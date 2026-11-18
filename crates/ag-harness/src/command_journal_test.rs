@@ -1,14 +1,37 @@
 //! Command journal unit tests for outcome decoding, unknown-command blocking,
 //! owner reconciliation, and duplicate request classification.
 
+#[cfg(feature = "sqlite")]
 use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::json;
 
 use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
-use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore, TurnOwner};
+#[cfg(feature = "sqlite")]
+use crate::store::SqliteStore;
+use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, TurnOwner};
 use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnOptions};
+
+/// Returns an empty memory store and an empty in-memory SQLite store.
+#[cfg(feature = "sqlite")]
+async fn command_stores() -> Vec<Arc<dyn SessionStore>> {
+    vec![
+        Arc::new(MemoryStore::new()),
+        Arc::new(
+            SqliteStore::open(Path::new(":memory:"))
+                .await
+                .expect("SQLite"),
+        ),
+    ]
+}
+
+/// Returns an empty memory store, the only command store without the
+/// `sqlite` feature.
+#[cfg(not(feature = "sqlite"))]
+fn command_stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
+    std::future::ready(vec![Arc::new(MemoryStore::new())])
+}
 
 fn outcome() -> CommandOutcome {
     CommandOutcome {
@@ -53,15 +76,7 @@ fn prefix_only_outcomes_recorded_before_head_and_tail_capture_still_decode() {
 #[tokio::test]
 async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owner() {
     // Arrange
-    let stores: Vec<Arc<dyn SessionStore>> = vec![
-        Arc::new(MemoryStore::new()),
-        Arc::new(
-            SqliteStore::open(Path::new(":memory:"))
-                .await
-                .expect("SQLite"),
-        ),
-    ];
-    for store in stores {
+    for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
         let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store
@@ -154,15 +169,7 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
 #[tokio::test]
 async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
     // Arrange
-    let stores: Vec<Arc<dyn SessionStore>> = vec![
-        Arc::new(MemoryStore::new()),
-        Arc::new(
-            SqliteStore::open(Path::new(":memory:"))
-                .await
-                .expect("SQLite"),
-        ),
-    ];
-    for store in stores {
+    for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
         let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store
@@ -218,15 +225,7 @@ async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
 #[tokio::test]
 async fn duplicate_requests_classify_before_pending_command_admission() {
     // Arrange
-    let stores: Vec<Arc<dyn SessionStore>> = vec![
-        Arc::new(MemoryStore::new()),
-        Arc::new(
-            SqliteStore::open(Path::new(":memory:"))
-                .await
-                .expect("SQLite"),
-        ),
-    ];
-    for store in stores {
+    for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
         let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store

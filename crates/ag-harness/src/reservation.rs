@@ -145,6 +145,7 @@ pub(crate) async fn recover_owner(owner: &TurnOwner) -> Result<(), SessionError>
 }
 
 /// Returns a conservative local deadline for a lease granted now.
+#[cfg(feature = "sqlite")]
 pub(crate) fn lease_deadline() -> Instant {
     // Stored timestamps round down to seconds; never promise the fractional
     // second.

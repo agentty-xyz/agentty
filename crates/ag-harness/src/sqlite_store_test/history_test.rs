@@ -10,9 +10,8 @@ use super::support::{create_version_one_database, read_call, schema, turn, turn_
 use crate::context::{HistoryProjection, HistoryTurn};
 use crate::input::TurnInput;
 use crate::model::ModelMessage;
-use crate::session::{
-    Database, NewSession, SessionError, TimestampSource, TurnSizeRow, load_turn_size_page,
-};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::{Database, TimestampSource, TurnSizeRow, load_turn_size_page};
 use crate::store::{AcquiredTurn, SessionStore as _};
 
 #[tokio::test]

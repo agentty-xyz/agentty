@@ -27,9 +27,19 @@
 //! [`CostTier`], so hosts can route simple tasks to cheap models.
 //! [`crate::catalog::ModelCatalog::from_environment`] catalogs these models
 //! by role.
+//!
+//! This module requires a `providers-*` feature. Every provider's catalog
+//! entries, profiles, and prices are available with either feature; building
+//! a client needs its family's feature: `providers-openai` for
+//! [`ModelProvider::OpenAi`] and [`ModelProvider::ChatGpt`], including the
+//! `ChatGPT` sign-in flow, and `providers-compat` for the Chat Completions
+//! providers. [`ModelConfiguration::client_from_environment`] returns
+//! `ModelConfigurationError::ProviderDisabled` for a provider whose family
+//! feature is off.
 
 mod catalog;
 mod chatgpt;
+#[cfg(feature = "providers-openai")]
 mod chatgpt_sign_in;
 mod kimi;
 mod muse;
@@ -37,32 +47,53 @@ mod openai;
 mod openai_compatible;
 mod qwen;
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
 mod test_support;
 
-pub use ag_router::chatgpt::{ChatGptAuth, ChatGptAuthError, ChatGptCredentials, ChatGptLogin};
+pub use ag_router::chatgpt::ChatGptAuthError;
+#[cfg(feature = "providers-openai")]
+pub use ag_router::chatgpt::{ChatGptAuth, ChatGptCredentials, ChatGptLogin};
 pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
 pub use catalog::{
-    CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
+    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
 };
+#[cfg(feature = "providers-openai")]
 pub(crate) use chatgpt::profile as chatgpt_profile;
 pub use chatgpt::{
     AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
     CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
-    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL, ChatGptConfig, auth_file as chatgpt_auth_file,
-    is_signed_in as chatgpt_is_signed_in,
+    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL,
 };
+#[cfg(feature = "providers-openai")]
+pub use chatgpt::{
+    ChatGptConfig, auth_file as chatgpt_auth_file, is_signed_in as chatgpt_is_signed_in,
+};
+#[cfg(feature = "providers-openai")]
 pub use chatgpt_sign_in::{
     CHATGPT_AUTH_URL_ENV, ChatGptSignIn, ChatGptSignInError, PendingChatGptSignIn,
 };
-pub use kimi::{KIMI_K2_6, KIMI_K3, KimiConfig};
-pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse, MuseConfig};
+#[cfg(feature = "providers-compat")]
+pub use kimi::KimiConfig;
+pub use kimi::{KIMI_K2_6, KIMI_K3};
+pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR};
+#[cfg(feature = "providers-compat")]
+pub use muse::{Muse, MuseConfig};
+#[cfg(feature = "providers-openai")]
+pub use openai::OpenAiConfig;
+#[cfg(feature = "providers-openai")]
 pub(crate) use openai::profile as openai_profile;
-pub use openai::{
-    GPT_5_3_CODEX, GPT_5_6_TERRA, GPT_6_1_SOL, GPT_6_ASTRA, GPT_6_LUNA, OpenAiConfig,
-};
+pub use openai::{GPT_5_3_CODEX, GPT_5_6_TERRA, GPT_6_1_SOL, GPT_6_ASTRA, GPT_6_LUNA};
+#[cfg(feature = "providers-compat")]
+pub use openai_compatible::OpenAiCompatibleConfig;
 pub use openai_compatible::{
     DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV,
-    OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV, OpenAiCompatibleConfig,
+    OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV,
 };
+#[cfg(feature = "providers-compat")]
+pub use qwen::QwenConfig;
+#[cfg(feature = "providers-compat")]
 pub(crate) use qwen::profile as qwen_profile;
-pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX, QwenConfig};
+pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX};
+
+#[doc(no_inline)]
+pub use crate::catalog::CostTier;

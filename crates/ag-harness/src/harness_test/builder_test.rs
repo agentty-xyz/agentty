@@ -1,6 +1,7 @@
 //! `HarnessBuilder` unit tests for model selection, budget derivation,
 //! validation failures, applied options, and shared handle configuration.
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::env;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
@@ -253,6 +254,7 @@ fn explicit_model_takes_precedence_over_the_catalog_but_not_a_selector() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_catalog_defaults_build_without_an_explicit_budget() {
     // Arrange
@@ -310,12 +312,12 @@ async fn build_applies_every_configured_option() {
     file_system
         .expect_canonicalize()
         .returning(|_| Ok(PathBuf::from(SENTINEL_PATH)));
+    let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
 
     // Act
     let harness = Harness::builder()
         .model(Arc::new(profiled_model(Some(declared_profile()))))
-        .store(Arc::new(MemoryStore::new()))
-        .sqlite("sessions.db")
+        .store(Arc::clone(&store))
         .repository(Repository::fixture("root"))
         .allow(Tool::Read)
         .allow(Tool::Write)
@@ -330,8 +332,12 @@ async fn build_applies_every_configured_option() {
 
     // Assert
     let config = &harness.inner;
-    assert_eq!(config.database_path, Some(PathBuf::from("sessions.db")));
-    assert!(config.store.is_none());
+    assert!(
+        config
+            .store
+            .as_ref()
+            .is_some_and(|configured| Arc::ptr_eq(configured, &store))
+    );
     assert_eq!(config.repository, Some(Repository::fixture("root")));
     assert_eq!(
         config.policy,
@@ -378,6 +384,26 @@ async fn built_history_budget_reaches_new_sessions() {
     assert_eq!(session.history.max_bytes, 64);
 }
 
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_path_replaces_an_earlier_store() {
+    // Act
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(declared_profile()))))
+        .store(Arc::new(MemoryStore::new()))
+        .sqlite("sessions.db")
+        .build()
+        .expect("SQLite-backed harness should build");
+
+    // Assert
+    assert_eq!(
+        harness.inner.database_path,
+        Some(PathBuf::from("sessions.db"))
+    );
+    assert!(harness.inner.store.is_none());
+}
+
+#[cfg(feature = "sqlite")]
 #[test]
 fn store_replaces_an_earlier_sqlite_path() {
     // Arrange
@@ -450,6 +476,7 @@ fn reconfiguring_a_clone_leaves_the_shared_configuration_unchanged() {
         reconfigured.inner.policy,
         ToolPolicy::default().allow(Tool::Read)
     );
+    #[cfg(feature = "sqlite")]
     assert!(Arc::ptr_eq(
         &harness.inner.database,
         &reconfigured.inner.database

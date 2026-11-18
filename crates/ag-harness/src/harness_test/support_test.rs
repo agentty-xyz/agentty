@@ -5,7 +5,9 @@ use std::io;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(feature = "sqlite")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "sqlite")]
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -19,13 +21,18 @@ use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleId, ModelResponseType};
 use crate::model::{
-    CompletionMetadata, CompletionUsage, MockModel, Model, ModelCompletion, ModelError,
-    ModelMessage, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, MockModel, Model, ModelCompletion, ModelResponse,
 };
+#[cfg(feature = "sqlite")]
+use crate::model::{ModelError, ModelMessage, ModelRequest};
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
-use crate::session::{Database, SessionError};
+#[cfg(feature = "sqlite")]
+use crate::session::SessionError;
+#[cfg(feature = "sqlite")]
+use crate::sqlite_store::Database;
 use crate::tool::{ReadArguments, Tool, ToolCall, WriteArguments};
+#[cfg(feature = "sqlite")]
 use crate::turn::TurnOutcome;
 
 pub(super) fn model() -> MockModel {
@@ -106,8 +113,10 @@ pub(super) fn response_with_metadata(response: ModelResponse) -> ModelCompletion
     )
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) struct SlowModel;
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for SlowModel {
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -119,12 +128,14 @@ impl Model for SlowModel {
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) struct InterruptionModel {
     pub(super) call_count: AtomicUsize,
     pub(super) dropped: Arc<Notify>,
     pub(super) started: Arc<Notify>,
 }
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for InterruptionModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -201,12 +212,14 @@ impl FileSystem for PendingToolFileSystem {
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) struct LeaseExpiryModel {
     pub(super) call_count: AtomicUsize,
     pub(super) release_first: Arc<Notify>,
     pub(super) started_first: Arc<Notify>,
 }
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for LeaseExpiryModel {
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -221,22 +234,26 @@ impl Model for LeaseExpiryModel {
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) struct RequestDropNotifier {
     pub(super) dropped: Arc<Notify>,
 }
 
+#[cfg(feature = "sqlite")]
 impl Drop for RequestDropNotifier {
     fn drop(&mut self) {
         self.dropped.notify_one();
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) struct LeaseOwnershipModel {
     pub(super) call_count: AtomicUsize,
     pub(super) dropped_first: Arc<Notify>,
     pub(super) started_first: Arc<Notify>,
 }
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for LeaseOwnershipModel {
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -254,6 +271,7 @@ impl Model for LeaseOwnershipModel {
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn send_with_resumed_session(
     harness: Arc<Harness>,
     prompt: &'static str,
@@ -266,12 +284,14 @@ pub(super) async fn send_with_resumed_session(
     session.send(prompt).await
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn wait_for_fixture(notify: &Notify, description: &str) {
     let result = tokio::time::timeout(Duration::from_secs(5), notify.notified()).await;
 
     assert!(result.is_ok(), "timed out waiting for {description}");
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn stored_turn_state(database: &Database) -> (String, Option<String>) {
     sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT status, error_type FROM session_turn ORDER BY turn_position DESC LIMIT 1",
@@ -281,6 +301,7 @@ pub(super) async fn stored_turn_state(database: &Database) -> (String, Option<St
     .expect("stored turn state should load")
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn wait_for_stored_turn_state(
     database: &Database,
     expected: &(String, Option<String>),
@@ -297,6 +318,7 @@ pub(super) async fn wait_for_stored_turn_state(
     }
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn stored_lease_expiry(database: &Database) -> i64 {
     sqlx::query_scalar::<_, i64>(
         "SELECT lease_expires_at FROM session_turn WHERE session_id = ? AND status = 'running'",
@@ -307,12 +329,14 @@ pub(super) async fn stored_lease_expiry(database: &Database) -> i64 {
     .expect("active lease should load")
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) fn elapsed_timestamp(origin: i64, started_at: tokio::time::Instant) -> i64 {
     let elapsed_seconds = i64::try_from(started_at.elapsed().as_secs()).unwrap_or(i64::MAX);
 
     origin.saturating_add(elapsed_seconds)
 }
 
+#[cfg(feature = "sqlite")]
 pub(super) async fn wait_for_lease_extension(
     database: &Database,
     previous_expiry: i64,

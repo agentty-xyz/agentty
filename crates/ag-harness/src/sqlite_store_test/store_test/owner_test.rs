@@ -13,10 +13,11 @@ use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
-use crate::session::tests::support::{
+use crate::session::{NewSession, SessionError, StoreIdentity};
+use crate::sqlite_store::Database;
+use crate::sqlite_store::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
-use crate::session::{Database, NewSession, SessionError, StoreIdentity};
 use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 
 #[tokio::test]
@@ -53,7 +54,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
     let mut wrong = owner.clone();
     wrong.token = vec![0];
     let mut foreign = owner.clone();
-    foreign.database = StoreIdentity::temporary();
+    foreign.database = StoreIdentity::unique();
     now.store(10 + TURN_LEASE_SECONDS, Ordering::SeqCst);
 
     // Act

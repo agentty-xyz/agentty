@@ -17,10 +17,10 @@ use crate::input::TurnInput;
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::reservation;
 use crate::schema_contract::OutputSchema;
-use crate::session::{
-    Database, DbResultExt as _, EncodedMessage, NewSession, ReservationObserver, SessionError,
-    StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
-    system_timestamp_source,
+use crate::session::{NewSession, SessionError, StoreIdentity, TurnOwner};
+use crate::sqlite_store::{
+    Database, DbResultExt as _, EncodedMessage, ReservationObserver, TimestampSource,
+    connect_options, next_turn_position, system_timestamp_source,
 };
 use crate::store::{AcquiredTurn, HistoryProjection, SessionStore};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
@@ -243,10 +243,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 impl NewSession {
     /// Adds a system prompt that is restored with the session.
     #[must_use]
-    pub(crate) fn with_system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
-        self.system_prompt = Some(system_prompt.into());
-
-        self
+    pub(crate) fn with_system_prompt(self, system_prompt: impl Into<String>) -> Self {
+        self.with_optional_system_prompt(Some(system_prompt.into()))
     }
 }
 
@@ -310,7 +308,7 @@ impl Database {
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(Self {
-            identity: StoreIdentity::temporary(),
+            identity: StoreIdentity::unique(),
             pool,
             reservation_observer: Arc::new(()),
             timestamp_source,

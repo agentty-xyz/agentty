@@ -3,7 +3,9 @@
 
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
-use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
+#[cfg(feature = "sqlite")]
+use wiremock::{Match, Request};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::provider::kimi::KimiConfig;
 use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
@@ -12,8 +14,10 @@ use crate::{model, tool};
 
 /// Matches a durable-session request whose body equals the wrapped value
 /// plus the session's `prompt_cache_key`.
+#[cfg(feature = "sqlite")]
 pub(super) struct SessionBody(pub(super) Value);
 
+#[cfg(feature = "sqlite")]
 impl Match for SessionBody {
     fn matches(&self, request: &Request) -> bool {
         let Ok(mut body) = request.body_json::<Value>() else {

@@ -5,6 +5,7 @@
 
 use std::error::Error;
 use std::future::poll_fn;
+#[cfg(feature = "sqlite")]
 use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,19 +16,23 @@ use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ModelCapabilities, ModelCompletion, ModelMessage,
     ModelRegistry, ModelRequest, ModelResponse,
 };
+#[cfg(feature = "providers-openai")]
 use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionStore};
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::TurnStatus;
 use ag_harness::{
-    Cost, ErrorKind, EventStream, Harness, HarnessError, LimitKind, Model, ModelCatalog,
-    ModelError, OutputSchema, Role, Run, RunEvent, RunEventKind, RunLimits, RunOutcome, RunRequest,
-    SessionError, TurnError, TurnRange,
+    Cost, ErrorKind, EventStream, Harness, HarnessError, Model, ModelCatalog, ModelError,
+    OutputSchema, Role, Run, RunEvent, RunEventKind, RunOutcome, RunRequest, SessionError,
+    TurnError, TurnRange,
 };
+#[cfg(feature = "sqlite")]
+use ag_harness::{LimitKind, RunLimits};
 use async_trait::async_trait;
 use futures_core::Stream;
 use serde_json::json;
+#[cfg(feature = "sqlite")]
 use tempfile::tempdir;
 
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -179,6 +184,7 @@ async fn priced_run_streams_request_costs_that_sum_to_its_recorded_cost()
     Ok(())
 }
 
+#[cfg(feature = "providers-openai")]
 #[tokio::test]
 async fn catalog_models_bill_at_list_prices_unless_the_host_overrides_them()
 -> Result<(), Box<dyn Error>> {
@@ -306,6 +312,7 @@ async fn switching_to_a_registered_model_stops_pricing_later_runs() -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_usage_totals_cover_limit_stopped_turns_and_survive_resume()
 -> Result<(), Box<dyn Error>> {
@@ -356,6 +363,7 @@ async fn sqlite_usage_totals_cover_limit_stopped_turns_and_survive_resume()
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_turns_without_recorded_usage_read_their_stored_outcome()
 -> Result<(), Box<dyn Error>> {

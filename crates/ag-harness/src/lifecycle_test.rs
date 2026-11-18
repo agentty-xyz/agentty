@@ -630,3 +630,12 @@ fn context_summary_kinds_have_stable_telemetry_values() {
         ]
     );
 }
+
+#[test]
+fn tool_error_kinds_have_stable_telemetry_values() {
+    // Act
+    let values = [ToolErrorType::Cancelled, ToolErrorType::Execution].map(ToolErrorType::as_str);
+
+    // Assert
+    assert_eq!(values, ["cancelled", "tool_execution_error"]);
+}

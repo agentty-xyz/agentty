@@ -7,6 +7,7 @@
 use std::error::Error;
 use std::future::IntoFuture;
 use std::num::NonZeroU32;
+#[cfg(feature = "sqlite")]
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -16,7 +17,9 @@ use ag_harness::model::{
     ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{MemoryStore, SessionStore, SqliteStore};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
+use ag_harness::store::{MemoryStore, SessionStore};
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::{TranscriptInput, TurnStatus};
 use ag_harness::{
@@ -25,6 +28,7 @@ use ag_harness::{
 };
 use async_trait::async_trait;
 use serde_json::json;
+#[cfg(feature = "sqlite")]
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
@@ -102,12 +106,23 @@ fn read_call(id: &str, first: bool) -> Result<ToolCall, ModelError> {
         .with_assistant_text(first.then(|| CALL_TEXT.to_string()))
 }
 
-/// Returns the two durable backends.
+/// Returns the durable backends this build includes.
+#[cfg(feature = "sqlite")]
 async fn journaled_stores() -> Result<Vec<Arc<dyn SessionStore>>, Box<dyn Error>> {
     Ok(vec![
         Arc::new(MemoryStore::new()),
         Arc::new(SqliteStore::open(Path::new(":memory:")).await?),
     ])
+}
+
+/// Durable backends, or the failure to open one.
+#[cfg(not(feature = "sqlite"))]
+type JournaledStores = Result<Vec<Arc<dyn SessionStore>>, Box<dyn Error>>;
+
+/// Returns the durable backends this build includes.
+#[cfg(not(feature = "sqlite"))]
+fn journaled_stores() -> std::future::Ready<JournaledStores> {
+    std::future::ready(Ok(vec![Arc::new(MemoryStore::new())]))
 }
 
 fn harness(model: &ScriptedModel, store: Arc<dyn SessionStore>) -> Result<Harness, Box<dyn Error>> {
@@ -340,6 +355,7 @@ async fn transcript_records_completed_failed_and_interrupted_turns() -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn transcript_survives_sqlite_resume_with_answered_calls_and_usage()
 -> Result<(), Box<dyn Error>> {

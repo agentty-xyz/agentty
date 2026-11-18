@@ -2,7 +2,8 @@ name: Native Harness Sandbox
 
 # Linux sandbox qualification runs in the coverage job, which installs the same
 # Bubblewrap setup and runs every `ag-harness` sandbox suite, so this workflow
-# only qualifies the macOS launcher.
+# only qualifies the macOS launcher. It also checks the `ag-harness` build
+# without default features, which shares the same path filter.
 on:
   # Runs on `main` so its Rust caches exist for pull requests to restore.
   push:
@@ -77,3 +78,42 @@ jobs:
           name: native-sandbox-test-results-macos
           build-directory: target/llvm-cov-target
           outcome: ${{ steps.sandbox-tests.outcome }}
+
+  # Builds without default features drop SQLite, the native sandbox,
+  # OpenTelemetry, or a provider family, so their own tests must still cover
+  # every line they compile. The workspace coverage job only builds the
+  # default features.
+  minimal:
+    name: ag-harness without default features
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust and prek
+        id: rust-setup
+        uses: $/.github/actions/setup-rust-prek
+        with:
+          cargo-llvm-cov: "true"
+          llvm-tools-preview: "true"
+      - name: Feature lint
+        run: prek run clippy-ag-harness-features --all-files --hook-stage manual
+      - name: Prepare reduced-feature timing reports
+        uses: $/.github/actions/test-timing
+        with:
+          phase: prepare
+          suite: ag-harness-features-test-results-ubuntu
+          build-directory: target/llvm-cov-target
+          exact-cache-hit: ${{ steps.rust-setup.outputs.exact-cache-hit }}
+      - name: Reduced-feature coverage
+        id: feature-tests
+        run: prek run coverage-ag-harness-features --all-files --hook-stage manual
+      - name: Retain reduced-feature test timings
+        if: ${{ always() }}
+        uses: $/.github/actions/upload-test-results
+        with:
+          name: ag-harness-features-test-results-ubuntu
+          build-directory: target/llvm-cov-target
+          outcome: ${{ steps.feature-tests.outcome }}

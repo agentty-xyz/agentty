@@ -1,9 +1,12 @@
 //! `ChatGPT` plan provider: model identifiers, context profiles, and sign-in
 //! credential file lookup.
 
+#[cfg(feature = "providers-openai")]
 use std::env;
+#[cfg(feature = "providers-openai")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "providers-openai")]
 use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
@@ -15,7 +18,9 @@ pub const CHATGPT_AUTH_FILE_ENV: &str = "CHATGPT_AUTH_FILE";
 pub(crate) const CHATGPT_BASE_URL_ENV: &str = "CHATGPT_BASE_URL";
 /// Environment variable naming Agentty's data directory, `~/.agentty` by
 /// default; the credential file is `auth/chatgpt.json` inside it.
+#[cfg(feature = "providers-openai")]
 const AGENTTY_ROOT_ENV: &str = "AGENTTY_ROOT";
+#[cfg(feature = "providers-openai")]
 const CREDENTIAL_FILE: &str = "auth/chatgpt.json";
 
 /// GPT-6.1 Sol on a `ChatGPT` plan.
@@ -52,6 +57,7 @@ const PLAN_PROFILE: ModelProfile = ModelProfile::new(272_000)
     .with_estimator(ESTIMATOR);
 
 /// Configuration for an `OpenAI` model billed to a `ChatGPT` plan.
+#[cfg(feature = "providers-openai")]
 pub struct ChatGptConfig {
     /// Credential file written by `ag-harness login chatgpt`.
     pub auth_file: PathBuf,
@@ -73,6 +79,7 @@ pub struct AuthFileUnavailable;
 /// # Errors
 ///
 /// Returns [`AuthFileUnavailable`] when none of the variables is set.
+#[cfg(feature = "providers-openai")]
 pub fn auth_file(
     mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
 ) -> Result<PathBuf, AuthFileUnavailable> {
@@ -91,6 +98,7 @@ pub fn auth_file(
 
 /// Returns whether `auth_file` holds a sign-in that can still serve
 /// requests: it exists, is readable, and `OpenAI` has not rejected it.
+#[cfg(feature = "providers-openai")]
 pub fn is_signed_in(auth_file: &Path) -> bool {
     ChatGptCredentials::load(auth_file).is_ok_and(|credentials| credentials.is_signed_in())
 }
@@ -117,5 +125,6 @@ pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-openai")]
 #[path = "chatgpt_test.rs"]
 mod tests;

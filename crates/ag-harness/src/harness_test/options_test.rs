@@ -17,7 +17,8 @@ use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
 use crate::model::{MockModel, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
 use crate::repository::Repository;
-use crate::session::{Database, SessionError};
+use crate::session::SessionError;
+use crate::sqlite_store::Database;
 use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnError, TurnOptions};
 
 fn readable_file_system() -> MockFileSystem {

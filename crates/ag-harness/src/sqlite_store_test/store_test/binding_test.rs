@@ -11,8 +11,9 @@ use tokio::sync::Notify;
 use super::support::{AcquisitionGate, CommitGate};
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
-use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, NewSession, ReservationObserver};
+use crate::session::NewSession;
+use crate::sqlite_store::tests::support::{schema, turn_options};
+use crate::sqlite_store::{Database, ReservationObserver};
 use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 
 #[tokio::test]

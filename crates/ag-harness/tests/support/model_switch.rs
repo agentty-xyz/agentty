@@ -7,7 +7,9 @@ use ag_harness::model::{
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession, SqliteStore};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
+use ag_harness::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession};
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
@@ -487,6 +489,7 @@ async fn switches_validate_image_history_against_target_capabilities() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn switching_survives_sqlite_reopen() {
     // Arrange
@@ -780,6 +783,7 @@ async fn independent_store_admission_checks_generation_atomically() {
     }
 }
 
+#[cfg(feature = "providers-compat")]
 #[tokio::test]
 async fn switching_checks_adapter_schema_without_network_access() {
     // Arrange

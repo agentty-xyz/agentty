@@ -11,8 +11,9 @@ use tokio::sync::Notify;
 use super::support::{AcquisitionGate, CommitGate};
 use crate::context::HistoryProjection;
 use crate::input::TurnInput;
-use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, NewSession, ReservationObserver, SessionError};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::tests::support::{schema, turn_options};
+use crate::sqlite_store::{Database, ReservationObserver};
 use crate::store::{AcquiredTurn, SessionStore};
 
 #[tokio::test]

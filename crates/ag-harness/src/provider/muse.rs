@@ -1,12 +1,17 @@
 //! Muse model identifiers and the `Muse` model served through Meta's Model
 //! API.
 
+#[cfg(feature = "providers-compat")]
 use std::env;
 
+#[cfg(feature = "providers-compat")]
 use async_trait::async_trait;
 
+#[cfg(feature = "providers-compat")]
 use super::catalog::{ModelConfiguration, ModelConfigurationError, ModelProvider};
+#[cfg(feature = "providers-compat")]
 use crate::lifecycle::LifecycleObserver;
+#[cfg(feature = "providers-compat")]
 use crate::model::{Model, ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelRequest};
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -22,10 +27,12 @@ pub const MUSE_SPARK_1_3: &str = "muse-spark-1.3";
 pub const MUSE_SPARK_1_3_CONTRIBUTOR: &str = "muse-spark-1.3-contributor";
 
 /// Muse model configured from the standard Model API environment variables.
+#[cfg(feature = "providers-compat")]
 pub struct Muse {
     client: ModelClient,
 }
 
+#[cfg(feature = "providers-compat")]
 impl Muse {
     /// Creates a Muse model using `MODEL_API_KEY` and the optional
     /// `MODEL_API_BASE_URL` override.
@@ -57,6 +64,7 @@ impl Muse {
     }
 }
 
+#[cfg(feature = "providers-compat")]
 #[async_trait]
 impl Model for Muse {
     fn metadata(&self) -> Option<ModelMetadata> {
@@ -81,6 +89,7 @@ impl Model for Muse {
 }
 
 /// Configuration for a Muse model served through Meta's Model API.
+#[cfg(feature = "providers-compat")]
 pub struct MuseConfig {
     /// API key sent as a bearer token.
     pub api_key: String,
@@ -91,5 +100,6 @@ pub struct MuseConfig {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
 #[path = "muse_test.rs"]
 mod tests;

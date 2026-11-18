@@ -433,6 +433,7 @@ impl ToolCall {
         self.assistant_text.as_deref()
     }
 
+    #[cfg(any(feature = "sqlite", test))]
     pub(crate) fn read(
         id: String,
         arguments: ReadArguments,
@@ -446,6 +447,7 @@ impl ToolCall {
         }
     }
 
+    #[cfg(any(feature = "sqlite", test))]
     pub(crate) fn write(
         id: String,
         arguments: WriteArguments,

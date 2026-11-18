@@ -6,12 +6,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(feature = "native-sandbox")]
+use super::contract::BashExecutor;
 use super::contract::{
-    BashExecutor, ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy,
-    ExecutionResult, Executor, Grants, Limits, MainExit, Termination,
+    ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy, ExecutionResult, Executor,
+    Grants, Limits, MainExit, Termination,
 };
-use super::native::{Monotonic, Native};
-use super::supervisor::Supervisor;
+#[cfg(feature = "native-sandbox")]
+use super::native::Native;
+use super::supervisor::{Monotonic, Supervisor};
 use crate::TurnError;
 use crate::bash::{BashArguments, BashConfig, BashError};
 use crate::command_journal::{
@@ -39,12 +42,20 @@ impl BashTool {
         if !configuration.snapshot.host_information {
             return Err(BashError::Unavailable);
         }
+        #[cfg(feature = "native-sandbox")]
         let selected: Arc<dyn BashExecutor> = match &configuration.executor {
             Some(executor) => Arc::clone(executor),
             None => Arc::new(Native {
                 configuration: configuration.clone(),
             }),
         };
+        // Without the native sandbox, `BashConfig::for_executor` is the only
+        // constructor, so the executor is always host-selected.
+        #[cfg(not(feature = "native-sandbox"))]
+        let selected = configuration
+            .executor
+            .clone()
+            .ok_or(BashError::Unavailable)?;
         let cleanup_scope = selected.cleanup_scope();
         let supervisor =
             Supervisor::new(selected, Arc::new(Monotonic)).map_err(|_| BashError::Unavailable)?;

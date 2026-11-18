@@ -1,6 +1,7 @@
 //! Command settlement unit tests for retained controls, admission release,
 //! cleanup retries, and per-owner reconciliation.
 
+#[cfg(feature = "sqlite")]
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,7 +16,10 @@ use crate::cancellation::{ControlledTurn, SettlementPhase, TurnControl};
 use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
-use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore};
+use crate::fault_store_test::{Fault, FaultStore};
+#[cfg(feature = "sqlite")]
+use crate::store::SqliteStore;
+use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore};
 use crate::store_fixture::{options, schema};
 use crate::{OutputSchema, ToolPolicy, TurnError, TurnInput, TurnOptions, reservation};
 
@@ -204,6 +208,120 @@ async fn reconciliation_releases_retained_store_and_control_after_caller_drop() 
     assert!(weak_store.upgrade().is_none());
 }
 
+/// Registers one journaled command of a fresh `retry` session in `store`
+/// whose outcome reports `cleanup_failed`, returning the commands, the store
+/// handle, and the turn that owns the journal.
+async fn journaled_command(
+    store: &Arc<FaultStore>,
+    cleanup_failed: bool,
+) -> (Commands, Arc<dyn SessionStore>, AcquiredTurn) {
+    let backend: Arc<dyn SessionStore> = store.clone();
+    backend
+        .create_session(&NewSession::new("retry", schema()), None, 1024)
+        .await
+        .expect("session");
+    let effects = Effects::default();
+    let commands = effects.commands().clone();
+    let acquired = reservation::acquire(
+        Arc::clone(&backend),
+        ("retry".into(), 0),
+        "run".into(),
+        options(),
+        None,
+        effects,
+    )
+    .await
+    .expect("acquire");
+    let journal = acquired.guard.write_journal();
+    let id = journal
+        .command_intent(&CommandIntent {
+            call_id: "call".into(),
+            command: "effect".into(),
+            policy: json!({}),
+            workspace: "/workspace".into(),
+        })
+        .await
+        .expect("intent");
+    let worker = commands.retain();
+    let operation = commands.register(
+        Arc::new(Control {
+            calls: AtomicUsize::new(0),
+            failure: AtomicBool::new(false),
+        }),
+        Some(journal),
+    );
+    operation.admitted(Some(id));
+    operation.observed(outcome(cleanup_failed));
+    drop(worker);
+
+    (commands, backend, acquired)
+}
+
+#[tokio::test]
+async fn outcome_journal_retry_records_a_clean_outcome_without_reconciliation() {
+    // Arrange
+    let store = Arc::new(FaultStore::new());
+    let (commands, backend, mut acquired) = journaled_command(&store, false).await;
+    store.inject(Fault::FinishCommand);
+    assert!(
+        commands.retry().await.is_err(),
+        "persistence failure stays unresolved"
+    );
+    store.repair(Fault::FinishCommand);
+
+    // Act
+    let retried = commands.retry().await;
+
+    // Assert
+    assert!(retried.is_ok(), "a clean outcome needs no reconciliation");
+    commands.settled().await.expect("settled");
+    let record = backend
+        .load_commands("retry")
+        .await
+        .expect("records")
+        .remove(0);
+    assert!(!record.reconciled);
+    assert_eq!(record.outcome, Some(outcome(false)));
+    acquired.guard.disarm();
+}
+
+#[tokio::test]
+async fn outcome_journal_retry_reconciles_once_the_owner_stops() {
+    // Arrange
+    let store = Arc::new(FaultStore::new());
+    let (commands, backend, mut acquired) = journaled_command(&store, true).await;
+    store.inject(Fault::FinishCommand);
+
+    // Act / Assert
+    assert!(
+        commands.retry().await.is_err(),
+        "persistence failure stays unresolved"
+    );
+    store.repair(Fault::FinishCommand);
+    assert!(
+        commands.retry().await.is_err(),
+        "live owner cannot reconcile"
+    );
+    backend
+        .interrupt(acquired.owner())
+        .await
+        .expect("interrupt");
+    acquired.guard.disarm();
+    commands
+        .retry()
+        .await
+        .expect("cleanup and journal reconciled");
+    commands.settled().await.expect("settled");
+    let record = backend
+        .load_commands("retry")
+        .await
+        .expect("records")
+        .remove(0);
+    assert!(record.reconciled);
+    assert_eq!(record.outcome, Some(outcome(true)));
+}
+
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn journal_retry_preserves_failure_and_requires_stopped_owner_for_reconciliation() {
     // Arrange

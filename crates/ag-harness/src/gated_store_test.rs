@@ -14,12 +14,25 @@ use tokio::time::Instant;
 use crate::TurnError;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::session::{Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
+use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
+#[cfg(feature = "sqlite")]
+use crate::sqlite_store::Database;
+#[cfg(not(feature = "sqlite"))]
+use crate::store::MemoryStore;
 use crate::store::{
     AcquiredTurn, HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission,
     WriteRecord,
 };
 use crate::store_fixture::{options, schema};
+
+/// Store the gate decorates: SQLite when the build includes it, otherwise
+/// the memory store.
+#[cfg(feature = "sqlite")]
+pub(crate) type GatedBackend = Database;
+/// Store the gate decorates: SQLite when the build includes it, otherwise
+/// the memory store.
+#[cfg(not(feature = "sqlite"))]
+pub(crate) type GatedBackend = MemoryStore;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PauseAt {
@@ -32,7 +45,7 @@ pub(crate) enum PauseAt {
 }
 
 pub(crate) struct GatedStore {
-    pub(crate) database: Database,
+    pub(crate) database: GatedBackend,
     pub(crate) entered: Notify,
     pub(crate) interrupted: Notify,
     pub(crate) pause_at: PauseAt,
@@ -43,7 +56,7 @@ pub(crate) struct GatedStore {
 }
 
 impl GatedStore {
-    pub(crate) fn new(database: Database, pause_at: PauseAt) -> Self {
+    pub(crate) fn new(database: GatedBackend, pause_at: PauseAt) -> Self {
         Self {
             database,
             entered: Notify::new(),
@@ -57,7 +70,10 @@ impl GatedStore {
     }
 
     pub(crate) async fn fixture(pause_at: PauseAt) -> (Arc<Self>, AcquiredTurn) {
+        #[cfg(feature = "sqlite")]
         let database = Database::open_in_memory().await.expect("database");
+        #[cfg(not(feature = "sqlite"))]
+        let database = MemoryStore::new();
         let store = Arc::new(Self::new(database, pause_at));
         store
             .create_session(&NewSession::new("session", schema()), None, 100_000)

@@ -7,23 +7,29 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::bash::{
-    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, Enforcement, ExecutionError,
-    UnsandboxedExecutor,
+    BashArguments, BashConfig, BashError, BashExecutor, BashPolicySnapshot, BashProcess,
+    Enforcement, ExecutionError, UnsandboxedExecutor,
 };
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
 use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
 use crate::{OutputSchema, Tool, ToolPolicy, TurnOptions};
 
+/// Returns the native sandbox configuration, or a host executor's without
+/// the `native-sandbox` feature.
 fn configuration() -> BashConfig {
-    BashConfig::new(
+    #[cfg(feature = "native-sandbox")]
+    let configuration = BashConfig::new(
         "/trusted/launcher".into(),
         "/bin/bash".into(),
         "revision-1".into(),
         Duration::from_secs(5),
         1024,
-    )
-    .expect("configuration")
+    );
+    #[cfg(not(feature = "native-sandbox"))]
+    let configuration = executor_configuration(Arc::new(NamedExecutor("container".to_string())));
+
+    configuration.expect("configuration")
 }
 
 fn executor_configuration(executor: Arc<dyn BashExecutor>) -> Result<BashConfig, BashError> {
@@ -178,7 +184,9 @@ fn policy_is_immutable_and_snapshots_identify_environment_without_values() {
         .expect("write")
         .with_environment("TOKEN".into(), "secret-environment-value".into())
         .expect("environment")
-        .with_host_information()
+        .with_host_information();
+    #[cfg(feature = "native-sandbox")]
+    let configured = configured
         .with_linux_bubblewrap("/usr/bin/bwrap".into())
         .expect("backend");
     let turn_options = options(configured.clone());
@@ -197,6 +205,7 @@ fn policy_is_immutable_and_snapshots_identify_environment_without_values() {
     assert_eq!(turn_options.bash(), Some(&configured));
 }
 
+#[cfg(feature = "native-sandbox")]
 #[test]
 fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots() {
     // Arrange
@@ -233,18 +242,46 @@ fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots(
 #[test]
 fn configuration_reports_the_selected_executor_enforcement() {
     // Arrange
-    let native = configuration();
     let custom = executor_configuration(Arc::new(NamedExecutor("container".to_string())))
+        .expect("executor configuration");
+    let unsandboxed = executor_configuration(Arc::new(UnsandboxedExecutor::without_isolation()))
         .expect("executor configuration");
 
     // Act
-    let enforcements = [native.enforcement(), custom.enforcement()];
+    let enforcements = [custom.enforcement(), unsandboxed.enforcement()];
 
     // Assert
+    assert_eq!(enforcements, [Enforcement::FileSystem, Enforcement::None]);
+    #[cfg(feature = "native-sandbox")]
     assert_eq!(
-        enforcements,
-        [Enforcement::FileSystemAndNetwork, Enforcement::FileSystem]
+        configuration().enforcement(),
+        Enforcement::FileSystemAndNetwork
     );
+}
+
+#[test]
+fn legacy_snapshots_without_an_executor_decode_as_the_native_default() {
+    // Arrange
+    let legacy = json!({
+        "bash": "/bin/bash",
+        "capture_bytes": 1024,
+        "environment_names": [],
+        "external_reads": [],
+        "host_information": false,
+        "launcher": "/trusted/launcher",
+        "linux_bubblewrap": null,
+        "revision": "revision-1",
+        "timeout": {"secs": 5, "nanos": 0},
+        "workspace_writes": []
+    });
+
+    // Act
+    let snapshot: BashPolicySnapshot =
+        serde_json::from_value(legacy.clone()).expect("legacy snapshot");
+
+    // Assert
+    assert_eq!(snapshot.executor, "native");
+    assert_eq!(serde_json::to_value(&snapshot).expect("snapshot"), legacy);
 }
 
 #[test]
@@ -282,6 +319,7 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
     // Act / Assert
     assert!(valid.clone().with_network().is_err());
     assert!(valid.clone().with_read("relative".into()).is_err());
+    #[cfg(feature = "native-sandbox")]
     assert!(
         valid
             .clone()
@@ -312,6 +350,7 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .with_environment("KEY".into(), "two".into())
             .is_err()
     );
+    #[cfg(feature = "native-sandbox")]
     assert_eq!(
         BashConfig::new(
             "relative-launcher".into(),
@@ -335,8 +374,8 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
         ),
     ] {
         assert!(
-            BashConfig::new(
-                "/launcher".into(),
+            BashConfig::for_executor(
+                Arc::new(NamedExecutor("container".to_string())),
                 "/bin/bash".into(),
                 revision.into(),
                 duration,
@@ -345,17 +384,6 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .is_err()
         );
     }
-    assert_eq!(
-        BashConfig::new(
-            "relative-launcher".into(),
-            "/bin/bash".into(),
-            "ok".into(),
-            Duration::from_secs(1),
-            1,
-        )
-        .err(),
-        Some(BashError::InvalidPolicy)
-    );
 }
 
 #[test]
@@ -368,8 +396,8 @@ fn capture_budget_accepts_the_default_and_the_maximum() {
 
     // Act
     let configurations = budgets.map(|budget| {
-        BashConfig::new(
-            "/launcher".into(),
+        BashConfig::for_executor(
+            Arc::new(NamedExecutor("container".to_string())),
             "/bin/bash".into(),
             "revision".into(),
             Duration::from_secs(1),

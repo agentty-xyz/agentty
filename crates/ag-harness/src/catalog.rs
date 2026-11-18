@@ -23,4 +23,4 @@ mod spec;
 
 pub use model_catalog::{CatalogBuilder, CatalogError, ModelCatalog, ModelHandle};
 pub use role::{ModelSelector, Role};
-pub use spec::{Capabilities, ModelId, ModelSpec, Pricing, PricingSource};
+pub use spec::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};

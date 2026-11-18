@@ -113,7 +113,7 @@ async fn session_inspection_reports_storage_failure() {
         .create()
         .await
         .expect("session");
-    let database = crate::session::Database::open(&directory.path().join("harness.db"))
+    let database = crate::sqlite_store::Database::open(&directory.path().join("harness.db"))
         .await
         .expect("database");
     sqlx::query("DROP TABLE session_write")

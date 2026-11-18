@@ -6,7 +6,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll};
 
-use opentelemetry::context::FutureExt as _;
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -14,7 +13,7 @@ use crate::effect::Effects;
 use crate::event::EventSink;
 use crate::session::{SessionError, TurnOwner};
 use crate::turn::TurnReport;
-use crate::{ModelError, TurnError, TurnOutcome, reservation};
+use crate::{ModelError, TurnError, TurnOutcome, reservation, telemetry};
 
 /// A lazy turn future with a separately retainable cancellation control.
 ///
@@ -56,16 +55,13 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
             let worker = make(worker_control.clone());
             // The spawned worker runs outside the caller's poll, so it carries
             // the caller's OpenTelemetry context for the turn span's parent.
-            let mut task = tokio::spawn(
-                async move {
-                    let result = worker.await;
-                    drop(lease);
-                    drop(effects);
+            let mut task = tokio::spawn(telemetry::with_current_context(async move {
+                let result = worker.await;
+                drop(lease);
+                drop(effects);
 
-                    result
-                }
-                .with_current_context(),
-            );
+                result
+            }));
             tokio::select! {
                 biased;
                 result = &mut task => result.map_err(|error| {

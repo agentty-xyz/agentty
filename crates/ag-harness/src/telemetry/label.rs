@@ -1,0 +1,28 @@
+//! Stable, low-cardinality error-type labels that lifecycle events and
+//! errors report whether or not OpenTelemetry export is compiled in.
+
+pub(crate) const ERROR_CANCELLED: &str = "cancelled";
+pub(crate) const ERROR_INVALID_OUTPUT: &str = "invalid_output";
+pub(crate) const ERROR_INVALID_PROVIDER_RESPONSE: &str = "invalid_provider_response";
+pub(crate) const ERROR_INVALID_RESPONSE: &str = "invalid_response";
+pub(crate) const ERROR_INVALID_TOOL_CALL: &str = "invalid_tool_call";
+pub(crate) const ERROR_PROVIDER: &str = "provider_error";
+pub(crate) const ERROR_REQUEST: &str = "request_error";
+pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
+pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
+pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
+pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
+pub(crate) const ERROR_COMPARISON_REPOSITORY_MISMATCH: &str = "comparison_repository_mismatch";
+pub(crate) const ERROR_CONTEXT_BUDGET: &str = "context_budget_exceeded";
+pub(crate) const ERROR_CONTEXT_OVERFLOW: &str = "context_overflow";
+pub(crate) const ERROR_REPEATED_TOOL_CALLS: &str = "repeated_tool_calls";
+pub(crate) const ERROR_RUN_LIMIT_MODEL_REQUESTS: &str = "run_limit_model_requests";
+pub(crate) const ERROR_RUN_LIMIT_TOOL_CALLS: &str = "run_limit_tool_calls";
+pub(crate) const ERROR_RUN_LIMIT_TOKENS: &str = "run_limit_tokens";
+pub(crate) const ERROR_RUN_LIMIT_WALL_TIME: &str = "run_limit_wall_time";
+pub(crate) const ERROR_CONTEXT_SUMMARY_INVALID_OUTPUT: &str = "context_summary_invalid_output";
+pub(crate) const ERROR_CONTEXT_SUMMARY_MODEL: &str = "context_summary_model_error";
+pub(crate) const ERROR_CONTEXT_SUMMARY_REJECTED: &str = "context_summary_rejected";
+pub(crate) const ERROR_SESSION: &str = "session_error";
+pub(crate) const ERROR_UNSUPPORTED_INPUT: &str = "unsupported_input";
+pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";

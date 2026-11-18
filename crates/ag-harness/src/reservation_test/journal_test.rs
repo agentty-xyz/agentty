@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::TurnInput;
-use crate::session::{Database, NewSession};
+use crate::session::NewSession;
+use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 use crate::store_fixture::{options, schema};
 

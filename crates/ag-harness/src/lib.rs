@@ -75,6 +75,17 @@
 //! | [`event`]      | Run events with items, usage, and their wire shape         |
 //! | [`transcript`] | Settled-turn transcripts and their wire shape              |
 //! | [`lifecycle`]  | Content-free events and OpenTelemetry observers            |
+//!
+//! # Features
+//!
+//! The default features keep every built-in backend: `sqlite`,
+//! `native-sandbox`, `otel`, `providers-openai`, and `providers-compat`.
+//! Disable them to build only the core with [`store::MemoryStore`],
+//! host-implemented [`Model`]s, and host-selected Bash executors. The crate
+//! README's feature table lists what each feature enables, and each gated
+//! item's documentation names the feature it requires.
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(test)]
 extern crate self as ag_harness;
@@ -87,6 +98,10 @@ mod store_fixture;
 mod gated_store_test;
 
 #[cfg(test)]
+mod fault_store_test;
+
+#[cfg(test)]
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[path = "../tests/support/chatgpt_sign_in.rs"]
 mod chatgpt_sign_in_fixture;
 
@@ -127,6 +142,7 @@ pub mod model;
 mod model_profile;
 mod model_registry;
 mod policy;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub mod provider;
 mod read;
 pub mod recovery;
@@ -139,9 +155,12 @@ mod run;
 mod schema_contract;
 mod session;
 mod session_model;
+#[cfg(feature = "sqlite")]
+mod sqlite_store;
 pub mod store;
 mod telemetry;
 pub mod tool;
+#[cfg(feature = "otel")]
 mod trace;
 pub mod transcript;
 pub mod turn;
@@ -176,6 +195,7 @@ pub use write_journal::WriteStatus;
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.
 /// Run only in a dedicated process, before creating any runtime or threads.
 /// Host applications should launch the executable through Bash turn options.
+#[cfg(feature = "native-sandbox")]
 #[doc(hidden)]
 pub fn run_sandbox_launcher() -> std::process::ExitCode {
     execution::run_launcher()

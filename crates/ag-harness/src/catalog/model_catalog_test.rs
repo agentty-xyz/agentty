@@ -1,23 +1,37 @@
 //! Model catalog unit tests for building, role requirements, selector
 //! resolution, price overrides, and environment-derived models and role
-//! defaults.
+//! defaults. Environment-derived catalogs need both provider families.
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::collections::BTreeMap;
+#[cfg(all(
+    any(feature = "providers-compat", feature = "providers-openai"),
+    not(all(feature = "providers-compat", feature = "providers-openai"))
+))]
+use std::env::VarError;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::{env, fs};
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_router::chatgpt::ChatGptAuthError;
 
 use crate::catalog::{
     Capabilities, CatalogError, ModelCatalog, ModelId, ModelSelector, ModelSpec, Pricing,
     PricingSource, Role,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::context::ContextBudgetError;
 use crate::model::{MockModel, Model, ModelProfile};
-use crate::provider::{ModelConfigurationError, ModelProvider};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelConfigurationError;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelProvider;
 
 const TEXT: &str = "host/text";
 const VISION: &str = "host/vision";
@@ -25,6 +39,7 @@ const VISION: &str = "host/vision";
 /// Default-role table over host models: a text-only profiled model, an
 /// unprofiled vision model, an uncataloged model, and a profiled vision
 /// model.
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 const HOST_ROLES: &[(Role, &[(ModelProvider, &str)])] = &[
     (
         Role::VISION,
@@ -87,6 +102,7 @@ fn catalog() -> ModelCatalog {
         .expect("catalog should build")
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 fn lookup(variables: &[(&str, &str)]) -> impl FnMut(&str) -> Result<String, env::VarError> + use<> {
     let variables = variables
         .iter()
@@ -354,6 +370,7 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
     }
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
     // Arrange
@@ -387,6 +404,7 @@ fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_catalogs_configured_providers_with_default_roles() {
     // Arrange
@@ -464,6 +482,7 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_skips_a_provider_whose_required_base_url_is_absent() {
     // Arrange
@@ -476,6 +495,7 @@ fn environment_skips_a_provider_whose_required_base_url_is_absent() {
     assert_eq!(catalog.specs().count(), 0);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     // Arrange
@@ -515,6 +535,7 @@ fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_skips_chatgpt_without_a_stored_sign_in() {
     // Arrange
@@ -530,6 +551,7 @@ fn environment_skips_chatgpt_without_a_stored_sign_in() {
     assert_eq!(catalog.specs().count(), 0);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_reports_a_broken_chatgpt_sign_in() {
     // Arrange
@@ -552,6 +574,7 @@ fn environment_reports_a_broken_chatgpt_sign_in() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn empty_environment_catalogs_nothing() {
     // Arrange
@@ -568,6 +591,7 @@ fn empty_environment_catalogs_nothing() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_reports_an_invalid_configured_provider() {
     // Arrange
@@ -603,6 +627,7 @@ fn environment_reports_an_invalid_configured_provider() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn process_environment_catalog_delegates_to_the_process_environment() {
     // Arrange
@@ -618,4 +643,53 @@ fn process_environment_catalog_delegates_to_the_process_environment() {
 
     // Assert
     assert_eq!(process, injected);
+}
+
+#[cfg(all(
+    any(feature = "providers-compat", feature = "providers-openai"),
+    not(all(feature = "providers-compat", feature = "providers-openai"))
+))]
+#[test]
+fn environment_skips_a_disabled_family_with_broken_credentials() {
+    // Arrange
+    let mut disabled_lookups = Vec::new();
+    let environment = |name: &str| {
+        let provider = ModelProvider::all().iter().find(|provider| {
+            name == provider.api_key_environment() || name == provider.base_url_environment()
+        });
+        match provider {
+            Some(provider) if !provider.is_enabled() => {
+                disabled_lookups.push(name.to_string());
+
+                Err(VarError::NotUnicode(OsString::from_vec(vec![0xff])))
+            }
+            Some(provider) if name == provider.api_key_environment() => {
+                Ok("provider-key".to_string())
+            }
+            Some(_) => Ok("https://provider.example/v1".to_string()),
+            None => Err(VarError::NotPresent),
+        }
+    };
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(environment)
+        .expect("a disabled family's broken credentials should be skipped");
+
+    // Assert
+    assert!(disabled_lookups.is_empty(), "{disabled_lookups:?}");
+    assert!(catalog.specs().count() > 0);
+    assert!(
+        catalog
+            .specs()
+            .all(|spec| spec.provider().is_some_and(ModelProvider::is_enabled))
+    );
+    let candidates: Vec<_> = [Role::SMART, Role::CHEAP, Role::FAST, Role::VISION]
+        .iter()
+        .flat_map(|role| catalog.candidates(role))
+        .collect();
+    assert_ne!(candidates, Vec::<&ModelId>::new());
+    for id in candidates {
+        let provider = catalog.spec(id).and_then(ModelSpec::provider);
+        assert!(provider.is_some_and(ModelProvider::is_enabled), "{id}");
+    }
 }

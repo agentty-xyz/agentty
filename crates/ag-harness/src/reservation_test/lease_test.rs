@@ -12,7 +12,11 @@ use crate::context::HistoryProjection;
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
-use crate::session::{Database, NewSession, SessionError};
+use crate::session::{NewSession, SessionError};
+#[cfg(feature = "sqlite")]
+use crate::sqlite_store::Database;
+#[cfg(not(feature = "sqlite"))]
+use crate::store::MemoryStore;
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::store_fixture::{options, schema};
 
@@ -319,9 +323,12 @@ async fn activating_an_active_guard_keeps_its_ownership_monitor() {
 #[tokio::test]
 async fn stopped_ownership_monitor_reports_ownership_loss() {
     // Arrange
+    #[cfg(feature = "sqlite")]
     let database = Database::open_in_memory()
         .await
         .expect("database should open");
+    #[cfg(not(feature = "sqlite"))]
+    let database = MemoryStore::new();
     database
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await

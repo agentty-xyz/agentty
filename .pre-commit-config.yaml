@@ -379,6 +379,48 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: clippy-ag-harness-features
+        name: ag-harness feature lint
+        description: Lint ag-harness without default features and with each optional feature that gates code alone. Selected feature unification keeps other workspace members from enabling the omitted features.
+        entry: >-
+          bash -eu -o pipefail -c 'export CARGO_RESOLVER_FEATURE_UNIFICATION=selected;
+          cargo clippy -q --locked -p ag-harness --all-targets --no-default-features -- -D warnings;
+          for feature in native-sandbox otel providers-compat providers-openai sqlite; do
+          cargo clippy -q --locked -p ag-harness --all-targets --no-default-features --features "$feature" -- -D warnings; done'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: coverage-ag-harness-features
+        name: ag-harness reduced-feature coverage
+        description: Cover ag-harness without default features, with each provider family alone, and with both families but no other backend, then require one merged report to cover every line and function those builds compile. The last run, which has the most tests, leaves the JUnit report.
+        entry: >-
+          bash -eu -o pipefail -c 'report=target/coverage-ag-harness-features.lcov; rm -f "$report";
+          export CARGO_RESOLVER_FEATURE_UNIFICATION=selected;
+          coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
+          case "$(uname -s)" in Darwin)
+          coverage_rustflags="$coverage_rustflags
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
+          coverage() { env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
+          CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          RUSTFLAGS="$coverage_rustflags" cargo llvm-cov "$@"; };
+          coverage clean --workspace;
+          for features in "" providers-openai providers-compat providers-compat,providers-openai; do
+          coverage nextest --no-report --timings -p ag-harness --no-default-features
+          ${features:+--features "$features"} --lib --tests --locked --profile ci; done;
+          coverage report --lcov
+          --no-default-ignore-filename-regex --ignore-filename-regex
+          "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"
+          --output-path "$report";
+          test -s "$report";
+          env -u CARGO_RESOLVER_FEATURE_UNIFICATION cargo run -q --locked -p ag-xtask -- check-coverage "$report" --path crates/ag-harness/'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: check-slow-tests
         name: slow-test ratchet
         description: Report the slowest tests in the CI nextest JUnit report and fail on any test over 5 s that `.config/slow-tests.yaml` does not list.

@@ -25,6 +25,29 @@ pub(super) trait Clock: Send + Sync {
     async fn wait_until(&self, deadline: Instant);
 }
 
+/// The process's monotonic clock.
+pub(super) struct Monotonic;
+
+#[async_trait]
+impl Clock for Monotonic {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    async fn wait_until(&self, deadline: Instant) {
+        let now = self.now();
+        // An expired deadline must win over ready process events without
+        // waiting for Tokio's next timer tick.
+        if deadline <= now {
+            return;
+        }
+
+        // Convert using the same clock that supplied the deadline. Tokio's
+        // clock can have a different origin after controlled time advancement.
+        tokio::time::sleep(deadline.duration_since(now)).await;
+    }
+}
+
 pub(super) struct Supervisor {
     backend: Arc<dyn BashExecutor>,
     clock: Arc<dyn Clock>,

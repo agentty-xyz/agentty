@@ -22,7 +22,7 @@ ag-contracts = { path = "crates/ag-contracts", version = "0.19.2" }
 ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.2" }
 ag-forge = { path = "crates/ag-forge", version = "0.19.2" }
 ag-git = { path = "crates/ag-git", version = "0.19.2" }
-ag-harness = { path = "crates/ag-harness" }
+ag-harness = { path = "crates/ag-harness", default-features = false }
 ag-protocol = { path = "crates/ag-protocol", version = "0.19.2" }
 ag-runtime = { path = "crates/ag-runtime" }
 ag-router = { path = "crates/ag-router", version = "0.19.2" }

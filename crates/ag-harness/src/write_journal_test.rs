@@ -15,7 +15,8 @@ use tokio::io::AsyncRead;
 
 use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
 use crate::reservation::TurnGuard;
-use crate::session::{Database, NewSession, SessionError, WriteRecordRow};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::{Database, WriteRecordRow};
 use crate::store::{AcquiredTurn, SessionStore as _};
 use crate::tool::{WriteArguments, WriteError};
 use crate::write::WriteTool;

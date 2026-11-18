@@ -11,8 +11,9 @@ use crate::TurnOutcome;
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
-use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, SessionError};
+use crate::session::SessionError;
+use crate::sqlite_store::Database;
+use crate::sqlite_store::tests::support::{schema, turn_options};
 use crate::store::{AcquiredTurn, HistoryProjection, NewSession, SessionStore};
 use crate::turn::{ModelRequestActivity, TurnReport};
 

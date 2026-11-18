@@ -12,7 +12,7 @@ pub(super) struct AcquisitionGate {
 }
 
 #[async_trait]
-impl crate::session::ReservationObserver for AcquisitionGate {
+impl crate::sqlite_store::ReservationObserver for AcquisitionGate {
     async fn committed(&self) -> Result<(), SessionError> {
         self.entered.notify_one();
         self.release.notified().await;
@@ -28,7 +28,7 @@ pub(super) struct CommitGate {
 }
 
 #[async_trait]
-impl crate::session::ReservationObserver for CommitGate {
+impl crate::sqlite_store::ReservationObserver for CommitGate {
     async fn committing(&self) {
         self.entered.notify_one();
         self.release.notified().await;
