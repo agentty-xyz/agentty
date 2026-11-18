@@ -1,27 +1,21 @@
 //! Command dispatch unit tests with mocked host boundaries.
 
 use std::ffi::OsString;
-use std::io::{self, Write};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use serde_json::Value;
 
-use crate::cli::{Cli, Command, Host, PlanOptions};
+use crate::cli::{AssembleOptions, BuildOptions, Cli, Command, Host, PlanOptions};
 use crate::file_system::MockFileSystem;
 use crate::process::MockProcessRunner;
-use crate::workspace::test_support::{demo_metadata, metadata_bytes};
+use crate::workspace::test_support::{BrokenPipe, demo_metadata, metadata_process};
 
 /// Returns a process runner that answers one `cargo metadata` call with the
 /// demo workspace.
 fn demo_process() -> MockProcessRunner {
-    let mut process = MockProcessRunner::new();
-    process
-        .expect_output()
-        .once()
-        .return_once(|_| Ok(metadata_bytes(&demo_metadata())));
-
-    process
+    metadata_process(&demo_metadata())
 }
 
 /// Returns a file system on which every `is_file` call answers `result`.
@@ -48,6 +42,7 @@ fn run(
         cargo: OsString::from("cargo"),
         file_system,
         process,
+        source_date_epoch: None,
     };
     let mut stdout = Vec::new();
     let result = host.run(command, &mut stdout);
@@ -55,34 +50,76 @@ fn run(
     (result, String::from_utf8(stdout).expect("UTF-8 output"))
 }
 
-/// Writer whose every write fails.
-struct BrokenPipe;
-
-impl Write for BrokenPipe {
-    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
-        Err(io::Error::from(io::ErrorKind::BrokenPipe))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Err(io::Error::from(io::ErrorKind::BrokenPipe))
-    }
-}
-
 #[test]
-fn cli_parses_plan_with_an_optional_tag() {
+fn cli_parses_every_command() {
     // Arrange
     let arguments = [
         vec!["ag-release", "plan"],
         vec!["ag-release", "plan", "--tag", "v1.2.3"],
+        vec!["ag-release", "build", "--target", "aarch64-apple-darwin"],
+        vec![
+            "ag-release",
+            "build",
+            "--target",
+            "aarch64-apple-darwin",
+            "--out-dir",
+            "dist",
+        ],
+        vec![
+            "ag-release",
+            "assemble",
+            "--tag",
+            "v1.2.3",
+            "--artifacts-dir",
+            "artifacts",
+        ],
     ];
 
     // Act
-    let tags = arguments.map(|arguments| match Cli::parse_from(arguments).command {
-        Command::Plan(options) => options.tag,
+    let commands = arguments.map(|arguments| match Cli::parse_from(arguments).command {
+        Command::Plan(PlanOptions { tag }) => format!("plan {tag:?}"),
+        Command::Build(BuildOptions { out_dir, target }) => format!("build {target} {out_dir:?}"),
+        Command::Assemble(AssembleOptions { artifacts_dir, tag }) => {
+            format!("assemble {tag} {}", artifacts_dir.display())
+        }
     });
 
     // Assert
-    assert_eq!(tags, [None, Some("v1.2.3".to_string())]);
+    assert_eq!(
+        commands,
+        [
+            "plan None",
+            "plan Some(\"v1.2.3\")",
+            "build aarch64-apple-darwin None",
+            "build aarch64-apple-darwin Some(\"dist\")",
+            "assemble v1.2.3 artifacts",
+        ]
+    );
+}
+
+#[test]
+fn report_written_prints_one_path_per_line_and_reports_write_failures() {
+    // Arrange
+    let paths = [
+        PathBuf::from("out/a.tar.gz"),
+        PathBuf::from("out/a.tar.gz.sha256"),
+    ];
+    let mut stdout = Vec::new();
+
+    // Act
+    let printed = Host::report_written(&mut stdout, &paths);
+    let failed = Host::report_written(&mut BrokenPipe, &paths);
+
+    // Assert
+    assert_eq!(printed, Ok(()));
+    assert_eq!(
+        String::from_utf8(stdout).expect("UTF-8 output"),
+        "out/a.tar.gz\nout/a.tar.gz.sha256\n"
+    );
+    assert_eq!(
+        failed,
+        Err("failed to write the command output: broken pipe".to_string())
+    );
 }
 
 #[test]
@@ -180,6 +217,7 @@ fn plan_reports_output_write_failures() {
         cargo: OsString::from("cargo"),
         file_system: &file_system,
         process: &process,
+        source_date_epoch: None,
     };
 
     // Act

@@ -1,9 +1,10 @@
 # ag-release
 
-`ag-release` plans GitHub releases of the binaries in a Cargo workspace. It reads its
-configuration from `Cargo.toml` and prints a release plan, a JSON document that release
-workflows consume. It is a small, project-agnostic replacement for a `dist`
-(`cargo-dist`) `dist-workspace.toml` setup.
+`ag-release` plans and packages GitHub releases of the binaries in a Cargo workspace. It
+reads its configuration from `Cargo.toml`, prints a release plan (a JSON document that
+release workflows consume), builds deterministic archives, and assembles the
+release-wide checksums and manifest. It is a small, project-agnostic replacement for a
+`dist` (`cargo-dist`) `dist-workspace.toml` setup.
 
 ## Quick Start
 
@@ -13,6 +14,10 @@ workflows consume. It is a small, project-agnostic replacement for a `dist`
    [Configuration](#configuration)).
 1. Set `repository = "https://github.com/<owner>/<name>"` on each released package.
 1. Run `ag-release plan` from anywhere in the workspace to validate the configuration.
+1. In the release workflow, run `ag-release build --target <triple>` on each matrix job,
+   collect every job's output into one directory, and run
+   `ag-release assemble --tag <tag> --artifacts-dir <dir>` on a checkout of the tagged
+   commit. Upload the directory's files to the GitHub release.
 
 ## Configuration
 
@@ -75,19 +80,59 @@ Each `apps[]` entry has `name`, `binaries`, `description`, `license`, `authors`,
 `archives[]` (`target`, `name`, `checksum`, `directory`), and `shell_installer`,
 `npm_package`, and `npm_tarball`, which are `null` unless that installer is enabled.
 
+### `build --target <triple> [--out-dir <dir>]`
+
+Runs
+`cargo build --locked --profile <profile> --target <triple> --package <app>... --bins`
+in the workspace root, streaming Cargo's output to stderr, then writes each app's
+`<app>-<target>.tar.gz` and `.sha256` into `<dir>` and prints their paths on stdout. The
+target must be configured, and its Rust target must already be installed (for example
+with `rustup target add`); `ag-release` does not install toolchains. `<dir>` defaults to
+`ag-release.out` in Cargo's target directory.
+
+### `assemble --tag <tag> --artifacts-dir <dir>`
+
+Checks that `<dir>` holds every archive the plan names, each with a `.sha256` file that
+matches it, and fails with a list of every missing or mismatched file otherwise. Then
+writes `source.tar.gz` and its `.sha256`, `sha256.sum`, and `release-manifest.json` into
+`<dir>` and prints their paths. The source archive is `git archive HEAD` of the
+workspace root below a `<repository name>-<version>/` directory, so run `assemble` on a
+checkout of the tagged commit. Other files in `<dir>` are ignored.
+
+`sha256.sum` lists every archive and the source archive, sorted by file name.
+`release-manifest.json` holds the release plan for the tag and the SHA-256 of each file
+that `sha256.sum` lists:
+
+```json
+{
+  "plan": { "tag": "v1.2.3", "version": "1.2.3", "...": "..." },
+  "sha256": {
+    "my-app-x86_64-unknown-linux-gnu.tar.gz": "<hex>",
+    "source.tar.gz": "<hex>"
+  }
+}
+```
+
 ## Artifacts
 
 The plan names every file a release publishes:
 
-| File                           | Contents                                   |
-| ------------------------------ | ------------------------------------------ |
-| `<app>-<target>.tar.gz`        | Top-level `<app>-<target>/` directory      |
-| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum            |
-| `<app>-installer.sh`           | Shell installer                            |
-| `<app>-npm-package.tar.gz`     | npm package `<npm-scope>/<app>` or `<app>` |
-| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit        |
-| `sha256.sum`                   | Checksums of every published file          |
-| `release-manifest.json`        | The plan and the SHA-256 of every artifact |
+| File                           | Contents                                                            |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `<app>-<target>.tar.gz`        | The app's binaries and `include` files in `<app>-<target>/`         |
+| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum: `<hex>  <file name>`               |
+| `<app>-installer.sh`           | Shell installer (planned; `assemble` does not write it yet)         |
+| `<app>-npm-package.tar.gz`     | npm package (planned; `assemble` does not write it yet)             |
+| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit                                 |
+| `sha256.sum`                   | `sha256sum`-compatible checksums of the archives and source archive |
+| `release-manifest.json`        | The plan and the SHA-256 of every file in `sha256.sum`              |
+
+Archives are reproducible: the same inputs give byte-identical `.tar.gz` files. Entries
+are sorted, owned by uid and gid 0 without user or group names, and have mode `0755`
+(directories and binaries) or `0644` (other files). Every entry's modification time is
+`SOURCE_DATE_EPOCH` when that variable is set to a number of seconds, and 0 otherwise.
+The gzip header records no file name or timestamp. The source archive's entries carry
+the commit time that `git archive` records.
 
 ## Limitations
 
