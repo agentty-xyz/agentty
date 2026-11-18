@@ -90,9 +90,9 @@ cargo run --locked -p ag-harness-cli -- serve
 - `run/start` answers with a run ID at once. The run's events follow as `run/event`
   notifications and end with a `completed` event that carries its usage, cost, and any
   failure. `run/cancel` succeeds for any run the server started, even a finished one.
-- `completed` arrives only after the run's turn is recorded: a run that emitted
-  `started` is then in `session/transcript` with its final status, and a run cancelled
-  before `started` recorded no turn.
+- After `completed`, `session/transcript` shows the terminal status of a run that
+  emitted `started`, unless the turn's cleanup failed; the schema's `completed`
+  description has the details.
 - Errors are JSON-RPC errors; harness failures carry `data.kind` and `data.retryable`.
   Malformed lines are answered with an error and the server keeps running. A message
   without `id` is executed but never answered.

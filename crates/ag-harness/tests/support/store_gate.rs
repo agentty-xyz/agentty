@@ -8,9 +8,9 @@ use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore,
-    StoreIdentity, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
+    StoreIdentity, StoredTurn, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
 };
-use ag_harness::{SessionError, TurnError, TurnOutcome};
+use ag_harness::{SessionError, TurnError, TurnOutcome, TurnRange};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -25,6 +25,8 @@ pub(crate) struct Gate {
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
     pub(crate) panic_switch: bool,
+    /// Holds each interrupt between `entered` and `release`.
+    pub(crate) pause_interrupt: AtomicBool,
     pub(crate) pause_switch: bool,
     pub(crate) release: Notify,
     pub(crate) reserve_session: Option<String>,
@@ -42,6 +44,7 @@ impl Gate {
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
             panic_switch: false,
+            pause_interrupt: AtomicBool::new(false),
             pause_switch: false,
             release: Notify::new(),
             reserve_session: None,
@@ -196,6 +199,9 @@ impl SessionStore for Gate {
 
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
         self.interrupted.notify_one();
+        if self.pause_interrupt.load(Ordering::SeqCst) {
+            self.pause().await;
+        }
         if self.fail_cleanup.load(Ordering::SeqCst) {
             return Err(SessionError::Store {
                 operation: "interrupt",
@@ -204,6 +210,14 @@ impl SessionStore for Gate {
         }
 
         self.store.interrupt(owner).await
+    }
+
+    async fn load_transcript(
+        &self,
+        session_id: &str,
+        range: &TurnRange,
+    ) -> Result<Vec<StoredTurn>, SessionError> {
+        self.store.load_transcript(session_id, range).await
     }
 
     async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {

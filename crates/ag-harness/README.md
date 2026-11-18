@@ -284,12 +284,14 @@ let outcome = session
   index, and catalog model ID, assistant text, reasoning, tool calls with their
   arguments and results, per-request usage and cost, context reductions, and a
   successful run's committed `Output` item. `Completed` is always the last event, also
-  after a failure or cancellation; items still open then were interrupted. Delivery is
-  lossless: the run waits while the stream is full, so read it while awaiting the
-  outcome. Cancelling still resolves a run whose stream is full. Dropping the stream
-  discards events without stalling the run. Events carry session content, so never
-  export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`; the
-  schema is committed in `crates/ag-harness/schema/run_event.json`.
+  after a failure or cancellation; items still open then were interrupted. It follows
+  settlement, so the transcript then holds the terminal status of a run that emitted
+  `Started`, unless persistence cleanup failed. Delivery is lossless: the run waits
+  while the stream is full, so read it while awaiting the outcome. Cancelling still
+  resolves a run whose stream is full. Dropping the stream discards events without
+  stalling the run. Events carry session content, so never export them as telemetry.
+  Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
+  `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy
