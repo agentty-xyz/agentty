@@ -122,12 +122,12 @@ use ag_harness::store::{SessionInfo, WriteStatus};
 use ag_harness::tool::LocalFileSystem;
 use ag_harness::tool::{FileSystem, ToolCall, ToolDefinition};
 #[cfg(feature = "sqlite")]
-use ag_harness::{ComparisonBase, RunOutput, RunRequest, Session, SessionBuilder};
+use ag_harness::{ComparisonBase, Session, SessionBuilder};
 use ag_harness::{
     ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent, ImageMediaType, InputBlock,
     Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, Role, RunError, SessionError, Tool, ToolPolicy, TurnError, TurnInput,
-    TurnInputError, TurnOptions,
+    RepositoryError, Role, RunError, RunOutput, RunRequest, SessionError, Tool, ToolPolicy,
+    TurnError, TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;

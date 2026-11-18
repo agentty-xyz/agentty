@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::timeout_at;
 
-use crate::bash::{BashArguments, BashError};
+use crate::bash::BashError;
 use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
 use crate::calibration::{Calibration, ContextCalibration};
@@ -52,7 +52,7 @@ use crate::turn::{
     sanitized_completion_metadata,
 };
 use crate::usage::{Cost, TurnUsage};
-use crate::write::{WriteError, WriteTool};
+use crate::write::WriteTool;
 use crate::{compaction, context, schema_contract};
 
 /// Final outputs a turn may have rejected for invalid JSON or a schema
@@ -133,7 +133,7 @@ impl Engine<'_> {
         // Host instructions are journaled after the input, so the turn
         // replays with them.
         if let Some(instructions) = request.instructions_message() {
-            Self::persist(recorder.as_ref(), instructions)
+            Self::persist(journal.as_ref(), instructions)
                 .await
                 .map_err(EngineFailure::unreported)?;
         }

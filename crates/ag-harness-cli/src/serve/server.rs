@@ -197,7 +197,7 @@ where
                 };
                 self.respond(id, Ok(MethodResult::RunStarted(started)))
                     .await?;
-                self.spawn(run);
+                self.spawn(*run);
             }
             Err(error) => self.respond(id, Err(error)).await?,
         }
@@ -227,7 +227,9 @@ where
         let result = match call {
             Call::SessionCreate(params) => self.create(params).await?,
             Call::SessionResume(params) => self.resume(params).await?,
-            Call::RunStart(params) => return self.start(params).map(Reply::Run),
+            Call::RunStart(params) => {
+                return self.start(params).map(|run| Reply::Run(Box::new(run)));
+            }
             Call::RunCancel(params) => self.cancel(&params.run)?,
             Call::SessionTranscript(params) => self.transcript(params).await?,
             Call::SessionUsage(params) => {
@@ -479,7 +481,7 @@ enum Reply {
     /// The request's result.
     Result(MethodResult),
     /// A run to announce and then start.
-    Run(PendingRun),
+    Run(Box<PendingRun>),
     /// `shutdown`, answered once every run stopped.
     Shutdown,
 }

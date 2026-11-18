@@ -492,7 +492,6 @@ impl EventSink {
         let final_permits = (0..FINAL_EVENTS)
             .filter_map(|_| sender.clone().try_reserve_owned().ok())
             .collect();
-        let run = RunId(uuid::Uuid::new_v4().to_string());
         let stream = EventStream {
             receiver,
             run: run.clone(),
