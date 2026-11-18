@@ -6,9 +6,11 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
+# Keep this companion CLI out of crates.io releases.
+publish = false
 
 [package.metadata.dist]
-# Publish this package only through the crates.io workflow.
+# Keep this companion CLI out of `cargo-dist` archives and installers.
 dist = false
 
 [[bin]]
