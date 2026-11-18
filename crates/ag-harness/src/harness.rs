@@ -1197,9 +1197,8 @@ impl Harness {
 
     /// Allows one built-in tool by default for `run_once` and `Session::send`.
     ///
-    /// The default set, or [`ToolSet::builtins`] without one, offers only
-    /// the built-ins allowed this way. Explicit turn options, and a
-    /// [`RunRequest::tools`] set, replace this default policy completely.
+    /// Without a default set from [`Self::tools`], the harness offers the
+    /// built-ins allowed this way; a set, at any level, always wins.
     #[deprecated(since = "0.20.0", note = "use `Harness::tools` with a `ToolSet`")]
     #[expect(deprecated, reason = "takes the deprecated `Tool`")]
     #[must_use]
@@ -1211,8 +1210,9 @@ impl Harness {
 
     /// Offers exactly `tools` by default for `run_once`, `Session::send`,
     /// and runs. A [`RunRequest::tools`] or explicit [`TurnOptions`]
-    /// replace the set; without one, the harness offers no tools. Only the
-    /// deprecated [`Self::allow`] on this harness drops built-ins from it.
+    /// replace the set; without one, the harness offers no tools, or the
+    /// built-ins a deprecated [`Self::allow`] allows, which never filters
+    /// this set.
     ///
     /// The defaults carry no [`crate::bash::BashConfig`], so a default set
     /// holding `bash`, such as [`ToolSet::builtins`], needs one on every run
@@ -1703,7 +1703,7 @@ impl Harness {
     }
 
     fn default_options(&self, output: OutputMode) -> TurnOptions {
-        TurnOptions::resolved(output, &self.inner.tools)
+        TurnOptions::from_output(output).with_tools(self.inner.tools.resolve())
     }
 
     /// Returns an engine for a durable turn of session `session` that
@@ -1883,8 +1883,8 @@ impl HarnessBuilder {
 
     /// Offers exactly `tools` in every turn that uses the defaults; without
     /// a set, the harness offers no tools. A [`RunRequest::tools`] or
-    /// explicit [`TurnOptions`] replace the set. Only the deprecated
-    /// [`Self::allow`] on this builder drops built-ins from it.
+    /// explicit [`TurnOptions`] replace the set. A deprecated
+    /// [`Self::allow`] applies only without a set and never filters it.
     ///
     /// A default set holding `bash` needs a [`crate::bash::BashConfig`] on
     /// every run or turn, as [`Harness::tools`] describes.
@@ -2192,7 +2192,7 @@ impl HarnessConfig {
                 self.context_estimator.as_ref(),
                 self.context_budget,
                 system_prompt,
-                &TurnOptions::resolved(output.clone(), &self.tools),
+                &TurnOptions::from_output(output.clone()).with_tools(self.tools.resolve()),
                 DEFAULT_MAX_HISTORY_BYTES,
             )
             .unwrap_or(DEFAULT_MAX_HISTORY_BYTES),

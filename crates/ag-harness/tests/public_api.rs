@@ -686,12 +686,18 @@ fn external_consumer_deprecated_tool_policy_maps_onto_a_tool_set() {
     // Assert
     assert_eq!(legacy.tools(), &read_only);
     assert_eq!(legacy, options, "equal options offer the same tools");
+    assert_eq!(legacy.tool_policy(), policy);
     assert_eq!(legacy.tool_policy(), options.tool_policy());
+    assert_eq!(
+        legacy.with_tools(ToolSet::builtins()),
+        options.with_tools(ToolSet::builtins()),
+        "equal options stay interchangeable after a later set"
+    );
     assert_eq!(legacy_hosted.tools(), &host_only);
     assert_eq!(
         legacy_hosted.tool_policy(),
-        policy,
-        "the getter keeps returning the configured policy"
+        ag_harness::ToolPolicy::default(),
+        "the getter reports the built-ins of the offered set"
     );
     assert_eq!(ag_harness::Tool::Read.name(), "read");
 }

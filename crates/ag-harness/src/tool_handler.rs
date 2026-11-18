@@ -314,8 +314,12 @@ impl ToolSet {
         }
     }
 
-    /// Returns this set with the built-in `read` added last, unless the set
-    /// already holds it.
+    /// Returns this set with the built-in `read`, unless the set already
+    /// holds it.
+    ///
+    /// Built-ins added this way keep their advertised order, `read`, `write`,
+    /// then `bash`, whatever order the calls come in, so equal selections
+    /// record and fingerprint alike; handlers keep their positions.
     ///
     /// Unlike [`ToolSetBuilder::read`], which rejects a second `read` with
     /// [`ToolSetError::DuplicateName`], this is idempotent: it cannot fail.
@@ -324,15 +328,15 @@ impl ToolSet {
         self.with_builtin(Builtin::Read)
     }
 
-    /// Returns this set with the built-in `write` added last, unless the
-    /// set already holds it; idempotent, like [`Self::with_read`].
+    /// Returns this set with the built-in `write`, unless the set already
+    /// holds it; ordered and idempotent like [`Self::with_read`].
     #[must_use]
     pub fn with_write(self) -> Self {
         self.with_builtin(Builtin::Write)
     }
 
-    /// Returns this set with the built-in `bash` added last, unless the set
-    /// already holds it; idempotent, like [`Self::with_read`].
+    /// Returns this set with the built-in `bash`, unless the set already
+    /// holds it; ordered and idempotent like [`Self::with_read`].
     ///
     /// A turn offering `bash` fails unless it has a
     /// [`crate::bash::BashConfig`], which the harness defaults never carry:
@@ -387,12 +391,22 @@ impl ToolSet {
         &self.entries
     }
 
-    /// Returns this set with `builtin` added last, unless it already holds
-    /// it. No handler takes a built-in's name, so the name stays unique.
+    /// Returns this set with `builtin` added before the first built-in that
+    /// follows it in the advertised order, or last, unless the set already
+    /// holds it. Built-ins so keep their advertised order whatever order they
+    /// are added in, and handlers keep their positions. No handler takes a
+    /// built-in's name, so the name stays unique.
     fn with_builtin(mut self, builtin: Builtin) -> Self {
-        if !self.permissions().allows(builtin) {
-            self.entries.push(ToolEntry::Builtin(builtin));
+        if self.permissions().allows(builtin) {
+            return self;
         }
+
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| matches!(entry, ToolEntry::Builtin(held) if *held > builtin))
+            .unwrap_or(self.entries.len());
+        self.entries.insert(index, ToolEntry::Builtin(builtin));
 
         self
     }
@@ -571,9 +585,8 @@ impl ToolSetBuilder {
     }
 }
 
-/// The tools a harness default, a run, or a turn selects: a set, and the
-/// permissions of a deprecated [`crate::ToolPolicy`], which drop the
-/// built-ins it denies from that set.
+/// The tools a harness offers by default: a set, or, without one, the
+/// built-ins a deprecated [`crate::ToolPolicy`] allows.
 #[derive(Clone, Default)]
 pub(crate) struct ToolSelection {
     /// Built-ins a deprecated policy allows.
@@ -582,41 +595,19 @@ pub(crate) struct ToolSelection {
 }
 
 impl ToolSelection {
-    /// Returns this selection with its unset parts taken from `defaults`.
-    ///
-    /// A selection that gives its own set offers exactly that set: the
-    /// deprecated policy of `defaults` restricts only a set this selection
-    /// inherits, never one it gives.
-    pub(crate) fn or(self, defaults: &Self) -> Self {
-        let legacy_permissions = match (&self.tools, self.legacy_permissions) {
-            (_, Some(permissions)) => Some(permissions),
-            (Some(_), None) => None,
-            (None, None) => defaults.legacy_permissions,
-        };
-
-        Self {
-            legacy_permissions,
-            tools: self.tools.or_else(|| defaults.tools.clone()),
-        }
-    }
-
     /// Allows `builtin` in the deprecated policy, which starts denying
     /// every built-in.
     pub(crate) fn allow(&mut self, builtin: Builtin) {
         self.legacy_permissions = Some(self.legacy_permissions.unwrap_or_default().allow(builtin));
     }
 
-    /// Returns the set a turn offers: the selected set without the
-    /// built-ins a deprecated policy denies. With such a policy, a
-    /// selection without a set starts from [`ToolSet::builtins`]; without
-    /// one, it offers no tools.
+    /// Returns the set a turn offers: the selected set whenever there is
+    /// one, otherwise the built-ins a deprecated policy allows, otherwise no
+    /// tools.
     pub(crate) fn resolve(&self) -> ToolSet {
         match (&self.tools, self.legacy_permissions) {
-            (tools, Some(allowed)) => tools
-                .as_ref()
-                .map_or_else(ToolSet::builtins, ToolSet::clone)
-                .restricted_to(allowed),
-            (Some(tools), None) => tools.clone(),
+            (Some(tools), _) => tools.clone(),
+            (None, Some(allowed)) => ToolSet::builtins().restricted_to(allowed),
             (None, None) => ToolSet::empty(),
         }
     }

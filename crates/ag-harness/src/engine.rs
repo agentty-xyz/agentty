@@ -1879,7 +1879,7 @@ fn count_malformed(
 /// tool `tools` offers with arguments that tool cannot decode.
 fn malformed_call(call: &ToolCall, tools: &Tools) -> Option<(String, String)> {
     if let Some(arguments) = call.malformed_arguments() {
-        let name = arguments.tool_name();
+        let name = arguments.name();
 
         return tools
             .handler(name)
@@ -1931,7 +1931,7 @@ fn unavailable_tool_result(name: &str, options: &TurnOptions) -> String {
 /// Renders the error result that answers a call with malformed arguments,
 /// naming the decoding failure and every argument field of the called tool.
 fn malformed_arguments_result(arguments: &MalformedArguments, options: &TurnOptions) -> String {
-    let name = arguments.tool_name();
+    let name = arguments.name();
     let fields = context::advertised_tools(options)
         .into_iter()
         .find(|tool| tool.name() == name)

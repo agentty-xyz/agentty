@@ -218,25 +218,30 @@ fn a_set_extends_another_through_its_builder() {
 }
 
 #[test]
-fn with_builtin_methods_append_each_built_in_once() {
+fn with_builtin_methods_add_each_built_in_once_in_advertised_order() {
     // Arrange
     let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
     let hosted = ToolSet::builder()
         .handler(Arc::clone(&echo))
+        .write()
         .build()
         .expect("tool set");
 
     // Act
     let selected = ToolSet::empty().with_read().with_write().with_bash();
+    let reversed = ToolSet::empty().with_bash().with_write().with_read();
     let repeated = ToolSet::empty().with_read().with_read();
     let extended = hosted.with_bash().with_read();
 
     // Assert
     assert_eq!(selected, ToolSet::builtins());
+    // Call order changes neither the set nor how it is recorded.
+    assert_eq!(reversed, ToolSet::builtins());
+    assert_eq!(reversed.recorded_names(), None);
     assert_eq!(repeated.names().collect::<Vec<_>>(), ["read"]);
     assert_eq!(
         extended.names().collect::<Vec<_>>(),
-        ["echo", "bash", "read"]
+        ["echo", "read", "write", "bash"]
     );
 }
 
@@ -276,7 +281,7 @@ fn permissions_list_the_built_ins_a_set_holds_and_restrict_it() {
 }
 
 #[test]
-fn a_selection_resolves_its_set_without_the_built_ins_a_legacy_policy_denies() {
+fn a_selection_offers_its_set_or_else_the_built_ins_a_legacy_policy_allows() {
     // Arrange
     let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
     let hosted = ToolSet::builder()
@@ -286,32 +291,19 @@ fn a_selection_resolves_its_set_without_the_built_ins_a_legacy_policy_denies() {
         .expect("tool set");
     let mut legacy = ToolSelection::default();
     legacy.allow(Builtin::Read);
-    let set_only = ToolSelection {
-        legacy_permissions: None,
-        tools: Some(hosted.clone()),
-    };
+    let mut both = legacy.clone();
+    both.tools = Some(hosted.clone());
 
     // Act
     let nothing = ToolSelection::default().resolve();
     let legacy_builtins = legacy.resolve();
-    let selected = set_only.resolve();
-    let restricted = legacy.clone().or(&set_only).resolve();
-    let inherited = ToolSelection::default().or(&legacy);
-    let overridden = set_only.or(&legacy);
+    let set_wins = both.resolve();
 
     // Assert
     assert!(nothing.is_empty());
     assert_eq!(legacy_builtins.names().collect::<Vec<_>>(), ["read"]);
-    assert_eq!(selected, hosted);
-    assert_eq!(restricted.names().collect::<Vec<_>>(), ["echo"]);
-    assert_eq!(
-        inherited.legacy_permissions,
-        Some(BuiltinPermissions::default().allow(Builtin::Read))
-    );
-    // A set given at this level is offered exactly; the inherited
-    // deprecated policy no longer drops its `write`.
-    assert_eq!(overridden.legacy_permissions, None);
-    assert_eq!(overridden.resolve(), hosted);
+    // The deprecated policy never filters a set: `write` stays offered.
+    assert_eq!(set_wins, hosted);
 }
 
 #[test]
@@ -322,7 +314,7 @@ fn only_a_set_other_than_built_ins_in_advertised_order_is_recorded() {
         .bash()
         .build()
         .expect("tool set");
-    let reordered = ToolSet::empty().with_bash().with_read();
+    let reordered = ToolSet::builder().bash().read().build().expect("tool set");
 
     // Act
     let names = set.recorded_names();

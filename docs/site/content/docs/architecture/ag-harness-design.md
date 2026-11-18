@@ -31,8 +31,8 @@ flowchart LR
   `ToolSet`; the built-in `read`, `write` (git-style patches), and sandboxed `bash` are
   handlers bound to the turn's repository and journal.
 - **Deny-by-default tools** — a turn offers exactly the handlers of its set, and a
-  harness offers none until the host gives it one; the deprecated `ToolPolicy` only
-  drops the built-ins it denies from that set.
+  harness offers none until the host gives it one; the deprecated `ToolPolicy` offers
+  its allowed built-ins only when no set is given.
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.

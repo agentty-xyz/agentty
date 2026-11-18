@@ -10,20 +10,10 @@ mod calibration;
 mod cancellation;
 #[path = "harness_test/fault_test.rs"]
 mod fault;
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage: the deprecated `ToolPolicy` must send the same definitions \
-              and record the same host requests as the equivalent set"
-)]
 #[path = "harness_test/handler_test.rs"]
 mod handler;
 #[path = "harness_test/history_test.rs"]
 mod history;
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage: options configured through the deprecated `ToolPolicy` \
-              keep their stored snapshots and replay"
-)]
 #[cfg(feature = "sqlite")]
 #[path = "harness_test/options_test.rs"]
 mod options;
@@ -44,10 +34,5 @@ mod tool_loop;
 #[path = "harness_test/write_journal_test.rs"]
 mod write_journal;
 
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage: fingerprints recorded through the deprecated `ToolPolicy` \
-              stay recognizable"
-)]
 #[path = "harness_test/recovery_test.rs"]
 mod recovery;

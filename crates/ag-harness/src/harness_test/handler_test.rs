@@ -28,7 +28,12 @@ use crate::tool::{
     ToolCall, ToolContext, ToolDefinition, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet,
 };
 use crate::turn::{HostToolOutcome, ToolActivity, TurnError};
-use crate::{ComparisonBase, Repository, RunRequest, Tool, ToolPolicy, TurnOptions};
+use crate::{ComparisonBase, Repository, RunRequest, TurnOptions};
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated policy API"
+)]
+use crate::{Tool, ToolPolicy};
 
 /// SHA-256 of the built-in definitions advertised with every built-in
 /// allowed, no comparison base, and an unsandboxed `bash`, serialized as
@@ -502,7 +507,7 @@ async fn a_durable_turn_names_its_session_and_replays_host_calls() {
 #[tokio::test]
 async fn a_host_id_reused_with_another_tool_set_conflicts() {
     // Arrange
-    let (model, requests) = scripted(vec![output(), output()]);
+    let (model, requests) = scripted(vec![output()]);
     let harness = harness(model, ToolSet::empty())
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("scripted", "1").expect("identity"));
@@ -513,9 +518,6 @@ async fn a_host_id_reused_with_another_tool_set_conflicts() {
         .expect("session");
     let options = || TurnOptions::from_output(object_schema());
     let host_only = tool_set(Recorder::new(Answer::Echo));
-    // The deprecated policy denies `write`, so this set offers only `fetch`.
-    let policy_restricted = TurnOptions::new(object_schema(), ToolPolicy::default())
-        .with_tools(host_only.to_builder().write().build().expect("tool set"));
 
     // Act
     let first = session
@@ -526,40 +528,32 @@ async fn a_host_id_reused_with_another_tool_set_conflicts() {
         .expect("first turn");
     let retried = session
         .turn("ask")
-        .options(TurnOptions::new(object_schema(), ToolPolicy::default()))
+        .options(options().with_tools(ToolSet::empty()))
         .host_id("job")
         .await
         .expect("same request");
     let changed = session
         .turn("ask")
-        .options(options().with_tools(host_only.clone()))
+        .options(options().with_tools(host_only))
         .host_id("job")
         .await;
-    let hosted = session
-        .turn("ask")
-        .options(options().with_tools(host_only))
-        .host_id("hosted")
-        .await
-        .expect("hosted turn");
-    let restricted = session
-        .turn("ask")
-        .options(policy_restricted)
-        .host_id("hosted")
-        .await
-        .expect("same hosted request");
 
     // Assert
     assert_eq!(retried.output(), first.output());
     assert!(matches!(changed, Err(SessionError::HostTurnConflict)));
-    assert_eq!(restricted.output(), hosted.output());
     assert_eq!(
         requests.lock().expect("requests lock").len(),
-        2,
-        "each equivalent request replays the recorded turn"
+        1,
+        "the equivalent request replays the recorded turn"
     );
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: requests recorded through the deprecated `ToolPolicy` \
+              replay"
+)]
 async fn a_host_request_recorded_with_a_deprecated_policy_replays_with_its_tool_set() {
     // Arrange
     let cases: [&[Tool]; 3] = [&[], &[Tool::Read], &[Tool::Read, Tool::Write, Tool::Bash]];
@@ -710,13 +704,11 @@ async fn a_run_tool_set_replaces_the_default_and_orders_host_and_built_in_tools(
         .expect("tool set");
     let bash = call("bash_0", "bash", r#"{"command":"ls"}"#);
     let (model, requests) = scripted(vec![ModelResponse::ToolCall(bash), output()]);
-    // The deprecated default policy allows only `read`; it restricts the
-    // harness's default set, never a set the run gives.
     let harness = Harness::builder()
         .model(Arc::new(model))
         .context_budget(unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .build()
         .expect("harness");
 
@@ -748,7 +740,12 @@ async fn a_run_tool_set_replaces_the_default_and_orders_host_and_built_in_tools(
 }
 
 #[tokio::test]
-async fn a_deprecated_run_policy_restricts_the_default_set_it_inherits() {
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated run policy offers its built-ins unless a set \
+              wins"
+)]
+async fn a_deprecated_run_policy_offers_its_built_ins_unless_the_run_gives_a_set() {
     // Arrange
     let default_set = tool_set(Recorder::new(Answer::Echo))
         .to_builder()
@@ -756,31 +753,44 @@ async fn a_deprecated_run_policy_restricts_the_default_set_it_inherits() {
         .write()
         .build()
         .expect("tool set");
-    let (model, requests) = scripted(vec![output()]);
-    let harness = Harness::builder()
-        .model(Arc::new(model))
-        .context_budget(unbounded_context_budget())
-        .repository(Repository::fixture("repo"))
-        .tools(default_set)
-        .build()
-        .expect("harness");
+    let read_only = || ToolPolicy::default().allow(Tool::Read);
+    let requests = [
+        request().tool_policy(read_only()),
+        request().tool_policy(read_only()).tools(ToolSet::empty()),
+        request().tools(ToolSet::empty()).tool_policy(read_only()),
+    ];
 
     // Act
-    let outcome = harness
-        .run(request().tool_policy(ToolPolicy::default().allow(Tool::Read)))
-        .await;
+    let mut advertised = Vec::new();
+    for run in requests {
+        let (model, sent) = scripted(vec![output()]);
+        let harness = Harness::builder()
+            .model(Arc::new(model))
+            .context_budget(unbounded_context_budget())
+            .repository(Repository::fixture("repo"))
+            .tools(default_set.clone())
+            .build()
+            .expect("harness");
+        harness.run(run).await.result.as_ref().expect("run output");
+        let names = sent.lock().expect("requests lock")[0]
+            .tools()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>();
+        advertised.push(names);
+    }
 
     // Assert
-    outcome.result.as_ref().expect("run output");
-    let advertised = requests.lock().expect("requests lock")[0]
-        .tools()
-        .iter()
-        .map(|tool| tool.name().to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(advertised, ["fetch", "read"]);
+    // The policy replaces the harness's default set with its built-ins, and
+    // a run's own set wins whatever the call order.
+    assert_eq!(advertised, [vec!["read".to_string()], vec![], vec![]]);
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated harness policy never filters a set"
+)]
 async fn built_ins_need_a_repository_only_in_turns_that_offer_them() {
     // Arrange: the builder's set offers only `fetch`, so the allowed `read`
     // needs no repository until a turn's own set offers it again.
@@ -870,6 +880,7 @@ fn bash_config(enforcement: Enforcement) -> BashConfig {
 }
 
 /// Returns the built-ins in `allowed` as a set, in their advertised order.
+#[expect(deprecated, reason = "maps the deprecated `Tool` cases onto sets")]
 fn selected_builtins(allowed: &[Tool]) -> ToolSet {
     let mut tools = ToolSet::empty();
     if allowed.contains(&Tool::Read) {
@@ -890,6 +901,10 @@ fn selected_builtins(allowed: &[Tool]) -> ToolSet {
 /// `bash` claiming `enforcement`. The built-ins are selected through a
 /// [`ToolSet`], or through the deprecated [`ToolPolicy`] when `legacy` is
 /// set.
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: the deprecated `ToolPolicy` sends the same definitions"
+)]
 async fn sent_definitions(
     compared: bool,
     enforcement: Enforcement,
@@ -928,6 +943,10 @@ fn triple(definition: &ToolDefinition) -> Value {
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: the deprecated `ToolPolicy` sends the same definitions"
+)]
 async fn built_in_definitions_sent_to_the_model_are_unchanged() {
     // Arrange
     let golden: Value = serde_json::from_str(BUILTIN_DEFINITIONS).expect("golden JSON");

@@ -457,11 +457,17 @@ fn a_built_in_selection_records_the_snapshot_its_deprecated_policy_did() {
 
     // Assert
     assert_eq!(selected, legacy);
-    assert_eq!(
-        serde_json::from_str::<Value>(&selected[1]).expect("snapshot")["tool_policy"],
-        json!({"read": true, "write": false})
-    );
+    // Snapshots `TurnOptions::new` encoded before tool sets replaced the
+    // policy, recorded on the base this change started from.
+    assert_eq!(selected[1..], RECORDED_SNAPSHOTS);
 }
+
+/// Snapshots of the `read`-only and all-built-ins policies as recorded
+/// before tool sets existed.
+const RECORDED_SNAPSHOTS: [&str; 2] = [
+    r#"{"comparison_base":null,"output_schema":{"type":"object"},"tool_policy":{"read":true,"write":false},"version":6,"bash":null,"instructions":null,"generation":{},"fingerprint":"9625949e5d158c63de04a49c9de77c10d2456561f255bb962ff56c0b05ec171b"}"#,
+    r#"{"comparison_base":null,"output_schema":{"type":"object"},"tool_policy":{"bash":true,"read":true,"write":true},"version":6,"bash":null,"instructions":null,"generation":{},"fingerprint":"dfd793c495b2c4c78e67db818d5ce6d4890a91addc9258c315841ebc2e0be083"}"#,
+];
 
 /// Rewrites a current snapshot as `version`, adding the default legacy
 /// tool-call limit and dropping fields that version did not record.

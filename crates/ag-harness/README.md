@@ -169,17 +169,16 @@ let harness = Harness::builder().model(model).tools(tools).build()?;
 - A turn offers exactly the tools of its set. Select built-ins with
   `ToolSet::builtins()`, `ToolSet::with_read`, `with_write`, and `with_bash`, or the
   builder's `read`, `write`, and `bash`; they need a repository, host handlers do not.
-  `with_*` is idempotent, while the builder rejects a name added twice. The set reads
-  each definition once, and only a call naming the tool exactly runs its handler.
+  `with_*` is idempotent and keeps built-ins in their advertised order whatever the call
+  order, while the builder rejects a name added twice. The set reads each definition
+  once, and only a call naming the tool exactly runs its handler.
 - Harness defaults carry no `BashConfig`, so a default set holding `bash`, such as
   `ToolSet::builtins()`, needs `RunRequest::bash` or `TurnOptions::with_bash` on every
   run or turn; for plain defaults, use `ToolSet::empty().with_read().with_write()`.
 - `Tool`, `ToolPolicy`, `Harness::allow`, `HarnessBuilder::allow`, `TurnOptions::new`,
   `TurnOptions::tool_policy`, `RunRequest::tool_policy`, and `MalformedArguments::tool`
-  are deprecated. They still work: a policy drops the built-ins it denies from the set
-  given at its own level, which defaults to `ToolSet::builtins()` when only a policy is
-  given. A set given at another level, such as `RunRequest::tools` under
-  `HarnessBuilder::allow`, is offered exactly.
+  are deprecated. They still work: a policy offers the built-ins it allows only when no
+  set is given at any level; a set always wins and is offered exactly.
 - `ToolError::rejected` sends feedback to the model and the turn continues, as do
   arguments that are not a JSON object, which also count toward the malformed-response
   limit. A result over 64 KiB is dropped and the model is told the call ran.

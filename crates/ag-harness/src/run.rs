@@ -55,7 +55,7 @@ pub struct RunRequest {
     instructions: Option<String>,
     limits: RunLimits,
     output: Option<OutputMode>,
-    tools: ToolSelection,
+    tools: Option<ToolSet>,
 }
 
 impl RunRequest {
@@ -70,7 +70,7 @@ impl RunRequest {
             instructions: None,
             limits: RunLimits::default(),
             output: None,
-            tools: ToolSelection::default(),
+            tools: None,
         }
     }
 
@@ -88,13 +88,11 @@ impl RunRequest {
     }
 
     /// Offers exactly `tools` in this run instead of the harness's default
-    /// set, like [`TurnOptions::with_tools`]; a deprecated harness default
-    /// policy does not restrict it. Only a deprecated [`Self::tool_policy`]
-    /// on this request drops the built-ins it denies. The sets are never
-    /// merged: to add a tool to a default, such as [`ToolSet::builtins`],
-    /// extend it with [`ToolSet::to_builder`].
+    /// set, like [`TurnOptions::with_tools`]. The sets are never merged: to
+    /// add a tool to a default, such as [`ToolSet::builtins`], extend it
+    /// with [`ToolSet::to_builder`].
     pub fn tools(mut self, tools: ToolSet) -> Self {
-        self.tools.tools = Some(tools);
+        self.tools = Some(tools);
 
         self
     }
@@ -138,15 +136,13 @@ impl RunRequest {
         self
     }
 
-    /// Replaces the harness's default tool policy for this run: the run's
-    /// tool set, or the harness's default set, drops the built-ins `policy`
-    /// denies, and starts from [`ToolSet::builtins`] when neither is set.
-    /// Without this, a harness default policy restricts only the harness's
-    /// default set, never one given with [`Self::tools`].
+    /// Offers the built-ins `policy` allows in this run, unless
+    /// [`Self::tools`] gives the run a set, which always wins.
     #[deprecated(since = "0.20.0", note = "use `RunRequest::tools` with a `ToolSet`")]
     #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
     pub fn tool_policy(mut self, policy: ToolPolicy) -> Self {
-        self.tools.legacy_permissions = Some(policy.into());
+        self.tools
+            .get_or_insert_with(|| ToolSet::builtins().restricted_to(policy.into()));
 
         self
     }
@@ -190,7 +186,9 @@ impl RunRequest {
             .output
             .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
-        let mut options = TurnOptions::resolved(output, &self.tools.or(default_tools))
+        let tools = self.tools.unwrap_or_else(|| default_tools.resolve());
+        let mut options = TurnOptions::from_output(output)
+            .with_tools(tools)
             .with_generation(self.generation)
             .with_limits(self.limits);
         if let Some(configuration) = self.bash {

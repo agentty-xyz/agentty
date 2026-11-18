@@ -32,7 +32,6 @@ use crate::schema_contract::OutputSchema;
 )]
 use crate::tool::Tool;
 use crate::tool::{ReadAction, ToolSet};
-use crate::tool_handler::{BuiltinPermissions, ToolSelection};
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -43,55 +42,30 @@ use crate::write::WriteError;
 /// is unlimited unless its run's [`crate::RunRequest::limits`] bound it;
 /// cancellation and, when declared, the effective model's context budget
 /// bound it either way.
-///
-/// Options compare equal when they configure the same turn: the same output
-/// mode, instructions, generation parameters, limits, Bash policy,
-/// comparison base, and offered tools, however those tools were selected.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
     generation: GenerationParams,
     instructions: Option<String>,
-    /// Built-ins a deprecated [`ToolPolicy`] allows; every set given to
-    /// [`Self::with_tools`] drops the others. Equality leaves it out:
-    /// [`Self::tools`] already reflects it.
-    legacy_permissions: Option<BuiltinPermissions>,
     limits: RunLimits,
     output: OutputMode,
     tools: ToolSet,
 }
 
-impl PartialEq for TurnOptions {
-    fn eq(&self, other: &Self) -> bool {
-        let Self {
-            bash,
-            comparison_base,
-            generation,
-            instructions,
-            legacy_permissions: _,
-            limits,
-            output,
-            tools,
-        } = self;
-
-        *bash == other.bash
-            && *comparison_base == other.comparison_base
-            && *generation == other.generation
-            && *instructions == other.instructions
-            && *limits == other.limits
-            && *output == other.output
-            && *tools == other.tools
-    }
-}
-
-impl Eq for TurnOptions {}
-
 impl TurnOptions {
     /// Resolves an output mode, usually a JSON [`OutputSchema`], for a turn
     /// that offers no tools until [`Self::with_tools`] gives it a set.
     pub fn from_output(output: impl Into<OutputMode>) -> Self {
-        Self::resolved(output, &ToolSelection::default())
+        Self {
+            bash: None,
+            comparison_base: None,
+            generation: GenerationParams::default(),
+            instructions: None,
+            limits: RunLimits::default(),
+            output: output.into(),
+            tools: ToolSet::empty(),
+        }
     }
 
     /// Resolves an output mode and explicit permissions, offering the
@@ -102,27 +76,7 @@ impl TurnOptions {
     )]
     #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
     pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
-        Self::resolved(
-            output,
-            &ToolSelection {
-                legacy_permissions: Some(tool_policy.into()),
-                tools: None,
-            },
-        )
-    }
-
-    /// Resolves `output` with the tools `selection` resolves to.
-    pub(crate) fn resolved(output: impl Into<OutputMode>, selection: &ToolSelection) -> Self {
-        Self {
-            bash: None,
-            comparison_base: None,
-            generation: GenerationParams::default(),
-            instructions: None,
-            legacy_permissions: selection.legacy_permissions,
-            limits: RunLimits::default(),
-            output: output.into(),
-            tools: selection.resolve(),
-        }
+        Self::from_output(output).with_tools(ToolSet::builtins().restricted_to(tool_policy.into()))
     }
 
     /// Bounds this turn's model requests, tool calls, tokens, and wall-clock
@@ -134,15 +88,10 @@ impl TurnOptions {
         self
     }
 
-    /// Offers exactly `tools` in this turn. Options from the deprecated
-    /// [`Self::new`] drop the built-ins their policy denies.
+    /// Offers exactly `tools` in this turn, replacing any earlier set.
     #[must_use]
     pub fn with_tools(mut self, tools: ToolSet) -> Self {
-        self.tools = ToolSelection {
-            legacy_permissions: self.legacy_permissions,
-            tools: Some(tools),
-        }
-        .resolve();
+        self.tools = tools;
 
         self
     }
@@ -217,19 +166,16 @@ impl TurnOptions {
         self.output.schema()
     }
 
-    /// Returns the policy these options were configured with: the one given
-    /// to the deprecated [`Self::new`] or a deprecated default policy, or,
-    /// for options selected with a [`ToolSet`] alone, a policy allowing
-    /// exactly the built-ins [`Self::tools`] holds.
+    /// Returns a policy allowing exactly the built-ins [`Self::tools`]
+    /// holds, which for options from the deprecated [`Self::new`] is the
+    /// policy given there.
     #[deprecated(
         since = "0.20.0",
         note = "use `TurnOptions::tools` for the tools this turn offers"
     )]
     #[expect(deprecated, reason = "returns the deprecated `ToolPolicy`")]
     pub fn tool_policy(&self) -> ToolPolicy {
-        self.legacy_permissions
-            .unwrap_or_else(|| self.tools.permissions())
-            .into()
+        self.tools.permissions().into()
     }
 
     /// Sets the host-validated comparison base for this turn only.

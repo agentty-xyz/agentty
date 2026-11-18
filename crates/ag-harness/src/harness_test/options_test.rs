@@ -19,7 +19,12 @@ use crate::model::{MockModel, ModelMessage, ModelRequest, ModelResponse, Reasoni
 use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::sqlite_store::Database;
-use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnError, TurnOptions};
+use crate::{ComparisonBase, OutputSchema, ToolSet, TurnError, TurnOptions};
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated policy API"
+)]
+use crate::{Tool, ToolPolicy};
 
 fn readable_file_system() -> MockFileSystem {
     let mut file_system = MockFileSystem::new();
@@ -122,7 +127,7 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
         .database(&database_path)
         .repository(Repository::fixture("old"))
         .file_system(readable_file_system())
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .max_history_bytes(NonZeroUsize::new(1024).expect("history budget"))
         .model_reasoning_effort(ReasoningEffort::Low)
         .with_lifecycle_observer(move |event: LifecycleEvent| {
@@ -145,7 +150,7 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
     let harness = harness
         .repository(Repository::fixture("new"))
         .file_system(MockFileSystem::new())
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .max_history_bytes(NonZeroUsize::new(1).expect("history budget"))
         .model_reasoning_effort(ReasoningEffort::High)
         .with_lifecycle_observer(move |event: LifecycleEvent| {
@@ -165,9 +170,8 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
     built.send("builder defaults").await.expect("built turn");
     session
         .turn("explicit options")
-        .options(TurnOptions::new(
+        .options(TurnOptions::from_output(
             OutputSchema::new(json!({"type": "integer"})).expect("integer schema"),
-            ToolPolicy::default(),
         ))
         .await
         .expect("explicit turn");
@@ -236,7 +240,8 @@ async fn equivalent_ephemeral_and_durable_turns_send_the_same_requests() {
         .repository(Repository::fixture("repo"))
         .file_system(readable_file_system())
         .model_reasoning_effort(ReasoningEffort::Low);
-    let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Read));
+    let options =
+        TurnOptions::from_output(object_schema()).with_tools(ToolSet::empty().with_read());
 
     // Act
     harness
@@ -296,7 +301,8 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
         .await
         .expect("session");
     let mut stale = harness.resume("session").await.expect("stale handle");
-    let read = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Read));
+    let read_only = || ToolSet::empty().with_read();
+    let read = TurnOptions::from_output(object_schema()).with_tools(read_only());
     let integer = OutputSchema::new(json!({"type":"integer"})).expect("integer schema");
 
     // Act
@@ -308,18 +314,12 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
         .expect("policy change");
     session
         .turn("schema change")
-        .options(TurnOptions::new(
-            integer.clone(),
-            ToolPolicy::default().allow(Tool::Read),
-        ))
+        .options(TurnOptions::from_output(integer.clone()).with_tools(read_only()))
         .await
         .expect("schema change");
     stale
         .turn("same options")
-        .options(TurnOptions::new(
-            integer,
-            ToolPolicy::default().allow(Tool::Read),
-        ))
+        .options(TurnOptions::from_output(integer).with_tools(read_only()))
         .await
         .expect("same options");
     let mut reopened = harness.resume("session").await.expect("reopened session");
@@ -362,8 +362,46 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
 }
 
 #[tokio::test]
-async fn empty_explicit_policy_answers_calls_as_unavailable_despite_allowed_harness_defaults() {
+async fn empty_explicit_tool_set_answers_calls_as_unavailable_despite_harness_defaults() {
     // Arrange
+    let directory = tempdir().expect("temporary directory");
+    let harness = Harness::new(denied_read_model(), unbounded_context_budget())
+        .tools(ToolSet::empty().with_read().with_write())
+        .database(directory.path().join("history.db"));
+    let denied = TurnOptions::from_output(object_schema());
+
+    // Act
+    let outputs = denied_turn_outputs(&harness, denied).await;
+
+    // Assert
+    assert_denied_read(&outputs);
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: an empty deprecated policy replaces allowed harness \
+              defaults"
+)]
+async fn empty_deprecated_policy_answers_calls_as_unavailable_despite_allowed_harness_defaults() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory");
+    let harness = Harness::new(denied_read_model(), unbounded_context_budget())
+        .allow(Tool::Read)
+        .allow(Tool::Write)
+        .database(directory.path().join("history.db"));
+    let denied = TurnOptions::new(object_schema(), ToolPolicy::default());
+
+    // Act
+    let outputs = denied_turn_outputs(&harness, denied).await;
+
+    // Assert
+    assert_denied_read(&outputs);
+}
+
+/// Returns a model that calls `read` once per turn, is offered no tools,
+/// and answers with the error result it receives.
+fn denied_read_model() -> MockModel {
     let mut model = model();
     model.expect_complete().times(4).returning(|request| {
         assert_eq!(request.tools().len(), 0);
@@ -377,14 +415,13 @@ async fn empty_explicit_policy_answers_calls_as_unavailable_despite_allowed_harn
 
         Ok(response_without_metadata(response))
     });
-    let directory = tempdir().expect("temporary directory");
-    let harness = Harness::new(model, unbounded_context_budget())
-        .allow(Tool::Read)
-        .allow(Tool::Write)
-        .database(directory.path().join("history.db"));
-    let denied = TurnOptions::new(object_schema(), ToolPolicy::default());
 
-    // Act
+    model
+}
+
+/// Runs `denied` as a one-shot and as a durable turn, returning both
+/// outputs.
+async fn denied_turn_outputs(harness: &Harness, denied: TurnOptions) -> [Value; 2] {
     let once = harness.turn("denied", denied.clone()).await;
     let mut session = harness
         .session("session", object_schema())
@@ -393,10 +430,15 @@ async fn empty_explicit_policy_answers_calls_as_unavailable_despite_allowed_harn
         .expect("session");
     let durable = session.turn("denied").options(denied).await;
 
-    // Assert
+    [
+        once.expect("one-shot turn continues").output().clone(),
+        durable.expect("durable turn continues").output().clone(),
+    ]
+}
+
+fn assert_denied_read(outputs: &[Value; 2]) {
     let expected = json!({"summary": "tool `read` is not available in this turn"});
-    assert_eq!(once.expect("one-shot turn continues").output(), &expected);
-    assert_eq!(durable.expect("durable turn continues").output(), &expected);
+    assert_eq!(outputs, &[expected.clone(), expected]);
 }
 
 #[tokio::test]
@@ -428,7 +470,7 @@ async fn options_persistence_failure_prevents_execution_and_reports_session_fail
     // Act
     let result = session
         .turn("never executed")
-        .options(TurnOptions::new(object_schema(), ToolPolicy::default()))
+        .options(TurnOptions::from_output(object_schema()))
         .await;
     let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_message")
         .fetch_one(database.pool())
@@ -476,7 +518,7 @@ async fn failed_schema_override_does_not_leak_into_the_next_turn() {
     // Act
     let invalid = session
         .turn("integer")
-        .options(TurnOptions::new(integer, ToolPolicy::default()))
+        .options(TurnOptions::from_output(integer))
         .await;
     let valid = session.send("default schema").await;
 
@@ -507,7 +549,8 @@ async fn comparison_changes_replay_completed_history_with_persisted_options() {
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(fixture.repository.clone())
         .database(fixture.directory.path().join("session.db"));
-    let without = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Read));
+    let without =
+        TurnOptions::from_output(object_schema()).with_tools(ToolSet::empty().with_read());
     let first = without.clone().with_comparison_base(
         ComparisonBase::validate(&fixture.repository, &fixture.base)
             .await
@@ -565,11 +608,11 @@ async fn reopening_keeps_comparison_fingerprints_across_key_order_changes() {
     let turns: Vec<_> = [schemas[0], schemas[1], schemas[1]]
         .into_iter()
         .map(|schema| {
-            TurnOptions::new(
+            TurnOptions::from_output(
                 OutputSchema::new(serde_json::from_str(schema).expect("schema JSON"))
                     .expect("schema"),
-                ToolPolicy::default().allow(Tool::Read),
             )
+            .with_tools(ToolSet::empty().with_read())
             .with_comparison_base(base.clone())
         })
         .collect();
@@ -635,8 +678,7 @@ async fn reopening_keeps_comparison_fingerprints_across_key_order_changes() {
 async fn comparison_scope_mismatch_fails_before_calling_the_model() {
     // Arrange
     let base = ComparisonBase::fixture("other");
-    let selected =
-        TurnOptions::new(object_schema(), ToolPolicy::default()).with_comparison_base(base);
+    let selected = TurnOptions::from_output(object_schema()).with_comparison_base(base);
     let directory = tempdir().expect("temporary directory");
     let events = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&events);

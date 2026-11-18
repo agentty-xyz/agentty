@@ -97,8 +97,9 @@ impl Tool {
 }
 
 /// A built-in tool, bound to a turn's repository and options when the turn
-/// starts and dispatched, like every tool, through its handler.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// starts and dispatched, like every tool, through its handler. Variants
+/// are declared, and so ordered, in their advertised order.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Builtin {
     Read,
     Write,
@@ -667,21 +668,21 @@ impl MalformedArguments {
     /// Returns the tool the model called.
     #[deprecated(
         since = "0.20.0",
-        note = "use `ToolCall::name` for the name of the called tool"
+        note = "use `MalformedArguments::name` for the name of the called tool"
     )]
     #[expect(deprecated, reason = "returns the deprecated `Tool`")]
     pub fn tool(&self) -> Tool {
         self.tool.into()
     }
 
+    /// Returns the name of the built-in tool the model called.
+    pub fn name(&self) -> &'static str {
+        self.tool.name()
+    }
+
     /// Returns the built-in tool the model called.
     pub(crate) fn builtin(&self) -> Builtin {
         self.tool
-    }
-
-    /// Returns the name of the built-in tool the model called.
-    pub(crate) fn tool_name(&self) -> &'static str {
-        self.tool.name()
     }
 }
 

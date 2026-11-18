@@ -188,7 +188,10 @@ pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBu
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use limit::{LimitKind, RunLimits};
 pub use model::{Model, ModelError};
-#[expect(deprecated, reason = "re-exports the deprecated `ToolPolicy` until A9")]
+#[expect(
+    deprecated,
+    reason = "re-exports the deprecated `ToolPolicy` until its removal"
+)]
 pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
 pub use request_option::{GenerationParams, OutputMode};
@@ -197,7 +200,10 @@ pub use run::{
 };
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
-#[expect(deprecated, reason = "re-exports the deprecated `Tool` until A9")]
+#[expect(
+    deprecated,
+    reason = "re-exports the deprecated `Tool` until its removal"
+)]
 pub use tool::Tool;
 pub use tool::{ToolHandler, ToolSet};
 pub use transcript::{TurnRange, TurnRecord};
