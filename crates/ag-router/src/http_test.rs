@@ -38,7 +38,7 @@ fn request(address: std::net::SocketAddr) -> ProviderRequest {
 
 /// Returns a request to `address` whose query and `api-key` header carry
 /// secrets, as a gateway's may.
-fn secret_request(address: std::net::SocketAddr) -> ProviderRequest {
+fn gateway_request(address: std::net::SocketAddr) -> ProviderRequest {
     let mut headers = HeaderMap::new();
     headers.insert("api-key", HeaderValue::from_static("header-secret"));
 
@@ -77,7 +77,7 @@ async fn refuses_a_redirect_so_secrets_never_reach_its_target() {
     let client = transport(Duration::from_secs(5));
 
     // Act
-    let result = client.post_json::<Value>(&secret_request(address)).await;
+    let result = client.post_json::<Value>(&gateway_request(address)).await;
     server.await.expect("server should finish");
 
     // Assert
@@ -117,12 +117,12 @@ async fn transport_failures_never_name_the_url() {
 
     // Act
     let refused_error = client
-        .post_json::<Value>(&secret_request(refused))
+        .post_json::<Value>(&gateway_request(refused))
         .await
         .map(drop)
         .expect_err("a refused connection must fail");
     let chunk_error = client
-        .post_json::<Value>(&secret_request(address))
+        .post_json::<Value>(&gateway_request(address))
         .await
         .map(drop)
         .expect_err("a body cut short must fail");
@@ -574,7 +574,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
 
     // Act
     let error = client
-        .post_json::<Value>(&secret_request(address))
+        .post_json::<Value>(&gateway_request(address))
         .await
         .map(|_| ())
         .expect_err("a stalled server must time out");

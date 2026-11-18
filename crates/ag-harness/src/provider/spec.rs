@@ -84,12 +84,7 @@ pub enum Auth {
 impl fmt::Debug for Auth {
     /// Names the authentication kind without revealing any secret.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => formatter.write_str("None"),
-            Self::Bearer(_) => formatter.write_str("Bearer(<redacted>)"),
-            Self::Header { name, .. } => write!(formatter, "Header({name}: <redacted>)"),
-            Self::Credential(_) => formatter.write_str("Credential"),
-        }
+        fmt::Debug::fmt(&self.clone().into_router(), formatter)
     }
 }
 
