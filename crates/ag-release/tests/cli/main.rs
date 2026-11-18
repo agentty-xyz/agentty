@@ -3,5 +3,6 @@
 mod assemble;
 mod npm_package;
 mod plan;
+mod release_note;
 mod shell_installer;
 mod support;
