@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ag_git as git;
 pub(crate) use ag_session::session_branch;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 
 use super::SessionError;
 use super::workflow::merge::SessionMergeService;
@@ -18,7 +18,7 @@ pub(crate) use super::workflow::task::{
 };
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{AppServices, SessionState, setting};
+use crate::app::{AppServices, SessionState, setting, spawn};
 use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
@@ -1144,22 +1144,24 @@ impl SessionManager {
                 (session_id.clone(), default_branch_name.clone())
             })
             .collect::<HashMap<_, _>>();
-        let mut branch_detection_tasks = JoinSet::new();
+        let branch_detection_tasks = session_inputs
+            .into_iter()
+            .map(|(session_id, session_folder, default_branch_name)| {
+                let git_client = Arc::clone(&self.git_client);
 
-        for (session_id, session_folder, default_branch_name) in session_inputs {
-            let git_client = Arc::clone(&self.git_client);
-            branch_detection_tasks.spawn(async move {
-                let branch_name = git_client
-                    .detect_git_info(session_folder)
-                    .await
-                    .unwrap_or(default_branch_name);
+                spawn::spawn_traced(async move {
+                    let branch_name = git_client
+                        .detect_git_info(session_folder)
+                        .await
+                        .unwrap_or(default_branch_name);
 
-                (session_id, branch_name)
-            });
-        }
+                    (session_id, branch_name)
+                })
+            })
+            .collect::<Vec<_>>();
 
-        while let Some(branch_detection_result) = branch_detection_tasks.join_next().await {
-            let Ok((session_id, branch_name)) = branch_detection_result else {
+        for branch_detection_task in branch_detection_tasks {
+            let Ok((session_id, branch_name)) = branch_detection_task.await else {
                 continue;
             };
 

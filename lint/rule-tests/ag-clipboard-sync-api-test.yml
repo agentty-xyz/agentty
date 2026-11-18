@@ -1,0 +1,7 @@
+id: ag-clipboard-sync-api
+valid:
+  - 'pub fn read_image() -> Result<Image, ClipboardError> { backend::read() }'
+  - 'async fn helper() {}'
+invalid:
+  - 'pub async fn read_image() -> Result<Image, ClipboardError> { backend::read() }'
+  - 'pub(crate) async fn read_text() -> Option<String> { None }'

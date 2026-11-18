@@ -8,3 +8,5 @@ invalid:
   - 'fn start() { tokio::task::spawn_blocking(move || work()); }'
   - 'fn start() { spawn_blocking(move || work()); }'
   - 'fn start() { tokio::task::spawn_local(work()); }'
+  - 'use tokio::task::{JoinHandle, JoinSet};'
+  - 'fn start() { let mut tasks = tokio::task::JoinSet::new(); }'

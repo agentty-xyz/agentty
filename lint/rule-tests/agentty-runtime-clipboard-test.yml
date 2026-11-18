@@ -1,0 +1,7 @@
+id: agentty-runtime-clipboard
+valid:
+  - 'use crate::app::App;'
+  - 'fn paste(app: &mut App) { app.paste_clipboard_image(); }'
+invalid:
+  - 'use ag_clipboard::read_image;'
+  - 'fn paste() { let image = ag_clipboard::read_image(); }'

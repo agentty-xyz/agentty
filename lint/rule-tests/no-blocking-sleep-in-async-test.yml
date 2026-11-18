@@ -1,0 +1,9 @@
+id: no-blocking-sleep-in-async
+valid:
+  - 'async fn wait() { tokio::time::sleep(DELAY).await; }'
+  - 'fn wait() { std::thread::sleep(DELAY); }'
+  - 'async fn serve() { std::thread::spawn(move || { std::thread::sleep(DELAY); }); }'
+invalid:
+  - 'async fn wait() { std::thread::sleep(DELAY); }'
+  - 'pub(crate) async fn wait() { if ready { thread::sleep(DELAY); } }'
+  - 'fn start() { tokio::spawn(async move { std::thread::sleep(DELAY); }); }'

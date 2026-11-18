@@ -1,12 +1,13 @@
-//! Check that SQL migration files in each migration directory have unique
-//! prefixes and that migrations existing at the branch fork point stay
-//! unchanged.
+//! Check that SQL migration files in each migration directory follow the
+//! `NNN_description.sql` pattern with unique prefixes and that migrations
+//! existing at the branch fork point stay unchanged.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::file_system::{FileSystem, RealFileSystem};
 
 /// Revision whose fork point bounds migration edits by default.
 const DEFAULT_BASE: &str = "origin/main";
@@ -22,8 +23,9 @@ const MIGRATION_PATHSPEC: &str = ":(top,glob)crates/*/migrations/*.sql";
 /// filesystem and Git adapters.
 ///
 /// # Errors
-/// Returns an error for unreadable directories, duplicate migration prefixes,
-/// an unresolvable base revision, or an edited existing migration.
+/// Returns an error for unreadable directories, misnamed migrations, duplicate
+/// migration prefixes, an unresolvable base revision, or an edited existing
+/// migration.
 pub(crate) fn run() -> Result<(), String> {
     let base = std::env::var(BASE_ENVIRONMENT).unwrap_or_else(|_| DEFAULT_BASE.to_string());
 
@@ -34,13 +36,6 @@ pub(crate) fn run() -> Result<(), String> {
         },
     }
     .run(Path::new("crates"), &base)
-}
-
-/// Filesystem operations used by migration discovery and validation.
-#[cfg_attr(test, mockall::automock)]
-trait FileSystem {
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
-    fn is_dir(&self, path: &Path) -> io::Result<bool>;
 }
 
 /// Read-only Git queries used to find edited migrations.
@@ -59,7 +54,7 @@ struct MigrationCheck<'host> {
 impl MigrationCheck<'_> {
     fn run(&self, root: &Path, base: &str) -> Result<(), String> {
         for directory in self.find_migration_dirs(root)? {
-            self.check_prefixes(&directory)?;
+            self.check_names(&directory)?;
         }
 
         self.check_history(base)
@@ -161,17 +156,34 @@ impl MigrationCheck<'_> {
             .map_err(|error| format!("Failed to read {}: {error}", directory.display()))
     }
 
-    fn check_prefixes(&self, directory: &Path) -> Result<(), String> {
+    /// Rejects migration file names outside the `NNN_description.sql` pattern
+    /// and numeric prefixes shared by more than one migration.
+    fn check_names(&self, directory: &Path) -> Result<(), String> {
         let mut prefix_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut misnamed = Vec::new();
         for path in self.read_dir(directory)? {
             if path.extension().is_some_and(|extension| extension == "sql") {
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if !Self::is_valid_name(&file_name) {
+                    misnamed.push(file_name.to_string());
+                }
                 let prefix = file_name.split('_').next().unwrap_or_default();
                 prefix_map
                     .entry(prefix.to_string())
                     .or_default()
                     .push(file_name.into_owned());
             }
+        }
+
+        if !misnamed.is_empty() {
+            misnamed.sort();
+
+            return Err(format!(
+                "Rename migrations in {} to `NNN_description.sql`, with a three-digit number and \
+                 a lowercase `snake_case` description: {}",
+                directory.display(),
+                misnamed.join(", ")
+            ));
         }
 
         for (prefix, files) in &mut prefix_map {
@@ -186,6 +198,24 @@ impl MigrationCheck<'_> {
         }
 
         Ok(())
+    }
+
+    /// Returns whether `file_name` is a three-digit number, an underscore, and
+    /// a nonempty lowercase `snake_case` description with the `.sql` suffix.
+    fn is_valid_name(file_name: &str) -> bool {
+        let Some((number, description)) = file_name
+            .strip_suffix(".sql")
+            .and_then(|stem| stem.split_once('_'))
+        else {
+            return false;
+        };
+
+        number.len() == 3
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+            && !description.is_empty()
+            && description
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     }
 }
 
@@ -210,32 +240,6 @@ impl Git for RealGit {
         }
 
         String::from_utf8(output.stdout).map_err(|error| format!("Invalid UTF-8 from git: {error}"))
-    }
-}
-
-/// Host adapter; workflow decisions remain in `MigrationCheck`.
-struct RealFileSystem;
-
-impl FileSystem for RealFileSystem {
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
-        std::fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect()
-    }
-
-    fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        match std::fs::metadata(path) {
-            Ok(metadata) => Ok(metadata.is_dir()),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(error) => Err(error),
-        }
     }
 }
 

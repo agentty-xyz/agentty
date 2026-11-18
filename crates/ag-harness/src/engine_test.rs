@@ -23,7 +23,7 @@ use crate::model::{
 use crate::request_option::OutputMode;
 use crate::tool::{ReadArguments, ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
-use crate::{OutputSchema, TurnOptions, schema_contract};
+use crate::{OutputSchema, TurnOptions};
 
 fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({"type": "object"})).expect("valid schema")
@@ -146,7 +146,7 @@ fn final_answers_must_match_the_requests_output_mode() {
     // Arrange
     let json_request = ModelRequest::new("reply", object_schema());
     let text_request = ModelRequest::new("reply", OutputMode::Text);
-    let oversized = "a".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+    let oversized = "a".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1);
     let call = ToolCall::read(
         "call-1".to_string(),
         serde_json::from_value::<ReadArguments>(json!({"path": "README.md"}))

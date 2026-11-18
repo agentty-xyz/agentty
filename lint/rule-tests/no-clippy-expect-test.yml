@@ -6,4 +6,7 @@ invalid:
   - "#[expect(clippy::too_many_lines)]\nfn render() {}"
   - "#[expect(dead_code, clippy::unused_self)]\nfn render() {}"
   - "#[cfg_attr(test, expect(clippy::panic))]\nfn render() {}"
+  - "#[cfg_attr(all(test, unix), expect(clippy::panic))]\nfn render() {}"
+  - "#[cfg_attr(\n    test,\n    expect(clippy::panic)\n)]\nfn render() {}"
+  - "#[cfg_attr(\n    all(test, unix),\n    expect(clippy::panic)\n)]\nfn render() {}"
   - '#![expect(clippy::pedantic)]'

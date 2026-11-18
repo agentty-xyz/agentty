@@ -1,0 +1,9 @@
+id: command-runner-boundary
+valid:
+  - 'use std::process::Output;'
+  - 'fn run() { let command = GitCommand::new(path, args); }'
+invalid:
+  - 'fn run() { let command = Command::new("gh"); }'
+  - 'fn run() { let command = std::process::Command::new("git"); }'
+  - 'use tokio::process::Command as AsyncCommand;'
+  - 'use std::process::{Command, Stdio};'

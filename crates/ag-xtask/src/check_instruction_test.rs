@@ -209,6 +209,37 @@ fn placeholders_identifiers_and_multiple_backticks_are_ignored() {
 }
 
 #[test]
+fn guides_reject_parent_relative_paths_that_other_instructions_may_use() {
+    // Arrange
+    let fixture = Fixture::new();
+    fixture.write("docs/guide.md", "# Guide\n");
+    fixture.write(
+        "crates/example/AGENTS.md",
+        "# Example\n`../../docs/guide.md`\n[Guide](../../docs/guide.md#usage)\n`..` `range/a..b`\n",
+    );
+    fixture.aliases("crates/example");
+    fixture.write("skills/example/SKILL.md", "[Guide](../../docs/guide.md)\n");
+
+    // Act
+    let result = fixture.check(&[
+        "AGENTS.md",
+        "crates/example/AGENTS.md",
+        "skills/example/SKILL.md",
+    ]);
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(
+            "crates/example/AGENTS.md:2: parent-relative path ../../docs/guide.md; write it from \
+             the repository root\ncrates/example/AGENTS.md:3: parent-relative path \
+             ../../docs/guide.md#usage; write it from the repository root"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
 fn local_links_cannot_escape_through_parent_components_or_symlinks() {
     // Arrange
     let fixture = Fixture::new();

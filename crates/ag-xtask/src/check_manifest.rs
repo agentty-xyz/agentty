@@ -1,5 +1,6 @@
 //! Check that workspace members inherit every dependency from the root
-//! manifest and that no dependency enables Tokio's `full` feature.
+//! manifest, that no dependency enables Tokio's `full` feature, and that no
+//! member declares a dependency banned for it.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -12,12 +13,46 @@ use serde::Deserialize;
 /// a `[target.<cfg>]` table.
 const DEPENDENCY_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
 
+/// Fix shared by the `ag-clipboard` Wayland bans.
+const WAYLAND_FIX: &str =
+    "read the Wayland clipboard through the audited `wl-paste` subprocess backend instead";
+
+/// Dependencies that a workspace member must not declare, each with the fix
+/// that replaces it.
+const BANNED_DEPENDENCIES: [BannedDependency; 5] = [
+    BannedDependency {
+        dependency: "smithay-clipboard",
+        fix: WAYLAND_FIX,
+        package: "ag-clipboard",
+    },
+    BannedDependency {
+        dependency: "wayland-backend",
+        fix: WAYLAND_FIX,
+        package: "ag-clipboard",
+    },
+    BannedDependency {
+        dependency: "wayland-client",
+        fix: WAYLAND_FIX,
+        package: "ag-clipboard",
+    },
+    BannedDependency {
+        dependency: "wayland-protocols",
+        fix: WAYLAND_FIX,
+        package: "ag-clipboard",
+    },
+    BannedDependency {
+        dependency: "wl-clipboard-rs",
+        fix: WAYLAND_FIX,
+        package: "ag-clipboard",
+    },
+];
+
 /// Validates workspace member manifests using `cargo metadata`.
 ///
 /// # Errors
 /// Returns an error when workspace metadata or a manifest is unreadable, or
-/// when a member dependency bypasses `[workspace.dependencies]` or enables
-/// Tokio's `full` feature.
+/// when a member dependency bypasses `[workspace.dependencies]`, enables
+/// Tokio's `full` feature, or appears in [`BANNED_DEPENDENCIES`].
 pub(crate) fn run() -> Result<(), String> {
     ManifestCheck {
         workspace: &RealWorkspace {
@@ -40,6 +75,14 @@ struct Package {
     dependencies: Vec<Dependency>,
     manifest: String,
     manifest_path: PathBuf,
+    name: String,
+}
+
+/// One dependency banned for one workspace member.
+struct BannedDependency {
+    dependency: &'static str,
+    fix: &'static str,
+    package: &'static str,
 }
 
 /// One declared dependency with the features Cargo enables for it, including
@@ -61,6 +104,7 @@ impl ManifestCheck<'_> {
         for package in self.workspace.packages()? {
             violations.extend(Self::uninherited_dependencies(&package)?);
             violations.extend(Self::full_tokio(&package));
+            violations.extend(Self::banned_dependencies(&package));
         }
 
         if violations.is_empty() {
@@ -124,6 +168,28 @@ impl ManifestCheck<'_> {
             })
             .collect()
     }
+
+    /// Reports each dependency that [`BANNED_DEPENDENCIES`] bans for the
+    /// package.
+    fn banned_dependencies(package: &Package) -> Vec<String> {
+        package
+            .dependencies
+            .iter()
+            .filter_map(|dependency| {
+                let banned = BANNED_DEPENDENCIES.iter().find(|banned| {
+                    banned.package == package.name && banned.dependency == dependency.name
+                })?;
+
+                Some(format!(
+                    "{}: `{}` must not depend on `{}`; {}",
+                    package.manifest_path.display(),
+                    package.name,
+                    dependency.name,
+                    banned.fix
+                ))
+            })
+            .collect()
+    }
 }
 
 /// Host adapter; manifest decisions remain in `ManifestCheck`.
@@ -155,6 +221,7 @@ impl RealWorkspace {
                     dependencies: package.dependencies,
                     manifest,
                     manifest_path: Self::relative(&package.manifest_path, &workspace_root),
+                    name: package.name,
                 })
             })
             .collect()
@@ -200,6 +267,7 @@ struct Metadata {
 struct MetadataPackage {
     dependencies: Vec<Dependency>,
     manifest_path: PathBuf,
+    name: String,
 }
 
 #[cfg(test)]

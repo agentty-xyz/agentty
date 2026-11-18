@@ -1,0 +1,17 @@
+id: struct-field-visibility-order
+language: rust
+severity: error
+message: Declare public and restricted struct fields before private fields.
+note: |
+  Move the field above the first private field, keeping each visibility group in
+  alphabetical order; see `crates/AGENTS.md`.
+rule:
+  kind: field_declaration
+  has:
+    kind: visibility_modifier
+  follows:
+    kind: field_declaration
+    not:
+      has:
+        kind: visibility_modifier
+    stopBy: end

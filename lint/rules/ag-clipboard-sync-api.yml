@@ -1,0 +1,20 @@
+id: ag-clipboard-sync-api
+language: rust
+severity: error
+message: Keep `ag-clipboard` public functions synchronous.
+note: |
+  Hosts read the clipboard on a blocking thread and own asynchronous offloading. Return
+  clipboard data or a typed `ClipboardError` from a synchronous function.
+files:
+  - crates/ag-clipboard/src/**/*.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  kind: function_item
+  all:
+    - has:
+        kind: visibility_modifier
+    - has:
+        kind: function_modifiers
+        regex: "\\basync\\b"

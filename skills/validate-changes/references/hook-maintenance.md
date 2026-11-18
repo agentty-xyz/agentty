@@ -4,7 +4,8 @@
 
 `check-instructions` validates instruction aliases, literal repository paths, local
 Markdown link targets, and hook IDs used in `prek run` commands across `AGENTS.md`
-files, `CONTRIBUTING.md`, and every Markdown file under `skills/`. It runs through
+files, `CONTRIBUTING.md`, and every Markdown file under `skills/`, and rejects
+parent-relative paths in `AGENTS.md` files. It runs through
 `ag-xtask check-instructions` on every default check invocation, including when
 referenced files are moved or deleted. Its unit and public CLI tests cover valid and
 broken instruction fixtures; validate checker changes with the affected-package recipe

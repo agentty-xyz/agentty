@@ -3,11 +3,12 @@ language: rust
 severity: error
 message: Spawn through `crate::app::spawn` so the task states whether it keeps the caller's trace.
 note: |
-  `tokio::spawn` and `spawn_blocking` drop the caller's OpenTelemetry context, so spans
-  inside the task start orphan traces or are not recorded. Use `spawn_traced` to nest
-  under the caller, and `spawn_detached` or `spawn_blocking_detached` for untraced work
-  or work that carries its own root span. Add a traced blocking helper to `spawn.rs` when
-  blocking work first needs the caller's trace.
+  `tokio::spawn`, `spawn_blocking`, and `JoinSet::spawn` drop the caller's OpenTelemetry
+  context, so spans inside the task start orphan traces or are not recorded. Use
+  `spawn_traced` to nest under the caller, and `spawn_detached` or
+  `spawn_blocking_detached` for untraced work or work that carries its own root span.
+  Collect `spawn_traced` handles instead of a `JoinSet`. Add a traced blocking helper to
+  `spawn.rs` when blocking work first needs the caller's trace.
 files:
   - crates/agentty/src/app/**/*.rs
   - crates/agentty/src/app.rs
@@ -18,7 +19,16 @@ ignores:
   - "**/*_test.rs"
   - "**/*_test/**"
 rule:
-  kind: call_expression
-  has:
-    field: function
-    regex: "^(::)?(tokio::)?(task::)?spawn(_blocking|_local)?$"
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: "^(::)?(tokio::)?(task::)?spawn(_blocking|_local)?$"
+    - kind: use_declaration
+      regex: "\\bJoinSet\\b"
+    - kind: scoped_identifier
+      regex: "(^|::)JoinSet::"
+      not:
+        inside:
+          kind: use_declaration
+          stopBy: end

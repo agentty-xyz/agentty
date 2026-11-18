@@ -1,0 +1,21 @@
+id: ag-store-typed-errors
+language: rust
+severity: error
+message: Return the crate's typed `DbError` instead of exposing `sqlx::Error`.
+note: |
+  Translate `sqlx::Error` into `DbError` inside the repository so consumers do not
+  depend on SQLx; see `crates/ag-store/AGENTS.md`.
+files:
+  - crates/ag-store/src/**/*.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: function_item
+      has:
+        kind: visibility_modifier
+    - kind: function_signature_item
+  has:
+    field: return_type
+    regex: "\\bsqlx::Error\\b"

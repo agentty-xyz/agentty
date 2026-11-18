@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use ag_session::StartExecutionGraphRequest;
+use ag_store::MockGraphRepository;
 
 use crate::app::execution_graph::tests::{graph, seed_session};
 use crate::app::graph_budget::GraphBudgetLedger;
-use crate::infra::db::{DbError, MockGraphRepository};
+use crate::infra::db::DbError;
 
 #[tokio::test]
 async fn failed_write_keeps_its_spending_until_a_retry_records_it() {

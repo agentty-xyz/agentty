@@ -29,10 +29,10 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
 - Use SQLx directly, without an ORM, and prefer checked query macros. Keep
   `crates/ag-store/.sqlx/` metadata current for offline builds.
 - Keep migrations embedded and connection setup configured for foreign keys and WAL.
-- Name new migrations `crates/ag-store/migrations/NNN_description.sql`.
-- Use singular `snake_case` table names and `snake_case` columns. New foreign keys use
-  `<table>_id`, booleans use `is_` or `has_`, and timestamps end in `_at`.
-- Translate `sqlx::Error` into the crate's typed error surface.
+- Use singular table names, and end timestamp columns in `_at`.
+- Name every boolean column `is_` or `has_` and constrain it with
+  `CHECK (<column> IN (0, 1))`; the schema contract test finds booleans only through
+  that constraint.
 
 ## Documentation
 

@@ -1,4 +1,5 @@
-//! Migration discovery, duplicate-prefix, and edit-history check unit tests.
+//! Migration discovery, naming, duplicate-prefix, and edit-history check unit
+//! tests.
 
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -10,9 +11,8 @@ use mockall::Sequence;
 use mockall::predicate::eq;
 use tempfile::tempdir;
 
-use crate::check_migration::{
-    FileSystem, Git, MigrationCheck, MockFileSystem, MockGit, RealFileSystem, RealGit, run,
-};
+use crate::check_migration::{Git, MigrationCheck, MockGit, RealGit, run};
+use crate::file_system::MockFileSystem;
 
 /// Fork point the history mocks report for `origin/main`.
 const FORK: &str = "fork";
@@ -87,7 +87,7 @@ fn unique_prefixes_ignore_non_sql_files_and_accept_empty_directories() {
         };
 
         // Act
-        let result = check.check_prefixes(Path::new("migration"));
+        let result = check.check_names(Path::new("migration"));
 
         // Assert
         assert_eq!(result, Ok(()));
@@ -105,12 +105,44 @@ fn duplicate_prefix_errors_are_sorted_and_include_file_names() {
     };
 
     // Act
-    let result = check.check_prefixes(Path::new("migration"));
+    let result = check.check_names(Path::new("migration"));
 
     // Assert
     assert_eq!(
         result,
         Err("Duplicate migration prefix `001` in migration: 001_a.sql, 001_z.sql".to_string())
+    );
+}
+
+#[test]
+fn misnamed_migrations_are_reported_before_duplicate_prefixes() {
+    // Arrange
+    let file_system = prefix_file_system(&[
+        "001_First.sql",
+        "001_.sql",
+        "abc_name.sql",
+        "01_short.sql",
+        "002.sql",
+        "003_valid_name_2.sql",
+    ]);
+    let git = MockGit::new();
+    let check = MigrationCheck {
+        file_system: &file_system,
+        git: &git,
+    };
+
+    // Act
+    let result = check.check_names(Path::new("migration"));
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(
+            "Rename migrations in migration to `NNN_description.sql`, with a three-digit number \
+             and a lowercase `snake_case` description: 001_.sql, 001_First.sql, 002.sql, \
+             01_short.sql, abc_name.sql"
+                .to_string()
+        )
     );
 }
 
@@ -262,7 +294,7 @@ fn discovery_and_validation_report_read_failures() {
         let result = if is_root {
             check.run(Path::new("crates"), "origin/main")
         } else {
-            check.check_prefixes(Path::new("crates"))
+            check.check_names(Path::new("crates"))
         };
 
         // Assert
@@ -331,41 +363,6 @@ fn workflow_propagates_duplicate_prefixes() {
             .expect_err("duplicate migration")
             .contains("001_first.sql, 001_second.sql")
     );
-}
-
-#[test]
-fn real_file_system_lists_entries_and_distinguishes_directories() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory");
-    let file = directory.path().join("001_example.sql");
-    fs::write(&file, "").expect("migration file");
-    let file_system = RealFileSystem;
-
-    // Act
-    let entries = file_system
-        .read_dir(directory.path())
-        .expect("directory entries");
-    let directory_exists = file_system
-        .is_dir(directory.path())
-        .expect("directory metadata");
-    let file_is_directory = file_system.is_dir(&file).expect("file metadata");
-    let missing_is_directory = file_system
-        .is_dir(&directory.path().join("missing"))
-        .expect("missing metadata");
-    let missing_entries = file_system.read_dir(&directory.path().join("missing"));
-    let file_child_is_directory = file_system
-        .is_dir(&file.join("child"))
-        .expect("file child metadata");
-    let invalid_metadata = file_system.is_dir(&directory.path().join("x".repeat(300)));
-
-    // Assert
-    assert_eq!(entries, vec![file]);
-    assert!(directory_exists);
-    assert!(!file_is_directory);
-    assert!(!missing_is_directory);
-    assert!(!file_child_is_directory);
-    assert!(missing_entries.is_err());
-    assert!(invalid_metadata.is_err());
 }
 
 #[test]

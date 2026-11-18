@@ -676,7 +676,7 @@ fn persisted_calls_store_assistant_text_only_when_present() {
         r#"{"arguments":{"command":"ls"},"id":"call","name":"bash","reasoning_content":null}"#;
     let oversized = serde_json::json!({
         "arguments": {"command": "ls"},
-        "assistant_text": "x".repeat(crate::schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1),
+        "assistant_text": "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1),
         "id": "call",
         "name": "bash",
         "reasoning_content": null

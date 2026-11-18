@@ -1,0 +1,11 @@
+id: test-only-items-in-test-files
+valid:
+  - "#[cfg(test)]\n#[path = \"clock_test.rs\"]\nmod tests;"
+  - "#[cfg(test)]\nextern crate self as ag_harness;"
+  - "#[cfg_attr(test, mockall::automock)]\ntrait Clock {}"
+  - "#[cfg(any(test, feature = \"test-utils\"))]\npub use mock::MockClock;"
+invalid:
+  - "#[cfg(test)]\npub use ag_store::MockGraphRepository;"
+  - "#[cfg(test)]\nfn helper() {}"
+  - "#[cfg(not(test))]\nconst LIMIT: usize = 10;"
+  - 'fn limit() -> usize { if cfg!(test) { 1 } else { 10 } }'

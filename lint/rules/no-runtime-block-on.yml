@@ -1,0 +1,17 @@
+id: no-runtime-block-on
+language: rust
+severity: error
+message: Await the future instead of building a runtime to call `block_on`.
+note: |
+  The workspace stays async end to end. Start runtimes only through `#[tokio::main]` and
+  `#[tokio::test]`, and make the caller `async` instead of blocking on a future.
+rule:
+  kind: call_expression
+  has:
+    field: function
+    any:
+      - regex: "(^|::)(Runtime::new|Builder::new_current_thread|Builder::new_multi_thread|block_on)$"
+      - kind: field_expression
+        has:
+          field: field
+          regex: "^block_on$"
