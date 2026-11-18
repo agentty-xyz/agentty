@@ -32,10 +32,7 @@ use super::protocol::{
     SessionCreateParams, SessionOpened, SessionResumeParams, SessionTranscriptParams, SessionUsage,
     StoreChoice, Transcript, line,
 };
-use crate::{
-    MODEL_PROFILE, login, model_client, select_cataloged, select_direct,
-    stored_model_identity_parts,
-};
+use crate::{connect_model, login, select_cataloged, select_direct, stored_model_identity_parts};
 
 /// Event lines runs may queue before the next one waits for the server to
 /// write them.
@@ -384,12 +381,8 @@ where
             .split_once('/')
             .and_then(|(provider, model)| Some((provider.parse::<ModelProvider>().ok()?, model)))
             .ok_or_else(|| ServeError::UnknownModel(id.to_string()))?;
-        let client = model_client(provider, model, None, &mut self.environment)
+        let (client, profile) = connect_model(provider, model, None, &mut self.environment)
             .map_err(ServeError::config)?;
-        let profile = provider
-            .declared_profile(model, &mut self.environment)
-            .map_err(ServeError::config)?
-            .unwrap_or(MODEL_PROFILE);
 
         select_direct(builder, Arc::new(client), profile).map_err(ServeError::config)
     }

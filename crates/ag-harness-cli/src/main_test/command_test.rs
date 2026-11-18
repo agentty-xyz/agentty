@@ -4,9 +4,9 @@
 use std::env;
 use std::sync::Arc;
 
-use ag_harness::catalog::ModelCatalog;
+use ag_harness::catalog::{ModelCatalog, Role};
 use ag_harness::model::ModelProfile;
-use ag_harness::provider::ModelProvider;
+use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
 use serde_json::json;
 
 use super::support::{FixedModel, test_catalog};
@@ -74,11 +74,11 @@ fn model_selection_resolves_numbers_roles_providers_and_known_models() {
     let numbered = ModelSelection::parse("2", &current, &catalog);
     let host = ModelSelection::parse("1", &current, &catalog);
     let role = ModelSelection::parse("cheap", &current, &catalog);
-    let cataloged = ModelSelection::parse("qwen-listed", &current, &catalog);
     let qualified = ModelSelection::parse("qwen/qwen-custom", &current, &catalog);
     let known = ModelSelection::parse(kimi_model, &current, &catalog);
     let custom = ModelSelection::parse("muse-custom", &current, &catalog);
     let unassigned_role = ModelSelection::parse("smart", &current, &catalog);
+    let role_named_model = ModelSelection::parse("openai-compatible/fast", &current, &catalog);
     let zero = ModelSelection::parse("0", &current, &catalog);
     let out_of_range = ModelSelection::parse("4", &current, &catalog);
     let unknown_provider = ModelSelection::parse("unknown/model", &current, &catalog);
@@ -91,10 +91,6 @@ fn model_selection_resolves_numbers_roles_providers_and_known_models() {
     assert!(matches!(host, Err(CliError::UnknownModel { model }) if model == "1"));
     assert_eq!(role.expect("role model").id().as_str(), "kimi/kimi-listed");
     assert_eq!(
-        cataloged.expect("cataloged model").id().as_str(),
-        "qwen/qwen-listed"
-    );
-    assert_eq!(
         qualified.expect("qualified model").id().as_str(),
         "qwen/qwen-custom"
     );
@@ -106,12 +102,15 @@ fn model_selection_resolves_numbers_roles_providers_and_known_models() {
         custom.expect("custom model").id().as_str(),
         "muse/muse-custom"
     );
+    assert!(matches!(
+        &unassigned_role,
+        Err(error @ CliError::UnassignedRole { role }) if *role == Role::SMART
+            && error.to_string()
+                == "no configured model serves the `smart` role; type /model to list models"
+    ));
     assert_eq!(
-        unassigned_role
-            .expect("unassigned role is a model ID")
-            .id()
-            .as_str(),
-        "muse/smart"
+        role_named_model.expect("qualified model").id().as_str(),
+        "openai-compatible/fast"
     );
     assert!(matches!(zero, Err(CliError::UnknownModel { model }) if model == "0"));
     assert!(matches!(out_of_range, Err(CliError::UnknownModel { .. })));
@@ -119,6 +118,30 @@ fn model_selection_resolves_numbers_roles_providers_and_known_models() {
         unknown_provider,
         Err(CliError::UnknownModel { model }) if model == "unknown/model"
     ));
+}
+
+#[test]
+fn bare_known_model_ids_prefer_the_current_provider_then_provider_order() {
+    // Arrange
+    let catalog = test_catalog();
+    let chatgpt = ModelSelection {
+        model: "any".to_string(),
+        provider: ModelProvider::ChatGpt,
+    };
+
+    // Act
+    let from_muse = ModelSelection::parse(GPT_6_LUNA, &muse_selection("muse-test"), &catalog);
+    let from_chatgpt = ModelSelection::parse(GPT_6_LUNA, &chatgpt, &catalog);
+
+    // Assert
+    assert_eq!(
+        from_muse.expect("known model").provider,
+        ModelProvider::OpenAi
+    );
+    assert_eq!(
+        from_chatgpt.expect("known model").provider,
+        ModelProvider::ChatGpt
+    );
 }
 
 #[test]
@@ -156,23 +179,23 @@ fn model_catalog_applies_an_explicit_base_url_only_to_its_provider() {
     };
     let kimi = ModelProvider::Kimi.known_models()[0];
 
+    let mut warnings = Vec::new();
+
     // Act
     let with_kimi_url = model_catalog(
         ModelProvider::Kimi,
         Some("https://models.example/v1"),
         &mut environment,
+        &mut warnings,
     )
     .expect("Kimi with a base URL should be cataloged");
     let with_qwen_url = model_catalog(
         ModelProvider::Qwen,
         Some("https://models.example/v1"),
         &mut environment,
+        &mut warnings,
     )
     .expect("Kimi without a base URL should be skipped");
-    let broken = model_catalog(ModelProvider::Muse, None, &mut |name: &str| match name {
-        "MODEL_API_KEY" => Err(env::VarError::NotUnicode("\u{fffd}".into())),
-        _ => Err(env::VarError::NotPresent),
-    });
 
     // Assert
     let kimi_id = ModelSelection {
@@ -183,7 +206,28 @@ fn model_catalog_applies_an_explicit_base_url_only_to_its_provider() {
     assert!(with_kimi_url.spec(&kimi_id).is_some());
     assert!(with_qwen_url.spec(&kimi_id).is_none());
     assert!(with_qwen_url.specs().next().is_some());
-    assert!(matches!(broken, Err(CliError::Catalog(_))));
+    assert_eq!(warnings, [] as [u8; 0]);
+}
+
+#[test]
+fn an_unusable_provider_leaves_the_catalog_empty_with_a_warning() {
+    // Arrange
+    let mut environment = |name: &str| match name {
+        "DASHSCOPE_API_KEY" => Ok("test-key".to_string()),
+        "MODEL_API_KEY" => Err(env::VarError::NotUnicode("\u{fffd}".into())),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let mut warnings = Vec::new();
+
+    // Act
+    let catalog = model_catalog(ModelProvider::Qwen, None, &mut environment, &mut warnings)
+        .expect("an unusable provider should not fail the chat");
+
+    // Assert
+    assert!(catalog.specs().next().is_none());
+    let warnings = String::from_utf8(warnings).expect("warnings should be UTF-8");
+    assert!(warnings.starts_with("warning: cannot catalog muse models: "));
+    assert!(warnings.ends_with("; /model lists no models and turns report no cost\n"));
 }
 
 #[test]

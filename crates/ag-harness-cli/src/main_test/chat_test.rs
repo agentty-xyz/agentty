@@ -429,7 +429,7 @@ async fn chat_switches_direct_sessions_by_catalog_number() {
         .await
         .expect("session should be created");
     let input =
-        BufReader::new(&b"/model 2\nquestion\n/model cheap\n/model qwen-listed\nlast\n"[..]);
+        BufReader::new(&b"/model 2\nquestion\n/model cheap\n/model qwen/qwen-listed\nlast\n"[..]);
     let mut output = Vec::new();
 
     // Act
@@ -450,7 +450,9 @@ async fn chat_switches_direct_sessions_by_catalog_number() {
     assert!(output.starts_with("model: kimi/kimi-listed\nassistant> from kimi-listed\n"));
     assert!(output.contains("model: kimi/kimi-listed\nmodel: qwen/qwen-listed\n"));
     assert!(output.contains("assistant> from qwen-listed\n"));
-    // A registered model has no prices, so switched runs report no cost.
+    // A registered model has no prices, so switched runs report no cost,
+    // even on the priced `kimi/kimi-listed`.
+    assert_eq!(output.matches("; cost unavailable\n").count(), 2);
     assert!(!output.contains("cost $"));
 }
 

@@ -130,10 +130,16 @@ fn response(message: &str, input_tokens: u64, output_tokens: u64) -> ResponseTem
     }))
 }
 
+/// Command storing sessions in a temporary root, whose model catalog
+/// ignores the developer's own `ChatGPT` sign-in.
 fn harness_command() -> std::io::Result<(tempfile::TempDir, Command)> {
     let storage = tempfile::tempdir()?;
     let mut command = Command::new(cargo_bin!("ag-harness"));
-    command.env("AG_HARNESS_ROOT", storage.path());
+    command
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("HOME", storage.path())
+        .env_remove("AGENTTY_ROOT")
+        .env_remove("CHATGPT_AUTH_FILE");
 
     Ok((storage, command))
 }
@@ -378,6 +384,9 @@ async fn cataloged_models_report_cost_session_usage_and_history() {
         ])
         .env("DASHSCOPE_API_KEY", "test-key")
         .env("AG_HARNESS_ROOT", storage.path())
+        .env("HOME", storage.path())
+        .env_remove("AGENTTY_ROOT")
+        .env_remove("CHATGPT_AUTH_FILE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -944,7 +953,7 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("kimi-key"))
-        .and(body_string_contains(r#""model":"kimi-test""#))
+        .and(body_string_contains(format!(r#""model":"{KIMI_K2_6}""#)))
         .and(body_string_contains(
             r#""content":"{\"message\":\"muse answer\"}","role":"assistant""#,
         ))
@@ -980,7 +989,7 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
         .stdin
         .take()
         .expect("stdin should be piped")
-        .write_all(b"/model kimi/kimi-test\nsecond question\n")
+        .write_all(format!("/model kimi/{KIMI_K2_6}\nsecond question\n").as_bytes())
         .await
         .expect("switch and prompt should be written");
     let output = child
@@ -1006,13 +1015,19 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
     );
     let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
     assert!(stdout.contains("assistant> muse answer\n---\n"));
-    assert!(stdout.contains("model: kimi/kimi-test\nassistant> kimi answer\n---\n"));
+    assert!(stdout.contains(&format!(
+        "model: kimi/{KIMI_K2_6}\nassistant> kimi answer\n---\n"
+    )));
     assert!(
         resumed.status.success(),
         "resume failed: {}",
         String::from_utf8_lossy(&resumed.stderr)
     );
-    assert!(String::from_utf8_lossy(&resumed.stdout).contains("assistant> kimi answer\n---\n"));
+    // The switch registered the cataloged Kimi model, so the resumed session
+    // runs through the registry, which has no prices.
+    let resumed = String::from_utf8_lossy(&resumed.stdout);
+    assert!(resumed.contains("assistant> kimi answer\n---\n"));
+    assert!(resumed.contains("\nusage: tokens 8 in, 2 out; cost unavailable\n"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

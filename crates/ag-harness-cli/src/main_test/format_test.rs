@@ -7,8 +7,8 @@ use ag_harness::{ModelError, RunError, TurnError, TurnRecord, Usage, UsageTotals
 use serde_json::json;
 
 use crate::{
-    CliError, assistant_text, format_duration, format_tokens, format_usage, format_usd,
-    framed_text, history_text, report_exit, single_line_terminal_text, terminal_text,
+    CliError, assistant_text, format_duration, format_request_usage, format_summed_tokens,
+    format_usd, framed_text, history_text, report_exit, single_line_terminal_text, terminal_text,
     trim_line_ending, usage_totals_text,
 };
 
@@ -143,8 +143,8 @@ fn token_totals_name_cached_reasoning_and_unreported_counts() {
     detailed.unreported_requests = 1;
 
     // Act
-    let plain = format_tokens(&plain);
-    let detailed = format_tokens(&detailed);
+    let plain = format_summed_tokens(&plain);
+    let detailed = format_summed_tokens(&detailed);
 
     // Assert
     assert_eq!(plain, "tokens 0 in, 0 out");
@@ -223,8 +223,8 @@ fn usage_format_marks_missing_counts() {
         ag_harness::model::CompletionUsage::new(None, None, Some(3), None, None, Some(7));
 
     // Act
-    let formatted = format_usage(&usage);
-    let missing_output_formatted = format_usage(&missing_output_usage);
+    let formatted = format_request_usage(&usage);
+    let missing_output_formatted = format_request_usage(&missing_output_usage);
 
     // Assert
     assert_eq!(formatted, "tokens ? in, 4 out, ? total");
