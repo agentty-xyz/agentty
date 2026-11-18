@@ -11,8 +11,9 @@
 //! Generation always re-records, fails when VHS is missing or produces no
 //! GIF, and removes the asset's same-named PNG poster so a stale poster cannot
 //! survive a new recording. Run it only through the `e2e-container` hook with
-//! `AGENTTY_MARKETING_ASSETS`, as `docs/contributing/feature-test/recording.md`
-//! describes; never record on the bare host.
+//! `AGENTTY_MARKETING_ASSETS`, as
+//! `skills/refresh-feature-recordings/references/recording.md` describes; never
+//! record on the bare host.
 
 mod demo;
 mod feature;

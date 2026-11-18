@@ -87,7 +87,7 @@ mockall.workspace = true
 opentelemetry-proto = { workspace = true, features = ["logs"] }
 prost.workspace = true
 wiremock.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["sqlx-toml"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true

@@ -59,12 +59,12 @@ duplicate commit, tag, push, or pull workflow steps here.
      the generators in `crates/agentty/tests/showcase/` and show the real package
      version in the top bar. After the version bump, regenerate all three GIFs with the
      `AGENTTY_MARKETING_ASSETS` command in the "Regenerate Marketing Assets" section of
-     `docs/contributing/feature-test/recording.md`, then extract each same-named PNG
-     poster. Follow `skills/refresh-feature-recordings/SKILL.md` and that page for the
-     recording environment, frame selection, and poster extraction. Never record on the
-     bare host or substitute an ad hoc container invocation. If the recording
-     environment is unavailable, report each GIF and PNG still showing the previous
-     version as blocked.
+     `skills/refresh-feature-recordings/references/recording.md`, then extract each
+     same-named PNG poster. Follow `skills/refresh-feature-recordings/SKILL.md` and that
+     page for the recording environment, frame selection, and poster extraction. Never
+     record on the bare host or substitute an ad hoc container invocation. If the
+     recording environment is unavailable, report each GIF and PNG still showing the
+     previous version as blocked.
    - Open every other PNG under `docs/site/static/`, including the `features/` posters
      and `social-card.png`. Check for outdated information: release versions, model or
      agent names, CLI versions, dates, renamed UI, and hero text. `FeatureTest` posters

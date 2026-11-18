@@ -10,9 +10,12 @@ review, and validation evidence, regardless of how a change was authored.
   files define development policy and required quality gates.
 - Use [skills/AGENTS.md](skills/AGENTS.md) to select the relevant task workflow. Read
   detailed references only when needed.
-- Follow the [development setup](docs/contributing/setup.md) to prepare a checkout. Use
-  the [validation recipes](docs/contributing/validation.md) for test selection and the
-  [SQLx metadata guide](docs/contributing/sqlx.md) for checked queries.
+- Follow the [development setup](skills/setup-development/SKILL.md) to prepare a
+  checkout. Use the [validation workflow](skills/validate-changes/SKILL.md) for test
+  selection and the [SQLx metadata workflow](skills/regenerate-sqlx-metadata/SKILL.md)
+  for checked queries.
+- Read [rule enforcement](docs/site/content/docs/contributing/rule-enforcement.md) to
+  learn where project rules are checked and how exceptions work.
 
 ## Preparing a Contribution
 

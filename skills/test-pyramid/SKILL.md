@@ -48,7 +48,7 @@ iteration most.
 
 Test levels describe what a test proves. Local versus CI execution is a separate
 decision: follow root `AGENTS.md` and the required procedure in
-`docs/contributing/validation.md`. A manual gate is not another test level.
+`skills/validate-changes/SKILL.md`. A manual gate is not another test level.
 
 Gated suites hold only tests that need their environment; place everything else at one
 of the levels. The native sandbox suite (`crates/ag-harness/tests/sandbox.rs`) runs in
@@ -122,10 +122,10 @@ rule against skipping or deleting a failing test during repair.
 
 ## Fast Local Loop
 
-- Use the focused and affected-package recipes in `docs/contributing/validation.md` for
+- Use the focused and affected-package recipes in `skills/validate-changes/SKILL.md` for
   iteration and final confirmation; do not duplicate hook implementations here.
-- For a focused PTY scenario, use the command in
-  `docs/contributing/feature-test/authoring.md`, not the full E2E hook.
+- For a focused PTY scenario, use the command in `skills/write-feature-tests/SKILL.md`,
+  not the full E2E hook.
 
 ## Finding Slow Tests
 

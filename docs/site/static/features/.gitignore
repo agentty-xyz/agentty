@@ -1,5 +1,5 @@
 # Generated feature demo artifacts — rebuild them with the `e2e-container` hook
-# as described in docs/contributing/feature-test/recording.md.
+# as described in skills/refresh-feature-recordings/references/recording.md.
 *.hash
 !.*.hash
 *.tape

@@ -83,8 +83,8 @@ weights first. The homepage feature card in `index.html` is hardcoded and curate
 separately. To add a feature:
 
 1. Add an E2E test with the `FeatureTest` builder and `.zola(...)` in
-   `crates/agentty/tests/e2e/`, following `docs/contributing/feature-test/authoring.md`.
-   Its first run writes `content/features/<name>.md` with this front matter:
+   `crates/agentty/tests/e2e/`, following `skills/write-feature-tests/SKILL.md`. Its
+   first run writes `content/features/<name>.md` with this front matter:
    ```toml
    +++
    title = "Feature title"
@@ -96,8 +96,8 @@ separately. To add a feature:
    +++
    ```
 1. Record the GIF into `static/features/` with the `e2e-container` hook described in
-   `docs/contributing/feature-test/recording.md`. Do not add or keep the feature page
-   until the matching GIF exists.
+   `skills/refresh-feature-recordings/references/recording.md`. Do not add or keep the
+   feature page until the matching GIF exists.
 1. Create the same-named PNG poster and inspect it. Successful GIF regeneration removes
    the previous poster so it cannot go stale; recreate and inspect it whenever the GIF
    changes.

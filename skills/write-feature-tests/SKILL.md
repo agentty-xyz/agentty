@@ -1,6 +1,16 @@
-# Authoring Feature Tests
+---
+name: write-feature-tests
+description: Write or change Agentty PTY scenarios with the FeatureTest builder, name published feature demos consistently, keep their freshness hashes deterministic, and run focused scenario checks without VHS.
+---
 
-## Naming Convention
+# Write Feature Tests
+
+Use this skill when adding or changing a visible Agentty UI scenario under
+`crates/agentty/tests/e2e/`, or when a published demo's freshness hash varies for
+unchanged UI. Follow `crates/agentty/tests/e2e/AGENTS.md` for scenario rules and
+`skills/refresh-feature-recordings/SKILL.md` to record published artifacts.
+
+## Name the Feature
 
 A published feature demo uses one name throughout the pipeline:
 
@@ -14,26 +24,50 @@ A published feature demo uses one name throughout the pipeline:
 Choose a short, descriptive `snake_case` feature name, such as `session_creation`,
 `help_overlay`, or `tab_switch`.
 
-### 1. Choose the test module
+## Steps
 
-Place the test in the E2E module matching the feature area. Session lifecycle, prompt,
-diff, review, and related topics live under `session/`. If no module fits, create one
-and register it in `crates/agentty/tests/e2e/main.rs`, or in
-`crates/agentty/tests/e2e/session.rs` for a new session topic.
+1. **Choose the test module.** Place the test in the E2E module matching the feature
+   area. Session lifecycle, prompt, diff, review, and related topics live under
+   `session/`. If no module fits, create one and register it in
+   `crates/agentty/tests/e2e/main.rs`, or in `crates/agentty/tests/e2e/session.rs` for a
+   new session topic.
 
-### 2. Write the test using `FeatureTest`
+1. **Seed fixtures.** For scenarios unrelated to model selection, seed explicit sessions
+   and settings with `ag_session::test_support` from the `test-utils` feature. Its named
+   model fixture is pinned independently of provider defaults, keeping recordings stable
+   when a default changes. Tests and demos of model pickers, defaults, and retirement
+   behavior keep explicit model-id expectations and refresh their recordings when that
+   behavior changes.
 
-For scenarios unrelated to model selection, seed explicit sessions and settings with
-`ag_session::test_support` from the `test-utils` feature. Its named model fixture is
-pinned independently of provider defaults, keeping recordings stable when a default
-changes. Tests and demos of model pickers, defaults, and retirement behavior keep
-explicit model-id expectations and refresh their recordings when that behavior changes.
+1. **Write the test with `FeatureTest`** from `crates/agentty/tests/e2e/common.rs`, as
+   described in [Builder Reference](#builder-reference). Omit `.zola(...)` when only PTY
+   coverage is needed.
 
-Use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs`. It handles
-`TempDir` and `BuilderEnv` creation, scenario execution, optional GIF generation with
-content-hash caching, and optional Zola page creation in one declarative chain. The
-example below publishes a feature demo; omit `.zola(...)` when only PTY coverage is
-needed.
+1. **Verify the Zola page.** With `.zola(...)`, `FeatureTest` generates
+   `docs/site/content/features/{name}.md` on first run with this front matter:
+
+   ```toml
+   +++
+   title = "Feature title"
+   description = "One-line description shown on the card."
+   weight = 50
+
+   [extra]
+   gif = "{name}.gif"
+   +++
+   ```
+
+   The `features.html` template discovers every page in `content/features/`, sorted by
+   `weight`, so no template edits are needed.
+
+1. **Run the focused check** in [Focused Validation](#focused-validation), then record
+   any published artifacts with `skills/refresh-feature-recordings/SKILL.md`.
+
+## Builder Reference
+
+`FeatureTest` handles `TempDir` and `BuilderEnv` creation, scenario execution, optional
+GIF generation with content-hash caching, and optional Zola page creation in one
+declarative chain. The example below publishes a feature demo:
 
 ```rust
 use testty::assertion;
@@ -78,8 +112,6 @@ async fn test_{name}() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### `FeatureTest` builder methods
-
 - **`new(name)`**: set the feature name used for the GIF filename and Zola page.
 - **`.with_git()`**: initialize a Git repository in the workdir, required for session
   and worktree features.
@@ -98,7 +130,12 @@ as the proof. If the proof mutates other fixture state, write a reset script nam
 proof workdir after the database restore and stops if it fails. Restore only that
 scenario's isolated fixture state.
 
-#### Common `Journey` helpers
+Older scenarios that construct `Scenario` and `FeatureDemo` directly keep their existing
+assertions when migrating to `FeatureTest`. `FeatureDemo` itself defaults to
+`GenerateIfStale`; the Agentty `FeatureTest` wrapper leaves recording off unless
+`TESTTY_GIF_MODE` explicitly enables it.
+
+### Journey Helpers
 
 Reuse the shared journey builders from `common.rs` instead of repeating step sequences:
 
@@ -114,7 +151,7 @@ Reuse the shared journey builders from `common.rs` instead of repeating step seq
   `create_session_with_prompt_and_return_to_list(prompt)`: run the full session creation
   flow, optionally with a custom prompt.
 
-#### Waits
+### Waits
 
 A stable-frame wait costs at least its full window. Before input or an assertion, wait
 for the content it depends on with `wait_for_text`, or with
@@ -124,25 +161,6 @@ stays absent, and where no deterministic content signal exists. Keys handled
 synchronously need no wait between them, except after `Esc`: wait for its effect so the
 next key is not read as an `Alt` chord. VHS replays `Step::eventually` as a sleep for
 its full timeout, so published scenarios avoid it.
-
-### 3. Verify the Zola page
-
-With `.zola(...)`, `FeatureTest` generates `docs/site/content/features/{name}.md` on
-first run with this front matter:
-
-```toml
-+++
-title = "Feature title"
-description = "One-line description shown on the card."
-weight = 50
-
-[extra]
-gif = "{name}.gif"
-+++
-```
-
-The `features.html` template discovers every page in `content/features/`, sorted by
-`weight`, so no template edits are needed.
 
 ## Focused Validation
 
@@ -176,9 +194,9 @@ published page or asset, run `prek run zola-check --all-files --hook-stage manua
 
 Use the generating modes only inside the canonical container, which may run with Podman
 on a developer host, never directly on the bare host; see the recording boundary in
-`docs/contributing/feature-test/recording.md`.
+`skills/refresh-feature-recordings/references/recording.md`.
 
-## Freshness Hash Determinism
+## Keep the Hash Deterministic
 
 The hash means "the UI moved" only if the same UI hashes the same way on every run and
 machine, because sidecars are committed locally and checked on Linux CI. The harness
@@ -202,7 +220,7 @@ Anything else volatile on screen, such as another generated ID, a live duration,
 random port, makes every run look stale and re-records the GIF for nothing. Freeze it in
 the app under test, or declare it with `FeatureDemo::redact`.
 
-Older scenarios that construct `Scenario` and `FeatureDemo` directly keep their existing
-assertions when migrating to `FeatureTest`. `FeatureDemo` itself defaults to
-`GenerateIfStale`; the Agentty `FeatureTest` wrapper leaves recording off unless
-`TESTTY_GIF_MODE` explicitly enables it.
+## Handoff
+
+Report the scenarios added or changed, the focused checks run with their freshness mode,
+and any published artifacts that still need recording.

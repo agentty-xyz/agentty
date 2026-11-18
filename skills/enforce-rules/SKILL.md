@@ -9,21 +9,18 @@ Use this skill when someone proposes a convention, a review keeps repeating the 
 comment, a fixed bug class could come back, or an `AGENTS.md` line could be checked
 mechanically. It decides where a rule lives and how it gets there.
 
-## Levels
+## Levels and Exceptions
 
-Place each rule at the lowest level that can decide it. Lower levels run earlier, cost
-less to maintain, and explain themselves through their own failure messages.
+`docs/site/content/docs/contributing/rule-enforcement.md` is the contributor-facing
+explanation of the levels, the hooks that report each one, and the exception policy.
+Read it first; the steps below use its level numbers:
 
-| Level | Home                                                                | Decides                                                               |
-| ----- | ------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 1     | `[workspace.lints]` in `Cargo.toml`, `clippy.toml`, `.rustfmt.toml` | Anything an existing rustc or Clippy lint, or a formatter, covers     |
-| 2     | `lint/rules/` (ast-grep)                                            | One file's syntax, scoped by path: banned calls, imports, attributes  |
-| 2     | `ag-xtask` `check-*` tasks                                          | Cross-file facts: manifests, the dependency graph, Git history        |
-| 2     | Contract tests in the owning crate                                  | Facts only running code can see, such as SQLite schema or query plans |
-| 3     | The nearest `AGENTS.md`                                             | Judgement no tool can decide                                          |
+- **Level 1:** rustc and Clippy lints and formatter configuration.
+- **Level 2:** ast-grep rules, `ag-xtask` checks, and contract tests.
+- **Level 3:** the nearest `AGENTS.md`.
 
-Prefer level 1 over level 2, and ast-grep over a new `ag-xtask` task. Write an
-`ag-xtask` task only when the rule needs more than one file's syntax.
+Write an `ag-xtask` task only when the rule needs more than one file's syntax. Put every
+exception in the check's configuration as that page describes, never at the call site.
 
 ## Placing a Rule
 
@@ -48,20 +45,10 @@ Prefer level 1 over level 2, and ast-grep over a new `ag-xtask` task. Write an
 1. Implement the check (see below) and make its failure message name the fix.
 1. Delete the `AGENTS.md` text the check now enforces, or shrink it to the judgement
    that remains. The root guide forbids restating enforced rules.
-1. Validate through `docs/contributing/validation.md`, adding the check's own hooks.
-
-## Exceptions
-
-Exceptions live in the check's configuration with a reason, never at the call site.
-Clippy rejects `#[allow]`, and ast-grep rules reject `#[expect(clippy::...)]` and
-`ast-grep-ignore` comments.
-
-- Clippy: set a lint threshold in `clippy.toml`, or keep the lint off.
-- ast-grep: narrow `files` or `ignores` in the rule and explain the exception in `note`.
-- `ag-xtask` and contract tests: a named allowlist constant with one reason per entry.
-
-`#[expect(<rustc lint>, reason = "...")]` stays available for rustc lints such as
-`unsafe_code`, where the exception is a reviewed property of one site.
+1. Update `docs/site/content/docs/contributing/rule-enforcement.md` when the change adds
+   a level, a reporting hook, or an exception mechanism, or changes the exception
+   policy. A new rule at an existing level needs no page change.
+1. Validate through `skills/validate-changes/SKILL.md`, adding the check's own hooks.
 
 ## Writing ast-grep Rules
 
@@ -100,4 +87,4 @@ Extend an existing check when the rule shares its inputs, as dependency rules do
 ## Handoff
 
 Report the rule, its level and home, the violation count before and after, the
-instructions removed, and the hooks run.
+instructions removed, any update to the rule-enforcement page, and the hooks run.

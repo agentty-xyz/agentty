@@ -5,12 +5,12 @@ description: Refresh Agentty's published feature GIFs, hash sidecars, and PNG po
 
 # Refresh Feature Recordings
 
-Use the existing procedures in `docs/contributing/feature-test/recording.md` for
-container recording and poster extraction, and
-`docs/contributing/feature-test/authoring.md` for focused freshness checks. Keep image
-digests, container commands, and rendering parameters in those canonical references.
-Root `AGENTS.md` defines the required validation gates. During a read-only review,
-identify missing or stale artifacts without regenerating them.
+Use the procedures in `skills/refresh-feature-recordings/references/recording.md` for
+container recording and poster extraction, and `skills/write-feature-tests/SKILL.md` for
+focused freshness checks. Keep image digests, container commands, and rendering
+parameters in those canonical references. Root `AGENTS.md` defines the required
+validation gates. During a read-only review, identify missing or stale artifacts without
+regenerating them.
 
 ## Identify the Affected Recordings
 
@@ -44,7 +44,7 @@ identify missing or stale artifacts without regenerating them.
    come from the `showcase` generator target without sidecars, so no freshness check
    flags them; when their captured UI changes, regenerate them with the
    `AGENTTY_MARKETING_ASSETS` command in "Regenerate Marketing Assets" in
-   `docs/contributing/feature-test/recording.md`.
+   `skills/refresh-feature-recordings/references/recording.md`.
 1. Refresh the same-named PNG for every regenerated GIF. Successful generation removes
    the old poster intentionally. Inspect the GIF, choose a representative stable frame,
    extract it with the documented poster procedure, and open the resulting PNG to check

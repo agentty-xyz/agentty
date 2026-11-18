@@ -23,6 +23,8 @@ digest with an explicit platform, so a missing variant fails instead of silently
 the wrong architecture through emulation, where Rust compiler probes can crash before
 the test starts.
 
+## Record Feature Artifacts
+
 On macOS or Windows, initialize the Podman machine once with `podman machine init`, then
 start it with `podman machine start` before pulling or running the image. Linux hosts
 run Podman directly without a machine.
@@ -42,7 +44,7 @@ The hook runs the Agentty `e2e` target in the native variant of the image pinned
 - `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest filterset.
 - `AGENTTY_MARKETING_ASSETS` runs the marketing asset generators below instead.
 - `AGENTTY_E2E_IMAGE` replaces the pinned image with a local candidate; see
-  `docs/contributing/feature-test/image-maintenance.md`.
+  `skills/maintain-e2e-image/SKILL.md`.
 
 The container runs as the host user so the bind-mounted workspace remains writable, with
 one build job and no development debug symbols to bound linker memory in smaller Podman
@@ -166,5 +168,4 @@ abort during AppKit registration and show a **Chromium quit unexpectedly** dialo
 the `e2e-container` hook for every intentional recording; do not suppress macOS crash
 reporting to hide a bare-host browser failure.
 
-When changing the image itself, follow
-`docs/contributing/feature-test/image-maintenance.md`.
+When changing the image itself, follow `skills/maintain-e2e-image/SKILL.md`.

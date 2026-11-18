@@ -5,5 +5,5 @@
   volatile output deterministic.
 - Use `.zola(...)` only when publishing a feature demo. Keep its `snake_case` test name,
   page, GIF, hash sidecar, and PNG poster aligned.
-- Follow `docs/contributing/feature-test/authoring.md` for focused scenario validation
-  and `docs/contributing/feature-test/recording.md` for published artifacts.
+- Follow `skills/write-feature-tests/SKILL.md` for scenario authoring and focused
+  validation, and `skills/refresh-feature-recordings/SKILL.md` for published artifacts.
