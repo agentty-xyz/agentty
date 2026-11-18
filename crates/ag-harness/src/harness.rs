@@ -40,7 +40,6 @@ use crate::memory_store::MemoryStore;
 use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
-use crate::policy::ToolPolicy;
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
@@ -51,7 +50,10 @@ use crate::session_model::ReplayTarget;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
-use crate::tool::{Tool, ToolSet};
+#[expect(deprecated, reason = "maps the deprecated `allow` setters")]
+use crate::tool::Tool;
+use crate::tool::ToolSet;
+use crate::tool_handler::ToolSelection;
 use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::usage::{TurnUsage, UsageTotals};
@@ -228,7 +230,7 @@ impl Session {
             return Ok(None);
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
-        let options = TurnOptions::new(schema, ToolPolicy::default());
+        let options = TurnOptions::from_output(schema);
         let (input, covered_through, source_bytes) = self.compaction_input(&source, &options)?;
         let outcome = self.harness.run_compaction(input, &options).await?;
         compaction::accept_summary(outcome.output(), MAX_SUMMARY_BYTES, source_bytes)?;
@@ -370,7 +372,7 @@ impl Session {
     /// [`SessionTurn::start`] to keep a cancellation control.
     ///
     /// Without [`SessionTurn::options`] the turn resolves the stored session
-    /// schema and the captured permission defaults afresh; earlier explicit
+    /// schema and the captured tool defaults afresh; earlier explicit
     /// overrides are not inherited.
     pub fn turn(&mut self, input: impl Into<TurnInput>) -> SessionTurn<'_> {
         SessionTurn {
@@ -385,15 +387,15 @@ impl Session {
     /// its [`crate::RunOutcome`].
     ///
     /// Unset request options use the stored session output mode and the
-    /// captured default tool policy; request options never change the
-    /// stored ones.
+    /// captured default tool set; request options never change the stored
+    /// ones.
     /// The run executes on its own task with a copy of this handle, like
     /// [`SessionTurn::start`], and owns its cancellation. Its turn joins the
     /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
         let budget = request.ledger();
         let config = &self.harness.inner;
-        let turn = request.into_turn(Some(&self.output), config.policy, &config.tools);
+        let turn = request.into_turn(Some(&self.output), &config.tools);
         let journal = RunJournal::new(
             Arc::clone(&self.database),
             self.id.clone(),
@@ -487,7 +489,7 @@ impl Session {
             "input": input_identity,
             "options": {
                 "schema": options.schema().map(OutputSchema::value),
-                "permissions": options.tool_policy(),
+                "permissions": options.tools().permissions(),
                 "max_tool_calls": LEGACY_FINGERPRINT_MAX_TOOL_CALLS,
                 "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
             },
@@ -516,7 +518,8 @@ impl Session {
             configuration["options"]["bash"] = bash.fingerprint();
         }
         // Later options join only when set, so earlier recorded requests
-        // stay recognizable; the default tool set likewise stays out.
+        // stay recognizable; built-ins in their advertised order likewise
+        // stay out, identified by their permissions.
         if let Some(instructions) = options.instructions() {
             configuration["options"]["instructions"] = json!(instructions);
         }
@@ -1065,7 +1068,7 @@ impl<'a> IntoFuture for OneShotTurn<'a> {
 
 /// Application-facing harness for one complete model turn.
 ///
-/// A turn advertises policy-approved tools, executes validated native calls,
+/// A turn advertises the tools of its [`ToolSet`], executes validated calls,
 /// returns tool results to the model, and finishes with locally validated
 /// structured output.
 /// Session builders and resumed sessions capture this configuration; later
@@ -1101,10 +1104,9 @@ impl Harness {
             model: None,
             model_reasoning_effort: None,
             model_selector: None,
-            policy: ToolPolicy::default(),
             repository: None,
             storage: None,
-            tools: ToolSet::builtins(),
+            tools: ToolSelection::default(),
         }
     }
 
@@ -1195,11 +1197,29 @@ impl Harness {
 
     /// Allows one built-in tool by default for `run_once` and `Session::send`.
     ///
-    /// Explicit turn options replace this default policy completely.
+    /// The default set, or [`ToolSet::builtins`] without one, offers only
+    /// the built-ins allowed this way. Explicit turn options, and a
+    /// [`RunRequest::tools`] set, replace this default policy completely.
+    #[deprecated(since = "0.20.0", note = "use `Harness::tools` with a `ToolSet`")]
+    #[expect(deprecated, reason = "takes the deprecated `Tool`")]
     #[must_use]
     pub fn allow(mut self, tool: Tool) -> Self {
-        let config = self.config_mut();
-        config.policy = config.policy.allow(tool);
+        self.config_mut().tools.allow(tool.into());
+
+        self
+    }
+
+    /// Offers exactly `tools` by default for `run_once`, `Session::send`,
+    /// and runs. A [`RunRequest::tools`] or explicit [`TurnOptions`]
+    /// replace the set; without one, the harness offers no tools. Only the
+    /// deprecated [`Self::allow`] on this harness drops built-ins from it.
+    ///
+    /// The defaults carry no [`crate::bash::BashConfig`], so a default set
+    /// holding `bash`, such as [`ToolSet::builtins`], needs one on every run
+    /// ([`RunRequest::bash`]) or turn ([`TurnOptions::with_bash`]).
+    #[must_use]
+    pub fn tools(mut self, tools: ToolSet) -> Self {
+        self.config_mut().tools.tools = Some(tools);
 
         self
     }
@@ -1293,7 +1313,7 @@ impl Harness {
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
     /// images. Shorthand for `self.turn(input, defaults).await`, where the
-    /// default permissions come from [`Self::allow`].
+    /// default tools come from [`Self::tools`].
     ///
     /// # Errors
     ///
@@ -1318,7 +1338,7 @@ impl Harness {
     /// outcome lists the run's files and commands like a durable session's.
     pub fn run(&self, request: RunRequest) -> Run {
         let budget = request.ledger();
-        let turn = request.into_turn(None, self.inner.policy, &self.inner.tools);
+        let turn = request.into_turn(None, &self.inner.tools);
         let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
         let id = Self::turn_cache_key();
         let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn, self.inner.pricing);
@@ -1350,8 +1370,8 @@ impl Harness {
 
     /// Configures one turn with exactly `options` and no stored history.
     ///
-    /// Options replace the harness schema and permission defaults; an empty
-    /// policy denies all tools. This never opens a store. Await the result to
+    /// Options replace the harness schema and tool defaults; options without
+    /// a tool set offer no tools. This never opens a store. Await the result to
     /// run it, or call [`OneShotTurn::start`] to keep a cancellation control.
     pub fn turn(&self, input: impl Into<TurnInput>, options: TurnOptions) -> OneShotTurn<'_> {
         OneShotTurn {
@@ -1683,7 +1703,7 @@ impl Harness {
     }
 
     fn default_options(&self, output: OutputMode) -> TurnOptions {
-        TurnOptions::new(output, self.inner.policy).with_tools(self.inner.tools.clone())
+        TurnOptions::resolved(output, &self.inner.tools)
     }
 
     /// Returns an engine for a durable turn of session `session` that
@@ -1752,10 +1772,9 @@ pub struct HarnessBuilder {
     model: Option<Arc<dyn Model>>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
-    policy: ToolPolicy,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
-    tools: ToolSet,
+    tools: ToolSelection,
 }
 
 impl HarnessBuilder {
@@ -1851,18 +1870,26 @@ impl HarnessBuilder {
     }
 
     /// Allows one built-in tool by default, like [`Harness::allow`].
+    #[deprecated(
+        since = "0.20.0",
+        note = "use `HarnessBuilder::tools` with a `ToolSet`"
+    )]
+    #[expect(deprecated, reason = "takes the deprecated `Tool`")]
     pub fn allow(mut self, tool: Tool) -> Self {
-        self.policy = self.policy.allow(tool);
+        self.tools.allow(tool.into());
 
         self
     }
 
-    /// Offers `tools` by default instead of [`ToolSet::builtins`]. Host
-    /// handlers in the set are offered in every turn that uses the
-    /// defaults; built-ins still need [`Self::allow`]. A
-    /// [`RunRequest::tools`] or explicit [`TurnOptions`] replace the set.
+    /// Offers exactly `tools` in every turn that uses the defaults; without
+    /// a set, the harness offers no tools. A [`RunRequest::tools`] or
+    /// explicit [`TurnOptions`] replace the set. Only the deprecated
+    /// [`Self::allow`] on this builder drops built-ins from it.
+    ///
+    /// A default set holding `bash` needs a [`crate::bash::BashConfig`] on
+    /// every run or turn, as [`Harness::tools`] describes.
     pub fn tools(mut self, tools: ToolSet) -> Self {
-        self.tools = tools;
+        self.tools.tools = Some(tools);
 
         self
     }
@@ -1926,9 +1953,9 @@ impl HarnessBuilder {
     ///
     /// `build` checks only that a model is selected or resolves from the
     /// catalog, that a budget is set or the model declares a valid profile,
-    /// and that a repository is set when the default policy allows a
-    /// repository tool. Storage is not touched: the SQLite database or host
-    /// store is first opened by a session's `create` or `resume`, which
+    /// and that a repository is set when the default tool set holds a
+    /// built-in repository tool. Storage is not touched: the SQLite database or
+    /// host store is first opened by a session's `create` or `resume`, which
     /// reports its failures as [`SessionError`].
     ///
     /// # Errors
@@ -1956,10 +1983,7 @@ impl HarnessBuilder {
             (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
             (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
         };
-        let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
-            .into_iter()
-            .any(|tool| self.policy.allows(tool) && self.tools.includes(tool));
-        if repository_tool_allowed && self.repository.is_none() {
+        if self.tools.resolve().has_builtin() && self.repository.is_none() {
             return Err(HarnessBuildError::RepositoryRequired.into());
         }
         let mut config = Self::direct_config(model, profile, self.context_budget)?;
@@ -1993,7 +2017,6 @@ impl HarnessBuilder {
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
         config.model_reasoning_effort = self.model_reasoning_effort;
-        config.policy = self.policy;
         config.repository = self.repository;
         config.tools = self.tools;
 
@@ -2054,8 +2077,9 @@ pub enum HarnessBuildError {
     /// The model's declared profile leaves no request capacity.
     #[error("model's declared context profile is invalid")]
     InvalidProfile(#[source] ContextBudgetError),
-    /// The default policy allows a repository tool but no repository is set.
-    #[error("allowed repository tools require a repository; call `repository`")]
+    /// The default tool set holds a built-in repository tool but no
+    /// repository is set.
+    #[error("the tool set holds built-in repository tools; call `repository`")]
     RepositoryRequired,
 }
 
@@ -2103,13 +2127,12 @@ struct HarnessConfig {
     model_id: Option<ModelId>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_registration: Option<ModelRegistration>,
-    policy: ToolPolicy,
     /// Prices of [`Self::model`], from the catalog entry the builder
     /// selected; `None` for any other model.
     pricing: Option<Pricing>,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,
-    tools: ToolSet,
+    tools: ToolSelection,
 }
 
 impl HarnessConfig {
@@ -2137,11 +2160,10 @@ impl HarnessConfig {
             model_id: None,
             model_reasoning_effort: None,
             model_registration: None,
-            policy: ToolPolicy::default(),
             pricing: None,
             repository: None,
             store: None,
-            tools: ToolSet::builtins(),
+            tools: ToolSelection::default(),
         }
     }
 
@@ -2170,7 +2192,7 @@ impl HarnessConfig {
                 self.context_estimator.as_ref(),
                 self.context_budget,
                 system_prompt,
-                &TurnOptions::new(output.clone(), self.policy),
+                &TurnOptions::resolved(output.clone(), &self.tools),
                 DEFAULT_MAX_HISTORY_BYTES,
             )
             .unwrap_or(DEFAULT_MAX_HISTORY_BYTES),

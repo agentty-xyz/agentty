@@ -238,10 +238,23 @@ async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
         .host_request("id".into(), &TurnInput::from("input"), &options)
         .expect("registered request");
 
+    let selected_by_set = session
+        .host_request(
+            "id".into(),
+            &TurnInput::from("input"),
+            &TurnOptions::from_output(options.output().clone()),
+        )
+        .expect("set-selected request");
+
     // Assert
     assert_eq!(
         unregistered.fingerprint(),
         "v1:4da118733f1dc225fd3d6836bafb287d27bb611b81af0f03202074545abef38e"
+    );
+    assert_eq!(
+        selected_by_set.fingerprint(),
+        registered.fingerprint(),
+        "an empty tool set records what an empty policy recorded"
     );
     assert_eq!(
         registered.fingerprint(),

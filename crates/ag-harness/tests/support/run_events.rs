@@ -19,7 +19,7 @@ use ag_harness::store::MemoryStore;
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     ErrorKind, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role, Run,
-    RunEvent, RunEventKind, RunOutcome, RunOutput, RunRequest, Tool, ToolPolicy,
+    RunEvent, RunEventKind, RunOutcome, RunOutput, RunRequest, ToolSet,
 };
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -430,7 +430,7 @@ async fn run_cancelled_during_a_tool_call_leaves_the_call_open() -> Result<(), B
         });
     let request = RunRequest::new("Read the name")
         .output(name_schema()?)
-        .tool_policy(ToolPolicy::default().allow(Tool::Read));
+        .tools(ToolSet::empty().with_read());
     let (stream, handle) = harness.run(request).into_parts();
     let cancel = handle.cancel_token();
     let outcome = tokio::spawn(handle.outcome());

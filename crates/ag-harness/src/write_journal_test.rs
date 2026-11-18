@@ -21,12 +21,12 @@ use crate::store::{AcquiredTurn, SessionStore as _};
 use crate::tool::{WriteArguments, WriteError};
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
-use crate::{ModelError, OutputSchema, ToolPolicy, TurnError, TurnInput, TurnOptions};
+use crate::{ModelError, OutputSchema, TurnError, TurnInput, TurnOptions};
 
 async fn fixture() -> (Database, TurnGuard) {
     let database = Database::open_in_memory().await.expect("database");
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let options = TurnOptions::from_output(schema.clone());
     database
         .create_session(&NewSession::new("session", schema), None, 4096)
         .await

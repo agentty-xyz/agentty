@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleTraceObserver};
 use ag_harness::model::{ContextBudget, ModelClient};
 use ag_harness::provider::QwenConfig;
-use ag_harness::{Harness, OutputSchema, Tool};
+use ag_harness::{Harness, OutputSchema, ToolSet};
 use ag_telemetry::{Context, FutureExt as _, KeyValue};
 use opentelemetry::trace::{SpanId, Status};
 use opentelemetry::{Array, StringValue, Value as AttributeValue, global};
@@ -187,7 +187,7 @@ async fn traced_scripted_run(
     let trace = RunTrace::start("trace_scenario");
     let harness = Harness::new(model, ContextBudget::new(NonZeroU64::MAX))
         .repository(repository_with_host_git(workspace.path()))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .with_lifecycle_observer(observer);
     let record = json!({
         "scenario": "trace_scenario",

@@ -4,9 +4,8 @@ Structured LLM turns with deny-by-default tools and durable sessions.
 
 - **Every answer is typed.** Each turn ends in JSON validated locally against your
   schema, or, in `OutputMode::Text`, in plain text.
-- **Tools are off until you allow them.** Read, write, and sandboxed Bash each need an
-  explicit grant; your own `ToolHandler`s run only when you add them to the turn's
-  `ToolSet`.
+- **Tools are off until you add them.** A turn offers exactly the tools of its
+  `ToolSet`: the built-in read, write, and sandboxed Bash, and your own `ToolHandler`s.
 - **Your store owns the conversation.** Sessions resume from SQLite (or your own store)
   in any process; the provider never holds the only copy.
 
@@ -37,9 +36,9 @@ Every harness needs a `ContextBudget`: the approximate request weight the model'
 context window allows, in roughly token-sized units. The builder derives it from the
 model's declared `ModelProfile`: built-in `OpenAI`, `ChatGPT`, and Qwen flash models
 declare one. For other models, set it with `context_budget`. `build` checks only the
-model, the budget, and that allowed repository tools have a repository, and reports a
-failure as a `HarnessError`; storage opens on first session use. `run_once` keeps no
-history. For a conversation, use a session.
+model, the budget, and that a default set holding built-ins has a repository, and
+reports a failure as a `HarnessError`; storage opens on first session use. `run_once`
+keeps no history. For a conversation, use a session.
 
 A `Harness` is a cheap, `Clone + Send + Sync` handle: clones share one configuration and
 one SQLite connection pool, so one harness can serve many concurrent sessions and turns.
@@ -50,14 +49,14 @@ them open a new file first: concurrent first opens can race on schema migration.
 ## Sessions
 
 ```rust
-use ag_harness::{Harness, Repository, Tool};
+use ag_harness::{Harness, Repository, ToolSet};
 
 let harness = Harness::builder()
     .model(model)
     .context_budget(budget)
     .sqlite("harness.db")
     .repository(Repository::new(".", git_executable)?)
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .build()?;
 
 let mut session = harness
@@ -160,16 +159,27 @@ impl ToolHandler for Clock {
     }
 }
 
-let tools = ToolSet::builder().read().handler(Arc::new(Clock::new()?)).build()?;
+let tools = ToolSet::builder().handler(Arc::new(Clock::new()?)).build()?;
 let harness = Harness::builder().model(model).tools(tools).build()?;
 ```
 
 - `HarnessBuilder::tools` sets the default set, `RunRequest::tools` replaces it for one
   run, and `TurnOptions::with_tools` for one turn; sets never merge, so extend a default
-  with `ToolSet::to_builder`. The default is `ToolSet::builtins()`.
-- A host handler is offered whenever it is in the set and needs no repository. A
-  built-in is offered only while the `ToolPolicy` also allows it. The set reads each
-  definition once, and only a call naming the tool exactly runs its handler.
+  with `ToolSet::to_builder`. Without a set, a turn offers no tools.
+- A turn offers exactly the tools of its set. Select built-ins with
+  `ToolSet::builtins()`, `ToolSet::with_read`, `with_write`, and `with_bash`, or the
+  builder's `read`, `write`, and `bash`; they need a repository, host handlers do not.
+  `with_*` is idempotent, while the builder rejects a name added twice. The set reads
+  each definition once, and only a call naming the tool exactly runs its handler.
+- Harness defaults carry no `BashConfig`, so a default set holding `bash`, such as
+  `ToolSet::builtins()`, needs `RunRequest::bash` or `TurnOptions::with_bash` on every
+  run or turn; for plain defaults, use `ToolSet::empty().with_read().with_write()`.
+- `Tool`, `ToolPolicy`, `Harness::allow`, `HarnessBuilder::allow`, `TurnOptions::new`,
+  `TurnOptions::tool_policy`, `RunRequest::tool_policy`, and `MalformedArguments::tool`
+  are deprecated. They still work: a policy drops the built-ins it denies from the set
+  given at its own level, which defaults to `ToolSet::builtins()` when only a policy is
+  given. A set given at another level, such as `RunRequest::tools` under
+  `HarnessBuilder::allow`, is offered exactly.
 - `ToolError::rejected` sends feedback to the model and the turn continues, as do
   arguments that are not a JSON object, which also count toward the malformed-response
   limit. A result over 64 KiB is dropped and the model is told the call ran.
@@ -189,14 +199,14 @@ and chain what you need before awaiting it:
 ```rust
 let outcome = session
     .turn("Review against main")
-    .options(TurnOptions::new(schema, ToolPolicy::default().allow(Tool::Read)))
+    .options(TurnOptions::from_output(schema).with_tools(ToolSet::empty().with_read()))
     .host_id("request-7")
     .await?;
 ```
 
 | Need                                    | Chain                                       |
 | --------------------------------------- | ------------------------------------------- |
-| Different schema or tools               | `.options(TurnOptions::new(...))`           |
+| Different schema or tools               | `.options(TurnOptions::from_output(...))`   |
 | Safe retries under a host request ID    | `.host_id(id)`, later `session.recover(id)` |
 | Cancellation and settlement observation | `.start()` instead of `.await`              |
 | A one-shot turn with explicit options   | `harness.turn(input, options)`              |
@@ -410,11 +420,11 @@ PNG/JPEG images for models that declare image support.
 
 ## Tools and permissions
 
-| Tool          | Does                               | Also requires                                 |
-| ------------- | ---------------------------------- | --------------------------------------------- |
-| `Tool::Read`  | Read, list, search, and show files | A `Repository`                                |
-| `Tool::Write` | Apply one bounded unified diff     | A `Repository`                                |
-| `Tool::Bash`  | Run a command in a sandbox         | `TurnOptions::with_bash(BashConfig)` per turn |
+| Tool    | Add with              | Does                               | Also requires                                 |
+| ------- | --------------------- | ---------------------------------- | --------------------------------------------- |
+| `read`  | `ToolSet::with_read`  | Read, list, search, and show files | A `Repository`                                |
+| `write` | `ToolSet::with_write` | Apply one bounded unified diff     | A `Repository`                                |
+| `bash`  | `ToolSet::with_bash`  | Run a command in a sandbox         | `TurnOptions::with_bash(BashConfig)` per turn |
 
 `Repository::new` requires a trusted Git executable outside the worktree. Comparisons
 (`diff`, `show` of the base side) additionally need a host-pinned `ComparisonBase` in
@@ -704,7 +714,7 @@ Features are additive: error enums whose variants depend on them are
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,
 `TurnOutcome`, `TurnError`, `SessionError`, `RunError`, `HarnessError`, `ErrorKind`,
-`OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, `Model`,
+`OutputSchema`, `ToolSet`, `ToolHandler`, `Repository`, `TurnInput`, `Model`,
 `ModelCatalog`, `ModelSelector`, and `Role`. Everything else is grouped by topic:
 
 | Module       | Contents                                                 |

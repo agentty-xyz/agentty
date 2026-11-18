@@ -176,13 +176,13 @@ pub enum LifecycleEventKind {
         /// Owning turn.
         turn_id: LifecycleId,
     },
-    /// One requested tool was unavailable to the turn, because its policy
-    /// denies it or no such tool exists; the model receives an error result
-    /// and the turn continues.
+    /// One requested tool was unavailable to the turn, because its tool set
+    /// leaves it out or no such tool exists; the model receives an error
+    /// result and the turn continues.
     ToolDenied {
         /// Elapsed time before denial.
         duration: Duration,
-        /// Whether policy denied a built-in tool or no such tool exists.
+        /// Whether the set left out a built-in tool or no such tool exists.
         reason: ToolUnavailableReason,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
@@ -417,7 +417,7 @@ impl ToolErrorType {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum ToolUnavailableReason {
-    /// A built-in tool the turn's policy does not enable.
+    /// A built-in tool the turn's tool set does not hold.
     Denied,
     /// A name that is no built-in tool, such as one the model invented.
     Unknown,

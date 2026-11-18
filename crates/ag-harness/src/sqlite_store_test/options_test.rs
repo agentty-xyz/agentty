@@ -205,7 +205,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules() {
         "comparison_base": null,
         "max_tool_calls": 8,
         "output_schema": schema().value(),
-        "tool_policy": options.tool_policy(),
+        "tool_policy": options.tools().permissions(),
         "version": 2,
     });
     let fingerprint = hex::encode(Sha256::digest(legacy.to_string()));

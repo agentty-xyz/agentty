@@ -5,12 +5,31 @@ use jsonschema::Validator;
 use serde_json::{Value, json};
 
 use super::{
-    MAX_PATCH_BYTES, MAX_PATH_BYTES, MAX_QUERY_BYTES, MAX_TOOL_CALL_ID_BYTES, READ_DESCRIPTION,
-    ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
-    ToolDefinitionError, WriteArguments,
+    Builtin, MAX_PATCH_BYTES, MAX_PATH_BYTES, MAX_QUERY_BYTES, MAX_TOOL_CALL_ID_BYTES,
+    READ_DESCRIPTION, ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments,
+    ToolDefinition, ToolDefinitionError, WriteArguments,
 };
 use crate::bash::Enforcement;
 use crate::{ComparisonBase, model, schema_contract};
+
+#[test]
+fn every_deprecated_tool_maps_to_the_built_in_of_its_name() {
+    // Arrange
+    let tools = [Tool::Read, Tool::Write, Tool::Bash];
+
+    // Act
+    let builtins = tools.map(Builtin::from);
+    let restored = builtins.map(Tool::from);
+
+    // Assert
+    assert_eq!(builtins, Builtin::ALL);
+    assert_eq!(restored, tools);
+    for (tool, builtin) in tools.into_iter().zip(builtins) {
+        assert_eq!(tool.name(), builtin.name());
+        assert_eq!(Builtin::named(tool.name()), Some(builtin));
+    }
+    assert_eq!(Builtin::named("fetch"), None);
+}
 
 #[test]
 fn tool_call_from_json_rejects_blank_and_oversized_identifiers() {

@@ -764,10 +764,13 @@ fn turn_options_tolerate_oversized_environments() {
     // Assert
     let edit = edit.expect("edit options should build");
     assert!(edit.bash().is_some());
-    assert!(edit.tool_policy().allows(ag_harness::Tool::Write));
+    assert_eq!(
+        edit.tools().names().collect::<Vec<_>>(),
+        ["read", "write", "bash"]
+    );
     let read_only = read_only.expect("read-only options should build");
     assert!(read_only.bash().is_none());
-    assert!(!read_only.tool_policy().allows(ag_harness::Tool::Write));
+    assert_eq!(read_only.tools().names().collect::<Vec<_>>(), ["read"]);
     assert!(output_schema(ProtocolRequestProfile::UtilityPrompt).is_ok());
 }
 

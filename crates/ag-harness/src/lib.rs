@@ -55,9 +55,10 @@
 //! - A [`BudgetLedger`], such as a [`SharedBudget`] capping total micro-USD or
 //!   tokens, reserves every model request of the runs it is given, so parallel
 //!   runs share one budget.
-//! - A turn offers the tools of its [`ToolSet`]: host [`ToolHandler`]s and the
-//!   built-in [`Tool`]s, which stay denied until allowed with
-//!   [`Harness::allow`] or a [`ToolPolicy`].
+//! - A turn offers exactly the tools of its [`ToolSet`]: host [`ToolHandler`]s
+//!   and the built-in `read`, `write`, and `bash` handlers. A harness offers no
+//!   tools until [`HarnessBuilder::tools`], [`RunRequest::tools`], or
+//!   [`TurnOptions::with_tools`] gives it a set.
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
 //!   [`SessionError`] by [`ErrorKind`] and whether a retry may succeed.
 //!
@@ -187,6 +188,7 @@ pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBu
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use limit::{LimitKind, RunLimits};
 pub use model::{Model, ModelError};
+#[expect(deprecated, reason = "re-exports the deprecated `ToolPolicy` until A9")]
 pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
 pub use request_option::{GenerationParams, OutputMode};
@@ -195,7 +197,9 @@ pub use run::{
 };
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
-pub use tool::{Tool, ToolHandler, ToolSet};
+#[expect(deprecated, reason = "re-exports the deprecated `Tool` until A9")]
+pub use tool::Tool;
+pub use tool::{ToolHandler, ToolSet};
 pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
 pub use usage::{Cost, UsageTotals};

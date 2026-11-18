@@ -22,7 +22,7 @@ use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::tool::ToolCall;
 use ag_harness::turn::ToolActivity;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy,
+    Harness, Model, ModelError, OutputSchema, Repository, Session, SessionError, ToolSet,
     TurnError, TurnOptions,
 };
 use serde_json::{Value, json};
@@ -733,8 +733,7 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
     let harness = Harness::new(provider.client()?, budget)
         .database(directory.path().join("fit.db"))
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
-        .allow(Tool::Read)
-        .allow(Tool::Write);
+        .tools(ToolSet::empty().with_read().with_write());
     let mut session = harness.session("fit", answer_schema()?).create().await?;
     provider.pace().await;
     session
@@ -881,7 +880,7 @@ async fn malformed_tool_arguments(
     let harness = Harness::new(model, unbounded_context_budget())
         .database(directory.path().join("malformed.db"))
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
     let mut session = harness
         .session("malformed", answer_schema()?)
         .create()
@@ -1112,7 +1111,7 @@ async fn injected_repetition(provider: Provider) -> Result<String, DynError> {
     };
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(repository)
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
     provider.pace().await;
     let outcome = harness
         .run_once(
@@ -1143,7 +1142,7 @@ async fn requested_repetition(provider: Provider) -> Result<String, DynError> {
     let (_workspace, repository) = notes_repository()?;
     let harness = Harness::new(provider.client()?, unbounded_context_budget())
         .repository(repository)
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
     provider.pace().await;
     let result = harness
         .run_once(
@@ -1308,7 +1307,7 @@ async fn context_overflow_recovery(provider: Provider) -> Result<String, DynErro
     let observed = Arc::clone(&retries);
     let harness = Harness::new(model, budget)
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .with_lifecycle_observer(move |event: ag_harness::lifecycle::LifecycleEvent| {
             if let ag_harness::lifecycle::LifecycleEventKind::ContextOverflowRetried {
                 rejected_weight,
@@ -1489,7 +1488,7 @@ async fn estimate_margin_near_window(provider: Provider) -> Result<String, DynEr
     )?;
     let harness = Harness::from_registry(&registry, provider.name())?
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
     provider.pace().await;
     let outcome = harness
         .run_once(
@@ -1606,10 +1605,9 @@ struct BashStep {
 }
 
 fn bash_options(executor: Executor, step: &BashStep) -> Result<TurnOptions, DynError> {
-    Ok(
-        TurnOptions::new(stdout_schema()?, ToolPolicy::default().allow(Tool::Bash))
-            .with_bash(executor.config(step.timeout, step.capture)?),
-    )
+    Ok(TurnOptions::from_output(stdout_schema()?)
+        .with_tools(ToolSet::empty().with_bash())
+        .with_bash(executor.config(step.timeout, step.capture)?))
 }
 
 fn bash_prompt(command: &str) -> String {
@@ -1830,7 +1828,7 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
         .execution_identity(ExecutionIdentity::new("live-image", "1")?)
         .max_history_bytes(NonZeroUsize::new(4 * 1024 * 1024).ok_or("history")?)
         .store(Arc::new(ag_harness::store::MemoryStore::new()));
-    let options = TurnOptions::new(vision::color_schema()?, ToolPolicy::default());
+    let options = TurnOptions::from_output(vision::color_schema()?);
     let mut session = harness
         .session("images", vision::color_schema()?)
         .create()

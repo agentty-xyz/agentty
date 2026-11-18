@@ -7,9 +7,9 @@ weight = 6
 # `ag-harness` — a light LLM harness
 
 `ag-harness` is the base layer between an application and an LLM. It is Rust-native,
-app-facing, and lightweight: an agent loop, three policy-checked tools, durable
-sessions, and content-free lifecycle events. Product decisions stay in the application.
-Agentty runs it as the preview `AgentKind::Harness` backend behind
+app-facing, and lightweight: an agent loop, three built-in tools selected by `ToolSet`,
+durable sessions, and content-free lifecycle events. Product decisions stay in the
+application. Agentty runs it as the preview `AgentKind::Harness` backend behind
 `--experimental-harness`, following the
 [Execution](@/docs/core-components/execution-components/execution-boundary.md) boundary.
 
@@ -30,8 +30,9 @@ flowchart LR
 - **Open tool handlers** — every tool is a `ToolHandler` in an ordered, name-unique
   `ToolSet`; the built-in `read`, `write` (git-style patches), and sandboxed `bash` are
   handlers bound to the turn's repository and journal.
-- **Deny-by-default permissions** — built-ins also pass an explicit per-turn policy;
-  host handlers run only when the host adds them to the turn's set.
+- **Deny-by-default tools** — a turn offers exactly the handlers of its set, and a
+  harness offers none until the host gives it one; the deprecated `ToolPolicy` only
+  drops the built-ins it denies from that set.
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
@@ -64,8 +65,8 @@ explicitly. `ag-router` stays unsplit: it compiles every provider transport eith
 - `Harness` owns the model and its required `ContextBudget`, validated repository,
   configured defaults, lifecycle observers, and the selected session store. It is a
   `Clone + Send + Sync` handle, so clones share one SQLite pool and calibration;
-  `Harness::builder` checks the model, the budget, and the repository required by
-  allowed tools at `build`; storage still opens on first session use.
+  `Harness::builder` checks the model, the budget, and the repository required by the
+  default set's built-in tools at `build`; storage still opens on first session use.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
   `Session::transcript` reads settled turns in full (all, the newest N, or a span).
   `Harness::fork` copies a session's configuration and settled turns through one index
@@ -73,10 +74,11 @@ explicitly. `ag-router` stays unsplit: it compiles every provider transport eith
   and gives it its own prompt-cache key; the source is never changed. Transcripts reuse
   the live `event::Item` shape. Durable and stateless turns can be awaited or started
   for a `TurnControl`.
-- `TurnOptions` fixes the output mode, `ToolPolicy`, `ToolSet`, and optional
-  `ComparisonBase` for one execution. Explicit options replace defaults; they are never
-  merged. The engine dispatches each call by name to the turn's handler; read repeats,
-  deferrals, and malformed or unavailable calls are answered before any handler runs.
+- `TurnOptions` fixes the output mode, `ToolSet`, and optional `ComparisonBase` for one
+  execution. Explicit options replace defaults; they are never merged. The engine binds
+  each built-in in the set to the turn's repository and dispatches every call by name to
+  the turn's handler; read repeats, deferrals, and malformed or unavailable calls are
+  answered before any handler runs.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys; each registration's `ModelProfile` declares its
   context window and estimator parameters. Hosts own per-model values; the harness holds
@@ -232,11 +234,11 @@ projections are unchanged.
 
 ## Permissions and tools
 
-All tools are denied by default; per-turn policy enables them explicitly. A call to a
-denied or nonexistent tool is answered with a correctable `"status": "unavailable"`
-result that lists the available tools, and the turn continues. Such a result is never
-cleared to fit the context window, and a dropped-round note never names its call, since
-it did not run.
+A turn offers exactly the tools of its `ToolSet`; without a set, it offers none. A call
+to a tool the set leaves out, or to a nonexistent tool, is answered with a correctable
+`"status": "unavailable"` result that lists the available tools, and the turn continues.
+Such a result is never cleared to fit the context window, and a dropped-round note never
+names its call, since it did not run.
 
 - `read` — bounded file, list, search, and `show(head)` inspection. A `list` or `search`
   path that matches no repository file returns a corrective error instead of an empty

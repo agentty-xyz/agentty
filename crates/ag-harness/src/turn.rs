@@ -21,11 +21,18 @@ pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{CompletionMetadata, ModelError};
+#[expect(deprecated, reason = "maps the deprecated `TurnOptions` policy API")]
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::OutputSchema;
-use crate::tool::{ReadAction, Tool, ToolSet};
+#[expect(
+    deprecated,
+    reason = "`MalformedArguments` still names the deprecated `Tool`"
+)]
+use crate::tool::Tool;
+use crate::tool::{ReadAction, ToolSet};
+use crate::tool_handler::{BuiltinPermissions, ToolSelection};
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -36,31 +43,85 @@ use crate::write::WriteError;
 /// is unlimited unless its run's [`crate::RunRequest::limits`] bound it;
 /// cancellation and, when declared, the effective model's context budget
 /// bound it either way.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// Options compare equal when they configure the same turn: the same output
+/// mode, instructions, generation parameters, limits, Bash policy,
+/// comparison base, and offered tools, however those tools were selected.
+#[derive(Clone, Debug)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
     generation: GenerationParams,
     instructions: Option<String>,
+    /// Built-ins a deprecated [`ToolPolicy`] allows; every set given to
+    /// [`Self::with_tools`] drops the others. Equality leaves it out:
+    /// [`Self::tools`] already reflects it.
+    legacy_permissions: Option<BuiltinPermissions>,
     limits: RunLimits,
     output: OutputMode,
-    tool_policy: ToolPolicy,
     tools: ToolSet,
 }
 
+impl PartialEq for TurnOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            bash,
+            comparison_base,
+            generation,
+            instructions,
+            legacy_permissions: _,
+            limits,
+            output,
+            tools,
+        } = self;
+
+        *bash == other.bash
+            && *comparison_base == other.comparison_base
+            && *generation == other.generation
+            && *instructions == other.instructions
+            && *limits == other.limits
+            && *output == other.output
+            && *tools == other.tools
+    }
+}
+
+impl Eq for TurnOptions {}
+
 impl TurnOptions {
-    /// Resolves an output mode, usually a JSON [`OutputSchema`], and
-    /// explicit permissions, offering the built-in tools the policy allows.
+    /// Resolves an output mode, usually a JSON [`OutputSchema`], for a turn
+    /// that offers no tools until [`Self::with_tools`] gives it a set.
+    pub fn from_output(output: impl Into<OutputMode>) -> Self {
+        Self::resolved(output, &ToolSelection::default())
+    }
+
+    /// Resolves an output mode and explicit permissions, offering the
+    /// built-in tools the policy allows.
+    #[deprecated(
+        since = "0.20.0",
+        note = "use `TurnOptions::from_output(output).with_tools(tools)`"
+    )]
+    #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
     pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
+        Self::resolved(
+            output,
+            &ToolSelection {
+                legacy_permissions: Some(tool_policy.into()),
+                tools: None,
+            },
+        )
+    }
+
+    /// Resolves `output` with the tools `selection` resolves to.
+    pub(crate) fn resolved(output: impl Into<OutputMode>, selection: &ToolSelection) -> Self {
         Self {
             bash: None,
             comparison_base: None,
             generation: GenerationParams::default(),
             instructions: None,
+            legacy_permissions: selection.legacy_permissions,
             limits: RunLimits::default(),
             output: output.into(),
-            tool_policy,
-            tools: ToolSet::builtins(),
+            tools: selection.resolve(),
         }
     }
 
@@ -73,12 +134,15 @@ impl TurnOptions {
         self
     }
 
-    /// Offers `tools` in this turn instead of [`ToolSet::builtins`]. A
-    /// built-in in the set is still offered only while the tool policy
-    /// allows it.
+    /// Offers exactly `tools` in this turn. Options from the deprecated
+    /// [`Self::new`] drop the built-ins their policy denies.
     #[must_use]
     pub fn with_tools(mut self, tools: ToolSet) -> Self {
-        self.tools = tools;
+        self.tools = ToolSelection {
+            legacy_permissions: self.legacy_permissions,
+            tools: Some(tools),
+        }
+        .resolve();
 
         self
     }
@@ -128,13 +192,13 @@ impl TurnOptions {
         &self.output
     }
 
-    /// Returns the tools this turn may offer.
+    /// Returns the tools this turn offers.
     pub fn tools(&self) -> &ToolSet {
         &self.tools
     }
 
-    /// Selects immutable Bash host policy for this turn. The separate Bash
-    /// tool permission must also be enabled. Does not change session defaults.
+    /// Selects immutable Bash host policy for this turn. The turn's tool set
+    /// must also hold `bash`. Does not change session defaults.
     #[must_use]
     pub fn with_bash(mut self, configuration: BashConfig) -> Self {
         self.bash = Some(configuration);
@@ -153,9 +217,19 @@ impl TurnOptions {
         self.output.schema()
     }
 
-    /// Returns the complete permissions for this turn.
+    /// Returns the policy these options were configured with: the one given
+    /// to the deprecated [`Self::new`] or a deprecated default policy, or,
+    /// for options selected with a [`ToolSet`] alone, a policy allowing
+    /// exactly the built-ins [`Self::tools`] holds.
+    #[deprecated(
+        since = "0.20.0",
+        note = "use `TurnOptions::tools` for the tools this turn offers"
+    )]
+    #[expect(deprecated, reason = "returns the deprecated `ToolPolicy`")]
     pub fn tool_policy(&self) -> ToolPolicy {
-        self.tool_policy
+        self.legacy_permissions
+            .unwrap_or_else(|| self.tools.permissions())
+            .into()
     }
 
     /// Sets the host-validated comparison base for this turn only.
@@ -670,6 +744,11 @@ impl ContextActivity {
     }
 }
 
+/// The deprecated [`Tool`] that [`ToolActivity::MalformedArguments`] still
+/// names until its field becomes a `String`.
+#[expect(deprecated, reason = "names the deprecated `Tool` in one place")]
+type LegacyTool = Tool;
+
 /// Sanitized details about one tool call: a built-in tool operation, or a
 /// call to a tool the turn does not make available.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -756,16 +835,19 @@ pub enum ToolActivity {
         duration: Duration,
         /// Bounded decoding failure.
         reason: String,
-        /// Tool the model called.
-        tool: Tool,
+        /// Tool the model called. Its type is the deprecated [`Tool`]: read
+        /// the name with [`ToolActivity::name`] instead of matching this
+        /// field. A later release makes it a `String` with the same
+        /// `snake_case` serialized value, so the wire format stays stable.
+        tool: LegacyTool,
     },
-    /// A call to a tool the turn does not make available, such as one its
-    /// policy denies or one the model invented, answered with an error result
-    /// listing the available tools instead of running.
+    /// A call to a tool the turn does not make available, such as a
+    /// built-in its tool set leaves out or one the model invented, answered
+    /// with an error result listing the available tools instead of running.
     Unavailable {
         /// Elapsed tool-handling time.
         duration: Duration,
-        /// Whether policy denied a built-in tool or no such tool exists.
+        /// Whether the set left out a built-in tool or no such tool exists.
         reason: ToolUnavailableReason,
         /// Function name the model called, as a replayable function name
         /// (see `ag_router::replayable_function_name`); a deserialized value
@@ -1066,8 +1148,9 @@ pub enum TurnError {
     /// A repository read failed.
     #[error(transparent)]
     Read(#[from] ReadError),
-    /// Repository-scoped tools were enabled without a repository root.
-    #[error("repository root is required when a repository tool is allowed")]
+    /// The tool set holds built-in repository tools, but no repository root
+    /// is set.
+    #[error("the tool set holds built-in repository tools; a repository root is required")]
     RepositoryRequired,
     /// The comparison base was validated for another repository scope.
     #[error("comparison base does not belong to the configured repository scope")]

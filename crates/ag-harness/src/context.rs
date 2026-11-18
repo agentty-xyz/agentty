@@ -18,7 +18,9 @@ use crate::model::{ModelMessage, ModelRequest};
 use crate::round_summary::{self, CoveredCalls, RoundSummaryJob, SOURCE_TEXT_LEVELS};
 use crate::schema_contract::OutputSchema;
 use crate::session_model::{self, RecordedModel, ReplayTarget};
-use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
+use crate::tool::{
+    Builtin, ReadAction, ReadArguments, ToolCall, ToolCallArguments, ToolDefinition,
+};
 use crate::tool_handler::ToolEntry;
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 use crate::{compaction, read};
@@ -2070,7 +2072,7 @@ impl ContextFit {
             content,
             name: name.to_string(),
         };
-        if name == Tool::Read.name()
+        if name == Builtin::Read.name()
             && let Some(page) = read::fit_tool_result(content, &|candidate| {
                 estimator.message_weight(&result(candidate.to_string())) <= allowed
             })
@@ -2566,24 +2568,21 @@ pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
         .tools()
         .entries()
         .iter()
-        .filter_map(|entry| match entry {
-            ToolEntry::Builtin(tool) => options
-                .tool_policy()
-                .allows(*tool)
-                .then(|| builtin_definition(*tool, options)),
-            ToolEntry::Handler { definition, .. } => Some(definition.clone()),
+        .map(|entry| match entry {
+            ToolEntry::Builtin(builtin) => builtin_definition(*builtin, options),
+            ToolEntry::Handler { definition, .. } => definition.clone(),
         })
         .collect()
 }
 
-/// Returns the definition of the built-in `tool` under `options`.
-pub(crate) fn builtin_definition(tool: Tool, options: &TurnOptions) -> ToolDefinition {
-    match tool {
-        Tool::Read => ToolDefinition::read_with_comparison_base(options.comparison_base()),
-        Tool::Write => ToolDefinition::write(),
+/// Returns the definition of `builtin` under `options`.
+pub(crate) fn builtin_definition(builtin: Builtin, options: &TurnOptions) -> ToolDefinition {
+    match builtin {
+        Builtin::Read => ToolDefinition::read_with_comparison_base(options.comparison_base()),
+        Builtin::Write => ToolDefinition::write(),
         // Without a configuration the turn fails before any command runs;
         // still claim no isolation rather than one nothing provides.
-        Tool::Bash => ToolDefinition::bash(
+        Builtin::Bash => ToolDefinition::bash(
             options
                 .bash()
                 .map_or(Enforcement::None, BashConfig::enforcement),
@@ -3147,7 +3146,7 @@ fn repeated_call(message: &ModelMessage) -> Option<String> {
     let ModelMessage::ToolResult { content, name, .. } = message else {
         return None;
     };
-    if name != Tool::Read.name() || !content.starts_with(REPEATED_READ_PREFIX) {
+    if name != Builtin::Read.name() || !content.starts_with(REPEATED_READ_PREFIX) {
         return None;
     }
     let result = serde_json::from_str::<Value>(content).ok()?;
@@ -3177,7 +3176,7 @@ fn cleared_repeat_result(
     ModelMessage::ToolResult {
         call_id: call_id.to_string(),
         content: Value::Object(notice).to_string(),
-        name: Tool::Read.name().to_string(),
+        name: Builtin::Read.name().to_string(),
     }
 }
 

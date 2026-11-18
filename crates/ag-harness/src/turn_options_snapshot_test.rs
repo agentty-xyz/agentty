@@ -9,15 +9,12 @@ use sha2::{Digest as _, Sha256};
 
 use super::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::limit::RunLimits;
-use crate::{
-    ComparisonBase, GenerationParams, OutputMode, OutputSchema, Tool, ToolPolicy, ToolSet,
-    TurnOptions,
-};
+use crate::{ComparisonBase, GenerationParams, OutputMode, OutputSchema, ToolSet, TurnOptions};
 
 #[test]
 fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     // Arrange
-    let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
+    let options = turn_options().with_tools(ToolSet::empty().with_write());
     let encoded = StoredTurnOptions::encode(&options);
     let snapshot: Value = serde_json::from_str(&encoded).expect("snapshot JSON");
     let mut invalid = Vec::new();
@@ -44,7 +41,12 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
 
     // Assert
     assert_eq!(decoded.output_schema, *schema().value());
-    assert_eq!(decoded.tool_policy, options.tool_policy());
+    assert_eq!(decoded.tool_policy, options.tools().permissions());
+    assert_eq!(
+        snapshot["tool_policy"],
+        json!({"read": false, "write": true})
+    );
+    assert!(snapshot.get("tools").is_none());
     assert_eq!(decoded.version, 6);
     assert_eq!(decoded.max_tool_calls, None);
     assert!(snapshot.get("max_tool_calls").is_none());
@@ -54,7 +56,7 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
 #[test]
 fn run_limits_never_reach_the_snapshot_or_its_fingerprint() {
     // Arrange
-    let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
+    let options = turn_options().with_tools(ToolSet::empty().with_write());
     let limited = options.clone().with_limits(
         RunLimits::default()
             .with_max_model_requests(NonZeroU32::MIN)
@@ -81,10 +83,7 @@ fn comparison_snapshots_preserve_identity_and_fingerprint_all_effective_options(
     let other_scope = plain
         .clone()
         .with_comparison_base(ComparisonBase::fixture("other-repository"));
-    let permissions = TurnOptions::new(
-        plain.output().clone(),
-        plain.tool_policy().allow(Tool::Read),
-    );
+    let permissions = plain.clone().with_tools(ToolSet::empty().with_read());
 
     // Act
     let snapshots: Vec<_> = [&plain, &selected, &other_scope, &permissions]
@@ -121,10 +120,9 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
     let options: Vec<_> = schemas
         .iter()
         .map(|schema| {
-            TurnOptions::new(
+            TurnOptions::from_output(
                 OutputSchema::new(serde_json::from_str(schema).expect("schema JSON"))
                     .expect("schema"),
-                ToolPolicy::default(),
             )
         })
         .collect();
@@ -157,7 +155,7 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
 fn version_one_options_remain_readable_but_never_imply_a_known_base() {
     // Arrange
     let options = turn_options();
-    let legacy = json!({"version":1, "output_schema":schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":8});
+    let legacy = json!({"version":1, "output_schema":schema().value(), "tool_policy":options.tools().permissions(), "max_tool_calls":8});
     let mut conflicting = legacy.clone();
     conflicting["comparison_base"] = json!(ComparisonBase::fixture("repo").identity());
 
@@ -341,7 +339,7 @@ fn current_fingerprints_sort_object_keys_without_a_tool_call_limit() {
     let snapshots: Vec<_> = [ordered, reordered]
         .into_iter()
         .map(|schema| {
-            let options = TurnOptions::new(schema, ToolPolicy::default());
+            let options = TurnOptions::from_output(schema);
 
             StoredTurnOptions::decode(&StoredTurnOptions::encode(&options)).expect("snapshot")
         })
@@ -363,7 +361,7 @@ fn current_fingerprints_sort_object_keys_without_a_tool_call_limit() {
 fn version_six_records_text_output_instructions_and_output_bounds() {
     // Arrange
     let tokens = NonZeroU32::new(256).expect("nonzero tokens");
-    let text = TurnOptions::new(OutputMode::Text, ToolPolicy::default())
+    let text = TurnOptions::from_output(OutputMode::Text)
         .with_instructions("Answer tersely.")
         .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
     let snapshot: Value =
@@ -430,6 +428,41 @@ fn a_tool_set_other_than_the_built_ins_is_recorded_and_fingerprinted() {
     ));
 }
 
+#[test]
+#[expect(
+    deprecated,
+    reason = "compares against the deprecated policy's snapshots"
+)]
+fn a_built_in_selection_records_the_snapshot_its_deprecated_policy_did() {
+    // Arrange
+    let policies = [
+        crate::ToolPolicy::default(),
+        crate::ToolPolicy::default().allow(crate::Tool::Read),
+        crate::ToolPolicy::default()
+            .allow(crate::Tool::Read)
+            .allow(crate::Tool::Write)
+            .allow(crate::Tool::Bash),
+    ];
+    let tool_sets = [
+        ToolSet::empty(),
+        ToolSet::empty().with_read(),
+        ToolSet::builtins(),
+    ];
+
+    // Act
+    let legacy =
+        policies.map(|policy| StoredTurnOptions::encode(&TurnOptions::new(schema(), policy)));
+    let selected =
+        tool_sets.map(|tools| StoredTurnOptions::encode(&turn_options().with_tools(tools)));
+
+    // Assert
+    assert_eq!(selected, legacy);
+    assert_eq!(
+        serde_json::from_str::<Value>(&selected[1]).expect("snapshot")["tool_policy"],
+        json!({"read": true, "write": false})
+    );
+}
+
 /// Rewrites a current snapshot as `version`, adding the default legacy
 /// tool-call limit and dropping fields that version did not record.
 fn versioned_snapshot(options: &TurnOptions, version: u8) -> Value {
@@ -474,5 +507,5 @@ fn schema() -> OutputSchema {
 }
 
 fn turn_options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default())
+    TurnOptions::from_output(schema())
 }

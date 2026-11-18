@@ -13,7 +13,7 @@ use ag_harness::lifecycle::{LifecycleEvent, LifecycleObserverSet};
 use ag_harness::model::{
     ContextBudget, ContextSummaryPolicy, HeuristicContextEstimator, ModelProfile,
 };
-use ag_harness::{Harness, OutputSchema, Tool};
+use ag_harness::{Harness, OutputSchema, ToolSet};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{Context, FutureExt as _};
 use tempfile::TempDir;
@@ -411,7 +411,7 @@ fn long_read_loop(harness: Harness, sent: SentRequests) -> ScenarioFuture {
         let workspace = Workspace::create(fixture.files()).await?;
         let outcome = harness
             .repository(benchmark_repository(workspace.root())?)
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .run_once(
                 fixture.prompt(),
                 OutputSchema::new(ReadLoopFixture::schema())?,
@@ -438,8 +438,7 @@ fn write_scenario(harness: Harness, sent: SentRequests, fixture: WriteFixture) -
         let workspace = Workspace::create(fixture.files()).await?;
         let outcome = harness
             .repository(benchmark_repository(workspace.root())?)
-            .allow(Tool::Read)
-            .allow(Tool::Write)
+            .tools(ToolSet::empty().with_read().with_write())
             .run_once(fixture.prompt(), OutputSchema::new(answer_schema())?)
             .await?;
         let mut contents = BTreeMap::new();
@@ -464,7 +463,7 @@ fn huge_result(harness: Harness, sent: SentRequests) -> ScenarioFuture {
         let workspace = Workspace::create(fixture.files()).await?;
         let outcome = harness
             .repository(benchmark_repository(workspace.root())?)
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .run_once(
                 HugeResultFixture::prompt(),
                 OutputSchema::new(answer_schema())?,
@@ -488,7 +487,7 @@ fn session_reads(harness: Harness, sent: SentRequests) -> ScenarioFuture {
         let database = tempfile::tempdir()?;
         let harness = harness
             .repository(benchmark_repository(workspace.root())?)
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .database(database.path().join("sessions.db"));
         harness
             .session(

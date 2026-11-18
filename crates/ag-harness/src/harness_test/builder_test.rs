@@ -22,11 +22,10 @@ use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
 use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
-use crate::policy::ToolPolicy;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::SessionStore;
-use crate::tool::Tool;
+use crate::tool::ToolSet;
 
 /// Request weight declared by the profile estimator, distinguishing it
 /// from the default estimator's zero request cost.
@@ -99,10 +98,15 @@ fn build_with_an_invalid_declared_profile_reports_it() {
 #[test]
 fn build_with_repository_tools_but_no_repository_reports_it() {
     // Arrange
-    let builders = [Tool::Bash, Tool::Read, Tool::Write].map(|tool| {
+    let tool_sets = [
+        ToolSet::empty().with_bash(),
+        ToolSet::empty().with_read(),
+        ToolSet::empty().with_write(),
+    ];
+    let builders = tool_sets.map(|tools| {
         Harness::builder()
             .model(Arc::new(profiled_model(Some(declared_profile()))))
-            .allow(tool)
+            .tools(tools)
     });
 
     // Act
@@ -320,8 +324,7 @@ async fn build_applies_every_configured_option() {
         .model(Arc::new(profiled_model(Some(declared_profile()))))
         .store(Arc::clone(&store))
         .repository(Repository::fixture("root"))
-        .allow(Tool::Read)
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .file_system(file_system)
         .max_history_bytes(NonZeroUsize::new(64).expect("non-zero"))
         .model_reasoning_effort(ReasoningEffort::High)
@@ -341,8 +344,8 @@ async fn build_applies_every_configured_option() {
     );
     assert_eq!(config.repository, Some(Repository::fixture("root")));
     assert_eq!(
-        config.policy,
-        ToolPolicy::default().allow(Tool::Read).allow(Tool::Write)
+        config.tools.resolve().names().collect::<Vec<_>>(),
+        ["read", "write"]
     );
     assert_eq!(
         config
@@ -653,14 +656,14 @@ fn reconfiguring_a_clone_leaves_the_shared_configuration_unchanged() {
     assert!(Arc::ptr_eq(&harness.inner, &shared.inner));
 
     // Act
-    let reconfigured = shared.allow(Tool::Read);
+    let reconfigured = shared.tools(ToolSet::empty().with_read());
 
     // Assert
     assert!(!Arc::ptr_eq(&harness.inner, &reconfigured.inner));
-    assert_eq!(harness.inner.policy, ToolPolicy::default());
+    assert!(harness.inner.tools.resolve().is_empty());
     assert_eq!(
-        reconfigured.inner.policy,
-        ToolPolicy::default().allow(Tool::Read)
+        reconfigured.inner.tools.resolve(),
+        ToolSet::empty().with_read()
     );
     #[cfg(feature = "sqlite")]
     assert!(Arc::ptr_eq(

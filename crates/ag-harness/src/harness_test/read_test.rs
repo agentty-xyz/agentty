@@ -27,7 +27,7 @@ use crate::read::ReadError;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
-use crate::tool::{ReadAction, Tool, ToolCall, ToolDefinition};
+use crate::tool::{ReadAction, ToolCall, ToolDefinition, ToolSet};
 use crate::turn::{ToolActivity, TurnError};
 
 #[tokio::test]
@@ -138,7 +138,7 @@ async fn completes_repository_inspection_round_trip() {
     });
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture(env!("CARGO_MANIFEST_DIR")))
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
 
     // Act
     let outcome = harness
@@ -299,7 +299,7 @@ async fn returns_correctable_repository_inspection_rejection_to_model() {
     });
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture(env!("CARGO_MANIFEST_DIR")))
-        .allow(Tool::Read);
+        .tools(ToolSet::empty().with_read());
 
     // Act
     let outcome = harness
@@ -625,7 +625,7 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
     let harness = Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(readable_file_system())
         .context_estimator(FlatEstimator);
 
@@ -698,7 +698,7 @@ async fn long_read_loops_send_reduced_copies_within_the_budget() {
     let harness = Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(repeatable_file_system(content));
 
     // Act
@@ -775,7 +775,7 @@ async fn very_long_read_loops_drop_their_oldest_rounds_to_stay_within_the_budget
     let harness = Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(repeatable_file_system(b"ok\n".to_vec()));
 
     // Act

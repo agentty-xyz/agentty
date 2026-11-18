@@ -34,7 +34,7 @@ use crate::request_option::OutputMode;
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
 use crate::run::{RunOutcome, RunRequest, Usage};
 use crate::store::MemoryStore;
-use crate::tool::{Tool, ToolCall};
+use crate::tool::{ToolCall, ToolSet};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
 use crate::usage::Cost;
 
@@ -167,7 +167,7 @@ fn budgeted_harness(model: SummarizingModel, policy: ContextSummaryPolicy, budge
         ContextBudget::new(NonZeroU64::new(budget).expect("nonzero budget")),
     )
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .file_system(files())
     .context_summaries(policy)
 }
@@ -604,7 +604,7 @@ async fn cancelling_a_turn_during_a_summary_reports_it_cancelled() {
         ContextBudget::new(NonZeroU64::new(BUDGET).expect("nonzero budget")),
     )
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .file_system(files())
     .context_summaries(ContextSummaryPolicy::Enabled);
     let (harness, events) = observed(harness);
@@ -819,7 +819,7 @@ async fn wall_time_stop_during_a_summary_still_streams_its_earlier_requests() {
         ContextBudget::new(NonZeroU64::new(BUDGET).expect("nonzero budget")),
     )
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .file_system(files())
     .context_summaries(ContextSummaryPolicy::Enabled);
 

@@ -26,11 +26,13 @@ use crate::event::{EventSink, EventStream, RunId};
 use crate::input::TurnInput;
 use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
+#[expect(deprecated, reason = "maps the deprecated `RunRequest::tool_policy`")]
 use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
 use crate::tool::ToolSet;
+use crate::tool_handler::ToolSelection;
 use crate::turn::{ModelRequestActivity, TurnOptions, TurnReport};
 use crate::usage::Cost;
 use crate::write_journal::{WriteRecord, WriteStatus};
@@ -40,7 +42,7 @@ use crate::write_journal::{WriteRecord, WriteStatus};
 ///
 /// Every option applies to this run only and never changes a session's
 /// stored defaults. An unset option keeps the default: the session's stored
-/// output mode and the harness's default tool policy and tool set.
+/// output mode and the harness's default tool set.
 #[derive(Clone)]
 #[must_use = "a run request does nothing until a run is started with it"]
 #[non_exhaustive]
@@ -53,8 +55,7 @@ pub struct RunRequest {
     instructions: Option<String>,
     limits: RunLimits,
     output: Option<OutputMode>,
-    tool_policy: Option<ToolPolicy>,
-    tools: Option<ToolSet>,
+    tools: ToolSelection,
 }
 
 impl RunRequest {
@@ -69,8 +70,7 @@ impl RunRequest {
             instructions: None,
             limits: RunLimits::default(),
             output: None,
-            tool_policy: None,
-            tools: None,
+            tools: ToolSelection::default(),
         }
     }
 
@@ -87,12 +87,14 @@ impl RunRequest {
         self
     }
 
-    /// Replaces the harness's default tool set for this run, like
-    /// [`TurnOptions::with_tools`]; built-ins in it still need the tool
-    /// policy. The sets are never merged: to add a tool to a default, such
-    /// as [`ToolSet::builtins`], extend it with [`ToolSet::to_builder`].
+    /// Offers exactly `tools` in this run instead of the harness's default
+    /// set, like [`TurnOptions::with_tools`]; a deprecated harness default
+    /// policy does not restrict it. Only a deprecated [`Self::tool_policy`]
+    /// on this request drops the built-ins it denies. The sets are never
+    /// merged: to add a tool to a default, such as [`ToolSet::builtins`],
+    /// extend it with [`ToolSet::to_builder`].
     pub fn tools(mut self, tools: ToolSet) -> Self {
-        self.tools = Some(tools);
+        self.tools.tools = Some(tools);
 
         self
     }
@@ -136,16 +138,21 @@ impl RunRequest {
         self
     }
 
-    /// Replaces the harness's default tool policy for this run; an empty
-    /// policy denies every tool.
+    /// Replaces the harness's default tool policy for this run: the run's
+    /// tool set, or the harness's default set, drops the built-ins `policy`
+    /// denies, and starts from [`ToolSet::builtins`] when neither is set.
+    /// Without this, a harness default policy restricts only the harness's
+    /// default set, never one given with [`Self::tools`].
+    #[deprecated(since = "0.20.0", note = "use `RunRequest::tools` with a `ToolSet`")]
+    #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
     pub fn tool_policy(mut self, policy: ToolPolicy) -> Self {
-        self.tool_policy = Some(policy);
+        self.tools.legacy_permissions = Some(policy.into());
 
         self
     }
 
     /// Configures the `bash` tool for this run, like
-    /// [`TurnOptions::with_bash`]. The tool policy must still allow it.
+    /// [`TurnOptions::with_bash`]. The run's tool set must still hold it.
     pub fn bash(mut self, configuration: BashConfig) -> Self {
         self.bash = Some(configuration);
 
@@ -165,8 +172,8 @@ impl RunRequest {
         self.budget.clone()
     }
 
-    /// Resolves the input and turn options, using `default_output`,
-    /// `default_policy`, and `default_tools` for unset options.
+    /// Resolves the input and turn options, using `default_output` and
+    /// `default_tools` for unset options.
     ///
     /// # Errors
     /// Returns a [`ErrorKind::Config`] failure when neither the request nor
@@ -174,8 +181,7 @@ impl RunRequest {
     pub(crate) fn into_turn(
         self,
         default_output: Option<&OutputMode>,
-        default_policy: ToolPolicy,
-        default_tools: &ToolSet,
+        default_tools: &ToolSelection,
     ) -> Result<(TurnInput, TurnOptions), RunError> {
         if self.limits.is_unsatisfiable() {
             return Err(RunError::with_kind(ErrorKind::Config, ZeroWallTime));
@@ -184,11 +190,9 @@ impl RunRequest {
             .output
             .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
-        let tools = self.tools.unwrap_or_else(|| default_tools.clone());
-        let mut options = TurnOptions::new(output, self.tool_policy.unwrap_or(default_policy))
+        let mut options = TurnOptions::resolved(output, &self.tools.or(default_tools))
             .with_generation(self.generation)
-            .with_limits(self.limits)
-            .with_tools(tools);
+            .with_limits(self.limits);
         if let Some(configuration) = self.bash {
             options = options.with_bash(configuration);
         }

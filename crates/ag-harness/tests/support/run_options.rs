@@ -10,7 +10,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::{
     ErrorKind, GenerationParams, Harness, Model, ModelError, OutputMode, OutputSchema, RunOutput,
-    RunRequest, SessionError, ToolPolicy, TurnOptions,
+    RunRequest, SessionError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -275,7 +275,7 @@ async fn one_shot_turns_carry_instructions_generation_and_text_output() -> Resul
     let requests = Requests::default();
     let harness = text_harness(&requests);
     let tokens = NonZeroU32::new(128).ok_or("tokens")?;
-    let options = TurnOptions::new(OutputMode::Text, ToolPolicy::default())
+    let options = TurnOptions::from_output(OutputMode::Text)
         .with_instructions("Answer tersely.")
         .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
 
@@ -333,7 +333,7 @@ async fn host_requests_fingerprint_instructions_and_generation() -> Result<(), B
         .store(Arc::new(MemoryStore::new()));
     let mut session = harness.session("hosted", name_schema()?).create().await?;
     let tokens = NonZeroU32::new(64).ok_or("tokens")?;
-    let options = TurnOptions::new(name_schema()?, ToolPolicy::default())
+    let options = TurnOptions::from_output(name_schema()?)
         .with_instructions("Answer tersely.")
         .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
 
@@ -350,10 +350,7 @@ async fn host_requests_fingerprint_instructions_and_generation() -> Result<(), B
         .await?;
     let changed = session
         .turn("first")
-        .options(
-            TurnOptions::new(name_schema()?, ToolPolicy::default())
-                .with_instructions("Answer in French."),
-        )
+        .options(TurnOptions::from_output(name_schema()?).with_instructions("Answer in French."))
         .host_id("request")
         .await;
 

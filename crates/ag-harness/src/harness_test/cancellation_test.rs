@@ -27,7 +27,7 @@ use crate::reservation::{TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, TimestampSource};
 use crate::store::SessionStore as _;
-use crate::tool::Tool;
+use crate::tool::ToolSet;
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancelling_a_provider_request_durably_interrupts_the_session_turn() {
@@ -126,7 +126,7 @@ async fn cancelling_a_tool_request_durably_interrupts_the_session_turn() {
         Harness::new(model, unbounded_context_budget())
             .database(&database_path)
             .repository(Repository::fixture("repo"))
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .file_system(PendingToolFileSystem {
                 started: Arc::clone(&tool_started),
             }),

@@ -31,7 +31,7 @@ use crate::schema_contract::OutputSchema;
 use crate::session::SessionError;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
-use crate::tool::{ReadArguments, Tool, ToolCall, WriteArguments};
+use crate::tool::{ReadArguments, ToolCall, ToolSet, WriteArguments};
 #[cfg(feature = "sqlite")]
 use crate::turn::TurnOutcome;
 
@@ -56,14 +56,14 @@ pub(super) fn object_schema() -> OutputSchema {
 pub(super) fn read_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
     Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(file_system)
 }
 
 pub(super) fn write_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
     Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_write())
         .file_system(file_system)
 }
 

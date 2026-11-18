@@ -1,10 +1,10 @@
 //! Tool handlers, the built-in repository tools, and their typed arguments.
 //!
-//! A turn offers the tools of its [`ToolSet`]: host [`ToolHandler`]s and
-//! the built-in `read`, `write`, and `bash` handlers. Built-ins stay denied
-//! until `Harness::allow` or a `ToolPolicy` in `TurnOptions` enables them.
-//! Repository access goes through a validated `Repository` and an injectable
-//! [`FileSystem`].
+//! A turn offers exactly the tools of its [`ToolSet`]: host
+//! [`ToolHandler`]s and the built-in `read`, `write`, and `bash` handlers.
+//! Every call runs through the handler of its name; a turn whose set holds
+//! no tool offers none. Repository access goes through a validated
+//! `Repository` and an injectable [`FileSystem`].
 
 use std::borrow::Cow;
 use std::fmt;
@@ -47,6 +47,7 @@ const READ_DESCRIPTION: &str = concat!(
     "File/show offsets are one-based line numbers and limits count lines. If truncated, ",
     "continue file/show at next_offset; narrow list/search/diff when no continuation is supplied."
 );
+const BASH_NAME: &str = "bash";
 const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
@@ -67,6 +68,14 @@ const WRITE_DESCRIPTION: &str = concat!(
 const WRITE_NAME: &str = "write";
 
 /// Built-in tool that can be enabled for a harness run.
+///
+/// A turn offers the tools its [`ToolSet`] holds; select built-ins with
+/// [`ToolSet::with_read`], [`ToolSet::with_write`], and
+/// [`ToolSet::with_bash`] or the matching [`ToolSetBuilder`] methods.
+#[deprecated(
+    since = "0.20.0",
+    note = "select built-in tools with `ToolSet`; a turn offers the tools its set holds"
+)]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
@@ -79,13 +88,60 @@ pub enum Tool {
     Write,
 }
 
+#[expect(deprecated, reason = "implements the deprecated `Tool`")]
 impl Tool {
     /// Returns the function name advertised to models.
     pub fn name(self) -> &'static str {
+        Builtin::from(self).name()
+    }
+}
+
+/// A built-in tool, bound to a turn's repository and options when the turn
+/// starts and dispatched, like every tool, through its handler.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Builtin {
+    Read,
+    Write,
+    Bash,
+}
+
+impl Builtin {
+    /// The built-in tools in their advertised order.
+    pub(crate) const ALL: [Self; 3] = [Self::Read, Self::Write, Self::Bash];
+
+    /// Returns the built-in tool named `name`, if any.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|builtin| builtin.name() == name)
+    }
+
+    /// Returns the function name advertised to models.
+    pub(crate) fn name(self) -> &'static str {
         match self {
-            Self::Bash => "bash",
+            Self::Bash => BASH_NAME,
             Self::Read => READ_NAME,
             Self::Write => WRITE_NAME,
+        }
+    }
+}
+
+#[expect(deprecated, reason = "maps the deprecated `Tool` onto built-ins")]
+impl From<Tool> for Builtin {
+    fn from(tool: Tool) -> Self {
+        match tool {
+            Tool::Bash => Self::Bash,
+            Tool::Read => Self::Read,
+            Tool::Write => Self::Write,
+        }
+    }
+}
+
+#[expect(deprecated, reason = "maps built-ins onto the deprecated `Tool`")]
+impl From<Builtin> for Tool {
+    fn from(builtin: Builtin) -> Self {
+        match builtin {
+            Builtin::Bash => Self::Bash,
+            Builtin::Read => Self::Read,
+            Builtin::Write => Self::Write,
         }
     }
 }
@@ -162,7 +218,7 @@ impl ToolDefinition {
 
         Self {
             description: format!("{isolation} {BASH_LIMITS}"),
-            name: Cow::Borrowed("bash"),
+            name: Cow::Borrowed(BASH_NAME),
             parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),
         }
     }
@@ -331,11 +387,9 @@ impl ToolCall {
             schema_contract::ensure_content_size(reasoning_content)
                 .map_err(model::ModelError::from)?;
         }
-        let tool = match name {
-            "bash" => Tool::Bash,
-            READ_NAME => Tool::Read,
-            WRITE_NAME => Tool::Write,
-            _ if let Some(replayable) = ag_router::replayable_function_name(name) => {
+        let tool = match Builtin::named(name) {
+            Some(builtin) => builtin,
+            None if let Some(replayable) = ag_router::replayable_function_name(name) => {
                 return Ok(Self {
                     arguments: ToolArguments::Unknown(UnknownToolCall {
                         renamed: replayable != name,
@@ -347,16 +401,16 @@ impl ToolCall {
                     reasoning_content,
                 });
             }
-            _ => {
+            None => {
                 return Err(model::ModelError::UnsupportedToolName {
                     name: schema_contract::bounded_diagnostic(name),
                 });
             }
         };
         let decoded = match tool {
-            Tool::Bash => serde_json::from_str(arguments).map(ToolArguments::Bash),
-            Tool::Read => serde_json::from_str(arguments).map(ToolArguments::Read),
-            Tool::Write => serde_json::from_str(arguments).map(ToolArguments::Write),
+            Builtin::Bash => serde_json::from_str(arguments).map(ToolArguments::Bash),
+            Builtin::Read => serde_json::from_str(arguments).map(ToolArguments::Read),
+            Builtin::Write => serde_json::from_str(arguments).map(ToolArguments::Write),
         };
         let arguments = decoded.unwrap_or_else(|error| {
             ToolArguments::Malformed(MalformedArguments {
@@ -457,7 +511,7 @@ impl ToolCall {
     /// names no built-in tool.
     pub fn name(&self) -> &str {
         match &self.arguments {
-            ToolArguments::Bash(_) => "bash",
+            ToolArguments::Bash(_) => BASH_NAME,
             ToolArguments::Read(_) => READ_NAME,
             ToolArguments::Write(_) => WRITE_NAME,
             ToolArguments::Malformed(arguments) => arguments.tool.name(),
@@ -596,7 +650,7 @@ enum ToolArguments {
 pub struct MalformedArguments {
     raw: String,
     reason: String,
-    tool: Tool,
+    tool: Builtin,
 }
 
 impl MalformedArguments {
@@ -611,8 +665,23 @@ impl MalformedArguments {
     }
 
     /// Returns the tool the model called.
+    #[deprecated(
+        since = "0.20.0",
+        note = "use `ToolCall::name` for the name of the called tool"
+    )]
+    #[expect(deprecated, reason = "returns the deprecated `Tool`")]
     pub fn tool(&self) -> Tool {
+        self.tool.into()
+    }
+
+    /// Returns the built-in tool the model called.
+    pub(crate) fn builtin(&self) -> Builtin {
         self.tool
+    }
+
+    /// Returns the name of the built-in tool the model called.
+    pub(crate) fn tool_name(&self) -> &'static str {
+        self.tool.name()
     }
 }
 
@@ -1069,5 +1138,9 @@ fn validate_repository_path(path: &str) -> Result<(), &'static str> {
 }
 
 #[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated `Tool`"
+)]
 #[path = "tool_test.rs"]
 mod tests;

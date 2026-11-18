@@ -16,7 +16,7 @@ use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTra
 use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest, ModelResponse};
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolDefinition;
-use ag_harness::{Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnOptions};
+use ag_harness::{Harness, Model, ModelError, OutputSchema, ToolSet, TurnOptions};
 use async_trait::async_trait;
 use opentelemetry::context::FutureExt as _;
 use opentelemetry::trace::{TraceContextExt as _, Tracer as _};
@@ -1450,7 +1450,7 @@ async fn started_turns_nest_under_the_caller_span() {
     let harness = Harness::new(SummaryModel, unbounded_context_budget())
         .store(Arc::new(MemoryStore::new()))
         .with_lifecycle_observer(LifecycleTraceObserver::new());
-    let options = TurnOptions::new(lifecycle_schema(), ToolPolicy::default());
+    let options = TurnOptions::from_output(lifecycle_schema());
     let mut session = harness
         .session("traced-session", lifecycle_schema())
         .create()
@@ -1766,7 +1766,7 @@ fn lifecycle_harness(server: &MockServer, repository: &std::path::Path) -> Harne
 
     Harness::new(PolicyDenialModel { client }, unbounded_context_budget())
         .repository(repository)
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .with_lifecycle_observer(observers)
 }
 

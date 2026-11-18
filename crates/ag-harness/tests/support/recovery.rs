@@ -14,7 +14,7 @@ use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, 
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, WriteStatus};
 use ag_harness::{
-    Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
+    Harness, Model, ModelError, SessionError, ToolSet, TurnError, TurnInput, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -478,7 +478,7 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
             .model_reasoning_effort(ag_harness::model::ReasoningEffort::High);
 
         // Act / Assert
-        let changed = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Read));
+        let changed = TurnOptions::from_output(schema()).with_tools(ToolSet::empty().with_read());
         assert!(matches!(
             session.turn("hello").options(changed).host_id("id").await,
             Err(SessionError::HostTurnConflict)
@@ -548,7 +548,7 @@ async fn retry_of_completed_write_returns_original_report_without_touching_files
             .create()
             .await
             .expect("session");
-        let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
+        let options = TurnOptions::from_output(schema()).with_tools(ToolSet::empty().with_write());
 
         // Act
         let original = session

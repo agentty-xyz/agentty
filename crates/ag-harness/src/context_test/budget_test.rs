@@ -13,15 +13,14 @@ use crate::context::{
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
-use crate::policy::ToolPolicy;
 use crate::schema_contract::OutputSchema;
-use crate::tool::{Tool, ToolDefinition};
+use crate::tool::{ToolDefinition, ToolSet};
 use crate::turn::{TurnError, TurnOptions};
 
-fn options_with(tool_policy: ToolPolicy) -> TurnOptions {
+fn options_with(tools: ToolSet) -> TurnOptions {
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
 
-    TurnOptions::new(schema, tool_policy)
+    TurnOptions::from_output(schema).with_tools(tools)
 }
 
 #[test]
@@ -142,7 +141,7 @@ fn mandatory_admission_includes_the_fixed_request_weight() {
         budget(10),
         None,
         &TurnInput::text("abcd"),
-        &options_with(ToolPolicy::default()),
+        &options_with(ToolSet::empty()),
     );
 
     // Assert
@@ -155,7 +154,7 @@ fn turn_instructions_count_toward_mandatory_admission() {
     // Arrange
     let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(3);
     let input = TurnInput::text("abcd");
-    let instructed = options_with(ToolPolicy::default()).with_instructions("abcdefgh");
+    let instructed = options_with(ToolSet::empty()).with_instructions("abcdefgh");
 
     // Act
     let plain = admit_mandatory_content(
@@ -163,7 +162,7 @@ fn turn_instructions_count_toward_mandatory_admission() {
         budget(10),
         None,
         &input,
-        &options_with(ToolPolicy::default()),
+        &options_with(ToolSet::empty()),
     );
     let rejected = admit_mandatory_content(&estimator, budget(10), None, &input, &instructed);
 
@@ -176,12 +175,12 @@ fn turn_instructions_count_toward_mandatory_admission() {
 }
 
 #[test]
-fn advertised_tools_follow_the_turn_policy() {
+fn advertised_tools_follow_the_turn_tool_set() {
     // Arrange
-    let denied = options_with(ToolPolicy::default());
-    let read_only = options_with(ToolPolicy::default().allow(Tool::Read));
-    let read_write = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
-    let bash_only = options_with(ToolPolicy::default().allow(Tool::Bash));
+    let denied = options_with(ToolSet::empty());
+    let read_only = options_with(ToolSet::empty().with_read());
+    let read_write = options_with(ToolSet::empty().with_read().with_write());
+    let bash_only = options_with(ToolSet::empty().with_bash());
 
     // Act
     let none = advertised_tools(&denied);
@@ -208,7 +207,7 @@ fn advertised_tools_follow_the_turn_policy() {
 #[test]
 fn advertised_bash_states_the_configured_executor_enforcement() {
     // Arrange
-    let bash_policy = ToolPolicy::default().allow(Tool::Bash);
+    let bash_only = || ToolSet::empty().with_bash();
     #[cfg(feature = "native-sandbox")]
     let (configuration, enforcement) = (
         BashConfig::new(
@@ -232,10 +231,10 @@ fn advertised_bash_states_the_configured_executor_enforcement() {
         Enforcement::None,
     );
     let configuration = configuration.expect("configuration");
-    let unconfigured = options_with(bash_policy);
+    let unconfigured = options_with(bash_only());
 
     // Act
-    let configured = advertised_tools(&options_with(bash_policy).with_bash(configuration));
+    let configured = advertised_tools(&options_with(bash_only()).with_bash(configuration));
     let missing = advertised_tools(&unconfigured);
 
     // Assert
@@ -247,7 +246,7 @@ fn advertised_bash_states_the_configured_executor_enforcement() {
 fn mandatory_content_admission_accounts_for_every_component() {
     // Arrange
     let budget = budget(25).with_reserved_output(5).expect("reserve");
-    let options = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let options = options_with(ToolSet::empty().with_read().with_write());
 
     // Act
     let remaining = admit_mandatory_content(
@@ -274,7 +273,7 @@ fn window_history_bytes_convert_the_weight_left_after_fixed_parts() {
         .with_messages(500, 4)
         .with_request_tokens(3);
     let budget = budget(10_000).with_reserved_output(1_000).expect("reserve");
-    let options = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let options = options_with(ToolSet::empty().with_read().with_write());
     let tools_weight: u64 = advertised_tools(&options)
         .iter()
         .map(|tool| estimator.tool_definition_weight(tool))
@@ -295,7 +294,7 @@ fn window_history_bytes_convert_the_weight_left_after_fixed_parts() {
 #[test]
 fn window_history_bytes_need_an_estimator_that_weighs_bytes() {
     // Arrange
-    let options = options_with(ToolPolicy::default());
+    let options = options_with(ToolSet::empty());
 
     // Act
     let bytes = window_history_bytes(&FixedEstimator, budget(1_000), None, &options, HISTORY_CAP);
@@ -308,7 +307,7 @@ fn window_history_bytes_need_an_estimator_that_weighs_bytes() {
 fn window_history_bytes_are_absent_when_fixed_parts_fill_the_window() {
     // Arrange
     let budget = budget(1_000).with_reserved_output(900).expect("reserve");
-    let options = options_with(ToolPolicy::default());
+    let options = options_with(ToolSet::empty());
 
     // Act
     let bytes = window_history_bytes(
@@ -326,7 +325,7 @@ fn window_history_bytes_are_absent_when_fixed_parts_fill_the_window() {
 #[test]
 fn window_history_bytes_stop_at_the_safety_cap() {
     // Arrange
-    let options = options_with(ToolPolicy::default());
+    let options = options_with(ToolSet::empty());
 
     // Act
     let bytes = window_history_bytes(
@@ -344,7 +343,7 @@ fn window_history_bytes_stop_at_the_safety_cap() {
 #[test]
 fn window_history_bytes_probe_mixed_content_for_tokenizer_estimators() {
     // Arrange
-    let options = options_with(ToolPolicy::default());
+    let options = options_with(ToolSet::empty());
 
     // Act
     let bytes = window_history_bytes(
@@ -403,7 +402,7 @@ fn mandatory_admission_weighs_input_as_its_canonical_message() {
         budget,
         None,
         &input,
-        &options_with(ToolPolicy::default()),
+        &options_with(ToolSet::empty()),
     );
 
     // Assert
@@ -422,7 +421,7 @@ fn mandatory_admission_weighs_input_as_its_canonical_message() {
 fn oversized_mandatory_content_returns_a_typed_error() {
     // Arrange
     let budget = budget(10);
-    let options = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let options = options_with(ToolSet::empty().with_read().with_write());
 
     // Act
     let rejected = admit_mandatory_content(
