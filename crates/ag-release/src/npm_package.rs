@@ -17,6 +17,9 @@ use crate::archive::{Archive, FileMode};
 use crate::plan::{AppPlan, ReleasePlan};
 use crate::target::Target;
 
+/// Workspace-root files the package includes when they exist.
+pub(crate) const DOCUMENTS: [&str; 3] = ["CHANGELOG.md", "LICENSE", "README.md"];
+
 /// Top-level directory of every npm package tarball.
 const PACKAGE_DIRECTORY: &str = "package";
 
@@ -41,9 +44,6 @@ pub(crate) struct NpmPackage<'release> {
 }
 
 impl NpmPackage<'_> {
-    /// Workspace-root files the package includes when they exist.
-    pub(crate) const DOCUMENTS: [&'static str; 3] = ["CHANGELOG.md", "LICENSE", "README.md"];
-
     /// Returns the package tarball, every entry below `package/` and stamped
     /// with `mtime` seconds since the Unix epoch.
     ///

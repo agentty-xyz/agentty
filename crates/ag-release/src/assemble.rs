@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::cli::{AssembleOptions, Host};
-use crate::npm_package::NpmPackage;
+use crate::npm_package::{self, NpmPackage};
 use crate::plan::ReleasePlan;
 use crate::process::ProcessCommand;
 use crate::shell_installer::ShellInstaller;
@@ -69,7 +69,7 @@ pub(crate) fn run(
 /// workspace `root`, with its contents.
 fn npm_documents(host: &Host<'_>, root: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     let mut documents = Vec::new();
-    for name in NpmPackage::DOCUMENTS {
+    for name in npm_package::DOCUMENTS {
         let path = root.join(name);
         if host.is_file(&path)? {
             documents.push((name, host.read_file(&path)?));
