@@ -14,6 +14,7 @@ categories = ["development-tools::build-utils", "command-line-utilities"]
 publish = false
 
 [dependencies]
+askama.workspace = true
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true

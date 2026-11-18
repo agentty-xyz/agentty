@@ -2,4 +2,5 @@
 
 mod assemble;
 mod plan;
+mod shell_installer;
 mod support;

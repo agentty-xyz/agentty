@@ -15,6 +15,7 @@ mod file_system;
 mod plan;
 mod process;
 mod repository;
+mod shell_installer;
 mod tag;
 mod target;
 mod workspace;

@@ -96,7 +96,7 @@ fn run(
 }
 
 #[test]
-fn assemble_writes_the_source_archive_checksum_list_and_manifest() {
+fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
     // Arrange
     let process = git_process(Ok(SOURCE_TAR.to_vec()));
     let files = demo_artifacts();
@@ -107,7 +107,10 @@ fn assemble_writes_the_source_archive_checksum_list_and_manifest() {
 
     // Assert
     assert_eq!(result, Ok(()));
+    let installers = ["demo-app-installer.sh", "demo-tool-installer.sh"];
     let written = [
+        installers[0],
+        installers[1],
         "source.tar.gz",
         "source.tar.gz.sha256",
         "sha256.sum",
@@ -129,8 +132,13 @@ fn assemble_writes_the_source_archive_checksum_list_and_manifest() {
         read("source.tar.gz.sha256"),
         checksum::line(&digest("source.tar.gz"), "source.tar.gz").into_bytes()
     );
-    let mut published = ARCHIVES.to_vec();
-    published.push("source.tar.gz");
+    let installer = String::from_utf8(read(installers[1])).expect("UTF-8 installer");
+    assert!(installer.contains(&format!(
+        "_sha256='{}'\n",
+        digest("demo-tool-x86_64-unknown-linux-gnu.tar.gz")
+    )));
+    let mut published = [&ARCHIVES[..], &installers, &["source.tar.gz"]].concat();
+    published.sort_unstable();
     assert_eq!(
         String::from_utf8(read("sha256.sum")).expect("UTF-8 checksum list"),
         published
