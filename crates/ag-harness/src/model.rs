@@ -635,12 +635,12 @@ impl ModelClient {
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
-        ag_router::Provider::Kimi => "moonshot_ai",
-        ag_router::Provider::Muse => "meta",
-        ag_router::Provider::ChatGpt => "openai_chatgpt",
-        ag_router::Provider::OpenAi => "openai",
-        ag_router::Provider::OpenAiCompatible => "openai_compatible",
-        ag_router::Provider::Qwen => "alibaba_cloud",
+        ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
+        ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::ChatGpt => telemetry::PROVIDER_OPENAI_CHATGPT,
+        ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
+        ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
+        ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
     }
 }
 

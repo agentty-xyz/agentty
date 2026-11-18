@@ -755,6 +755,7 @@ async fn switches_replay_foreign_reasoning_as_notes_and_restore_it_natively() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn projected_history_survives_sqlite_reopen_after_a_switch() {
     // Arrange
@@ -854,6 +855,7 @@ async fn notes_stay_reasoning_for_a_target_that_replays_reasoning_text() {
     );
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn turns_without_a_snapshot_replay_natively_only_until_a_switch() {
     // Arrange

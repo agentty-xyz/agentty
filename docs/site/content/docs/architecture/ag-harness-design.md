@@ -186,9 +186,9 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
 - `switch_model` selects another registration for an idle session. It refuses only
   history the target cannot replay (tools or images it lacks); stored turns stay native,
   and requests replay another reasoning family's reasoning (all `OpenAI` Responses
-  models form one family) as `[harness]` notes of at most 1 KiB, so
-  switching back restores it. `compact` publishes a
-  schema-validated summary checkpoint that replays ahead of the remaining recent turns.
+  models form one family) as `[harness]` notes of at most 1 KiB, so switching back
+  restores it. `compact` publishes a schema-validated summary checkpoint that replays
+  ahead of the remaining recent turns.
 - History replays through a sticky `HistoryProjection` that omits, abbreviates, or
   elides older turns only when they outgrow the byte or budget limits. Boundaries only
   advance, so the next turn's first request usually repeats the previous request's

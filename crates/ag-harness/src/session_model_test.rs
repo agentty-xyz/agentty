@@ -1,13 +1,17 @@
 //! Recorded model snapshot decoding, generation overflow, and cross-family
 //! history projection tests.
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::borrow::Cow;
 
 #[cfg(feature = "sqlite")]
 use serde_json::json;
 
 use crate::context::{CLEARED_REASONING, HistoryTurn, TurnStop};
-use crate::model::{Model, ModelMessage, ModelMetadata};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use crate::model::Model;
+use crate::model::{ModelMessage, ModelMetadata};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::provider::{ModelConfiguration, ModelProvider};
 use crate::session_model::{
     RecordedModel, ReplayTarget, cleared_note_text, clears_reasoning, next_generation, project_turn,
@@ -82,6 +86,7 @@ fn quoted(text: &str) -> String {
 }
 
 /// Returns the metadata of a cataloged client of `provider`.
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 fn client_metadata(provider: ModelProvider, model: &str) -> (ModelMetadata, bool) {
     let client = ModelConfiguration::new(provider, model)
         .base_url("http://127.0.0.1:9")
@@ -309,6 +314,7 @@ fn notes_quote_reasoning_as_one_bounded_json_string() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn reasoning_replays_natively_only_within_one_reasoning_family() {
     // Arrange
