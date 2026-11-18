@@ -351,24 +351,21 @@ fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Erro
     // Arrange
     let (sink, _stream) = EventSink::channel(RunId::generate());
     let events: Vec<RunEvent> = [
-        RunEventKind::ContextCompacted(CompactionReport {
+        RunEventKind::Compacted(CompactionReport {
             outcome: CompactionOutcome::Compacted {
                 covered_through: TurnIndex(1),
                 model: Some(ModelId::new("host/cheap")),
             },
-            evicted_turns: 0,
         }),
-        RunEventKind::ContextCompacted(CompactionReport {
+        RunEventKind::Compacted(CompactionReport {
             outcome: CompactionOutcome::NothingToCover,
-            evicted_turns: 0,
         }),
-        RunEventKind::ContextCompacted(CompactionReport {
+        RunEventKind::Compacted(CompactionReport {
             outcome: CompactionOutcome::Failed(RunFailure {
                 kind: ErrorKind::InvalidOutput,
                 message: "summary rejected".to_string(),
                 retryable: false,
             }),
-            evicted_turns: 2,
         }),
     ]
     .into_iter()
@@ -391,7 +388,7 @@ fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Erro
     for event in encoded.as_array().ok_or("an array of events")? {
         assert!(validator.is_valid(event), "{event} matches the schema");
     }
-    assert_eq!(encoded[0]["kind"]["type"], "context_compacted");
+    assert_eq!(encoded[0]["kind"]["type"], "compacted");
     assert_eq!(encoded[0]["kind"]["outcome"]["status"], "compacted");
     assert_eq!(encoded[0]["kind"]["outcome"]["covered_through"], 1);
     assert_eq!(encoded[0]["kind"]["outcome"]["model"], "host/cheap");
@@ -399,7 +396,6 @@ fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Erro
     assert_eq!(encoded[2]["kind"]["outcome"]["status"], "failed");
     assert_eq!(encoded[2]["kind"]["outcome"]["kind"], "invalid_output");
     assert_eq!(encoded[2]["kind"]["outcome"]["message"], "summary rejected");
-    assert_eq!(encoded[2]["kind"]["evicted_turns"], 2);
 
     Ok(())
 }

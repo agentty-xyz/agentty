@@ -175,7 +175,7 @@ impl RunEvent {
 pub enum RunEventKind {
     /// The run's turn was admitted to its session and is about to send its
     /// first model request, or the compaction requests that precede it (see
-    /// [`Self::ContextCompacted`]). A run that fails before admission, such as
+    /// [`Self::Compacted`]). A run that fails before admission, such as
     /// one whose session is busy, emits only [`Self::Completed`].
     Started {
         /// Catalog identifier of the model, when the harness selected it
@@ -230,22 +230,20 @@ pub enum RunEventKind {
     /// Under [`crate::model::ContextPolicy::AutoCompact`], the session tried
     /// to compact earlier turns before the run's first turn request. It
     /// follows [`Self::Started`] and the [`Self::ModelRequestCompleted`]
-    /// events of the compaction requests.
-    ContextCompacted(CompactionReport),
+    /// events of the compaction requests, each emitted as it completed. The
+    /// turn's [`crate::turn::HistoryActivity`] counts what its first request
+    /// still evicted.
+    Compacted(CompactionReport),
     /// The run finished; always the last event.
     Completed(RunSummary),
 }
 
-/// What the automatic compaction before a run's first turn request did,
-/// and what the turn's first request still evicted.
+/// What a compaction attempt did.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct CompactionReport {
     /// Whether a checkpoint was published.
     pub outcome: CompactionOutcome,
-    /// Loaded turns the first turn request still evicted, after a
-    /// published checkpoint or in its place; zero when the history fit.
-    pub evicted_turns: u64,
 }
 
 /// How an automatic compaction attempt ended.

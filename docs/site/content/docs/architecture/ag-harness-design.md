@@ -223,11 +223,14 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   history weighs more than the threshold share of the weight left for it, the turn runs
   `compact` on the summary model, leaving the newest loaded turn uncovered, and builds
   its request against the published checkpoint. A failed compaction keeps the previous
-  checkpoint, the turn evicts as before, and the handle backs off for a doubling number
-  of turns, up to 32. Compaction requests reserve from the run's budget ledger, count
-  toward its limits, lead its `TurnReport` as `Compaction` requests, and keep their
-  usage when the run stops during compaction; a streamed run emits their
-  `ModelRequestCompleted` events and then `ContextCompacted`.
+  checkpoint, the turn evicts as before, and the in-memory handle backs off for a
+  doubling number of turns, up to 32; a resumed handle starts without the backoff.
+  Compaction requests reserve from the run's budget ledger and spend at most all but one
+  of its model requests and half its tokens, so the turn keeps room to answer; the
+  ledger refusing a request, the wall-clock limit, or a store failure fails the turn
+  instead. They lead its `TurnReport` as `Compaction` requests and keep their usage when
+  the run stops during compaction; a streamed run emits each one's
+  `ModelRequestCompleted` event as it completes and then `Compacted`.
 
 ## Cancellation and settlement
 

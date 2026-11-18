@@ -5,9 +5,10 @@
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::bash::{CommandIntent, CommandOutcome, CommandRecord};
@@ -16,7 +17,7 @@ use crate::recovery::HostTurnRecord;
 use crate::store::{
     CompactionSource, HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession,
     Reservation, SessionCheckpoint, SessionStore, StoreIdentity, StoredTurn, TurnAdmission,
-    TurnOwner, WriteRecord,
+    TurnOwner, TurnUsage, WriteRecord,
 };
 use crate::transcript::TurnRange;
 use crate::{SessionError, TurnError, TurnOutcome};
@@ -30,6 +31,8 @@ pub(crate) enum Fault {
     FinishCommand,
     /// Loads report a provider without its model name.
     IncompleteModel,
+    /// Publishing a compaction checkpoint fails.
+    PublishCheckpoint,
     /// Turn lease renewals fail, so the turn loses its lease.
     Renew,
     WriteIntent,
@@ -39,6 +42,9 @@ pub(crate) enum Fault {
 pub(crate) struct FaultStore {
     faults: Mutex<HashSet<Fault>>,
     inner: MemoryStore,
+    /// Notified when a checkpoint publication starts, which then never
+    /// finishes, if set.
+    publish_stall: Mutex<Option<Arc<Notify>>>,
 }
 
 impl FaultStore {
@@ -46,7 +52,17 @@ impl FaultStore {
         Self {
             faults: Mutex::new(HashSet::new()),
             inner: MemoryStore::new(),
+            publish_stall: Mutex::new(None),
         }
+    }
+
+    /// Makes every later checkpoint publication notify `started` and never
+    /// finish.
+    pub(crate) fn stall_publication(&self, started: Arc<Notify>) {
+        *self
+            .publish_stall
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(started);
     }
 
     /// Fails `fault`'s operation until it is repaired.
@@ -168,6 +184,18 @@ impl SessionStore for FaultStore {
         session_id: &str,
         checkpoint: &SessionCheckpoint,
     ) -> Result<(), SessionError> {
+        self.check(Fault::PublishCheckpoint, "publish checkpoint")?;
+        // A stalled publication never reaches the memory store.
+        let stall = self
+            .publish_stall
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(started) = stall {
+            started.notify_one();
+            std::future::pending::<()>().await;
+        }
+
         self.inner.publish_checkpoint(session_id, checkpoint).await
     }
 
@@ -199,6 +227,14 @@ impl SessionStore for FaultStore {
         self.inner
             .complete_request(owner, messages, outcome, projection)
             .await
+    }
+
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        self.inner.record_usage(owner, usage).await
+    }
+
+    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        self.inner.load_usage(session_id).await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {

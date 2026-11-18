@@ -36,7 +36,7 @@
       "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added.",
       "oneOf": [
         {
-          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::ContextCompacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
+          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
           "type": "object",
           "properties": {
             "type": {
@@ -170,12 +170,12 @@
           ]
         },
         {
-          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests.",
+          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests, each emitted as it completed. The\nturn's [`crate::turn::HistoryActivity`] counts what its first request\nstill evicted.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "context_compacted"
+              "const": "compacted"
             }
           },
           "$ref": "#/$defs/CompactionReport",
@@ -797,23 +797,16 @@
       ]
     },
     "CompactionReport": {
-      "description": "What the automatic compaction before a run's first turn request did,\nand what the turn's first request still evicted.",
+      "description": "What a compaction attempt did.",
       "type": "object",
       "properties": {
         "outcome": {
           "description": "Whether a checkpoint was published.",
           "$ref": "#/$defs/CompactionOutcome"
-        },
-        "evicted_turns": {
-          "description": "Loaded turns the first turn request still evicted, after a\npublished checkpoint or in its place; zero when the history fit.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
         }
       },
       "required": [
-        "outcome",
-        "evicted_turns"
+        "outcome"
       ]
     },
     "RunSummary": {

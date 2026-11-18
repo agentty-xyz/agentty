@@ -22,8 +22,7 @@ use crate::catalog::{ModelId, Pricing};
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{
-    CompactionReport, EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem,
-    ToolCallStatus,
+    EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
 };
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -233,14 +232,6 @@ impl Engine<'_> {
     ) -> Result<(Value, ModelRequest), TurnError> {
         let summary_trigger = (self.context_summaries == ContextSummaryPolicy::Enabled)
             .then_some(ContextSummaryTrigger::Proactive);
-        // Compaction requests the session sent for the turn are published
-        // before what compaction did.
-        if let Some(prior) = self.prior_requests {
-            self.publish_requests(state).await?;
-            self.publish(RunEventKind::ContextCompacted(prior.report.clone()))
-                .await;
-        }
-
         loop {
             // Summary requests and rejected outputs recorded since the last
             // round are published before the next request.
@@ -1444,16 +1435,13 @@ impl EngineFailure {
 }
 
 /// Model requests a session sent for a turn before the turn's first
-/// request, each attributed to and priced at the model that answered it,
-/// with the report of the automatic compaction that sent them.
+/// request, such as automatic compaction, each attributed to and priced at
+/// the model that answered it and already published as run events.
 pub(crate) struct PriorRequests {
     pub(crate) activities: Vec<ModelRequestActivity>,
     /// Lifecycle model request indexes they took, from zero; the turn's own
     /// requests continue from here.
     pub(crate) lifecycle_requests: u64,
-    /// Published after the requests' own events, before the turn's first
-    /// request.
-    pub(crate) report: CompactionReport,
     /// When the compaction started, from which the turn's wall-clock limit
     /// runs.
     pub(crate) started_at: time::Instant,
@@ -1530,11 +1518,17 @@ impl TurnState {
         .with_context_summary_failures(self.context_fit.summary_failures())
     }
 
-    /// Records `prior` requests ahead of the turn's own, which publishes
-    /// them before its first request and counts them toward its limits;
+    /// Records the already published `prior` requests ahead of the turn's
+    /// own, which counts them toward its limits, cost, and stored usage;
     /// its lifecycle request indexes continue after theirs.
     fn prepend(&mut self, prior: &PriorRequests) {
         self.model_requests.extend_from_slice(&prior.activities);
+        self.published_requests = self.model_requests.len();
+        self.cost = prior
+            .activities
+            .iter()
+            .map(ModelRequestActivity::cost)
+            .fold(self.cost, Cost::sum);
         self.model_request_index = prior.lifecycle_requests;
     }
 }

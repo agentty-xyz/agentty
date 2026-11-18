@@ -16,13 +16,13 @@ use tokio::sync::Notify;
 
 use super::support::{object_schema, wait_for_fixture};
 use crate::budget::{BudgetLedger, Estimate, Reservation};
-use crate::catalog::{Capabilities, ModelCatalog, ModelId, ModelSpec, Role};
+use crate::catalog::{Capabilities, ModelCatalog, ModelId, ModelSpec, Pricing, Role};
 use crate::compaction::{GENERATION_INSTRUCTIONS, SessionCheckpoint};
 use crate::context::{ContextBudget, ContextPolicy};
 use crate::error::{ErrorKind, RunError};
 use crate::event::{CompactionOutcome, CompactionReport, RunEventKind, RunFailure, TurnIndex};
 use crate::fault_store_test::{Fault, FaultStore};
-use crate::harness::{EnclosingTurn, Harness, Session};
+use crate::harness::{CompactionBackoff, CompactionRequests, EnclosingTurn, Harness, Session};
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{
@@ -46,10 +46,13 @@ const COMPACTION_INPUT_TOKENS: u64 = 700;
 /// Payload bytes of each turn's input, about a quarter of [`BUDGET`].
 const INPUT_BYTES: usize = 8_000;
 
+/// Scripted answer to one compaction request.
+type ScriptedCompaction = Result<ModelResponse, ModelError>;
+
 /// Answers turn requests with a short output and compaction requests with
 /// the scripted responses, in order, then with a valid summary.
 struct CompactingModel {
-    compactions: Mutex<VecDeque<Result<ModelResponse, ModelError>>>,
+    compactions: Mutex<VecDeque<ScriptedCompaction>>,
     /// Compaction requests received so far.
     compactions_seen: AtomicUsize,
     /// Time every request takes before it is answered, if any.
@@ -226,6 +229,57 @@ fn harness(model: CompactingModel, policy: ContextPolicy) -> Harness {
     .context_policy(policy)
 }
 
+/// Returns an automatically compacting harness whose only model, `model`,
+/// is cataloged at one micro-USD per input token.
+fn priced_harness(model: CompactingModel) -> Harness {
+    let catalog = ModelCatalog::builder()
+        .model(
+            ModelSpec::new("host/priced")
+                .with_profile(ModelProfile::new(BUDGET))
+                .with_pricing(Pricing::new(1_000_000, 0)),
+            Arc::new(model),
+        )
+        .assign(Role::SMART, ["host/priced"])
+        .build()
+        .expect("catalog builds");
+
+    Harness::builder()
+        .catalog(Arc::new(catalog))
+        .store(Arc::new(MemoryStore::new()))
+        .context_policy(ContextPolicy::auto_compact())
+        // Loads as many turns as the uncataloged harness does.
+        .max_history_bytes(NonZeroUsize::new(1 << 20).expect("nonzero bytes"))
+        .build()
+        .expect("harness builds")
+}
+
+/// Streams one run of turn 4 and cancels it once `started` is notified,
+/// returning its event kinds with its outcome.
+async fn cancelled_when(
+    session: &Session,
+    started: &Notify,
+    description: &str,
+) -> (Vec<RunEventKind>, RunOutcome) {
+    let (mut stream, handle) = session.run(RunRequest::new(input(4))).into_parts();
+    let cancel = handle.cancel_token();
+    let drain = async {
+        let mut events = Vec::new();
+        while let Some(event) =
+            std::future::poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await
+        {
+            events.push(event.kind);
+        }
+
+        events
+    };
+    let (events, outcome, ()) = tokio::join!(drain, handle.outcome(), async {
+        wait_for_fixture(started, description).await;
+        cancel.cancel();
+    });
+
+    (events, outcome)
+}
+
 /// Sends turns `1..=count` and returns their outcomes.
 async fn send_turns(session: &mut Session, count: usize) -> Vec<TurnOutcome> {
     let mut outcomes = Vec::new();
@@ -311,7 +365,7 @@ fn compaction_report(events: &[RunEventKind]) -> CompactionReport {
     events
         .iter()
         .find_map(|kind| match kind {
-            RunEventKind::ContextCompacted(report) => Some(report.clone()),
+            RunEventKind::Compacted(report) => Some(report.clone()),
             _ => None,
         })
         .expect("compaction event")
@@ -514,8 +568,7 @@ async fn failed_compaction_falls_back_to_eviction_and_reports_it() {
         report.outcome,
         CompactionOutcome::Failed(model_failure(ModelError::InvalidResponse))
     );
-    assert!(report.evicted_turns > 0);
-    assert_eq!(report.evicted_turns, evicted(&outcome));
+    assert!(evicted(&outcome) > 0);
     // The failed request completed nothing, so only the turn's own request
     // is reported and streamed.
     assert_eq!(
@@ -561,7 +614,7 @@ async fn a_rejected_summary_falls_back_to_eviction_and_still_counts_its_usage() 
         CompactionOutcome::Failed(RunFailure { kind: ErrorKind::Store, message, retryable: false })
             if message.contains("at most 16384")
     ));
-    assert!(report.evicted_turns > 0);
+    assert!(evicted(&outcome) > 0);
     assert_eq!(
         request_purposes(outcome.report.model_requests()),
         [ModelRequestPurpose::Compaction, ModelRequestPurpose::Turn]
@@ -572,7 +625,7 @@ async fn a_rejected_summary_falls_back_to_eviction_and_still_counts_its_usage() 
         RunEventKind::ModelRequestCompleted { usage, .. }
             if usage.input == COMPACTION_INPUT_TOKENS
     ));
-    assert!(matches!(events[2], RunEventKind::ContextCompacted(_)));
+    assert!(matches!(events[2], RunEventKind::Compacted(_)));
     assert!(session.checkpoint().is_none());
 }
 
@@ -603,8 +656,7 @@ async fn compaction_that_still_does_not_fit_evicts_after_the_new_checkpoint() {
             model: None,
         }
     );
-    assert!(report.evicted_turns > 0);
-    assert_eq!(report.evicted_turns, evicted(&outcome));
+    assert!(evicted(&outcome) > 0);
     assert!(outcome.report.history().checkpoint_replayed());
     let request = last_turn_request(&requests);
     assert!(carries(&request, "cobalt-41"));
@@ -649,7 +701,7 @@ async fn a_failed_turn_after_compaction_still_reports_the_compaction() {
     assert_eq!(outcome.usage.input, COMPACTION_INPUT_TOKENS);
     let compacted = events
         .iter()
-        .position(|kind| matches!(kind, RunEventKind::ContextCompacted(_)))
+        .position(|kind| matches!(kind, RunEventKind::Compacted(_)))
         .expect("compaction event");
     assert!(matches!(
         events.last(),
@@ -660,32 +712,58 @@ async fn a_failed_turn_after_compaction_still_reports_the_compaction() {
 
 #[tokio::test]
 async fn failed_compaction_backs_off_before_retrying() {
+    // Streamed runs execute on copies of the handle, which share its backoff.
+    for streamed in [false, true] {
+        // Arrange
+        let (model, requests) = CompactingModel::new(vec![
+            Err(ModelError::InvalidResponse),
+            Err(ModelError::InvalidResponse),
+        ]);
+        // At this threshold every turn after the second is due to compact.
+        let harness = harness(model, at(50));
+        let mut session = harness
+            .session("backing-off", object_schema())
+            .create()
+            .await
+            .expect("session created");
+        send_turns(&mut session, 2).await;
+        let mut attempts = Vec::new();
+
+        // Act
+        for number in 3..=8 {
+            if streamed {
+                let (_events, outcome) = streamed_turn(&session, number).await;
+                assert!(outcome.result.is_ok());
+            } else {
+                session.send(input(number)).await.expect("turn succeeds");
+            }
+            attempts.push(compactions(&requests).len());
+        }
+
+        // Assert
+        // Turn 3 fails, turn 4 is skipped, turn 5 fails again, turns 6 and 7
+        // are skipped, and turn 8 compacts.
+        assert_eq!(attempts, [1, 1, 2, 2, 2, 3], "streamed: {streamed}");
+    }
+}
+
+#[test]
+fn the_backoff_doubles_up_to_32_skipped_turns_and_resets_after_a_success() {
     // Arrange
-    let (model, requests) = CompactingModel::new(vec![
-        Err(ModelError::InvalidResponse),
-        Err(ModelError::InvalidResponse),
-    ]);
-    // At this threshold every turn after the second is due to compact.
-    let harness = harness(model, at(50));
-    let mut session = harness
-        .session("backing-off", object_schema())
-        .create()
-        .await
-        .expect("session created");
-    send_turns(&mut session, 2).await;
-    let mut attempts = Vec::new();
+    let mut backoff = CompactionBackoff::default();
+    let mut retry_at = Vec::new();
 
     // Act
-    for number in 3..=8 {
-        session.send(input(number)).await.expect("turn succeeds");
-        attempts.push(compactions(&requests).len());
+    for _ in 0..8 {
+        backoff.failed(10);
+        retry_at.push(backoff.retry_at);
     }
+    backoff = CompactionBackoff::default();
+    backoff.failed(10);
 
     // Assert
-    // Turn 3 fails, turn 4 is skipped, turn 5 fails again, turns 6 and 7
-    // are skipped, and turn 8 compacts.
-    assert_eq!(attempts, [1, 1, 2, 2, 2, 3]);
-    assert!(session.checkpoint().is_some());
+    assert_eq!(retry_at, [12, 13, 15, 19, 27, 43, 43, 43]);
+    assert_eq!(backoff.retry_at, 12);
 }
 
 #[tokio::test]
@@ -693,14 +771,18 @@ async fn streamed_compaction_runs_on_the_summary_model_and_counts_its_usage() {
     // Arrange
     let (smart, smart_requests) = CompactingModel::new(Vec::new());
     let (cheap, cheap_requests) = CompactingModel::new(Vec::new());
+    let cheap_pricing = Pricing::new(3_000_000, 0);
     let catalog = ModelCatalog::builder()
         .model(
-            ModelSpec::new("host/smart").with_profile(ModelProfile::new(BUDGET)),
+            ModelSpec::new("host/smart")
+                .with_profile(ModelProfile::new(BUDGET))
+                .with_pricing(Pricing::new(1_000_000, 0)),
             Arc::new(smart.named("smart")),
         )
         .model(
             ModelSpec::new("host/cheap")
-                .with_capabilities(Capabilities::NONE.with_structured_output(true)),
+                .with_capabilities(Capabilities::NONE.with_structured_output(true))
+                .with_pricing(cheap_pricing),
             Arc::new(cheap.named("cheap")),
         )
         .assign(Role::SMART, ["host/smart"])
@@ -728,13 +810,25 @@ async fn streamed_compaction_runs_on_the_summary_model_and_counts_its_usage() {
     assert_eq!(compactions(&smart_requests).len(), 0);
     assert_eq!(compactions(&cheap_requests).len(), 1);
     assert!(matches!(events[0], RunEventKind::Started { .. }));
+    // Priced at the summary model: 700 input tokens at 3 micro-USD each.
+    let compaction_cost = Some(Cost::of(
+        &Usage {
+            input: COMPACTION_INPUT_TOKENS,
+            output: 20,
+            ..Usage::default()
+        },
+        cheap_pricing,
+    ));
+    assert_eq!(compaction_cost.map(|cost| cost.micro_usd), Some(2_100));
     assert!(matches!(
         &events[1],
-        RunEventKind::ModelRequestCompleted { model: Some(model), usage, .. }
-            if model.as_str() == "host/cheap" && usage.input == COMPACTION_INPUT_TOKENS
+        RunEventKind::ModelRequestCompleted { cost, model: Some(model), usage, .. }
+            if model.as_str() == "host/cheap"
+                && usage.input == COMPACTION_INPUT_TOKENS
+                && *cost == compaction_cost
     ));
     let report = compaction_report(&events);
-    assert!(matches!(events[2], RunEventKind::ContextCompacted(_)));
+    assert!(matches!(events[2], RunEventKind::Compacted(_)));
     assert_eq!(
         report.outcome,
         CompactionOutcome::Compacted {
@@ -742,8 +836,20 @@ async fn streamed_compaction_runs_on_the_summary_model_and_counts_its_usage() {
             model: Some(ModelId::new("host/cheap")),
         }
     );
-    assert_eq!(report.evicted_turns, 0);
+    assert_eq!(outcome.report.history().evicted_turns(), 0);
     assert_eq!(streamed_input_tokens(&events), outcome.usage.input);
+    assert_eq!(
+        outcome.cost.map(|cost| cost.micro_usd),
+        compaction_cost.map(|cost| cost.micro_usd)
+    );
+    assert!(matches!(
+        events.last(),
+        Some(RunEventKind::Completed(summary)) if summary.cost == outcome.cost
+    ));
+    assert_eq!(
+        session.usage().await.expect("stored usage loads").cost,
+        outcome.cost
+    );
     assert_eq!(outcome.usage.input, COMPACTION_INPUT_TOKENS);
     assert_eq!(
         outcome.report.model_requests()[0].purpose(),
@@ -760,51 +866,59 @@ async fn streamed_compaction_runs_on_the_summary_model_and_counts_its_usage() {
 
 #[tokio::test]
 async fn compaction_requests_belong_to_the_turns_own_lifecycle_turn() {
-    // Arrange
-    let recorder = LifecycleRecorder::default();
-    let (model, _requests) = CompactingModel::new(Vec::new());
-    let harness =
-        harness(model, ContextPolicy::auto_compact()).with_lifecycle_observer(recorder.clone());
-    let mut session = harness
-        .session("traced", object_schema())
-        .create()
-        .await
-        .expect("session created");
+    // A compaction that succeeds, one whose request fails, and one whose
+    // first answer violates the checkpoint schema and is corrected.
+    let cases: [(Vec<ScriptedCompaction>, &[u64]); 3] = [
+        (Vec::new(), &[0, 1]),
+        (vec![Err(ModelError::InvalidResponse)], &[0, 1]),
+        (
+            vec![Ok(ModelResponse::Output(json!({"unexpected": true})))],
+            &[0, 1, 2],
+        ),
+    ];
+    for (compactions, expected_indexes) in cases {
+        // Arrange
+        let recorder = LifecycleRecorder::default();
+        let (model, _requests) = CompactingModel::new(compactions);
+        let harness =
+            harness(model, ContextPolicy::auto_compact()).with_lifecycle_observer(recorder.clone());
+        let mut session = harness
+            .session("traced", object_schema())
+            .create()
+            .await
+            .expect("session created");
 
-    // Act
-    let outcomes = send_turns(&mut session, 4).await;
+        // Act
+        send_turns(&mut session, 4).await;
 
-    // Assert
-    assert_eq!(
-        purposes(outcomes.last().expect("last outcome")),
-        [ModelRequestPurpose::Compaction, ModelRequestPurpose::Turn]
-    );
-    let events = recorder.events.lock().expect("events lock").clone();
-    let turns: Vec<_> = events
-        .iter()
-        .filter_map(|event| match event.kind() {
-            LifecycleEventKind::TurnStarted { turn_id } => Some(*turn_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(turns.len(), 4);
-    let last_turn_requests: Vec<u64> = events
-        .iter()
-        .filter_map(|event| match event.kind() {
-            LifecycleEventKind::ModelRequestStarted {
-                request_index,
-                turn_id: Some(turn_id),
-                ..
-            } if *turn_id == turns[3] => Some(*request_index),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(last_turn_requests, [0, 1]);
-    assert!(
-        !events
+        // Assert
+        let events = recorder.events.lock().expect("events lock").clone();
+        let turns: Vec<_> = events
             .iter()
-            .any(|event| matches!(event.kind(), LifecycleEventKind::TurnFailed { .. }))
-    );
+            .filter_map(|event| match event.kind() {
+                LifecycleEventKind::TurnStarted { turn_id } => Some(*turn_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(turns.len(), 4);
+        let last_turn_requests: Vec<u64> = events
+            .iter()
+            .filter_map(|event| match event.kind() {
+                LifecycleEventKind::ModelRequestStarted {
+                    request_index,
+                    turn_id: Some(turn_id),
+                    ..
+                } if *turn_id == turns[3] => Some(*request_index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(last_turn_requests, expected_indexes);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.kind(), LifecycleEventKind::TurnFailed { .. }))
+        );
+    }
 }
 
 #[tokio::test]
@@ -829,8 +943,10 @@ async fn an_empty_compaction_source_reports_nothing_to_cover() {
         .expect("compaction succeeds");
     let compacted = compactions(&requests).len();
 
+    let mut completed = CompactionRequests::default();
+
     // Act
-    let compaction = session
+    let outcome = session
         .auto_compact(
             EnclosingTurn {
                 control: None,
@@ -839,13 +955,15 @@ async fn an_empty_compaction_source_reports_nothing_to_cover() {
             },
             2,
             1,
+            &mut completed,
         )
         .await
+        .expect("compaction does not fail the turn")
         .expect("compaction due");
 
     // Assert
-    assert_eq!(compaction.outcome, CompactionOutcome::NothingToCover);
-    assert_eq!(compaction.requests.activities.len(), 0);
+    assert_eq!(outcome, CompactionOutcome::NothingToCover);
+    assert_eq!(completed.activities.len(), 0);
     assert_eq!(compactions(&requests).len(), compacted);
     assert_eq!(
         session.checkpoint().map(SessionCheckpoint::covered_through),
@@ -862,24 +980,16 @@ async fn cancelling_a_run_during_compaction_keeps_its_usage_and_the_session() {
     // a correction, which stalls.
     let (model, requests) =
         CompactingModel::new(vec![Ok(ModelResponse::Output(json!({"unexpected": true})))]);
-    let harness = harness(
-        model.stalling_compaction(1, Arc::clone(&started)),
-        ContextPolicy::auto_compact(),
-    );
+    let harness = priced_harness(model.stalling_compaction(1, Arc::clone(&started)));
     let mut session = harness
         .session("cancelled", object_schema())
         .create()
         .await
         .expect("session created");
     send_turns(&mut session, 3).await;
-    let handle = session.run(RunRequest::new(input(4))).into_handle();
-    let cancel = handle.cancel_token();
 
     // Act
-    let (outcome, ()) = tokio::join!(handle.outcome(), async {
-        wait_for_fixture(&started, "the compaction correction").await;
-        cancel.cancel();
-    });
+    let (events, outcome) = cancelled_when(&session, &started, "the compaction correction").await;
     let turn_4_sent = turn_requests(&requests)
         .iter()
         .any(|request| carries(request, "turn-4 "));
@@ -895,8 +1005,22 @@ async fn cancelling_a_run_during_compaction_keeps_its_usage_and_the_session() {
         [ModelRequestPurpose::Compaction]
     );
     assert_eq!(outcome.usage.input, COMPACTION_INPUT_TOKENS);
+    // The billed request streamed as it completed, so the events sum to the
+    // run's usage although compaction never finished.
+    assert_eq!(streamed_input_tokens(&events), COMPACTION_INPUT_TOKENS);
+    assert!(matches!(
+        events.last(),
+        Some(RunEventKind::Completed(summary)) if summary.usage == outcome.usage
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|kind| matches!(kind, RunEventKind::Compacted(_)))
+    );
     // The stopped turn's stored usage keeps the billed compaction request.
     assert_eq!(stored.usage.input, COMPACTION_INPUT_TOKENS);
+    assert_eq!(outcome.cost.map(|cost| cost.micro_usd), Some(700));
+    assert_eq!(stored.cost, outcome.cost);
     assert!(!turn_4_sent);
     assert!(resumed.checkpoint().is_none());
     let follow_up = follow_up.expect("the session accepts the next turn");
@@ -907,13 +1031,52 @@ async fn cancelling_a_run_during_compaction_keeps_its_usage_and_the_session() {
 }
 
 #[tokio::test]
-async fn losing_the_lease_during_compaction_interrupts_the_turn() {
+async fn cancelling_a_run_while_its_checkpoint_publishes_keeps_its_usage() {
+    // Arrange
+    let store = Arc::new(FaultStore::new());
+    let publishing = Arc::new(Notify::new());
+    let (model, _requests) = CompactingModel::new(Vec::new());
+    let harness = harness(model, ContextPolicy::auto_compact())
+        .store(Arc::clone(&store) as Arc<dyn SessionStore>);
+    let mut session = harness
+        .session("publishing", object_schema())
+        .create()
+        .await
+        .expect("session created");
+    send_turns(&mut session, 3).await;
+    store.stall_publication(Arc::clone(&publishing));
+
+    // Act
+    let (events, outcome) =
+        cancelled_when(&session, &publishing, "the checkpoint publication").await;
+    let stored = session.usage().await.expect("stored usage loads");
+
+    // Assert
+    assert_eq!(
+        outcome.result.as_ref().err().map(RunError::kind),
+        Some(ErrorKind::Cancelled)
+    );
+    assert_eq!(
+        request_purposes(outcome.report.model_requests()),
+        [ModelRequestPurpose::Compaction]
+    );
+    assert_eq!(outcome.usage.input, COMPACTION_INPUT_TOKENS);
+    assert_eq!(streamed_input_tokens(&events), COMPACTION_INPUT_TOKENS);
+    assert_eq!(stored.usage.input, COMPACTION_INPUT_TOKENS);
+    assert!(session.checkpoint().is_none());
+}
+
+#[tokio::test]
+async fn losing_the_lease_during_compaction_interrupts_the_turn_and_reports_its_usage() {
     // Arrange
     let store = Arc::new(FaultStore::new());
     let started = Arc::new(Notify::new());
-    let (model, _requests) = CompactingModel::new(Vec::new());
+    // The first answer violates the checkpoint schema, so generation sends
+    // a correction, which stalls after one request was billed.
+    let (model, requests) =
+        CompactingModel::new(vec![Ok(ModelResponse::Output(json!({"unexpected": true})))]);
     let harness = harness(
-        model.stalling_compaction(0, Arc::clone(&started)),
+        model.stalling_compaction(1, Arc::clone(&started)),
         ContextPolicy::auto_compact(),
     )
     .store(Arc::clone(&store) as Arc<dyn SessionStore>);
@@ -926,52 +1089,97 @@ async fn losing_the_lease_during_compaction_interrupts_the_turn() {
     store.inject(Fault::Renew);
 
     // Act
-    let (result, ()) = tokio::join!(session.send(input(4)), async {
-        wait_for_fixture(&started, "the compaction request").await;
+    let (outcome, ()) = tokio::join!(session.run(RunRequest::new(input(4))), async {
+        wait_for_fixture(&started, "the compaction correction").await;
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS)).await;
         tokio::time::resume();
     });
-
-    // Assert
-    assert!(matches!(
-        result,
-        Err(SessionError::Store {
-            operation: "renew turn lease",
-            ..
-        })
-    ));
-}
-
-#[tokio::test]
-async fn compaction_requests_count_toward_the_runs_request_limit() {
-    // Arrange
-    let (model, requests) = CompactingModel::new(Vec::new());
-    let mut session = harness(model, ContextPolicy::auto_compact())
-        .session("limited", object_schema())
-        .create()
-        .await
-        .expect("session created");
-    send_turns(&mut session, 3).await;
-    let turns_before = turn_requests(&requests).len();
-    let limits = RunLimits::default().with_max_model_requests(NonZeroU32::MIN);
-
-    // Act
-    let (_events, outcome) =
-        streamed_request(&session, RunRequest::new(input(4)).limits(limits)).await;
+    store.repair(Fault::Renew);
+    let turn_4_sent = turn_requests(&requests)
+        .iter()
+        .any(|request| carries(request, "turn-4 "));
+    let stored = session.usage().await.expect("stored usage loads");
+    let resumed = harness.resume("leased").await.expect("session resumes");
 
     // Assert
     assert_eq!(
         outcome.result.as_ref().err().map(RunError::kind),
-        Some(ErrorKind::BudgetExhausted(LimitKind::ModelRequests))
+        Some(ErrorKind::Store)
     );
-    assert_eq!(compactions(&requests).len(), 1);
-    assert_eq!(turn_requests(&requests).len(), turns_before);
     assert_eq!(
         request_purposes(outcome.report.model_requests()),
         [ModelRequestPurpose::Compaction]
     );
     assert_eq!(outcome.usage.input, COMPACTION_INPUT_TOKENS);
+    // Only renewals failed, so the store still accepted the usage; a store
+    // whose lease another owner took refuses it, and only the outcome then
+    // counts the billed request.
+    assert_eq!(stored.usage.input, COMPACTION_INPUT_TOKENS);
+    assert!(!turn_4_sent);
+    assert!(resumed.checkpoint().is_none());
+}
+
+#[tokio::test]
+async fn compaction_spends_only_its_share_of_the_runs_limits() {
+    // Arrange
+    // Each compaction's first answer violates the checkpoint schema, so it
+    // needs a correction that its share of the limits may not allow.
+    let requests_limit = |max: u32| {
+        RunLimits::default().with_max_model_requests(NonZeroU32::new(max).expect("nonzero"))
+    };
+    let tokens_limit =
+        RunLimits::default().with_max_total_tokens(NonZeroU64::new(1_000).expect("nonzero tokens"));
+    let cases = [
+        // One request leaves compaction no share, so it is skipped.
+        (requests_limit(1), 0, None),
+        // Compaction may send one of two requests, so its correction stops.
+        (requests_limit(2), 1, Some(LimitKind::ModelRequests)),
+        // Compaction may use 500 of 1,000 tokens, and its first request
+        // used 720, so its correction stops.
+        (tokens_limit, 1, Some(LimitKind::Tokens)),
+        // Three requests leave compaction two, enough for its correction.
+        (requests_limit(3), 2, None),
+    ];
+    for (limits, compaction_requests, stopped_by) in cases {
+        // Arrange
+        let (model, requests) =
+            CompactingModel::new(vec![Ok(ModelResponse::Output(json!({"unexpected": true})))]);
+        let mut session = harness(model, ContextPolicy::auto_compact())
+            .session("limited", object_schema())
+            .create()
+            .await
+            .expect("session created");
+        send_turns(&mut session, 3).await;
+
+        // Act
+        let (events, outcome) =
+            streamed_request(&session, RunRequest::new(input(4)).limits(limits)).await;
+
+        // Assert
+        // The turn still answers within the run's limits.
+        assert!(outcome.result.is_ok(), "{limits:?}");
+        assert_eq!(compactions(&requests).len(), compaction_requests);
+        assert!(carries(&last_turn_request(&requests), "turn-4 "));
+        let reported = events.iter().find_map(|kind| match kind {
+            RunEventKind::Compacted(report) => Some(report.outcome.clone()),
+            _ => None,
+        });
+        match stopped_by {
+            Some(limit) => assert!(matches!(
+                reported,
+                Some(CompactionOutcome::Failed(RunFailure {
+                    kind: ErrorKind::BudgetExhausted(reached),
+                    ..
+                })) if reached == limit
+            )),
+            None if compaction_requests == 0 => assert_eq!(reported, None),
+            None => assert!(matches!(
+                reported,
+                Some(CompactionOutcome::Compacted { .. })
+            )),
+        }
+    }
 }
 
 #[tokio::test]
@@ -1039,6 +1247,81 @@ async fn the_wall_time_limit_runs_from_the_start_of_compaction() {
         request_purposes(outcome.report.model_requests()),
         [ModelRequestPurpose::Compaction]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_failures_during_compaction_fail_the_turn_without_backing_off() {
+    // The run's ledger refusing the compaction request, its wall-clock limit
+    // passing during compaction, and a store failure publishing the
+    // checkpoint.
+    let refusing_ledger = Arc::new(CountingLedger {
+        remaining: Mutex::new(0),
+    });
+    let cases = [
+        (
+            RunRequest::new(input(4)).budget(refusing_ledger),
+            None,
+            None,
+            ErrorKind::BudgetExhausted(LimitKind::Cost),
+        ),
+        (
+            RunRequest::new(input(4))
+                .limits(RunLimits::default().with_max_wall_time(Duration::from_secs(60))),
+            Some(Duration::from_secs(70)),
+            None,
+            ErrorKind::BudgetExhausted(LimitKind::WallTime),
+        ),
+        (
+            RunRequest::new(input(4)),
+            None,
+            Some(Fault::PublishCheckpoint),
+            ErrorKind::Store,
+        ),
+    ];
+    for (request, delay, fault, kind) in cases {
+        // Arrange
+        let store = Arc::new(FaultStore::new());
+        let (model, requests) = CompactingModel::new(Vec::new());
+        let model = match delay {
+            Some(delay) => model.delayed(delay),
+            None => model,
+        };
+        let mut session = harness(model, ContextPolicy::auto_compact())
+            .store(Arc::clone(&store) as Arc<dyn SessionStore>)
+            .session("run-failure", object_schema())
+            .create()
+            .await
+            .expect("session created");
+        send_turns(&mut session, 3).await;
+        let turns_before = turn_requests(&requests).len();
+        if let Some(fault) = fault {
+            store.inject(fault);
+        }
+
+        // Act
+        let (events, outcome) = streamed_request(&session, request).await;
+        if let Some(fault) = fault {
+            store.repair(fault);
+        }
+        let attempts = compactions(&requests).len();
+        let follow_up = session.send(input(5)).await;
+
+        // Assert
+        assert_eq!(
+            outcome.result.as_ref().err().map(RunError::kind),
+            Some(kind)
+        );
+        assert_eq!(turn_requests(&requests).len(), turns_before + 1);
+        assert!(
+            !events
+                .iter()
+                .any(|kind| matches!(kind, RunEventKind::Compacted(_)))
+        );
+        assert_eq!(streamed_input_tokens(&events), outcome.usage.input);
+        // No backoff: the next turn compacts at once.
+        assert!(follow_up.is_ok(), "{kind:?}");
+        assert!(compactions(&requests).len() > attempts, "{kind:?}");
+    }
 }
 
 /// Ledger that admits a fixed number of model requests and refuses every

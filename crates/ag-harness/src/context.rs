@@ -322,11 +322,17 @@ pub enum ContextPolicy {
     /// newest one while another is uncovered, and then admits the turn
     /// against the new checkpoint. When compaction fails or the history
     /// still does not fit, the turn falls back to eviction. After a failed
-    /// compaction the session's handle skips automatic compaction for the
-    /// next turn, and for twice as many turns after each further
+    /// compaction the in-memory session handle skips automatic compaction
+    /// for the next turn, and for twice as many turns after each further
     /// consecutive failure, up to 32, so a failing summary model is not
-    /// asked again before every turn. A streamed run reports each attempt
-    /// as [`crate::RunEventKind::ContextCompacted`], and its
+    /// asked again before every turn; the backoff is not stored, so a
+    /// resumed handle starts without it. Compaction may send all but one of
+    /// the run's [`crate::RunLimits::max_model_requests`] and use half its
+    /// [`crate::RunLimits::max_total_tokens`], and is skipped when that
+    /// leaves it nothing; reaching that share fails the compaction, while
+    /// the run's budget ledger refusing a request, its wall-clock limit, or
+    /// a store failure fails the turn. A streamed run reports each attempt
+    /// as [`crate::RunEventKind::Compacted`], and its
     /// [`crate::TurnReport`] lists the compaction requests as
     /// [`crate::turn::ModelRequestPurpose::Compaction`], so their usage
     /// counts toward the run's. Lifecycle observers see the compaction

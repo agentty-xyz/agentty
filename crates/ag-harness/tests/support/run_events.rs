@@ -18,9 +18,8 @@ use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ContextPolicy, ModelCompletion,
     ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
-use ag_harness::store::{MemoryStore, SessionCheckpoint};
+use ag_harness::store::MemoryStore;
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
-use ag_harness::turn::{ModelRequestActivity, ModelRequestPurpose};
 use ag_harness::{
     ErrorKind, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role, Run,
     RunEvent, RunEventKind, RunOutcome, RunOutput, RunRequest, ToolSet,
@@ -649,18 +648,10 @@ fn compacting_input(number: usize) -> String {
 }
 
 #[tokio::test]
-async fn auto_compaction_streams_its_requests_and_report_before_the_turn()
+async fn auto_compaction_is_configurable_and_matchable_from_outside_the_crate()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let policy = ContextPolicy::auto_compact();
-    assert!(matches!(
-        policy,
-        ContextPolicy::AutoCompact {
-            threshold_percent: 90,
-            ..
-        }
-    ));
-    assert_eq!(ContextPolicy::default(), ContextPolicy::Evict);
+    let policy = ContextPolicy::auto_compact_at(90).ok_or("threshold in range")?;
     let harness = Harness::new(
         CompactingModel,
         ContextBudget::new(NonZeroU64::new(COMPACTING_BUDGET).ok_or("nonzero budget")?),
@@ -680,36 +671,23 @@ async fn auto_compaction_streams_its_requests_and_report_before_the_turn()
 
     // Assert
     assert!(outcome.result.is_ok());
-    assert_eq!(
-        labels(&events)[..3],
-        ["started", "request", "other"].map(String::from)
-    );
-    let Some(RunEventKind::ContextCompacted(report)) = events.get(2).map(|event| &event.kind)
-    else {
-        return Err("the third event must be `ContextCompacted`".into());
-    };
     assert!(matches!(
-        &report.outcome,
-        CompactionOutcome::Compacted { covered_through, model: None } if covered_through.get() == 1
+        policy,
+        ContextPolicy::AutoCompact {
+            threshold_percent: 90,
+            ..
+        }
     ));
-    assert_eq!(report.evicted_turns, 0);
-    let purposes: Vec<_> = outcome
-        .report
-        .model_requests()
-        .iter()
-        .map(ModelRequestActivity::purpose)
-        .collect();
-    assert_eq!(
-        purposes,
-        [ModelRequestPurpose::Compaction, ModelRequestPurpose::Turn]
-    );
+    let compacted = events.iter().find_map(|event| match &event.kind {
+        RunEventKind::Compacted(report) => Some(&report.outcome),
+        _ => None,
+    });
+    assert!(matches!(
+        compacted,
+        Some(CompactionOutcome::Compacted { covered_through, model: None, .. })
+            if covered_through.get() == 1
+    ));
     assert_eq!(last_summary(&events)?.usage, outcome.usage);
-    assert_eq!(outcome.usage.input, 20);
-    let resumed = harness.resume("compacting").await?;
-    assert_eq!(
-        resumed.checkpoint().map(SessionCheckpoint::covered_through),
-        Some(1)
-    );
 
     Ok(())
 }

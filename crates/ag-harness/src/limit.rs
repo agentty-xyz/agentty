@@ -24,9 +24,9 @@ use tokio::time::Instant;
 pub struct RunLimits {
     /// Model requests the run may send, counting re-sent requests, context
     /// summaries, and the automatic compaction requests before the run's
-    /// first request. Checked before each request of the run's
-    /// conversation, so one context summary started below the limit may
-    /// still send up to three requests past it.
+    /// first request, which leave it at least one. Checked before each request
+    /// of the run's conversation, so one context summary started below the
+    /// limit may still send up to three requests past it.
     pub max_model_requests: Option<NonZeroU32>,
     /// Tool calls the model may request, counting calls that never run,
     /// such as calls to denied or unknown tools. A response whose calls
@@ -120,6 +120,27 @@ impl RunLimits {
         }
 
         Ok(())
+    }
+
+    /// Returns the share of these limits that automatic compaction before
+    /// the run's first request may spend, which leaves the run at least one
+    /// model request and half its tokens, or `None` when no share leaves
+    /// that. The wall-clock limit stays shared.
+    pub(crate) fn compaction_share(self) -> Option<Self> {
+        let max_model_requests = match self.max_model_requests {
+            Some(max_requests) => Some(NonZeroU32::new(max_requests.get() - 1)?),
+            None => None,
+        };
+        let max_total_tokens = match self.max_total_tokens {
+            Some(max_tokens) => Some(NonZeroU64::new(max_tokens.get() / 2)?),
+            None => None,
+        };
+
+        Some(Self {
+            max_model_requests,
+            max_total_tokens,
+            ..self
+        })
     }
 
     /// Returns when a run that started at `started_at` reaches its

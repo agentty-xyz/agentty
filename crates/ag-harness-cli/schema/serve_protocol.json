@@ -1511,7 +1511,7 @@
             "session",
             "turn"
           ],
-          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::ContextCompacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`]."
+          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`]."
         },
         {
           "type": "object",
@@ -1619,13 +1619,13 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "context_compacted"
+              "const": "compacted"
             }
           },
           "required": [
             "type"
           ],
-          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests."
+          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests, each emitted as it completed. The\nturn's [`crate::turn::HistoryActivity`] counts what its first request\nstill evicted."
         },
         {
           "$ref": "#/$defs/RunSummary",
@@ -1846,19 +1846,12 @@
         "outcome": {
           "$ref": "#/$defs/CompactionOutcome",
           "description": "Whether a checkpoint was published."
-        },
-        "evicted_turns": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "description": "Loaded turns the first turn request still evicted, after a\npublished checkpoint or in its place; zero when the history fit."
         }
       },
       "required": [
-        "outcome",
-        "evicted_turns"
+        "outcome"
       ],
-      "description": "What the automatic compaction before a run's first turn request did,\nand what the turn's first request still evicted."
+      "description": "What a compaction attempt did."
     },
     "RunSummary": {
       "type": "object",
