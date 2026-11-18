@@ -75,11 +75,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 serde_yaml_ng = "0.10"
 sha2 = "0.11.0"
-# Pin the upstream fix for RUSTSEC-2026-0459 until SQLx releases support for
-# libsqlite3-sys 0.39. Remove the Git source when that release is available.
-# Omit the registry version so Cargo rejects publication instead of replacing
-# the security fix with a vulnerable registry release.
-sqlx = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tachyonfx = { version = "0.25.2", default-features = false, features = ["std"] }
 tempfile = "3.27"
 thiserror = "2"
