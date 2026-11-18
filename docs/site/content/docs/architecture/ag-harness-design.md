@@ -215,7 +215,22 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   prefix. Each `TurnReport` carries a `HistoryActivity` describing what was replayed.
 - Unless the host sets the history byte limit, a session created for a model with a
   declared context window stores what that window leaves after the fixed request parts,
-  at the estimator's rate and at most 256 KiB; other sessions store 256 KiB.
+  at the estimator's rate and at most 256 KiB; other sessions store 256 KiB. A round
+  summary's byte limit converts its share of the capacity at the same measured rate.
+- `ContextPolicy` decides what happens before history would be re-projected. `Evict`,
+  the default, re-projects without a model call. `AutoCompact` runs after admission and
+  before the turn's first request, under its lease and cancellable: when the uncovered
+  history weighs more than the threshold share of the weight left for it, the turn runs
+  `compact` on the summary model, leaving the newest loaded turn uncovered, and builds
+  its request against the published checkpoint. A failed compaction keeps the previous
+  checkpoint, the turn evicts as before, and the in-memory handle backs off for a
+  doubling number of turns, up to 32; a resumed handle starts without the backoff.
+  Compaction requests reserve from the run's budget ledger and spend at most all but one
+  of its model requests and half its tokens, so the turn keeps room to answer; the
+  ledger refusing a request, the wall-clock limit, or a store failure fails the turn
+  instead. They lead its `TurnReport` as `Compaction` requests and keep their usage when
+  the run stops during compaction; a streamed run emits each one's
+  `ModelRequestCompleted` event as it completes and then `Compacted`.
 
 ## Cancellation and settlement
 
@@ -376,8 +391,8 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
 
 Planned: a comparison base pinned to the session's base commit, idempotent host request
 IDs for Agentty operations, running Agentty's `bash` through the native sandbox,
-proactive compaction, and one correlator shared by `LifecycleTraceObserver` and
-`LifecycleMetrics`.
+automatic compaction in Agentty, and one correlator shared by `LifecycleTraceObserver`
+and `LifecycleMetrics`.
 
 ### Proposed: Agentty as the meta-harness
 

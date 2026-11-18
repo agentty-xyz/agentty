@@ -654,6 +654,22 @@ let harness = Harness::from_registry(&models, "review-model")?;
   every call, so its sources are sized by its raw estimator. The checkpoint records the
   model that wrote it. A switched session compacts and summarizes on its registered
   model.
+- `context_policy(ContextPolicy::auto_compact())` compacts automatically. By default
+  (`ContextPolicy::Evict`) history that outgrows the weight left for it is re-projected
+  and its oldest turns are evicted. With `auto_compact()` (90 percent) or
+  `auto_compact_at(threshold_percent)`, a turn whose uncovered history passes that share
+  first runs the same compaction on the summary model, leaving the newest turn
+  uncovered, and then admits the turn against the new checkpoint. If compaction fails or
+  history still does not fit, the turn evicts as before, and after a failure the
+  in-memory `Session` handle waits a growing number of turns before trying again; the
+  backoff is not stored, so keep a long-lived handle to benefit from it. A streamed run
+  reports each attempt as `RunEventKind::Compacted`, whose `CompactionOutcome` is
+  `Compacted`, `NothingToCover`, or `Failed`. Compaction requests lead the `TurnReport`
+  as `ModelRequestPurpose::Compaction`, belong to the turn's lifecycle turn, reserve
+  from the run's budget ledger, and count toward its limits and usage, even when the run
+  is cancelled during compaction. They may spend all but one of the run's model requests
+  and half its tokens; the ledger refusing a request, the wall-clock limit, or a store
+  failure fails the turn rather than the compaction.
 - Bump the registration revision whenever configuration or credentials scope changes.
   Never put secrets in it. A revised `ModelProfile` alone needs no new revision: it only
   shapes how new requests are fitted, while a new revision would strand stored sessions.

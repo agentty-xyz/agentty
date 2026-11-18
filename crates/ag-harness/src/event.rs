@@ -174,8 +174,9 @@ impl RunEvent {
 #[non_exhaustive]
 pub enum RunEventKind {
     /// The run's turn was admitted to its session and is about to send its
-    /// first model request. A run that fails before admission, such as one
-    /// whose session is busy, emits only [`Self::Completed`].
+    /// first model request, or the compaction requests that precede it (see
+    /// [`Self::Compacted`]). A run that fails before admission, such as
+    /// one whose session is busy, emits only [`Self::Completed`].
     Started {
         /// Catalog identifier of the model, when the harness selected it
         /// from a [`crate::ModelCatalog`]; `None` for a model the host
@@ -226,8 +227,48 @@ pub enum RunEventKind {
     /// Counts describe that whole request, so a reduction carried over from
     /// an earlier request is reported again.
     ContextReduced(ContextActivity),
+    /// Under [`crate::model::ContextPolicy::AutoCompact`], the session tried
+    /// to compact earlier turns before the run's first turn request. It
+    /// follows [`Self::Started`] and the [`Self::ModelRequestCompleted`]
+    /// events of the compaction requests, each emitted as it completed. The
+    /// turn's [`crate::turn::HistoryActivity`] counts what its first request
+    /// still evicted.
+    Compacted(CompactionReport),
     /// The run finished; always the last event.
     Completed(RunSummary),
+}
+
+/// What a compaction attempt did.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct CompactionReport {
+    /// Whether a checkpoint was published.
+    pub outcome: CompactionOutcome,
+}
+
+/// How an automatic compaction attempt ended.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CompactionOutcome {
+    /// A new checkpoint was published.
+    Compacted {
+        /// Newest turn the published checkpoint covers.
+        covered_through: TurnIndex,
+        /// Catalog identifier of the model that answered the compaction
+        /// requests, as their [`RunEventKind::ModelRequestCompleted`]
+        /// events name it; `None` for a model the host supplied directly.
+        /// The checkpoint itself records the provider's model metadata.
+        model: Option<ModelId>,
+    },
+    /// The store held no uncovered turn to compact, for example because
+    /// another handle of the session published a checkpoint covering them
+    /// first. No model request was sent and the turn replays the store's
+    /// checkpoint.
+    NothingToCover,
+    /// Compaction failed, so the previous checkpoint stays and the turn
+    /// fell back to eviction.
+    Failed(RunFailure),
 }
 
 /// What an item is, known when it starts.

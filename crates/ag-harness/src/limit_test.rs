@@ -16,7 +16,7 @@ fn default_limits_never_stop_a_run() {
     // Act
     let request = limits.check_request(u64::MAX, u64::MAX);
     let tool_calls = limits.check_tool_calls(usize::MAX, usize::MAX);
-    let deadline = limits.deadline();
+    let deadline = limits.deadline(Instant::now());
 
     // Assert
     assert_eq!(request, Ok(()));
@@ -79,6 +79,41 @@ fn only_a_zero_wall_time_is_unsatisfiable() {
     assert_eq!(unsatisfiable, [true, false]);
 }
 
+#[test]
+fn compaction_shares_leave_the_run_a_request_and_half_its_tokens() {
+    // Arrange
+    let requests = |max: u32| {
+        RunLimits::default().with_max_model_requests(NonZeroU32::new(max).expect("nonzero"))
+    };
+    let tokens = |max: u64| {
+        RunLimits::default().with_max_total_tokens(NonZeroU64::new(max).expect("nonzero"))
+    };
+    let wall_time = RunLimits::default().with_max_wall_time(Duration::from_secs(5));
+
+    // Act
+    let shares = [
+        RunLimits::default().compaction_share(),
+        requests(1).compaction_share(),
+        requests(3).compaction_share(),
+        tokens(1).compaction_share(),
+        tokens(1_001).compaction_share(),
+        wall_time.compaction_share(),
+    ];
+
+    // Assert
+    assert_eq!(
+        shares,
+        [
+            Some(RunLimits::default()),
+            None,
+            Some(requests(2)),
+            None,
+            Some(tokens(500)),
+            Some(wall_time),
+        ]
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn deadline_follows_the_wall_time_unless_the_clock_cannot_hold_it() {
     // Arrange
@@ -86,8 +121,8 @@ async fn deadline_follows_the_wall_time_unless_the_clock_cannot_hold_it() {
     let unbounded = RunLimits::default().with_max_wall_time(Duration::MAX);
 
     // Act
-    let deadline = limits.deadline();
-    let overflowing = unbounded.deadline();
+    let deadline = limits.deadline(Instant::now());
+    let overflowing = unbounded.deadline(Instant::now());
 
     // Assert
     assert_eq!(deadline, Some(Instant::now() + Duration::from_secs(5)));
