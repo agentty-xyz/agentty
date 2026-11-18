@@ -1,6 +1,7 @@
 //! Model that writes compaction checkpoints and in-turn round summaries in
 //! place of the session's model.
 
+use std::cmp;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
@@ -45,7 +46,8 @@ pub(crate) struct SummaryModel {
 impl SummaryModel {
     /// Returns the summary model `handle` resolved, sized by the host's
     /// explicit `overrides`, else by its declared profile, else by the
-    /// session's `context_budget` and `context_estimator`.
+    /// session's `context_budget` and `context_estimator`; an explicit
+    /// budget larger than the declared one gives way to it.
     pub(crate) fn new(
         handle: &ModelHandle,
         overrides: &SizingOverrides,
@@ -60,6 +62,14 @@ impl SummaryModel {
             .clone()
             .or(profile_estimator)
             .unwrap_or_else(|| Arc::clone(context_estimator));
+        // An explicit budget may lower the model's declared window but
+        // never raise it past what the model accepts.
+        let context_budget = match (overrides.context_budget, handle.context_budget()) {
+            (Some(explicit), Some(declared)) => {
+                cmp::min_by_key(explicit, declared, |budget| budget.max_request_weight())
+            }
+            (explicit, declared) => explicit.or(declared).unwrap_or(context_budget),
+        };
         let spec = handle.spec();
         let reasoning_effort = spec
             .capabilities()
@@ -68,10 +78,7 @@ impl SummaryModel {
 
         Self {
             concurrency: handle.concurrency(),
-            context_budget: overrides
-                .context_budget
-                .or(handle.context_budget())
-                .unwrap_or(context_budget),
+            context_budget,
             context_calibration: ContextCalibration::default(),
             context_estimator,
             id: handle.id().clone(),

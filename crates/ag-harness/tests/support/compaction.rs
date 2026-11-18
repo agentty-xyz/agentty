@@ -13,7 +13,7 @@ use ag_harness::model::{
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{CheckpointError, SessionCheckpoint, SessionStore};
 use ag_harness::{
-    ErrorKind, Harness, HarnessBuildError, HarnessError, Model, ModelCatalog, ModelError,
+    ErrorKind, Harness, HarnessError, Model, ModelCatalog, ModelError, ModelSelectionError,
     ModelSelector, OutputSchema, Role, SessionError, TurnError,
 };
 use async_trait::async_trait;
@@ -33,6 +33,7 @@ struct CompactingModel {
     mode: Mutex<SummaryMode>,
     name: &'static str,
     pause: Mutex<bool>,
+    provider: &'static str,
     released: Notify,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
 }
@@ -48,12 +49,22 @@ enum SummaryMode {
 
 impl CompactingModel {
     fn shared(name: &'static str, requests: &Arc<Mutex<Vec<ModelRequest>>>) -> Arc<Self> {
+        Self::hosted(name, name, requests)
+    }
+
+    /// Returns a model reporting `provider` and `name` as its metadata.
+    fn hosted(
+        provider: &'static str,
+        name: &'static str,
+        requests: &Arc<Mutex<Vec<ModelRequest>>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             entered: Notify::new(),
             generations: AtomicUsize::new(0),
             mode: Mutex::new(SummaryMode::Valid),
             name,
             pause: Mutex::new(false),
+            provider,
             released: Notify::new(),
             requests: Arc::clone(requests),
         })
@@ -77,7 +88,7 @@ impl CompactingModel {
 #[async_trait]
 impl Model for CompactingModel {
     fn metadata(&self) -> Option<ModelMetadata> {
-        Some(ModelMetadata::new(self.name, self.name).expect("metadata"))
+        Some(ModelMetadata::new(self.provider, self.name).expect("metadata"))
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -888,6 +899,10 @@ struct CatalogedModels {
     smart: Arc<Mutex<Vec<ModelRequest>>>,
 }
 
+/// Provider every cataloged compacting model reports, so the default
+/// summary model shares the session model's provider.
+const HOST_PROVIDER: &str = "host";
+
 /// Returns a catalog of `smart`, `cheap`, and `review` compacting models
 /// with structured output, assigning `smart` the smart role, `review` a
 /// host-defined review role, and `cheap` the cheap role when
@@ -921,15 +936,15 @@ fn cataloged_models_with<M: Model + 'static>(
     let builder = ModelCatalog::builder()
         .model(
             spec("host/smart", unbounded_model_profile()),
-            CompactingModel::shared("smart", &smart),
+            CompactingModel::hosted(HOST_PROVIDER, "smart", &smart),
         )
         .model(
             spec("host/cheap", cheap_profile),
-            wrap_cheap(CompactingModel::shared("cheap", &cheap)),
+            wrap_cheap(CompactingModel::hosted(HOST_PROVIDER, "cheap", &cheap)),
         )
         .model(
             spec("host/review", unbounded_model_profile()),
-            CompactingModel::shared("review", &review),
+            CompactingModel::hosted(HOST_PROVIDER, "review", &review),
         )
         .assign(Role::SMART, ["host/smart"])
         .assign(Role::new("review"), ["host/review"]);
@@ -988,7 +1003,7 @@ async fn compaction_runs_on_the_cheap_role_and_attributes_generation_to_it() {
             .expect("checkpoint");
 
         // Assert
-        assert_eq!(checkpoint.provider(), Some("cheap"));
+        assert_eq!(checkpoint.provider(), Some(HOST_PROVIDER));
         assert_eq!(checkpoint.model(), Some("cheap"));
         let stored = store
             .load_session("cheap")
@@ -998,7 +1013,7 @@ async fn compaction_runs_on_the_cheap_role_and_attributes_generation_to_it() {
             .expect("stored checkpoint");
         assert_eq!(
             (stored.provider(), stored.model()),
-            (Some("cheap"), Some("cheap"))
+            (Some(HOST_PROVIDER), Some("cheap"))
         );
         assert_eq!(generations(&models.cheap), 1);
         assert_eq!(generations(&models.smart), 0);
@@ -1098,10 +1113,16 @@ async fn explicit_compaction_models_override_the_summary_model() {
         assert_eq!(generations(&models.smart), 1);
         assert!(matches!(
             unknown,
-            Err(SessionError::ModelSelection(HarnessBuildError::Catalog(
+            Err(SessionError::ModelSelection(ModelSelectionError::Catalog(
                 CatalogError::UnknownModel { .. }
             )))
         ));
+        assert_eq!(
+            unknown
+                .err()
+                .and_then(|error| std::error::Error::source(&error).map(ToString::to_string)),
+            Some("cannot select the model from the catalog".to_string())
+        );
     }
 }
 
@@ -1137,8 +1158,12 @@ async fn compaction_with_a_selector_requires_a_cataloged_session_model() {
         let error = selected.expect_err("an explicit model replaces the catalog");
         assert!(matches!(
             error,
-            SessionError::ModelSelection(HarnessBuildError::CatalogRequired)
+            SessionError::ModelSelection(ModelSelectionError::NoCatalog)
         ));
+        assert_eq!(
+            std::error::Error::source(&error).map(ToString::to_string),
+            Some("the session's model did not come from a catalog".to_string())
+        );
         assert_eq!(HarnessError::from(error).kind(), ErrorKind::Config);
         assert_eq!(checkpoint.model(), Some("direct"));
         assert_eq!(generations(&models.cheap), 0);
@@ -1228,8 +1253,11 @@ async fn summary_models_without_metadata_leave_provenance_unknown() {
                 rejects_schemas: false,
             })
         });
+        // A model without metadata shares no known provider, so only an
+        // explicit selector summarizes on it.
         let harness = Harness::builder()
             .catalog(Arc::clone(&models.catalog))
+            .summary_model_selector(Role::CHEAP)
             .store(Arc::clone(&store))
             .build()
             .expect("harness");
@@ -1287,11 +1315,16 @@ async fn summary_models_that_reject_the_checkpoint_schema_fail_before_generation
 
         // Assert
         assert!(matches!(
-            result,
-            Err(SessionError::Turn(TurnError::Model(
-                ModelError::UnsupportedOutputSchema { .. }
-            )))
+            &result,
+            Err(SessionError::ModelSelection(ModelSelectionError::Unsupported { id }))
+                if id.as_str() == "host/cheap"
         ));
+        assert_eq!(
+            result
+                .err()
+                .and_then(|error| std::error::Error::source(&error).map(ToString::to_string)),
+            Some("model `host/cheap` cannot write summaries".to_string())
+        );
         assert_eq!(generations(&models.cheap), 0);
     }
 }
@@ -1335,9 +1368,7 @@ async fn switching_to_a_registered_model_moves_compaction_to_it() {
         assert_eq!(generations(&models.cheap), 0);
         assert!(matches!(
             selected,
-            Err(SessionError::ModelSelection(
-                HarnessBuildError::CatalogRequired
-            ))
+            Err(SessionError::ModelSelection(ModelSelectionError::NoCatalog))
         ));
     }
 }

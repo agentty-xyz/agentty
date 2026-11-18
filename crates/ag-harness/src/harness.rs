@@ -24,7 +24,7 @@ use crate::budget::{BudgetLedger, Unlimited};
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::catalog::{
-    Capabilities, CatalogError, ModelCatalog, ModelHandle, ModelId, ModelSelector, Pricing, Role,
+    CatalogError, ModelCatalog, ModelHandle, ModelId, ModelSelector, Pricing, Role,
 };
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
@@ -47,7 +47,7 @@ use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
-use crate::session::{LoadedSession, NewSession, SessionError};
+use crate::session::{LoadedSession, ModelSelectionError, NewSession, SessionError};
 use crate::session_model::ReplayTarget;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
@@ -243,10 +243,11 @@ impl Session {
     /// for this call.
     ///
     /// # Errors
-    /// Returns [`SessionError::ModelSelection`] when the harness's model
-    /// did not come from a catalog or the catalog cannot resolve
-    /// `selector`, [`SessionError::Turn`] when the model cannot serve the
-    /// checkpoint schema, and otherwise the errors of [`Self::compact`].
+    /// Returns [`SessionError::ModelSelection`] before any model call when
+    /// the harness's model did not come from a catalog, the catalog cannot
+    /// resolve `selector`, or the selected model lacks structured output or
+    /// rejects the checkpoint schema, and otherwise the errors of
+    /// [`Self::compact`].
     pub async fn compact_with(
         &mut self,
         selector: impl Into<ModelSelector>,
@@ -289,13 +290,8 @@ impl Session {
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
         let options = TurnOptions::from_output(schema);
+        // Selection already checked that a summary model serves the schema.
         let summary_model = summary_model.as_ref();
-        if let (Some(summary), Some(schema)) = (summary_model, options.schema()) {
-            summary
-                .model
-                .validate_schema(schema)
-                .map_err(TurnError::from)?;
-        }
         let (input, covered_through, source_bytes) =
             self.compaction_input(summary_model, &source, &options)?;
         let outcome = self
@@ -1966,27 +1962,39 @@ impl HarnessBuilder {
     ///
     /// Summaries go to the resolved model unless it is the session's own
     /// model. Building fails when the catalog cannot resolve `selector`,
+    /// when the resolved model lacks structured output or rejects the
+    /// summary schema ([`HarnessBuildError::SummaryModelUnsupported`]),
     /// without a catalog, or together with an explicit [`Self::model`].
     ///
     /// Without this selector, a harness whose model came from the catalog
-    /// summarizes on the first [`Role::CHEAP`] candidate with structured
-    /// output, and only when it is served by the session model's provider,
-    /// so session content stays with that provider; otherwise summaries
-    /// stay on the session's model.
+    /// summarizes on the first [`Role::CHEAP`] candidate that has structured
+    /// output, accepts the summary schema, has prices when the session
+    /// model has them, and is served by the session model's provider, so
+    /// session content stays with that provider; otherwise summaries stay
+    /// on the session's model. Host-implemented models count as one
+    /// provider only when both report [`crate::model::ModelMetadata`] with
+    /// the same provider name, so host catalogs that summarize on another
+    /// model without such metadata need this selector.
     ///
     /// The summary model sizes its requests with an explicit
-    /// [`Self::context_budget`] and [`Self::context_estimator`], else with
-    /// its declared profile, else with the session's; it calibrates its own
-    /// estimates and asks for low reasoning effort when its specification
-    /// declares reasoning, and none otherwise. An in-turn summary request
-    /// that does not fit its budget goes to the session's model instead.
+    /// [`Self::context_estimator`], else with its declared profile's
+    /// estimator, else with the session's, and with the smaller of an
+    /// explicit [`Self::context_budget`] and its declared profile's budget,
+    /// else whichever is set, else the session's budget; it calibrates its
+    /// own estimates and asks for low reasoning effort when its
+    /// specification declares reasoning, and none otherwise. An in-turn
+    /// summary request that does not fit its budget goes to the session's
+    /// model instead.
     ///
     /// Each request the summary model answers is priced at its own
     /// [`crate::catalog::Pricing`] and summed into the run's cost, reserves
     /// the summary model's own estimate from the run's budget ledger, waits
     /// for a permit of the summary model's own
     /// [`crate::catalog::ModelSpec::max_concurrency`], and counts toward
-    /// the turn's run limits like any other model request.
+    /// the turn's run limits like any other model request. A run's cost is
+    /// `None` once any of its requests went to an unpriced model, so a
+    /// selected summary model without prices leaves every run that
+    /// summarizes on it unpriced, even when the session model has prices.
     pub fn summary_model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.summary_selector = Some(selector.into());
 
@@ -2184,7 +2192,9 @@ impl HarnessBuilder {
                         .resolve(&selector)
                         .map_err(HarnessBuildError::Catalog)?;
 
-                    config.summary_model_for(&summary)
+                    config
+                        .supported_summary_model(&summary)
+                        .map_err(|id| HarnessBuildError::SummaryModelUnsupported { id })?
                 }
                 None => Self::default_summary_model(&catalog, &handle)
                     .and_then(|summary| config.summary_model_for(&summary)),
@@ -2201,33 +2211,39 @@ impl HarnessBuilder {
     }
 
     /// Returns the default summary model for the session model `session`:
-    /// the first [`Role::CHEAP`] candidate with structured output, when the
-    /// session model's provider serves it, so summarized session content
-    /// never reaches another provider.
+    /// the first [`Role::CHEAP`] candidate that serves summaries, has
+    /// prices when `session` has them, and is served by the session model's
+    /// provider, so summarized session content never reaches another
+    /// provider and a priced run never turns unpriced.
     fn default_summary_model(catalog: &ModelCatalog, session: &ModelHandle) -> Option<ModelHandle> {
-        let selector = ModelSelector::Require {
-            role: Role::CHEAP,
-            needs: Capabilities::NONE.with_structured_output(true),
+        catalog
+            .candidates(&Role::CHEAP)
+            .iter()
+            .filter_map(|id| catalog.resolve(&ModelSelector::Id(id.clone())).ok())
+            .find(|summary| {
+                (session.spec().pricing().is_none() || summary.spec().pricing().is_some())
+                    && Self::same_provider(summary, session)
+                    && serves_summaries(summary)
+            })
+    }
+
+    /// Returns whether one provider serves `summary` and `session`: the
+    /// same built-in provider, or host models reporting the same provider
+    /// name in their metadata. A host model without metadata is never
+    /// known to share a provider.
+    fn same_provider(summary: &ModelHandle, session: &ModelHandle) -> bool {
+        #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+        if summary.spec().provider().is_some() || session.spec().provider().is_some() {
+            return summary.spec().provider() == session.spec().provider();
+        }
+        let host_provider = |handle: &ModelHandle| {
+            handle
+                .model()
+                .metadata()
+                .map(|metadata| metadata.provider())
         };
 
-        catalog
-            .resolve(&selector)
-            .ok()
-            .filter(|summary| Self::same_provider(summary, session))
-    }
-
-    /// Returns whether the built-in providers serving `summary` and
-    /// `session` match, both host models included.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-    fn same_provider(summary: &ModelHandle, session: &ModelHandle) -> bool {
-        summary.spec().provider() == session.spec().provider()
-    }
-
-    /// Returns `true`: without built-in providers every model is a host
-    /// model.
-    #[cfg(not(any(feature = "providers-compat", feature = "providers-openai")))]
-    fn same_provider(_summary: &ModelHandle, _session: &ModelHandle) -> bool {
-        true
+        host_provider(summary).is_some_and(|provider| host_provider(session) == Some(provider))
     }
 
     /// Returns the configuration of a directly supplied model, bounded by
@@ -2269,9 +2285,7 @@ pub enum HarnessBuildError {
     /// No model was selected.
     #[error("harness requires a model; call `model` or `catalog`")]
     ModelRequired,
-    /// A model selector was set without a catalog to resolve it, or
-    /// [`Session::compact_with`] was called on a harness whose model did
-    /// not come from a catalog.
+    /// A model selector was set without a catalog to resolve it.
     #[error("model selector requires a catalog; call `catalog`")]
     CatalogRequired,
     /// The catalog could not resolve the model or summary model selector.
@@ -2281,6 +2295,13 @@ pub enum HarnessBuildError {
     /// selector.
     #[error("set either `model` or a model selector, not both")]
     ConflictingModelSelection,
+    /// The summary model selector resolved a model that lacks structured
+    /// output or rejects the summary schema.
+    #[error("summary model `{id}` cannot write summaries")]
+    SummaryModelUnsupported {
+        /// Catalog identifier of the resolved model.
+        id: ModelId,
+    },
     /// No budget was set and the model declares no context profile.
     #[error("model declares no context profile; call `context_budget`")]
     ContextBudgetRequired,
@@ -2433,26 +2454,50 @@ impl HarnessConfig {
         })
     }
 
+    /// Returns [`Self::summary_model_for`] `handle`, or the identifier of
+    /// a model other than [`Self::model`] that cannot serve summaries.
+    fn supported_summary_model(
+        &self,
+        handle: &ModelHandle,
+    ) -> Result<Option<SummaryModel>, ModelId> {
+        let summary = self.summary_model_for(handle);
+        if summary.is_some() && !serves_summaries(handle) {
+            return Err(handle.id().clone());
+        }
+
+        Ok(summary)
+    }
+
     /// Resolves `selector` from [`Self::catalog`] to a summary model, or
     /// `None` for the session's own model, reusing the configured summary
     /// model, with its calibration, when `selector` resolves to it.
     fn resolve_summary_model(
         &self,
         selector: &ModelSelector,
-    ) -> Result<Option<SummaryModel>, HarnessBuildError> {
+    ) -> Result<Option<SummaryModel>, ModelSelectionError> {
         let catalog = self
             .catalog
             .as_ref()
-            .ok_or(HarnessBuildError::CatalogRequired)?;
+            .ok_or(ModelSelectionError::NoCatalog)?;
         let handle = catalog
             .resolve(selector)
-            .map_err(HarnessBuildError::Catalog)?;
+            .map_err(ModelSelectionError::Catalog)?;
 
-        Ok(match &self.summary_model {
-            Some(summary) if summary.id == *handle.id() => Some(summary.clone()),
-            _ => self.summary_model_for(&handle),
-        })
+        match &self.summary_model {
+            Some(summary) if summary.id == *handle.id() => Ok(Some(summary.clone())),
+            _ => self
+                .supported_summary_model(&handle)
+                .map_err(|id| ModelSelectionError::Unsupported { id }),
+        }
     }
+}
+
+/// Returns whether the model `handle` can write summaries: it declares
+/// structured output and accepts the summary schema.
+fn serves_summaries(handle: &ModelHandle) -> bool {
+    handle.spec().capabilities().structured_output()
+        && compaction::summary_schema()
+            .is_ok_and(|schema| handle.model().validate_schema(&schema).is_ok())
 }
 
 /// How a [`Harness`] chooses the retained history bytes of new sessions.

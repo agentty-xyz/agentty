@@ -594,15 +594,20 @@ fails the build. When the model comes from the catalog, the catalog also resolve
 summary model, which writes compaction checkpoints and in-turn round summaries:
 `summary_model_selector`, or by default the first `Role::CHEAP` model with structured
 output that the session model's provider serves, so session content stays with that
-provider. Summaries stay on the session model when nothing else resolves. An explicit
-`context_budget` and `context_estimator` size the summary model too; otherwise its own
-profile does. It asks for low reasoning effort only when it declares reasoning. A round
-summary that does not fit the summary model's budget goes to the session model. A
-request the summary model answers is priced at its own `Pricing` and summed into the
-run's cost, reserves its own estimate from the run's budget ledger, takes a permit of
-its own `max_concurrency`, and counts toward `RunLimits` like any other request. Each
-`ModelRequestCompleted` event and `ModelRequestActivity` names the cataloged model that
-answered it, with its cost.
+provider, and that has prices when the session model has them. Host models share a
+provider only when both report metadata naming the same provider. The summary model must
+have structured output and accept the summary schema, or the build fails. Summaries stay
+on the session model when nothing else resolves. An explicit `context_estimator` sizes
+the summary model too, and an explicit `context_budget` does unless the summary model's
+own profile declares a smaller one; otherwise its own profile sizes it. It asks for low
+reasoning effort only when it declares reasoning. A round summary that does not fit the
+summary model's budget goes to the session model. A request the summary model answers is
+priced at its own `Pricing` and summed into the run's cost, reserves its own estimate
+from the run's budget ledger, takes a permit of its own `max_concurrency`, and counts
+toward `RunLimits` like any other request. A run with any request answered by an
+unpriced model reports no cost, so a selected summary model without prices leaves the
+runs it summarizes in unpriced. Each `ModelRequestCompleted` event and
+`ModelRequestActivity` names the cataloged model that answered it, with its own cost.
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement
@@ -644,7 +649,9 @@ let harness = Harness::from_registry(&models, "review-model")?;
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
   that fit, which later turns replay first; call it again to cover the rest. It runs on
   the harness's summary model, and `session.compact_with(selector)` runs it on the model
-  the selector resolves from the harness's catalog instead. The checkpoint records the
+  the selector resolves from the harness's catalog instead. A selector naming a model
+  other than the session or summary model starts that model's calibration afresh on
+  every call, so its sources are sized by its raw estimator. The checkpoint records the
   model that wrote it. A switched session compacts and summarizes on its registered
   model.
 - Bump the registration revision whenever configuration or credentials scope changes.

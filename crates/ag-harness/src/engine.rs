@@ -791,8 +791,11 @@ impl Engine<'_> {
 
     /// Emits a [`RunEventKind::ModelRequestCompleted`] for every model
     /// request `state` recorded since the last call, attributed to the model
-    /// that answered it and priced at its prices, so the events' usage and
-    /// cost sum to the run outcome's, then records the turn's usage so
+    /// that answered it and priced at its prices, so the events' usage sums
+    /// to the run outcome's. Their costs sum to its cost while every request
+    /// is priced; once one is not, the outcome's cost is `None` although
+    /// the priced requests' events keep their own costs. Then records the
+    /// turn's usage so
     /// far on its durable turn. The session recorded zero usage when it
     /// admitted the turn, so a turn stopped before its first response never
     /// reads as unknown.

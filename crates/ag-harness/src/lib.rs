@@ -200,7 +200,7 @@ pub use run::{
     CancelToken, FileChange, Run, RunHandle, RunOutcome, RunOutput, RunRequest, Unsettled, Usage,
 };
 pub use schema_contract::{OutputSchema, OutputSchemaError};
-pub use session::SessionError;
+pub use session::{ModelSelectionError, SessionError};
 #[expect(
     deprecated,
     reason = "re-exports the deprecated `Tool` until its removal"

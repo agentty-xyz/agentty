@@ -198,15 +198,17 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   ahead of the remaining recent turns.
 - Compaction checkpoints and in-turn round summaries run on the summary model: a
   selector the host sets, or by default the catalog's first cheap model with structured
-  output on the session model's provider, else the session model. It sizes requests with
-  the host's explicit budget and estimator or its own profile, calibrates only its own
-  estimates, and asks for low reasoning effort only when it declares reasoning. Only the
-  session model continues a turn's cached prefix; a round summary that does not fit the
-  summary model, including after a correction, goes to the session model. A summary
-  model request is priced at that model's prices within the run's cost, reserves that
-  model's estimate from the run's budget ledger, holds that model's concurrency permit,
-  and counts toward the run's limits. Checkpoint provenance, lifecycle events, run
-  events, and reports attribute each request to the model that answered it.
+  output on the session model's provider (host models only when their metadata names the
+  same provider) that is priced when the session model is, else the session model. It
+  sizes requests with the host's explicit estimator and budget, never above its own
+  profile's budget, or with its own profile, calibrates only its own estimates, and asks
+  for low reasoning effort only when it declares reasoning. Only the session model
+  continues a turn's cached prefix; a round summary that does not fit the summary model,
+  including after a correction, goes to the session model. A summary model request is
+  priced at that model's prices within the run's cost, reserves that model's estimate
+  from the run's budget ledger, holds that model's concurrency permit, and counts toward
+  the run's limits. Checkpoint provenance, lifecycle events, run events, and reports
+  attribute each request to the model that answered it.
 - History replays through a sticky `HistoryProjection` that omits, abbreviates, or
   elides older turns only when they outgrow the byte or budget limits. Boundaries only
   advance, so the next turn's first request usually repeats the previous request's
