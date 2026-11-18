@@ -482,6 +482,11 @@ impl Case {
                     && metadata.title.to_lowercase().contains("empty")
                     && metadata.is_title_change_significant
             }
+            "description-repository-language-rule" => {
+                metadata.title != DESCRIPTION_GENERATED_TITLE
+                    && metadata.title.to_lowercase().contains("csv")
+                    && metadata.is_title_change_significant
+            }
             _ => {
                 metadata.title == DESCRIPTION_GENERATED_TITLE
                     && !metadata.is_title_change_significant
@@ -497,9 +502,21 @@ impl Case {
             .lines()
             .filter(|line| line.starts_with("## "))
             .collect::<Vec<_>>();
+        let valid_language = if self.name == "description-repository-language-rule" {
+            let words = metadata
+                .description
+                .to_lowercase()
+                .split(|character: char| !character.is_alphabetic())
+                .filter(|word| GERMAN_MARKER_WORDS.contains(word))
+                .count();
+
+            headings.len() == 3 && words > 0
+        } else {
+            headings == expected_headings
+        };
 
         valid_title
-            && headings == expected_headings
+            && valid_language
             && metadata.description.split_whitespace().count() <= 180
             && !metadata.description.contains("Co-Authored-By: Agentty")
             && !metadata
@@ -589,6 +606,23 @@ fn title_cases() -> Vec<Case> {
             request_kind: AgentRequestKind::UtilityPrompt,
             required: vec!["csv", "export"],
             forbidden: vec!["password"],
+        },
+        Case {
+            captured_diff: None,
+            name: "non-english-request-defaults-english",
+            permission_mode: PermissionMode::ReadOnly,
+            prompt: render(
+                title,
+                &[
+                    ("original_request", "Füge eine Passwort-Zurücksetzung hinzu"),
+                    ("current_title", "Füge eine Passwort-Zurücksetzung hinzu"),
+                    ("latest_request", "Füge eine Passwort-Zurücksetzung hinzu"),
+                ],
+            ),
+            review_expectations: Vec::new(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            required: vec!["password", "reset"],
+            forbidden: vec!["passwort", "füge"],
         },
         Case {
             captured_diff: None,
@@ -986,6 +1020,12 @@ const DESCRIPTION_GENERATED_TITLE: &str = "Reject empty CSV exports";
 /// Title prefix required only by the `CLAUDE.md` fixture guidance.
 const REPOSITORY_TITLE_PREFIX: &str = "CSV-7: ";
 
+/// Common German words, one of which shows a description followed the
+/// `CLAUDE.md` fixture language rule instead of the English default.
+const GERMAN_MARKER_WORDS: &[&str] = &[
+    "das", "der", "die", "eine", "einen", "für", "nicht", "und", "werden", "wird",
+];
+
 /// Creation cases render `null` current metadata, as production does before
 /// a review request exists.
 fn description_cases() -> Vec<Case> {
@@ -1009,6 +1049,7 @@ fn description_cases() -> Vec<Case> {
         ),
         ("description-repository-template", None),
         ("description-repository-title-rule", None),
+        ("description-repository-language-rule", None),
     ]
     .into_iter()
     .map(|(name, current)| {
@@ -1023,7 +1064,11 @@ fn description_cases() -> Vec<Case> {
         if name == "description-repository-template" {
             forbidden.push(TEMPLATE_GUIDANCE_COMMENT);
         }
-        let mut required = vec!["empty", "csv"];
+        let mut required = if name == "description-repository-language-rule" {
+            vec!["csv"]
+        } else {
+            vec!["empty", "csv"]
+        };
         if name == "description-integrates-update" {
             required.extend([
                 "avoid blank downloads.",
@@ -1083,6 +1128,12 @@ fn description_case_folder(root: &Path, case: &Case) -> io::Result<PathBuf> {
             ),
         )?;
     }
+    if case.name == "description-repository-language-rule" {
+        std::fs::write(
+            folder.join("CLAUDE.md"),
+            "Write pull request titles and descriptions in German.",
+        )?;
+    }
 
     Ok(folder)
 }
@@ -1121,6 +1172,22 @@ fn description_grader_rejects_unstructured_unfounded_and_duplicate_output() {
     );
     assert_eq!(
         cases[3].grade(&titled_response(&prefixed_title, true, valid))["success"],
+        true
+    );
+    let german_title = "Leere CSV-Exporte ablehnen";
+    let german = "## Warum?\nLeere CSV-Downloads verwirren die Nutzer.\n\n## Was?\nLeere Exporte \
+                  werden abgelehnt.\n\n## Auswirkung?\nNutzer sehen einen Fehler.";
+    assert_eq!(cases[4].grade(&response(valid))["success"], false);
+    assert_eq!(
+        cases[4].grade(&titled_response(german_title, true, valid))["success"],
+        false
+    );
+    assert_eq!(
+        cases[4].grade(&titled_response(german_title, false, german))["success"],
+        false
+    );
+    assert_eq!(
+        cases[4].grade(&titled_response(german_title, true, german))["success"],
         true
     );
     for description in invalid {

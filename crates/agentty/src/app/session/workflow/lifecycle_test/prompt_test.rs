@@ -212,6 +212,10 @@ fn test_session_title_generation_prompt_includes_session_context() {
     // Assert
     assert!(title_prompt.contains("Generate a concise, commit-style title"));
     assert!(title_prompt.contains("present simple tense, under 72 characters"));
+    assert!(title_prompt.contains(
+        "Write the title in English unless applicable repository instructions specify another\n  \
+         language."
+    ));
     assert!(title_prompt.contains("session's overall requested work"));
     assert!(title_prompt.contains("not merely its latest message"));
     assert!(title_prompt.contains("assistant's answer"));

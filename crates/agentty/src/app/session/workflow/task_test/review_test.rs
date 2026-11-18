@@ -80,6 +80,10 @@ fn test_review_request_metadata_prompt_marks_initial_creation() {
     assert!(prompt.contains(generated_title));
     assert!(prompt.contains("start from the generated title"));
     assert!(prompt.contains("repository PR/MR title rules"));
+    assert!(prompt.contains(
+        "Write new title and description text in English unless applicable \
+         repository\ninstructions specify another language."
+    ));
     for source in [
         "`AGENTS.md`",
         "`CLAUDE.md`",

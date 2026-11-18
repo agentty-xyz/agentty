@@ -229,7 +229,9 @@ If message generation fails, auto-commit stops and the worktree stays intact.
 <a id="usage-title-refinement"></a> The Fast model also refines session titles from the
 overall goal. Draft titles update as messages are staged, committed work uses the
 session commit title, and failed refinement keeps the provisional title. Commits added
-after publishing leave the title unchanged.
+after publishing leave the title unchanged. Generated session titles, commit messages,
+and review-request titles and descriptions are in English unless the project's agent
+instructions specify another language.
 
 A Git index lock is retried for five seconds, then reported as `[Commit Error]`. Agentty
 never removes the lock; wait for active Git operations to finish, and let only the

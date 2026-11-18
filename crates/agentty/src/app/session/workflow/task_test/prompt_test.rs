@@ -149,6 +149,10 @@ fn test_session_commit_message_prompt_includes_continuity_and_diff() {
     assert!(prompt.contains("most specific applicable repository guidance"));
     assert!(prompt.contains("`.agents/skills/`"));
     assert!(prompt.contains("present simple tense"));
+    assert!(prompt.contains(
+        "Write the message in English unless higher-priority user instructions or repository\n  \
+         guidance specify another language."
+    ));
     assert!(prompt.contains("Conventional Commit prefixes"));
     assert!(prompt.contains("refine that same message"));
     assert!(prompt.contains("Do not invent unsupported changes"));
