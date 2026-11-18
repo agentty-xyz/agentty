@@ -12,6 +12,7 @@ use ag_harness::catalog::ModelId;
 use ag_harness::event::RunEvent;
 use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::{GPT_6_LUNA, MUSE_SPARK_1_3, ModelProvider};
+use ag_harness::{Repository, ToolSet};
 use serde_json::{Value, json};
 use tokio::io::{
     AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader, DuplexStream, Lines,
@@ -20,7 +21,7 @@ use tokio::task::{JoinHandle, LocalSet};
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{event_line, serve};
+use super::{Settings, event_line, serve};
 use crate::serve::protocol::{
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
 };
@@ -118,16 +119,25 @@ fn is_completed(message: &Value) -> bool {
     message["method"] == "run/event" && message["params"]["event"]["kind"]["type"] == "completed"
 }
 
+/// Settings offering `tools`, or none, whose approvals time out after
+/// `approval_timeout`.
+fn settings(tools: Option<(Repository, ToolSet, Duration)>) -> Settings {
+    let (tools, approval_timeout) = match tools {
+        Some((repository, tools, timeout)) => (Some((repository, tools)), timeout),
+        None => (None, READ_TIMEOUT),
+    };
+
+    Settings {
+        approval_timeout,
+        reasoning_effort: ReasoningEffort::Low,
+        tools,
+    }
+}
+
 /// Serves `input` to the end and returns every written message.
 async fn exchange(input: &str, environment: Environment) -> (Vec<Value>, io::Result<()>) {
     let mut output = Vec::new();
-    let served = serve(
-        input.as_bytes(),
-        &mut output,
-        environment,
-        ReasoningEffort::Low,
-    )
-    .await;
+    let served = serve(input.as_bytes(), &mut output, environment, settings(None)).await;
     let messages = String::from_utf8(output)
         .expect("output should be UTF-8")
         .lines()
@@ -158,13 +168,17 @@ struct Client {
 
 impl Client {
     fn start(environment: Environment) -> Self {
+        Self::start_with(environment, settings(None))
+    }
+
+    fn start_with(environment: Environment, settings: Settings) -> Self {
         let (input, server_input) = tokio::io::duplex(1 << 16);
         let (server_output, output) = tokio::io::duplex(1 << 20);
         let server = tokio::task::spawn_local(serve(
             BufReader::new(server_input),
             server_output,
             environment,
-            ReasoningEffort::Low,
+            settings,
         ));
 
         Self {
@@ -945,7 +959,7 @@ async fn a_failed_write_stops_the_server_with_its_error() {
         input.as_bytes(),
         ClosedOutput { writes: 0 },
         environment("http://127.0.0.1:9", &[]),
-        ReasoningEffort::Low,
+        settings(None),
     )
     .await;
 
@@ -977,7 +991,7 @@ async fn a_failed_event_write_still_stops_every_run() {
             input.as_bytes(),
             ClosedOutput { writes: 2 },
             environment(&provider.uri(), &[]),
-            ReasoningEffort::Low,
+            settings(None),
         ),
     )
     .await
@@ -1024,4 +1038,229 @@ fn an_event_time_before_the_epoch_is_sent_as_the_epoch() {
     assert_eq!(early["params"]["event"]["at"], json!(0));
     assert_eq!(early["params"]["event"]["kind"]["type"], json!("completed"));
     assert_eq!(early["params"]["event"]["seq"], json!(3));
+}
+
+/// Starts a provider that answers prompts containing `Write` with a `write`
+/// call creating `a.txt`, the call's result with `done`, and every other
+/// prompt with `hello`.
+async fn writing_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("call-write"))
+        .respond_with(answer("done"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Write"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-write",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json!({
+                                "path": "a.txt",
+                                "patch": "--- /dev/null\n+++ b/a.txt\n"
+                            }).to_string()
+                        }
+                    }]
+                }
+            }]
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(answer("hello"))
+        .with_priority(3)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Starts a client of a server whose runs may read and write a new
+/// temporary repository, which is returned, and whose approvals time out
+/// after `approval_timeout`; a session `s` is open.
+async fn writing_client(
+    provider: &MockServer,
+    approval_timeout: Duration,
+) -> (Client, tempfile::TempDir) {
+    let repository = tempfile::tempdir().expect("temporary repository should exist");
+    let tools = (
+        crate::repository_or_default(repository.path().to_path_buf(), None)
+            .expect("repository should open"),
+        ToolSet::empty().with_read().with_write(),
+        approval_timeout,
+    );
+    let mut client = Client::start_with(environment(&provider.uri(), &[]), settings(Some(tools)));
+    let output = json!({"type": "json", "schema": message_schema()});
+    client
+        .call(
+            1,
+            "session/create",
+            json!({"session": "s", "model": local_model(), "output": output}),
+        )
+        .await;
+
+    (client, repository)
+}
+
+fn is_approval_request(message: &Value) -> bool {
+    message["method"] == "approval/decide"
+}
+
+/// Answers server request `id` with the decision `decision`.
+fn approval_answer(id: &Value, decision: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}})
+}
+
+#[tokio::test]
+async fn an_approved_write_runs_after_its_event_and_the_clients_answer() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = writing_provider().await;
+            let (mut client, repository) = writing_client(&provider, READ_TIMEOUT).await;
+
+            // Act
+            client
+                .send(&request(
+                    2,
+                    "run/start",
+                    json!({"session": "s", "input": "Write a.txt"}),
+                ))
+                .await;
+            let mut messages = Vec::new();
+            while !messages.last().is_some_and(is_approval_request) {
+                messages.push(client.read().await.expect("server should ask"));
+            }
+            let asked = messages.last().cloned().expect("approval request");
+            client.send(&approval_answer(&asked["id"], "allow")).await;
+            let run = messages[0]["result"]["run"].clone();
+            let completed = client.completed(&run).await;
+            let (_, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(asked["id"], json!("approval-0"));
+            assert_eq!(asked["params"]["session"], json!("s"));
+            assert_eq!(asked["params"]["request"]["tool"], json!("write"));
+            assert_eq!(asked["params"]["request"]["run"], run);
+            let event = &messages[messages.len() - 2]["params"]["event"]["kind"];
+            assert_eq!(event["type"], json!("approval_requested"));
+            assert_eq!(event["request"], asked["params"]["request"]);
+            assert_eq!(completed["params"]["event"]["kind"]["error"], Value::Null);
+            assert!(repository.path().join("a.txt").is_file());
+            assert!(served.is_ok());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn invalid_and_error_answers_are_rejected_and_deny_the_write() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = writing_provider().await;
+            let (mut client, repository) = writing_client(&provider, READ_TIMEOUT).await;
+            let started = client
+                .call(
+                    2,
+                    "run/start",
+                    json!({"session": "s", "input": "Write a.txt"}),
+                )
+                .await;
+            let run = started["result"]["run"].clone();
+            let asked = client.wait(is_approval_request).await;
+
+            // Act
+            client.send(&approval_answer(&asked["id"], "maybe")).await;
+            let invalid = client
+                .wait(|message| message["error"]["code"] == INVALID_PARAMS)
+                .await;
+            client
+                .send(&json!({
+                    "jsonrpc": "2.0",
+                    "id": asked["id"],
+                    "error": {"code": 1, "message": "the user said no"}
+                }))
+                .await;
+            let completed = client.completed(&run).await;
+            let (_, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(invalid["id"], Value::Null);
+            assert!(
+                invalid["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message
+                        .starts_with("invalid answer to server request \"approval-0\": ")),
+                "{invalid}"
+            );
+            assert_eq!(completed["params"]["event"]["kind"]["error"], Value::Null);
+            assert!(!repository.path().join("a.txt").exists());
+            let denied_result = provider
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|request| String::from_utf8_lossy(&request.body).contains("the user said no"));
+            assert!(denied_result, "the model receives the denial");
+            assert!(served.is_ok());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn an_unanswered_write_times_out_and_the_session_runs_again() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = writing_provider().await;
+            let (mut client, repository) =
+                writing_client(&provider, Duration::from_millis(50)).await;
+            let started = client
+                .call(
+                    2,
+                    "run/start",
+                    json!({"session": "s", "input": "Write a.txt"}),
+                )
+                .await;
+            let run = started["result"]["run"].clone();
+            let asked = client.wait(is_approval_request).await;
+
+            // Act
+            let timed_out = client.completed(&run).await;
+            client.send(&approval_answer(&asked["id"], "allow")).await;
+            let next = client
+                .call(3, "run/start", json!({"session": "s", "input": "Hi"}))
+                .await;
+            let next_completed = client.completed(&next["result"]["run"]).await;
+            let (rest, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(
+                timed_out["params"]["event"]["kind"]["error"]["kind"],
+                json!("approval_timeout")
+            );
+            assert!(!repository.path().join("a.txt").exists());
+            assert_eq!(
+                next_completed["params"]["event"]["kind"]["error"],
+                Value::Null
+            );
+            assert!(
+                !rest.iter().any(|message| message.get("error").is_some()),
+                "a late answer is dropped without a reply: {rest:?}"
+            );
+            assert!(served.is_ok());
+        })
+        .await;
 }

@@ -3,8 +3,9 @@
 //! Requests are parsed in two steps: [`Envelope::parse`] checks the
 //! JSON-RPC 2.0 envelope, and [`Call::parse`] decodes the method's
 //! parameters, so each failure maps to its JSON-RPC error code. Every
-//! message the server writes is a [`Response`], an [`ErrorResponse`], or a
-//! [`Notification`].
+//! message the server writes is a [`Response`], an [`ErrorResponse`], a
+//! [`Notification`], or a [`ServerRequest`], which the client answers;
+//! [`Answer::parse`] reads those answers.
 //!
 //! A message without `id` is a client notification: the server executes it
 //! like a request but never answers it, not even with an error.
@@ -16,8 +17,8 @@ use std::time::Duration;
 
 use ag_harness::event::{RunEvent, RunId};
 use ag_harness::{
-    ErrorKind, GenerationParams, LimitKind, OutputMode, OutputSchema, OutputSchemaError, RunLimits,
-    TurnRange, TurnRecord, UsageTotals,
+    ApprovalRequest, Decision, ErrorKind, GenerationParams, LimitKind, OutputMode, OutputSchema,
+    OutputSchemaError, RunLimits, TurnRange, TurnRecord, UsageTotals,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -625,6 +626,125 @@ pub(crate) struct RunEventParams {
     pub(crate) event: RunEvent,
     /// Identifier of the run's session.
     pub(crate) session: String,
+}
+
+/// Server request asking the client to decide on one tool call that
+/// changes state. The client answers with a response carrying the same
+/// `id` and an [`ApprovalDecision`] as its `result`; an error response
+/// denies the call. A run whose answer does not arrive within the
+/// server's approval timeout fails with `approval_timeout`.
+#[derive(Debug, JsonSchema, Serialize)]
+pub(crate) struct ServerRequest {
+    /// Identifier the client's answer must carry, unique within this
+    /// server.
+    pub(crate) id: RequestId,
+    /// JSON-RPC version.
+    pub(crate) jsonrpc: JsonRpcVersion,
+    /// Request method.
+    pub(crate) method: ServerMethod,
+    /// The call waiting for a decision and the session of its run.
+    pub(crate) params: ApprovalParams,
+}
+
+impl ServerRequest {
+    /// Asks the client, under identifier `id`, to decide on `request`
+    /// made by a run in `session`.
+    pub(crate) fn approval(id: String, session: String, request: ApprovalRequest) -> Self {
+        Self {
+            id: RequestId(Value::String(id)),
+            jsonrpc: JsonRpcVersion::V2,
+            method: ServerMethod::ApprovalDecide,
+            params: ApprovalParams { request, session },
+        }
+    }
+}
+
+/// Method of a server request.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+pub(crate) enum ServerMethod {
+    /// Asks the client to decide on a tool call; it follows the run's
+    /// `approval_requested` event for the call.
+    #[serde(rename = "approval/decide")]
+    ApprovalDecide,
+}
+
+/// Parameters of an `approval/decide` request.
+#[derive(Debug, JsonSchema, Serialize)]
+pub(crate) struct ApprovalParams {
+    /// The call waiting for a decision, as the run's `approval_requested`
+    /// event carries it.
+    pub(crate) request: ApprovalRequest,
+    /// Identifier of the run's session.
+    pub(crate) session: String,
+}
+
+/// A client's decision on an `approval/decide` request, the `result` of
+/// its answer.
+#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ApprovalDecision {
+    /// Runs the call with the model's arguments.
+    // A struct variant, so serde rejects other fields as the schema states.
+    Allow {},
+    /// Runs the call with `arguments` instead, which must match the tool's
+    /// parameters or the run fails as a tool failure.
+    AllowWith {
+        /// Replacement arguments, a JSON object.
+        arguments: Value,
+    },
+    /// Does not run the call; the model receives `feedback` as its result.
+    Deny {
+        /// Why the call was denied, sent to the model.
+        feedback: String,
+    },
+}
+
+impl From<ApprovalDecision> for Decision {
+    fn from(decision: ApprovalDecision) -> Self {
+        match decision {
+            ApprovalDecision::Allow {} => Self::Allow,
+            ApprovalDecision::AllowWith { arguments } => Self::AllowWith(arguments),
+            ApprovalDecision::Deny { feedback } => Self::Deny { feedback },
+        }
+    }
+}
+
+/// A client's answer to a server request.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Answer {
+    /// Decision, or why the answer's `result` is not one.
+    pub(crate) decision: Result<Decision, String>,
+    /// Identifier of the answered server request.
+    pub(crate) id: Value,
+}
+
+impl Answer {
+    /// Reads `message` as an answer to a server request: an object without
+    /// `method` that carries `id` and exactly one of `result` and `error`.
+    /// An error answer denies the call with the error's message. Returns
+    /// `None` for any other message, which is read as a request.
+    pub(crate) fn parse(message: &Value) -> Option<Self> {
+        let fields = message.as_object()?;
+        if fields.contains_key("method") {
+            return None;
+        }
+        let id = fields.get("id")?.clone();
+        let decision = match (fields.get("result"), fields.get("error")) {
+            (Some(result), None) => serde_json::from_value::<ApprovalDecision>(result.clone())
+                .map(Decision::from)
+                .map_err(|error| error.to_string()),
+            (None, Some(error)) => Ok(Decision::Deny {
+                feedback: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the client did not decide")
+                    .to_string(),
+            }),
+            _ => return None,
+        };
+
+        Some(Self { decision, id })
+    }
 }
 
 /// Serializes `message` as one line of JSON, newline included.

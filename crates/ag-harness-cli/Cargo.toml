@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 ag-harness = { workspace = true, features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"] }
 ag-telemetry = { workspace = true, features = ["otlp"] }
+async-trait.workspace = true
 clap.workspace = true
 futures-core.workspace = true
 rustls.workspace = true
@@ -28,7 +29,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
-async-trait.workspace = true
 jsonschema.workspace = true
 opentelemetry-proto.workspace = true
 prost.workspace = true

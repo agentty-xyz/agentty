@@ -7,6 +7,7 @@ use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{env, io};
 
 use ag_harness::catalog::{
@@ -135,16 +136,20 @@ struct Cli {
 
 impl Cli {
     /// Returns a set global option that `serve` does not use, since its
-    /// requests choose each session's model and store.
+    /// requests choose each session's model and store; `--git-executable`
+    /// applies only with `--read-dir`.
     fn option_serve_ignores(&self) -> Option<&'static str> {
-        if !matches!(self.command, Command::Serve(_)) {
+        let Command::Serve(args) = &self.command else {
             return None;
-        }
+        };
 
         [
             ("--comparison-base", self.comparison_base.is_some()),
             ("--database", self.database.is_some()),
-            ("--git-executable", self.git_executable.is_some()),
+            (
+                "--git-executable",
+                self.git_executable.is_some() && args.read_dir.is_none(),
+            ),
             ("--otlp-endpoint", self.otlp_endpoint.is_some()),
         ]
         .into_iter()
@@ -173,19 +178,34 @@ const SERVE_HELP: &str = concat!(
     "Each line is one JSON message. Requests: session/create, session/resume, run/start, ",
     "run/cancel, session/transcript, session/usage, and shutdown. A message without an id is ",
     "executed but never answered. Each run streams its events as run/event notifications, ",
-    "ending with its completed event. Tools are denied. The end of input cancels runs in flight ",
-    "and exits.\n\n",
+    "ending with its completed event. Without --read-dir, tools are denied. With it, runs may ",
+    "read that repository, and with --allow-write also write to it: each write first sends the ",
+    "client an approval/decide request, and a run whose answer does not arrive within ",
+    "--approval-timeout-ms fails. The end of input cancels runs in flight and exits.\n\n",
     "Requests choose each session's model and store, so of the global options only ",
-    "--reasoning-effort applies; the others are rejected.\n\n",
+    "--reasoning-effort, and --git-executable with --read-dir, apply; the others are ",
+    "rejected.\n\n",
     "The protocol and its schema, which --print-schema prints, may change in any release."
 );
 
 /// Arguments for serving the unstable protocol.
 #[derive(Debug, Args)]
 struct ServeArgs {
+    /// Enables repository writes through the write tool; each write waits
+    /// for the client's approval.
+    #[arg(long, requires = "read_dir")]
+    allow_write: bool,
+    /// Milliseconds the client has to answer each approval request before
+    /// the run fails.
+    #[arg(long, value_name = "MS", default_value_t = 300_000)]
+    approval_timeout_ms: u64,
     /// Prints the JSON Schema of every protocol message and exits.
     #[arg(long)]
     print_schema: bool,
+    /// Repository directory every run may read; runs offer no tools
+    /// without it.
+    #[arg(long, value_name = "DIR")]
+    read_dir: Option<PathBuf>,
 }
 
 /// Arguments for signing in to a provider.
@@ -736,9 +756,7 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
-    let git_executable = cli.git_executable;
-    let reasoning_effort = cli.reasoning_effort;
-    let trace = cli.otlp_endpoint.is_some();
+    let effort = cli.reasoning_effort;
     match cli.command {
         Command::Run(args) => {
             let database = database_path(cli.database, &mut environment)?;
@@ -752,7 +770,7 @@ where
             let mut models =
                 chat_models(selection, args.base_url, &mut environment, warning_output)?;
             let harness = models.harness(false)?;
-            let repository = repository_or_default(args.read_dir, git_executable)?;
+            let repository = repository_or_default(args.read_dir, cli.git_executable)?;
             let comparison_base =
                 comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, system_prompt) = configured_harness(
@@ -760,8 +778,8 @@ where
                 database,
                 repository,
                 args.allow_write,
-                reasoning_effort,
-                trace,
+                effort,
+                cli.otlp_endpoint.is_some(),
             );
             let mut session = harness
                 .session(&session_id, chat_schema()?)
@@ -789,7 +807,7 @@ where
             let mut models =
                 chat_models(selection, args.base_url, &mut environment, warning_output)?;
             let harness = models.harness(info.registration_identity().is_some())?;
-            let repository = repository_or_default(args.read_dir, git_executable)?;
+            let repository = repository_or_default(args.read_dir, cli.git_executable)?;
             let comparison_base =
                 comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, _) = configured_harness(
@@ -797,8 +815,8 @@ where
                 database,
                 repository,
                 args.allow_write,
-                reasoning_effort,
-                trace,
+                effort,
+                cli.otlp_endpoint.is_some(),
             );
             let mut session = harness.resume(&args.session).await?;
             announce_session(&mut output, &args.session).await?;
@@ -823,14 +841,18 @@ where
             )
             .await
         }
-        Command::Serve(args) => run_serve(args, reasoning_effort, environment, input, output).await,
+        Command::Serve(args) => {
+            run_serve(args, effort, cli.git_executable, environment, input, output).await
+        }
     }
 }
 
-/// Serves the protocol, or prints its schema.
+/// Serves the protocol with the host's reasoning effort and Git
+/// executable, or prints its schema.
 async fn run_serve<Input, Output>(
     args: ServeArgs,
     reasoning_effort: ReasoningEffort,
+    git_executable: Option<PathBuf>,
     environment: impl FnMut(&str) -> Result<String, env::VarError>,
     input: Input,
     mut output: Output,
@@ -844,8 +866,38 @@ where
 
         return Ok(output.flush().await?);
     }
+    let settings = serve_settings(&args, reasoning_effort, git_executable)?;
 
-    Ok(serve::serve(input, output, environment, reasoning_effort).await?)
+    Ok(serve::serve(input, output, environment, settings).await?)
+}
+
+/// Returns the settings `args` select: `read` in `--read-dir`, plus
+/// `write` with `--allow-write`, or no tools without a directory.
+fn serve_settings(
+    args: &ServeArgs,
+    reasoning_effort: ReasoningEffort,
+    git_executable: Option<PathBuf>,
+) -> Result<serve::Settings, CliError> {
+    let tools = match &args.read_dir {
+        Some(root) => {
+            let repository = repository_or_default(root.clone(), git_executable)?;
+            let tools = ToolSet::empty().with_read();
+            let tools = if args.allow_write {
+                tools.with_write()
+            } else {
+                tools
+            };
+
+            Some((repository, tools))
+        }
+        None => None,
+    };
+
+    Ok(serve::Settings {
+        approval_timeout: Duration::from_millis(args.approval_timeout_ms),
+        reasoning_effort,
+        tools,
+    })
 }
 
 async fn announce_session(

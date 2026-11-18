@@ -6,7 +6,7 @@ use std::future::poll_fn;
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use std::{env, io};
 
 use ag_harness::catalog::{ModelCatalog, ModelId, ModelSelector, Role};
@@ -15,8 +15,8 @@ use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::ModelProvider;
 use ag_harness::store::{MemoryStore, SessionInfo};
 use ag_harness::{
-    CancelToken, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError, RunHandle,
-    RunRequest, Session, SessionError,
+    CancelToken, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError, Repository,
+    RunHandle, RunRequest, Session, SessionError, ToolSet,
 };
 use futures_core::Stream;
 use serde::Serialize;
@@ -26,11 +26,12 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use super::approval::Approvals;
 use super::protocol::{
-    Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse, MethodResult, ModelChoice,
-    Notification, PARSE_ERROR, RequestId, Response, RunStartParams, RunStarted, SERVER_ERROR,
-    SessionCreateParams, SessionOpened, SessionResumeParams, SessionTranscriptParams, SessionUsage,
-    StoreChoice, Transcript, line,
+    Answer, Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse, INVALID_PARAMS,
+    MethodResult, ModelChoice, Notification, PARSE_ERROR, RequestId, Response, RunStartParams,
+    RunStarted, SERVER_ERROR, SessionCreateParams, SessionOpened, SessionResumeParams,
+    SessionTranscriptParams, SessionUsage, StoreChoice, Transcript, line,
 };
 use crate::{connect_model, login, select_cataloged, select_direct, stored_model_identity_parts};
 
@@ -44,8 +45,9 @@ const EVENT_LINE_BUFFER: usize = 64;
 ///
 /// Requests are answered in order, and a run's identifier is answered
 /// before its first event. Client notifications are executed but never
-/// answered. Runs execute concurrently; their events are written between
-/// responses, one whole line at a time.
+/// answered. Runs execute concurrently; their events, and the
+/// `approval/decide` requests that follow their `approval_requested`
+/// events, are written between responses, one whole line at a time.
 ///
 /// # Errors
 /// Returns a failure to read `input` or to write to `output`.
@@ -53,7 +55,7 @@ pub(crate) async fn serve<Input, Output>(
     mut input: Input,
     output: Output,
     environment: impl FnMut(&str) -> Result<String, env::VarError>,
-    reasoning_effort: ReasoningEffort,
+    settings: Settings,
 ) -> io::Result<()>
 where
     Input: AsyncBufRead + Unpin,
@@ -61,15 +63,16 @@ where
 {
     let (event_sender, event_lines) = mpsc::channel(EVENT_LINE_BUFFER);
     let mut server = Server {
+        approvals: Approvals::default(),
         environment,
         event_lines,
         event_sender,
         finished_runs: HashSet::new(),
         memory: MemoryStore::new(),
         output,
-        reasoning_effort,
         runs: HashMap::new(),
         sessions: HashMap::new(),
+        settings,
     };
     let answered = server.serve_lines(&mut input).await;
     let (mut output, stopped) = server.stop().await;
@@ -85,11 +88,26 @@ where
     }
 }
 
+/// Host settings shared by every session of one server.
+pub(crate) struct Settings {
+    /// Time the client has to answer each `approval/decide` request.
+    pub(crate) approval_timeout: Duration,
+    pub(crate) reasoning_effort: ReasoningEffort,
+    /// Repository the built-in tools work in and the tools every run
+    /// offers; without it, runs offer no tools.
+    pub(crate) tools: Option<(Repository, ToolSet)>,
+}
+
 /// Writes one complete line and flushes it.
 async fn write_line(output: &mut (impl AsyncWrite + Unpin), line: &str) -> io::Result<()> {
     output.write_all(line.as_bytes()).await?;
 
     output.flush().await
+}
+
+/// Returns the next event of `events`, or `None` once the run ended.
+async fn next_event(events: &mut EventStream) -> Option<RunEvent> {
+    poll_fn(|context| Pin::new(&mut *events).poll_next(context)).await
 }
 
 /// Encodes `event` of a run in `session` as a `run/event` notification
@@ -110,8 +128,11 @@ fn event_line(session: String, event: RunEvent) -> String {
 
 /// State of one `serve` process.
 struct Server<Environment, Output> {
+    /// Approval handler of every session, which asks this server's client.
+    approvals: Approvals,
     environment: Environment,
-    /// Serialized events of every run, written in arrival order.
+    /// Serialized events and approval requests of every run, written in
+    /// arrival order.
     event_lines: mpsc::Receiver<String>,
     /// Sender cloned into each run.
     event_sender: mpsc::Sender<String>,
@@ -121,9 +142,9 @@ struct Server<Environment, Output> {
     /// Store of every session opened with [`StoreChoice::Memory`].
     memory: MemoryStore,
     output: Output,
-    reasoning_effort: ReasoningEffort,
     runs: HashMap<RunId, RunTask>,
     sessions: HashMap<String, Session>,
+    settings: Settings,
 }
 
 impl<Environment, Output> Server<Environment, Output>
@@ -175,6 +196,9 @@ where
                 return Ok(ControlFlow::Continue(()));
             }
         };
+        if let Some(answer) = Answer::parse(&message) {
+            return self.decide(answer).await.map(ControlFlow::Continue);
+        }
         let envelope = match Envelope::parse(message) {
             Ok(envelope) => envelope,
             Err(response) => {
@@ -203,6 +227,27 @@ where
         }
 
         Ok(ControlFlow::Continue(()))
+    }
+
+    /// Hands the client's `answer` to the run waiting for it. An answer
+    /// whose `result` is not a decision is rejected with an error that has
+    /// no `id`, and the run keeps waiting for a valid one.
+    async fn decide(&mut self, answer: Answer) -> io::Result<()> {
+        match answer.decision {
+            Ok(decision) => {
+                self.approvals.answer(&answer.id, decision);
+
+                Ok(())
+            }
+            Err(reason) => {
+                let error = ErrorObject::new(
+                    INVALID_PARAMS,
+                    format!("invalid answer to server request {}: {reason}", answer.id),
+                );
+
+                self.write(&ErrorResponse::new(None, error)).await
+            }
+        }
     }
 
     /// Answers request `id` with `reply`; a client notification, which has
@@ -333,9 +378,16 @@ where
     }
 
     /// Builds the harness of one session: `model` stored in `store`, with
-    /// every tool denied.
+    /// the server's tools, or none, and every call that changes state
+    /// approved by the client.
     fn harness(&mut self, model: &ModelChoice, store: StoreChoice) -> Result<Harness, ServeError> {
-        let builder = Harness::builder().model_reasoning_effort(self.reasoning_effort);
+        let mut builder = Harness::builder()
+            .model_reasoning_effort(self.settings.reasoning_effort)
+            .approval(Arc::new(self.approvals.clone()))
+            .approval_timeout(self.settings.approval_timeout);
+        if let Some((repository, tools)) = &self.settings.tools {
+            builder = builder.repository(repository.clone()).tools(tools.clone());
+        }
         let builder = match store {
             StoreChoice::Memory => builder.store(Arc::new(self.memory.clone())),
             StoreChoice::Sqlite { path } => builder.sqlite(path),
@@ -427,14 +479,32 @@ where
         let id = events.run_id().clone();
         let cancel = handle.cancel_token();
         let sender = self.event_sender.clone();
+        // The run is polled only once its task starts, so it cannot ask
+        // before its approvals are routed here.
+        let mut asks = self.approvals.open(id.clone());
+        let approvals = self.approvals.clone();
+        let run = id.clone();
         // The run's task holds `sender` until its stream ends, so `stop`
-        // drains every event.
+        // drains every event. Events are read first: the run emits its
+        // `approval_requested` event before it asks, so the event is
+        // always written before the request.
         let forward = async move {
-            while let Some(event) =
-                poll_fn(|context| Pin::new(&mut events).poll_next(context)).await
-            {
-                let _ = sender.send(event_line(session.clone(), event)).await;
+            loop {
+                let line = tokio::select! {
+                    biased;
+                    event = next_event(&mut events) => {
+                        match event {
+                            Some(event) => event_line(session.clone(), event),
+                            None => break,
+                        }
+                    }
+                    Some(ask) = asks.recv() => {
+                        line(&approvals.request(session.clone(), ask)).unwrap_or_default()
+                    }
+                };
+                let _ = sender.send(line).await;
             }
+            approvals.close(&run);
         };
         let task = tokio::spawn(async move {
             let (_outcome, ()) = tokio::join!(handle.outcome(), forward);

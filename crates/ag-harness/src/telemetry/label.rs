@@ -11,6 +11,7 @@ pub(crate) const ERROR_REQUEST: &str = "request_error";
 pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
 pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
 pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
+pub(crate) const ERROR_APPROVAL_TIMEOUT: &str = "approval_timeout";
 pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
 pub(crate) const ERROR_COMPARISON_REPOSITORY_MISMATCH: &str = "comparison_repository_mismatch";
 pub(crate) const ERROR_CONTEXT_BUDGET: &str = "context_budget_exceeded";

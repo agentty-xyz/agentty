@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -38,12 +39,13 @@ pub trait ToolHandler: Send + Sync {
     /// that copy.
     fn definition(&self) -> ToolDefinition;
 
-    /// Returns what a call may change, for hosts that gate or schedule
-    /// calls by their effects.
+    /// Returns what a call may change: with an approval handler, a call
+    /// that is not [`ToolEffects::ReadOnly`] waits for its decision.
     fn effects(&self) -> ToolEffects;
 
     /// Runs one call with the model's JSON `arguments`, which the harness
-    /// does not validate against the definition's parameters.
+    /// does not validate against the definition's parameters, or with the
+    /// validated ones a [`crate::approval::Decision::AllowWith`] gave.
     ///
     /// The returned [`ToolOutput`] is sent to the model as the call's
     /// result.
@@ -56,7 +58,11 @@ pub trait ToolHandler: Send + Sync {
 }
 
 /// What one tool call may change.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+///
+/// With a [`crate::approval::ApprovalHandler`] configured, every call to a
+/// tool that is not [`Self::ReadOnly`] waits for its decision.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ToolEffects {
     /// Reads state without changing it, like the built-in `read`.

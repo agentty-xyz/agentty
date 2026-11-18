@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ServeMessage",
-  "description": "One line of the UNSTABLE `ag-harness serve` JSON-RPC 2.0 protocol: a client request, or a server response, error response, or `run/event` notification. The protocol may change in any release.",
+  "description": "One line of the UNSTABLE `ag-harness serve` JSON-RPC 2.0 protocol: a client request or answer, or a server response, error response, `run/event` notification, or `approval/decide` request. The protocol may change in any release.",
   "anyOf": [
     {
       "$ref": "#/$defs/Request"
@@ -14,6 +14,12 @@
     },
     {
       "$ref": "#/$defs/Notification"
+    },
+    {
+      "$ref": "#/$defs/ServerRequest"
+    },
+    {
+      "$ref": "#/$defs/ApprovalAnswer"
     }
   ],
   "x-method-results": {
@@ -37,6 +43,11 @@
     },
     "shutdown": {
       "$ref": "#/$defs/Empty"
+    }
+  },
+  "x-server-request-results": {
+    "approval/decide": {
+      "$ref": "#/$defs/ApprovalDecision"
     }
   },
   "$defs": {
@@ -898,6 +909,11 @@
         },
         {
           "type": "string",
+          "const": "approval_timeout",
+          "description": "The approval handler did not decide on a tool call within the\nharness's approval timeout, so the call did not run."
+        },
+        {
+          "type": "string",
           "const": "busy",
           "description": "The session already has an active turn or matching host request, or\nthe session store is temporarily locked or saturated."
         },
@@ -1131,6 +1147,11 @@
           "type": "string",
           "const": "unavailable",
           "description": "The tool is denied by policy or does not exist."
+        },
+        {
+          "type": "string",
+          "const": "denied",
+          "description": "The [`crate::approval::ApprovalHandler`] denied the call, which did\nnot run; the model received the denial's feedback."
         },
         {
           "type": "string",
@@ -1564,6 +1585,29 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "approval_requested"
+            },
+            "id": {
+              "$ref": "#/$defs/ItemId",
+              "description": "Identifier of the call's [`ItemKind::ToolCall`] item."
+            },
+            "request": {
+              "$ref": "#/$defs/ApprovalRequest",
+              "description": "The call waiting for a decision."
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "request"
+          ],
+          "description": "A tool call that changes state waits for the harness's\n[`crate::approval::ApprovalHandler`], which the harness asks right\nafter this event. It falls between the call's [`Self::ItemStarted`]\nand [`Self::ItemCompleted`]; a call the handler did not decide on in\ntime fails the run with [`ErrorKind::ApprovalTimeout`]."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "model_request_completed"
             },
             "cost": {
@@ -1674,7 +1718,7 @@
           "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn."
         }
       ],
-      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas and approval requests, may be added."
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, may be added."
     },
     "ModelId": {
       "type": "string",
@@ -1714,6 +1758,75 @@
         }
       ],
       "description": "What an item is, known when it starts."
+    },
+    "ApprovalRequest": {
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Arguments the model sent, as a JSON object."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "Provider identifier of the call."
+        },
+        "effects": {
+          "$ref": "#/$defs/ToolEffects",
+          "description": "What the call may change, as its tool declares it."
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Run that made the call; `None` for a call outside a run, such as one\nfrom [`crate::Harness::turn`]."
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Host-created session whose turn made the call; `None` for a\nstateless run or turn."
+        },
+        "tool": {
+          "type": "string",
+          "description": "Function name of the called tool."
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "effects",
+        "tool"
+      ],
+      "description": "One tool call waiting for its [`Decision`]."
+    },
+    "ToolEffects": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "read_only",
+          "description": "Reads state without changing it, like the built-in `read`."
+        },
+        {
+          "type": "string",
+          "const": "writes",
+          "description": "Changes state outside the model's context, such as workspace files\nor records in another system, like the built-in `write`."
+        },
+        {
+          "type": "string",
+          "const": "executes",
+          "description": "Runs commands or other actions whose effects the harness cannot\nbound, like the built-in `bash`."
+        }
+      ],
+      "description": "What one tool call may change.\n\nWith a [`crate::approval::ApprovalHandler`] configured, every call to a\ntool that is not [`Self::ReadOnly`] waits for its decision."
     },
     "ContextActivity": {
       "type": "object",
@@ -1919,6 +2032,139 @@
         "usage"
       ],
       "description": "How a run finished, carried by [`RunEventKind::Completed`]."
+    },
+    "ServerRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId",
+          "description": "Identifier the client's answer must carry, unique within this\nserver."
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion",
+          "description": "JSON-RPC version."
+        },
+        "method": {
+          "$ref": "#/$defs/ServerMethod",
+          "description": "Request method."
+        },
+        "params": {
+          "$ref": "#/$defs/ApprovalParams",
+          "description": "The call waiting for a decision and the session of its run."
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "description": "Server request asking the client to decide on one tool call that\nchanges state. The client answers with a response carrying the same\n`id` and an [`ApprovalDecision`] as its `result`; an error response\ndenies the call. A run whose answer does not arrive within the\nserver's approval timeout fails with `approval_timeout`."
+    },
+    "ServerMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "approval/decide",
+          "description": "Asks the client to decide on a tool call; it follows the run's\n`approval_requested` event for the call."
+        }
+      ],
+      "description": "Method of a server request."
+    },
+    "ApprovalParams": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/ApprovalRequest",
+          "description": "The call waiting for a decision, as the run's `approval_requested`\nevent carries it."
+        },
+        "session": {
+          "type": "string",
+          "description": "Identifier of the run's session."
+        }
+      },
+      "required": [
+        "request",
+        "session"
+      ],
+      "description": "Parameters of an `approval/decide` request."
+    },
+    "ApprovalDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow"
+            }
+          },
+          "required": [
+            "decision"
+          ],
+          "description": "Runs the call with the model's arguments."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "allow_with"
+            },
+            "arguments": {
+              "description": "Replacement arguments, a JSON object."
+            }
+          },
+          "required": [
+            "decision",
+            "arguments"
+          ],
+          "description": "Runs the call with `arguments` instead, which must match the tool's\nparameters or the run fails as a tool failure."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "deny"
+            },
+            "feedback": {
+              "type": "string",
+              "description": "Why the call was denied, sent to the model."
+            }
+          },
+          "required": [
+            "decision",
+            "feedback"
+          ],
+          "description": "Does not run the call; the model receives `feedback` as its result."
+        }
+      ],
+      "description": "A client's decision on an `approval/decide` request, the `result` of\nits answer."
+    },
+    "ApprovalAnswer": {
+      "description": "Client answer to an `approval/decide` server request: the request's `id` and the decision as `result`. An error response with the request's `id` denies the call with the error's message.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion"
+        },
+        "result": {
+          "$ref": "#/$defs/ApprovalDecision"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "additionalProperties": false
     },
     "Request": {
       "description": "Client request: `jsonrpc`, `id`, `method`, and the method's `params`, which may be omitted when every parameter has a default. A message without `id` is a client notification, which the server executes but never answers.",

@@ -216,6 +216,11 @@
           "const": "repetition"
         },
         {
+          "description": "The approval handler did not decide on a tool call within the\nharness's approval timeout, so the call did not run.",
+          "type": "string",
+          "const": "approval_timeout"
+        },
+        {
           "description": "The session already has an active turn or matching host request, or\nthe session store is temporarily locked or saturated.",
           "type": "string",
           "const": "busy"
@@ -450,6 +455,11 @@
           "description": "The tool is denied by policy or does not exist.",
           "type": "string",
           "const": "unavailable"
+        },
+        {
+          "description": "The [`crate::approval::ApprovalHandler`] denied the call, which did\nnot run; the model received the denial's feedback.",
+          "type": "string",
+          "const": "denied"
         },
         {
           "description": "The call was answered, as a [`crate::TurnRecord`] reports every\nanswered call: sessions store the result text but not which of the\nstatuses above the live run reported.",

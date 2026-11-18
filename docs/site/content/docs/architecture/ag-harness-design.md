@@ -33,6 +33,8 @@ flowchart LR
 - **Deny-by-default tools** — a turn offers exactly the handlers of its set, and a
   harness offers none until the host gives it one; the deprecated `ToolPolicy` offers
   its allowed built-ins only when no set is given.
+- **Host approvals** — an optional `ApprovalHandler` decides every call that changes
+  state, within a bounded decision timeout.
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
@@ -269,6 +271,16 @@ to a tool the set leaves out, or to a nonexistent tool, is answered with a corre
 Such a result is never cleared to fit the context window, and a dropped-round note never
 names its call, since it did not run.
 
+With an `ApprovalHandler` configured, a call to a tool whose `ToolEffects` are not
+`ReadOnly` waits for the handler's `Decision` after its arguments decode and its
+`ApprovalRequested` event is emitted; read-only calls never ask, and without a handler
+every offered tool runs unasked. The wait is bounded by the harness's approval timeout:
+a timeout fails the turn with `ErrorKind::ApprovalTimeout`, which settles it like any
+failure, so the session's turn lease is released rather than renewed indefinitely.
+Cancellation drops the pending decision. `AllowWith` arguments are validated against the
+tool's parameters schema before the handler runs, and a denial answers the model with a
+`"status": "denied"` result carrying the feedback.
+
 - `read` — bounded file, list, search, and `show(head)` inspection. A `list` or `search`
   path that matches no repository file returns a corrective error instead of an empty
   result.
@@ -368,8 +380,7 @@ OpenTelemetry context, so harness spans nest under the host's span.
 
 `ag-harness serve` exposes sessions and runs to non-Rust hosts as JSON-RPC 2.0 over
 standard input and output, one JSON message per line. The protocol is unstable: its
-methods and wire types may change in any release, and approvals and tools are not part
-of it yet.
+methods and wire types may change in any release.
 
 - The Rust API stays the source of truth. Requests map to `Harness::session`,
   `Harness::resume`, `Session::run`, `CancelToken::cancel`, `Session::transcript`, and
@@ -385,12 +396,20 @@ of it yet.
   and invalid parameters use the standard codes without stopping the server; harness
   failures use `-32000` with the `ErrorKind` name and retry flag as `data`. Client
   notifications are executed but never answered.
+- Tools are offered only when the server is started with a repository: `read`, plus
+  `write` when writes are allowed. Approvals are server-to-client requests. The server's
+  `ApprovalHandler` hands each call to the task forwarding its run's events, which reads
+  events first, so the `approval/decide` request always follows the run's
+  `ApprovalRequested` event. The client's answer, matched by request `id`, resolves the
+  waiting run; a late answer is dropped, and the harness's approval timeout fails a run
+  whose answer never arrives.
 - `shutdown` and the end of input cancel runs in flight and wait for their `Completed`
   events before exiting.
 
 `crates/ag-harness-cli/schema/serve_protocol.json` is the generated schema of every
 message, printed by `serve --print-schema`; each method's result is a closed object
-named in `x-method-results`, and a unit test fails when the file is stale.
+named in `x-method-results`, each server request's answer in `x-server-request-results`,
+and a unit test fails when the file is stale.
 
 ## Agentty integration
 

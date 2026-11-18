@@ -70,6 +70,9 @@ pub enum ErrorKind {
     ToolFailed,
     /// The model kept repeating tool calls without progress after a nudge.
     Repetition,
+    /// The [`crate::approval::ApprovalHandler`] did not decide on a tool
+    /// call within the harness's approval timeout, so the call did not run.
+    ApprovalTimeout,
     /// The session already has an active turn or matching host request, or
     /// the session store is temporarily locked or saturated.
     Busy,
@@ -102,6 +105,7 @@ impl ErrorKind {
             Self::Other => "other",
             Self::ToolFailed => "tool_failed",
             Self::Repetition => "repetition",
+            Self::ApprovalTimeout => "approval_timeout",
             Self::Busy => "busy",
             Self::Conflict => "conflict",
             Self::NotFound => "not_found",
@@ -175,6 +179,9 @@ pub(crate) enum ErrorKindName {
     ToolFailed,
     /// The model kept repeating tool calls without progress after a nudge.
     Repetition,
+    /// The approval handler did not decide on a tool call within the
+    /// harness's approval timeout, so the call did not run.
+    ApprovalTimeout,
     /// The session already has an active turn or matching host request, or
     /// the session store is temporarily locked or saturated.
     Busy,
@@ -216,6 +223,7 @@ impl ErrorKindName {
             (Self::Other, None) => ErrorKind::Other,
             (Self::ToolFailed, None) => ErrorKind::ToolFailed,
             (Self::Repetition, None) => ErrorKind::Repetition,
+            (Self::ApprovalTimeout, None) => ErrorKind::ApprovalTimeout,
             (Self::Busy, None) => ErrorKind::Busy,
             (Self::Conflict, None) => ErrorKind::Conflict,
             (Self::NotFound, None) => ErrorKind::NotFound,
@@ -242,6 +250,7 @@ impl From<ErrorKind> for ErrorKindName {
             ErrorKind::Other => Self::Other,
             ErrorKind::ToolFailed => Self::ToolFailed,
             ErrorKind::Repetition => Self::Repetition,
+            ErrorKind::ApprovalTimeout => Self::ApprovalTimeout,
             ErrorKind::Busy => Self::Busy,
             ErrorKind::Conflict => Self::Conflict,
             ErrorKind::NotFound => Self::NotFound,
@@ -470,6 +479,7 @@ impl Classification {
             | TurnError::UsageJournal { .. } => ErrorKind::Store,
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
+            TurnError::ApprovalTimeout { .. } => ErrorKind::ApprovalTimeout,
             TurnError::LimitReached { limit } | TurnError::BudgetRefused { limit } => {
                 ErrorKind::BudgetExhausted(*limit)
             }

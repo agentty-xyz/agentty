@@ -33,7 +33,7 @@
   ],
   "$defs": {
     "RunEventKind": {
-      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas and approval requests, may be added.",
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, may be added.",
       "oneOf": [
         {
           "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
@@ -113,6 +113,29 @@
             "type",
             "id",
             "item"
+          ]
+        },
+        {
+          "description": "A tool call that changes state waits for the harness's\n[`crate::approval::ApprovalHandler`], which the harness asks right\nafter this event. It falls between the call's [`Self::ItemStarted`]\nand [`Self::ItemCompleted`]; a call the handler did not decide on in\ntime fails the run with [`ErrorKind::ApprovalTimeout`].",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "approval_requested"
+            },
+            "id": {
+              "description": "Identifier of the call's [`ItemKind::ToolCall`] item.",
+              "$ref": "#/$defs/ItemId"
+            },
+            "request": {
+              "description": "The call waiting for a decision.",
+              "$ref": "#/$defs/ApprovalRequest"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "request"
           ]
         },
         {
@@ -410,6 +433,11 @@
           "const": "unavailable"
         },
         {
+          "description": "The [`crate::approval::ApprovalHandler`] denied the call, which did\nnot run; the model received the denial's feedback.",
+          "type": "string",
+          "const": "denied"
+        },
+        {
           "description": "The call was answered, as a [`crate::TurnRecord`] reports every\nanswered call: sessions store the result text but not which of the\nstatuses above the live run reported.",
           "type": "string",
           "const": "answered"
@@ -458,6 +486,79 @@
         "status",
         "summary"
       ]
+    },
+    "ApprovalRequest": {
+      "description": "One tool call waiting for its [`Decision`].",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Arguments the model sent, as a JSON object."
+        },
+        "call_id": {
+          "description": "Provider identifier of the call.",
+          "type": "string"
+        },
+        "effects": {
+          "description": "What the call may change, as its tool declares it.",
+          "$ref": "#/$defs/ToolEffects"
+        },
+        "run": {
+          "description": "Run that made the call; `None` for a call outside a run, such as one\nfrom [`crate::Harness::turn`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "description": "Host-created session whose turn made the call; `None` for a\nstateless run or turn.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "description": "Function name of the called tool.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "effects",
+        "tool"
+      ]
+    },
+    "ToolEffects": {
+      "description": "What one tool call may change.\n\nWith a [`crate::approval::ApprovalHandler`] configured, every call to a\ntool that is not [`Self::ReadOnly`] waits for its decision.",
+      "oneOf": [
+        {
+          "description": "Reads state without changing it, like the built-in `read`.",
+          "type": "string",
+          "const": "read_only"
+        },
+        {
+          "description": "Changes state outside the model's context, such as workspace files\nor records in another system, like the built-in `write`.",
+          "type": "string",
+          "const": "writes"
+        },
+        {
+          "description": "Runs commands or other actions whose effects the harness cannot\nbound, like the built-in `bash`.",
+          "type": "string",
+          "const": "executes"
+        }
+      ]
+    },
+    "RunId": {
+      "description": "Identifier of one run, unique across processes.\n\nEvery [`crate::Run`] has one: each event of its stream carries it, and\neach of its tool calls sees it in [`crate::tool::ToolContext::run_id`].",
+      "type": "string"
     },
     "Cost": {
       "description": "Price of some [`Usage`] in integer micro-USD, one millionth of a US\ndollar, with where its prices came from.\n\n[`Self::of`] prices usage as follows, given that the [`Usage`] counts\noverlap: `cache_read` and a known `cache_write` are part of `input`, and\n`reasoning` is part of `output`.\n\n- Input tokens neither read from nor written to the cache bill at the input\n  price.\n- `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and\n  `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both\n  fall back to the input price when the pricing declares no cache price, as\n  built-in prices do not yet.\n- Output tokens, reasoning included, bill at the output price.\n\nThe exact sum is rounded once to the nearest micro-USD, halves up, so a\nrun's cost, the sum of its requests' costs, can differ from pricing its\nsummed usage by less than one micro-USD per request. Arithmetic never\noverflows: a cost beyond `u64::MAX` micro-USD saturates at it. A sum of\ncosts priced from different sources is [`PricingSource::Mixed`].\n\nA model without [`Pricing`], such as a host model nobody priced, an\nOpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal\nrequests are not metered, has no cost: `Option<Cost>` is `None` there.\nOn the wire it is `{\"micro_usd\": 1250, \"pricing\": \"built_in\"}`.",
@@ -738,6 +839,11 @@
           "const": "repetition"
         },
         {
+          "description": "The approval handler did not decide on a tool call within the\nharness's approval timeout, so the call did not run.",
+          "type": "string",
+          "const": "approval_timeout"
+        },
+        {
           "description": "The session already has an active turn or matching host request, or\nthe session store is temporarily locked or saturated.",
           "type": "string",
           "const": "busy"
@@ -875,10 +981,6 @@
       "required": [
         "usage"
       ]
-    },
-    "RunId": {
-      "description": "Identifier of one run, unique across processes.\n\nEvery [`crate::Run`] has one: each event of its stream carries it, and\neach of its tool calls sees it in [`crate::tool::ToolContext::run_id`].",
-      "type": "string"
     }
   }
 }

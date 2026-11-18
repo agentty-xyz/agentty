@@ -41,6 +41,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();
     let engine = Engine {
+        approval: None,
         budget: &Unlimited,
         concurrency: None,
         context_budget: unbounded_context_budget(),
@@ -111,6 +112,7 @@ async fn run_scripted(
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();
     let engine = Engine {
+        approval: None,
         budget: &Unlimited,
         concurrency: None,
         context_budget,

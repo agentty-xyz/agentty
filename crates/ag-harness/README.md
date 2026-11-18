@@ -190,6 +190,43 @@ let harness = Harness::builder().model(model).tools(tools).build()?;
   and the workspace; `ToolContext::cancelled` resolves when the turn is cancelled, which
   also drops the call's future.
 
+### Approvals
+
+`HarnessBuilder::approval` gates every call to a tool whose `ToolEffects` are not
+`ReadOnly`, such as the built-in `write` and `bash`, behind your `ApprovalHandler`;
+read-only calls never ask. Without a handler, every tool in the set runs unasked.
+
+```rust,ignore
+use ag_harness::{ApprovalHandler, ApprovalRequest, Decision};
+
+struct AskTheUser;
+
+#[async_trait::async_trait]
+impl ApprovalHandler for AskTheUser {
+    async fn decide(&self, request: &ApprovalRequest) -> Decision {
+        match request.tool.as_str() {
+            "write" => Decision::Allow,
+            _ => Decision::Deny { feedback: "not now".into() },
+        }
+    }
+}
+
+let harness = Harness::builder()
+    .model(model)
+    .tools(tools)
+    .approval(Arc::new(AskTheUser))
+    .approval_timeout(Duration::from_secs(60))
+    .build()?;
+```
+
+- A run emits `RunEventKind::ApprovalRequested` for the call, then asks the handler.
+- `Allow` runs the call; `AllowWith(arguments)` runs it with replacement arguments that
+  must match the tool's parameters schema (the session keeps the model's call);
+  `Deny { feedback }` answers the model with the feedback and the run continues.
+- A handler that does not decide within `approval_timeout` (five minutes by default)
+  fails the run with `ErrorKind::ApprovalTimeout`; the call never runs and the session
+  is released for its next turn. Cancelling the run drops the pending decision.
+
 ## Turns
 
 `run_once` and `send` run a turn with the defaults. When a turn needs more, call `turn`
@@ -880,8 +917,9 @@ Features are additive: error enums whose variants depend on them are
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,
 `TurnOutcome`, `TurnError`, `SessionError`, `RunError`, `HarnessError`, `ErrorKind`,
-`OutputSchema`, `ToolSet`, `ToolHandler`, `Repository`, `TurnInput`, `Model`,
-`ModelCatalog`, `ModelSelector`, and `Role`. Everything else is grouped by topic:
+`OutputSchema`, `ToolSet`, `ToolHandler`, `ApprovalHandler`, `Decision`, `Repository`,
+`TurnInput`, `Model`, `ModelCatalog`, `ModelSelector`, and `Role`. Everything else is
+grouped by topic:
 
 | Module       | Contents                                                 |
 | ------------ | -------------------------------------------------------- |

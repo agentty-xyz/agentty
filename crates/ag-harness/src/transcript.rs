@@ -359,7 +359,7 @@ struct TurnErrorKind(TurnErrorType);
 
 impl TurnErrorKind {
     /// Every classification a store may record for a stopped turn.
-    const ALL: [Self; 27] = [
+    const ALL: [Self; 28] = [
         Self(TurnErrorType::Cancelled),
         Self(TurnErrorType::Tool),
         Self(TurnErrorType::ContextBudget),
@@ -389,6 +389,7 @@ impl TurnErrorKind {
         Self(TurnErrorType::BudgetLedger(LimitKind::ModelRequests)),
         Self(TurnErrorType::BudgetLedger(LimitKind::ToolCalls)),
         Self(TurnErrorType::BudgetLedger(LimitKind::WallTime)),
+        Self(TurnErrorType::ApprovalTimeout),
     ];
 
     /// Returns the kind a live run reports for this classification, as far
@@ -397,6 +398,7 @@ impl TurnErrorKind {
         match self.0 {
             TurnErrorType::Cancelled => ErrorKind::Cancelled,
             TurnErrorType::Tool => ErrorKind::ToolFailed,
+            TurnErrorType::ApprovalTimeout => ErrorKind::ApprovalTimeout,
             TurnErrorType::ContextBudget
             | TurnErrorType::Model(ModelErrorType::ContextOverflow) => ErrorKind::ContextOverflow,
             TurnErrorType::RepeatedToolCalls => ErrorKind::Repetition,

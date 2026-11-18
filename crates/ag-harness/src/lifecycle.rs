@@ -338,6 +338,8 @@ pub enum TurnErrorType {
     Model(ModelErrorType),
     /// A repository-scoped tool failed.
     Tool,
+    /// The approval handler did not decide on a tool call in time.
+    ApprovalTimeout,
     /// Mandatory request content exceeded the model's context budget.
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
@@ -362,6 +364,7 @@ impl TurnErrorType {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
             Self::Model(error_type) => error_type.as_str(),
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
+            Self::ApprovalTimeout => crate::telemetry::ERROR_APPROVAL_TIMEOUT,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
             Self::RunLimit(LimitKind::ModelRequests) => {
