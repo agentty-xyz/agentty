@@ -92,21 +92,21 @@ async fn presets_send_byte_identical_requests() -> Result<(), Box<dyn Error>> {
         (
             "openai/gpt-6-luna",
             conformance::options(Some(Max), true, Some(512)),
-            include_str!("fixtures/conformance/requests/openai-gpt-6-luna.json"),
+            "openai-gpt-6-luna",
         ),
         (
             "openai/gpt-5.3-codex",
             conformance::options(Some(Max), false, None),
-            include_str!("fixtures/conformance/requests/openai-gpt-5.3-codex.json"),
+            "openai-gpt-5.3-codex",
         ),
         (
             "chatgpt/gpt-6-sol",
             conformance::options(Some(High), true, None),
-            include_str!("fixtures/conformance/requests/chatgpt-gpt-6-sol.json"),
+            "chatgpt-gpt-6-sol",
         ),
     ];
 
-    for (model, options, golden) in cases {
+    for (model, options, fixture) in cases {
         let server = server(400, "{}".to_string()).await;
         let base_url = format!("{}/v1", server.uri());
         let (prefix, name) = model.split_once('/').ok_or("model id")?;
@@ -120,7 +120,7 @@ async fn presets_send_byte_identical_requests() -> Result<(), Box<dyn Error>> {
         let received = execute_golden(&server, spec, model, options).await?;
 
         // Assert
-        conformance::assert_golden(&received, golden)?;
+        conformance::assert_golden(&received, fixture)?;
     }
 
     Ok(())

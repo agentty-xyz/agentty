@@ -61,7 +61,7 @@ fn routes_each_model_to_its_own_preset_and_rejects_an_unconfigured_one() {
     ));
     assert!(matches!(
         router.validate_schema("kimi/kimi-k3", &object_schema()),
-        Err(ModelError::UnknownProvider)
+        Err(ModelError::NoProviderSpec)
     ));
 }
 
@@ -158,14 +158,21 @@ fn reports_which_models_replay_plain_text_reasoning() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "duplicate provider specification")]
-fn a_duplicate_specification_panics_in_debug_builds() {
-    // Arrange / Act
-    let _ = Router::new([
-        preset::muse(BASE_URL, "key", "muse-spark-1.3"),
-        preset::muse(BASE_URL, "other-key", "muse-spark-1.3"),
+fn keeps_the_first_of_duplicate_specifications() {
+    // Arrange
+    let model = "muse/muse-spark-1.3";
+
+    // Act
+    let router = Router::new([
+        preset::muse(BASE_URL, "key", "muse-spark-1.3").with_image_input(false),
+        preset::muse(BASE_URL, "other-key", "muse-spark-1.3").with_image_input(true),
     ]);
+
+    // Assert
+    assert!(matches!(
+        router.validate_input(model, &image_input()),
+        Err(ModelError::UnsupportedImageInput { .. })
+    ));
 }
 
 #[test]
@@ -249,7 +256,7 @@ fn rejects_malformed_model_ids() {
     }
     assert!(matches!(
         router.validate_schema("other/model", &object_schema()),
-        Err(ModelError::UnknownProvider)
+        Err(ModelError::NoProviderSpec)
     ));
 }
 

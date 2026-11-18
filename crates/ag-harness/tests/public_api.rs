@@ -2316,15 +2316,24 @@ fn external_consumer_serves_a_model_from_an_open_provider_specification() {
         ThinkingOptions::default().with_preserve_reasoning(true),
     ))
     .with_reasoning_text_replay(true)
-    .with_reasoning_family(ReasoningFamily::Providers(vec!["gateway-eu".into()]));
+    .with_reasoning_family(ReasoningFamily::Providers(vec!["gateway-eu".into()]))
+    .for_model("served-model");
     let responses = ProviderSpec::new("responses", WireProtocol::Responses, "https://r.example/v1")
-        .with_reasoning(ReasoningMapping::Effort(EffortNames::default()));
+        .with_reasoning(ReasoningMapping::Effort(EffortNames::default()))
+        .for_model("m");
 
     // Act
-    let client = ModelClient::from_spec(gateway, "served-model");
-    let invalid = ModelClient::from_spec(responses.with_header("Content-Type", "x"), "m");
+    let client = ModelClient::from_spec(gateway);
+    let invalid = ModelClient::from_spec(responses.clone().with_header("Content-Type", "x"));
+    let modelless = ModelClient::from_spec(ProviderSpec::new(
+        "responses",
+        WireProtocol::Responses,
+        "https://r.example/v1",
+    ));
 
     // Assert
+    assert!(matches!(modelless, Err(ProviderSpecError::MissingModel)));
+    assert_eq!(responses.model(), Some("m"));
     let client = client.expect("valid specification");
     assert_eq!(client.metadata().provider(), "gateway");
     assert_eq!(
@@ -2346,14 +2355,14 @@ fn external_consumer_builds_openai_presets() {
     });
 
     // Act
-    let mismatched = ModelClient::from_spec(spec.clone(), "gpt-6-sol");
+    let client = ModelClient::from_spec(spec.clone());
 
     // Assert
     assert_eq!(spec.model(), Some("gpt-6-luna"));
-    assert!(matches!(
-        mismatched,
-        Err(ProviderSpecError::ModelMismatch { .. })
-    ));
+    assert_eq!(
+        client.expect("valid preset").metadata().model(),
+        "gpt-6-luna"
+    );
 }
 
 #[cfg(feature = "providers-compat")]
@@ -2367,7 +2376,7 @@ fn external_consumer_builds_compatible_presets() {
     });
 
     // Act
-    let client = ModelClient::from_spec(spec, "llama3.3");
+    let client = ModelClient::from_spec(spec);
 
     // Assert
     assert_eq!(

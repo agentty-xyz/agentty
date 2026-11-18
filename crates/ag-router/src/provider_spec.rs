@@ -200,7 +200,8 @@ pub enum MaxTokensField {
 /// it before any network access.
 ///
 /// The debug output names headers and query parameters but never prints
-/// their values or a key.
+/// their values, a key, or credentials, a query, or a fragment of the base
+/// URL.
 #[derive(Clone)]
 pub struct ProviderSpec {
     pub(crate) auth: Auth,
@@ -232,7 +233,8 @@ pub(crate) struct HistoryReplay {
 
 impl fmt::Debug for ProviderSpec {
     /// Prints the policy with header and query names only, since gateways
-    /// carry keys in both.
+    /// carry keys in both, and the base URL without credentials, query, or
+    /// fragment.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redacted = |pairs: &[(String, String)]| {
             pairs
@@ -246,7 +248,7 @@ impl fmt::Debug for ProviderSpec {
             .field("id", &self.id)
             .field("model", &self.model)
             .field("protocol", &self.protocol)
-            .field("base_url", &self.base_url)
+            .field("base_url", &redacted_base_url(&self.base_url))
             .field("auth", &self.auth)
             .field("headers", &redacted(&self.headers))
             .field("query", &redacted(&self.query))
@@ -457,13 +459,25 @@ impl ProviderSpec {
     ///
     /// # Errors
     /// Returns [`ModelError::InvalidProviderConfig`] naming the first
-    /// problem: a base URL that is not an absolute `http` or `https` URL
-    /// without a query or fragment, a blank key, an invalid or reserved
-    /// header, a blank overflow marker, or an option the protocol cannot
-    /// express.
+    /// problem: a blank identifier or one containing `/`, which no
+    /// `provider/model` identifier routes to; a base URL that is not an
+    /// absolute `http` or `https` URL without credentials, a query, or a
+    /// fragment; a blank key; an invalid or reserved header, including an
+    /// [`Auth::Header`] name the router sets itself other than
+    /// `Authorization`; a blank effort name or overflow marker; or an option
+    /// the protocol cannot express. No reason quotes the base URL or a
+    /// header value, which may carry keys.
     pub fn validate(&self) -> Result<(), ModelError> {
+        if self.id.trim().is_empty() || self.id.contains('/') {
+            return Err(invalid("provider identifier must be nonblank without `/`"));
+        }
         validate_base_url(&self.base_url)?;
         self.validate_auth()?;
+        if let ReasoningMapping::Effort(names) = &self.reasoning
+            && names.names.iter().any(|name| name.trim().is_empty())
+        {
+            return Err(invalid("reasoning effort names must not be blank"));
+        }
         let auth_header = match &self.auth {
             Auth::Header { name, .. } => HeaderName::from_bytes(name.as_bytes()).ok(),
             Auth::None | Auth::Bearer(_) | Auth::Credential(_) => None,
@@ -611,18 +625,30 @@ impl ProviderSpec {
         Ok(headers)
     }
 
-    /// Rejects a blank key or an invalid authentication header.
+    /// Rejects a blank key, or an invalid authentication header or one
+    /// naming a header the router sets itself other than `Authorization`.
     fn validate_auth(&self) -> Result<(), ModelError> {
         match &self.auth {
             Auth::Bearer(key) if key.trim().is_empty() => Err(invalid("bearer key is blank")),
-            Auth::Header { value, .. } if value.trim().is_empty() => {
-                Err(invalid("authentication header value is blank"))
-            }
-            Auth::Header { name, value } if header(name, value).is_none() => Err(invalid(format!(
-                "authentication header `{name}` is invalid"
-            ))),
-            Auth::None | Auth::Credential(_) | Auth::Bearer(_) | Auth::Header { .. } => Ok(()),
+            Auth::Header { name, value } => Self::validate_auth_header(name, value),
+            Auth::None | Auth::Bearer(_) | Auth::Credential(_) => Ok(()),
         }
+    }
+
+    /// Rejects a blank, invalid, or router-owned authentication header.
+    fn validate_auth_header(name: &str, value: &str) -> Result<(), ModelError> {
+        if value.trim().is_empty() {
+            return Err(invalid("authentication header value is blank"));
+        }
+        let (parsed, _) = header(name, value)
+            .ok_or_else(|| invalid(format!("authentication header `{name}` is invalid")))?;
+        if parsed != AUTHORIZATION && RESERVED_HEADERS.contains(&parsed.as_str()) {
+            return Err(invalid(format!(
+                "authentication header `{name}` is set by the router"
+            )));
+        }
+
+        Ok(())
     }
 
     /// Rejects an option the protocol cannot express.
@@ -662,21 +688,39 @@ impl ProviderSpec {
     }
 }
 
-/// Requires an absolute `http` or `https` URL without a query or fragment,
-/// since request paths and query parameters are appended to it.
+/// Requires an absolute `http` or `https` URL without credentials, a query,
+/// or a fragment, since request paths and query parameters are appended to
+/// it and keys belong in [`Auth`]. The reason never quotes the URL, which a
+/// rejected one may carry a key in.
 fn validate_base_url(base_url: &str) -> Result<(), ModelError> {
     let valid = url::Url::parse(base_url).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none()
             && url.query().is_none()
             && url.fragment().is_none()
     });
     if !valid {
-        return Err(invalid(format!(
-            "base URL `{base_url}` must be an absolute http(s) URL without a query or fragment"
-        )));
+        return Err(invalid(
+            "base URL must be an absolute http(s) URL without credentials, query, or fragment",
+        ));
     }
 
     Ok(())
+}
+
+/// Returns `base_url` without credentials, query, or fragment, which may
+/// carry keys, or `<invalid>` when it does not parse.
+fn redacted_base_url(base_url: &str) -> String {
+    let Ok(mut url) = url::Url::parse(base_url) else {
+        return "<invalid>".to_string();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+
+    url.to_string()
 }
 
 /// Returns an [`ModelError::InvalidProviderConfig`] for `reason`.

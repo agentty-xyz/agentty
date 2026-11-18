@@ -146,7 +146,7 @@ impl HttpTransport {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         Self {
-            client: reqwest::Client::new(),
+            client: Self::client(reqwest::Client::builder()),
             max_retry_delay: MAX_RETRY_DELAY,
             request_timeout,
             retry_delay: RETRY_DELAY,
@@ -158,12 +158,20 @@ impl HttpTransport {
     /// `idle_timeout`.
     pub(crate) fn streaming(idle_timeout: Duration, request_timeout: Duration) -> Self {
         let mut transport = Self::new(request_timeout);
-        transport.client = reqwest::Client::builder()
-            .read_timeout(idle_timeout)
-            .build()
-            .unwrap_or_default();
+        transport.client = Self::client(reqwest::Client::builder().read_timeout(idle_timeout));
 
         transport
+    }
+
+    /// Builds a client that follows no redirect, so authentication and
+    /// extra headers, which may carry keys, never reach another host; a
+    /// `3xx` fails as an HTTP error. A build failure falls back to
+    /// [`reqwest::Client::default`], which panics on the same failure.
+    fn client(builder: reqwest::ClientBuilder) -> reqwest::Client {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default()
     }
 
     /// Sends `request` and decodes its successful body.
@@ -244,6 +252,9 @@ impl HttpTransport {
                     source: source.without_url(),
                     status,
                 });
+            }
+            if response.status().is_redirection() {
+                return Err(TransportError::Redirected(response.status()));
             }
 
             return Ok(response);
@@ -370,6 +381,10 @@ pub(crate) enum TransportError {
     },
     #[error("model API returned an invalid response: {0}")]
     InvalidResponse(#[source] serde_json::Error),
+    /// A redirect, which the transport never follows; its target is not
+    /// named, since a request's keys must not leave the configured host.
+    #[error("model API answered with redirect HTTP {0}, which is not followed")]
+    Redirected(reqwest::StatusCode),
     #[error("model API response body exceeds the size limit")]
     ResponseBodyTooLarge,
     #[error("model API transport failed: {0}")]
@@ -412,6 +427,11 @@ impl TransportError {
             error @ Self::InvalidResponse(_) => model::ModelError::classified_request(
                 model::ModelErrorType::InvalidProviderResponse,
                 None,
+                error.into(),
+            ),
+            error @ Self::Redirected(status) => model::ModelError::classified_request(
+                model::ModelErrorType::Provider,
+                Some(status.as_u16()),
                 error.into(),
             ),
             Self::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,

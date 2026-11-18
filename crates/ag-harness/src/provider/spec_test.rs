@@ -1,6 +1,6 @@
 //! Open provider specification tests: each harness option maps onto the
 //! routed specification, `ModelClient::from_spec` wires one to the wire, and
-//! invalid or mismatched specifications fail before any client exists.
+//! invalid or modelless specifications fail before any client exists.
 
 use std::error::Error;
 use std::sync::Arc;
@@ -15,9 +15,11 @@ use super::{
     ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 use crate::model::{
-    Model, ModelClient, ModelMetadataError, ModelRequest, ReasoningEffort, ReasoningFamily,
+    Model, ModelClient, ModelMetadata, ModelMetadataError, ModelRequest, ReasoningEffort,
+    ReasoningFamily,
 };
 use crate::schema_contract::OutputSchema;
+use crate::telemetry;
 
 const BASE_URL: &str = "https://gateway.example/v1";
 
@@ -166,7 +168,8 @@ async fn from_spec_sends_requests_through_the_specification() {
         "additionalProperties": false
     }))
     .expect("valid schema");
-    let client = ModelClient::from_spec(spec, "gateway-model").expect("valid specification");
+    let client =
+        ModelClient::from_spec(spec.for_model("gateway-model")).expect("valid specification");
 
     // Act
     let result = client
@@ -191,20 +194,21 @@ async fn from_spec_sends_requests_through_the_specification() {
 }
 
 #[test]
-fn from_spec_rejects_invalid_unnamed_and_mismatched_specifications() {
+fn from_spec_rejects_invalid_unnamed_and_modelless_specifications() {
     // Arrange
     let blank_key = ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL)
-        .with_auth(Auth::Bearer(" ".to_string()));
-    let unnamed = ProviderSpec::new(" ", WireProtocol::Responses, BASE_URL);
-    let preset = ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL);
-    let mut pinned = preset.clone();
-    pinned.spec = pinned.spec.for_model("kimi-k2.6");
+        .with_auth(Auth::Bearer(" ".to_string()))
+        .for_model("gateway-model");
+    let unnamed = ProviderSpec::new(" ", WireProtocol::Responses, BASE_URL).for_model("model");
+    let modelless = ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL);
+    let blank_model = modelless.clone().for_model(" ");
 
     // Act
-    let invalid = ModelClient::from_spec(blank_key.clone(), "gateway-model");
-    let unnamed = ModelClient::from_spec(unnamed, "gateway-model");
-    let mismatched = ModelClient::from_spec(pinned.clone(), "kimi-k3");
-    let matched = ModelClient::from_spec(pinned.clone(), "kimi-k2.6");
+    let invalid = ModelClient::from_spec(blank_key.clone());
+    let unnamed = ModelClient::from_spec(unnamed);
+    let missing = ModelClient::from_spec(modelless.clone());
+    let blank = ModelClient::from_spec(blank_model);
+    let served = ModelClient::from_spec(modelless.clone().for_model("kimi-k2.6"));
 
     // Assert
     assert!(matches!(
@@ -222,18 +226,55 @@ fn from_spec_rejects_invalid_unnamed_and_mismatched_specifications() {
             ModelMetadataError::EmptyProvider
         ))
     ));
+    assert_eq!(
+        missing.err().map(|error| error.to_string()).as_deref(),
+        Some("provider specification names no model")
+    );
     assert!(matches!(
-        &mismatched,
-        Err(ProviderSpecError::ModelMismatch { served, requested })
-            if served == "kimi-k2.6" && requested == "kimi-k3"
+        blank,
+        Err(ProviderSpecError::Metadata(ModelMetadataError::EmptyModel))
     ));
     assert_eq!(
-        mismatched.err().map(|error| error.to_string()).as_deref(),
-        Some("provider specification serves model `kimi-k2.6`, not `kimi-k3`")
+        served.expect("a named model is served").metadata().model(),
+        "kimi-k2.6"
     );
-    assert!(matched.is_ok());
-    assert_eq!(preset.model(), None);
-    assert_eq!(pinned.model(), Some("kimi-k2.6"));
+    assert_eq!(modelless.model(), None);
+}
+
+#[test]
+fn new_derives_the_reasoning_family_from_the_provider_name() {
+    // Arrange
+    let names = [
+        telemetry::PROVIDER_OPENAI,
+        telemetry::PROVIDER_OPENAI_CHATGPT,
+        telemetry::PROVIDER_OPENAI_COMPATIBLE,
+        telemetry::PROVIDER_MOONSHOT_AI,
+        "gateway",
+    ];
+
+    // Act
+    let families = names.map(|name| {
+        (
+            ProviderSpec::new(name, WireProtocol::ChatCompletions, BASE_URL)
+                .reasoning_family()
+                .clone(),
+            ModelMetadata::new(name, "model")
+                .expect("valid metadata")
+                .reasoning_family()
+                .clone(),
+        )
+    });
+
+    // Assert
+    for (family, metadata_family) in &families {
+        assert_eq!(family, metadata_family);
+    }
+    assert_eq!(
+        families[0].0,
+        ReasoningFamily::Providers(vec!["openai_chatgpt".into()])
+    );
+    assert_eq!(families[2].0, ReasoningFamily::Model);
+    assert_eq!(families[4].0, ReasoningFamily::Provider);
 }
 
 #[test]
@@ -289,8 +330,8 @@ fn from_spec_carries_the_reasoning_family_and_text_replay() {
         .with_reasoning_text_replay(true);
 
     // Act
-    let plain_client = ModelClient::from_spec(plain.clone(), "gateway-model");
-    let shared_client = ModelClient::from_spec(shared.clone(), "gateway-model");
+    let plain_client = ModelClient::from_spec(plain.clone().for_model("gateway-model"));
+    let shared_client = ModelClient::from_spec(shared.clone().for_model("gateway-model"));
 
     // Assert
     assert_eq!(plain.reasoning_family(), &ReasoningFamily::Provider);

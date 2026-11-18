@@ -82,10 +82,14 @@ pub enum Auth {
 }
 
 impl fmt::Debug for Auth {
-    /// Names the authentication kind without revealing any secret, exactly
-    /// as the routed authentication prints itself.
+    /// Names the authentication kind without revealing any secret.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.clone().into_router(), formatter)
+        match self {
+            Self::None => formatter.write_str("None"),
+            Self::Bearer(_) => formatter.write_str("Bearer(<redacted>)"),
+            Self::Header { name, .. } => write!(formatter, "Header({name}: <redacted>)"),
+            Self::Credential(_) => formatter.write_str("Credential"),
+        }
     }
 }
 
@@ -220,30 +224,26 @@ pub enum ProviderSpecError {
         /// Why no request can be sent, naming the field that failed.
         reason: String,
     },
-    /// The specification is a preset tailored to another model.
-    #[error("provider specification serves model `{served}`, not `{requested}`")]
-    ModelMismatch {
-        /// The model the preset was built for.
-        served: String,
-        /// The model the client was asked to serve.
-        requested: String,
-    },
+    /// The specification names no model to serve; set one with
+    /// [`ProviderSpec::for_model`].
+    #[error("provider specification names no model")]
+    MissingModel,
 }
 
 /// Wire protocol, endpoint, authentication, and request policy of one
 /// provider, served by [`crate::model::ModelClient::from_spec`].
 ///
-/// [`Self::new`] starts from a conservative policy for the protocol, and the
-/// `with_*` methods adjust it. [`Self::name`] is the provider name that
+/// [`Self::new`] starts from a conservative policy for the protocol,
+/// [`Self::for_model`] names the model a client serves, and the `with_*`
+/// methods adjust the policy. [`Self::name`] is the provider name that
 /// telemetry, persisted model metadata, and provider errors carry, and
-/// [`Self::with_reasoning_family`] decides which recorded turns its models
-/// replay with their provider reasoning intact.
+/// [`Self::reasoning_family`] decides which recorded turns its model replays
+/// with their provider reasoning intact.
 ///
 /// The built-in providers are presets, such as [`Self::kimi`], each behind
-/// its family's `providers-*` feature. A preset keeps the human-readable
-/// product name, such as `Kimi`, in provider errors, and every preset except
-/// [`Self::openai_compatible`] is tailored to its configured model and
-/// serves only that model.
+/// its family's `providers-*` feature, serving the model of its
+/// configuration under a policy tailored to that model. A preset keeps the
+/// human-readable product name, such as `Kimi`, in provider errors.
 ///
 /// [`Self::validate`] rejects a specification no request can be sent with,
 /// and [`crate::model::ModelClient::from_spec`] runs it. The debug output
@@ -263,8 +263,11 @@ impl ProviderSpec {
     /// replay, prompt cache key, or image input, and the bound sent as
     /// `max_tokens`. The Responses API starts with native structured output,
     /// efforts under their own names, image input, `prompt_cache_key`, and
-    /// `max_output_tokens`. Either starts in the
-    /// [`ReasoningFamily::Provider`] family.
+    /// `max_output_tokens`. Either names no model yet ([`Self::for_model`])
+    /// and starts in the reasoning family [`ModelMetadata::new`] assigns
+    /// `name`, so a built-in provider name keeps its built-in family.
+    ///
+    /// [`ModelMetadata::new`]: crate::model::ModelMetadata::new
     pub fn new(
         name: impl Into<Cow<'static, str>>,
         protocol: WireProtocol,
@@ -279,8 +282,8 @@ impl ProviderSpec {
             .with_display_name(name.as_ref());
 
         Self {
+            reasoning_family: ReasoningFamily::for_provider(&name),
             name,
-            reasoning_family: ReasoningFamily::Provider,
             spec,
         }
     }
@@ -292,7 +295,6 @@ impl ProviderSpec {
     pub fn openai(config: OpenAiConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_OPENAI,
-            ReasoningFamily::Providers(vec![Cow::Borrowed(telemetry::PROVIDER_OPENAI_CHATGPT)]),
             ag_router::preset::openai(config.base_url, config.api_key, &config.model),
         )
     }
@@ -307,7 +309,6 @@ impl ProviderSpec {
     pub fn chatgpt(config: ChatGptConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_OPENAI_CHATGPT,
-            ReasoningFamily::Providers(vec![Cow::Borrowed(telemetry::PROVIDER_OPENAI)]),
             ag_router::preset::chatgpt(
                 config.base_url,
                 Arc::new(ag_router::chatgpt::ChatGptAuth::new(config.auth_file)),
@@ -321,7 +322,6 @@ impl ProviderSpec {
     pub fn kimi(config: KimiConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_MOONSHOT_AI,
-            ReasoningFamily::Provider,
             ag_router::preset::kimi(config.base_url, config.api_key, &config.model),
         )
     }
@@ -331,7 +331,6 @@ impl ProviderSpec {
     pub fn muse(config: MuseConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_META,
-            ReasoningFamily::Provider,
             ag_router::preset::muse(config.base_url, config.api_key, &config.model),
         )
     }
@@ -345,8 +344,8 @@ impl ProviderSpec {
     pub fn openai_compatible(config: OpenAiCompatibleConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_OPENAI_COMPATIBLE,
-            ReasoningFamily::Model,
-            ag_router::preset::openai_compatible(config.base_url, config.api_key),
+            ag_router::preset::openai_compatible(config.base_url, config.api_key)
+                .for_model(config.model),
         )
     }
 
@@ -356,7 +355,6 @@ impl ProviderSpec {
     pub fn qwen(config: QwenConfig) -> Self {
         Self::preset(
             telemetry::PROVIDER_ALIBABA_CLOUD,
-            ReasoningFamily::Provider,
             ag_router::preset::qwen(config.base_url, config.api_key, &config.model),
         )
     }
@@ -367,10 +365,20 @@ impl ProviderSpec {
         &self.name
     }
 
-    /// Returns the one model a preset serves, or `None` when the
-    /// specification serves any model.
+    /// Returns the model a client built from this specification serves, or
+    /// `None` before [`Self::for_model`] names one.
     pub fn model(&self) -> Option<&str> {
         self.spec.model()
+    }
+
+    /// Sets the model a client built from this specification serves. A
+    /// preset already serves the model of its configuration under a policy
+    /// tailored to it, so configure a preset's model there instead.
+    #[must_use]
+    pub fn for_model(mut self, model: impl Into<String>) -> Self {
+        self.spec = self.spec.for_model(model);
+
+        self
     }
 
     /// Returns the reasoning family of the specification's models.
@@ -382,11 +390,13 @@ impl ProviderSpec {
     ///
     /// # Errors
     /// Returns [`ProviderSpecError::Invalid`] naming the first problem: a
-    /// base URL that is not an absolute `http` or `https` URL without a
-    /// query or fragment, a blank key, an invalid header or one the harness
-    /// sets itself (`Authorization`, `Content-Type`, `Content-Length`,
-    /// `Host`, or the [`Auth::Header`] name), a blank overflow marker, or an
-    /// option the protocol cannot express.
+    /// base URL that is not an absolute `http` or `https` URL without
+    /// credentials, a query, or a fragment; a blank key; an invalid header or
+    /// one the harness sets itself (`Authorization`, `Content-Type`,
+    /// `Content-Length`, `Host`, or the [`Auth::Header`] name, which itself
+    /// may name only `Authorization` among these); a blank effort name or
+    /// overflow marker; or an option the protocol cannot express. The reason
+    /// never quotes the base URL or a header value.
     pub fn validate(&self) -> Result<(), ProviderSpecError> {
         self.spec
             .validate()
@@ -473,9 +483,10 @@ impl ProviderSpec {
         self
     }
 
-    /// Sets the reasoning family of the specification's models, which
-    /// decides which recorded turns they replay with their provider
-    /// reasoning intact; other turns replay it as short notes.
+    /// Sets the reasoning family of the specification's models in place of
+    /// the one [`Self::new`] derives from the provider name, which decides
+    /// which recorded turns they replay with their provider reasoning
+    /// intact; other turns replay it as short notes.
     #[must_use]
     pub fn with_reasoning_family(mut self, reasoning_family: ReasoningFamily) -> Self {
         self.reasoning_family = reasoning_family;
@@ -533,15 +544,13 @@ impl ProviderSpec {
         (self.name, self.reasoning_family, self.spec)
     }
 
+    /// Wraps the routed preset `spec` of the built-in provider `name`, in
+    /// that provider's reasoning family.
     #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-    fn preset(
-        name: &'static str,
-        reasoning_family: ReasoningFamily,
-        spec: ag_router::ProviderSpec,
-    ) -> Self {
+    fn preset(name: &'static str, spec: ag_router::ProviderSpec) -> Self {
         Self {
             name: Cow::Borrowed(name),
-            reasoning_family,
+            reasoning_family: ReasoningFamily::for_provider(name),
             spec,
         }
     }

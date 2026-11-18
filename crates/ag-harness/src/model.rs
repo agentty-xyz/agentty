@@ -254,31 +254,28 @@ impl ModelClient {
         Self::routed(ProviderSpec::qwen(config), &model, profile)
     }
 
-    /// Creates a client for `model` served by any provider `spec` describes,
-    /// such as an OpenAI-compatible gateway with its own headers or query
-    /// parameters. The client declares no context profile, so hosts set the
-    /// budget explicitly; telemetry and persisted metadata carry
-    /// [`ProviderSpec::name`].
+    /// Creates a client for the model `spec` serves (a preset's configured
+    /// model, or the one [`ProviderSpec::for_model`] names) through any
+    /// provider `spec` describes, such as an OpenAI-compatible gateway with
+    /// its own headers or query parameters. The client declares no context
+    /// profile, so hosts set the budget explicitly; telemetry and persisted
+    /// metadata carry [`ProviderSpec::name`].
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderSpecError::Metadata`] when the provider name or
-    /// model identifier is blank, [`ProviderSpecError::Invalid`] when no
-    /// request can be sent with `spec` (see [`ProviderSpec::validate`]), and
-    /// [`ProviderSpecError::ModelMismatch`] when `spec` is a preset built
-    /// for another model.
-    pub fn from_spec(spec: ProviderSpec, model: &str) -> Result<Self, ProviderSpecError> {
+    /// Returns [`ProviderSpecError::Invalid`] when no request can be sent
+    /// with `spec` (see [`ProviderSpec::validate`]),
+    /// [`ProviderSpecError::MissingModel`] when `spec` names no model, and
+    /// [`ProviderSpecError::Metadata`] when the provider name or model
+    /// identifier is blank.
+    pub fn from_spec(spec: ProviderSpec) -> Result<Self, ProviderSpecError> {
         spec.validate()?;
-        if let Some(served) = spec.model()
-            && served != model
-        {
-            return Err(ProviderSpecError::ModelMismatch {
-                served: served.to_string(),
-                requested: model.to_string(),
-            });
-        }
+        let model = spec
+            .model()
+            .ok_or(ProviderSpecError::MissingModel)?
+            .to_string();
 
-        Ok(Self::routed(spec, model, None)?)
+        Ok(Self::routed(spec, &model, None)?)
     }
 
     /// Returns the validated provider and model identity retained by the
@@ -667,8 +664,11 @@ pub struct ModelMetadata {
 }
 
 impl ModelMetadata {
-    /// Creates metadata for one provider model, in the reasoning family
-    /// [`ReasoningFamily::for_provider`] assigns its provider name.
+    /// Creates metadata for one provider model, in the reasoning family of
+    /// its provider name: the two built-in `OpenAI` providers share one
+    /// ([`ReasoningFamily::Providers`]), each built-in OpenAI-compatible
+    /// model is its own ([`ReasoningFamily::Model`]), and every other
+    /// provider name groups its models ([`ReasoningFamily::Provider`]).
     ///
     /// # Errors
     ///
@@ -752,6 +752,11 @@ pub enum ReasoningFamily {
     /// provider names, such as `OpenAI` models reached with an API key and
     /// those billed to a `ChatGPT` plan, which share encrypted `Responses`
     /// reasoning items.
+    ///
+    /// The list is directional: it decides only which recorded turns this
+    /// model replays natively. A model of a listed provider replays this
+    /// model's turns natively only when its own family lists this model's
+    /// provider too, as the two built-in `OpenAI` providers list each other.
     Providers(Vec<Cow<'static, str>>),
 }
 
@@ -759,7 +764,7 @@ impl ReasoningFamily {
     /// Returns the family of the built-in provider named `provider`: the
     /// two `OpenAI` providers share one, each OpenAI-compatible model is its
     /// own, and every other provider name groups its models.
-    pub fn for_provider(provider: &str) -> Self {
+    pub(crate) fn for_provider(provider: &str) -> Self {
         match provider {
             telemetry::PROVIDER_OPENAI => {
                 Self::Providers(vec![Cow::Borrowed(telemetry::PROVIDER_OPENAI_CHATGPT)])

@@ -390,9 +390,11 @@ crate::define_model_response_error! {
         /// The model identifier is not `provider/model`.
         #[error("model identifier must be provider/model")]
         InvalidModelId,
-        /// No specification serves the requested provider and model.
-        #[error("requested provider or model is not configured")]
-        UnknownProvider,
+        /// No specification serves the requested model: its provider is
+        /// unknown, or every specification of that provider is restricted to
+        /// other models.
+        #[error("no provider specification serves the requested model")]
+        NoProviderSpec,
         /// The provider specification cannot send a request.
         #[error("provider specification is invalid: {reason}")]
         InvalidProviderConfig {
@@ -440,7 +442,7 @@ impl ModelError {
             | Self::UnsupportedToolName { .. }
             | Self::InvalidToolArguments { .. } => ErrorClass::InvalidToolCall,
             Self::InvalidModelId
-            | Self::UnknownProvider
+            | Self::NoProviderSpec
             | Self::InvalidProviderConfig { .. }
             | Self::InvalidResponseFormatName => ErrorClass::Request,
         }

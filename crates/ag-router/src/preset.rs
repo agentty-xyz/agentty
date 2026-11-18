@@ -7,6 +7,13 @@
 //! several models of one provider holds one preset per model. A preset is
 //! an ordinary specification, so a host can adjust it with the `with_*`
 //! methods, such as adding a header.
+//!
+//! A preset given a model it does not know serves it under the provider's
+//! shared policy alone, without the model-specific options: [`kimi`] and
+//! [`qwen`] then send no reasoning control and accept no image input or
+//! reasoning-text replay, and [`muse`] accepts no image input. Presets
+//! taking both a base URL and a key take them in that order; a key passed
+//! as the base URL fails validation without the key appearing in the error.
 
 use std::sync::Arc;
 

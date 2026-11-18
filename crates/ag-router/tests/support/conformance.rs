@@ -1,8 +1,71 @@
 //! Shared requests, recorded fixtures, and golden-request checks of the
 //! per-protocol conformance suites.
 //!
-//! The golden `requests/` fixtures were recorded from `main` at commit
-//! `690dc10d7`, before the `ProviderSpec` change; see [`assert_golden`].
+//! The golden `requests/` fixtures were recorded from the closed provider
+//! enum this crate replaced, at `main` commit `7ddd0c382` (the base of the
+//! `ProviderSpec` change), with key `test-key`, or the `plan-token`
+//! credential and no key for `chatgpt`. To record them again, check out that
+//! commit, copy this file to `crates/ag-router/tests/support/`, add the
+//! recorder below as `crates/ag-router/tests/record_golden.rs` (with the
+//! `PlanToken` credential the responses suite defines, implementing
+//! `BearerCredential`), run it with `GOLDEN_OUT` naming an output directory,
+//! and compare the output with the `requests/` files byte for byte:
+//!
+//! ```text
+//! #[allow(dead_code)]
+//! #[path = "support/conformance.rs"]
+//! mod conformance;
+//!
+//! #[tokio::test]
+//! async fn record() -> Result<(), Box<dyn Error>> {
+//!     let out = std::env::var("GOLDEN_OUT")?;
+//!     // (fixture, model, with_tools, options): the cases of both suites'
+//!     // `presets_send_byte_identical_requests`, with tools on every
+//!     // Responses case.
+//!     for (fixture, model, with_tools, options) in cases {
+//!         let server = MockServer::start().await;
+//!         Mock::given(method("POST"))
+//!             .respond_with(ResponseTemplate::new(400).set_body_string("{}"))
+//!             .mount(&server)
+//!             .await;
+//!         let (provider, api_key, credential) = match model.split_once('/').ok_or("id")?.0 {
+//!             "kimi" => (Provider::Kimi, Some("test-key".to_string()), None),
+//!             "muse" => (Provider::Muse, Some("test-key".to_string()), None),
+//!             "qwen" => (Provider::Qwen, Some("test-key".to_string()), None),
+//!             "openai" => (Provider::OpenAi, Some("test-key".to_string()), None),
+//!             "chatgpt" => (Provider::ChatGpt, None, Some(Arc::new(PlanToken) as _)),
+//!             _ => (Provider::OpenAiCompatible, Some("test-key".to_string()), None),
+//!         };
+//!         let router = Router::single(ProviderConfig {
+//!             provider,
+//!             api_key,
+//!             base_url: format!("{}/v1", server.uri()),
+//!             credential,
+//!         });
+//!         let _ = router
+//!             .execute(conformance::golden_request(model, with_tools, options)?)
+//!             .await;
+//!         let request = conformance::only_request(&server).await?;
+//!         let mut headers = serde_json::Map::new();
+//!         for name in request.headers.keys() {
+//!             if name.as_str() != "host" {
+//!                 let value = request.headers.get(name).ok_or("header")?;
+//!                 headers.insert(name.as_str().to_string(), json!(value.to_str()?));
+//!             }
+//!         }
+//!         let body: Value = serde_json::from_slice(&request.body)?;
+//!         let record = json!({
+//!             "path": request.url.path(),
+//!             "query": request.url.query(),
+//!             "headers": headers,
+//!             "body": body,
+//!         });
+//!         std::fs::write(format!("{out}/{fixture}.json"), format!("{record}\n"))?;
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
 
 use std::error::Error;
 use std::num::NonZeroU32;
@@ -127,35 +190,46 @@ pub(crate) fn error_chain(error: &(dyn Error + 'static)) -> String {
     chain
 }
 
-/// Asserts that `request` matches the golden record `fixture`: the same
-/// path, no query, each header once with the same value, and a
-/// byte-identical body.
+/// Asserts that `request` matches the golden record named `fixture` under
+/// `requests/`: the same path, no query, each header once with the same
+/// value, and a byte-identical body. Each failure names the fixture.
 ///
-/// The `requests/` fixtures were recorded from the closed provider enum
-/// this crate replaced, at `main` commit `690dc10d7` (the base of the
-/// `ProviderSpec` change), by sending the same golden requests through
-/// `Router::single(ProviderConfig { provider, api_key, base_url,
-/// credential })` with key `test-key`, or the `plan-token` credential and
-/// no key for `chatgpt`. To repeat the check, check out that commit and run
-/// those cases against these fixtures with this helper.
+/// The module documentation records where the fixtures come from and how to
+/// record them again.
 pub(crate) fn assert_golden(request: &Request, fixture: &str) -> Result<(), Box<dyn Error>> {
-    let golden: Value = serde_json::from_str(fixture)?;
+    let path = format!(
+        "{}/tests/fixtures/conformance/requests/{fixture}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let golden: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     let mut headers = serde_json::Map::new();
     for name in request.headers.keys() {
         if name.as_str() != "host" {
             let mut values = request.headers.get_all(name).iter();
             let value = values.next().ok_or("header without a value")?;
-            assert!(values.next().is_none(), "header `{name}` sent twice");
+            assert!(
+                values.next().is_none(),
+                "{fixture}: header `{name}` sent twice"
+            );
             headers.insert(name.as_str().to_string(), json!(value.to_str()?));
         }
     }
 
-    assert_eq!(json!(request.url.path()), golden["path"]);
-    assert_eq!(json!(request.url.query()), golden["query"]);
-    assert_eq!(Value::Object(headers), golden["headers"]);
+    assert_eq!(json!(request.url.path()), golden["path"], "{fixture}: path");
+    assert_eq!(
+        json!(request.url.query()),
+        golden["query"],
+        "{fixture}: query"
+    );
+    assert_eq!(
+        Value::Object(headers),
+        golden["headers"],
+        "{fixture}: headers"
+    );
     assert_eq!(
         String::from_utf8(request.body.clone())?,
-        serde_json::to_string(&golden["body"])?
+        serde_json::to_string(&golden["body"])?,
+        "{fixture}: body"
     );
 
     Ok(())

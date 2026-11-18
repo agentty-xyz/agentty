@@ -306,11 +306,13 @@ and overflow markers. Hosts pass resolved keys; the harness never reads the envi
 for a specification. The built-in providers are presets of the same type, one per model
 where policy depends on the model, and per-protocol conformance suites pin their
 requests byte for byte with golden fixtures. The router keeps the first of duplicate
-specifications and replaces one only through `Router::with_override`. `ag-harness` wraps
-the type as `provider::ProviderSpec`, served by `ModelClient::from_spec`, with presets
-behind `providers-openai` and `providers-compat`. Each specification also declares its
-`ReasoningFamily`, which decides whose recorded reasoning a model replays natively after
-a model switch.
+specifications and replaces one only through `Router::with_override`, and its transport
+follows no redirect, so authentication and extra headers stay with the configured host.
+`ag-harness` wraps the type as `provider::ProviderSpec`, served by
+`ModelClient::from_spec` for the model the specification names, with presets behind
+`providers-openai` and `providers-compat`. Each specification also carries a
+`ReasoningFamily`, derived from its provider name unless the host sets one, which
+decides whose recorded reasoning a model replays natively after a model switch.
 
 - **`openai`** uses the stateless Responses API, so the harness still owns history.
   Encrypted reasoning items are stored with the response and replayed verbatim.

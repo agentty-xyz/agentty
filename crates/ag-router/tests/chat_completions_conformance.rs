@@ -65,53 +65,53 @@ async fn presets_send_byte_identical_requests() -> Result<(), Box<dyn Error>> {
             "kimi/kimi-k2.6",
             true,
             conformance::options(Some(High), true, Some(512)),
-            include_str!("fixtures/conformance/requests/kimi-k2.6.json"),
+            "kimi-k2.6",
         ),
         (
             "kimi/kimi-k2.7-code",
             true,
             conformance::options(Some(Low), true, None),
-            include_str!("fixtures/conformance/requests/kimi-k2.7-code.json"),
+            "kimi-k2.7-code",
         ),
         (
             "kimi/kimi-k3",
             false,
             conformance::options(Some(Medium), true, None),
-            include_str!("fixtures/conformance/requests/kimi-k3.json"),
+            "kimi-k3",
         ),
         (
             "muse/muse-spark-1.3",
             true,
             conformance::options(Some(Max), true, Some(512)),
-            include_str!("fixtures/conformance/requests/muse-spark-1.3.json"),
+            "muse-spark-1.3",
         ),
         (
             "qwen/qwen3.8-max",
             true,
             conformance::options(Some(High), true, Some(512)),
-            include_str!("fixtures/conformance/requests/qwen3.8-max.json"),
+            "qwen3.8-max",
         ),
         (
             "qwen/qwen-plus",
             false,
             conformance::options(Some(Low), false, None),
-            include_str!("fixtures/conformance/requests/qwen-plus.json"),
+            "qwen-plus",
         ),
         (
             "openai-compatible/llama3.3",
             true,
             conformance::options(Some(High), true, Some(512)),
-            include_str!("fixtures/conformance/requests/openai-compatible-tools.json"),
+            "openai-compatible-tools",
         ),
         (
             "openai-compatible/llama3.3",
             false,
             conformance::options(None, false, None),
-            include_str!("fixtures/conformance/requests/openai-compatible-no-tools.json"),
+            "openai-compatible-no-tools",
         ),
     ];
 
-    for (model, with_tools, options, golden) in cases {
+    for (model, with_tools, options, fixture) in cases {
         let server = server(400, "{}").await;
         let base_url = format!("{}/v1", server.uri());
         let (prefix, name) = model.split_once('/').ok_or("model id")?;
@@ -126,7 +126,7 @@ async fn presets_send_byte_identical_requests() -> Result<(), Box<dyn Error>> {
         let received = execute_golden(&server, spec, model, with_tools, options).await?;
 
         // Assert
-        conformance::assert_golden(&received, golden)?;
+        conformance::assert_golden(&received, fixture)?;
     }
 
     Ok(())

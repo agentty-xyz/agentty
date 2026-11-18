@@ -553,9 +553,9 @@ notes. `ProviderSpec::new` starts from a conservative policy for the protocol. K
 literal values the host resolved, so the harness reads no environment variables for a
 specification. The built-in providers are presets of the same type, such as
 `ProviderSpec::kimi`, behind their family's `providers-*` feature, and the `ModelClient`
-constructors send exactly what their preset does. Every preset except
-`ProviderSpec::openai_compatible` is tailored to its configured model and serves only
-that model:
+constructors send exactly what their preset does. A preset serves its configured model
+under a policy tailored to it; a custom specification names its model with
+`ProviderSpec::for_model`:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -570,19 +570,24 @@ let spec = ProviderSpec::new(
     name: "api-key".to_string(),
     value: std::env::var("AZURE_OPENAI_API_KEY")?,
 })
-.with_query("api-version", "preview");
-let model = ModelClient::from_spec(spec, "gpt-6-luna")?;
+.with_query("api-version", "preview")
+.for_model("gpt-6-luna");
+let model = ModelClient::from_spec(spec)?;
 ```
 
 The provider name, here `azure_openai`, is what telemetry, persisted sessions, and
-provider errors record. `ModelClient::from_spec` runs `ProviderSpec::validate` and fails
-with `ProviderSpecError::Invalid`, naming the field, for a specification no request can
-be sent with: a base URL that is not an absolute `http(s)` URL without a query, a blank
-key, an invalid header or one the harness sets itself, a blank overflow marker, or an
-option its protocol cannot express. It fails with `ProviderSpecError::ModelMismatch` for
-a preset built for another model. Header and query values are sent as secrets: debug
-output and errors never print them. `ModelClient::from_spec` declares no context
-profile, so hosts set the budget explicitly.
+provider errors record, and a built-in provider name keeps its built-in
+`ReasoningFamily` unless `ProviderSpec::with_reasoning_family` replaces it.
+`ModelClient::from_spec` runs `ProviderSpec::validate` and fails with
+`ProviderSpecError::Invalid`, naming the field, for a specification no request can be
+sent with: a base URL that is not an absolute `http(s)` URL without credentials or a
+query, a blank key, an invalid header or one the harness sets itself, a blank effort
+name or overflow marker, or an option its protocol cannot express. It fails with
+`ProviderSpecError::MissingModel` for a specification that names no model. Header and
+query values are sent as secrets: debug output and errors never print them, nor
+credentials or a query in the base URL, and requests follow no redirect.
+`ModelClient::from_spec` declares no context profile, so hosts set the budget
+explicitly.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and

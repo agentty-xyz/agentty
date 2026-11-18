@@ -19,11 +19,13 @@ Responses provider without code changes. The built-in providers are `preset`s ro
 except `openai_compatible` is tailored to one model and serves only that model
 (`ProviderSpec::for_model`). A router routes `provider/model` to the specification for
 that model, else to the provider's model-independent one, so it can hold one preset per
-model. A duplicate specification keeps the first and panics in debug builds;
+model; a model no specification serves fails with `ModelError::NoProviderSpec`. Of
+duplicate specifications the router keeps the first in every build;
 `Router::with_override` replaces one. `ProviderSpec::validate` rejects a specification
 no request can be sent with, and every request runs it before any network access,
 failing with `ModelError::InvalidProviderConfig` naming the field. Header and query
-values are never printed by debug output or errors.
+values, and credentials or a query in the base URL, are never printed by debug output or
+errors, and requests follow no redirect, so keys never reach another host.
 
 ```rust
 use ag_router::{

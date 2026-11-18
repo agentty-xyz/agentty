@@ -436,7 +436,7 @@ async fn rejects_unknown_provider_before_network() -> Result<(), Box<dyn std::er
         .expect_err("unconfigured provider must fail");
 
     // Assert
-    assert!(matches!(error, ModelError::UnknownProvider));
+    assert!(matches!(error, ModelError::NoProviderSpec));
     assert!(
         server
             .received_requests()
@@ -619,7 +619,7 @@ async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
     }
     assert!(matches!(
         Router::new([]).keeps_prefix_across_schemas("qwen/qwen3.8-max"),
-        Err(ModelError::UnknownProvider)
+        Err(ModelError::NoProviderSpec)
     ));
 
     Ok(())

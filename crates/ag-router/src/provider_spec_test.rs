@@ -173,14 +173,6 @@ fn rejects_specifications_no_request_can_be_sent_with() {
         value: value.to_string(),
     };
     let invalid = [
-        (base_url(" "), "base URL ` `"),
-        (
-            base_url("api.example.com/v1"),
-            "base URL `api.example.com/v1`",
-        ),
-        (base_url("ftp://example.com/v1"), "base URL `ftp://"),
-        (base_url("https://example.com/v1?x=y"), "base URL `https://"),
-        (base_url("https://example.com/v1#top"), "base URL `https://"),
         (
             chat().with_auth(Auth::Bearer(" ".to_string())),
             "bearer key is blank",
@@ -254,7 +246,68 @@ fn rejects_specifications_no_request_can_be_sent_with() {
     ];
 
     // Act / Assert
-    for (spec, expected) in invalid {
+    assert_rejects(invalid);
+    for spec in valid {
+        assert!(spec.validate().is_ok(), "{spec:?}");
+    }
+}
+
+#[test]
+fn rejects_unroutable_ids_url_credentials_router_owned_auth_and_blank_efforts() {
+    // Arrange
+    let base_url = |url: &str| ProviderSpec::new("custom", WireProtocol::ChatCompletions, url);
+    let base_url_error =
+        "base URL must be an absolute http(s) URL without credentials, query, or fragment";
+    let header_auth = |name: &str| Auth::Header {
+        name: name.to_string(),
+        value: "value".to_string(),
+    };
+    let invalid = [
+        (
+            ProviderSpec::new(" ", WireProtocol::ChatCompletions, BASE_URL),
+            "provider identifier must be nonblank without `/`",
+        ),
+        (
+            ProviderSpec::new("openrouter/meta", WireProtocol::ChatCompletions, BASE_URL),
+            "provider identifier must be nonblank without `/`",
+        ),
+        (base_url(" "), base_url_error),
+        (base_url("api.example.com/v1"), base_url_error),
+        (base_url("ftp://example.com/v1"), base_url_error),
+        (base_url("https://example.com/v1?x=y"), base_url_error),
+        (base_url("https://example.com/v1#top"), base_url_error),
+        (base_url("https://user@example.com/v1"), base_url_error),
+        (base_url("https://:token@example.com/v1"), base_url_error),
+        (
+            chat().with_auth(header_auth("Host")),
+            "authentication header `Host` is set by the router",
+        ),
+        (
+            chat().with_auth(header_auth("Content-Length")),
+            "authentication header `Content-Length` is set by the router",
+        ),
+        (
+            chat().with_reasoning(ReasoningMapping::Effort(
+                EffortNames::default().with(ReasoningEffort::High, " "),
+            )),
+            "reasoning effort names must not be blank",
+        ),
+    ];
+
+    // Act / Assert
+    assert_rejects(invalid);
+    assert!(
+        chat()
+            .with_auth(header_auth("Authorization"))
+            .validate()
+            .is_ok()
+    );
+}
+
+/// Asserts that each specification fails validation with a reason starting
+/// with its expected text.
+fn assert_rejects<'expected>(cases: impl IntoIterator<Item = (ProviderSpec, &'expected str)>) {
+    for (spec, expected) in cases {
         let result = spec.validate();
         assert!(
             matches!(
@@ -263,9 +316,6 @@ fn rejects_specifications_no_request_can_be_sent_with() {
             ),
             "{spec:?}: {result:?}"
         );
-    }
-    for spec in valid {
-        assert!(spec.validate().is_ok(), "{spec:?}");
     }
 }
 
@@ -371,4 +421,31 @@ fn debug_output_names_headers_and_query_parameters_without_values() {
     assert!(debug.contains("x-gateway-key: <redacted>"), "{debug}");
     assert!(debug.contains("key: <redacted>"), "{debug}");
     assert!(!debug.contains("secret"), "{debug}");
+}
+
+#[test]
+fn neither_debug_output_nor_validation_reveals_base_url_secrets() {
+    // Arrange
+    let specs = [
+        "https://gw.example/v1?api-key=url-secret#frag-secret",
+        "https://user:url-secret@gw.example/v1",
+        "not a url-secret",
+    ]
+    .map(|url| ProviderSpec::new("custom", WireProtocol::ChatCompletions, url));
+
+    // Act
+    let outputs = specs.map(|spec| {
+        let reason = spec.validate().map_err(|error| error.to_string());
+
+        (format!("{spec:?}"), reason)
+    });
+
+    // Assert
+    for (debug, reason) in &outputs {
+        assert!(!debug.contains("secret"), "{debug}");
+        let reason = reason.as_ref().expect_err("each base URL is invalid");
+        assert!(!reason.contains("secret"), "{reason}");
+    }
+    assert!(outputs[0].0.contains("base_url: \"https://gw.example/v1\""));
+    assert!(outputs[2].0.contains("base_url: \"<invalid>\""));
 }

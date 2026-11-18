@@ -30,13 +30,11 @@ impl Router {
     /// A request for `provider/model` goes to the specification with
     /// [`ProviderSpec::id`] `provider` restricted to `model`
     /// ([`ProviderSpec::for_model`]), or else to the one serving every model
-    /// of `provider`. A duplicate, a specification with the same identifier
-    /// and model as an earlier one, is a configuration mistake: the first
-    /// one stays and debug builds panic, so it cannot change the wire policy
-    /// unnoticed. Replace a specification with [`Self::with_override`].
-    ///
-    /// # Panics
-    /// Panics in debug builds on a duplicate specification.
+    /// of `provider`. Of duplicates, specifications with the same identifier
+    /// and model, the first one stays in every build, so a later one cannot
+    /// change the wire policy; replace a specification with
+    /// [`Self::with_override`]. Each request validates its specification
+    /// ([`ProviderSpec::validate`]) before any network access.
     pub fn new(specs: impl IntoIterator<Item = ProviderSpec>) -> Self {
         let mut router = Self {
             client: chat_completion::default_client(),
@@ -44,12 +42,10 @@ impl Router {
             specs: HashMap::new(),
         };
         for spec in specs {
-            let key = (spec.id.clone(), spec.model.clone());
-            debug_assert!(
-                !router.specs.contains_key(&key),
-                "duplicate provider specification {key:?}"
-            );
-            router.specs.entry(key).or_insert(spec);
+            router
+                .specs
+                .entry((spec.id.clone(), spec.model.clone()))
+                .or_insert(spec);
         }
 
         router
@@ -217,7 +213,7 @@ impl Router {
             .specs
             .get(&(prefix.to_string(), Some(model.to_string())))
             .or_else(|| self.specs.get(&(prefix.to_string(), None)))
-            .ok_or(ModelError::UnknownProvider)?;
+            .ok_or(ModelError::NoProviderSpec)?;
         spec.validate()?;
 
         Ok((spec, model))
