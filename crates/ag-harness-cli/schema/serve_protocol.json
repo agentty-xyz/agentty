@@ -1628,6 +1628,38 @@
           "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests, each emitted as it completed. The\nturn's [`crate::turn::HistoryActivity`] counts what its first request\nstill evicted."
         },
         {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "retrying"
+            },
+            "after": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Delay before the retry is sent; on the wire, whole milliseconds."
+            },
+            "attempt": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "One-based number of this retry within its model request."
+            },
+            "kind": {
+              "$ref": "#/$defs/ErrorKind",
+              "description": "The failure being retried: [`ErrorKind::RateLimited`] for a\n`429`, [`ErrorKind::Overloaded`] for a `5xx`, or\n[`ErrorKind::Transport`] for a connection failure."
+            }
+          },
+          "required": [
+            "type",
+            "after",
+            "attempt",
+            "kind"
+          ],
+          "description": "A model request failed transiently and is retried after `after`, as\nits provider's [`crate::provider::RetryPolicy`] allows; emitted\nbefore the wait, so cancelling the run then stops it. A request that\nstill fails after its last retry fails the run with that failure."
+        },
+        {
           "$ref": "#/$defs/RunSummary",
           "type": "object",
           "properties": {
@@ -1642,7 +1674,7 @@
           "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn."
         }
       ],
-      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added."
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas and approval requests, may be added."
     },
     "ModelId": {
       "type": "string",

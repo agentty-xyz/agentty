@@ -19,6 +19,7 @@ mod provider;
 mod provider_spec;
 mod response_error;
 mod responses;
+mod retry;
 mod schema;
 mod tool;
 
@@ -37,6 +38,7 @@ pub use provider_spec::{
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 pub use responses::{ReasoningView, reasoning_view};
+pub use retry::{Jitter, Retry, RetryKind, RetryObserver, RetryPolicy};
 pub use schema::{
     OutputSchema, OutputSchemaError, OutputValidationError, RESPONSE_CONTENT_LIMIT_BYTES,
     bounded_diagnostic, ensure_content_size,

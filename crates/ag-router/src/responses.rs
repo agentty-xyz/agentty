@@ -22,6 +22,7 @@ use crate::http::{
 };
 use crate::model::{GeneratedResponse, ModelErrorType};
 use crate::provider_spec::{ProviderSpec, ReasoningMapping};
+use crate::retry::RetryObserver;
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Bound for one whole streamed response. Long reasoning at the highest
@@ -45,21 +46,25 @@ pub(crate) struct ResponsesBackend<'spec> {
     headers: HeaderMap,
     http: Arc<HttpTransport>,
     model: String,
+    observer: Option<Arc<dyn RetryObserver>>,
     policy: &'spec ProviderSpec,
 }
 
 impl<'spec> ResponsesBackend<'spec> {
-    /// Creates a backend sending `headers` through `http`.
+    /// Creates a backend sending `headers` through `http`, reporting
+    /// retries to `observer`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
         http: Arc<HttpTransport>,
+        observer: Option<Arc<dyn RetryObserver>>,
     ) -> Self {
         Self {
             headers,
             http,
             model,
+            observer,
             policy,
         }
     }
@@ -116,7 +121,8 @@ impl<'spec> ResponsesBackend<'spec> {
             self.headers.clone(),
             self.policy.endpoint(ENDPOINT_PATH),
             payload,
-        );
+        )
+        .with_retry(self.policy.retry, self.observer.clone());
         let response = self.create(&request_body).await.map_err(|error| {
             error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
         })?;

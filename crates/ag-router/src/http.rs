@@ -1,9 +1,11 @@
-//! Shared HTTP transport for provider wire APIs: provider headers, bounded
-//! retries, bounded bodies, and context-overflow classification.
+//! Shared HTTP transport for provider wire APIs: provider headers, retries
+//! under the provider's [`RetryPolicy`], bounded bodies, and context-overflow
+//! classification.
 
 use std::error::Error;
 use std::fmt::Write as _;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
@@ -11,19 +13,12 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::retry::{Retry, RetryKind, RetryObserver, RetryPolicy};
 use crate::{model, schema as schema_contract};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
-const MAX_RATE_LIMIT_RETRIES: usize = 5;
-/// Ceiling for the exponential backoff between rate-limit retries.
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
-/// Ceiling for a provider-declared `Retry-After`, so a per-minute quota can
-/// be waited out without honoring an unbounded instruction.
-const MAX_PROVIDER_RETRY_DELAY: Duration = Duration::from_secs(60);
-const MAX_TRANSPORT_RETRIES: usize = 1;
 pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
-const RETRY_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
     * JSON_STRING_MAX_EXPANSION
     + RESPONSE_ENVELOPE_LIMIT_BYTES;
@@ -96,22 +91,40 @@ pub(crate) fn has_context_overflow_marker(text: &str, provider_markers: &[String
         .any(|marker| text.contains(marker))
 }
 
-/// One provider-authenticated JSON `POST`.
+/// One provider-authenticated JSON `POST` and the policy that retries it.
 pub(crate) struct ProviderRequest {
     endpoint: String,
     headers: HeaderMap,
+    observer: Option<Arc<dyn RetryObserver>>,
     payload: Value,
+    retry: RetryPolicy,
 }
 
 impl ProviderRequest {
     /// Creates a request from provider-owned headers, such as its
-    /// authentication, and payload data.
+    /// authentication, and payload data, retried by the default policy.
     pub(crate) fn new(headers: HeaderMap, endpoint: String, payload: Value) -> Self {
         Self {
             endpoint,
             headers,
+            observer: None,
             payload,
+            retry: RetryPolicy::default(),
         }
+    }
+
+    /// Retries this request under `retry`, reporting each retry to
+    /// `observer`.
+    #[must_use]
+    pub(crate) fn with_retry(
+        mut self,
+        retry: RetryPolicy,
+        observer: Option<Arc<dyn RetryObserver>>,
+    ) -> Self {
+        self.observer = observer;
+        self.retry = retry;
+
+        self
     }
 
     /// Returns the headers sent before the JSON content type.
@@ -130,26 +143,24 @@ impl ProviderRequest {
     }
 }
 
-/// Reqwest transport that retries rate limits and one connection failure,
+/// Reqwest transport that retries each request under its [`RetryPolicy`]
 /// and bounds every response body it reads.
 pub(crate) struct HttpTransport {
     client: reqwest::Client,
-    max_retry_delay: Duration,
+    clock: RetryClock,
     request_timeout: Duration,
-    retry_delay: Duration,
 }
 
 impl HttpTransport {
     /// Creates a transport whose requests each time out after
-    /// `request_timeout`, with the production retry delays.
+    /// `request_timeout`, waiting out retries on the system clock.
     pub(crate) fn new(request_timeout: Duration) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         Self {
             client: Self::client(reqwest::Client::builder()),
-            max_retry_delay: MAX_RETRY_DELAY,
+            clock: RetryClock::system(),
             request_timeout,
-            retry_delay: RETRY_DELAY,
         }
     }
 
@@ -189,11 +200,13 @@ impl HttpTransport {
     }
 
     /// Sends `request` and returns its successful response with the body
-    /// unread, retrying rate limits and one connection failure. A `429`
-    /// whose body reports a spent quota is returned without a retry.
+    /// unread, retrying the failures its [`RetryPolicy`] retries and
+    /// reporting each retry to its observer before waiting. A `429` whose
+    /// body reports a spent quota is returned without a retry.
     ///
     /// A timed-out request is reported without a retry, since a reasoning
-    /// model that ran out the bound would likely run it out again.
+    /// model that ran out the bound would likely run it out again. Dropping
+    /// the returned future, as cancellation does, stops a pending wait.
     ///
     /// # Errors
     /// Returns a transport or HTTP failure.
@@ -201,8 +214,9 @@ impl HttpTransport {
         &self,
         request: &ProviderRequest,
     ) -> Result<reqwest::Response, TransportError> {
-        let mut rate_limit_retries = 0_usize;
-        let mut transport_retries = 0_usize;
+        let policy = &request.retry;
+        let mut connection_retries = 0_u32;
+        let mut status_retries = 0_u32;
         loop {
             let response = self
                 .client
@@ -214,9 +228,24 @@ impl HttpTransport {
                 .await;
             let mut response = match response {
                 Ok(response) => response,
-                Err(error) if !error.is_timeout() && transport_retries < MAX_TRANSPORT_RETRIES => {
-                    transport_retries += 1;
-                    tokio::time::sleep(self.retry_delay).await;
+                Err(error)
+                    if !error.is_timeout()
+                        && policy.allows(
+                            RetryKind::Connection,
+                            status_retries,
+                            connection_retries,
+                        ) =>
+                {
+                    connection_retries += 1;
+                    let delay = policy.connection_delay((self.clock.jitter)());
+                    self.wait(
+                        request,
+                        connection_retries + status_retries,
+                        delay,
+                        RetryKind::Connection,
+                        None,
+                    )
+                    .await;
 
                     continue;
                 }
@@ -225,22 +254,26 @@ impl HttpTransport {
 
             if let Err(source) = response.error_for_status_ref() {
                 let status = response.status();
-                let retry_after = retry_after(response.headers());
+                let retry_after = policy.retry_after(response.headers(), (self.clock.now)());
                 let body = error_body_summary(&mut response).await;
+                let retried = RetryKind::of_status(status).filter(|kind| {
+                    !is_quota_exceeded(status, &body)
+                        && policy.allows(*kind, status_retries, connection_retries)
+                });
 
-                if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
-                    && !is_quota_exceeded(status, &body)
-                {
-                    let delay = rate_limit_retry_delay(
-                        retry_after,
-                        rate_limit_retries,
-                        self.retry_delay,
-                        self.max_retry_delay,
-                    );
-                    rate_limit_retries += 1;
+                if let Some(kind) = retried {
+                    let delay =
+                        policy.status_delay(status_retries, retry_after, (self.clock.jitter)());
+                    status_retries += 1;
                     drop(response);
-                    tokio::time::sleep(delay).await;
+                    self.wait(
+                        request,
+                        connection_retries + status_retries,
+                        delay,
+                        kind,
+                        Some(status.as_u16()),
+                    )
+                    .await;
 
                     continue;
                 }
@@ -260,6 +293,54 @@ impl HttpTransport {
             return Ok(response);
         }
     }
+
+    /// Reports retry `attempt` of `request` to its observer, then waits
+    /// `delay`.
+    async fn wait(
+        &self,
+        request: &ProviderRequest,
+        attempt: u32,
+        delay: Duration,
+        kind: RetryKind,
+        status: Option<u16>,
+    ) {
+        if let Some(observer) = &request.observer {
+            observer
+                .retrying(Retry {
+                    attempt,
+                    delay,
+                    kind,
+                    status,
+                })
+                .await;
+        }
+
+        (self.clock.sleep)(delay).await;
+    }
+}
+
+/// Time and randomness a transport's retries read: an injected boundary,
+/// so tests wait and jitter deterministically.
+#[derive(Clone, Copy)]
+pub(crate) struct RetryClock {
+    /// Returns a jitter sample in `[0, 1)`.
+    pub(crate) jitter: fn() -> f64,
+    /// Returns the wall-clock time an HTTP-date `Retry-After` is read
+    /// against.
+    pub(crate) now: fn() -> SystemTime,
+    /// Waits out one retry delay.
+    pub(crate) sleep: fn(Duration) -> tokio::time::Sleep,
+}
+
+impl RetryClock {
+    /// Returns the system clock, Tokio's timer, and a fast random source.
+    pub(crate) fn system() -> Self {
+        Self {
+            jitter: fastrand::f64,
+            now: SystemTime::now,
+            sleep: tokio::time::sleep,
+        }
+    }
 }
 
 /// Deserializes an optional field leniently: a value of another shape reads
@@ -274,30 +355,6 @@ where
     let value = Value::deserialize(deserializer)?;
 
     Ok(serde_json::from_value(value).ok())
-}
-
-fn rate_limit_retry_delay(
-    provider_delay: Option<Duration>,
-    retry: usize,
-    retry_delay: Duration,
-    max_retry_delay: Duration,
-) -> Duration {
-    let backoff = retry_delay
-        .saturating_mul(1_u32 << retry.min(31))
-        .min(max_retry_delay);
-
-    provider_delay.unwrap_or_default().max(backoff)
-}
-
-/// Returns the provider's `Retry-After` delay, read as whole delta-seconds
-/// and capped at [`MAX_PROVIDER_RETRY_DELAY`]; an HTTP-date or other value
-/// reads as absent.
-fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|seconds| Duration::from_secs(seconds).min(MAX_PROVIDER_RETRY_DELAY))
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {
@@ -447,3 +504,7 @@ impl TransportError {
 #[cfg(test)]
 #[path = "http_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "http_retry_test.rs"]
+mod retry_tests;

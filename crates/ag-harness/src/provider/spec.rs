@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -227,6 +228,129 @@ pub enum MaxTokensField {
     /// The original Chat Completions `max_tokens`, which most compatible
     /// servers read.
     MaxTokens,
+}
+
+/// Transient failure a [`RetryPolicy`] may retry.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum RetryKind {
+    /// HTTP `429` without a spent-quota marker; a `429` reporting a spent
+    /// quota is never retried.
+    RateLimited,
+    /// HTTP `500`, `502`, `503`, or `504`.
+    ServerError,
+    /// HTTP `529`, an overloaded provider.
+    Overloaded,
+    /// The connection failed before any response; a timed-out request is
+    /// never retried.
+    Connection,
+}
+
+impl RetryKind {
+    /// Converts to the routed retry kind.
+    const fn to_router(self) -> ag_router::RetryKind {
+        match self {
+            Self::RateLimited => ag_router::RetryKind::RateLimited,
+            Self::ServerError => ag_router::RetryKind::ServerError,
+            Self::Overloaded => ag_router::RetryKind::Overloaded,
+            Self::Connection => ag_router::RetryKind::Connection,
+        }
+    }
+}
+
+/// Random spread applied to each computed retry backoff, so clients limited
+/// together do not retry together; a provider's `Retry-After` is never
+/// shortened by it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Jitter {
+    /// Wait exactly the computed backoff.
+    #[default]
+    None,
+    /// Wait a uniformly random delay between zero and the backoff.
+    Full,
+    /// Wait half the backoff plus a uniformly random delay up to the other
+    /// half.
+    Equal,
+}
+
+impl Jitter {
+    /// Converts to the routed jitter.
+    const fn to_router(self) -> ag_router::Jitter {
+        match self {
+            Self::None => ag_router::Jitter::None,
+            Self::Full => ag_router::Jitter::Full,
+            Self::Equal => ag_router::Jitter::Equal,
+        }
+    }
+}
+
+/// How a provider's failed requests are retried, set with
+/// [`ProviderSpec::with_retry`]; each retry is reported to a streamed run as
+/// a [`crate::event::RunEventKind::Retrying`] event before its wait.
+///
+/// The default, which every preset uses, retries a `429` without a
+/// spent-quota marker up to five times and one connection failure. Each
+/// retry waits an exponential backoff from one second, doubled per status
+/// retry and capped at five seconds, or the provider's `Retry-After`, as
+/// delta-seconds or an HTTP date capped at sixty seconds, whichever is
+/// longer. Server errors (`500`, `502`-`504`) and an overloaded `529` are
+/// opt-ins through [`Self::with_retried`]; a spent quota (`402`, or a `429`
+/// reporting one) and a timed-out request are never retried. Cancelling a
+/// run stops a pending wait.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetryPolicy(ag_router::RetryPolicy);
+
+impl RetryPolicy {
+    /// Returns a policy that retries nothing.
+    pub fn none() -> Self {
+        Self(ag_router::RetryPolicy::none())
+    }
+
+    /// Sets the backoff before the first status retry, doubled for each
+    /// later one; a connection retry waits it undoubled.
+    #[must_use]
+    pub fn with_base_delay(self, base_delay: Duration) -> Self {
+        Self(self.0.with_base_delay(base_delay))
+    }
+
+    /// Sets the random spread of each computed backoff.
+    #[must_use]
+    pub fn with_jitter(self, jitter: Jitter) -> Self {
+        Self(self.0.with_jitter(jitter.to_router()))
+    }
+
+    /// Sets the most requests sent for one model request answered with
+    /// retried statuses, the first included; `0` reads as `1`.
+    #[must_use]
+    pub fn with_max_attempts(self, max_attempts: u32) -> Self {
+        Self(self.0.with_max_attempts(max_attempts))
+    }
+
+    /// Sets the ceiling of the exponential backoff.
+    #[must_use]
+    pub fn with_max_backoff(self, max_backoff: Duration) -> Self {
+        Self(self.0.with_max_backoff(max_backoff))
+    }
+
+    /// Sets how many connection failures one model request retries, beside
+    /// its status retries.
+    #[must_use]
+    pub fn with_max_connection_retries(self, max_connection_retries: u32) -> Self {
+        Self(self.0.with_max_connection_retries(max_connection_retries))
+    }
+
+    /// Sets the ceiling of a provider-declared `Retry-After`.
+    #[must_use]
+    pub fn with_max_retry_after(self, max_retry_after: Duration) -> Self {
+        Self(self.0.with_max_retry_after(max_retry_after))
+    }
+
+    /// Sets whether failures of `kind` are retried.
+    #[must_use]
+    pub fn with_retried(self, kind: RetryKind, retried: bool) -> Self {
+        Self(self.0.with_retried(kind.to_router(), retried))
+    }
 }
 
 /// Failure to build a client from a [`ProviderSpec`].
@@ -567,6 +691,15 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_tool_result_name(mut self, tool_result_name: bool) -> Self {
         self.spec = self.spec.with_tool_result_name(tool_result_name);
+
+        self
+    }
+
+    /// Sets how failed requests are retried; every specification, preset
+    /// or not, starts from [`RetryPolicy::default`].
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.spec = self.spec.with_retry(retry.0);
 
         self
     }
