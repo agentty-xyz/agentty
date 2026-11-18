@@ -29,14 +29,6 @@ use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseSt
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, Session, SessionHandles, SessionId, Status,
-    can_append_session_to_stack as stack_can_append_session,
-    can_create_stacked_child as stack_can_create_stacked_child,
-    can_merge_session_branch_in_stack as stack_can_merge_session_branch,
-    can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
-    can_rebase_session_branch_in_stack as stack_can_rebase_session_branch,
-    can_reply_to_session_in_stack as stack_can_reply_to_session,
-    can_start_staged_session_in_stack as stack_can_start_staged_session,
-    has_reserved_branch_work_in_stack,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::session_order;
@@ -114,28 +106,6 @@ enum ReplyEligibility {
     QuestionAnswer,
     /// Accept review-comment batches during active turns and syncs.
     ReviewComments,
-}
-
-/// Capability used to authorize and stop one terminal cancellation.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum CancellationCapability {
-    /// Cancellation initiated through the ordinary user action.
-    User,
-    /// Forced cancellation of a descendant after its stack parent is canceled.
-    StackedDescendant,
-}
-
-impl CancellationCapability {
-    /// Returns whether this capability can cancel the current session state.
-    fn allows(self, session: &Session) -> bool {
-        match self {
-            Self::User => session.allows_cancel_action(),
-            Self::StackedDescendant => {
-                session.status != Status::Canceled
-                    && session.status.can_transition_to(Status::Canceled)
-            }
-        }
-    }
 }
 
 impl ReplyEligibility {
@@ -469,114 +439,6 @@ impl SessionManager {
         .await
     }
 
-    /// Creates a blank draft session stacked on top of a selected parent
-    /// session branch.
-    ///
-    /// The child remains an explicit draft while prompts are staged. It can
-    /// start once the parent is review-ready and no other stack member is
-    /// doing branch work. Its lazy worktree is based on the stored parent
-    /// branch, and the parent link is kept so review publishing can target the
-    /// parent branch while the stack is active.
-    ///
-    /// # Errors
-    /// Returns an error when the parent is missing, already stacked, terminal,
-    /// an unmaterialized draft, missing project metadata, or when draft
-    /// persistence fails.
-    pub async fn create_stacked_draft_session(
-        &mut self,
-        services: &AppServices,
-        parent_session_id: &str,
-    ) -> Result<String, SessionError> {
-        self.create_stacked_draft_session_with_optional_settings(services, parent_session_id, None)
-            .await
-    }
-
-    /// Moves one independent review-ready session beneath another session and
-    /// queues a branch sync onto the new parent branch.
-    ///
-    /// # Errors
-    /// Returns an error when either session is ineligible, stack policy would
-    /// be violated, metadata cannot be persisted, or the sync cannot start.
-    pub async fn append_session_to_stack(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        parent_session_id: &str,
-    ) -> Result<(), SessionError> {
-        if !stack_can_append_session(&self.state.sessions, session_id, parent_session_id)
-            || self.has_competing_preparation(session_id)
-            || has_reserved_branch_work_in_stack(&self.state.sessions, parent_session_id, |id| {
-                self.worker_service.has_preparation_reservation(id)
-            })
-        {
-            return Err(SessionError::Workflow(
-                "Append to stack requires an independent Review or AgentReview session and an \
-                 idle review-ready parent"
-                    .to_string(),
-            ));
-        }
-
-        let (old_base_branch, old_parent_session_id, parent_branch) = {
-            let session = self.session_or_err(session_id)?;
-            let parent_session = self.session_or_err(parent_session_id)?;
-            let parent_branch = self
-                .session_branch_name(&parent_session.id)
-                .map_or_else(|| session_branch(&parent_session.id), str::to_string);
-
-            (
-                session.base_branch.clone(),
-                session.parent_session_id.clone(),
-                parent_branch,
-            )
-        };
-        let old_stack_base_commit_hash = services
-            .db()
-            .sessions()
-            .get_session_stack_base_commit_hash(session_id)
-            .await?;
-        services
-            .db()
-            .sessions()
-            .update_session_stack_membership(
-                session_id,
-                Some(parent_session_id),
-                &parent_branch,
-                old_stack_base_commit_hash.clone(),
-            )
-            .await?;
-        let session = self
-            .state
-            .session_mut_for_id(session_id)
-            .ok_or(SessionError::NotFound)?;
-        session.base_branch.clone_from(&parent_branch);
-        session.parent_session_id = Some(SessionId::from(parent_session_id));
-
-        if let Err(error) = self.rebase_session(services, session_id).await {
-            services
-                .db()
-                .sessions()
-                .update_session_stack_membership(
-                    session_id,
-                    old_parent_session_id.as_deref(),
-                    &old_base_branch,
-                    old_stack_base_commit_hash,
-                )
-                .await?;
-            let session = self
-                .state
-                .session_mut_for_id(session_id)
-                .ok_or(SessionError::NotFound)?;
-            session.base_branch = old_base_branch;
-            session.parent_session_id = old_parent_session_id;
-
-            return Err(error);
-        }
-
-        services.emit_session_and_project_refresh_events();
-
-        Ok(())
-    }
-
     /// Creates one blank draft session for an explicit persisted project.
     ///
     /// Continuation flows use the source session project instead of the
@@ -594,14 +456,8 @@ impl SessionManager {
         project_id: i64,
         base_branch: &str,
     ) -> Result<String, SessionError> {
-        self.create_draft_session_for_project_with_parent(
-            services,
-            project_id,
-            base_branch,
-            None,
-            None,
-        )
-        .await
+        self.create_draft_session_for_project_with_settings(services, project_id, base_branch, None)
+            .await
     }
 
     /// Creates one project-scoped draft with a deterministic launch-settings
@@ -614,90 +470,6 @@ impl SessionManager {
         services: &AppServices,
         project_id: i64,
         base_branch: &str,
-        creation_settings: Option<SessionCreationSettings>,
-    ) -> Result<String, SessionError> {
-        self.create_draft_session_for_project_with_parent(
-            services,
-            project_id,
-            base_branch,
-            None,
-            creation_settings,
-        )
-        .await
-    }
-
-    /// Creates one stacked draft with a deterministic launch-settings
-    /// snapshot.
-    ///
-    /// # Errors
-    /// Returns an error when the parent is ineligible or persistence fails.
-    pub(crate) async fn create_stacked_draft_session_with_settings(
-        &mut self,
-        services: &AppServices,
-        parent_session_id: &str,
-        creation_settings: SessionCreationSettings,
-    ) -> Result<String, SessionError> {
-        self.create_stacked_draft_session_with_optional_settings(
-            services,
-            parent_session_id,
-            Some(creation_settings),
-        )
-        .await
-    }
-
-    /// Creates one stacked draft with optional deterministic launch settings.
-    async fn create_stacked_draft_session_with_optional_settings(
-        &mut self,
-        services: &AppServices,
-        parent_session_id: &str,
-        creation_settings: Option<SessionCreationSettings>,
-    ) -> Result<String, SessionError> {
-        let (base_branch, parent_id) = {
-            let parent_session = self.session_or_err(parent_session_id)?;
-            if !stack_can_create_stacked_child(&self.state.sessions, parent_session_id) {
-                return Err(SessionError::Workflow(
-                    "Stacked sessions require an active materialized parent below the five-level \
-                     stack limit"
-                        .to_string(),
-                ));
-            }
-
-            let parent_branch = self
-                .session_branch_name(&parent_session.id)
-                .map_or_else(|| session_branch(&parent_session.id), str::to_string);
-
-            (parent_branch, parent_session.id.clone())
-        };
-        let project_id = services
-            .db()
-            .sessions()
-            .load_session_project_id(parent_id.as_str())
-            .await?
-            .ok_or_else(|| {
-                SessionError::Workflow(
-                    "Parent session has no project association for stacked draft creation"
-                        .to_string(),
-                )
-            })?;
-
-        self.create_draft_session_for_project_with_parent(
-            services,
-            project_id,
-            &base_branch,
-            Some(parent_id.as_str()),
-            creation_settings,
-        )
-        .await
-    }
-
-    /// Creates one blank draft session with an optional persisted parent
-    /// session id.
-    async fn create_draft_session_for_project_with_parent(
-        &mut self,
-        services: &AppServices,
-        project_id: i64,
-        base_branch: &str,
-        parent_session_id: Option<&str>,
         creation_settings: Option<SessionCreationSettings>,
     ) -> Result<String, SessionError> {
         let creation_settings = self
@@ -725,7 +497,6 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: true,
                 model: session_model.as_str(),
-                parent_session_id,
                 permission_mode: creation_settings.permission_mode,
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
@@ -740,19 +511,12 @@ impl SessionManager {
         })?;
 
         Self::record_session_creation_activity(services, &session_id).await;
-        services.record_session_start(
-            if parent_session_id.is_some() {
-                SessionType::Stacked
-            } else {
-                SessionType::Draft
-            },
-            session_agent,
-        );
+        services.record_session_start(SessionType::Draft, session_agent);
 
         Ok(session_id)
     }
 
-    /// Forks a root review-ready session into a new independent review
+    /// Forks a review-ready session into a new independent review
     /// session.
     ///
     /// The fork creates a new worktree branch from the source session branch,
@@ -761,9 +525,9 @@ impl SessionManager {
     /// session for one-time history replay on its first reply.
     ///
     /// # Errors
-    /// Returns an error if the source session is missing, not root
-    /// review-ready, repository metadata cannot be resolved, the worktree
-    /// cannot be created, or the metadata snapshot cannot be persisted.
+    /// Returns an error if the source session is missing, not review-ready,
+    /// repository metadata cannot be resolved, the worktree cannot be created,
+    /// or the metadata snapshot cannot be persisted.
     /// Preparation failures roll back the reserved fork and its resources.
     pub async fn fork_session(
         &mut self,
@@ -823,7 +587,7 @@ impl SessionManager {
             let source_session = self.session_or_err(source_session_id)?;
             if !source_session.allows_fork_action() {
                 return Err(SessionError::Workflow(
-                    "Only root review-ready sessions can be forked".to_string(),
+                    "Only review-ready sessions can be forked".to_string(),
                 ));
             }
 
@@ -955,7 +719,6 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: false,
                 model: creation_settings.agent.model().as_str(),
-                parent_session_id: None,
                 permission_mode: creation_settings.permission_mode,
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
@@ -973,10 +736,9 @@ impl SessionManager {
     /// Creates the git worktree for one session branch from an explicit start
     /// ref.
     ///
-    /// Regular sessions pass the local base branch as the start ref, stacked
-    /// drafts pass their parent branch, and forks pass the source session
-    /// branch so the new worktree preserves the source branch state at fork
-    /// time.
+    /// Regular sessions pass the local base branch as the start ref, and forks
+    /// pass the source session branch so the new worktree preserves the source
+    /// branch state at fork time.
     ///
     /// # Errors
     /// Returns an error if git worktree creation fails.
@@ -1038,7 +800,7 @@ impl SessionManager {
 
             return Ok(());
         }
-        let (base_branch, folder, parent_session_id, persisted_session_id, session_agent) = {
+        let (base_branch, folder, persisted_session_id, session_agent) = {
             let session = self.session_or_err(session_id)?;
             if !session.is_draft_session() {
                 return Ok(());
@@ -1047,7 +809,6 @@ impl SessionManager {
             (
                 session.base_branch.clone(),
                 session.folder.clone(),
-                session.parent_session_id.clone(),
                 session.id.clone(),
                 session.agent,
             )
@@ -1067,13 +828,6 @@ impl SessionManager {
                 .map_err(|error| {
                     SessionError::Workflow(format!("Failed to setup session backend: {error}"))
                 })?;
-            self.persist_stack_base_for_stacked_draft_worktree(
-                services,
-                &folder,
-                parent_session_id.as_ref(),
-                &persisted_session_id,
-            )
-            .await?;
             self.set_session_worktree_available(session_id, true);
 
             return Ok(());
@@ -1112,13 +866,6 @@ impl SessionManager {
                 "Failed to setup session backend: {error}"
             )));
         }
-        self.persist_stack_base_for_stacked_draft_worktree(
-            services,
-            &folder,
-            parent_session_id.as_ref(),
-            &persisted_session_id,
-        )
-        .await?;
         self.set_session_worktree_available(session_id, true);
 
         Ok(())
@@ -1153,42 +900,6 @@ impl SessionManager {
             .session_mut_for_id(session_id)
             .ok_or(SessionError::NotFound)?
             .is_draft = false;
-
-        Ok(())
-    }
-
-    /// Persists the parent tip used by a stacked draft's newly materialized
-    /// worktree.
-    ///
-    /// The stored hash lets later stacked-child rebases use
-    /// `git rebase --onto` to replay only the child's commits when the parent
-    /// branch moves or squash-merges.
-    ///
-    /// # Errors
-    /// Returns an error when the worktree `HEAD` cannot be resolved or stack
-    /// metadata cannot be persisted.
-    async fn persist_stack_base_for_stacked_draft_worktree(
-        &self,
-        services: &AppServices,
-        folder: &Path,
-        parent_session_id: Option<&SessionId>,
-        session_id: &str,
-    ) -> Result<(), SessionError> {
-        if parent_session_id.is_none() {
-            return Ok(());
-        }
-
-        let stack_base_commit_hash = services
-            .git_client()
-            .head_hash(folder.to_path_buf())
-            .await
-            .map_err(SessionError::Git)?;
-        services
-            .db()
-            .sessions()
-            .update_session_stack_base_commit_hash(session_id, Some(stack_base_commit_hash))
-            .await
-            .map_err(SessionError::Db)?;
 
         Ok(())
     }
@@ -1490,17 +1201,13 @@ impl SessionManager {
         })
     }
 
-    /// Returns whether the selected session can parent another stacked draft.
-    pub(crate) fn can_create_stacked_child(&self, session_id: &str) -> bool {
-        stack_can_create_stacked_child(&self.state.sessions, session_id)
-    }
-
-    /// Returns whether a staged draft can start under the current stack
-    /// constraints.
+    /// Returns whether a staged draft can start without invalidating a queued
+    /// saved-prompt handoff.
     pub(crate) fn can_start_staged_session(&self, session_id: &str) -> bool {
-        stack_can_start_staged_session(&self.state.sessions, session_id)
+        self.state
+            .session_for_id(session_id)
+            .is_some_and(Session::can_start_staged_session)
             && self.can_retry_workspace_preparation(session_id)
-            && !self.has_competing_preparation(session_id)
     }
 
     /// Prevents workspace retries from invalidating a queued or running
@@ -1509,52 +1216,10 @@ impl SessionManager {
         !self.worker_service.has_preparation_reservation(session_id)
     }
 
-    /// Returns whether a session can start branch-mutating work without
-    /// competing with another member of its stack.
-    pub(crate) fn can_mutate_session_branch_in_stack(&self, session_id: &str) -> bool {
-        stack_can_mutate_session_branch(&self.state.sessions, session_id)
-            && !self.has_competing_preparation(session_id)
-    }
-
-    /// Returns whether a session can enter the merge queue without competing
-    /// with another member of its stack.
-    pub(crate) fn can_merge_session_branch_in_stack(&self, session_id: &str) -> bool {
-        stack_can_merge_session_branch(&self.state.sessions, session_id)
-            && !self.has_competing_preparation(session_id)
-    }
-
-    /// Returns whether a session can start sync work without competing with
-    /// another member of its stack.
-    pub(crate) fn can_rebase_session_branch_in_stack(&self, session_id: &str) -> bool {
-        stack_can_rebase_session_branch(&self.state.sessions, session_id)
-            && !self.has_competing_preparation(session_id)
-    }
-
-    /// Returns whether a session can accept a reply without another stack
-    /// member already owning active branch work.
-    pub(crate) fn can_reply_to_session_in_stack(&self, session_id: &str) -> bool {
-        stack_can_reply_to_session(&self.state.sessions, session_id)
-            && !self.has_competing_preparation(session_id)
-    }
-
-    /// Includes queued saved turns in stack policy without publishing a
-    /// premature user-visible status. Foreground actions are serialized, so
-    /// claiming at enqueue closes the gap before worker acceptance.
-    fn has_competing_preparation(&self, session_id: &str) -> bool {
-        has_reserved_branch_work_in_stack(&self.state.sessions, session_id, |candidate_id| {
-            candidate_id != session_id
-                && self
-                    .worker_service
-                    .has_preparation_reservation(candidate_id)
-        })
-    }
-
     /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
     /// This materializes the deferred draft worktree before launching the
-    /// first live turn. Stacked drafts additionally wait for a review-ready
-    /// parent and an otherwise idle stack so only one branch-mutating session
-    /// runs in that stack.
+    /// first live turn.
     ///
     /// # Errors
     /// Returns an error if the session is missing, is not a draft session, no
@@ -1583,9 +1248,7 @@ impl SessionManager {
             }
             if !self.can_start_staged_session(session_id) {
                 return Err(SessionError::Workflow(
-                    "Stacked sessions can only start when their parent is in review and the stack \
-                     has no other active branch work"
-                        .to_string(),
+                    "Session workspace preparation is already queued".to_string(),
                 ));
             }
 
@@ -2721,12 +2384,6 @@ impl SessionManager {
         reply_eligibility: ReplyEligibility,
     ) -> Result<ReplyContext, SessionError> {
         let session_index = self.session_index_or_err(session_id)?;
-        if !self.can_reply_to_session_in_stack(session_id) {
-            return Err(SessionError::Workflow(
-                "Stacked replies can only run when no other stack session is active".to_string(),
-            ));
-        }
-
         let session = &mut self.state.sessions[session_index];
 
         let is_first_message = session.awaits_first_message();
@@ -3776,31 +3433,8 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let status_updated = self
-            .cancel_single_session(services, session_id, CancellationCapability::User)
-            .await?;
-        if !status_updated {
-            return Ok(());
-        }
-        self.cancel_stacked_child_sessions(services, session_id)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Cancels one session without cascading into stacked children.
-    async fn cancel_single_session(
-        &self,
-        services: &AppServices,
-        session_id: &str,
-        cancellation_capability: CancellationCapability,
-    ) -> Result<bool, SessionError> {
         let session = self.session_or_err(session_id)?;
-        if !cancellation_capability.allows(session) {
-            if cancellation_capability == CancellationCapability::StackedDescendant {
-                return Ok(false);
-            }
-
+        if !session.allows_cancel_action() {
             return Err(SessionError::Workflow(
                 "Session is not cancelable in its current state".to_string(),
             ));
@@ -3834,80 +3468,7 @@ impl SessionManager {
             );
         }
 
-        Ok(status_updated)
-    }
-
-    /// Cancels every loaded stacked descendant of `parent_session_id`.
-    ///
-    /// The cascade bypasses the ordinary user-action gate, stops active or
-    /// reserved descendant branch work, and attempts every loaded descendant
-    /// before reporting any failures to the parent cancellation caller.
-    ///
-    /// # Errors
-    /// Returns a workflow error listing descendants that could not be
-    /// canceled after all other descendants have been attempted.
-    pub(crate) async fn cancel_stacked_child_sessions(
-        &self,
-        services: &AppServices,
-        parent_session_id: &str,
-    ) -> Result<(), SessionError> {
-        let mut cancellation_failures = Vec::new();
-        for child_session_id in self.stacked_descendant_session_ids(parent_session_id) {
-            if let Err(error) = self
-                .cancel_single_session(
-                    services,
-                    child_session_id.as_str(),
-                    CancellationCapability::StackedDescendant,
-                )
-                .await
-            {
-                warn!(
-                    parent_session_id = parent_session_id,
-                    child_session_id = %child_session_id,
-                    error = %error,
-                    "failed to cancel stacked child session after parent cancellation"
-                );
-                cancellation_failures.push(format!("{child_session_id}: {error}"));
-            }
-        }
-
-        if cancellation_failures.is_empty() {
-            return Ok(());
-        }
-
-        Err(SessionError::Workflow(format!(
-            "Failed to cancel stacked descendants: {}",
-            cancellation_failures.join("; ")
-        )))
-    }
-
-    /// Returns loaded descendant ids in parent-before-child order.
-    fn stacked_descendant_session_ids(&self, parent_session_id: &str) -> Vec<SessionId> {
-        let mut ancestor_session_ids = vec![SessionId::from(parent_session_id)];
-        let mut descendant_session_ids = Vec::new();
-
-        loop {
-            let next_descendants = self
-                .state
-                .sessions
-                .iter()
-                .filter(|session| {
-                    session.parent_session_id.as_ref().is_some_and(|parent_id| {
-                        ancestor_session_ids.contains(parent_id)
-                            && !descendant_session_ids.contains(&session.id)
-                    })
-                })
-                .map(|session| session.id.clone())
-                .collect::<Vec<_>>();
-            if next_descendants.is_empty() {
-                break;
-            }
-
-            ancestor_session_ids.extend(next_descendants.iter().cloned());
-            descendant_session_ids.extend(next_descendants);
-        }
-
-        descendant_session_ids
+        Ok(())
     }
 
     /// Defers terminal cancellation cleanup so foreground key handling returns

@@ -10,7 +10,6 @@ use ag_git as git;
 pub(crate) use ag_session::session_branch;
 use tokio::task::JoinHandle;
 
-use super::SessionError;
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
 pub(crate) use super::workflow::task::{
@@ -29,7 +28,6 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::session_order::{self, ArchiveAction};
-use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
     GeneratedTurnUpdate, QueuedAction, TransientMessage, TransientMessageAnchor,
     TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
@@ -880,20 +878,6 @@ impl SessionManager {
             .retract(TransientMessageSlot::PublishedBranchSync);
 
         true
-    }
-
-    /// Appends transient sync-error notices to stacked children whose
-    /// automatic rebase could not be enqueued.
-    pub(crate) fn append_stacked_rebase_failure_notices(
-        &mut self,
-        failures: Vec<(SessionId, SessionError)>,
-        failure_context: &str,
-    ) {
-        for (child_session_id, error) in failures {
-            let notice =
-                TranscriptNotice::RebaseError.format_line(format!("{failure_context}: {error}"));
-            self.append_workflow_notice(child_session_id.as_str(), notice);
-        }
     }
 
     /// Appends one transient workflow notice shown for one session.

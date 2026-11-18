@@ -293,15 +293,6 @@ pub(crate) enum AppEvent {
         attempt_id: String,
         session_id: SessionId,
     },
-    /// Indicates one review-ready parent turn finished and any materialized
-    /// stacked child branches should sync onto the refreshed parent branch.
-    StackedParentTurnCompleted { session_id: SessionId },
-    /// Indicates one review-ready parent sync finished and any materialized
-    /// stacked child branches should sync onto the refreshed parent branch.
-    StackedParentSyncCompleted { session_id: SessionId },
-    /// Indicates a parent session merged and its materialized children should
-    /// run deterministic restack rebases against the parent's former base.
-    StackedParentMergeCompleted { child_session_ids: Vec<SessionId> },
     /// Indicates a transient workflow notice changed for one session.
     SessionWorkflowNoticeUpdated {
         notice: String,
@@ -469,9 +460,6 @@ pub(super) struct AppEventBatch {
     /// Whether this batch should reload session list snapshots from
     /// persistence.
     pub(super) should_reload_sessions: bool,
-    pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
-    pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
-    pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) sync_main_completion: Option<SyncMainCompletion>,
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
     pub(super) update_status: Option<UpdateStatus>,
@@ -541,9 +529,6 @@ impl AppEventBatch {
             || !self.session_diff_updates.is_empty()
             || !self.session_title_generation_finished.is_empty()
             || !self.session_workflow_notice_updates.is_empty()
-            || !self.stacked_parent_merge_child_rebases.is_empty()
-            || !self.stacked_parent_syncs_completed.is_empty()
-            || !self.stacked_parent_turns_completed.is_empty()
             || self.sync_main_conflict.is_some()
             || self.sync_main_completion.is_some();
         let mut after_snapshot_effects = (!self.review_updates.is_empty())
@@ -741,9 +726,6 @@ impl AppEventBatch {
             | AppEvent::FocusedReviewPersistenceRetry { .. }
             | AppEvent::SessionUpdated { .. }
             | AppEvent::AgentResponseReceived { .. }
-            | AppEvent::StackedParentTurnCompleted { .. }
-            | AppEvent::StackedParentSyncCompleted { .. }
-            | AppEvent::StackedParentMergeCompleted { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }
             | AppEvent::ReviewWatchRerunFinished { .. }) => self.collect_workflow_event(event),
@@ -895,15 +877,6 @@ impl AppEventBatch {
                 session_id,
                 turn_applied_state,
             } => self.collect_agent_response_received(session_id, turn_applied_state),
-            AppEvent::StackedParentTurnCompleted { session_id } => {
-                self.stacked_parent_turns_completed.insert(session_id);
-            }
-            AppEvent::StackedParentSyncCompleted { session_id } => {
-                self.stacked_parent_syncs_completed.insert(session_id);
-            }
-            AppEvent::StackedParentMergeCompleted { child_session_ids } => self
-                .stacked_parent_merge_child_rebases
-                .extend(child_session_ids),
             AppEvent::PublishedBranchSyncUpdated {
                 persistent_notice,
                 session_id,
@@ -1263,17 +1236,6 @@ impl App {
         self.sync_touched_sessions(&event_batch.session_ids);
         self.apply_session_transient_updates(&mut event_batch);
         self.apply_deferred_session_settings().await;
-        self.start_stacked_child_rebases_after_parent_merge(std::mem::take(
-            &mut event_batch.stacked_parent_merge_child_rebases,
-        ))
-        .await;
-        let mut turned_parent_session_ids =
-            std::mem::take(&mut event_batch.stacked_parent_turns_completed);
-        turned_parent_session_ids.extend(std::mem::take(
-            &mut event_batch.stacked_parent_syncs_completed,
-        ));
-        self.start_stacked_child_rebases_after_parent_turns(turned_parent_session_ids)
-            .await;
         let mut auto_review_session_ids =
             self.sessions_entering_review(&event_batch.session_ids, &previous_session_states);
         auto_review_session_ids.extend(completed_review_session_ids);
@@ -1522,8 +1484,7 @@ impl App {
         }
 
         let default_branch = sync_main_outcome.default_branch.clone();
-        sync_main_outcome.deferred_merged_session_ids = self
-            .finalize_merged_sessions_after_main_sync(&default_branch)
+        self.finalize_merged_sessions_after_main_sync(&default_branch)
             .await;
     }
 
@@ -1543,7 +1504,6 @@ impl App {
 
         status.phase = match &completion.result {
             Ok(outcome) => ProjectSyncPhase::Complete {
-                deferred_session_count: outcome.deferred_merged_session_ids.len(),
                 pulled_commits: outcome.pulled_commits,
                 pushed_commits: outcome.pushed_commits,
                 resolved_conflict_count: outcome.resolved_conflict_files.len(),
@@ -1627,48 +1587,6 @@ impl App {
             } if diff_session_id == session_id => Some(review_comments),
             _ => None,
         }
-    }
-
-    /// Starts automatic sync rebases for stacked children after their parent
-    /// has returned to a review-ready state.
-    async fn start_stacked_child_rebases_after_parent_turns(
-        &mut self,
-        parent_session_ids: HashSet<SessionId>,
-    ) {
-        for parent_session_id in parent_session_ids {
-            let failures = self
-                .sessions
-                .rebase_stacked_children_after_parent_turn(
-                    &self.services,
-                    parent_session_id.as_str(),
-                )
-                .await;
-            self.sessions
-                .append_stacked_rebase_failure_notices(failures, "Stacked child auto-sync failed");
-        }
-    }
-
-    /// Starts deterministic sync rebases for children retargeted by a parent
-    /// merge.
-    async fn start_stacked_child_rebases_after_parent_merge(
-        &mut self,
-        child_session_ids: HashSet<SessionId>,
-    ) {
-        if child_session_ids.is_empty() {
-            return;
-        }
-
-        let mut child_session_ids = child_session_ids.into_iter().collect::<Vec<_>>();
-        child_session_ids.sort();
-
-        let failures = self
-            .sessions
-            .rebase_sessions_after_parent_merge(&self.services, child_session_ids)
-            .await;
-        self.sessions.append_stacked_rebase_failure_notices(
-            failures,
-            "Stacked child post-merge sync failed",
-        );
     }
 
     /// Executes the ordered external effects from a pure reduction plan.
@@ -2143,7 +2061,6 @@ impl App {
             AppMode::ChatGptSignIn { dialog } => dialog.session_id() == session_id,
             AppMode::List
             | AppMode::SessionCreation { .. }
-            | AppMode::StackAppendParentSelection { .. }
             | AppMode::PreCommitHookWarning { .. }
             | AppMode::ProjectCatalog { .. }
             | AppMode::ProjectSwitcher { .. }
@@ -2224,37 +2141,21 @@ impl App {
 
     /// Returns the lookup root for one session's at-mention entries.
     ///
-    /// Materialized sessions use their own worktree. An unmaterialized
-    /// stacked draft walks its parent chain to the nearest materialized
-    /// ancestor so files introduced there remain available before the
-    /// intermediate child worktrees are created.
+    /// Materialized sessions use their own worktree; unmaterialized drafts use
+    /// the project working directory.
     pub(crate) fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
-        let project_working_dir = self.working_dir().to_path_buf();
-        let mut candidate_session_id = Some(SessionId::from(session_id));
-        let mut visited_session_ids = HashSet::new();
-        let mut nearest_materialized_folder = None;
-
-        while let Some(ref session_id) = candidate_session_id {
-            if !visited_session_ids.insert(session_id.clone()) {
-                break;
-            }
-            let Some(session) = self.sessions.session_for_id(session_id) else {
-                break;
-            };
-            if self.services.fs_client().is_dir(session.folder.clone()) {
-                nearest_materialized_folder = Some(session.folder.clone());
-
-                break;
-            }
-            candidate_session_id.clone_from(&session.parent_session_id);
-        }
-
-        let has_materialized_folder = nearest_materialized_folder.is_some();
+        let session_folder = self
+            .sessions
+            .session_for_id(session_id)
+            .map(|session| session.folder.clone());
+        let has_session_folder = session_folder
+            .as_ref()
+            .is_some_and(|folder| self.services.fs_client().is_dir(folder.clone()));
 
         at_mention_lookup_root(
-            project_working_dir,
-            nearest_materialized_folder,
-            has_materialized_folder,
+            self.working_dir().to_path_buf(),
+            session_folder,
+            has_session_folder,
         )
     }
 
@@ -2661,7 +2562,7 @@ impl App {
     }
 
     /// Records one externally merged session as read-only `Merged` without
-    /// starting local cleanup or stacked-child restacking.
+    /// starting local cleanup.
     pub(super) async fn record_externally_merged_session(
         &self,
         session_id: &str,
@@ -2694,16 +2595,8 @@ impl App {
 
     /// Finalizes read-only merged sessions that reached the branch updated by
     /// a successful user-triggered main sync.
-    ///
-    /// A merged stacked child also reached that branch when its merged parent
-    /// targeted the branch directly, even if the child's persisted review
-    /// target still names the parent review branch.
-    async fn finalize_merged_sessions_after_main_sync(
-        &mut self,
-        default_branch: &str,
-    ) -> Vec<SessionId> {
-        let mut deferred_session_ids = Vec::new();
-        let merged_session_ids = self
+    async fn finalize_merged_sessions_after_main_sync(&mut self, default_branch: &str) {
+        let session_ids = self
             .sessions
             .sessions()
             .iter()
@@ -2713,133 +2606,29 @@ impl App {
                     .ok()
                     .and_then(|handles| handles.status.lock().ok().map(|status| *status))
                     == Some(Status::Merged)
+                    && session
+                        .review_request
+                        .as_ref()
+                        .is_some_and(|review_request| {
+                            review_request.summary.target_branch == default_branch
+                        })
             })
             .map(|session| session.id.clone())
             .collect::<Vec<_>>();
-        let mut session_ids = Vec::new();
-        for session_id in merged_session_ids {
-            match self
-                .merged_session_reached_synced_branch(&session_id, default_branch)
-                .await
-            {
-                Ok(true) => session_ids.push(session_id),
-                Ok(false) => {}
-                Err(error) => {
-                    self.append_output_for_session(
-                        &session_id,
-                        &TranscriptNotice::ReviewRequestSyncWarning
-                            .format(format!("Durable restack marker load failed: {error}")),
-                    )
-                    .await;
-                    deferred_session_ids.push(session_id);
-                }
-            }
-        }
 
         for session_id in session_ids {
-            let session_head_hash = match self
-                .services
-                .db()
-                .sessions()
-                .load_session_merged_commit_hash(&session_id)
-                .await
-            {
-                Ok(session_head_hash) => session_head_hash,
-                Err(error) => {
-                    self.append_output_for_session(
-                        &session_id,
-                        &TranscriptNotice::ReviewRequestSyncWarning
-                            .format(format!("Merged commit hash load failed: {error}")),
-                    )
-                    .await;
-                    deferred_session_ids.push(session_id);
-
-                    continue;
-                }
-            };
-
-            if let Some(warning) = self
-                .complete_externally_merged_session(&session_id, session_head_hash)
-                .await
-            {
+            if let Some(warning) = self.complete_externally_merged_session(&session_id).await {
                 self.append_output_for_session(
                     &session_id,
                     &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
                 )
                 .await;
             }
-            if self
-                .sessions
-                .session_handles_or_err(&session_id)
-                .ok()
-                .and_then(|handles| handles.status.lock().ok().map(|status| *status))
-                == Some(Status::Merged)
-            {
-                deferred_session_ids.push(session_id);
-            }
         }
-
-        deferred_session_ids
     }
 
-    /// Returns whether one merged review is now present on the manually
-    /// synchronized branch, directly, through its merged stack parent, or by
-    /// the durable restack marker left after that parent was archived.
-    ///
-    /// Returns an error when the durable marker cannot be loaded.
-    async fn merged_session_reached_synced_branch(
-        &self,
-        session_id: &SessionId,
-        default_branch: &str,
-    ) -> Result<bool, DbError> {
-        let Ok(session) = self.sessions.session_or_err(session_id) else {
-            return Ok(false);
-        };
-        let Some(review_request) = session.review_request.as_ref() else {
-            return Ok(false);
-        };
-        if review_request.summary.target_branch == default_branch {
-            return Ok(true);
-        }
-        if let Some(parent_session_id) = session.parent_session_id.as_ref() {
-            let Some(parent_session) = self
-                .sessions
-                .sessions()
-                .iter()
-                .find(|candidate| candidate.id == *parent_session_id)
-            else {
-                return Ok(false);
-            };
-            let Some(parent_review_request) = parent_session.review_request.as_ref() else {
-                return Ok(false);
-            };
-
-            return Ok(review_request.summary.target_branch
-                == parent_review_request.summary.source_branch
-                && parent_review_request.summary.target_branch == default_branch
-                && self
-                    .sessions
-                    .session_handles_or_err(parent_session_id)
-                    .ok()
-                    .and_then(|handles| handles.status.lock().ok().map(|status| *status))
-                    == Some(Status::Merged));
-        }
-        if session.base_branch != default_branch {
-            return Ok(false);
-        }
-
-        let stack_base_commit_hash = self
-            .services
-            .db()
-            .sessions()
-            .get_session_stack_base_commit_hash(session_id)
-            .await?;
-
-        Ok(stack_base_commit_hash.is_some())
-    }
-
-    /// Marks one externally merged session `Done` after manual target sync,
-    /// persists child restack intent, and returns any finalization warning.
+    /// Marks one externally merged session `Done` after manual target sync and
+    /// returns any finalization warning.
     ///
     /// The session is still moved to `Done` when cleanup fails because the
     /// merge already happened upstream, but the caller should surface the
@@ -2847,7 +2636,6 @@ impl App {
     pub(super) async fn complete_externally_merged_session(
         &self,
         session_id: &str,
-        session_head_hash: Option<String>,
     ) -> Option<String> {
         let Ok(session) = self.sessions.session_or_err(session_id) else {
             return None;
@@ -2857,28 +2645,7 @@ impl App {
         };
 
         let folder = session.folder.clone();
-        let base_branch = session.base_branch.clone();
         let source_branch = crate::app::session::session_branch(session_id);
-        let app_event_tx = self.services.event_sender();
-
-        match crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
-            self.services.db(),
-            session_id,
-            &base_branch,
-            session_head_hash,
-        )
-        .await
-        {
-            Ok(child_session_ids) => {
-                crate::app::session::SessionManager::emit_stacked_parent_merge_completed(
-                    &app_event_tx,
-                    child_session_ids,
-                );
-            }
-            Err(error) => {
-                return Some(format!("Stacked child restack intent failed: {error}"));
-            }
-        }
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
@@ -2944,10 +2711,6 @@ impl App {
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
         let _ = status_transition.apply(Status::Canceled).await;
-        let _ = self
-            .sessions
-            .cancel_stacked_child_sessions(&self.services, session_id)
-            .await;
     }
 
     /// Builds a session-view info popup mode with explicit loading metadata.

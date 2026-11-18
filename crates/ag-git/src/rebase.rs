@@ -167,36 +167,6 @@ pub(crate) async fn rebase_start(
     .await?
 }
 
-/// Starts a rebase that moves commits after `old_base` onto `new_base`.
-///
-/// This is used for stacked sessions to drop commits that came from a parent
-/// branch after that parent has moved or squash-merged into its own base.
-///
-/// # Arguments
-/// * `repo_path` - Path to the git repository or worktree.
-/// * `new_base` - Ref that should become the new base of replayed commits.
-/// * `old_base` - Commit/ref whose ancestors should be left behind.
-///
-/// # Returns
-/// A [`RebaseStepResult`] describing whether the rebase completed or
-/// encountered conflicts.
-///
-/// # Errors
-/// Returns a [`GitError`] for non-conflict git failures.
-pub(crate) async fn rebase_onto_start(
-    repo_path: PathBuf,
-    new_base: String,
-    old_base: String,
-) -> Result<RebaseStepResult, GitError> {
-    spawn_blocking_in_context(move || {
-        let rebase_args = ["rebase", "--onto", new_base.as_str(), old_base.as_str()];
-        run_rebase_step(&repo_path, &rebase_args, "git rebase --onto", |detail| {
-            format!("Failed to rebase onto {new_base} after {old_base}: {detail}.")
-        })
-    })
-    .await?
-}
-
 /// Continues an in-progress rebase.
 ///
 /// # Arguments

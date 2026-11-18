@@ -6,8 +6,7 @@ aliases = [ "/docs/core-components/scheduler/"]
 +++
 
 `ag-scheduler` provides shared admission. A shared admission pool bounds concurrent
-session model turns to eight per Agentty process. Regular and stacked sessions use the
-same pool.
+session model turns to eight per Agentty process. Every session type uses the same pool.
 
 ## Connections
 

@@ -23,7 +23,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::help_action::ViewSessionState;
 use crate::runtime::EventResult;
-use crate::test_support::{SessionFixtureBuilder, new_test_app, session_manager_with_sessions};
+use crate::test_support::{new_test_app, session_manager_with_sessions};
 
 #[test]
 fn test_view_context_returns_none_for_non_view_mode() {
@@ -154,10 +154,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
-        mutate_session_branch: ViewActionState::Enabled,
-        rebase_session_branch: ViewActionState::Enabled,
         open_worktree: ViewActionState::Enabled,
-        reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
@@ -177,7 +174,6 @@ fn test_open_view_help_overlay_preserves_view_context() {
             context: HelpContext::View {
                 can_fork_session: true,
                 can_merge_session_branch: true,
-                can_mutate_session_branch: true,
                 can_open_worktree: true,
                 can_start_staged_session: false,
                 publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -379,39 +375,6 @@ fn test_view_session_snapshot_enables_continue_for_canceled_session() {
     assert!(!snapshot.can_open_worktree());
     assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
     assert_eq!(snapshot.session_status, Status::Canceled);
-}
-
-#[test]
-fn test_view_session_snapshot_blocks_parent_reply_with_running_child() {
-    // Arrange
-    let parent = SessionFixtureBuilder::new()
-        .id("parent")
-        .status(Status::Review)
-        .draft(false)
-        .build();
-    let mut child = SessionFixtureBuilder::new()
-        .id("child")
-        .status(Status::InProgress)
-        .draft(true)
-        .parent_session_id(Some("parent".into()))
-        .build();
-    child.prompt = "staged child draft".to_string();
-    let sessions = session_manager_with_sessions(vec![parent, child]);
-    let mut mode = AppMode::View {
-        session_id: "parent".into(),
-        scroll_offset: Some(1),
-    };
-    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
-
-    // Act
-    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
-        .expect("expected view snapshot");
-
-    // Assert
-    assert_eq!(snapshot.session_state, ViewSessionState::Review);
-    assert!(!snapshot.can_open_prompt_composer());
-    assert!(!snapshot.can_merge_session());
-    assert!(!snapshot.can_rebase_session());
 }
 
 #[test]

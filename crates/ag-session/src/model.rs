@@ -232,24 +232,6 @@ impl SessionStatus {
         matches!(self, SessionStatus::Merged)
     }
 
-    /// Returns whether this status is stable enough to start a stacked child.
-    pub fn allows_stacked_child_start(self) -> bool {
-        self.allows_review_actions()
-    }
-
-    /// Returns whether this status represents branch-mutating stack work.
-    pub fn is_stack_branch_mutating(self) -> bool {
-        matches!(
-            self,
-            SessionStatus::InProgress
-                | SessionStatus::Question
-                | SessionStatus::Queued
-                | SessionStatus::Rebasing
-                | SessionStatus::Merging
-                | SessionStatus::Merged
-        )
-    }
-
     /// Returns whether a transition to `next` is valid.
     pub fn can_transition_to(self, next: SessionStatus) -> bool {
         if self == next {
@@ -364,8 +346,6 @@ pub struct SessionSettings {
     pub base_branch: String,
     /// Whether the session uses deferred draft materialization.
     pub is_draft: bool,
-    /// Immediate parent session for a stacked session.
-    pub parent_session_id: Option<SessionId>,
     /// Provider permission mode used for future turns.
     pub permission_mode: PermissionMode,
     /// Owning project identifier.

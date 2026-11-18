@@ -331,7 +331,6 @@ fn project_sync_status_is_running_only_for_active_phases() {
     };
     assert!(status.is_running());
     status.phase = ProjectSyncPhase::Complete {
-        deferred_session_count: 0,
         pulled_commits: Some(0),
         pushed_commits: Some(0),
         resolved_conflict_count: 0,

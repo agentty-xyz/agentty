@@ -208,10 +208,10 @@ Markdown file previews use the same renderer.
 
 ### Forking a Review Session
 
-Press `F` in a root **Review** or **AgentReview** session to fork it after confirmation.
-The fork gets a new worktree from the source commit and a copy of the saved
-conversation; uncommitted changes are not copied. Publishing, review state, usage, and
-timing start fresh. Stacked children cannot be forked.
+Press `F` in a **Review** or **AgentReview** session to fork it after confirmation. The
+fork gets a new worktree from the source commit and a copy of the saved conversation;
+uncommitted changes are not copied. Publishing, review state, usage, and timing start
+fresh.
 
 ### Commit and Merge Behavior
 
@@ -265,29 +265,22 @@ unchanged.
 
 ## Session Types
 
-<a id="usage-draft-stacked"></a> Press `a` on **Sessions** and choose a type.
+<a id="usage-session-types"></a> Press `a` on **Sessions** and choose a type.
 Unavailable types are shown muted.
 
 - **Regular**: The first `Enter` starts work.
 - **Draft**: Each `Enter` stages a message; `s` starts them together and creates the
   worktree from the current base branch.
-- **Stacked**: A draft based on a parent session, up to five levels below a root.
-- **Append to stack** `[Preview]`: Moves an independent review-ready session below an
-  eligible parent and syncs it onto that branch. Sessions with children or linked review
-  requests cannot be moved.
 - **Harness** `[Preview]`: A regular session run by Agentty's built-in agent loop,
   offered only with `--experimental-harness`; see
   [Harness Sessions](@/docs/agents/backends.md#backends-harness).
 
-Start stacked drafts from parent to child; each needs a review-ready parent and an idle
-stack. Parents can receive replies and sync while their children are idle. Completing a
-parent turn or syncing the parent rebases review-ready descendants. A parent merge
-retargets children to its base and keeps their changes; failed child syncs show
-`[Sync Error]`. Canceling a parent cancels its unfinished descendants.
-
 The orchestrator session type is retired. Former controllers and their children remain
 independent sessions with transcripts and workspaces intact; pending campaign work is
 stopped, and former controllers and research sessions stay read-only.
+
+Stacked sessions are retired. Existing stacked sessions become independent sessions that
+keep their former parent branch as their base branch.
 
 ## Branch Publish Flow
 
@@ -297,7 +290,7 @@ GitLab merge request. During a turn or rebase, publishing waits in the queue.
 1. Keep the default branch name or enter one that does not exist remotely. The name is
    fixed after publishing.
 1. Agentty pushes with a force-with-lease check, then creates or refreshes an open
-   review request. Stacked children target their parent's branch.
+   review request.
 1. The request URL appears in chat. Later completed turns push their new commits to the
    same branch automatically when no chat or sync is queued. Retry failed pushes with
    `p`.
@@ -349,9 +342,8 @@ status in the background:
 
 A remote merge moves the session to read-only **Merged**, keeping its transcript and
 diff in Active. Sync its local target branch with `s` from the list to move it to
-**Done**, remove the worktree, and retarget stacked children; if that fails, follow the
-warning and retry. Syncing a parent's target also completes merged children. Closing an
-unmerged request cancels its session.
+**Done** and remove the worktree; if that fails, follow the warning and retry. Closing
+an unmerged request cancels its session.
 
 ### Watching a Review Request
 
@@ -419,7 +411,7 @@ image paste uses `wl-paste` when available; unsupported clipboards show an inlin
 
 `Up` / `Down` browse prompt history, keeping attached images. Type `@` to look up
 repository files; Rust and Python files show their module documentation summary.
-Unstarted stacked drafts look up files in the nearest available ancestor worktree. See
+Unstarted drafts look up files in the project checkout. See
 [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for editing keys.
 
 During a turn, the output shows live tool, MCP, and skill counts with succeeded, failed,
@@ -643,7 +635,7 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 - `failure_category` is `session`, `database`, `git`, `one_shot`, `no_agent`,
   `terminal`, or `workflow`; `stage` is `startup` or `runtime`. Failures before the
   database opens send nothing.
-- `session_type` is `regular`, `draft`, `stacked`, or `fork`.
+- `session_type` is `regular`, `draft`, or `fork`.
 - `agent` and `model` identify the selected provider and model; any local model is sent
   as `openai-compatible`, never by name.
 - `permission_mode` is `auto_edit`, `auto_edit_address_comments`, or `read_only`.

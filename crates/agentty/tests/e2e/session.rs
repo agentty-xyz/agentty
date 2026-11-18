@@ -17,7 +17,6 @@ mod review;
 mod review_comment;
 mod review_request;
 mod setting;
-mod stack;
 mod sync;
 mod telemetry;
 mod worktree;

@@ -86,63 +86,43 @@ async fn prompt_slash_state_offers_graph_only_with_the_experimental_flag() {
 }
 
 #[tokio::test]
-async fn at_mention_lookup_root_uses_nearest_materialized_stacked_ancestor() {
+async fn at_mention_lookup_root_uses_materialized_session_folder() {
     // Arrange
     let (mut app, temp_dir) = crate::test_support::new_test_app().await;
-    let ancestor_folder = temp_dir.path().join("materialized-ancestor");
-    fs::create_dir(&ancestor_folder).expect("failed to create ancestor folder");
+    let session_folder = temp_dir.path().join("materialized-session");
+    fs::create_dir(&session_folder).expect("failed to create session folder");
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
-            .id("ancestor-session")
-            .folder(ancestor_folder.clone())
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("unmaterialized-parent")
-            .folder(temp_dir.path().join("missing-parent"))
-            .parent_session_id(Some(SessionId::from("ancestor-session")))
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("unmaterialized-child")
-            .folder(temp_dir.path().join("missing-child"))
-            .parent_session_id(Some(SessionId::from("unmaterialized-parent")))
+            .id("materialized-session")
+            .folder(session_folder.clone())
             .build(),
     );
 
     // Act
-    let lookup_root = app.at_mention_lookup_root("unmaterialized-child");
+    let lookup_root = app.at_mention_lookup_root("materialized-session");
 
     // Assert
-    assert_eq!(lookup_root, ancestor_folder);
+    assert_eq!(lookup_root, session_folder);
 }
 
 #[tokio::test]
-async fn at_mention_lookup_root_falls_back_for_cyclic_parent_chain() {
+async fn at_mention_lookup_root_falls_back_for_unmaterialized_session() {
     // Arrange
     let (mut app, temp_dir) = crate::test_support::new_test_app().await;
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
-            .id("first-session")
-            .folder(temp_dir.path().join("missing-first"))
-            .parent_session_id(Some(SessionId::from("second-session")))
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("second-session")
-            .folder(temp_dir.path().join("missing-second"))
-            .parent_session_id(Some(SessionId::from("first-session")))
+            .id("unmaterialized-session")
+            .folder(temp_dir.path().join("missing-session"))
             .build(),
     );
 
     // Act
-    let lookup_root = app.at_mention_lookup_root("first-session");
+    let lookup_root = app.at_mention_lookup_root("unmaterialized-session");
+    let missing_session_root = app.at_mention_lookup_root("missing-session");
 
     // Assert
     assert_eq!(lookup_root, app.working_dir());
+    assert_eq!(missing_session_root, app.working_dir());
 }
 
 #[test]
@@ -332,32 +312,4 @@ async fn restore_prompt_progress_retains_snapshot_when_session_is_missing() {
     // Assert
     assert!(!restored);
     assert!(app.prompt_progress.contains_key(&session_id));
-}
-
-#[tokio::test]
-async fn restore_prompt_progress_retains_snapshot_while_stack_reply_is_blocked() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    let parent_session_id = SessionId::from("parent-session");
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id(parent_session_id.clone())
-            .status(Status::Review)
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("active-child")
-            .parent_session_id(Some(parent_session_id.clone()))
-            .status(Status::InProgress)
-            .build(),
-    );
-    app.save_prompt_progress(test_prompt_mode_snapshot(parent_session_id.clone()));
-
-    // Act
-    let restored = app.restore_prompt_progress(&parent_session_id).await;
-
-    // Assert
-    assert!(!restored);
-    assert!(app.prompt_progress.contains_key(&parent_session_id));
 }

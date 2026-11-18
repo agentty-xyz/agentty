@@ -13,14 +13,13 @@ use super::{
     EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width,
     extend_row_backgrounds_to_page_edges, model_column_width, pr_ready_label,
     prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
-    selected_session_id, status_column_width, timer_column_width, tree_position_label,
+    selected_session_id, status_column_width, timer_column_width,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionSize, Status,
 };
-use crate::domain::session_order::SessionTreePosition;
 use crate::domain::theme::ColorTheme;
 use crate::ui::render::Page;
 use crate::ui::style;
@@ -668,101 +667,6 @@ fn test_render_session_row_shows_model_with_persisted_reasoning_level() {
     // Assert
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains(&format!("{} [medium]", model_fixture::CODEX_MODEL_ID)));
-}
-
-#[test]
-fn test_render_session_row_connects_stacked_child_to_parent() {
-    // Arrange
-    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-    let backend = ratatui::backend::TestBackend::new(100, 12);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mut table_state = TableState::default();
-    table_state.select(Some(1));
-    let mut parent_session =
-        crate::test_support::titled_session_fixture("parent-1", Status::Review);
-    parent_session.title = Some("Parent session".to_string());
-    let mut child_session = crate::test_support::titled_session_fixture("child-1", Status::Draft);
-    child_session.parent_session_id = Some("parent-1".into());
-    child_session.title = Some("Child session".to_string());
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    terminal
-        .draw(|frame| {
-            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
-                .render(frame, frame.area());
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("Parent session"));
-    assert!(text.contains("└ [XS]  Child session"));
-    let buffer = terminal.backend().buffer();
-    let fallback_cell = &buffer.content()[0];
-    let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
-    assert_eq!(tree_cell.fg, style::palette::text_muted());
-    assert_eq!(tree_cell.bg, style::palette::surface_selection());
-    assert_ne!(tree_cell.fg, tree_cell.bg);
-}
-
-#[test]
-fn test_tree_position_label_uses_middle_branch_for_nonfinal_child() {
-    // Arrange
-    let tree_position = SessionTreePosition::Child {
-        depth: 2,
-        is_last: false,
-    };
-
-    // Act
-    let label = tree_position_label(tree_position);
-
-    // Assert
-    assert_eq!(label, "  ├ ");
-}
-
-#[test]
-fn test_render_session_rows_indent_to_stack_depth_five() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(100, 14);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mut table_state = TableState::default();
-    table_state.select(Some(5));
-    let sessions = (0..=5)
-        .map(|depth| {
-            let mut session = crate::test_support::titled_session_fixture(
-                &format!("level-{depth}"),
-                Status::Review,
-            );
-            session.title = Some(if depth == 0 {
-                "Stack root".to_string()
-            } else {
-                format!("Stack level {depth}")
-            });
-            if depth > 0 {
-                session.parent_session_id = Some(format!("level-{}", depth - 1).into());
-            }
-
-            session
-        })
-        .collect::<Vec<_>>();
-
-    // Act
-    terminal
-        .draw(|frame| {
-            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
-                .render(frame, frame.area());
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("Stack root"));
-    assert!(text.contains("└ [XS]  Stack level 1"));
-    assert!(text.contains("  └ [XS]  Stack level 2"));
-    assert!(text.contains("    └ [XS]  Stack level 3"));
-    assert!(text.contains("      └ [XS]  Stack level 4"));
-    assert!(text.contains("        └ [XS]  Stack level 5"));
 }
 
 #[test]

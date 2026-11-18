@@ -575,7 +575,6 @@ pub(super) fn successful_manual_sync_completion(
         },
         result: Ok(SyncMainOutcome {
             default_branch: default_branch.to_string(),
-            deferred_merged_session_ids: Vec::new(),
             pulled_commit_titles: Vec::new(),
             pulled_commits: Some(pulled_commits),
             pushed_commit_titles: Vec::new(),

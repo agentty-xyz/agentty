@@ -267,10 +267,7 @@ fn test_help_context_view_keybindings_for_in_progress_show_sync_and_queue_and_hi
     let context = HelpContext::View {
         can_fork_session: true,
         can_merge_session_branch: true,
-        can_mutate_session_branch: true,
         can_open_worktree: true,
-        can_rebase_session_branch: true,
-        can_reply_to_session: true,
         can_start_staged_session: false,
         can_view_review_comments: false,
         publish_pull_request_action: None,
@@ -305,10 +302,7 @@ fn test_help_context_restore_mode_ignores_help_only_view_fields() {
     let context = HelpContext::View {
         can_fork_session: true,
         can_merge_session_branch: true,
-        can_mutate_session_branch: true,
         can_open_worktree: true,
-        can_rebase_session_branch: true,
-        can_reply_to_session: true,
         can_start_staged_session: false,
         can_view_review_comments: false,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -415,10 +409,7 @@ fn test_help_context_view_keybindings_include_publish_pull_request_action() {
     let context = HelpContext::View {
         can_fork_session: true,
         can_merge_session_branch: true,
-        can_mutate_session_branch: true,
         can_open_worktree: true,
-        can_rebase_session_branch: true,
-        can_reply_to_session: true,
         can_start_staged_session: false,
         can_view_review_comments: false,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),

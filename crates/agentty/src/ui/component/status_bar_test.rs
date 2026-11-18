@@ -129,17 +129,14 @@ fn test_project_sync_text_formats_each_terminal_and_progress_phase() {
         ),
         (
             ProjectSyncPhase::Complete {
-                deferred_session_count: 2,
                 pulled_commits: Some(3),
                 pushed_commits: Some(4),
                 resolved_conflict_count: 1,
             },
-            "Synced agentty/main: 3 pulled, 4 pushed, 1 conflict resolved, 2 sessions need \
-             attention",
+            "Synced agentty/main: 3 pulled, 4 pushed, 1 conflict resolved",
         ),
         (
             ProjectSyncPhase::Complete {
-                deferred_session_count: 0,
                 pulled_commits: None,
                 pushed_commits: None,
                 resolved_conflict_count: 0,

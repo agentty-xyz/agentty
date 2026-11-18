@@ -353,7 +353,6 @@ async fn test_process_event_with_key_handler_pastes_into_prompt_mode() {
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentKind::Antigravity.default_model(),
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: "project".to_string(),
         prompt: String::new(),

@@ -21,8 +21,8 @@ use super::{
     list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
     list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_new_remote_branch,
-    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
-    ref_hash, remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
+    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_start, ref_hash,
+    remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
     squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
 };
 
@@ -123,17 +123,6 @@ pub trait GitClient: Send + Sync {
         &self,
         repo_path: PathBuf,
         target_branch: String,
-    ) -> GitFuture<Result<RebaseStepResult, GitError>>;
-
-    /// Starts `git rebase --onto new_base old_base` in `repo_path`.
-    ///
-    /// # Errors
-    /// Returns an error when rebase cannot be started.
-    fn rebase_onto_start(
-        &self,
-        repo_path: PathBuf,
-        new_base: String,
-        old_base: String,
     ) -> GitFuture<Result<RebaseStepResult, GitError>>;
 
     /// Continues an in-progress rebase in `repo_path`.
@@ -602,15 +591,6 @@ impl GitClient for RealGitClient {
         target_branch: String,
     ) -> GitFuture<Result<RebaseStepResult, GitError>> {
         Box::pin(async move { rebase_start(repo_path, target_branch).await })
-    }
-
-    fn rebase_onto_start(
-        &self,
-        repo_path: PathBuf,
-        new_base: String,
-        old_base: String,
-    ) -> GitFuture<Result<RebaseStepResult, GitError>> {
-        Box::pin(async move { rebase_onto_start(repo_path, new_base, old_base).await })
     }
 
     fn rebase_continue(&self, repo_path: PathBuf) -> GitFuture<Result<RebaseStepResult, GitError>> {

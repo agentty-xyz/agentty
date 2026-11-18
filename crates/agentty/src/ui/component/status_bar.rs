@@ -112,7 +112,6 @@ impl StatusBar {
                 style::palette::warning(),
             ),
             ProjectSyncPhase::Complete {
-                deferred_session_count,
                 pulled_commits,
                 pushed_commits,
                 resolved_conflict_count,
@@ -122,7 +121,6 @@ impl StatusBar {
                     *pulled_commits,
                     *pushed_commits,
                     *resolved_conflict_count,
-                    *deferred_session_count,
                 ),
                 style::palette::success(),
             ),
@@ -312,7 +310,6 @@ fn sync_complete_text(
     pulled_commits: Option<u32>,
     pushed_commits: Option<u32>,
     resolved_conflict_count: usize,
-    deferred_session_count: usize,
 ) -> String {
     let mut summaries = Vec::new();
     if let Some(pulled_commits) = pulled_commits {
@@ -325,12 +322,6 @@ fn sync_complete_text(
         summaries.push(format!(
             "{} resolved",
             count_label(resolved_conflict_count, "conflict")
-        ));
-    }
-    if deferred_session_count > 0 {
-        summaries.push(format!(
-            "{} need attention",
-            count_label(deferred_session_count, "session")
         ));
     }
     if summaries.is_empty() {

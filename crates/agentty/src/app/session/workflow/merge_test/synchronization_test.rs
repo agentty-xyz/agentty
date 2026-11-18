@@ -21,7 +21,7 @@ use super::super::super::worker::has_unfinished_rebase_operation;
 use super::super::{
     FinalizeRebaseInput, MergeStartRestoreContext, MockSyncAssistClient, REBASE_ASSIST_POLICY,
     RealSyncAssistClient, RebaseAssistInput, RebaseAssistLoopInput, RebaseAssistMode,
-    RebaseAssistWorkspace, RebasePlan, SessionMergeService, SyncSessionStartError,
+    RebaseAssistWorkspace, SessionMergeService, SyncSessionStartError,
 };
 use super::support::{
     assert_merge_metadata, blocking_auto_push_git_client, build_merge_task_input_for_test,
@@ -209,7 +209,7 @@ async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
         .returning(|_| Box::pin(async { Ok(()) }));
     let (_temp_dir, mut input) =
         build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-    input.rebase_plan = RebasePlan::target("origin/main".to_string());
+    input.rebase_target = "origin/main".to_string();
     let workflow = Span::root("session.sync", Vec::new());
     let workflow_id = workflow.context().span().span_context().span_id();
 
@@ -547,7 +547,7 @@ async fn test_rebase_assist_input_clone() {
         id: "session-123".into(),
         run_client: test_run_client(),
         transcript: empty_transcript(),
-        rebase_plan: RebasePlan::target("origin/main".to_string()),
+        rebase_target: "origin/main".to_string(),
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_update_versions: Arc::default(),
     };
@@ -558,7 +558,7 @@ async fn test_rebase_assist_input_clone() {
     // Assert
     assert_eq!(input.id, cloned_input.id);
     assert_eq!(input.folder, cloned_input.folder);
-    assert_eq!(input.rebase_plan, cloned_input.rebase_plan);
+    assert_eq!(input.rebase_target, cloned_input.rebase_target);
     assert_eq!(input.session_agent, cloned_input.session_agent);
 }
 
@@ -933,26 +933,17 @@ async fn test_finalize_rebase_task_skips_auto_push_without_published_branch() {
     })
     .await;
 
-    // Assert — no PublishedBranchSyncUpdated events should be emitted,
-    // but the stack-sync fan-out event should still be available.
+    // Assert — no PublishedBranchSyncUpdated events should be emitted.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let mut sync_event_count = 0;
-    let mut stack_sync_event_count = 0;
     while let Ok(event) = app_event_rx.try_recv() {
         if matches!(&event, AppEvent::PublishedBranchSyncUpdated { .. }) {
             sync_event_count += 1;
-        }
-        if matches!(&event, AppEvent::StackedParentSyncCompleted { .. }) {
-            stack_sync_event_count += 1;
         }
     }
     assert_eq!(
         sync_event_count, 0,
         "should not emit sync events without published branch"
-    );
-    assert_eq!(
-        stack_sync_event_count, 1,
-        "should emit one stacked parent sync completion event"
     );
 
     let transcript_text = transcript
@@ -1454,73 +1445,6 @@ async fn test_run_rebase_assist_loop_resumes_in_progress_rebase_and_reports_fail
     );
 }
 
-/// Verifies a successful deterministic `--onto` restack reports its new base
-/// and clears the stack-base hash of a child whose parent link is gone.
-#[tokio::test]
-async fn test_execute_rebase_workflow_completes_onto_restack_and_clears_stack_base() {
-    // Arrange
-    let mut mock_git_client = git::MockGitClient::new();
-    mock_git_client
-        .expect_is_worktree_clean()
-        .once()
-        .returning(|_| Box::pin(async { Ok(true) }));
-    mock_git_client
-        .expect_is_rebase_in_progress()
-        .once()
-        .returning(|_| Box::pin(async { Ok(false) }));
-    mock_git_client
-        .expect_rebase_onto_start()
-        .once()
-        .withf(|_, new_base, old_base| new_base == "main" && old_base == "parent-tip")
-        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    let (_temp_dir, mut input) =
-        build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-    input.rebase_plan = RebasePlan::Onto {
-        new_base: "main".to_string(),
-        old_base: "parent-tip".to_string(),
-    };
-    let project_id = input
-        .db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to insert project");
-    input
-        .db
-        .sessions()
-        .insert_session(
-            "session-123",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "Rebasing",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session row");
-    input
-        .db
-        .sessions()
-        .update_session_stack_base_commit_hash("session-123", Some("parent-tip".to_string()))
-        .await
-        .expect("failed to seed stack base");
-    let db = input.db.clone();
-
-    // Act
-    let result = SessionManager::execute_rebase_workflow(input).await;
-    let stack_base = db
-        .sessions()
-        .get_session_stack_base_commit_hash("session-123")
-        .await
-        .expect("failed to load stack base");
-
-    // Assert
-    assert_eq!(
-        result.map_err(|error| error.to_string()),
-        Ok("Successfully synced wt/session- onto main".to_string())
-    );
-    assert_eq!(stack_base, None);
-}
-
 #[tokio::test]
 async fn test_run_rebase_start_uses_resolved_rebase_target() {
     // Arrange
@@ -1532,32 +1456,7 @@ async fn test_run_rebase_start_uses_resolved_rebase_target() {
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
     let (_temp_dir, mut input) =
         build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-    input.rebase_plan = RebasePlan::target("origin/main".to_string());
-
-    // Act
-    let result = SessionManager::run_rebase_start(&input).await;
-
-    // Assert
-    let step_result = result.expect("rebase start should succeed");
-    assert_eq!(step_result, git::RebaseStepResult::Completed);
-}
-
-#[tokio::test]
-async fn test_run_rebase_start_uses_onto_plan() {
-    // Arrange
-    let mut mock_git_client = git::MockGitClient::new();
-    mock_git_client.expect_rebase_start().times(0);
-    mock_git_client
-        .expect_rebase_onto_start()
-        .once()
-        .withf(|_, new_base, old_base| new_base == "main" && old_base == "parent-tip")
-        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    let (_temp_dir, mut input) =
-        build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-    input.rebase_plan = RebasePlan::Onto {
-        new_base: "main".to_string(),
-        old_base: "parent-tip".to_string(),
-    };
+    input.rebase_target = "origin/main".to_string();
 
     // Act
     let result = SessionManager::run_rebase_start(&input).await;
@@ -1865,56 +1764,6 @@ async fn test_resolve_session_rebase_target_fetches_remote_base_for_published_se
 }
 
 #[tokio::test]
-async fn test_resolve_session_rebase_plan_uses_recorded_stack_base() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    let temp_dir = tempdir().expect("failed to create temporary test directory");
-    let project_path = temp_dir.path().to_string_lossy().to_string();
-    let project_id = db
-        .projects()
-        .upsert_project(&project_path, Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session(
-            "child-session",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-    db.sessions()
-        .update_session_stack_base_commit_hash("child-session", Some("parent-tip".to_string()))
-        .await
-        .expect("failed to set stack base hash");
-    let mut mock_git_client = git::MockGitClient::new();
-    mock_git_client.expect_fetch_remote().times(0);
-    let folder = temp_dir.path().join("child-session");
-
-    // Act
-    let rebase_plan = SessionManager::resolve_session_rebase_plan(
-        &db,
-        &mock_git_client,
-        &folder,
-        "child-session",
-        "main",
-    )
-    .await
-    .expect("failed to resolve rebase plan");
-
-    // Assert
-    assert_eq!(
-        rebase_plan,
-        RebasePlan::Onto {
-            new_base: "main".to_string(),
-            old_base: "parent-tip".to_string(),
-        }
-    );
-}
-
-#[tokio::test]
 async fn test_resolve_session_rebase_target_reports_published_fetch_failure() {
     // Arrange
     let db = AppRepositories::in_memory().await.expect("db should open");
@@ -1993,11 +1842,6 @@ async fn test_execute_merge_workflow_reuses_session_branch_commit_messages() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    mock_git_client
-        .expect_head_hash()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
     mock_git_client
         .expect_squash_merge_diff()
         .times(1)
@@ -2232,9 +2076,6 @@ fn expect_merge_rebase_completes(git_client: &mut git::MockGitClient) {
     git_client
         .expect_rebase_start()
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    git_client
-        .expect_head_hash()
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
 }
 
 /// Expects a squash diff with changes that require a commit message.
@@ -2264,11 +2105,6 @@ async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    mock_git_client
-        .expect_head_hash()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
     mock_git_client
         .expect_squash_merge_diff()
         .times(1)
@@ -2337,7 +2173,7 @@ async fn test_merge_session_rejects_linked_review_request_before_workflow_start(
             crate::test_support::SessionFixtureBuilder::new()
                 .review_request(Some(linked_github_review_request()))
                 .build(),
-            "Merge cannot run for linked review requests or while another stack session is active",
+            "Merge cannot run for linked review requests",
         ),
         (
             crate::test_support::SessionFixtureBuilder::new()
@@ -2418,64 +2254,6 @@ async fn test_rebase_session_skips_duplicate_unfinished_rebase_for_running_turn(
             .collect::<Vec<_>>(),
         ["rebase-1"]
     );
-}
-
-/// Verifies stacked-child restacks only target review-ready children of a
-/// review-ready parent and report children whose worktree is missing.
-#[tokio::test]
-async fn test_stacked_child_restacks_report_children_without_worktrees() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    for (id, parent_session_id, status) in [
-        ("parent", None, Status::Review),
-        ("child", Some("parent"), Status::Review),
-        ("draft-child", Some("parent"), Status::Draft),
-    ] {
-        app.sessions.push_session(
-            crate::test_support::SessionFixtureBuilder::new()
-                .id(id)
-                .parent_session_id(parent_session_id.map(Into::into))
-                .status(status)
-                .build(),
-        );
-    }
-    let expected_failures = vec![(
-        "child".to_string(),
-        "No git worktree for this session".to_string(),
-    )];
-
-    // Act
-    let missing_parent_failures = app
-        .sessions
-        .rebase_stacked_children_after_parent_turn(&app.services, "missing")
-        .await;
-    let draft_parent_failures = app
-        .sessions
-        .rebase_stacked_children_after_parent_turn(&app.services, "draft-child")
-        .await;
-    let turn_failures = app
-        .sessions
-        .rebase_stacked_children_after_parent_turn(&app.services, "parent")
-        .await;
-    let merge_failures = app
-        .sessions
-        .rebase_sessions_after_parent_merge(
-            &app.services,
-            vec!["draft-child".into(), "child".into()],
-        )
-        .await;
-
-    // Assert
-    let failure_text = |failures: Vec<(crate::domain::session::SessionId, SessionError)>| {
-        failures
-            .into_iter()
-            .map(|(session_id, error)| (session_id.as_str().to_string(), error.to_string()))
-            .collect::<Vec<_>>()
-    };
-    assert!(missing_parent_failures.is_empty());
-    assert!(draft_parent_failures.is_empty());
-    assert_eq!(failure_text(turn_failures), expected_failures);
-    assert_eq!(failure_text(merge_failures), expected_failures);
 }
 
 #[test]

@@ -36,7 +36,7 @@ pub use rebase::{InProgressGitOperation, RebaseStepResult};
 pub(crate) use rebase::{
     abort_rebase, has_unmerged_paths, in_progress_operation, is_rebase_in_progress,
     list_conflicted_files, list_staged_conflict_marker_files, rebase, rebase_continue,
-    rebase_onto_start, rebase_start,
+    rebase_start,
 };
 pub(crate) use repo::{main_checkout_working_tree, main_repo_root, repo_url};
 pub(crate) use sleeper::{Sleeper, ThreadSleeper};

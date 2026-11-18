@@ -53,46 +53,6 @@ fn session_fixture(session_id: &str) -> Session {
     session
 }
 
-#[test]
-fn route_shared_context_finds_appendable_parent_for_selected_review_session() {
-    // Arrange
-    let sessions = vec![session_fixture("source"), session_fixture("parent")];
-    let mut project_table_state = TableState::default();
-    let mut table_state = TableState::default();
-    table_state.select(Some(0));
-    let shared = RouteSharedContext {
-        active_project_id: 1,
-        archived_session_count: 0,
-        available_agent_clis: &[],
-        current_tab: Tab::Sessions,
-        default_reasoning_level: ReasoningLevel::High,
-        harness_availability: HarnessAvailability::Hidden,
-        available_agent_kinds: AgentKind::ALL,
-        has_more_archived_sessions: false,
-        is_archive_expanded: false,
-        mru_project_order: &[],
-        process_resources: None,
-        project_table_state: &mut project_table_state,
-        projects: &[],
-        session_git_statuses: &HashMap::new(),
-        sessions: &sessions,
-        settings_screen: None,
-        stats_activity: &[],
-        table_state: &mut table_state,
-    };
-
-    // Act
-    let can_append = shared.can_append_selected_session();
-    let can_create_stacked = shared.can_create_stacked_session();
-    let parent_sessions = shared.stack_append_parent_sessions("source");
-
-    // Assert
-    assert!(can_append);
-    assert!(can_create_stacked);
-    assert_eq!(parent_sessions.len(), 1);
-    assert_eq!(parent_sessions[0].id.as_str(), "parent");
-}
-
 /// Flattens a rendered test buffer into a plain string for text assertions.
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     buffer
@@ -263,10 +223,7 @@ fn surface_for_help_context_classifies_each_restored_page() {
     let view_context = HelpContext::View {
         can_fork_session: true,
         can_merge_session_branch: true,
-        can_mutate_session_branch: true,
         can_open_worktree: true,
-        can_rebase_session_branch: true,
-        can_reply_to_session: true,
         can_start_staged_session: false,
         can_view_review_comments: false,
         publish_pull_request_action: None,
@@ -680,13 +637,6 @@ fn render_list_backed_modes_forward_frame_time_to_every_overlay() {
             "New Session",
         ),
         (
-            AppMode::StackAppendParentSelection {
-                selected_parent_index: 0,
-                session_id: "session-overlay".into(),
-            },
-            "Append to stack",
-        ),
-        (
             AppMode::PreCommitHookWarning {
                 message: "Install the hook".to_string(),
             },
@@ -791,10 +741,7 @@ fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
                 context: crate::presentation::app_mode::HelpContext::View {
                     can_fork_session: true,
                     can_merge_session_branch: true,
-                    can_mutate_session_branch: true,
                     can_open_worktree: true,
-                    can_rebase_session_branch: true,
-                    can_reply_to_session: true,
                     can_start_staged_session: false,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,

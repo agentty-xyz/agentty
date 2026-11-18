@@ -554,10 +554,10 @@ async fn canceling_one_task_attempt_does_not_interrupt_a_later_attempt() {
             .is_err()
     );
 
-    assert_implementation_reserves_stack(&mut app, factory, service, session_id).await;
+    assert_implementation_reserves_preparation(&mut app, factory, service, session_id).await;
 }
 
-async fn assert_implementation_reserves_stack(
+async fn assert_implementation_reserves_preparation(
     app: &mut App,
     factory: Arc<TestSessionRunFactory>,
     service: ag_session::SessionService,
@@ -585,13 +585,6 @@ async fn assert_implementation_reserves_stack(
         ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     implementation.task_id = "implementation".to_string();
     implementation.input.accepted_plan = Some(plan);
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("child")
-            .parent_session_id(Some(session_id.clone()))
-            .status(SessionStatus::Review)
-            .build(),
-    );
     let paused = app
         .sessions
         .pause_session_worker(&session_id)
@@ -613,11 +606,15 @@ async fn assert_implementation_reserves_stack(
         .returning(|_| Box::pin(async { Ok(()) }));
     factory.register("implementation", Arc::new(channel));
 
-    // Act / Assert: queued implementation reserves the stack before dispatch.
+    // Act / Assert: queued implementation reserves branch work before dispatch.
     app.drive_session_request(service.submit_agent_task(&session_id, implementation))
         .await
         .expect("implementation admitted");
-    assert!(!app.sessions.can_reply_to_session_in_stack("child"));
+    assert!(
+        app.sessions
+            .worker_service
+            .has_preparation_reservation(&session_id)
+    );
     drop(paused);
     tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
         .await
@@ -637,7 +634,11 @@ async fn assert_implementation_reserves_stack(
         .expect("task")
         .expect("present");
     assert_eq!(task.attempts[0].status, TaskAttemptStatus::Succeeded);
-    assert!(app.sessions.can_reply_to_session_in_stack("child"));
+    assert!(
+        !app.sessions
+            .worker_service
+            .has_preparation_reservation(&session_id)
+    );
     assert_eq!(
         app.services
             .db()
@@ -652,48 +653,9 @@ async fn assert_implementation_reserves_stack(
 }
 
 #[tokio::test]
-async fn implementation_admission_preserves_stack_branch_exclusivity() {
+async fn deferred_task_admission_requires_a_prepared_workspace() {
     // Arrange
     let (mut app, directory) = new_test_app().await;
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("parent")
-            .status(SessionStatus::Review)
-            .build(),
-    );
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("child")
-            .parent_session_id(Some("parent".into()))
-            .status(SessionStatus::InProgress)
-            .build(),
-    );
-    // Act
-    let result = app
-        .sessions
-        .validate_agent_task_admission("parent", TaskAgentRole::Implementer);
-
-    // Assert
-    assert!(
-        result
-            .expect_err("active child blocks mutation")
-            .to_string()
-            .contains("Stacked task execution")
-    );
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("deferred-child")
-            .parent_session_id(Some("parent".into()))
-            .draft(true)
-            .status(SessionStatus::Draft)
-            .build(),
-    );
-    let deferred_child = app
-        .sessions
-        .validate_agent_task_admission("deferred-child", TaskAgentRole::Planner)
-        .expect_err("active stack blocks workspace preparation");
-    assert!(deferred_child.to_string().contains("idle stack"));
-    // Act / Assert: deferred workspaces fail before admitting model work.
     app.sessions.push_session(
         SessionFixtureBuilder::new()
             .id("deferred")
@@ -703,12 +665,16 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
             .build(),
     );
     let service = app.session_service();
+
+    // Act
     let deferred = app
         .drive_session_request(
             service.submit_agent_task(&SessionId::from("deferred"), request("deferred")),
         )
         .await
         .expect_err("unprepared workspace");
+
+    // Assert
     assert!(deferred.to_string().contains("prepared workspace"));
     assert!(
         app.services
@@ -722,29 +688,34 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
 }
 
 #[test]
-fn deferred_planner_requires_a_review_ready_parent_even_when_stack_is_idle() {
+fn task_admission_accepts_review_sessions_and_planner_drafts_only() {
     // Arrange
-    let parent = SessionFixtureBuilder::new()
-        .id("parent")
-        .status(SessionStatus::Done)
+    let review = SessionFixtureBuilder::new()
+        .id("review")
+        .status(SessionStatus::Review)
         .build();
-    let child = SessionFixtureBuilder::new()
-        .id("child")
-        .parent_session_id(Some("parent".into()))
+    let draft = SessionFixtureBuilder::new()
+        .id("draft")
         .draft(true)
         .status(SessionStatus::Draft)
         .build();
-    let mut manager = session_manager_with_handles(vec![parent, child], HashMap::new());
+    let mut manager = session_manager_with_handles(vec![review, draft], HashMap::new());
 
     // Act
-    let result = manager.validate_agent_task_admission("child", TaskAgentRole::Planner);
+    let review_implementer =
+        manager.validate_agent_task_admission("review", TaskAgentRole::Implementer);
+    let draft_planner = manager.validate_agent_task_admission("draft", TaskAgentRole::Planner);
+    let draft_implementer =
+        manager.validate_agent_task_admission("draft", TaskAgentRole::Implementer);
 
     // Assert
+    assert!(review_implementer.is_ok());
+    assert!(draft_planner.is_ok());
     assert!(
-        result
-            .expect_err("parent must be in review")
+        draft_implementer
+            .expect_err("draft implementer")
             .to_string()
-            .contains("review-ready parent")
+            .contains("cannot accept isolated task in status `Draft`")
     );
 }
 

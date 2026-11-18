@@ -138,7 +138,6 @@ async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: String::new(),
         prompt: String::new(),
@@ -360,27 +359,19 @@ async fn test_question_enter_encodings_submit_without_lookup() {
 }
 
 #[tokio::test]
-async fn test_question_at_mention_loads_parent_worktree_entries_for_stacked_session() {
+async fn test_question_at_mention_loads_session_worktree_entries() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;
-    let parent_session_id = SessionId::from("parent-session");
-    let child_session_id = SessionId::from("child-session");
-    let parent_folder = base_dir.path().join("parent-worktree");
-    let expected_path = "parent_question_target.txt";
-    std::fs::create_dir_all(&parent_folder).expect("failed to create parent worktree");
-    std::fs::write(parent_folder.join(expected_path), "parent")
-        .expect("failed to write parent worktree file");
+    let question_session_id = SessionId::from("question-session");
+    let session_folder = base_dir.path().join("session-worktree");
+    let expected_path = "question_target.txt";
+    std::fs::create_dir_all(&session_folder).expect("failed to create session worktree");
+    std::fs::write(session_folder.join(expected_path), "session")
+        .expect("failed to write session worktree file");
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
-            .id(parent_session_id.clone())
-            .folder(parent_folder)
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id(child_session_id.clone())
-            .folder(base_dir.path().join("missing-child-worktree"))
-            .parent_session_id(Some(parent_session_id))
+            .id(question_session_id.clone())
+            .folder(session_folder)
             .status(Status::Question)
             .build(),
     );
@@ -389,12 +380,12 @@ async fn test_question_at_mention_loads_parent_worktree_entries_for_stacked_sess
         attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
-        input: InputState::with_text("@parent".to_string()),
+        input: InputState::with_text("@question".to_string()),
         questions: vec![QuestionItem::new("Which file?")],
         responses: Vec::new(),
         scroll_offset: None,
         selected_option_index: None,
-        session_id: child_session_id.clone(),
+        session_id: question_session_id.clone(),
     };
 
     // Act
@@ -416,7 +407,7 @@ async fn test_question_at_mention_loads_parent_worktree_entries_for_stacked_sess
         AppEvent::AtMentionEntriesLoaded {
             entries,
             session_id,
-        } if session_id == child_session_id
+        } if session_id == question_session_id
             && entries.contains(&crate::domain::file_entry::FileEntry {
                 is_dir: false,
                 path: expected_path.to_string(),
