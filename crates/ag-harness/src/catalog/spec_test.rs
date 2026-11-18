@@ -1,6 +1,8 @@
 //! Catalog data unit tests for identifiers, capabilities, prices, cost
 //! tiers, and specifications.
 
+use std::num::NonZeroU32;
+
 use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::model::ModelProfile;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -203,7 +205,7 @@ fn model_spec_starts_unknown_and_records_declarations() {
         .with_max_output(16_000)
         .with_capabilities(capabilities)
         .with_pricing(pricing)
-        .with_max_concurrency(4);
+        .with_max_concurrency(NonZeroU32::MIN.saturating_add(3));
 
     // Assert
     assert_eq!(unknown.id().as_str(), "host/model");
@@ -218,7 +220,7 @@ fn model_spec_starts_unknown_and_records_declarations() {
     assert_eq!(declared.max_output(), Some(16_000));
     assert_eq!(declared.capabilities(), capabilities);
     assert_eq!(declared.pricing(), Some(pricing));
-    assert_eq!(declared.max_concurrency(), Some(4));
+    assert_eq!(declared.max_concurrency().map(NonZeroU32::get), Some(4));
 }
 
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]

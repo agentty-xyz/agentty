@@ -15,6 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::bash::{BashConfig, CommandRecord};
+use crate::budget::BudgetLedger;
 use crate::cancellation::{
     ControlledTurn, SettlementError, SettlementPhase, TurnControl, TurnRecord,
 };
@@ -44,6 +45,7 @@ use crate::write_journal::{WriteRecord, WriteStatus};
 #[non_exhaustive]
 pub struct RunRequest {
     bash: Option<BashConfig>,
+    budget: Option<Arc<dyn BudgetLedger>>,
     comparison_base: Option<ComparisonBase>,
     generation: GenerationParams,
     input: TurnInput,
@@ -58,6 +60,7 @@ impl RunRequest {
     pub fn new(input: impl Into<TurnInput>) -> Self {
         Self {
             bash: None,
+            budget: None,
             comparison_base: None,
             generation: GenerationParams::default(),
             input: input.into(),
@@ -77,6 +80,18 @@ impl RunRequest {
     /// before the run starts.
     pub fn limits(mut self, limits: RunLimits) -> Self {
         self.limits = limits;
+
+        self
+    }
+
+    /// Draws this run's model requests from `ledger` instead of the
+    /// harness's [`crate::HarnessBuilder::budget`]. The harness ledger is not
+    /// consulted for this run, so its caps do not apply; to stack caps,
+    /// pass a ledger that reserves from both. A ledger that refuses a
+    /// request ends the run with [`ErrorKind::BudgetExhausted`], settled
+    /// like a [`Self::limits`] stop.
+    pub fn budget(mut self, ledger: Arc<dyn BudgetLedger>) -> Self {
+        self.budget = Some(ledger);
 
         self
     }
@@ -130,6 +145,11 @@ impl RunRequest {
         self.comparison_base = Some(base);
 
         self
+    }
+
+    /// Returns the ledger set with [`Self::budget`], if any.
+    pub(crate) fn ledger(&self) -> Option<Arc<dyn BudgetLedger>> {
+        self.budget.clone()
     }
 
     /// Resolves the input and turn options, using `default_output` and

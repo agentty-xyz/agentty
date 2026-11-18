@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
+use crate::budget::Unlimited;
 use crate::calibration::ContextCalibration;
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, ContextSummaryPolicy, HeuristicContextEstimator,
@@ -39,6 +40,8 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
     let engine = Engine {
+        budget: &Unlimited,
+        concurrency: None,
         context_budget: unbounded_context_budget(),
         context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator::DEFAULT,
@@ -48,6 +51,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         events: None,
         file_system: &file_system,
         lifecycle: &lifecycle,
+        max_output: None,
         model: &model,
         model_reasoning_effort: Some(ReasoningEffort::Low),
         options: &options,
@@ -98,6 +102,8 @@ async fn run_scripted(
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
     let engine = Engine {
+        budget: &Unlimited,
+        concurrency: None,
         context_budget,
         context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator::DEFAULT,
@@ -107,6 +113,7 @@ async fn run_scripted(
         events: None,
         file_system: &file_system,
         lifecycle: &lifecycle,
+        max_output: None,
         model: &model,
         model_reasoning_effort: None,
         options: &options,

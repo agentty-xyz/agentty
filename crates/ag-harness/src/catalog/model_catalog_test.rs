@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::env::VarError;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
+use std::num::NonZeroU32;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
@@ -368,6 +369,37 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
             Err(CatalogError::UnknownModel { id }) if id.as_str() == VISION
         ));
     }
+}
+
+#[test]
+fn handles_of_one_entry_share_its_concurrency_cap() {
+    // Arrange
+    let capped = ModelCatalog::builder()
+        .model(
+            text_spec().with_max_concurrency(NonZeroU32::MIN.saturating_add(1)),
+            model(),
+        )
+        .model(vision_spec(), model())
+        .build()
+        .expect("catalog should build");
+
+    // Act
+    let first = capped.resolve(&ModelSelector::Id(ModelId::new(TEXT)));
+    let second = capped.resolve(&ModelSelector::Id(ModelId::new(TEXT)));
+    let uncapped = capped.resolve(&ModelSelector::Id(ModelId::new(VISION)));
+
+    // Assert
+    let first = first
+        .expect("cataloged")
+        .concurrency()
+        .expect("capped model");
+    let second = second
+        .expect("cataloged")
+        .concurrency()
+        .expect("capped model");
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.available_permits(), 2);
+    assert!(uncapped.expect("cataloged").concurrency().is_none());
 }
 
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]

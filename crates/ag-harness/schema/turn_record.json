@@ -161,7 +161,7 @@
           "const": "cancelled"
         },
         {
-          "description": "The run reached one of its run limits, named beside the kind;\nretrying the same run would reach the same limit.",
+          "description": "The run reached one of its run limits or a budget ledger cap, named\nbeside the kind; retrying the same run would reach the same limit.",
           "type": "string",
           "const": "budget_exhausted"
         },
@@ -243,7 +243,7 @@
       ]
     },
     "LimitKind": {
-      "description": "Which [`RunLimits`] limit stopped a run.\n\nIt serializes as its `snake_case` name.",
+      "description": "Which limit stopped a run: one of its [`RunLimits`], or a cap of the\nbudget ledger that refused its next model request.\n\nIt serializes as its `snake_case` name.",
       "oneOf": [
         {
           "description": "[`RunLimits::max_model_requests`]: model requests.",
@@ -256,7 +256,7 @@
           "const": "tool_calls"
         },
         {
-          "description": "[`RunLimits::max_total_tokens`]: input plus output tokens.",
+          "description": "[`RunLimits::max_total_tokens`] or a ledger's token cap: input plus\noutput tokens.",
           "type": "string",
           "const": "tokens"
         },
@@ -264,6 +264,11 @@
           "description": "[`RunLimits::max_wall_time`]: wall-clock time.",
           "type": "string",
           "const": "wall_time"
+        },
+        {
+          "description": "A ledger's cost cap: micro-USD.",
+          "type": "string",
+          "const": "cost"
         }
       ]
     },

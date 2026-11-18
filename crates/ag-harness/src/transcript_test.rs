@@ -341,6 +341,11 @@ fn stored_classifications_read_as_the_kinds_live_runs_report() {
         ErrorKind::InvalidOutput,
         ErrorKind::InvalidOutput,
         ErrorKind::InvalidOutput,
+        ErrorKind::BudgetExhausted(LimitKind::Cost),
+        ErrorKind::BudgetExhausted(LimitKind::Tokens),
+        ErrorKind::BudgetExhausted(LimitKind::ModelRequests),
+        ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
+        ErrorKind::BudgetExhausted(LimitKind::WallTime),
     ]
     .into_iter()
     .map(|kind| (Some(kind), Some(kind)))

@@ -13,6 +13,7 @@ use futures_core::Stream;
 use serde_json::{Value, json};
 
 use super::support::object_schema;
+use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::compaction::summary_schema;
 use crate::context::{
     ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
@@ -31,10 +32,11 @@ use crate::model::{
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
-use crate::run::{RunOutcome, RunRequest};
+use crate::run::{RunOutcome, RunRequest, Usage};
 use crate::store::MemoryStore;
 use crate::tool::{Tool, ToolCall};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
+use crate::usage::Cost;
 
 /// Weight budget that holds about five 8 KB file reads.
 const BUDGET: u64 = 12_000;
@@ -846,4 +848,70 @@ async fn wall_time_stop_during_a_summary_still_streams_its_earlier_requests() {
             .any(|request| request.purpose() == ModelRequestPurpose::ContextSummary),
         "the rejected summary request is part of the outcome"
     );
+}
+
+/// Ledger that admits a fixed number of model requests and refuses every
+/// later one at its cost cap.
+struct CountingLedger {
+    remaining: Mutex<usize>,
+}
+
+#[async_trait]
+impl BudgetLedger for CountingLedger {
+    async fn reserve(&self, estimate: Estimate) -> Result<Reservation, LimitKind> {
+        let mut remaining = self.remaining.lock().expect("remaining lock");
+        *remaining = remaining.checked_sub(1).ok_or(LimitKind::Cost)?;
+
+        Ok(Reservation::new(estimate, drop))
+    }
+
+    fn commit(&self, _reservation: Reservation, _actual: &Usage, _cost: Option<Cost>) {}
+}
+
+#[tokio::test]
+async fn a_refused_summary_request_ends_the_run_at_the_ledger_cap() {
+    // Arrange
+    let (model, requests) = SummarizingModel::new(Vec::new());
+    let _ = limited_run(
+        &harness(model, ContextSummaryPolicy::Enabled),
+        RunLimits::default(),
+    )
+    .await;
+    let first_summary = requests
+        .lock()
+        .expect("requests lock")
+        .iter()
+        .position(is_summary_request)
+        .expect("the turn summarized");
+    let (model, requests) = SummarizingModel::new(Vec::new());
+    let (observed_harness, events) = observed(harness(model, ContextSummaryPolicy::Enabled));
+    let (model, _) = SummarizingModel::new(Vec::new());
+    let unobserved_harness = harness(model, ContextSummaryPolicy::Enabled);
+    let refused_run = |harness: &Harness| {
+        harness.run(
+            RunRequest::new("read every file")
+                .output(object_schema())
+                .budget(Arc::new(CountingLedger {
+                    remaining: Mutex::new(first_summary),
+                })),
+        )
+    };
+
+    // Act
+    let outcome = refused_run(&observed_harness).await;
+    let unobserved = refused_run(&unobserved_harness).await;
+
+    // Assert
+    let stopped = Some(ErrorKind::BudgetExhausted(LimitKind::Cost));
+    assert_eq!(outcome.result.err().map(|error| error.kind()), stopped);
+    assert_eq!(unobserved.result.err().map(|error| error.kind()), stopped);
+    assert_eq!(summary_requests(&requests), Vec::<ModelRequest>::new());
+    assert_eq!(outcome.report.model_requests().len(), first_summary);
+    assert!(summary_events(&events).iter().any(|event| matches!(
+        event,
+        LifecycleEventKind::ContextSummaryFailed {
+            error_type: ContextSummaryErrorType::BudgetExhausted,
+            ..
+        }
+    )));
 }

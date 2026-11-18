@@ -78,6 +78,10 @@ mod transcript_test;
 #[path = "support/run_cost.rs"]
 mod run_cost_test;
 
+#[cfg(test)]
+#[path = "support/run_budget.rs"]
+mod run_budget_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

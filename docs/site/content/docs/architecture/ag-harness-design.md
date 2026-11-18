@@ -93,6 +93,16 @@ and is journaled as failed, or as interrupted when the deadline dropped a runnin
 call, so the session continues normally. Limits are never stored in snapshots or session
 defaults.
 
+Budgets shared across runs go through a `BudgetLedger`. Before every model request the
+engine takes the request's concurrency permit, then reserves an estimate of its tokens
+and cost. A refused reservation fails the turn with `TurnError::BudgetRefused` before
+anything is sent. Once sent, a request is always charged: its reported usage, or the
+whole estimate when the provider reports none or the request fails or is dropped. The
+harness keeps one ledger, default `Unlimited`; a run's own ledger replaces it for that
+run. `SharedBudget` decides admission atomically, and a refusal is final. A catalog
+entry's `max_concurrency` becomes one semaphore shared by everything built from that
+catalog; it bounds requests in flight, not runs.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]

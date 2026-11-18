@@ -18,7 +18,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 #[cfg(feature = "sqlite")]
 use tokio::sync::OnceCell;
+use tokio::sync::Semaphore;
 
+use crate::budget::{BudgetLedger, Unlimited};
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Pricing, Role};
@@ -85,7 +87,9 @@ impl Session {
     /// registration. Historical
     /// provider reasoning is not portable and causes an explicit rejection.
     /// A registered model has no prices, so later runs report no
-    /// [`crate::Cost`] and their turns count as unpriced.
+    /// [`crate::Cost`] and their turns count as unpriced, no catalog
+    /// concurrency cap, so later requests no longer take its permits, and
+    /// no cataloged maximum output for budget estimates.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
     /// handle.
@@ -111,6 +115,8 @@ impl Session {
         )
         .await?;
         let config = self.harness.config_mut();
+        config.concurrency = None;
+        config.max_output = None;
         config.model = registration.model();
         config.model_id = None;
         config.pricing = None;
@@ -370,6 +376,7 @@ impl Session {
     /// [`SessionTurn::start`], and owns its cancellation. Its turn joins the
     /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
+        let budget = request.ledger();
         let turn = request.into_turn(Some(&self.output), self.harness.inner.policy);
         let journal = RunJournal::new(
             Arc::clone(&self.database),
@@ -378,6 +385,9 @@ impl Session {
             self.harness.inner.pricing,
         );
         let mut session = self.detached();
+        if let Some(budget) = budget {
+            session.harness.config_mut().budget = budget;
+        }
 
         Run::new(
             ControlledTurn::new(move |control| async move {
@@ -1050,6 +1060,7 @@ impl Harness {
     /// [`Self::from_registry`] remain available.
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder {
+            budget: None,
             catalog: None,
             context_budget: None,
             context_estimator: None,
@@ -1261,15 +1272,19 @@ impl Harness {
     /// fresh in-memory session, never in the configured store, so its
     /// outcome lists the run's files and commands like a durable session's.
     pub fn run(&self, request: RunRequest) -> Run {
+        let budget = request.ledger();
         let turn = request.into_turn(None, self.inner.policy);
         let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
         let id = Self::turn_cache_key();
         let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn, self.inner.pricing);
         // Nothing replays the single turn, so no history budget applies.
-        let harness = self
+        let mut harness = self
             .clone()
             .store(store)
             .max_history_bytes(NonZeroUsize::MAX);
+        if let Some(budget) = budget {
+            harness.config_mut().budget = budget;
+        }
 
         Run::new(
             ControlledTurn::new(move |control| async move {
@@ -1645,6 +1660,8 @@ impl Harness {
         let config = &self.inner;
 
         Engine {
+            budget: config.budget.as_ref(),
+            concurrency: config.concurrency.as_deref(),
             context_budget: config.context_budget,
             context_calibration: &config.context_calibration,
             context_estimator: config.context_estimator.as_ref(),
@@ -1654,6 +1671,7 @@ impl Harness {
             events: None,
             file_system: &config.file_system,
             lifecycle: &config.lifecycle,
+            max_output: config.max_output,
             model: &config.model,
             model_reasoning_effort: config.model_reasoning_effort,
             options,
@@ -1673,6 +1691,7 @@ impl Harness {
 /// [`ModelCatalog`] and a [`ModelSelector`].
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
+    budget: Option<Arc<dyn BudgetLedger>>,
     catalog: Option<Arc<ModelCatalog>>,
     context_budget: Option<ContextBudget>,
     context_estimator: Option<Arc<dyn ContextEstimator>>,
@@ -1713,8 +1732,28 @@ impl HarnessBuilder {
     /// [`crate::catalog::CatalogBuilder::pricing`] or declares for its own
     /// models with [`crate::catalog::ModelSpec::with_pricing`]. A model set
     /// with [`Self::model`] has no prices and reports no cost.
+    ///
+    /// The resolved entry's [`crate::catalog::ModelSpec::max_concurrency`]
+    /// bounds the model requests in flight at once across every session
+    /// and run of every harness built from `catalog`; it limits requests,
+    /// not runs, so a run waits for a permit before each request and holds
+    /// none between them. A model set with [`Self::model`] has no cap.
     pub fn catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
         self.catalog = Some(catalog);
+
+        self
+    }
+
+    /// Draws every model request of every run, turn, and session of the
+    /// harness from `ledger`; the default, [`Unlimited`], never refuses.
+    /// Hand one [`crate::budget::SharedBudget`] to several harnesses to cap
+    /// their total spend.
+    ///
+    /// [`RunRequest::budget`] replaces `ledger` for one run: that run never
+    /// consults it, so it is a ceiling only for runs without their own
+    /// ledger. To stack caps, give the run a ledger that reserves from both.
+    pub fn budget(mut self, ledger: Arc<dyn BudgetLedger>) -> Self {
+        self.budget = Some(ledger);
 
         self
     }
@@ -1836,32 +1875,26 @@ impl HarnessBuilder {
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let (model, profile, model_id, cataloged_pricing) =
-            match (self.model, self.catalog, self.model_selector) {
-                (Some(_), _, Some(_)) => {
-                    return Err(HarnessBuildError::ConflictingModelSelection.into());
-                }
-                (Some(model), _, None) => {
-                    let profile = model.profile();
+        let (model, profile, cataloged) = match (self.model, self.catalog, self.model_selector) {
+            (Some(_), _, Some(_)) => {
+                return Err(HarnessBuildError::ConflictingModelSelection.into());
+            }
+            (Some(model), _, None) => {
+                let profile = model.profile();
 
-                    (model, profile, None, None)
-                }
-                (None, Some(catalog), selector) => {
-                    let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
-                    let handle = catalog
-                        .resolve(&selector)
-                        .map_err(HarnessBuildError::Catalog)?;
+                (model, profile, None)
+            }
+            (None, Some(catalog), selector) => {
+                let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
+                let handle = catalog
+                    .resolve(&selector)
+                    .map_err(HarnessBuildError::Catalog)?;
 
-                    (
-                        handle.model(),
-                        handle.profile(),
-                        Some(handle.id().clone()),
-                        handle.spec().pricing(),
-                    )
-                }
-                (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
-                (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
-            };
+                (handle.model(), handle.profile(), Some(handle))
+            }
+            (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
+            (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
+        };
         let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
             .into_iter()
             .any(|tool| self.policy.allows(tool));
@@ -1887,12 +1920,19 @@ impl HarnessBuilder {
             Some(StorageSource::Store(store)) => config.store = Some(store),
             None => {}
         }
+        if let Some(budget) = self.budget {
+            config.budget = budget;
+        }
+        if let Some(handle) = cataloged {
+            config.concurrency = handle.concurrency();
+            config.max_output = handle.spec().max_output();
+            config.model_id = Some(handle.id().clone());
+            config.pricing = handle.spec().pricing();
+        }
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
-        config.model_id = model_id;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
-        config.pricing = cataloged_pricing;
         config.repository = self.repository;
 
         Ok(Harness::from_config(config))
@@ -1963,6 +2003,13 @@ enum StorageSource {
 /// method copies it first when other handles still share it.
 #[derive(Clone)]
 struct HarnessConfig {
+    /// Ledger that reserves every model request; a run's own ledger
+    /// replaces it in that run's copy of the configuration.
+    budget: Arc<dyn BudgetLedger>,
+    /// Concurrency cap of [`Self::model`], from the catalog entry the
+    /// builder selected and shared with every harness built from that
+    /// catalog; `None` for any other model.
+    concurrency: Option<Arc<Semaphore>>,
     context_budget: ContextBudget,
     context_calibration: ContextCalibration,
     context_estimator: Arc<dyn ContextEstimator>,
@@ -1975,6 +2022,9 @@ struct HarnessConfig {
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
     max_history_bytes: usize,
+    /// Cataloged maximum output of [`Self::model`], which bounds each
+    /// request's budget estimate; `None` for any other model.
+    max_output: Option<u64>,
     model: Arc<dyn Model>,
     /// Catalog identifier of [`Self::model`] when the builder selected it
     /// from a [`ModelCatalog`].
@@ -1994,6 +2044,8 @@ impl HarnessConfig {
     /// model, backed by the local filesystem.
     fn new(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
         Self {
+            budget: Arc::new(Unlimited),
+            concurrency: None,
             context_budget,
             context_calibration: ContextCalibration::default(),
             context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
@@ -2006,6 +2058,7 @@ impl HarnessConfig {
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
             max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
+            max_output: None,
             model,
             model_id: None,
             model_reasoning_effort: None,
