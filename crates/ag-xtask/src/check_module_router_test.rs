@@ -1,16 +1,12 @@
-//! Module router discovery, statement scanning, and host adapter unit tests.
+//! Module router discovery and statement scanning unit tests.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::{fs, io};
 
 use mockall::predicate::eq;
-use tempfile::tempdir;
 
-use crate::check_module_router::{
-    FileSystem, MockFileSystem, ModuleRouterCheck, RealFileSystem, run,
-};
+use crate::check_module_router::{ModuleRouterCheck, run};
+use crate::file_system::MockFileSystem;
 
 /// Router text exercising every allowed top-level form.
 const ROUTER: &str = r##"//! Router documentation with `fn` and { braces }.
@@ -235,53 +231,6 @@ fn unreadable_directories_metadata_and_files_fail_the_check() {
     assert_eq!(
         file,
         Err("Failed to read crates/example/src/app.rs: denied".to_string())
-    );
-}
-
-#[test]
-fn real_file_system_lists_reads_and_distinguishes_directories() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory");
-    let file = directory.path().join("app.rs");
-    fs::write(&file, "mod child;\n").expect("router file");
-    let file_system = RealFileSystem;
-
-    // Act
-    let entries = file_system.read_dir(directory.path());
-    let missing_entries = file_system.read_dir(&directory.path().join("missing"));
-    let text = file_system.read_to_string(&file);
-    let is_directory = file_system.is_dir(directory.path());
-    let is_file = file_system.is_dir(&file);
-    let is_missing = file_system.is_dir(&directory.path().join("missing"));
-    let below_file = file_system.is_dir(&file.join("child"));
-
-    // Assert
-    assert_eq!(entries.expect("entries"), vec![file]);
-    assert!(missing_entries.is_err());
-    assert_eq!(text.expect("text"), "mod child;\n");
-    assert!(is_directory.expect("directory"));
-    assert!(!is_file.expect("file"));
-    assert!(!is_missing.expect("missing"));
-    assert!(!below_file.expect("below file"));
-}
-
-#[cfg(unix)]
-#[test]
-fn real_file_system_reports_metadata_permission_failures() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory");
-    let locked = directory.path().join("locked");
-    fs::create_dir(&locked).expect("locked directory");
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("lock directory");
-
-    // Act
-    let result = RealFileSystem.is_dir(&locked.join("child"));
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("unlock directory");
-
-    // Assert
-    assert_eq!(
-        result.expect_err("permission failure").kind(),
-        io::ErrorKind::PermissionDenied
     );
 }
 

@@ -11,9 +11,8 @@ use mockall::Sequence;
 use mockall::predicate::eq;
 use tempfile::tempdir;
 
-use crate::check_migration::{
-    FileSystem, Git, MigrationCheck, MockFileSystem, MockGit, RealFileSystem, RealGit, run,
-};
+use crate::check_migration::{Git, MigrationCheck, MockGit, RealGit, run};
+use crate::file_system::MockFileSystem;
 
 /// Fork point the history mocks report for `origin/main`.
 const FORK: &str = "fork";
@@ -364,41 +363,6 @@ fn workflow_propagates_duplicate_prefixes() {
             .expect_err("duplicate migration")
             .contains("001_first.sql, 001_second.sql")
     );
-}
-
-#[test]
-fn real_file_system_lists_entries_and_distinguishes_directories() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory");
-    let file = directory.path().join("001_example.sql");
-    fs::write(&file, "").expect("migration file");
-    let file_system = RealFileSystem;
-
-    // Act
-    let entries = file_system
-        .read_dir(directory.path())
-        .expect("directory entries");
-    let directory_exists = file_system
-        .is_dir(directory.path())
-        .expect("directory metadata");
-    let file_is_directory = file_system.is_dir(&file).expect("file metadata");
-    let missing_is_directory = file_system
-        .is_dir(&directory.path().join("missing"))
-        .expect("missing metadata");
-    let missing_entries = file_system.read_dir(&directory.path().join("missing"));
-    let file_child_is_directory = file_system
-        .is_dir(&file.join("child"))
-        .expect("file child metadata");
-    let invalid_metadata = file_system.is_dir(&directory.path().join("x".repeat(300)));
-
-    // Assert
-    assert_eq!(entries, vec![file]);
-    assert!(directory_exists);
-    assert!(!file_is_directory);
-    assert!(!missing_is_directory);
-    assert!(!file_child_is_directory);
-    assert!(missing_entries.is_err());
-    assert!(invalid_metadata.is_err());
 }
 
 #[test]

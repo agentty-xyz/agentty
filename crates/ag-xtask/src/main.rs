@@ -9,6 +9,7 @@ mod check_manifest;
 mod check_migration;
 mod check_module_router;
 mod e2e_container;
+mod file_system;
 mod format_changed;
 mod slow_test;
 mod timing;

@@ -1,8 +1,9 @@
 //! Check that each Rust module file paired with a same-named directory is a
 //! router: it declares child modules and re-exports, and defines nothing.
 
-use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::file_system::{FileSystem, RealFileSystem};
 
 /// Top-level item keywords a router module may contain.
 const ROUTER_ITEMS: [&str; 3] = ["extern", "mod", "use"];
@@ -18,20 +19,6 @@ pub(crate) fn run() -> Result<(), String> {
         file_system: &RealFileSystem,
     }
     .run(Path::new("crates"))
-}
-
-/// Filesystem operations used by router discovery and validation.
-#[cfg_attr(test, mockall::automock)]
-trait FileSystem {
-    /// Returns the entries directly inside `path`.
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
-
-    /// Returns whether `path` is a directory, treating a missing path as not
-    /// one.
-    fn is_dir(&self, path: &Path) -> io::Result<bool>;
-
-    /// Returns the UTF-8 contents of `path`.
-    fn read_to_string(&self, path: &Path) -> io::Result<String>;
 }
 
 /// Router policy, independent of the host filesystem.
@@ -342,36 +329,6 @@ impl ModuleRouterCheck<'_> {
         self.file_system
             .is_dir(path)
             .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))
-    }
-}
-
-/// Host adapter; router decisions remain in `ModuleRouterCheck`.
-struct RealFileSystem;
-
-impl FileSystem for RealFileSystem {
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
-        std::fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect()
-    }
-
-    fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        match std::fs::metadata(path) {
-            Ok(metadata) => Ok(metadata.is_dir()),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        std::fs::read_to_string(path)
     }
 }
 

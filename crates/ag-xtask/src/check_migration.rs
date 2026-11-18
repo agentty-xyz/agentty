@@ -4,9 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::file_system::{FileSystem, RealFileSystem};
 
 /// Revision whose fork point bounds migration edits by default.
 const DEFAULT_BASE: &str = "origin/main";
@@ -35,13 +36,6 @@ pub(crate) fn run() -> Result<(), String> {
         },
     }
     .run(Path::new("crates"), &base)
-}
-
-/// Filesystem operations used by migration discovery and validation.
-#[cfg_attr(test, mockall::automock)]
-trait FileSystem {
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
-    fn is_dir(&self, path: &Path) -> io::Result<bool>;
 }
 
 /// Read-only Git queries used to find edited migrations.
@@ -246,32 +240,6 @@ impl Git for RealGit {
         }
 
         String::from_utf8(output.stdout).map_err(|error| format!("Invalid UTF-8 from git: {error}"))
-    }
-}
-
-/// Host adapter; workflow decisions remain in `MigrationCheck`.
-struct RealFileSystem;
-
-impl FileSystem for RealFileSystem {
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
-        std::fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect()
-    }
-
-    fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        match std::fs::metadata(path) {
-            Ok(metadata) => Ok(metadata.is_dir()),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(error) => Err(error),
-        }
     }
 }
 
