@@ -158,6 +158,25 @@ fn reports_which_models_replay_plain_text_reasoning() {
 }
 
 #[test]
+fn only_anthropic_messages_replays_turn_instructions() {
+    // Arrange
+    let router = Router::new([
+        preset::anthropic(BASE_URL, "key", "claude-opus-5-5"),
+        preset::openai(BASE_URL, "key", "gpt-6.1-sol"),
+    ]);
+
+    // Act
+    let replays = [
+        router.replays_turn_instructions("anthropic/claude-opus-5-5"),
+        router.replays_turn_instructions("openai/gpt-6.1-sol"),
+    ];
+
+    // Assert
+    assert_eq!(replays.map(Result::ok), [Some(true), Some(false)]);
+    assert!(router.replays_turn_instructions("openai/other").is_err());
+}
+
+#[test]
 fn keeps_the_first_of_duplicate_specifications() {
     // Arrange
     let model = "muse/muse-spark-1.3";

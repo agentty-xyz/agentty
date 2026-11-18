@@ -138,7 +138,7 @@ pub struct GenerationOptions {
     /// `max_output_tokens` to the Responses API, as the provider's
     /// `max_tokens` or `max_completion_tokens` to Chat Completions, and as
     /// `max_tokens` to Anthropic Messages, which sends
-    /// [`crate::ProviderSpec::with_default_max_output_tokens`] without one. A
+    /// [`crate::ProviderSpec::with_fallback_max_tokens`] without one. A
     /// provider that rejects the bound, such as the ChatGPT-plan backend or
     /// the Responses API below its minimum of 16, fails the request with
     /// [`ModelError::UnsupportedGeneration`] before sending it (see

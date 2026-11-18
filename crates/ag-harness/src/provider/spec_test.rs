@@ -110,10 +110,10 @@ fn maps_every_option_onto_the_routed_specification() {
         ),
         (
             ProviderSpec::new("gateway", WireProtocol::AnthropicMessages, BASE_URL)
-                .with_default_max_output_tokens(NonZeroU32::MIN)
+                .with_fallback_max_tokens(NonZeroU32::MIN)
                 .with_structured_output(StructuredOutputMode::ForcedTool),
             router_spec(ag_router::WireProtocol::AnthropicMessages)
-                .with_default_max_output_tokens(NonZeroU32::MIN)
+                .with_fallback_max_tokens(NonZeroU32::MIN)
                 .with_structured_output(ag_router::StructuredOutputMode::ForcedTool),
         ),
         (
@@ -574,6 +574,7 @@ async fn anthropic_preset_serves_claude_with_an_api_key_and_cache_writes() {
         "https://api.anthropic.com/v1"
     );
     assert_eq!(family, ReasoningFamily::Provider);
+    assert!(Model::replays_turn_instructions(&client));
     assert_eq!(client.metadata().provider(), telemetry::PROVIDER_ANTHROPIC);
     assert_eq!(client.metadata().model(), "claude-opus-5-5");
     let usage = completion

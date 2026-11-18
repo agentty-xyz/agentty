@@ -31,11 +31,6 @@ use crate::provider_spec::{
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 
-/// The Anthropic Messages API version the [`anthropic`] preset requests:
-/// the first stable version, which every Claude model and
-/// Anthropic-compatible gateway accepts.
-const ANTHROPIC_VERSION: &str = "2023-06-01";
-
 /// The Anthropic API's `400` message for input over the window, as in
 /// "prompt is too long: 208000 tokens > 200000 maximum".
 const ANTHROPIC_CONTEXT_OVERFLOW: &str = "prompt is too long";
@@ -89,9 +84,9 @@ const OPENAI_CONTEXT_OVERFLOW: &str = "exceeds the context window";
 const OPENAI_MAX_EFFORT_PREFIXES: [&str; 2] = ["gpt-5.6-", "gpt-6"];
 
 /// Claude models through the Anthropic Messages API, authenticated by an
-/// `x-api-key` header with the `anthropic-version` header: native structured
-/// output, image input, and, for the models that take them, efforts with
-/// adaptive thinking, `xhigh` sent as `high` before Claude Opus 4.7.
+/// `x-api-key` header beside the protocol's `anthropic-version`: native
+/// structured output, image input, and, for the models that take them, efforts
+/// with adaptive thinking, `xhigh` sent as `high` before Claude Opus 4.7.
 pub fn anthropic(
     base_url: impl Into<String>,
     api_key: impl Into<String>,
@@ -113,7 +108,6 @@ pub fn anthropic(
             value: api_key.into(),
         })
         .with_display_name("Anthropic")
-        .with_header("anthropic-version", ANTHROPIC_VERSION)
         .with_overflow_marker(ANTHROPIC_CONTEXT_OVERFLOW)
         .with_reasoning(reasoning)
 }

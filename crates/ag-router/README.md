@@ -132,21 +132,24 @@ surface supports chat only. Streaming to callers and other model modes are not y
 implemented.
 
 `anthropic` sends unstreamed requests to `{base_url}/messages` with the key in
-`x-api-key` and an `anthropic-version` header. System messages become top-level `system`
-blocks, consecutive messages of one role merge, tool results return as `tool_result`
-blocks, and images as base64 `image` blocks. A request without an output bound sends
-`ProviderSpec::with_default_max_output_tokens` (32,000 by default), since the API
-requires `max_tokens`. The schema is the native `output_config.format`, or with
-`StructuredOutputMode::ForcedTool` a `structured_output` tool whose input is the answer,
-forced when the request has no tools or effort (current Claude models reject forced
-tools). A reasoning effort is sent as `output_config.effort` with summarized adaptive
-thinking. A response's signed `thinking` and `redacted_thinking` blocks are returned as
-one JSON array in the reasoning content of its first call or output, with markers where
-its text and calls went, and replayed verbatim in that order; other reasoning content is
-omitted. Usage counts cache reads and writes as input and reports the writes. A
-`max_tokens`, `pause_turn`, or `refusal` stop is an incomplete response, a
-`model_context_window_exceeded` stop or a "prompt is too long" `400` is a context
-overflow, and an HTTP `529` keeps its status for the caller's overload handling.
+`x-api-key` and the protocol's `anthropic-version: 2023-06-01` header, which
+`with_header` replaces. System messages become top-level `system` blocks, consecutive
+messages of one role merge, tool results return as `tool_result` blocks, and images as
+base64 `image` blocks. A request without an output bound sends `max_tokens` 16,000
+(`ProviderSpec::with_fallback_max_tokens`), since the API requires one. The schema is
+the native `output_config.format`, or with `StructuredOutputMode::ForcedTool` a
+`structured_output` tool whose input is the answer, forced only for a specification
+without a reasoning mapping, since thinking forbids a forced tool. A reasoning effort is
+sent as `output_config.effort` with summarized adaptive thinking. A response's signed
+`thinking` and `redacted_thinking` blocks are returned as one JSON array in the
+reasoning content of its first call or output, with markers where its text and calls
+went, and replayed verbatim in that order; other reasoning content is omitted. Signed
+thinking survives only history that grows, so `Router::replays_turn_instructions` tells
+callers to replay earlier turns' instructions as first sent. Usage counts cache reads
+and writes as input and reports the writes. A `max_tokens`, `pause_turn`, or `refusal`
+stop is an incomplete response, a `model_context_window_exceeded` stop or a "prompt is
+too long" `400` is a context overflow, and an HTTP `529` keeps its status for the
+caller's overload handling.
 
 `chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
 OpenAI's "Sign in with ChatGPT" instead of API credits. Its preset authenticates with

@@ -135,6 +135,16 @@ pub trait Model: Send + Sync {
         false
     }
 
+    /// Returns whether history replays each earlier turn with its host
+    /// instructions, exactly as the turn first sent them, so a session's
+    /// requests only ever grow, as Anthropic Messages models require of
+    /// history before signed thinking. By default, as for every other
+    /// built-in provider, a turn's instructions apply to that turn only and
+    /// later requests leave them out.
+    fn replays_turn_instructions(&self) -> bool {
+        false
+    }
+
     /// Returns whether the implementation answers requests in
     /// [`OutputMode::Text`] with plain text, returned as
     /// [`ModelResponse::Text`]. The default, `false`, makes text-mode turns
@@ -676,6 +686,12 @@ impl Model for ModelClient {
     fn replays_reasoning_text(&self) -> bool {
         self.router
             .replays_reasoning_text(&self.router_model)
+            .unwrap_or(false)
+    }
+
+    fn replays_turn_instructions(&self) -> bool {
+        self.router
+            .replays_turn_instructions(&self.router_model)
             .unwrap_or(false)
     }
 

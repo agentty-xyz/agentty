@@ -620,9 +620,12 @@ budget explicitly.
 
 `WireProtocol::AnthropicMessages` serves Claude models, and `ProviderSpec::anthropic`
 presets it with an `AnthropicConfig` (the API key, a base URL such as
-`DEFAULT_ANTHROPIC_BASE_URL`, and the model), sending the key as `x-api-key` with an
-`anthropic-version` header. The catalog lists no Claude model yet, so serve it with
-`ModelClient::from_spec` and declare its context profile and prices:
+`DEFAULT_ANTHROPIC_BASE_URL`, and the model), sending the key as `x-api-key` beside the
+protocol's `anthropic-version: 2023-06-01` header, which `ProviderSpec::with_header` can
+replace. The catalog lists no Claude model yet, so serve it with
+`ModelClient::from_spec` and declare its context profile with a `ModelRegistry`
+registration's `ModelCapabilities` (see "Model catalog" below) and its prices with
+`catalog::ModelSpec::with_pricing`:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -636,18 +639,23 @@ let model = ModelClient::from_spec(ProviderSpec::anthropic(AnthropicConfig {
 ```
 
 Requests are unstreamed. Structured output uses the native `output_config.format`;
-`StructuredOutputMode::ForcedTool` instead reads the answer from a forced
-`structured_output` tool call, for models or schemas native output rejects (current
-Claude models reject forced tools). A reasoning effort turns on summarized adaptive
+`StructuredOutputMode::ForcedTool` instead reads the answer from a `structured_output`
+tool call, for models or schemas native output rejects. It forces that tool only for a
+specification without a reasoning mapping, since thinking, which current Claude models
+do by default, forbids a forced tool. A reasoning effort turns on summarized adaptive
 thinking for the models that take one. Signed `thinking` and `redacted_thinking` blocks
-are recorded and replayed verbatim in their original place on later requests; every
-Claude model shares one reasoning family, and a switch to another provider carries that
-reasoning as a short note. A request without an output bound sends
-`ProviderSpec::with_default_max_output_tokens` (32,000 by default), since the API
-requires one. Usage counts cache reads and cache writes as input, and
-`Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop fails as an
-incomplete response, a `model_context_window_exceeded` stop or a "prompt is too long"
-`400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
+are recorded and replayed verbatim in their original place on later requests, and
+earlier turns replay with their turn instructions as first sent
+(`Model::replays_turn_instructions`), because the newest Claude models drop or reject
+signed thinking after an edited earlier message. Context reductions that clear or elide
+earlier rounds still edit history, so long sessions on those models can lose earlier
+thinking. Every Claude model shares one reasoning family, and a switch to another
+provider carries that reasoning as a short note. A request without an output bound sends
+`max_tokens` 16,000 (`ProviderSpec::with_fallback_max_tokens`), since the API requires
+one. Usage counts cache reads and cache writes as input, and `Usage::cache_write`
+reports the writes. A `refusal` or `max_tokens` stop fails as an incomplete response, a
+`model_context_window_exceeded` stop or a "prompt is too long" `400` as a context
+overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and

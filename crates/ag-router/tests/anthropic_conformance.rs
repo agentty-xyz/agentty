@@ -326,9 +326,11 @@ async fn rejects_images_for_a_specification_without_image_input() -> Result<(), 
 async fn forced_tool_output_reads_the_tool_input_as_the_answer() -> Result<(), Box<dyn Error>> {
     // Arrange
     let server = server(200, FORCED_TOOL).await;
-    let spec = custom(&server).with_structured_output(StructuredOutputMode::ForcedTool);
+    let spec = custom(&server)
+        .with_reasoning(ReasoningMapping::None)
+        .with_structured_output(StructuredOutputMode::ForcedTool);
     let request = structured(
-        "custom/claude-opus-5",
+        "custom/claude-haiku-4-5",
         vec![ModelMessage::User("Find the name".to_string())],
     )?;
 
@@ -362,23 +364,27 @@ async fn forced_tool_output_reads_the_tool_input_as_the_answer() -> Result<(), B
 }
 
 #[tokio::test]
-async fn forced_tool_output_requires_a_call_beside_tools_and_lets_thinking_choose()
+async fn forced_tool_output_requires_a_call_beside_tools_and_lets_thinking_models_choose()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     let with_tools = server(200, MESSAGE).await;
     let thinking = server(200, MESSAGE).await;
-    let spec = |server: &MockServer| {
-        custom(server).with_structured_output(StructuredOutputMode::ForcedTool)
+    let forced = custom(&with_tools)
+        .with_reasoning(ReasoningMapping::None)
+        .with_structured_output(StructuredOutputMode::ForcedTool);
+    // Its effort names make it a model that may think by default.
+    let free = custom(&thinking).with_structured_output(StructuredOutputMode::ForcedTool);
+    let request = || {
+        conformance::golden_request(
+            "custom/claude",
+            true,
+            conformance::options(None, false, None),
+        )
     };
-    let request = |options| conformance::golden_request("custom/claude-opus-5", true, options);
 
     // Act
-    Router::new([spec(&with_tools)])
-        .execute(request(conformance::options(None, false, None))?)
-        .await?;
-    let answer = Router::new([spec(&thinking)])
-        .execute(request(conformance::options(Some(High), false, None))?)
-        .await?;
+    Router::new([forced]).execute(request()?).await?;
+    let answer = Router::new([free]).execute(request()?).await?;
 
     // Assert
     let tool_body = received_body(&with_tools).await?;
@@ -386,11 +392,7 @@ async fn forced_tool_output_requires_a_call_beside_tools_and_lets_thinking_choos
     assert_eq!(tool_body["tools"][1]["name"], "structured_output");
     let thinking_body = received_body(&thinking).await?;
     assert_eq!(thinking_body["tool_choice"], json!({"type": "auto"}));
-    assert_eq!(
-        thinking_body["thinking"],
-        json!({"display": "summarized", "type": "adaptive"})
-    );
-    assert_eq!(thinking_body["output_config"], json!({"effort": "high"}));
+    assert!(thinking_body.get("thinking").is_none());
     assert!(matches!(answer, Completion::Output { value, .. } if value == json!({"name": "Ada"})));
 
     Ok(())
@@ -486,9 +488,14 @@ async fn maps_stop_reasons_to_failures() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn maps_overloaded_overflow_and_billing_rejections() -> Result<(), Box<dyn Error>> {
+async fn maps_overloaded_server_overflow_and_billing_rejections() -> Result<(), Box<dyn Error>> {
     // Arrange
     let overloaded = server(529, OVERLOADED).await;
+    let failed = server(
+        500,
+        r#"{"type":"error","error":{"type":"api_error","message":"Internal server error"}}"#,
+    )
+    .await;
     let too_long = server(400, PROMPT_TOO_LONG).await;
     let billing = server(
         402,
@@ -510,6 +517,7 @@ async fn maps_overloaded_overflow_and_billing_rejections() -> Result<(), Box<dyn
 
     // Act
     let overloaded = execute(overloaded).await?;
+    let failed = execute(failed).await?;
     let too_long = execute(too_long).await?;
     let billing = execute(billing).await?;
 
@@ -518,6 +526,8 @@ async fn maps_overloaded_overflow_and_billing_rejections() -> Result<(), Box<dyn
     assert_eq!(overloaded.http_status(), Some(529));
     assert!(overloaded.to_string().contains("overloaded_error"));
     assert!(!conformance::error_chain(&overloaded).contains("test-key"));
+    assert_eq!(failed.error_class(), ErrorClass::Provider);
+    assert_eq!(failed.http_status(), Some(500));
     assert_eq!(too_long.error_class(), ErrorClass::ContextOverflow);
     assert!(billing.is_quota_exceeded());
 

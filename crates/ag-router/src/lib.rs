@@ -18,6 +18,7 @@ mod model;
 pub mod preset;
 mod provider;
 mod provider_spec;
+mod reasoning;
 mod response_error;
 mod responses;
 mod retry;
@@ -38,7 +39,7 @@ pub use provider_spec::{
     Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
-pub use responses::{ReasoningView, reasoning_view};
+pub use reasoning::{ReasoningView, reasoning_view};
 pub use retry::{Jitter, RetryKind, RetryNotice, RetryObserver, RetryPolicy};
 pub use schema::{
     OutputSchema, OutputSchemaError, OutputValidationError, RESPONSE_CONTENT_LIMIT_BYTES,

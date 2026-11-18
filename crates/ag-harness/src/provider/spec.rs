@@ -119,12 +119,12 @@ pub enum StructuredOutputMode {
     JsonSchema,
     /// Advertise a `structured_output` tool whose input schema is the output
     /// schema, and read its input as the answer (Anthropic Messages only).
-    /// A request without tools or a reasoning effort forces that tool; one
-    /// with tools requires some tool call; one with an effort, which turns
-    /// thinking on and so forbids forcing a tool, lets the model choose and
-    /// also reads a text answer. For models without native structured
-    /// output or with schemas it rejects; current Claude models reject a
-    /// forced tool.
+    /// Under [`ReasoningMapping::None`], for a model that does not think by
+    /// default, a request without tools forces that tool and one with tools
+    /// requires some tool call. A model with a reasoning mapping may think,
+    /// which forbids forcing a tool, so it chooses freely and a text answer
+    /// is read too. For models without native structured output or with
+    /// schemas native output rejects.
     ForcedTool,
     /// State the schema in a leading system message and request the
     /// `json_object` response format.
@@ -442,13 +442,14 @@ impl ProviderSpec {
     /// needs. The Responses API starts with native structured output, efforts
     /// under their own names, image input, `prompt_cache_key`, and
     /// `max_output_tokens`. Anthropic Messages starts with native structured
-    /// output, efforts under their own names, image input, and the required
-    /// `max_tokens`, filled from [`Self::with_default_max_output_tokens`] when
-    /// a request sets no bound; it needs `x-api-key` authentication
-    /// ([`Auth::Header`]) and an `anthropic-version` header
-    /// ([`Self::with_header`]), which the `Self::anthropic` preset sets. Each
-    /// names no model yet ([`Self::for_model`])
-    /// and starts in the reasoning family [`ModelMetadata::new`] assigns
+    /// output, efforts under their own names, image input, the required
+    /// `max_tokens` (16,000 when a request sets no bound, see
+    /// [`Self::with_fallback_max_tokens`]), and the `anthropic-version:
+    /// 2023-06-01` header, which [`Self::with_header`] can replace; it needs
+    /// `x-api-key` authentication ([`Auth::Header`]), which the
+    /// `Self::anthropic` preset sets. Each names no model yet
+    /// ([`Self::for_model`]) and starts in the reasoning family
+    /// [`ModelMetadata::new`] assigns
     /// `name`, so a built-in provider name keeps its built-in family.
     ///
     /// [`ModelMetadata::new`]: crate::model::ModelMetadata::new
@@ -615,18 +616,22 @@ impl ProviderSpec {
         self
     }
 
-    /// Sets the output-token bound sent when a request sets none (Anthropic
-    /// Messages only, which requires a bound; other protocols then send
-    /// none). It starts at 32,000 tokens.
+    /// Sets the `max_tokens` an Anthropic Messages request sends when the
+    /// request sets no output-token bound, in place of 16,000. The API
+    /// requires a bound, and requests are unstreamed, so a larger one risks
+    /// the ten-minute request timeout. Other protocols send no bound then,
+    /// so validation rejects this setting for them.
     #[must_use]
-    pub fn with_default_max_output_tokens(mut self, max_output_tokens: NonZeroU32) -> Self {
-        self.spec = self.spec.with_default_max_output_tokens(max_output_tokens);
+    pub fn with_fallback_max_tokens(mut self, max_tokens: NonZeroU32) -> Self {
+        self.spec = self.spec.with_fallback_max_tokens(max_tokens);
 
         self
     }
 
     /// Adds a header sent with every request, such as `OpenRouter`'s
-    /// `HTTP-Referer`. Its value is sent as sensitive and never printed.
+    /// `HTTP-Referer`, in place of any earlier header of the same name, such
+    /// as the `anthropic-version` an Anthropic Messages specification starts
+    /// with. Its value is sent as sensitive and never printed.
     #[must_use]
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.spec = self.spec.with_header(name, value);

@@ -89,13 +89,17 @@ fn starts_from_a_conservative_policy_per_protocol() {
 }
 
 #[test]
-fn starts_anthropic_messages_with_native_output_and_a_default_bound() {
+fn starts_anthropic_messages_with_native_output_and_a_replaceable_version() {
     // Arrange
     let bound = NonZeroU32::new(4_096).expect("nonzero");
 
     // Act
     let anthropic = anthropic();
-    let bounded = anthropic.clone().with_default_max_output_tokens(bound);
+    let bounded = anthropic
+        .clone()
+        .with_fallback_max_tokens(bound)
+        .with_header("Anthropic-Version", "2026-10-21");
+    let headers = bounded.request_headers(None).expect("valid headers");
 
     // Assert
     assert_eq!(
@@ -107,12 +111,23 @@ fn starts_anthropic_messages_with_native_output_and_a_default_bound() {
         ReasoningMapping::Effort(EffortNames::default())
     );
     assert_eq!(anthropic.max_tokens_field, Some(MaxTokensField::MaxTokens));
-    assert_eq!(anthropic.default_max_output_tokens.get(), 32_000);
+    assert_eq!(anthropic.fallback_max_tokens, None);
+    assert_eq!(
+        anthropic.headers,
+        [("anthropic-version".to_string(), "2023-06-01".to_string())]
+    );
     assert!(anthropic.image_input && !anthropic.prompt_cache_key);
     assert!(!anthropic.keeps_prefix_across_schemas());
     assert!(anthropic.validate().is_ok());
-    assert_eq!(bounded.default_max_output_tokens, bound);
-    assert!(format!("{bounded:?}").contains("default_max_output_tokens: 4096"));
+    assert_eq!(bounded.fallback_max_tokens, Some(bound));
+    assert!(format!("{bounded:?}").contains("fallback_max_tokens: Some(4096)"));
+    assert_eq!(
+        headers
+            .get_all("anthropic-version")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["2026-10-21"]
+    );
 }
 
 #[test]
@@ -270,6 +285,10 @@ fn rejects_specifications_no_request_can_be_sent_with() {
         (
             chat().with_structured_output(StructuredOutputMode::ForcedTool),
             "the ChatCompletions protocol cannot express forced-tool structured output",
+        ),
+        (
+            responses().with_fallback_max_tokens(NonZeroU32::MIN),
+            "the Responses protocol cannot express a fallback `max_tokens`",
         ),
     ];
     let valid = [

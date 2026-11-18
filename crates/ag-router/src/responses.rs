@@ -22,8 +22,9 @@ use crate::http::{
 };
 use crate::model::{GeneratedResponse, ModelErrorType};
 use crate::provider_spec::{ProviderSpec, ReasoningMapping};
+use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
-use crate::{anthropic, input, model, schema as schema_contract, tool};
+use crate::{input, model, schema as schema_contract, tool};
 
 /// Bound for one whole streamed response. Long reasoning at the highest
 /// efforts can run for many minutes, so silence is bounded separately.
@@ -400,33 +401,12 @@ pub(crate) fn default_transport() -> Arc<HttpTransport> {
     ))
 }
 
-/// Readable view of the provider-neutral reasoning content a model
-/// returned, as [`reasoning_view`] reads it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReasoningView<'a> {
-    /// Content that is neither Responses reasoning items nor Anthropic
-    /// thinking blocks, such as the plain-text reasoning Chat Completions
-    /// providers return, as written.
-    Text(&'a str),
-    /// The summary text of Responses reasoning items, whose reasoning itself
-    /// is encrypted, or the summarized thinking of Anthropic thinking
-    /// blocks, with parts separated by blank lines.
-    Summary(String),
-    /// Responses reasoning items or Anthropic thinking blocks without any
-    /// summary text: encrypted, redacted, or omitted only.
-    Opaque,
-}
-
-/// Returns the readable view of `reasoning_content`, recognizing Responses
-/// reasoning items and Anthropic thinking blocks exactly as requests replay
-/// them.
-pub fn reasoning_view(reasoning_content: &str) -> ReasoningView<'_> {
-    if let Some(view) = anthropic::reasoning_view(reasoning_content) {
-        return view;
-    }
-    let Some(items) = reasoning_items(reasoning_content) else {
-        return ReasoningView::Text(reasoning_content);
-    };
+/// Returns the readable view of reasoning content holding Responses
+/// reasoning items, exactly as requests replay them, or `None` for other
+/// content: their summary text, with parts separated by blank lines, or
+/// [`ReasoningView::Opaque`] when no item has any.
+pub(crate) fn reasoning_view(reasoning_content: &str) -> Option<ReasoningView<'static>> {
+    let items = reasoning_items(reasoning_content)?;
     let summaries: Vec<&str> = items
         .iter()
         .filter_map(|item| item.get("summary").and_then(Value::as_array))
@@ -435,10 +415,10 @@ pub fn reasoning_view(reasoning_content: &str) -> ReasoningView<'_> {
         .filter(|text| !text.trim().is_empty())
         .collect();
     if summaries.is_empty() {
-        return ReasoningView::Opaque;
+        return Some(ReasoningView::Opaque);
     }
 
-    ReasoningView::Summary(summaries.join("\n\n"))
+    Some(ReasoningView::Summary(summaries.join("\n\n")))
 }
 
 /// Returns the reasoning items a prior response stored in its reasoning

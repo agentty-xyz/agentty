@@ -1064,7 +1064,15 @@ impl Session {
         // Turns another reasoning family produced replay their reasoning as
         // notes; stored turns stay native.
         let model = &self.harness.inner.model;
-        let mut target = ReplayTarget::new(model.metadata().as_ref(), self.model_generation);
+        // Only turns that carried instructions depend on whether the model
+        // replays them.
+        let instructed = turns.iter().any(|(_, turn)| {
+            turn.messages
+                .iter()
+                .any(|message| matches!(message, ModelMessage::Instructions(_)))
+        });
+        let mut target = ReplayTarget::new(model.metadata().as_ref(), self.model_generation)
+            .with_turn_instructions(instructed && model.replays_turn_instructions());
         // Only projected turns depend on how the model replays reasoning.
         if !turns.iter().all(|(_, turn)| target.replays_natively(turn)) {
             target = target.with_reasoning_text(model.replays_reasoning_text());
@@ -1072,7 +1080,7 @@ impl Session {
         let mut history_turn_starts = Vec::with_capacity(turns.len());
         for (_, turn) in &turns {
             history_turn_starts.push(messages.len());
-            messages.extend(session_model::project_turn(turn, &target).replay());
+            messages.extend(session_model::project_turn(turn, &target).replay_for(&target));
         }
         let retained_messages = messages.len();
         let request = ModelRequest::with_history(messages, input, options.output().clone())

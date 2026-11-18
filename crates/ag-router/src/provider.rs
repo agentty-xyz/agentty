@@ -123,6 +123,18 @@ impl Router {
         Ok(self.route(model)?.0.replay.reasoning_text)
     }
 
+    /// Returns whether the selected model needs earlier turns replayed with
+    /// their turn instructions, exactly as first sent: Anthropic Messages
+    /// models drop or reject signed thinking that follows an edited earlier
+    /// message, so their history must only grow. Other models replay a
+    /// turn's instructions with that turn only.
+    ///
+    /// # Errors
+    /// Returns a routing error for an unknown or unconfigured model.
+    pub fn replays_turn_instructions(&self, model: &str) -> Result<bool, ModelError> {
+        Ok(self.route(model)?.0.protocol == WireProtocol::AnthropicMessages)
+    }
+
     /// Executes one request and validates terminal JSON against its schema;
     /// a request without a schema returns bounded, nonblank terminal text.
     ///

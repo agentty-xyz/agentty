@@ -18,10 +18,19 @@ use crate::schema::OutputSchema;
 /// Smallest `max_output_tokens` the Responses API accepts.
 const MIN_MAX_OUTPUT_TOKENS: u32 = 16;
 
-/// Output-token bound an Anthropic Messages request sends when the request
-/// sets none, since the API requires one: room for long adaptive thinking
-/// and an answer within one non-streamed response.
-const DEFAULT_MAX_OUTPUT_TOKENS: NonZeroU32 = NonZeroU32::MIN.saturating_add(31_999);
+/// `max_tokens` an Anthropic Messages request sends when neither the request
+/// nor [`ProviderSpec::with_fallback_max_tokens`] sets a bound, since the API
+/// requires one: Anthropic's guidance for unstreamed requests, which must
+/// finish within the ten-minute request timeout.
+pub(crate) const DEFAULT_FALLBACK_MAX_TOKENS: NonZeroU32 = NonZeroU32::MIN.saturating_add(15_999);
+
+/// Header naming the Anthropic Messages API version.
+const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
+
+/// The Anthropic Messages API version a specification requests unless a
+/// header replaces it: the first stable version, which every Claude model
+/// and Anthropic-compatible gateway accepts.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Headers the router sets itself, which an extra header must not repeat.
 const RESERVED_HEADERS: [&str; 4] = ["authorization", "content-length", "content-type", "host"];
@@ -85,12 +94,12 @@ pub enum StructuredOutputMode {
     JsonSchema,
     /// Advertise a `structured_output` tool whose input schema is the output
     /// schema, and read its input as the answer (Anthropic Messages only).
-    /// A request without tools or a reasoning effort forces that tool; one
-    /// with tools requires some tool call; one with an effort, which turns
-    /// thinking on and so forbids forcing a tool, lets the model choose and
-    /// also reads a text answer. For models without native structured
-    /// output or with schemas it rejects; current Claude models reject a
-    /// forced tool.
+    /// Under [`ReasoningMapping::None`], for a model that does not think by
+    /// default, a request without tools forces that tool and one with tools
+    /// requires some tool call. A model with a reasoning mapping may think,
+    /// which forbids forcing a tool, so it chooses freely and a text answer
+    /// is read too. For models without native structured output or with
+    /// schemas native output rejects.
     ForcedTool,
     /// State the schema in a leading system message and request the
     /// `json_object` response format.
@@ -239,8 +248,8 @@ pub enum MaxTokensField {
 pub struct ProviderSpec {
     pub(crate) auth: Auth,
     pub(crate) base_url: String,
-    pub(crate) default_max_output_tokens: NonZeroU32,
     pub(crate) display_name: String,
+    pub(crate) fallback_max_tokens: Option<NonZeroU32>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) id: String,
     pub(crate) image_input: bool,
@@ -292,7 +301,7 @@ impl fmt::Debug for ProviderSpec {
             .field("structured_output", &self.structured_output)
             .field("reasoning", &self.reasoning)
             .field("max_tokens_field", &self.max_tokens_field)
-            .field("default_max_output_tokens", &self.default_max_output_tokens)
+            .field("fallback_max_tokens", &self.fallback_max_tokens)
             .field("image_input", &self.image_input)
             .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
@@ -325,22 +334,31 @@ impl ProviderSpec {
     /// starts with native structured output, efforts under their own names,
     /// image input, `prompt_cache_key`, and `max_output_tokens`. Anthropic
     /// Messages starts with native structured output (`output_config.format`),
-    /// efforts under their own names, image input, and the required
-    /// `max_tokens` field, filled from [`Self::with_default_max_output_tokens`]
-    /// when a request sets no bound; it needs `x-api-key` authentication and
-    /// an `anthropic-version` header, which the [`crate::preset::anthropic`]
+    /// efforts under their own names, image input, the required `max_tokens`
+    /// field (16,000 when a request sets no bound, see
+    /// [`Self::with_fallback_max_tokens`]), and the `anthropic-version:
+    /// 2023-06-01` header, which [`Self::with_header`] can replace; it needs
+    /// `x-api-key` authentication, which the [`crate::preset::anthropic`]
     /// preset sets.
     pub fn new(id: impl Into<String>, protocol: WireProtocol, base_url: impl Into<String>) -> Self {
         let id = id.into();
+        let anthropic = protocol == WireProtocol::AnthropicMessages;
         let chat = protocol == WireProtocol::ChatCompletions;
         let responses = protocol == WireProtocol::Responses;
 
         Self {
             auth: Auth::None,
             base_url: base_url.into(),
-            default_max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             display_name: id.clone(),
-            headers: Vec::new(),
+            fallback_max_tokens: None,
+            headers: if anthropic {
+                vec![(
+                    ANTHROPIC_VERSION_HEADER.to_string(),
+                    ANTHROPIC_VERSION.to_string(),
+                )]
+            } else {
+                Vec::new()
+            },
             id,
             image_input: !chat,
             instruction_placement: InstructionPlacement::Separate,
@@ -410,12 +428,14 @@ impl ProviderSpec {
         self
     }
 
-    /// Sets the output-token bound sent when a request sets none (Anthropic
-    /// Messages only, which requires a bound; other protocols then send
-    /// none). It starts at 32,000 tokens.
+    /// Sets the `max_tokens` an Anthropic Messages request sends when the
+    /// request sets no output-token bound, in place of 16,000. The API
+    /// requires a bound, and requests are unstreamed, so a larger one risks
+    /// the ten-minute request timeout. Other protocols send no bound then,
+    /// so validation rejects this setting for them.
     #[must_use]
-    pub fn with_default_max_output_tokens(mut self, max_output_tokens: NonZeroU32) -> Self {
-        self.default_max_output_tokens = max_output_tokens;
+    pub fn with_fallback_max_tokens(mut self, max_tokens: NonZeroU32) -> Self {
+        self.fallback_max_tokens = Some(max_tokens);
 
         self
     }
@@ -429,12 +449,17 @@ impl ProviderSpec {
     }
 
     /// Adds a header sent with every request, such as `OpenRouter`'s
-    /// `HTTP-Referer`. Its value is sent as sensitive and never printed; a
-    /// header the router sets itself, such as `Authorization` or
-    /// `Content-Type`, fails validation.
+    /// `HTTP-Referer`, in place of any earlier header of the same name, read
+    /// case-insensitively, such as the `anthropic-version` an Anthropic
+    /// Messages specification starts with. Its value is sent as sensitive
+    /// and never printed; a header the router sets itself, such as
+    /// `Authorization` or `Content-Type`, fails validation.
     #[must_use]
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.push((name.into(), value.into()));
+        let name = name.into();
+        self.headers
+            .retain(|(existing, _)| !existing.eq_ignore_ascii_case(&name));
+        self.headers.push((name, value.into()));
 
         self
     }
@@ -740,6 +765,7 @@ impl ProviderSpec {
     fn validate_protocol(&self) -> Result<(), ModelError> {
         let unsupported = match self.protocol {
             WireProtocol::AnthropicMessages => self.unsupported_by_anthropic(),
+            _ if self.fallback_max_tokens.is_some() => Some("a fallback `max_tokens`"),
             WireProtocol::ChatCompletions => {
                 if self.max_tokens_field == Some(MaxTokensField::MaxOutputTokens) {
                     Some("the `max_output_tokens` field")

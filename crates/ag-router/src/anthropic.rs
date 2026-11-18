@@ -26,8 +26,10 @@ use serde_json::{Value, json};
 use crate::chat_completion::TURN_INSTRUCTIONS_HEADING;
 use crate::http::{HttpTransport, ProviderRequest, deserialize_optional};
 use crate::model::{GeneratedResponse, ModelErrorType};
-use crate::provider_spec::{ProviderSpec, ReasoningMapping, StructuredOutputMode};
-use crate::responses::ReasoningView;
+use crate::provider_spec::{
+    DEFAULT_FALLBACK_MAX_TOKENS, ProviderSpec, ReasoningMapping, StructuredOutputMode,
+};
+use crate::reasoning::ReasoningView;
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Messages endpoint under a provider base URL.
@@ -117,8 +119,10 @@ impl<'spec> AnthropicBackend<'spec> {
                 schema: format.schema().value(),
             });
         let mut tools: Vec<_> = request.tools().iter().map(ToolPayload::from).collect();
+        // A model with a reasoning mapping may think without an effort, and
+        // thinking forbids forcing a tool.
         let tool_choice = output_tool.map(|format| {
-            let choice = if effort.is_some() {
+            let choice = if self.policy.reasoning != ReasoningMapping::None {
                 ToolChoice::Auto
             } else if tools.is_empty() {
                 ToolChoice::Tool {
@@ -140,7 +144,8 @@ impl<'spec> AnthropicBackend<'spec> {
             max_tokens: request
                 .options
                 .max_output_tokens
-                .unwrap_or(self.policy.default_max_output_tokens)
+                .or(self.policy.fallback_max_tokens)
+                .unwrap_or(DEFAULT_FALLBACK_MAX_TOKENS)
                 .get(),
             messages,
             model: &self.model,
