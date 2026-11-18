@@ -54,14 +54,14 @@ back to an API key. When the plan limit is reached, requests fail until it reset
 
 Type `/` in the chat to list commands:
 
-- `/model` lists the cataloged models of every provider with credentials, numbered in
-  ID order, with their list prices and the roles (`smart`, `cheap`, `fast`, `vision`)
-  whose first choice they are.
+- `/model` lists the cataloged models of every provider with credentials, numbered in ID
+  order, with their list prices and the roles (`smart`, `cheap`, `fast`, `vision`) whose
+  first choice they are.
 - `/model <MODEL>` switches later turns of the session to a list number, a role's first
-  choice, a `provider/model` pair, a known model ID (of the current provider when it
-  has one), or another model ID from the current provider. Role names win over model
-  IDs; use `provider/model` for a model named like a role. Completed history is kept,
-  and resuming the session uses the new model.
+  choice, a `provider/model` pair, a known model ID (of the current provider when it has
+  one), or another model ID from the current provider. Role names win over model IDs;
+  use `provider/model` for a model named like a role. Completed history is kept, and
+  resuming the session uses the new model.
 - `/usage` shows the session's summed tokens and cost.
 - `/history` shows the session's turns: each prompt and answer.
 - `/help` shows the commands.
