@@ -133,6 +133,7 @@ struct ProjectionRow {
 struct SessionMessageRow {
     error_type: Option<String>,
     kind: String,
+    model_snapshot: Option<String>,
     payload: String,
     status: String,
     turn_position: i64,
@@ -223,7 +224,7 @@ enum WindowForm {
     /// Every message, loaded after the window is chosen.
     Full,
     /// The turn's elided form, already loaded to weigh it.
-    Elided(HistoryTurn),
+    Elided(Box<HistoryTurn>),
     /// Only the input and final message, loaded after the window is chosen.
     Brief,
 }
@@ -2145,7 +2146,7 @@ async fn load_window_turns(
         };
         let turn = match form {
             WindowForm::Full => next_loaded(),
-            WindowForm::Elided(turn) => Some(turn),
+            WindowForm::Elided(turn) => Some(*turn),
             WindowForm::Brief => next_loaded().map(|turn| turn.brief()),
         };
         turns.extend(turn.map(|turn| (position, turn)));
@@ -2173,7 +2174,8 @@ SELECT message.turn_position AS "turn_position!: i64",
        message.kind AS "kind!: String",
        message.payload AS "payload!: String",
        turn.status AS "status!: String",
-       turn.error_type
+       turn.error_type,
+       turn.model_snapshot
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
@@ -2212,10 +2214,16 @@ ORDER BY message.turn_position, message.message_position
                     failed: row.status == "failed",
                     ..TurnStop::default()
                 });
+                let model = row
+                    .model_snapshot
+                    .as_deref()
+                    .map(crate::store::RecordedModel::decode)
+                    .transpose()?;
                 turns.push((
                     row.turn_position,
                     HistoryTurn {
                         messages: vec![message],
+                        model,
                         stop,
                     },
                 ));
@@ -2474,7 +2482,7 @@ async fn window_form(
         if let Some(turn) = elided {
             let bytes = context::retained_bytes(&turn.messages);
 
-            return Ok(Some((WindowForm::Elided(turn), bytes)));
+            return Ok(Some((WindowForm::Elided(Box::new(turn)), bytes)));
         }
     }
 

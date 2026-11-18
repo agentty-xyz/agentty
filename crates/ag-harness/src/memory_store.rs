@@ -788,6 +788,7 @@ impl Record {
                     turn.owner.turn_position(),
                     HistoryTurn {
                         messages: turn.messages.clone(),
+                        model: Some(turn.model.clone()),
                         stop: self.stop(turn),
                     },
                 )
@@ -815,6 +816,7 @@ impl Record {
                     turn.owner.turn_position(),
                     HistoryTurn {
                         messages: turn.messages.clone(),
+                        model: Some(turn.model.clone()),
                         stop: self.stop(turn),
                     },
                 )

@@ -44,10 +44,10 @@ use crate::policy::ToolPolicy;
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
-use crate::reservation;
 use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, NewSession, SessionError};
+use crate::session_model::ReplayTarget;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
@@ -56,6 +56,7 @@ use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::usage::{TurnUsage, UsageTotals};
 use crate::write_journal::WriteRecord;
+use crate::{reservation, session_model};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 /// Former default per-turn tool-call limit, still hashed into host-request
@@ -84,8 +85,15 @@ impl Session {
     /// estimator set with [`Harness::context_estimator`], discards the
     /// in-memory calibration of the previous model's estimates, and fences
     /// older handles, including when switching back to a previous
-    /// registration. Historical
-    /// provider reasoning is not portable and causes an explicit rejection.
+    /// registration. Stored history stays as each model wrote it: when a
+    /// later request goes to a model of another reasoning family (all
+    /// `OpenAI` Responses models form one family, each OpenAI-compatible
+    /// server model its own, and every other provider one), turns an earlier
+    /// family produced replay their reasoning as short notes, and switching
+    /// back replays that reasoning natively again. Every switch, including
+    /// one within a provider, restarts the history projection, so the new
+    /// model's first request shares no cached prompt prefix with the old
+    /// one.
     /// A registered model has no prices, so later runs report no
     /// [`crate::Cost`] and their turns count as unpriced, no catalog
     /// concurrency cap, so later requests no longer take its permits, and
@@ -722,10 +730,18 @@ impl Session {
             .map(|system_prompt| ModelMessage::System(system_prompt.clone()))
             .chain(checkpoint_message)
             .collect();
+        // Turns another reasoning family produced replay their reasoning as
+        // notes; stored turns stay native.
+        let model = &self.harness.inner.model;
+        let mut target = ReplayTarget::new(model.metadata().as_ref(), self.model_generation);
+        // Only projected turns depend on how the model replays reasoning.
+        if !turns.iter().all(|(_, turn)| target.replays_natively(turn)) {
+            target = target.with_reasoning_text(model.replays_reasoning_text());
+        }
         let mut history_turn_starts = Vec::with_capacity(turns.len());
         for (_, turn) in &turns {
             history_turn_starts.push(messages.len());
-            messages.extend(turn.replay());
+            messages.extend(session_model::project_turn(turn, &target).replay());
         }
         let retained_messages = messages.len();
         let request = ModelRequest::with_history(messages, input, options.output().clone())
@@ -738,7 +754,11 @@ impl Session {
             request,
             retained_messages,
             history,
-            ReplayedHistory { projection, turns },
+            ReplayedHistory {
+                projection,
+                target,
+                turns,
+            },
         )
     }
 

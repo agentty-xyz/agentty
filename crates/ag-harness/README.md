@@ -543,7 +543,14 @@ let harness = Harness::from_registry(&models, "review-model")?;
   capacity. The budget bounds replayed history as above and fails before any provider
   call when mandatory content cannot fit. `TurnReport::history` says what was replayed
   or dropped.
-- `session.switch_model(&models, key)` changes the model of an idle session.
+- `session.switch_model(&models, key)` changes the model of an idle session. It rejects
+  tool or image history the target cannot replay with
+  `SessionError::UnsupportedModelHistory`. Reasoning from a model of another reasoning
+  family (`OpenAI` and `ChatGPT`-plan models share one) is replayed to the new model as
+  short `[harness]` notes: as reasoning when the new model replays reasoning text, or as
+  assistant text otherwise; tool calls keep their ids, arguments, and results. The
+  stored history is unchanged, so switching back replays it natively. Every switch,
+  including one between models of the same provider, loses the provider's prompt cache.
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
   that fit, which later turns replay first; call it again to cover the rest.
 - Bump the registration revision whenever configuration or credentials scope changes.

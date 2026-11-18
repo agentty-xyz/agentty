@@ -107,6 +107,15 @@ pub trait Model: Send + Sync {
         false
     }
 
+    /// Returns whether the provider replays the plain-text reasoning of
+    /// replayed assistant messages, as thinking-mode Kimi and Qwen models
+    /// require on replayed tool calls. History another reasoning family
+    /// wrote then replays its reasoning notes as reasoning; otherwise, as by
+    /// default, as assistant text.
+    fn replays_reasoning_text(&self) -> bool {
+        false
+    }
+
     /// Returns whether the implementation answers requests in
     /// [`OutputMode::Text`] with plain text, returned as
     /// [`ModelResponse::Text`]. The default, `false`, makes text-mode turns
@@ -626,12 +635,12 @@ impl ModelClient {
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
-        ag_router::Provider::Kimi => "moonshot_ai",
-        ag_router::Provider::Muse => "meta",
-        ag_router::Provider::ChatGpt => "openai_chatgpt",
-        ag_router::Provider::OpenAi => "openai",
-        ag_router::Provider::OpenAiCompatible => "openai_compatible",
-        ag_router::Provider::Qwen => "alibaba_cloud",
+        ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
+        ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::ChatGpt => telemetry::PROVIDER_OPENAI_CHATGPT,
+        ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
+        ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
+        ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
     }
 }
 
@@ -662,6 +671,12 @@ impl Model for ModelClient {
     fn keeps_prefix_across_schemas(&self) -> bool {
         self.router
             .keeps_prefix_across_schemas(&self.router_model)
+            .unwrap_or(false)
+    }
+
+    fn replays_reasoning_text(&self) -> bool {
+        self.router
+            .replays_reasoning_text(&self.router_model)
             .unwrap_or(false)
     }
 

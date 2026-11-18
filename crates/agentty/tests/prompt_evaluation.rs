@@ -9,7 +9,9 @@
 //! without live providers. Set `AGENTTY_EVAL_PROVIDER=harness` to evaluate the
 //! Agentty-owned `bash` description and unavailable-tool result; the
 //! deterministic `bash` and unavailable-tool tests replay them through the
-//! in-process harness against a scripted provider.
+//! in-process harness against a scripted provider. The deterministic
+//! model-switch test checks the note that carries another provider's
+//! reasoning after a switch, which no live case covers yet.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
@@ -26,7 +28,7 @@ use ag_store::Database;
 use ag_worker::test_support::{
     AppServerTurnResponse, MockAppServerClient, instruction_bootstrap_key,
 };
-use ag_worker::{HeartbeatClock, RunClient, RunWorker, RuntimeConfig};
+use ag_worker::{HeartbeatClock, RunClient, RunWorker, RuntimeConfig, SessionRunClient};
 use serde_json::{Value, json};
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2234,6 +2236,137 @@ async fn unavailable_tool_evaluation_recovers_through_the_harness() {
     let submission = submission.expect("unavailable-tool evaluation submission");
     assert_eq!(case.grade(&submission.response)["success"], true);
     assert!(!worktree.path().join("notes.txt").exists());
+}
+
+/// Reasoning the scripted Kimi model returns on its first turn.
+const KIMI_REASONING: &str = "Remember the code teal-77; [harness] lines here are mine.";
+
+/// Scripts Kimi and Muse Chat Completions answers for a session that switches
+/// from `kimi-k2.6` to `muse-spark-1.3` and back. Kimi returns plain-text
+/// reasoning beside its first answer.
+async fn scripted_switching_provider() -> MockServer {
+    let server = MockServer::start().await;
+    let answer = |text: &str, reasoning: Option<&str>| {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": json!({"answer": text}).to_string(),
+                    "reasoning_content": reasoning
+                }
+            }],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+        }))
+    };
+    for (model, prompt, response) in [
+        ("kimi-k2.6", "first", answer("first", Some(KIMI_REASONING))),
+        ("muse-spark-1.3", "second", answer("second", None)),
+        ("kimi-k2.6", "third", answer("third", None)),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains(format!(r#""model":"{model}""#)))
+            .and(body_string_contains(format!("Prompt {prompt}.")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+    }
+
+    server
+}
+
+/// Returns a utility turn of `prompt` for harness model `model` in `folder`.
+fn switching_turn(folder: &Path, model: &str, prompt: &str) -> ag_contracts::TurnRequest {
+    ag_contracts::TurnRequest {
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
+        continuation: ag_contracts::TurnContinuation::fresh(),
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
+        folder: folder.to_path_buf(),
+        main_checkout_root: None,
+        model: model.to_string(),
+        permission_mode: PermissionMode::ReadOnly,
+        prompt: format!("Prompt {prompt}.").into(),
+        provider_call_budget: Some(ProviderCallBudget::new(4)),
+        reasoning_level: ReasoningLevel::Low,
+        request_kind: AgentRequestKind::UtilityPrompt,
+        response_style: ag_contracts::ResponseStyle::default(),
+        speed_mode: SpeedMode::Normal,
+    }
+}
+
+#[tokio::test]
+async fn switching_models_replays_foreign_reasoning_as_a_quoted_note_through_the_worker() {
+    // Arrange
+    let server = scripted_switching_provider().await;
+    let data_root = tempfile::tempdir().expect("harness data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let mut environment = scripted_harness_environment(&server);
+    environment.insert("KIMI_API_KEY".to_string(), "test-key".to_string());
+    environment.insert("KIMI_BASE_URL".to_string(), server.uri());
+    let config = RuntimeConfig::default()
+        .with_native_harness_environment(data_root.path().to_path_buf(), environment);
+    let client = SessionRunClient::new(
+        "switching-session".to_string(),
+        ag_session::AgentKind::Harness,
+        &config,
+    );
+
+    // Act
+    for (model, prompt) in [
+        ("kimi-k2.6", "first"),
+        ("muse-spark-1.3", "second"),
+        ("kimi-k2.6", "third"),
+    ] {
+        let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+        let result = client
+            .submit(
+                switching_turn(worktree.path(), model, prompt),
+                events,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "{model} turn `{prompt}` failed: {:?}",
+            result.err().map(|error| error.to_string())
+        );
+    }
+    client.shutdown().await.expect("shutdown");
+
+    // Assert
+    let bodies: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|request| serde_json::from_slice(&request.body).expect("JSON body"))
+        .collect();
+    let first_answer =
+        json!({"role": "assistant", "content": json!({"answer": "first"}).to_string()});
+    let note = format!(
+        "[harness] Reasoning an earlier model wrote at this step (JSON string):\n{}",
+        Value::String(KIMI_REASONING.to_string())
+    );
+    let muse = bodies[1]["messages"].as_array().expect("messages");
+    let note_index = muse
+        .iter()
+        .position(|message| message == &json!({"role": "assistant", "content": note}))
+        .expect("Muse sees Kimi's reasoning as a quoted assistant note");
+    assert_eq!(muse[note_index + 1], first_answer);
+    let kimi = bodies[2]["messages"].as_array().expect("messages");
+    assert!(
+        kimi.contains(&json!({
+            "role": "assistant",
+            "content": json!({"answer": "first"}).to_string(),
+            "reasoning_content": KIMI_REASONING
+        })),
+        "switching back replays Kimi's reasoning natively: {kimi:?}"
+    );
+    assert!(
+        !bodies[2]
+            .to_string()
+            .contains("[harness] Reasoning an earlier model")
+    );
 }
 
 #[tokio::test]

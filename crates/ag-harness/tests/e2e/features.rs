@@ -251,19 +251,12 @@ async fn switch_roundtrip(from: Provider, to: Provider) -> Result<String, DynErr
     .await?;
     let _ = stored;
 
-    let switched = session.switch_model(&registry, to.name()).await;
-    match switched {
-        Ok(()) => {}
-        Err(SessionError::UnsupportedModelHistory { .. }) if from == Provider::Kimi => {
-            return Ok(format!(
-                "switch {}->{} rejected as documented (Kimi reasoning history is nonportable): {}",
-                from.name(),
-                to.name(),
-                switched.unwrap_err()
-            ));
-        }
-        Err(error) => return Err(format!("switch to {} failed: {error}", to.name()).into()),
-    }
+    // Reasoning history from another provider replays as text notes, so the
+    // switch must succeed whichever provider reasoned first.
+    session
+        .switch_model(&registry, to.name())
+        .await
+        .map_err(|error| format!("switch to {} failed: {error}", to.name()))?;
     let recalled = send(
         to,
         &mut session,
@@ -288,30 +281,22 @@ async fn switch_roundtrip(from: Provider, to: Provider) -> Result<String, DynErr
         .database(&database)
         .resume("switch")
         .await?;
-    let back = resumed.switch_model(&registry, from.name()).await;
-    let back_detail = match back {
-        Ok(()) => {
-            let again = send(
-                from,
-                &mut resumed,
-                "Set answer to the code I asked you to remember, followed by the word back.",
-            )
-            .await?;
-            if !answer(&again).contains("teal-77") {
-                return Err(
-                    format!("{} lost history after switching back: {again}", from.name()).into(),
-                );
-            }
-            "switch back ok".to_string()
-        }
-        Err(SessionError::UnsupportedModelHistory { .. }) if to == Provider::Kimi => {
-            "switch back rejected as documented (Kimi reasoning history)".to_string()
-        }
-        Err(error) => return Err(format!("switch back failed: {error}").into()),
-    };
+    resumed
+        .switch_model(&registry, from.name())
+        .await
+        .map_err(|error| format!("switch back failed: {error}"))?;
+    let again = send(
+        from,
+        &mut resumed,
+        "Set answer to the code I asked you to remember, followed by the word back.",
+    )
+    .await?;
+    if !answer(&again).contains("teal-77") {
+        return Err(format!("{} lost history after switching back: {again}", from.name()).into());
+    }
 
     Ok(format!(
-        "{}->{} recall ok; stale-resume rejected; {back_detail}",
+        "{}->{} recall ok; stale-resume rejected; switch back ok",
         from.name(),
         to.name()
     ))

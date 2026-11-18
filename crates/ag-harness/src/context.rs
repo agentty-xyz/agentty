@@ -16,6 +16,7 @@ use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
 use crate::round_summary::{self, CoveredCalls, RoundSummaryJob, SOURCE_TEXT_LEVELS};
 use crate::schema_contract::OutputSchema;
+use crate::session_model::{self, RecordedModel, ReplayTarget};
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 use crate::{compaction, read};
@@ -444,16 +445,50 @@ impl ContextEstimator for HeuristicContextEstimator {
     }
 }
 
-/// One finished session turn loaded for replay.
+/// One finished session turn loaded for replay. Stores outside this crate
+/// build it with [`Self::new`], [`Self::with_model`], and
+/// [`Self::with_stop`].
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct HistoryTurn {
     /// Persisted messages in order, starting with the turn's user input.
     pub messages: Vec<ModelMessage>,
+    /// Model selection recorded when the turn was reserved; `None` for a
+    /// legacy turn without a snapshot. Replay reads only its provider and
+    /// model names: a later request to a model of another reasoning family
+    /// replays the turn's provider reasoning as notes instead of natively.
+    /// A turn without a snapshot replays natively only until the session
+    /// first switches models, and as notes after that.
+    pub model: Option<RecordedModel>,
     /// Why the turn stopped; `None` for a completed turn.
     pub stop: Option<TurnStop>,
 }
 
 impl HistoryTurn {
+    /// Creates a completed turn of `messages` without a model snapshot.
+    pub fn new(messages: Vec<ModelMessage>) -> Self {
+        Self {
+            messages,
+            model: None,
+            stop: None,
+        }
+    }
+
+    /// Returns this turn with `model`, the selection recorded when the turn
+    /// was reserved.
+    #[must_use]
+    pub fn with_model(mut self, model: RecordedModel) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    /// Returns this turn stopped for `stop`.
+    #[must_use]
+    pub fn with_stop(mut self, stop: TurnStop) -> Self {
+        self.stop = Some(stop);
+        self
+    }
+
     /// Returns the messages replayed for this turn. Its host instructions
     /// applied to that turn only, so they stay stored but are not replayed.
     /// A completed turn otherwise replays verbatim. A stopped turn adds a
@@ -514,6 +549,7 @@ impl HistoryTurn {
 
         Self {
             messages,
+            model: self.model.clone(),
             stop: self.stop.clone(),
         }
     }
@@ -541,6 +577,7 @@ impl HistoryTurn {
                 .into_iter()
                 .chain(output)
                 .collect(),
+            model: self.model.clone(),
             stop: self.stop.clone(),
         }
     }
@@ -594,12 +631,9 @@ impl HistoryTurn {
 }
 
 impl From<Vec<ModelMessage>> for HistoryTurn {
-    /// Describes a completed turn.
+    /// Describes a completed turn without a model snapshot.
     fn from(messages: Vec<ModelMessage>) -> Self {
-        Self {
-            messages,
-            stop: None,
-        }
+        Self::new(messages)
     }
 }
 
@@ -1046,11 +1080,14 @@ pub(crate) struct SentHistory {
 }
 
 /// The finished turns one turn's first request replayed, oldest first with
-/// their positions and in their replayed forms, and the projection they
-/// follow.
+/// their positions and in their stored forms, the projection they follow,
+/// and the model the request replayed them to.
 #[derive(Debug, Default)]
 pub(crate) struct ReplayedHistory {
     pub(crate) projection: HistoryProjection,
+    /// The request's model, which decides which turns replayed their
+    /// reasoning as notes (see [`session_model::project_turn`]).
+    pub(crate) target: ReplayTarget,
     pub(crate) turns: Vec<(i64, HistoryTurn)>,
 }
 
@@ -1068,7 +1105,13 @@ impl ReplayedHistory {
             self.projection.drop_before(position.saturating_add(1))
         });
         for ((position, turn), messages) in kept.iter().zip(&sent.turns) {
-            if *messages != turn.elided().replay() {
+            // The fit elides the projected turn; projection commutes with
+            // elision, so this is also how the next request replays it.
+            if *messages
+                != session_model::project_turn(turn, &self.target)
+                    .elided()
+                    .replay()
+            {
                 break;
             }
             projection = projection.elide_before(position.saturating_add(1));
@@ -2486,11 +2529,15 @@ impl Reduction {
                     content,
                     reasoning_content,
                 },
-            ) if reasoning_content.len() > CLEARED_REASONING.len() => {
+            ) if session_model::clears_reasoning(reasoning_content) => {
                 Some(ModelMessage::AssistantReasoning {
                     content: content.clone(),
                     reasoning_content: CLEARED_REASONING.to_string(),
                 })
+            }
+            // Reasoning another family wrote, projected to an assistant note.
+            (Self::ClearReasoning, ModelMessage::Assistant(text)) => {
+                session_model::cleared_note_text(text, true).map(ModelMessage::Assistant)
             }
             (Self::ClearReasoning, _) => reduce_calls(message, cleared_reasoning_call),
             (Self::ShrinkWrite, _) => reduce_calls(message, |call| {
@@ -2870,7 +2917,7 @@ fn is_tool_call_message(message: &ModelMessage) -> bool {
 fn carries_reasoning(message: &ModelMessage) -> bool {
     tool_calls(message).iter().any(|call| {
         call.reasoning_content()
-            .is_some_and(|reasoning| reasoning.len() > CLEARED_REASONING.len())
+            .is_some_and(session_model::clears_reasoning)
     })
 }
 
@@ -3145,10 +3192,17 @@ fn reduce_calls(
 
 /// Rebuilds a tool call with its provider reasoning replaced by
 /// [`CLEARED_REASONING`], keeping its identifier, arguments, and assistant
-/// text.
+/// text; a call without reasoning instead clears the projected reasoning
+/// note leading its assistant text.
 fn cleared_reasoning_call(call: &ToolCall) -> Option<ToolCall> {
-    call.reasoning_content()
-        .filter(|reasoning| reasoning.len() > CLEARED_REASONING.len())?;
+    let Some(reasoning) = call.reasoning_content() else {
+        let text = session_model::cleared_note_text(call.assistant_text()?, false)?;
+
+        return Some(call.replayed_as(None, Some(text)));
+    };
+    if !session_model::clears_reasoning(reasoning) {
+        return None;
+    }
 
     ToolCall::from_json(
         call.id().to_string(),

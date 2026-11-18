@@ -433,6 +433,22 @@ impl ToolCall {
         self.assistant_text.as_deref()
     }
 
+    /// Returns this call with its identifier and arguments, replayed with
+    /// `reasoning_content` and `assistant_text` instead of its own, as a
+    /// request to a model of another reasoning family replays it.
+    pub(crate) fn replayed_as(
+        &self,
+        reasoning_content: Option<String>,
+        assistant_text: Option<String>,
+    ) -> Self {
+        Self {
+            arguments: self.arguments.clone(),
+            assistant_text,
+            id: self.id.clone(),
+            reasoning_content,
+        }
+    }
+
     #[cfg(any(feature = "sqlite", test))]
     pub(crate) fn read(
         id: String,

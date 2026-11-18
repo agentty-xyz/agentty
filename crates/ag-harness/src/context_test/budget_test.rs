@@ -343,6 +343,7 @@ fn stopped_turn_replay_answers_unfinished_tool_calls_and_ends_with_its_note() {
             ModelMessage::AssistantToolCalls(vec![read_call("first"), read_call("second")]),
             result("first"),
         ],
+        model: None,
         stop: Some(TurnStop {
             error_type: "Tool".to_string(),
             failed: true,
@@ -382,6 +383,7 @@ fn stop_note_bounds_the_effects_it_names() {
     commands.extend((1..10).map(|index| format!("command {index}")));
     let turn = HistoryTurn {
         messages: vec![ModelMessage::User("run".to_string())],
+        model: None,
         stop: Some(TurnStop {
             unfinished_commands: commands,
             ..interrupted()

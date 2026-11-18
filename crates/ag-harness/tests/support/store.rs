@@ -153,13 +153,15 @@ impl Record {
                 .collect(),
             ..stop
         });
-        self.loaded.turns.push((
-            owner.turn_position(),
-            HistoryTurn {
-                messages: std::mem::take(&mut self.pending),
-                stop,
-            },
-        ));
+        // A switch needs an idle session, so the selection is the one the
+        // turn was reserved under.
+        let turn = HistoryTurn::new(std::mem::take(&mut self.pending))
+            .with_model(self.loaded.recorded_model());
+        let turn = match stop {
+            Some(stop) => turn.with_stop(stop),
+            None => turn,
+        };
+        self.loaded.turns.push((owner.turn_position(), turn));
         self.owner = None;
     }
 

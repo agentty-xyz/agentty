@@ -215,21 +215,27 @@ fn model_switch_requires_an_idle_current_selection_and_advances_it() {
 fn model_switch_rejects_history_the_target_cannot_replay() {
     // Arrange
     let switch = switch(0, ModelCapabilities::new(unbounded_model_profile()));
-    let portable = [ModelMessage::User("prompt".into())];
     let reasoning = [ModelMessage::AssistantReasoning {
         content: "{}".into(),
         reasoning_content: "private".into(),
     }];
+    let tool_result = [ModelMessage::ToolResult {
+        call_id: "call".into(),
+        content: "{}".into(),
+        name: "read".into(),
+    }];
 
     // Act
-    let portable = switch.check_history(&portable);
     let reasoning = switch.check_history(&reasoning);
+    let tool_result = switch.check_history(&tool_result);
 
     // Assert
-    assert!(portable.is_ok());
+    assert!(reasoning.is_ok(), "reasoning replays as notes");
     assert!(matches!(
-        reasoning,
-        Err(SessionError::UnsupportedModelHistory { .. })
+        tool_result,
+        Err(SessionError::UnsupportedModelHistory {
+            reason: "target does not support tool history"
+        })
     ));
 }
 

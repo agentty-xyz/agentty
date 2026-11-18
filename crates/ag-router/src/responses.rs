@@ -447,21 +447,62 @@ pub(crate) fn default_transport() -> Arc<HttpTransport> {
     ))
 }
 
+/// Readable view of the provider-neutral reasoning content a model
+/// returned, as [`reasoning_view`] reads it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReasoningView<'a> {
+    /// Content that is not Responses reasoning items, such as the plain-text
+    /// reasoning Chat Completions providers return, as written.
+    Text(&'a str),
+    /// The summary text of Responses reasoning items, whose reasoning itself
+    /// is encrypted, with summary parts separated by blank lines.
+    Summary(String),
+    /// Responses reasoning items without any summary text: encrypted only.
+    Opaque,
+}
+
+/// Returns the readable view of `reasoning_content`, recognizing Responses
+/// reasoning items exactly as requests replay them.
+pub fn reasoning_view(reasoning_content: &str) -> ReasoningView<'_> {
+    let Some(items) = reasoning_items(reasoning_content) else {
+        return ReasoningView::Text(reasoning_content);
+    };
+    let summaries: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item.get("summary").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    if summaries.is_empty() {
+        return ReasoningView::Opaque;
+    }
+
+    ReasoningView::Summary(summaries.join("\n\n"))
+}
+
 /// Returns the reasoning items a prior response stored in its reasoning
 /// content, or none for content that is not such an array.
 fn replayed_reasoning(reasoning_content: Option<&str>) -> Vec<InputItem> {
     reasoning_content
-        .and_then(|content| serde_json::from_str::<Vec<Value>>(content).ok())
+        .and_then(reasoning_items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(InputItem::Reasoning)
+        .collect()
+}
+
+/// Parses content that is a nonempty JSON array of Responses reasoning
+/// items, the form a response's reasoning is stored in.
+fn reasoning_items(content: &str) -> Option<Vec<Value>> {
+    serde_json::from_str::<Vec<Value>>(content)
+        .ok()
         .filter(|items| {
             !items.is_empty()
                 && items
                     .iter()
                     .all(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(InputItem::Reasoning)
-        .collect()
 }
 
 /// Incremental reader of a Responses server-sent event stream that keeps

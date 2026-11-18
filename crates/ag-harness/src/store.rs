@@ -179,7 +179,12 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<(), SessionError>;
     /// Loads configuration and bounded finished history; recovers expired
     /// turns. Return the current registration identity in [`LoadedSession`];
-    /// a load or turn must never assign or switch that identity.
+    /// a load or turn must never assign or switch that identity. Give each
+    /// turn the model snapshot recorded at its reservation in
+    /// [`HistoryTurn::model`], so requests to a model of another reasoning
+    /// family replay its reasoning as notes; once the session has switched
+    /// models, a turn without a snapshot replays its reasoning as notes to
+    /// every model.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
     /// Switches an idle session's model in one atomic section: recover
     /// expired turns and validate every finished turn's canonical message with

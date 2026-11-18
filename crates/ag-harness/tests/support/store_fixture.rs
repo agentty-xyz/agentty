@@ -10,7 +10,8 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionStore, WriteStatus,
+    AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, RecordedModel,
+    SessionStore, WriteStatus,
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
@@ -44,6 +45,23 @@ pub(crate) fn image_input(before: &str, payload: &[u8], after: &str) -> TurnInpu
         InputBlock::Text(after.to_string()),
     ])
     .expect("image input")
+}
+
+/// Returns the model snapshot a store records for a turn of a session
+/// created without a model selection.
+pub(crate) fn unselected_model() -> RecordedModel {
+    RecordedModel {
+        generation: 0,
+        model: None,
+        provider: None,
+        registration_identity: None,
+    }
+}
+
+/// Returns the completed turn of `messages` as a store loads it for a
+/// session created without a model selection.
+pub(crate) fn loaded_turn(messages: Vec<ModelMessage>) -> HistoryTurn {
+    HistoryTurn::new(messages).with_model(unselected_model())
 }
 
 /// Returns one empty store of each backend this build includes.

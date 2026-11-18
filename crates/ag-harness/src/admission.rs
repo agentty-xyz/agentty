@@ -230,9 +230,9 @@ impl ModelSwitch {
         crate::session_model::next_generation(self.generation)
     }
 
-    /// Validates canonical messages for the target model. Provider-specific
-    /// reasoning is always rejected: it has no cross-model portability
-    /// contract.
+    /// Validates canonical messages for the target model: tool history needs
+    /// tool calls and image history needs image input. Provider reasoning is
+    /// accepted; requests to another reasoning family replay it as notes.
     ///
     /// # Errors
     /// Returns [`SessionError::UnsupportedModelHistory`] for content the

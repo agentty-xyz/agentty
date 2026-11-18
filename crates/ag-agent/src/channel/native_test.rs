@@ -9,13 +9,7 @@ use crate::agent::instruction_bootstrap_key;
 
 /// Builds a completed history turn at `position` from `messages`.
 fn history_turn(position: i64, messages: Vec<ModelMessage>) -> (i64, HistoryTurn) {
-    (
-        position,
-        HistoryTurn {
-            messages,
-            stop: None,
-        },
-    )
+    (position, HistoryTurn::from(messages))
 }
 
 #[test]

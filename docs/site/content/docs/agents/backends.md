@@ -239,8 +239,8 @@ disabling the other session types.
 - A content-free report of each completed turn (token usage, context fitting,
   corrections, and tool activity) is kept in the `harness_turn_report` database table,
   including after the session is deleted.
-- Once a session has reasoning history from `kimi-k3`, `kimi-k2.6`, `qwen3.8-max`, or
-  `qwen3.8-flash`, switching away from that model is rejected.
+- A session can switch models between turns. A model from another provider sees earlier
+  reasoning as short notes of at most 1 KiB each, and switching back restores it.
 
 <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
 Model** also lists every ready harness model with its price class, such as

@@ -8,7 +8,8 @@ use crate::context::{
     ELIDED_SOURCE_LIMIT_FACTOR, HistoryLimit, HistoryProjection, HistoryTurn, ReplayForm,
     ReplayedHistory, SentHistory, TurnStop, project_history,
 };
-use crate::model::ModelMessage;
+use crate::model::{ModelMessage, ModelMetadata};
+use crate::session_model::{self, RecordedModel, ReplayTarget};
 
 /// A completed turn reading one file of `bytes` bytes with reasoning beside
 /// its call, then answering.
@@ -229,6 +230,7 @@ fn reprojection_keeps_only_the_input_and_note_of_a_stopped_turn_that_does_not_fi
             ModelMessage::AssistantToolCall(read_call("call")),
             tool_result("call", "read", "{}"),
         ],
+        model: None,
         stop: Some(TurnStop {
             error_type: "cancelled".to_string(),
             ..TurnStop::default()
@@ -310,6 +312,7 @@ fn the_next_turn_keeps_what_this_turn_left_out_or_sent_elided() {
     ]);
     let replayed = ReplayedHistory {
         projection: HistoryProjection::new(0, 0, 2),
+        target: ReplayTarget::default(),
         turns: turns.clone(),
     };
     let sent = SentHistory {
@@ -331,4 +334,48 @@ fn the_next_turn_keeps_what_this_turn_left_out_or_sent_elided() {
     // Assert
     assert_eq!(after, HistoryProjection::new(1, 1, 3));
     assert_eq!(unreduced, replayed.projection);
+}
+
+#[test]
+fn a_foreign_turn_sent_elided_stays_elided_in_its_projected_form() {
+    // Arrange
+    let snapshot = RecordedModel {
+        generation: 0,
+        model: Some("gpt-6-luna".to_string()),
+        provider: Some("openai".to_string()),
+        registration_identity: None,
+    };
+    let foreign = |input: &str| read_turn(input, 300).with_model(snapshot.clone());
+    let turns = positioned(&[foreign("elided"), foreign("whole")]);
+    let metadata = ModelMetadata::new("meta", "muse-spark-1.3").expect("metadata");
+    let target = ReplayTarget::new(Some(&metadata), 1);
+    let projected = |turn: &HistoryTurn| session_model::project_turn(turn, &target).into_owned();
+    let replayed = ReplayedHistory {
+        projection: HistoryProjection::default(),
+        target: target.clone(),
+        turns: turns.clone(),
+    };
+    let sent = SentHistory {
+        dropped_turns: 0,
+        turns: vec![
+            projected(&turns[0].1).elided().replay(),
+            projected(&turns[1].1).replay(),
+        ],
+    };
+
+    // Act
+    let after = replayed.after_turn(&sent);
+
+    // Assert
+    assert_ne!(
+        projected(&turns[0].1).elided(),
+        projected(&turns[0].1),
+        "the elided form clears the projected reasoning note"
+    );
+    assert_eq!(after, HistoryProjection::default().elide_before(1));
+    assert_eq!(
+        projected(&turns[0].1.elided()).replay(),
+        sent.turns[0],
+        "the next turn replays the stored elided turn exactly as sent"
+    );
 }

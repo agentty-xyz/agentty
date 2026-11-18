@@ -20,6 +20,7 @@ use crate::reservation::TURN_LEASE_SECONDS;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, TimestampSource, connect_options, interrupt_owned_turn};
 use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
+use crate::store_fixture::{loaded_turn, unselected_model};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::TurnError;
 
@@ -609,11 +610,12 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     assert_eq!(
         loaded.turns,
         vec![
-            (0, HistoryTurn::from(turn("first", "first"))),
+            (0, loaded_turn(turn("first", "first"))),
             (
                 1,
                 HistoryTurn {
                     messages: vec![ModelMessage::User("abandoned".to_string())],
+                    model: Some(unselected_model()),
                     stop: Some(TurnStop {
                         error_type: "interrupted".to_string(),
                         ..TurnStop::default()
