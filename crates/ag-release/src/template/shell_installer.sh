@@ -270,7 +270,7 @@ update_path() {
     _fish_alternative=". \"$_env_expression.fish\""
     add_line "$_fish_dir/$APP_NAME.env.fish" "$_fish_line" "$_fish_alternative"
     if [ -n "${GITHUB_PATH:-}" ]; then
-        printf '%s\n' "$_bin_dir" >>"$GITHUB_PATH" || fail "cannot update $GITHUB_PATH"
+        printf '%s\n' "$_bin_dir" >> "$GITHUB_PATH" || fail "cannot update $GITHUB_PATH"
         say "  added $_bin_dir to $GITHUB_PATH"
     fi
     say ""
@@ -330,7 +330,7 @@ add_line() {
         grep -qF -- "$_equivalent" "$_startup_file" 2>/dev/null; then
         return 0
     fi
-    printf '\n%s\n' "$_line" >>"$_startup_file" || fail "cannot update $_startup_file"
+    printf '\n%s\n' "$_line" >> "$_startup_file" || fail "cannot update $_startup_file"
     say "  updated $_startup_file"
 }
 
