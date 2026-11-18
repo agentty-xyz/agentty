@@ -4,12 +4,12 @@
 #
 # Environment variables:
 #   {{ variable_prefix }}_DOWNLOAD_URL: base URL of the release archives.
-#   {{ variable_prefix }}_INSTALL_DIR: install prefix; binaries go to its `bin` directory.
+#   {{ variable_prefix }}_INSTALL_DIR: install prefix; binaries go to its bin directory.
 #   {{ variable_prefix }}_UNMANAGED_INSTALL: directory to install the binaries into
 #     directly, without a receipt or PATH changes.
-#   {{ variable_prefix }}_NO_MODIFY_PATH: `1` leaves PATH and shell startup files unchanged.
+#   {{ variable_prefix }}_NO_MODIFY_PATH: 1 leaves PATH and shell startup files unchanged.
 #
-# Every command runs inside `main`, which the last line calls, so a truncated
+# Every command runs inside main, which the last line calls, so a truncated
 # download runs nothing.
 
 APP_NAME={{ app_name }}
@@ -92,7 +92,7 @@ cleanup() {
     fi
 }
 
-# Sets `_target` and its `_archive`, `_directory`, and `_sha256`.
+# Sets _target and its _archive, _directory, and _sha256.
 detect_target() {
     _system=$(uname -s) || fail "cannot run uname"
     _machine=$(uname -m) || fail "cannot run uname"
@@ -140,7 +140,7 @@ check_libc() {
     if [ -z "$MIN_GLIBC" ]; then
         return 0
     fi
-    # The first line of `ldd --version` ends with the glibc version.
+    # The first line that ldd --version prints ends with the glibc version.
     _glibc_version=$(printf '%s\n' "$_ldd" | awk 'NR == 1 { print $NF }')
     _glibc_major=${_glibc_version%%.*}
     _glibc_minor=${_glibc_version#*.}
@@ -160,28 +160,35 @@ check_libc() {
 }
 
 is_number() {
-    case "$1" in
+    _value=$1
+    case "$_value" in
         '' | *[!0-9]*) return 1 ;;
     esac
 }
 
+# Downloads the URL in the first argument to the file in the second.
 download() {
+    _url=$1
+    _output=$2
     if command -v curl >/dev/null 2>&1; then
-        curl --fail --location --silent --show-error --output "$2" "$1" ||
-            fail "cannot download $1"
+        curl --fail --location --silent --show-error --output "$_output" "$_url" ||
+            fail "cannot download $_url"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$2" "$1" || fail "cannot download $1"
+        wget -q -O "$_output" "$_url" || fail "cannot download $_url"
     else
         fail "installing $APP_NAME needs curl or wget"
     fi
 }
 
-# Fails unless the file `$1` has the SHA-256 the release recorded.
+# Fails unless the file in the first argument has the SHA-256 the release
+# recorded.
 verify_sha256() {
+    _downloaded=$1
     if command -v sha256sum >/dev/null 2>&1; then
-        _sum=$(sha256sum "$1") || fail "cannot compute the SHA-256 of $_archive"
+        _sum=$(sha256sum "$_downloaded") || fail "cannot compute the SHA-256 of $_archive"
     elif command -v shasum >/dev/null 2>&1; then
-        _sum=$(shasum -a 256 "$1") || fail "cannot compute the SHA-256 of $_archive"
+        _sum=$(shasum -a 256 "$_downloaded") ||
+            fail "cannot compute the SHA-256 of $_archive"
     else
         fail "cannot verify $_archive: neither sha256sum nor shasum is installed"
     fi
@@ -191,24 +198,28 @@ verify_sha256() {
     fi
 }
 
-# Creates the directory `$1` and sets `_absolute` to its absolute path.
+# Creates the directory in the first argument and sets _absolute to its
+# absolute path.
 absolute_directory() {
-    mkdir -p "$1" || fail "cannot create $1"
-    _absolute=$(CDPATH='' cd -- "$1" && pwd) || fail "cannot enter $1"
+    _wanted=$1
+    mkdir -p "$_wanted" || fail "cannot create $_wanted"
+    _absolute=$(CDPATH='' cd -- "$_wanted" && pwd) || fail "cannot enter $_wanted"
 }
 
-# Moves each binary from `$1` into `$2` with an atomic rename, so a running
-# binary is never written over.
+# Moves each binary from the directory in the first argument into the one in
+# the second with an atomic rename, so a running binary is never written over.
 install_binaries() {
+    _from=$1
+    _to=$2
     for _binary in {{ binaries }}; do
-        _staged=$(mktemp "$2/.$_binary.XXXXXX") ||
-            fail "cannot create a temporary file in $2"
-        if ! cp "$1/$_binary" "$_staged" || ! chmod 755 "$_staged" ||
-            ! mv -f "$_staged" "$2/$_binary"; then
-            fail "cannot install $2/$_binary"
+        _staged=$(mktemp "$_to/.$_binary.XXXXXX") ||
+            fail "cannot create a temporary file in $_to"
+        if ! cp "$_from/$_binary" "$_staged" || ! chmod 755 "$_staged" ||
+            ! mv -f "$_staged" "$_to/$_binary"; then
+            fail "cannot install $_to/$_binary"
         fi
         _staged=
-        say "  $2/$_binary"
+        say "  $_to/$_binary"
     done
 }
 
@@ -223,7 +234,7 @@ write_receipt() {
         fail "cannot write $_receipt_dir/$APP_NAME-receipt.json"
 }
 
-# Puts `_bin_dir` on PATH through `<prefix>/env` and `<prefix>/env.fish`,
+# Puts _bin_dir on PATH through <prefix>/env and <prefix>/env.fish,
 # sourced from the shell startup files, unless it is on PATH already.
 update_path() {
     case ":${PATH:-}:" in
@@ -267,14 +278,16 @@ update_path() {
     say "    source \"$_env_expression.fish\" (fish)"
 }
 
-# Prints `$1` with a leading `$HOME/` in place of the home directory.
+# Prints the path in the first argument with a leading $HOME/ in place of the
+# home directory.
 home_expression() {
-    case "$1" in
+    _path=$1
+    case "$_path" in
         "$HOME"/*)
             # shellcheck disable=SC2016
-            printf '$HOME/%s\n' "${1#"$HOME"/}"
+            printf '$HOME/%s\n' "${_path#"$HOME"/}"
             ;;
-        *) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "$_path" ;;
     esac
 }
 
@@ -305,13 +318,18 @@ EOF
     say "  created $_env_script.fish"
 }
 
-# Appends the line `$2` to the file `$1` unless it holds `$2` or `$3`.
+# Appends the line in the second argument to the file in the first, unless
+# the file holds that line or the equivalent line in the third argument.
 add_line() {
-    if grep -qF -- "$2" "$1" 2>/dev/null || grep -qF -- "$3" "$1" 2>/dev/null; then
+    _startup_file=$1
+    _line=$2
+    _equivalent=$3
+    if grep -qF -- "$_line" "$_startup_file" 2>/dev/null ||
+        grep -qF -- "$_equivalent" "$_startup_file" 2>/dev/null; then
         return 0
     fi
-    printf '\n%s\n' "$2" >>"$1" || fail "cannot update $1"
-    say "  updated $1"
+    printf '\n%s\n' "$_line" >>"$_startup_file" || fail "cannot update $_startup_file"
+    say "  updated $_startup_file"
 }
 
 main "$@"
