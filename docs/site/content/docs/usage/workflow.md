@@ -215,16 +215,21 @@ timing start fresh. Stacked children cannot be forked.
 
 ### Commit and Merge Behavior
 
-After each file-changing turn, Agentty creates or updates one session commit. The
-project's Fast model writes its message from the cumulative changes, honoring the
-coauthor setting; with `--experimental-harness`, that can be a
-[harness model](@/docs/agents/backends.md#backends-harness-fast-model). Reverting all
-changes removes the empty commit. If message generation fails, auto-commit stops and the
-worktree stays intact.
+After each file-changing turn, Agentty commits the changes. Until you publish the
+branch, it creates or updates one session commit, and reverting all changes removes the
+empty commit. After publishing, each file-changing turn adds a new commit instead, so
+reviewers can see what changed since their last look.
+
+The project's Fast model writes each message, honoring the coauthor setting; with
+`--experimental-harness`, that can be a
+[harness model](@/docs/agents/backends.md#backends-harness-fast-model). The session
+commit message covers the cumulative changes, and a later commit covers only its turn.
+If message generation fails, auto-commit stops and the worktree stays intact.
 
 <a id="usage-title-refinement"></a> The Fast model also refines session titles from the
-overall goal. Draft titles update as messages are staged, committed work uses the commit
-title, and failed refinement keeps the provisional title.
+overall goal. Draft titles update as messages are staged, committed work uses the
+session commit title, and failed refinement keeps the provisional title. Commits added
+after publishing leave the title unchanged.
 
 A Git index lock is retried for five seconds, then reported as `[Commit Error]`. Agentty
 never removes the lock; wait for active Git operations to finish, and let only the
@@ -236,8 +241,9 @@ warns you: continue with `Enter` or cancel with `Esc` / `q`, and install the hoo
 `[Commit Warning]`; failing hooks stop commits.
 
 For an unlinked session, `m` queues a local squash merge using the session commit
-message. The target checkout must be clean. A failed rebase or merge returns the session
-to **Review**. Linked review requests merge through their forge; see
+message, followed by the titles of any commits added after publishing. The target
+checkout must be clean. A failed rebase or merge returns the session to **Review**.
+Linked review requests merge through their forge; see
 [Review Request Sync](@/docs/usage/workflow.md#review-request-sync).
 
 Session sync (`r`) rebases onto the local base for unpublished sessions, or onto the
@@ -290,8 +296,9 @@ GitLab merge request. During a turn or rebase, publishing waits in the queue.
    fixed after publishing.
 1. Agentty pushes with a force-with-lease check, then creates or refreshes an open
    review request. Stacked children target their parent's branch.
-1. The request URL appears in chat. Later completed turns push to the same branch
-   automatically when no chat or sync is queued. Retry failed pushes with `p`.
+1. The request URL appears in chat. Later completed turns push their new commits to the
+   same branch automatically when no chat or sync is queued. Retry failed pushes with
+   `p`.
 
 Review-request titles stay stable unless the primary objective changes. Descriptions
 follow repository PR/MR instructions, skills, and templates, or else use `Why?`,

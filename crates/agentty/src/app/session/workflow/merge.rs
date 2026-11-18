@@ -1357,8 +1357,12 @@ impl SessionManager {
             None
         } else {
             Some(
-                Self::load_authoritative_session_commit_message(git_client, folder.to_path_buf())
-                    .await?,
+                Self::load_authoritative_session_commit_message(
+                    git_client,
+                    folder.to_path_buf(),
+                    base_branch.to_string(),
+                )
+                .await?,
             )
         };
         let merge_outcome = if let Some(commit_message) = authoritative_commit_message.as_ref() {
@@ -1553,17 +1557,20 @@ impl SessionManager {
             })
     }
 
-    /// Loads the canonical session commit message from the worktree `HEAD` for
-    /// reuse during squash merge.
+    /// Loads the message covering every session-branch commit beyond
+    /// `base_branch` for reuse during squash merge.
     ///
     /// # Errors
-    /// Returns an error when `HEAD` cannot be inspected or does not contain a
-    /// non-blank commit message.
+    /// Returns an error when the branch commits cannot be inspected or do not
+    /// contain a non-blank commit message.
     async fn load_authoritative_session_commit_message(
         git_client: &dyn GitClient,
         folder: PathBuf,
+        base_branch: String,
     ) -> Result<String, SessionError> {
-        let commit_message = git_client.head_commit_message(folder).await?;
+        let commit_message =
+            SessionTaskService::session_branch_commit_message(git_client, folder, base_branch)
+                .await?;
         let Some(commit_message) = commit_message else {
             return Err(SessionError::Workflow(
                 "Session branch has no commit message to reuse for merge".to_string(),
@@ -2139,10 +2146,16 @@ impl SessionManager {
             SessionTaskService::load_auto_commit_reasoning_level(&input.db, &input.id).await;
         let auto_commit_speed_mode =
             SessionTaskService::load_auto_commit_speed_mode(&input.db, &input.id).await;
+        let commit_mode = SessionTaskService::session_commit_mode(
+            &input.db,
+            &input.id,
+            input.rebase_plan.target_label(),
+        )
+        .await?;
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
-            input.rebase_plan.target_label(),
+            commit_mode,
             (
                 auto_commit_agent,
                 auto_commit_reasoning_level,
@@ -2155,13 +2168,18 @@ impl SessionManager {
         .await
         {
             Ok(outcome) => {
-                Self::update_session_title_from_commit_message(
-                    &input.db,
-                    &input.id,
-                    &outcome.commit_message,
-                    &input.app_event_tx,
-                )
-                .await;
+                // A follow-up commit describes one turn, so the title keeps
+                // the session-wide wording it had when the branch was
+                // published.
+                if !outcome.is_follow_up {
+                    Self::update_session_title_from_commit_message(
+                        &input.db,
+                        &input.id,
+                        &outcome.commit_message,
+                        &input.app_event_tx,
+                    )
+                    .await;
+                }
 
                 let commit_message = TranscriptNotice::Commit
                     .format_line(format!("committed with hash `{}`", outcome.commit_hash));

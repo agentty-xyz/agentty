@@ -373,6 +373,24 @@ const LOCAL_HISTORY_CASES: &[ContractCase] = &[
         expected: "Ok(true)",
     },
     ContractCase {
+        operation: "commit_messages_since",
+        prepare: |repository| {
+            repository.git(&["checkout", "--quiet", "feature"])?;
+
+            repository.commit_file("follow-up.txt", "follow-up\n", "Follow up\n\nExplain it")
+        },
+        observe: |repository| {
+            Box::pin(async move {
+                let messages = RealGitClient
+                    .commit_messages_since(repository.local, "main".to_string())
+                    .await;
+
+                format!("{messages:?}")
+            })
+        },
+        expected: r#"Ok(["Add feature", "Follow up\n\nExplain it"])"#,
+    },
+    ContractCase {
         operation: "get_ref_ahead_behind",
         prepare: KEEP_STANDARD_LAYOUT,
         observe: |repository| {

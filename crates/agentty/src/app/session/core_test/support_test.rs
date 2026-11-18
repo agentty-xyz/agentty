@@ -567,6 +567,9 @@ pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitC
     mock.expect_head_commit_message()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(None) }));
+    mock.expect_commit_messages_since()
+        .times(0..)
+        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
 }
 
 /// Replaces app-level git dependencies with the provided mock client.

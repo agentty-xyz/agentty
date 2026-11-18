@@ -671,8 +671,8 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
     Ok(())
 }
 
-/// Enables publishing and records branch pushes plus thread mutations without
-/// contacting a live forge.
+/// Enables publishing and records branch pushes, the two newest pushed commit
+/// titles, and thread mutations without contacting a live forge.
 async fn seed_review_publication_spies(env: &BuilderEnv) -> E2eResult {
     common::open_database(env)
         .await?
@@ -689,6 +689,7 @@ async fn seed_review_publication_spies(env: &BuilderEnv) -> E2eResult {
     let git_script = r#"#!/bin/sh
 if [ "$1" = "push" ]; then
   printf '%s\n' push >> "$AGENTTY_TEST_REVIEW_EVENTS"
+  REAL_GIT log --format=%s -2 HEAD > "${AGENTTY_TEST_REVIEW_EVENTS}.pushed"
   printf '*\tHEAD:refs/heads/wt/review-s\t[new branch]\n'
   REAL_GIT update-ref refs/remotes/origin/wt/review-s HEAD
   exit 0
@@ -819,6 +820,12 @@ async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
                     let replies = std::fs::read_to_string(events_path.with_extension("replies"))
                         .expect("recorded review replies");
                     assert!(replies.contains("Explained the output after the queued edit"));
+                    let pushed = std::fs::read_to_string(events_path.with_extension("pushed"))
+                        .expect("recorded pushed history");
+                    assert_eq!(
+                        pushed, "Helper response\nHelper response\n",
+                        "Each file-changing turn on a published branch adds its own commit"
+                    );
                 })
             },
         )

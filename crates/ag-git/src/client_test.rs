@@ -498,6 +498,27 @@ async fn test_diff_does_not_include_base_only_commits() {
 }
 
 #[tokio::test]
+async fn test_diff_against_head_shows_only_uncommitted_changes() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(dir.path());
+    run_git_command(dir.path(), &["checkout", "-b", "session-branch"]);
+    fs::write(dir.path().join("committed.txt"), "committed").expect("failed to write file");
+    run_git_command(dir.path(), &["add", "committed.txt"]);
+    run_git_command(dir.path(), &["commit", "-m", "Session change"]);
+    fs::write(dir.path().join("pending.txt"), "pending").expect("failed to write pending file");
+
+    // Act
+    let diff_output = diff(dir.path().to_path_buf(), "HEAD".to_string())
+        .await
+        .expect("failed to load diff");
+
+    // Assert
+    assert!(diff_output.contains("pending.txt"));
+    assert!(!diff_output.contains("committed.txt"));
+}
+
+#[tokio::test]
 async fn test_is_worktree_clean_returns_true_for_clean_repo() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");

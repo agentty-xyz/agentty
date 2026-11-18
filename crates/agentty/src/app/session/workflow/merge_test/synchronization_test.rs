@@ -233,6 +233,87 @@ async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
     );
 }
 
+/// Verifies a published session's pending changes become a follow-up commit
+/// before sync without replacing the session-wide title. The injected
+/// state-query failure ends the workflow right after that commit.
+#[tokio::test]
+async fn test_execute_rebase_workflow_adds_follow_up_commit_for_published_session() {
+    // Arrange
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_is_worktree_clean()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    mock_git_client
+        .expect_diff()
+        .times(1)
+        .withf(|_, evidence_base| evidence_base == "HEAD")
+        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
+    mock_git_client.expect_has_commits_since().never();
+    mock_git_client
+        .expect_commit_all_preserving_single_commit()
+        .never();
+    mock_git_client
+        .expect_commit_all()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_head_short_hash()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+    mock_git_client
+        .expect_is_rebase_in_progress()
+        .times(1)
+        .returning(|_| {
+            Box::pin(async { Err(GitError::OutputParse("state query failed".to_string())) })
+        });
+    mock_git_client
+        .expect_abort_rebase()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let (_temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+    let db = input.db.clone();
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    db.sessions()
+        .insert_session(
+            "session-123",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session row");
+    db.sessions()
+        .update_session_title("session-123", "Add login flow")
+        .await
+        .expect("failed to set session title");
+    db.sessions()
+        .update_session_published_upstream_ref(
+            "session-123",
+            Some("origin/wt/session-123".to_string()),
+        )
+        .await
+        .expect("failed to publish session branch");
+
+    // Act
+    let result = SessionManager::execute_rebase_workflow(input).await;
+
+    // Assert
+    assert!(result.is_err());
+    let session = db
+        .sessions()
+        .load_session("session-123")
+        .await
+        .expect("session should load")
+        .expect("session should exist");
+    assert_eq!(session.title.as_deref(), Some("Add login flow"));
+}
+
 #[tokio::test]
 async fn test_ensure_merge_target_clean_blocks_dirty_main_checkout() {
     // Arrange
@@ -1889,11 +1970,12 @@ async fn test_resolve_session_rebase_target_reports_published_fetch_failure() {
 }
 
 #[tokio::test]
-async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
+async fn test_execute_merge_workflow_reuses_session_branch_commit_messages() {
     // Arrange
     enable_tracing_log_fallback();
     let expected_merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
-    let canonical_commit_message = "Refine merge flow\n\n- Reuse the session commit body";
+    let canonical_commit_message =
+        "Refine merge flow\n\n- Reuse the session commit body\n- Address review feedback";
     let mut mock_git_client = git::MockGitClient::new();
     let mut sequence = Sequence::new();
     mock_git_client
@@ -1922,17 +2004,17 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
         .in_sequence(&mut sequence)
         .returning(|_, _, _| Box::pin(async { Ok("diff --git a/file b/file".to_string()) }));
     mock_git_client
-        .expect_head_commit_message()
+        .expect_commit_messages_since()
         .times(1)
+        .withf(|_, base_branch| base_branch == "main")
         .in_sequence(&mut sequence)
-        .returning({
-            let canonical_commit_message = canonical_commit_message.to_string();
-
-            move |_| {
-                let canonical_commit_message = canonical_commit_message.clone();
-
-                Box::pin(async move { Ok(Some(canonical_commit_message)) })
-            }
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(vec![
+                    "Refine merge flow\n\n- Reuse the session commit body".to_string(),
+                    "Address review feedback\n\n- Rename the handler".to_string(),
+                ])
+            })
         });
     mock_git_client
         .expect_squash_merge()
@@ -2108,8 +2190,8 @@ fn merge_task_failure_cases() -> [(&'static str, Status, ConfigureGitClient); 6]
                 expect_merge_rebase_completes(git_client);
                 expect_nonempty_squash_diff(git_client);
                 git_client
-                    .expect_head_commit_message()
-                    .returning(|_| Box::pin(async { Ok(None) }));
+                    .expect_commit_messages_since()
+                    .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
             },
         ),
         (
@@ -2119,8 +2201,8 @@ fn merge_task_failure_cases() -> [(&'static str, Status, ConfigureGitClient); 6]
                 expect_merge_rebase_completes(git_client);
                 expect_nonempty_squash_diff(git_client);
                 git_client
-                    .expect_head_commit_message()
-                    .returning(|_| Box::pin(async { Ok(Some("  \n".to_string())) }));
+                    .expect_commit_messages_since()
+                    .returning(|_, _| Box::pin(async { Ok(vec!["  \n".to_string()]) }));
             },
         ),
         (
@@ -2192,7 +2274,7 @@ async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _, _| Box::pin(async { Ok("   ".to_string()) }));
-    mock_git_client.expect_head_commit_message().times(0);
+    mock_git_client.expect_commit_messages_since().times(0);
     mock_git_client.expect_squash_merge().times(0);
     mock_git_client
         .expect_remove_worktree()

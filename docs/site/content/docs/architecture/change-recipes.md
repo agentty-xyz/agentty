@@ -20,8 +20,9 @@ comments identify the exact files.
    `crates/agentty/src/app/session_runtime.rs`; do not share `App` behind an async
    mutex.
 1. Keep persistence in `ag-store` domain modules and Git operations behind `GitClient`.
-1. Preserve the session-branch invariant: one evolving commit per session branch,
-   created by the first file-changing turn and amended by later ones.
+1. Preserve the session-branch invariant: an unpublished branch holds one evolving
+   commit, created by the first file-changing turn and amended by later ones; a
+   published branch gains one commit per file-changing turn instead.
 1. Update `docs/site/content/docs/usage/workflow.md` when lifecycle or status behavior
    changes.
 

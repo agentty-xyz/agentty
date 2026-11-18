@@ -11,8 +11,8 @@ use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
 use super::super::{
-    AutoCommitOutcome, SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER, SessionTaskService,
-    is_input_size_error,
+    AutoCommitOutcome, CommitPromptEvidence, SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER,
+    SessionTaskService, is_input_size_error,
 };
 use super::support::insert_review_session;
 use crate::app::AppEvent;
@@ -22,6 +22,12 @@ use crate::app::session::SessionError;
 use crate::db::AppRepositories;
 use crate::domain::agent::AgentKind;
 use crate::domain::session_message::SessionTranscript;
+
+/// Diff evidence for the evolving session commit.
+const SESSION_DIFF: CommitPromptEvidence = CommitPromptEvidence {
+    fallback: false,
+    follow_up: false,
+};
 
 #[tokio::test]
 /// Verifies size failures preserve pending changes and never enter repair.
@@ -131,7 +137,7 @@ fn test_session_commit_message_prompt_includes_continuity_and_diff() {
         diff,
         current_commit_message,
         "{}",
-        false,
+        SESSION_DIFF,
     );
 
     // Assert
@@ -171,7 +177,10 @@ fn test_session_commit_message_prompt_reserves_agentty_trailer_for_application()
             "changed.rs",
             None,
             user_requests,
-            fallback,
+            CommitPromptEvidence {
+                fallback,
+                follow_up: false,
+            },
         );
 
         // Assert
@@ -180,6 +189,47 @@ fn test_session_commit_message_prompt_reserves_agentty_trailer_for_application()
         assert!(prompt.contains("Application code appends it according to the project setting"));
         assert!(prompt.contains(user_requests));
         assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
+    }
+}
+
+#[test]
+/// Verifies only follow-up prompts scope the message to the latest changes,
+/// for both diff and fallback evidence.
+fn test_session_commit_message_prompt_scopes_follow_up_to_latest_changes() {
+    for fallback in [false, true] {
+        // Arrange
+        let follow_up_evidence = CommitPromptEvidence {
+            fallback,
+            follow_up: true,
+        };
+        let session_evidence = CommitPromptEvidence {
+            fallback,
+            follow_up: false,
+        };
+
+        // Act
+        let follow_up_prompt = SessionTaskService::session_commit_message_prompt(
+            "changed.rs",
+            None,
+            "{}",
+            follow_up_evidence,
+        );
+        let session_prompt = SessionTaskService::session_commit_message_prompt(
+            "changed.rs",
+            None,
+            "{}",
+            session_evidence,
+        );
+
+        // Assert
+        assert!(follow_up_prompt.contains("one follow-up commit"));
+        assert!(follow_up_prompt.contains("Describe only those latest changes"));
+        assert!(!follow_up_prompt.contains("cumulative session diff"));
+        assert!(!session_prompt.contains("one follow-up commit"));
+        assert_eq!(
+            session_prompt.contains("cumulative session diff"),
+            !fallback
+        );
     }
 }
 
@@ -203,7 +253,7 @@ fn test_session_commit_message_prompt_escapes_triple_backtick_fence_in_diff() {
         diff,
         current_commit_message,
         "{}",
-        false,
+        SESSION_DIFF,
     );
 
     // Assert
@@ -234,7 +284,7 @@ fn test_session_commit_message_prompt_strips_coauthor_trailer_from_continuity() 
         diff,
         Some(current_commit_message.as_str()),
         "{}",
-        false,
+        SESSION_DIFF,
     );
 
     // Assert
@@ -276,7 +326,7 @@ fn diagnostics_and_user_preferences_keep_json_boundaries() {
         "diff",
         Some("Old\nmessage"),
         &preferences,
-        false,
+        SESSION_DIFF,
     );
 
     // Assert

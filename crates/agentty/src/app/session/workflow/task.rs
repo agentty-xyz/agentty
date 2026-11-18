@@ -66,6 +66,9 @@ struct SessionCommitMessagePromptTemplate<'a> {
     fallback: bool,
     /// Diff or fallback context wrapped in a fence sized for its content.
     fenced_diff: &'a str,
+    /// Whether the message is for one follow-up commit on a published branch
+    /// instead of the whole session.
+    follow_up: bool,
     /// Bounded user requests that guide scope and message formatting, never
     /// proof of completion.
     user_requests: &'a str,
@@ -199,12 +202,77 @@ impl StatusTransition {
     }
 }
 
+/// How auto-commit records pending changes on the session branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionCommitMode<'a> {
+    /// Creates or amends the single commit that holds every change since
+    /// `base_branch`, used while the branch is unpublished.
+    Evolving {
+        /// Branch the session branch forked from.
+        base_branch: &'a str,
+    },
+    /// Adds one commit holding only the pending changes, used once the branch
+    /// is published so remote history grows instead of being rewritten.
+    FollowUp,
+}
+
+impl<'a> SessionCommitMode<'a> {
+    /// Returns the ref that commit evidence is diffed against: the fork point
+    /// for the evolving commit, or `HEAD` for a follow-up commit, which holds
+    /// only the changes pending on top of it.
+    fn evidence_base(self) -> &'a str {
+        match self {
+            Self::Evolving { base_branch } => base_branch,
+            Self::FollowUp => "HEAD",
+        }
+    }
+
+    /// Returns whether pending changes go into a new commit.
+    fn is_follow_up(self) -> bool {
+        self == Self::FollowUp
+    }
+
+    /// Commits all pending changes with `commit_message`, amending the
+    /// evolving session commit or adding a follow-up commit.
+    fn commit(
+        self,
+        git_client: &dyn GitClient,
+        folder: std::path::PathBuf,
+        commit_message: String,
+    ) -> git::GitFuture<Result<(), git::GitError>> {
+        match self {
+            Self::Evolving { base_branch } => git_client.commit_all_preserving_single_commit(
+                folder,
+                base_branch.to_string(),
+                commit_message,
+                git::SingleCommitMessageStrategy::Replace,
+            ),
+            Self::FollowUp => git_client.commit_all(folder, commit_message),
+        }
+    }
+}
+
 /// Generated session commit details for one successful auto-commit run.
 pub(crate) struct SessionCommitOutcome {
     /// Short hash of the rewritten or created `HEAD` commit.
     pub(crate) commit_hash: String,
-    /// Canonical commit title/body stored on the session branch `HEAD`.
+    /// Commit title/body stored on the session branch `HEAD`: the cumulative
+    /// session message, or one turn's message for a follow-up commit.
     pub(crate) commit_message: String,
+    /// Whether the commit was added on top of a published branch and so
+    /// describes one turn instead of the whole session.
+    pub(crate) is_follow_up: bool,
+}
+
+/// Evidence shape rendered into one commit-message prompt.
+#[derive(Clone, Copy)]
+struct CommitPromptEvidence {
+    /// Whether the payload contains filenames and conversation instead of a
+    /// diff.
+    fallback: bool,
+    /// Whether the evidence covers only the pending changes of one follow-up
+    /// commit instead of the whole session.
+    follow_up: bool,
 }
 
 /// Terminal result of the automatic session-commit phase.
@@ -397,13 +465,18 @@ impl SessionTaskService {
         let outcome = match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
                 Self::append_pre_commit_hook_warning(&context).await;
-                SessionManager::update_session_title_from_commit_message(
-                    &context.db,
-                    &context.id,
-                    &outcome.commit_message,
-                    &context.app_event_tx,
-                )
-                .await;
+                // A follow-up commit describes one turn, so the title keeps
+                // the session-wide wording it had when the branch was
+                // published.
+                if !outcome.is_follow_up {
+                    SessionManager::update_session_title_from_commit_message(
+                        &context.db,
+                        &context.id,
+                        &outcome.commit_message,
+                        &context.app_event_tx,
+                    )
+                    .await;
+                }
 
                 let message = TranscriptNotice::Commit
                     .format_line(format!("committed with hash `{}`", outcome.commit_hash));
@@ -801,11 +874,12 @@ impl SessionTaskService {
             Self::load_auto_commit_reasoning_level(&context.db, &context.id).await;
         let auto_commit_speed_mode =
             Self::load_auto_commit_speed_mode(&context.db, &context.id).await;
+        let commit_mode = Self::session_commit_mode(&context.db, &context.id, &base_branch).await?;
 
         Self::commit_session_changes(
             context.git_client.as_ref(),
             &context.folder,
-            &base_branch,
+            commit_mode,
             (
                 auto_commit_agent,
                 auto_commit_reasoning_level,
@@ -869,19 +943,20 @@ impl SessionTaskService {
         diff: &str,
         current_commit_message: Option<&str>,
         user_requests: &str,
-        fallback: bool,
+        evidence: CommitPromptEvidence,
     ) -> String {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let fence = ag_protocol::diff_fence(diff);
-        let language = if fallback { "text" } else { "diff" };
+        let language = if evidence.fallback { "text" } else { "diff" };
         let fenced_diff = format!("{fence}{language}\n{diff}\n{fence}");
         let template = SessionCommitMessagePromptTemplate {
             current_commit_message: &serde_json::json!(stripped_current_commit_message.trim())
                 .to_string(),
             user_requests,
-            fallback,
+            fallback: evidence.fallback,
             fenced_diff: &fenced_diff,
+            follow_up: evidence.follow_up,
         };
 
         // This template writes borrowed strings and a boolean into a
@@ -1013,20 +1088,45 @@ impl SessionTaskService {
             .collect()
     }
 
-    /// Generates and commits the canonical session commit message through an
-    /// injected one-shot client.
-    ///
-    /// Input-limit failures retry with cumulative changed filenames and the
-    /// bounded user/assistant transcript, sharing the primary call budget.
+    /// Selects follow-up commits once the session branch is published and the
+    /// evolving session commit otherwise.
     ///
     /// # Errors
-    /// Returns an error if the worktree is clean, the cumulative session diff
-    /// cannot be generated, commit-message generation fails, or the git commit
-    /// cannot be created/amended.
+    /// Returns an error when the published branch reference cannot be loaded.
+    pub(crate) async fn session_commit_mode<'a>(
+        db: &AppRepositories,
+        session_id: &str,
+        base_branch: &'a str,
+    ) -> Result<SessionCommitMode<'a>, SessionError> {
+        let published_upstream_ref = db
+            .sessions()
+            .load_session_published_upstream_ref(session_id)
+            .await?;
+
+        Ok(if published_upstream_ref.is_some() {
+            SessionCommitMode::FollowUp
+        } else {
+            SessionCommitMode::Evolving { base_branch }
+        })
+    }
+
+    /// Generates a commit message through an injected one-shot client and
+    /// commits the pending changes as `mode` selects.
+    ///
+    /// An evolving commit describes the cumulative session diff and refines
+    /// the existing session message. A follow-up commit describes only the
+    /// changes pending on top of `HEAD`. Input-limit failures retry with the
+    /// matching changed filenames and the bounded user/assistant transcript,
+    /// sharing the primary call budget.
+    ///
+    /// # Errors
+    /// Returns an error if the worktree is clean, the diff cannot be
+    /// generated, commit-message generation fails, or the git commit cannot be
+    /// created/amended.
     pub(crate) async fn commit_session_changes(
         git_client: &dyn GitClient,
         folder: &Path,
-        base_branch: &str,
+        mode: SessionCommitMode<'_>,
         agent_settings: (
             AgentSelection,
             ReasoningLevel,
@@ -1050,15 +1150,18 @@ impl SessionTaskService {
             ));
         }
 
+        let evidence_base = mode.evidence_base();
+        let follow_up = mode.is_follow_up();
         let diff = Span::child("commit.diff")
             .run(
-                git_client.diff(folder.clone(), base_branch.to_string()),
+                git_client.diff(folder.clone(), evidence_base.to_string()),
                 |_| Outcome::Failed,
             )
             .await?;
-        let has_session_commit = git_client
-            .has_commits_since(folder.clone(), base_branch.to_string())
-            .await?;
+        let has_session_commit = !follow_up
+            && git_client
+                .has_commits_since(folder.clone(), evidence_base.to_string())
+                .await?;
         let current_commit_message = if has_session_commit {
             git_client.head_commit_message(folder.clone()).await?
         } else {
@@ -1077,14 +1180,17 @@ impl SessionTaskService {
             ),
             run_client,
             include_coauthored_by_agentty,
-            false,
+            CommitPromptEvidence {
+                fallback: false,
+                follow_up,
+            },
         )
         .await;
         let generated_commit_message = match generated_commit_message {
             Err(error) if is_input_size_error(&error) => {
                 call_budget.ensure_available()?;
                 let changed_files = git_client
-                    .diff_changed_files(folder.clone(), base_branch.to_string())
+                    .diff_changed_files(folder.clone(), evidence_base.to_string())
                     .await?;
                 let fallback_context = super::commit_context::fallback(
                     &changed_files,
@@ -1104,23 +1210,19 @@ impl SessionTaskService {
                     ),
                     run_client,
                     include_coauthored_by_agentty,
-                    true,
+                    CommitPromptEvidence {
+                        fallback: true,
+                        follow_up,
+                    },
                 )
                 .await?
             }
             result => result?,
         };
 
+        let commit = mode.commit(git_client, folder.clone(), generated_commit_message.clone());
         Span::child("commit.git")
-            .run(
-                git_client.commit_all_preserving_single_commit(
-                    folder.clone(),
-                    base_branch.to_string(),
-                    generated_commit_message.clone(),
-                    git::SingleCommitMessageStrategy::Replace,
-                ),
-                |_| Outcome::Failed,
-            )
+            .run(commit, |_| Outcome::Failed)
             .await?;
 
         let commit_hash = git_client.head_short_hash(folder).await?;
@@ -1128,7 +1230,29 @@ impl SessionTaskService {
         Ok(SessionCommitOutcome {
             commit_hash,
             commit_message: generated_commit_message,
+            is_follow_up: follow_up,
         })
+    }
+
+    /// Loads one message covering every session-branch commit beyond
+    /// `base_branch`, or `None` when the branch has no such commit.
+    ///
+    /// An unpublished branch holds only the evolving session commit, whose
+    /// message is returned unchanged. A published branch can also hold
+    /// follow-up commits, whose titles are listed below that message.
+    ///
+    /// # Errors
+    /// Returns an error when the branch commits cannot be read.
+    pub(crate) async fn session_branch_commit_message(
+        git_client: &dyn GitClient,
+        folder: std::path::PathBuf,
+        base_branch: String,
+    ) -> Result<Option<String>, SessionError> {
+        let commit_messages = git_client
+            .commit_messages_since(folder, base_branch)
+            .await?;
+
+        Ok(cumulative_commit_message(&commit_messages))
     }
 
     /// Retains the original request and recent user steering within a fixed
@@ -1195,7 +1319,7 @@ impl SessionTaskService {
         message_context: (Option<&str>, &str, &ag_contracts::ProviderCallBudget),
         run_client: &dyn RunClient,
         include_coauthored_by_agentty: bool,
-        fallback: bool,
+        evidence: CommitPromptEvidence,
     ) -> Result<String, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let (current_commit_message, user_requests, call_budget) = message_context;
@@ -1214,7 +1338,7 @@ impl SessionTaskService {
             &bounded_diff,
             Some(&bounded_message),
             user_requests,
-            fallback,
+            evidence,
         );
         preparation.attribute("agentty.input.compacted", bounded_diff != diff);
         preparation.finish(Outcome::Completed);
@@ -1224,7 +1348,7 @@ impl SessionTaskService {
             )));
         }
         call_budget.ensure_available()?;
-        let generation = Span::child(if fallback {
+        let generation = Span::child(if evidence.fallback {
             "commit.fallback"
         } else {
             "commit.message"
@@ -1670,6 +1794,45 @@ fn strip_agentty_coauthor_trailer(commit_message: &str) -> String {
         .filter(|line| line.trim() != SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Combines the evolving session commit message with the titles of later
+/// follow-up commits so one message covers the whole branch.
+///
+/// Messages are ordered oldest first. Follow-up titles become `-` bullets
+/// below the session message, and Agentty's coauthor trailer stays last.
+fn cumulative_commit_message(commit_messages: &[String]) -> Option<String> {
+    let (session_message, follow_up_messages) = commit_messages.split_first()?;
+    let follow_up_titles = follow_up_messages
+        .iter()
+        .filter_map(|message| message.lines().map(str::trim).find(|line| !line.is_empty()))
+        .map(|title| format!("- {title}"))
+        .collect::<Vec<_>>();
+    if follow_up_titles.is_empty() {
+        return Some(session_message.clone());
+    }
+
+    let has_coauthor_trailer = commit_messages.iter().any(|message| {
+        message
+            .lines()
+            .any(|line| line.trim() == SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
+    });
+    let session_message = strip_agentty_coauthor_trailer(session_message);
+    let session_message = session_message.trim();
+    let ends_with_bullet = session_message
+        .lines()
+        .last()
+        .is_some_and(|line| line.trim_start().starts_with("- "));
+    let separator = if ends_with_bullet { "\n" } else { "\n\n" };
+    let message = format!(
+        "{session_message}{separator}{}",
+        follow_up_titles.join("\n")
+    );
+
+    Some(append_agentty_coauthor_trailer(
+        &message,
+        has_coauthor_trailer,
+    ))
 }
 
 /// Returns a deterministic fallback commit message when protocol `answer` text
