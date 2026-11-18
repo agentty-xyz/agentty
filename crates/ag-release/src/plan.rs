@@ -82,6 +82,11 @@ impl ReleasePlan {
             version: workspace.version.to_string(),
         })
     }
+
+    /// Returns the GitHub URL that the release `tag`'s files download from.
+    pub(crate) fn download_url(&self, tag: &str) -> String {
+        format!("{}/releases/download/{tag}", self.repository.url)
+    }
 }
 
 /// One app's release contents and artifact file names.
@@ -123,6 +128,12 @@ impl AppPlan {
                 .contains(&Installer::Shell)
                 .then(|| artifact::shell_installer(name)),
         }
+    }
+
+    /// Returns `<APP>`, the prefix of the installers' environment variables:
+    /// the app name in upper case with `-` replaced by `_`.
+    pub(crate) fn environment_prefix(&self) -> String {
+        self.name.to_ascii_uppercase().replace('-', "_")
     }
 }
 

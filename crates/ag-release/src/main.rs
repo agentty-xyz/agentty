@@ -12,6 +12,7 @@ mod checksum;
 mod cli;
 mod config;
 mod file_system;
+mod npm_package;
 mod plan;
 mod process;
 mod repository;

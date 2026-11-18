@@ -1,10 +1,15 @@
 //! Temporary demo workspaces and the `ag-release` binary for command-line
 //! tests.
 
-use std::path::Path;
-use std::process::Command;
-use std::{fs, io};
+use std::error::Error;
+use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::{env, fs, io};
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 
 /// The supported release target of the machine running the tests.
@@ -16,6 +21,19 @@ pub(crate) const HOST_TARGET: &str = "x86_64-apple-darwin";
 pub(crate) const HOST_TARGET: &str = "aarch64-unknown-linux-gnu";
 #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 pub(crate) const HOST_TARGET: &str = "x86_64-unknown-linux-gnu";
+
+/// Every supported target, in triple order.
+pub(crate) const TARGETS: [&str; 4] = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+];
+
+/// The installers' error suffix naming every supported target.
+pub(crate) const SUPPORTED: &str = "demo-app supports aarch64-apple-darwin, \
+                                    aarch64-unknown-linux-gnu, x86_64-apple-darwin, \
+                                    x86_64-unknown-linux-gnu";
 
 /// Manifest of the demo workspace's only member.
 const DEMO_APP_MANIFEST: &str = r#"[package]
@@ -93,4 +111,97 @@ pub(crate) fn ag_release(current_dir: &Path, args: &[&str]) -> Command {
         .env_remove("CARGO");
 
     command
+}
+
+/// A release of the demo app for every target, assembled by `ag-release`.
+pub(crate) struct Release {
+    /// Artifacts directory holding the archives and the generated files.
+    pub(crate) artifacts: TempDir,
+    _workspace: TempDir,
+}
+
+impl Release {
+    /// Writes an archive and checksum file for every target, whose `demo-app`
+    /// binary is a shell script running `command(target)`, and assembles the
+    /// release of a demo workspace with the root `manifest`.
+    pub(crate) fn assemble(
+        manifest: &str,
+        command: impl Fn(&str) -> String,
+    ) -> Result<Self, Box<dyn Error>> {
+        let workspace = committed_demo_workspace(manifest)?;
+        let artifacts = tempdir()?;
+        for target in TARGETS {
+            let archive = Self::archive(target, &command(target))?;
+            let name = format!("demo-app-{target}.tar.gz");
+            fs::write(
+                artifacts.path().join(format!("{name}.sha256")),
+                format!("{}  {name}\n", sha256(&archive)),
+            )?;
+            fs::write(artifacts.path().join(name), archive)?;
+        }
+        let directory = artifacts.path().to_str().ok_or("UTF-8 artifacts path")?;
+        let assemble = ["assemble", "--tag", "v0.1.0", "--artifacts-dir", directory];
+        let output = isolate_git(&mut ag_release(workspace.path(), &assemble)).output()?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into());
+        }
+
+        Ok(Self {
+            artifacts,
+            _workspace: workspace,
+        })
+    }
+
+    /// Returns a `.tar.gz` holding `demo-app-<target>/demo-app`, a script
+    /// that runs `command`.
+    pub(crate) fn archive(target: &str, command: &str) -> io::Result<Vec<u8>> {
+        let script = format!("#!/bin/sh\n{command}\n");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(script.len() as u64);
+        header.set_mode(0o755);
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        builder.append_data(
+            &mut header,
+            format!("demo-app-{target}/demo-app"),
+            script.as_bytes(),
+        )?;
+
+        builder.into_inner()?.finish()
+    }
+
+    /// Returns the path of the release file `name`.
+    pub(crate) fn artifact(&self, name: &str) -> PathBuf {
+        self.artifacts.path().join(name)
+    }
+}
+
+/// Returns the lowercase hexadecimal SHA-256 of `contents`.
+pub(crate) fn sha256(contents: &[u8]) -> String {
+    hex::encode(Sha256::digest(contents))
+}
+
+/// Returns standard output of a successful run, or standard error.
+pub(crate) fn result(output: &Output) -> Result<String, String> {
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    if output.status.success() {
+        return Ok(text(&output.stdout));
+    }
+
+    Err(text(&output.stderr))
+}
+
+/// Links each of `tools` found on the host `PATH` into `directory`, so a
+/// sandboxed `PATH` offers only those tools.
+pub(crate) fn link_tools(directory: &Path, tools: &[&str]) -> io::Result<()> {
+    let host_path = env::var_os("PATH").unwrap_or_default();
+    for tool in tools {
+        let found = env::split_paths(&host_path)
+            .map(|candidate| candidate.join(tool))
+            .find(|path| path.is_file());
+        if let Some(path) = found {
+            symlink(path, directory.join(tool))?;
+        }
+    }
+
+    Ok(())
 }

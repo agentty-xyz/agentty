@@ -76,3 +76,22 @@ fn uname_names_and_glibc_follow_the_triple() {
         assert_eq!(names, (system, &machines[..], glibc), "{target}");
     }
 }
+
+#[test]
+fn node_names_follow_the_triple() {
+    // Arrange
+    let expected = [
+        (Target::Aarch64AppleDarwin, "darwin", "arm64"),
+        (Target::Aarch64UnknownLinuxGnu, "linux", "arm64"),
+        (Target::X8664AppleDarwin, "darwin", "x64"),
+        (Target::X8664UnknownLinuxGnu, "linux", "x64"),
+    ];
+
+    for (target, platform, arch) in expected {
+        // Act
+        let names = (target.node_platform(), target.node_arch());
+
+        // Assert
+        assert_eq!(names, (platform, arch), "{target}");
+    }
+}

@@ -129,6 +129,38 @@ fn archives_are_byte_identical_for_the_same_inputs_in_any_order() {
 }
 
 #[test]
+fn files_only_archives_record_no_directory_entries() {
+    // Arrange
+    let mut archive = Archive::files_only("package".to_string());
+    archive
+        .add_file("lib/index.js", FileMode::Regular, b"index\n".to_vec())
+        .expect("add file");
+    archive
+        .add_file("run.js", FileMode::Executable, b"run\n".to_vec())
+        .expect("add file");
+
+    // Act
+    let tarball = archive.to_tar_gz(0).expect("files-only archive");
+
+    // Assert
+    let layout = decode(&tarball)
+        .into_iter()
+        .map(|entry| (entry.0, entry.1, entry.2))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        layout,
+        [
+            (
+                "package/lib/index.js".to_string(),
+                EntryType::Regular,
+                0o644
+            ),
+            ("package/run.js".to_string(), EntryType::Regular, 0o755),
+        ]
+    );
+}
+
+#[test]
 fn archives_stamp_every_entry_with_the_given_time() {
     // Arrange
     let archive = demo_archive(&[0]);

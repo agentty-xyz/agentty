@@ -87,7 +87,7 @@ impl<'plan> ShellInstaller<'plan> {
                 .map(|binary| Self::quote(binary))
                 .collect::<Vec<_>>()
                 .join(" "),
-            download_url: Self::quote(&format!("{}/releases/download/{tag}", repository.url)),
+            download_url: Self::quote(&plan.download_url(tag)),
             min_glibc: plan.min_glibc,
             receipt_binaries: Self::quote(&json!(app.binaries).to_string()),
             receipt_provider: Self::quote(
@@ -112,7 +112,7 @@ impl<'plan> ShellInstaller<'plan> {
                     .join(", "),
             ),
             targets,
-            variable_prefix: app.name.to_ascii_uppercase().replace('-', "_"),
+            variable_prefix: app.environment_prefix(),
             version: &plan.version,
         };
 

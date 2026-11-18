@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::cli::{AssembleOptions, Host};
+use crate::npm_package::NpmPackage;
 use crate::plan::ReleasePlan;
 use crate::process::ProcessCommand;
 use crate::shell_installer::ShellInstaller;
@@ -37,11 +38,24 @@ pub(crate) fn run(
     let tag = ReleaseTag::parse(&options.tag)?;
     let workspace = Workspace::load(host.process, host.cargo.clone())?;
     let plan = ReleasePlan::new(&workspace, Some(&tag))?;
+    let mtime = archive::modification_time(host.source_date_epoch.as_deref())?;
     let mut assembly = Assembly::verify(host, &options.artifacts_dir, &plan)?;
     for app in &plan.apps {
         if let Some(name) = &app.shell_installer {
             let script = ShellInstaller::render(&plan, app, &tag.name, &assembly.sha256)?;
             assembly.publish(name, script.as_bytes())?;
+        }
+        if let (Some(tarball), Some(name)) = (&app.npm_tarball, &app.npm_package) {
+            let package = NpmPackage {
+                app,
+                documents: npm_documents(host, &workspace.root)?,
+                name,
+                plan: &plan,
+                sha256: &assembly.sha256,
+                tag: &tag.name,
+            };
+            let contents = package.to_tar_gz(mtime)?;
+            assembly.publish(tarball, &contents)?;
         }
     }
     let source = source_archive(host, &workspace, &plan)?;
@@ -49,6 +63,20 @@ pub(crate) fn run(
     let written = assembly.finish()?;
 
     Host::report_written(stdout, &written)
+}
+
+/// Returns each of the npm package's documents that is a file in the
+/// workspace `root`, with its contents.
+fn npm_documents(host: &Host<'_>, root: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    let mut documents = Vec::new();
+    for name in NpmPackage::DOCUMENTS {
+        let path = root.join(name);
+        if host.is_file(&path)? {
+            documents.push((name, host.read_file(&path)?));
+        }
+    }
+
+    Ok(documents)
 }
 
 /// Returns the gzip-compressed `git archive` of `HEAD` in the workspace
