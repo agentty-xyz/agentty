@@ -2,17 +2,19 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
-    GraphBlockedReason, GraphContext, GraphControlRequest, GraphNode, GraphNodeStatus,
+    GraphBlockedReason, GraphContext, GraphControlRequest, GraphNode, GraphNodeStatus, GraphResult,
     GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
-use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner};
+use ag_worker::{
+    GraphExecutionRecord, GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner,
+};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +23,12 @@ use crate::app::review_graph::ReviewGraphHost;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::Status;
+use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::GraphEvidence;
+use crate::presentation::execution_graph::{
+    GraphViewOutput, outputs_awaiting_acceptance, takes_revision_guidance,
+};
+use crate::presentation::graph_chat::output_approval_notice;
 
 /// Launches retain their executor and budgets even after dispatch stops.
 pub(super) struct GraphDriver {
@@ -36,6 +43,14 @@ impl GraphDriver {
     fn is_live(&self) -> bool {
         self.running.load(Ordering::Acquire) && !self.cancellation.is_cancelled()
     }
+}
+
+/// Session state a graph driver works in and reports to.
+pub(super) struct GraphDriverSession {
+    /// Session worktree the graph's nodes run in.
+    pub(super) folder: PathBuf,
+    /// Live session chat that receives the driver's notices.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Active graph drivers keyed by graph identity, shared with lifecycle
@@ -278,9 +293,9 @@ impl App {
         }
         self.sessions
             .sync_session_from_handle(&request.graph.session_id);
-        let session = self
+        let (session, handles) = self
             .sessions
-            .session_or_err(&request.graph.session_id)
+            .session_and_handles_or_err(&request.graph.session_id)
             .map_err(|error| invalid(error.to_string()))?;
         if !matches!(
             session.status,
@@ -296,6 +311,7 @@ impl App {
             ));
         }
         let folder = session.folder.clone();
+        let transcript = Arc::clone(&handles.transcript);
         self.services
             .validate_graph_session_permissions(&request.graph.session_id)
             .await?;
@@ -334,7 +350,7 @@ impl App {
                 cancellation,
                 executor,
                 running,
-                folder,
+                GraphDriverSession { folder, transcript },
             );
 
             return Ok(());
@@ -345,8 +361,12 @@ impl App {
             Arc::new(self.services.graph_resources.with_budgets(budgets)),
             runner,
         );
-        self.services
-            .spawn_graph_driver(request, cancellation, executor, folder);
+        self.services.spawn_graph_driver(
+            request,
+            cancellation,
+            executor,
+            GraphDriverSession { folder, transcript },
+        );
 
         Ok(())
     }
@@ -478,7 +498,7 @@ impl AppServices {
         request: StartExecutionGraphRequest,
         cancellation: CancellationToken,
         executor: GraphExecutor,
-        folder: std::path::PathBuf,
+        session: GraphDriverSession,
     ) {
         let services = self.clone();
         let graph = request.graph.clone();
@@ -496,7 +516,7 @@ impl AppServices {
                     running: running.clone(),
                 },
             );
-        services.spawn_graph_driver_task(graph, cancellation, executor, running, folder);
+        services.spawn_graph_driver_task(graph, cancellation, executor, running, session);
     }
 
     fn spawn_graph_driver_task(
@@ -505,7 +525,7 @@ impl AppServices {
         cancellation: CancellationToken,
         executor: Arc<GraphExecutor>,
         running: Arc<AtomicBool>,
-        folder: std::path::PathBuf,
+        session: GraphDriverSession,
     ) {
         if running.swap(true, Ordering::AcqRel) {
             return;
@@ -515,7 +535,7 @@ impl AppServices {
         self.track_cleanup_task(spawn::spawn_detached(async move {
             let _activity = activity;
             services
-                .drive_graph(&graph, &cancellation, &executor, &folder, || {
+                .drive_graph(&graph, &cancellation, &executor, &session, || {
                     services.graph_session_permission(graph.session_id.as_str())
                 })
                 .await;
@@ -529,7 +549,7 @@ impl AppServices {
         graph: &ExecutionGraph,
         cancellation: &CancellationToken,
         executor: &GraphExecutor,
-        folder: &Path,
+        session: &GraphDriverSession,
         mut load_permission: F,
     ) where
         F: FnMut() -> P,
@@ -558,11 +578,17 @@ impl AppServices {
                     parent_id: Some(graph.id.clone()),
                     ..ag_worker::RunScope::default()
                 },
-                executor.run_ready(&graph.id, graph.revision, folder, permission),
+                executor.run_ready(&graph.id, graph.revision, &session.folder, permission),
             )
             .await;
             match result {
                 Ok(receipts) if !receipts.is_empty() => {
+                    self.announce_outputs_awaiting_acceptance(
+                        graph,
+                        &receipts,
+                        &session.transcript,
+                    )
+                    .await;
                     // Settlement stores results after the worker's own status
                     // updates; refresh session views that project them.
                     SessionTaskService::emit_session_updated(
@@ -621,6 +647,62 @@ impl AppServices {
                 () = executor.capacity_released() => {},
                 () = executor.environment_released() => {},
             }
+        }
+    }
+
+    /// Tells the user in chat when a settled execution leaves its output
+    /// waiting for their approval, showing that output with the reply
+    /// guidance the sidebar gives.
+    ///
+    /// Only outputs of executions in `receipts` are announced, so restarting
+    /// a driver never repeats an earlier notice.
+    async fn announce_outputs_awaiting_acceptance(
+        &self,
+        graph: &ExecutionGraph,
+        receipts: &[GraphExecutionRecord],
+        transcript: &Arc<Mutex<SessionTranscript>>,
+    ) {
+        let repository = self.db().graphs();
+        let progress = repository.progress(&graph.id).await.ok().flatten();
+        let awaiting: Vec<(String, GraphResult, bool)> = progress
+            .iter()
+            .flat_map(|progress| {
+                outputs_awaiting_acceptance(progress)
+                    .into_iter()
+                    .filter(|(producer, _)| {
+                        producer.executions.last().is_some_and(|execution| {
+                            receipts
+                                .iter()
+                                .any(|receipt| receipt.execution == *execution)
+                        })
+                    })
+                    .map(|(producer, result)| {
+                        (
+                            producer.node_id.clone(),
+                            result.clone(),
+                            takes_revision_guidance(&graph.nodes, progress, &producer.node_id),
+                        )
+                    })
+            })
+            .collect();
+        for (node_id, result, takes_revision) in awaiting {
+            let body = repository
+                .load_result(&result.reference.id)
+                .await
+                .ok()
+                .flatten()
+                .map_or_default(|stored| stored.body);
+            let output = GraphViewOutput::new(result, body);
+            let notice = output_approval_notice(&node_id, output.display(), takes_revision);
+            SessionTaskService::append_workflow_notice(
+                transcript,
+                self.db(),
+                &self.event_sender(),
+                &self.session_update_versions(),
+                &graph.session_id,
+                &notice,
+            )
+            .await;
         }
     }
 

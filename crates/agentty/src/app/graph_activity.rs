@@ -2,8 +2,9 @@
 //!
 //! Proposal generation and graph reply decisions run on the utility worker,
 //! outside the session worker, yet they are work the session is doing. Each
-//! holds a [`GraphActivity`] lease that shows a `Review` session as
-//! `InProgress`. Leases and worker turns share one status: a turn or rebase
+//! holds a [`GraphActivity`] lease that shows a `Draft` or `Review` session
+//! as `InProgress` from the moment the work is requested, before its task
+//! starts. Leases and worker turns share one status: a turn or rebase
 //! that ends while a lease is held defers its `Review` to the last lease, and
 //! the last lease never ends a turn that is still running. Each lease also
 //! persists a running session operation, so restart recovery returns a
@@ -95,10 +96,12 @@ impl GraphActivityRegistry {
             || (current == Status::InProgress && sessions.contains_key(session_id))
     }
 
-    /// Records one lease. The first lease moves a `Review` session to
-    /// `InProgress` and returns `true`. Any other status keeps its own
-    /// meaning, such as a running turn, a pending question, a focused review,
-    /// or a watched review request, which `Review` would discard on release.
+    /// Records one lease. The first lease moves a `Draft` or `Review`
+    /// session to `InProgress` and returns `true`; a `Draft` session leaves
+    /// the lease in `Review`, like its first finished turn. Any other status
+    /// keeps its own meaning, such as a running turn, a pending question, a
+    /// focused review, or a watched review request, which `Review` would
+    /// discard on release.
     fn acquire(&self, session_id: &SessionId, status: &Mutex<Status>) -> bool {
         let mut sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         let state = sessions.entry(session_id.clone()).or_default();
@@ -107,7 +110,7 @@ impl GraphActivityRegistry {
             return false;
         }
         let mut current = status.lock().unwrap_or_else(PoisonError::into_inner);
-        if *current != Status::Review {
+        if !matches!(*current, Status::Draft | Status::Review) {
             return false;
         }
         *current = Status::InProgress;
@@ -181,10 +184,13 @@ struct GraphActivityState {
 
 /// One background graph task's claim on its session status.
 ///
-/// Call [`GraphActivity::finish`] when the task ends. A lease that is never
-/// finished, such as one aborted at shutdown, leaves its running operation for
-/// restart recovery.
+/// Call [`GraphActivity::record`] when the task starts and
+/// [`GraphActivity::finish`] when it ends. A lease that is never finished,
+/// such as one aborted at shutdown, leaves its running operation for restart
+/// recovery.
 pub(crate) struct GraphActivity {
+    /// Whether this lease moved the session to `InProgress`.
+    is_claimed: bool,
     operation_id: String,
     session_id: SessionId,
     /// Status handle of the loaded session; an unloaded session keeps its
@@ -193,6 +199,31 @@ pub(crate) struct GraphActivity {
 }
 
 impl GraphActivity {
+    /// Persists the lease's running operation, then the `InProgress` status
+    /// it claimed, so a crash never leaves a stored `InProgress` without
+    /// recoverable work.
+    pub(crate) async fn record(&self, services: &AppServices) {
+        let operations = services.db().operations();
+        // Best-effort: without the row, only restart recovery is lost.
+        let _ = operations
+            .insert_session_operation(
+                &self.operation_id,
+                &self.session_id,
+                GRAPH_ACTIVITY_OPERATION_KIND,
+            )
+            .await;
+        let _ = operations
+            .mark_session_operation_running(&self.operation_id)
+            .await;
+        if self.is_claimed
+            && let Some(status) = &self.status
+        {
+            services
+                .publish_latest_session_status(&self.session_id, status)
+                .await;
+        }
+    }
+
     /// Restores the session status when this is the last lease and settles
     /// the lease operation.
     ///
@@ -221,30 +252,28 @@ impl AppServices {
     /// Starts one graph lease for `session_id`, holding `status` when the
     /// session is loaded.
     ///
-    /// The running operation is recorded before the status changes, so a
-    /// crash never leaves `InProgress` without recoverable work.
-    pub(crate) async fn begin_graph_activity(
+    /// Call it before spawning the graph task: a claimed session shows
+    /// `InProgress` at once, without waiting for the writes that
+    /// [`GraphActivity::record`] makes.
+    pub(crate) fn begin_graph_activity(
         &self,
         session_id: &SessionId,
         status: Option<Arc<Mutex<Status>>>,
     ) -> GraphActivity {
-        let operation_id = Uuid::new_v4().to_string();
-        let operations = self.db().operations();
-        // Best-effort: without the row, only restart recovery is lost.
-        let _ = operations
-            .insert_session_operation(&operation_id, session_id, GRAPH_ACTIVITY_OPERATION_KIND)
-            .await;
-        let _ = operations
-            .mark_session_operation_running(&operation_id)
-            .await;
-        if let Some(status) = &status
-            && self.graph_activity.acquire(session_id, status)
-        {
-            self.publish_latest_session_status(session_id, status).await;
+        let is_claimed = status
+            .as_ref()
+            .is_some_and(|status| self.graph_activity.acquire(session_id, status));
+        if is_claimed {
+            SessionTaskService::emit_session_updated(
+                &self.event_sender(),
+                &self.session_update_versions(),
+                session_id,
+            );
         }
 
         GraphActivity {
-            operation_id,
+            is_claimed,
+            operation_id: Uuid::new_v4().to_string(),
             session_id: session_id.clone(),
             status,
         }

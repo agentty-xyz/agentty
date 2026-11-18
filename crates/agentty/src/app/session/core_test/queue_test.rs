@@ -130,8 +130,8 @@ async fn test_enqueue_message_under_a_graph_lease_runs_at_once() {
     );
     let activity = app
         .services
-        .begin_graph_activity(&SessionId::from(session_id.as_str()), Some(status))
-        .await;
+        .begin_graph_activity(&SessionId::from(session_id.as_str()), Some(status));
+    activity.record(&app.services).await;
 
     // Act
     app.enqueue_message(&session_id, "queued reply")
@@ -158,11 +158,11 @@ async fn test_enqueue_message_after_the_graph_lease_ends_still_runs() {
             .expect("handles")
             .status,
     );
-    app.services
-        .begin_graph_activity(&SessionId::from(session_id.as_str()), Some(status))
-        .await
-        .finish(&app.services)
-        .await;
+    let activity = app
+        .services
+        .begin_graph_activity(&SessionId::from(session_id.as_str()), Some(status));
+    activity.record(&app.services).await;
+    activity.finish(&app.services).await;
 
     // Act
     app.enqueue_message(&session_id, "queued reply")

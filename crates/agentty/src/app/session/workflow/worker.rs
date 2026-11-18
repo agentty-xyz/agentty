@@ -1013,9 +1013,10 @@ impl SessionWorkerService {
                         .iter()
                         .filter(|operation| operation.session_id == session_id)
                         .collect();
-                    // A graph lease only ever moves `Review` to `InProgress`,
-                    // so interrupted graph work alone undoes just that and
-                    // leaves every other status as the lease found it.
+                    // A graph lease only ever moves `Draft` or `Review` to
+                    // `InProgress` and ends in `Review`, so interrupted graph
+                    // work alone undoes just that and leaves every other
+                    // status as the lease found it.
                     let is_graph_activity_only = session_operations
                         .iter()
                         .any(|operation| operation.kind == GRAPH_ACTIVITY_OPERATION_KIND)

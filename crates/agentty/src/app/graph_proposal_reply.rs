@@ -325,9 +325,10 @@ impl App {
             .session_handles_or_err(&session_id)
             .ok()
             .map(|handles| Arc::clone(&handles.status));
+        let activity = services.begin_graph_activity(&session_id, status);
         self.services
             .track_cleanup_task(spawn::spawn_detached(async move {
-                let activity = services.begin_graph_activity(&session_id, status).await;
+                activity.record(&services).await;
                 let outcome = match reply.outcome {
                     Some(outcome) => outcome,
                     None => match decision.decide(run_client.as_ref()).await {

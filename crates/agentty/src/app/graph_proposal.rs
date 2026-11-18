@@ -384,11 +384,10 @@ impl App {
             .ok();
         let status = handles.map(|handles| Arc::clone(&handles.status));
         let transcript = handles.map(|handles| Arc::clone(&handles.transcript));
+        let activity = services.begin_graph_activity(&state.input.session_id, status);
         self.services
             .track_cleanup_task(spawn::spawn_detached(async move {
-                let activity = services
-                    .begin_graph_activity(&state.input.session_id, status)
-                    .await;
+                activity.record(&services).await;
                 run_graph_proposal_generation(
                     &services,
                     &state,
