@@ -2617,31 +2617,23 @@ impl App {
             .collect::<Vec<_>>();
 
         for session_id in session_ids {
-            if let Some(warning) = self.complete_externally_merged_session(&session_id).await {
-                self.append_output_for_session(
-                    &session_id,
-                    &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
-                )
-                .await;
-            }
+            self.complete_externally_merged_session(&session_id).await;
         }
     }
 
     /// Marks one externally merged session `Done` after manual target sync and
-    /// returns any finalization warning.
+    /// starts its worktree cleanup.
     ///
-    /// The session is still moved to `Done` when cleanup fails because the
-    /// merge already happened upstream, but the caller should surface the
-    /// warning to the user.
-    pub(super) async fn complete_externally_merged_session(
-        &self,
-        session_id: &str,
-    ) -> Option<String> {
+    /// Sessions without a snapshot or runtime handles, and sessions whose
+    /// current status cannot move to `Done`, are left unchanged. The session
+    /// is still moved to `Done` when cleanup fails because the merge already
+    /// happened upstream; the cleanup task surfaces that warning.
+    pub(super) async fn complete_externally_merged_session(&self, session_id: &str) {
         let Ok(session) = self.sessions.session_or_err(session_id) else {
-            return None;
+            return;
         };
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
-            return None;
+            return;
         };
 
         let folder = session.folder.clone();
@@ -2649,13 +2641,11 @@ impl App {
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let status_applied = status_transition.apply(Status::Done).await;
-        if !status_applied {
-            return Some("Could not archive the merged session".to_string());
+        if !status_transition.apply(Status::Done).await {
+            return;
         }
-        self.spawn_externally_merged_session_cleanup(session_id, folder, source_branch, handles);
 
-        None
+        self.spawn_externally_merged_session_cleanup(session_id, folder, source_branch, handles);
     }
 
     /// Removes an externally merged session worktree without delaying terminal

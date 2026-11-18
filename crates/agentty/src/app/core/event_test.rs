@@ -1,6 +1,6 @@
 //! `AppEvent` batching, reduction planning, and event application unit tests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -113,6 +113,40 @@ async fn exhausted_focused_review_persistence_logs_without_tracing() {
     ));
     assert!(warnings[0].contains("session_id=session-1"));
     assert!(warnings[0].contains("error=attempted to acquire a connection on a closed pool"));
+}
+
+/// Verifies a session finishing a rebase re-enters review for auto-review
+/// unless a ready review result is already cached.
+#[tokio::test]
+async fn rebased_session_enters_review_only_without_ready_review_cache() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let id = SessionId::from("rebased-session");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(id.as_str())
+            .status(crate::domain::session::Status::Review)
+            .build(),
+    );
+    let session_ids = HashSet::from([id.clone()]);
+    let previous_session_states =
+        HashMap::from([(id.clone(), crate::domain::session::Status::Rebasing)]);
+
+    // Act
+    let without_cache = app.sessions_entering_review(&session_ids, &previous_session_states);
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
+            diff_hash: 7,
+            text: "cached review".into(),
+        },
+    );
+    let with_ready_cache = app.sessions_entering_review(&session_ids, &previous_session_states);
+
+    // Assert
+    assert_eq!(without_cache, HashSet::from([id]));
+    assert!(with_ready_cache.is_empty());
 }
 
 #[tokio::test]

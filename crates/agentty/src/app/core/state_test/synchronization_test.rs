@@ -192,15 +192,19 @@ async fn externally_merged_helpers_ignore_missing_session_runtime_state() {
     let record_result = app
         .record_externally_merged_session("snapshot-only", None)
         .await;
-    let missing_session_result = app.complete_externally_merged_session("missing").await;
-    let missing_handles_result = app
-        .complete_externally_merged_session("snapshot-only")
+    app.complete_externally_merged_session("missing").await;
+    app.complete_externally_merged_session("snapshot-only")
         .await;
 
     // Assert
     assert_eq!(record_result, None);
-    assert_eq!(missing_session_result, None);
-    assert_eq!(missing_handles_result, None);
+    assert_eq!(
+        app.sessions
+            .session_or_err("snapshot-only")
+            .expect("expected snapshot-only session")
+            .status,
+        Status::Merged
+    );
 }
 
 #[tokio::test]
@@ -1044,7 +1048,7 @@ async fn merged_review_waits_for_successful_manual_sync_before_cleanup() {
 }
 
 #[tokio::test]
-async fn complete_externally_merged_session_reports_invalid_done_transition() {
+async fn complete_externally_merged_session_ignores_invalid_done_transition() {
     // Arrange
     let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
     let session_id = "session-done-failure";
@@ -1057,13 +1061,9 @@ async fn complete_externally_merged_session_reports_invalid_done_transition() {
     *handles.status.lock().expect("status lock poisoned") = Status::Draft;
 
     // Act
-    let warning = app
-        .complete_externally_merged_session(session_id)
-        .await
-        .expect("invalid transition should produce a warning");
+    app.complete_externally_merged_session(session_id).await;
 
     // Assert
-    assert_eq!(warning, "Could not archive the merged session");
     assert_eq!(
         *app.sessions
             .session_handles_or_err(session_id)
