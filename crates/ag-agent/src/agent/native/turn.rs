@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::activity::ActivityBridge;
 use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig};
 use super::failure;
+use super::run_failure::RunFailure;
 use crate::agent::{
     InstructionDeliveryMode, PromptPreparationRequest, execution_policy, parse_turn_response,
     prepare_prompt_text,
@@ -175,11 +176,14 @@ pub(crate) async fn run_one_shot(
     let control = turn.control();
     let outcome = tokio::select! {
         biased;
-        () = cancellation.cancelled() => Err("[Stopped] Agent run canceled".to_string()),
-        outcome = turn => outcome.map_err(|error| format!("Harness turn failed: {error}")),
+        () = cancellation.cancelled() => Err(RunFailure::Stopped),
+        outcome = turn => outcome.map_err(RunFailure::from_run),
     };
     settle(&control).await?;
-    let outcome = outcome?;
+    let outcome = outcome.map_err(|failure| match failure {
+        RunFailure::Stopped => "[Stopped] Agent run canceled".to_string(),
+        RunFailure::Failed(message) => message,
+    })?;
     let response = parse_outcome(&outcome, profile)?;
     let (input_tokens, output_tokens) = token_usage(outcome.report());
 

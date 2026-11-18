@@ -20,15 +20,17 @@ use ag_contracts::{
 };
 use ag_harness::model::ModelMessage;
 use ag_harness::store::{HistoryTurn, LoadedSession, SessionStore, SqliteStore};
-use ag_harness::{Harness, Repository, Session, SessionError, TurnControl};
+use ag_harness::{
+    ErrorKind, Harness, HarnessError, Repository, Session, SessionError, TurnControl,
+};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use crate::agent::native::{
-    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, failure,
-    output_schema, parse_outcome, reject_attachments, repository, running_context_window, settle,
-    system_prompt, token_usage, turn_options,
+    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, RunFailure,
+    failure, output_schema, parse_outcome, reject_attachments, repository, running_context_window,
+    settle, system_prompt, token_usage, turn_options,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -72,7 +74,8 @@ impl AgentChannel for NativeAgentChannel {
     /// waits for its cleanup.
     ///
     /// # Errors
-    /// Returns [`AgentError::Backend`] for unsupported controls,
+    /// Returns [`AgentError::InterruptedByUser`] when the harness cancelled
+    /// the turn, or [`AgentError::Backend`] for unsupported controls,
     /// configuration, provider, settlement, or protocol failures.
     fn run_turn(
         &self,
@@ -86,7 +89,7 @@ impl AgentChannel for NativeAgentChannel {
         Box::pin(async move {
             run_session_turn(&config, &active, session_id, req, events)
                 .await
-                .map_err(AgentError::Backend)
+                .map_err(AgentError::from)
         })
     }
 
@@ -117,7 +120,7 @@ async fn run_session_turn(
     session_id: String,
     req: TurnRequest,
     events: mpsc::UnboundedSender<TurnEvent>,
-) -> Result<TurnResult, String> {
+) -> Result<TurnResult, RunFailure> {
     execution_policy::validate(AgentKind::Harness, &req.execution_policy)
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
@@ -180,7 +183,7 @@ async fn run_session_turn(
     // A failed settlement stays registered so the next turn retries it.
     settle(&control).await?;
     lock(active).remove(&session_id);
-    let outcome = outcome.map_err(|error| format!("Harness turn failed: {error}"))?;
+    let outcome = outcome.map_err(RunFailure::from_run)?;
     let assistant_message = parse_outcome(&outcome, profile)?;
     let (input_tokens, output_tokens) = token_usage(outcome.report());
     // An unversioned id makes the next session turn re-send the session
@@ -276,9 +279,9 @@ impl SessionOpener<'_> {
     /// `selection` when it differs, or creates the session when it does not
     /// exist. Returns the session with the history the harness loads for it.
     async fn open(&self, selection: &ModelSelection) -> Result<(Session, LoadedHistory), String> {
-        let loaded = match self.load().await {
+        let loaded = match self.load().await.map_err(HarnessError::from) {
             Ok(loaded) => loaded,
-            Err(SessionError::NotFound { .. }) => {
+            Err(error) if error.kind() == ErrorKind::NotFound => {
                 let session = self
                     .harness(selection)?
                     .session(self.session_id, output_schema(self.profile)?)

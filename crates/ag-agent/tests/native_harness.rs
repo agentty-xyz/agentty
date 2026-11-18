@@ -11,10 +11,10 @@ use ag_agent::{
     NativeHarnessConfig, RealOneShotClient, create_agent_channel, instruction_bootstrap_key,
 };
 use ag_contracts::{
-    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentRequestKind,
-    ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
-    TurnRequest,
+    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
+    AgentRequestKind, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest,
+    PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
+    TurnEvent, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
@@ -1294,6 +1294,91 @@ async fn shutdown_cancels_a_running_command_and_waits_for_cleanup() {
 }
 
 #[tokio::test]
+async fn shutdown_during_a_running_turn_reports_it_interrupted() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(
+        &server,
+        "Run until stopped",
+        tool_call("call-sleep", "bash", &json!({"command": "sleep 30"})),
+        1,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let running = tokio::spawn(channel.run_turn(
+        "session-stop".to_string(),
+        turn_request(worktree.path(), MUSE_MODEL, "Run until stopped"),
+        events_tx,
+    ));
+    while let Some(event) = events_rx.recv().await {
+        if matches!(
+            &event,
+            TurnEvent::Activity(activity)
+                if activity.name == "bash" && activity.status == ActivityStatus::Running
+        ) {
+            break;
+        }
+    }
+
+    // Act
+    let shutdown = tokio::time::timeout(
+        Duration::from_secs(10),
+        channel.shutdown_session("session-stop".to_string()),
+    )
+    .await;
+    let result = tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("cancelled turn should finish")
+        .expect("turn task should not panic");
+
+    // Assert
+    assert!(matches!(shutdown, Ok(Ok(()))), "{shutdown:?}");
+    assert!(
+        matches!(&result, Err(AgentError::InterruptedByUser(message)) if message.starts_with("[Stopped]")),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn overloaded_provider_fails_the_turn_asking_to_retry_later() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(
+        &server,
+        "Busy provider",
+        ResponseTemplate::new(503).insert_header("Retry-After", "7"),
+        1,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-overloaded",
+        turn_request(worktree.path(), MUSE_MODEL, "Busy provider"),
+    )
+    .await;
+
+    // Assert
+    let error = result.expect_err("an overloaded provider should fail the turn");
+    assert!(error.starts_with("Harness turn failed: "), "{error}");
+    assert!(
+        error.ends_with(
+            "\n\nThis failure is temporary (overloaded). Send the prompt again after 7 seconds."
+        ),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn failed_shutdown_cleanup_is_retried_before_the_next_turn() {
     // Arrange
     let server = MockServer::start().await;
@@ -1667,6 +1752,27 @@ async fn utility_run_stops_when_cancelled() {
         result.expect_err("cancelled run should stop").to_string(),
         "[Stopped] Agent run canceled"
     );
+}
+
+#[tokio::test]
+async fn rejected_credentials_fail_the_utility_run_without_a_retry_hint() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Name this session", ResponseTemplate::new(401), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let client = RealOneShotClient::pooled(None)
+        .with_native_harness(config(data_root.path(), environment(&server)));
+
+    // Act
+    let result = client.submit(utility_request(worktree.path(), None)).await;
+
+    // Assert
+    let error = result
+        .expect_err("rejected credentials should fail the run")
+        .to_string();
+    assert!(error.starts_with("Harness turn failed: "), "{error}");
+    assert!(!error.contains("temporary"), "{error}");
 }
 
 #[tokio::test]

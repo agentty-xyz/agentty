@@ -28,7 +28,10 @@ provides a Rust implementation that `ag-agent` runs in process for `AgentKind::H
 when the host enables it; Agentty does so only when started with
 `--experimental-harness`. Without that configuration, harness work fails before
 execution. The native harness charges each model request against a utility's
-provider-call budget. See
+provider-call budget. Its adapter decides each failed turn from the harness `ErrorKind`:
+a cancelled run is reported as stopped, and a retryable kind asks the user to send the
+prompt again, after the provider's `Retry-After` when present, rather than replaying the
+turn's tool effects. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for its component
 contracts.
 
