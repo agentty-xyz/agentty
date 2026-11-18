@@ -23,11 +23,13 @@ pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
     }
 }
 
+/// Returns a command that captures the first stdin message, as a
+/// `stream-json` reader does, and answers without waiting for stdin to close.
 pub(super) fn stdin_capture_command(capture_path: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg("cat > \"$CLI_CAPTURE_PATH\"; printf '%s' '{\"answer\":\"ok\",\"questions\":[]}'");
+    command.arg("-c").arg(
+        "head -n 1 > \"$CLI_CAPTURE_PATH\"; printf '%s' '{\"answer\":\"ok\",\"questions\":[]}'",
+    );
     command.env("CLI_CAPTURE_PATH", capture_path);
 
     command

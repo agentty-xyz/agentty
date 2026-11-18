@@ -181,9 +181,7 @@ async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
             &mut transport,
             &mut state,
             "Implement the task",
-            ProtocolRequestProfile::SessionTurn,
-            ReasoningLevel::default(),
-            SpeedMode::default(),
+            session_turn_options(SpeedMode::default()),
             stream_tx,
         ))
         .await;
@@ -237,9 +235,7 @@ async fn run_turn_with_runtime_compacts_and_retries_after_context_overflow() {
             &mut transport,
             &mut state,
             "Implement the task",
-            ProtocolRequestProfile::SessionTurn,
-            ReasoningLevel::default(),
-            SpeedMode::Fast,
+            session_turn_options(SpeedMode::Fast),
             stream_tx,
         ))
         .await;
@@ -547,4 +543,14 @@ fn assert_compaction_span(exporter: &InMemorySpanExporter, outcome: &'static str
             .contains(&KeyValue::new("agentty.outcome", outcome))
     );
     assert!(!format!("{spans:?}").contains("private"));
+}
+
+/// Builds non-steerable session-turn options at one service speed.
+fn session_turn_options(speed_mode: SpeedMode) -> lifecycle::CodexTurnOptions<'static> {
+    lifecycle::CodexTurnOptions {
+        protocol_profile: ProtocolRequestProfile::SessionTurn,
+        reasoning_level: ReasoningLevel::default(),
+        speed_mode,
+        steering: None,
+    }
 }

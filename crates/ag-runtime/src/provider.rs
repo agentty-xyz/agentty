@@ -54,6 +54,12 @@ pub fn uses_persistent_session(kind: AgentKind) -> bool {
     ag_agent::transport_mode(kind).uses_app_server()
 }
 
+/// Whether the selected provider's session turns accept user prompts while
+/// running.
+pub fn supports_turn_steering(kind: AgentKind) -> bool {
+    ag_agent::supports_turn_steering(kind)
+}
+
 /// Reclaims adapter-owned resources during workspace deletion.
 ///
 /// # Errors

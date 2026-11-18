@@ -33,6 +33,9 @@ transports never reach application workflows.
   match the requested policy before reuse.
 - **Lifecycle:** keep provider processes behind runtime objects and clean them up after
   cancellation or shutdown.
+- **Steering:** forward a user prompt into the running session turn of an adapter that
+  accepts mid-turn input. Other adapters reject it, and the host keeps the prompt for a
+  later turn.
 
 Shared requests, events, settings, and errors live in `ag-contracts`. Frontend policy,
 mailbox scheduling, and persistence stay outside the runtime.

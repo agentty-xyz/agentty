@@ -16,7 +16,9 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
+use crate::test_support::{
+    AppServerError, AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK,
+};
 use crate::{RuntimeConfig, SessionRunClient};
 
 #[path = "task_context_test.rs"]
@@ -684,4 +686,36 @@ fn completed_turn() -> TurnResult {
         output_tokens: 5,
         provider_conversation_id: None,
     }
+}
+
+#[tokio::test]
+async fn steering_reaches_the_session_runtime_and_reports_rejections() {
+    // Arrange
+    let mut server = MockAppServerClient::new();
+    server
+        .expect_steer_turn()
+        .withf(|runtime_id, prompt| runtime_id == "steer-session" && prompt.text == "accepted")
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    server
+        .expect_steer_turn()
+        .withf(|_, prompt| prompt.text == "rejected")
+        .once()
+        .returning(|_, _| {
+            Box::pin(async { Err(AppServerError::Provider("turn ended".to_string())) })
+        });
+    let config = RuntimeConfig::with_app_server(Arc::new(server));
+    let client = SessionRunClient::new(
+        "steer-session".into(),
+        ag_session::AgentKind::Codex,
+        &config,
+    );
+
+    // Act
+    let accepted = client.steer(TurnPrompt::from("accepted")).await;
+    let rejected = client.steer(TurnPrompt::from("rejected")).await;
+
+    // Assert
+    assert!(accepted.is_ok());
+    assert!(matches!(rejected, Err(AgentError::Runtime(message)) if message == "turn ended"));
 }

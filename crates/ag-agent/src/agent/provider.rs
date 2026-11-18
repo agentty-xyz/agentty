@@ -13,9 +13,11 @@ use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
     BuildCommandRequest,
 };
+use super::cli::execution::CliTurnSteering;
+use super::cli::stdin::StdinSteering;
 use super::prompt;
 use super::response_parser::ParsedResponse;
-use crate::app_server::AppServerClient;
+use crate::app_server::{AppServerClient, TurnSteeringInbox};
 
 /// Factory hook used to build or override provider-specific app-server
 /// clients.
@@ -55,7 +57,13 @@ pub fn transport_mode(kind: AgentKind) -> AgentTransport {
     provider_descriptor(kind).transport
 }
 
-/// Returns whether the provider expects prompts through stdin.
+/// Returns whether the provider's session turns accept user prompts while
+/// running. Hosts queue prompts as later turns for other providers.
+pub fn supports_turn_steering(kind: AgentKind) -> bool {
+    provider_descriptor(kind).turn_steering
+}
+
+/// Returns how the provider receives prompts.
 pub(crate) fn prompt_transport(kind: AgentKind) -> AgentPromptTransport {
     provider_descriptor(kind).prompt_transport
 }
@@ -122,10 +130,28 @@ pub(crate) fn build_command_stdin_payload(
 
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
-        AgentPromptTransport::Stdin => {
-            prompt::build_prompt_stdin_payload(request, protocol_schema_instruction_mode, "Claude")
-                .map(Some)
+        AgentPromptTransport::StreamJsonStdin => {
+            prompt::build_cli_prompt_text(request, protocol_schema_instruction_mode, "Claude")
+                .map(|prompt_text| Some(super::claude::stream_json_user_message(&prompt_text)))
         }
+    }
+}
+
+/// Returns stdin steering for one CLI session turn when the provider reads
+/// user messages while it works.
+pub(crate) fn cli_turn_steering(
+    kind: AgentKind,
+    inbox: Arc<TurnSteeringInbox>,
+) -> Option<CliTurnSteering> {
+    match prompt_transport(kind) {
+        AgentPromptTransport::Argv => None,
+        AgentPromptTransport::StreamJsonStdin => Some(CliTurnSteering {
+            is_turn_end: super::claude::is_turn_result,
+            stdin: StdinSteering {
+                encode_prompt: super::claude::encode_steering_prompt,
+                inbox,
+            },
+        }),
     }
 }
 
@@ -139,6 +165,8 @@ struct AgentProviderDescriptor {
     prompt_transport: AgentPromptTransport,
     protocol_schema_instruction_mode: ProtocolSchemaInstructionMode,
     transport: AgentTransport,
+    /// Whether running session turns accept steering prompts.
+    turn_steering: bool,
 }
 
 fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
@@ -157,6 +185,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
+            turn_steering: false,
         },
         AgentKind::Claude => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
@@ -164,9 +193,10 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::claude::ClaudeBackend),
             parse_response: super::response_parser::parse_claude_response_with_fallback,
             parse_stream_payload: super::response_parser::parse_claude_stream_payload,
-            prompt_transport: AgentPromptTransport::Stdin,
+            prompt_transport: AgentPromptTransport::StreamJsonStdin,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Cli,
+            turn_steering: true,
         },
         AgentKind::Codex => AgentProviderDescriptor {
             app_server_client_factory: |default_client| {
@@ -182,6 +212,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
+            turn_steering: true,
         },
         AgentKind::Harness => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
@@ -192,6 +223,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Native,
+            turn_steering: false,
         },
     }
 }

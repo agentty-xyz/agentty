@@ -346,6 +346,22 @@ pub(crate) fn session_output_queued_lines(
     )]
 }
 
+/// Shortcut hint shown below queued chat that can join the running turn.
+pub(crate) const STEER_HINT_TEXT: &str = "  Ctrl+s sends queued messages now";
+
+/// Builds the hint row offering to send queued chat into the running turn,
+/// clipped to display width.
+pub(crate) fn session_output_steer_hint_line(inner_width: usize) -> Option<Line<'static>> {
+    if inner_width == 0 {
+        return None;
+    }
+
+    Some(Line::styled(
+        text_util::truncate_with_ellipsis(STEER_HINT_TEXT, inner_width),
+        Style::default().fg(style::palette::text_subtle()),
+    ))
+}
+
 /// Returns the loader label for active session states.
 ///
 /// Most in-progress details are agent thinking snippets appended to the

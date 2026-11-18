@@ -10,7 +10,9 @@ use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
     TurnResult,
 };
-use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt};
+use ag_protocol::{
+    AgentResponse, ProtocolRequestProfile, TurnPrompt, build_protocol_repair_prompt,
+};
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +22,7 @@ use crate::agent::cli::execution::{
     self, CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload,
 };
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
+use crate::app_server::steering::{self, TurnSteeringRegistry};
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
@@ -35,6 +38,8 @@ pub(crate) struct CliAgentChannel {
     backend: Arc<dyn AgentBackend>,
     /// Provider family used for stream and response parsing.
     kind: AgentKind,
+    /// Steering inboxes of running session turns for steerable providers.
+    steering: TurnSteeringRegistry,
 }
 
 impl CliAgentChannel {
@@ -49,6 +54,7 @@ impl CliAgentChannel {
             active: Arc::default(),
             backend,
             kind,
+            steering: TurnSteeringRegistry::default(),
         }
     }
 }
@@ -203,10 +209,16 @@ impl AgentChannel for CliAgentChannel {
         let kind = self.kind;
         let backend = Arc::clone(&self.backend);
         let active = Arc::clone(&self.active);
+        let steering_registry = self.steering.clone();
 
         Box::pin(async move {
             let cancellation = CancellationToken::new();
-            let lease = CliTurnLease::acquire(active, session_id, cancellation.clone())?;
+            let lease = CliTurnLease::acquire(active, session_id.clone(), cancellation.clone())?;
+            // Register steering only once this turn owns the session, so a
+            // rejected concurrent turn cannot replace the running turn's inbox.
+            let steering = (agent::supports_turn_steering(kind)
+                && req.request_kind.protocol_profile() == ProtocolRequestProfile::SessionTurn)
+                .then(|| steering_registry.register(&session_id));
             let execution = async {
                 let mut req = req;
                 req.prompt = agent::apply_response_style_prompt(
@@ -236,6 +248,9 @@ impl AgentChannel for CliAgentChannel {
                     build_request,
                     &observer,
                     None,
+                    steering
+                        .as_ref()
+                        .and_then(|steering| agent::cli_turn_steering(kind, steering.inbox())),
                 )
                 .await
                 .map_err(map_cli_turn_execution_error)?;
@@ -258,9 +273,20 @@ impl AgentChannel for CliAgentChannel {
                 }
 
                 let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
-                let assistant_message =
+                let mut assistant_message =
                     parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
                         .await?;
+                for follow_up_content in &parsed.follow_up_contents {
+                    let follow_up = parse_or_keep_follow_up_response(
+                        kind,
+                        follow_up_content,
+                        &req,
+                        &backend,
+                        &events,
+                    )
+                    .await;
+                    append_follow_up_response(&mut assistant_message, follow_up);
+                }
 
                 Ok(TurnResult {
                     assistant_message,
@@ -275,8 +301,24 @@ impl AgentChannel for CliAgentChannel {
                 result = execution => result,
                 () = cancellation.cancelled() => Err(AgentError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string())),
             };
+            drop(steering);
             drop(lease);
             result
+        })
+    }
+
+    /// Writes one prompt into the session's running CLI turn through stdin.
+    fn steer_turn(
+        &self,
+        session_id: String,
+        prompt: TurnPrompt,
+    ) -> AgentFuture<Result<(), AgentError>> {
+        let acknowledgement = self.steering.submit(&session_id, prompt);
+
+        Box::pin(async move {
+            steering::await_acknowledgement(acknowledgement)
+                .await
+                .map_err(|error| AgentError::Runtime(error.to_string()))
         })
     }
 
@@ -293,6 +335,51 @@ impl AgentChannel for CliAgentChannel {
             Ok(())
         })
     }
+}
+
+/// Parses one follow-up reply, keeping its raw text when neither the strict
+/// parse nor the repair retry produces a protocol response.
+///
+/// The primary answer is already valid and the steer that caused the
+/// follow-up was already accepted, so a malformed follow-up must not fail
+/// the turn and discard both replies.
+async fn parse_or_keep_follow_up_response(
+    kind: AgentKind,
+    content: &str,
+    req: &TurnRequest,
+    backend: &Arc<dyn AgentBackend>,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> AgentResponse {
+    match parse_or_repair_cli_response(kind, content, req, backend, events).await {
+        Ok(follow_up) => follow_up,
+        Err(error) => {
+            let _ = events.send(TurnEvent::ThoughtDelta(format!(
+                "Kept a follow-up reply as plain text: {error}"
+            )));
+
+            AgentResponse::plain(content.trim())
+        }
+    }
+}
+
+/// Appends the reply of a follow-up turn the same run answered, such as a
+/// steering prompt Claude read after its turn ended, so neither reply is lost.
+fn append_follow_up_response(response: &mut AgentResponse, follow_up: AgentResponse) {
+    let AgentResponse {
+        answer,
+        questions,
+        review_comment_outcomes,
+    } = follow_up;
+    if !answer.trim().is_empty() {
+        if !response.answer.trim().is_empty() {
+            response.answer.push_str("\n\n");
+        }
+        response.answer.push_str(&answer);
+    }
+    response.questions.extend(questions);
+    response
+        .review_comment_outcomes
+        .extend(review_comment_outcomes);
 }
 
 /// Parses one CLI turn response strictly, falling back to a single
@@ -402,10 +489,16 @@ async fn execute_cli_repair_command(
     events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<String, String> {
     let observer = CliTurnObserver::new(events.clone(), kind, false);
-    let output =
-        execution::execute_cli_command(backend, kind, build_request, &observer, Some(timeout))
-            .await
-            .map_err(|error| format!("repair {error}"))?;
+    let output = execution::execute_cli_command(
+        backend,
+        kind,
+        build_request,
+        &observer,
+        Some(timeout),
+        None,
+    )
+    .await
+    .map_err(|error| format!("repair {error}"))?;
 
     match output.exit_status {
         CliExitStatus::NonZero(exit_code) => {

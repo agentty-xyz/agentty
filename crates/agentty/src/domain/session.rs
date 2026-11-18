@@ -440,6 +440,16 @@ impl Session {
         self.is_draft_session() && self.status == Status::Draft && self.has_staged_drafts()
     }
 
+    /// Returns whether the oldest queued chat message can join the running
+    /// turn now instead of waiting for the next one.
+    pub fn can_steer_queued_messages(&self) -> bool {
+        self.status == Status::InProgress
+            && self
+                .queued_messages
+                .first()
+                .is_some_and(QueuedMessage::is_steerable)
+    }
+
     /// Returns whether the session can be canceled by the user.
     ///
     /// Running sessions can be canceled from the list after their active turn
@@ -626,6 +636,7 @@ impl Session {
 pub struct QueuedMessage {
     order: u64,
     prompt: TurnPrompt,
+    steerable: bool,
     transcript_text: String,
 }
 
@@ -637,8 +648,26 @@ impl QueuedMessage {
         Self {
             order,
             prompt,
+            steerable: false,
             transcript_text,
         }
+    }
+
+    /// Marks whether the prompt can join the running turn instead of
+    /// waiting for the next one.
+    ///
+    /// Prompts with image attachments always wait: their temporary files
+    /// are released when a turn that owns them ends.
+    #[must_use]
+    pub(crate) fn with_steering(mut self, harness_steers: bool) -> Self {
+        self.steerable = harness_steers && !self.prompt.has_attachments();
+
+        self
+    }
+
+    /// Returns whether the prompt can be sent into the running turn now.
+    pub(crate) fn is_steerable(&self) -> bool {
+        self.steerable
     }
 
     /// Consumes the queue entry and returns its structured prompt.
@@ -688,6 +717,12 @@ pub struct SessionHandles {
     pub queued_work_sequence: Arc<AtomicU64>,
     /// Shared mutable status synchronized with persistence/UI.
     pub status: Arc<Mutex<Status>>,
+    /// Whether the worker is running a chat turn on the session's own
+    /// conversation.
+    ///
+    /// Queued prompts can join only that turn. Agent-task and graph turns
+    /// also hold the session `InProgress`, but run in separate conversations.
+    pub steerable_turn: Arc<AtomicBool>,
     /// Shared typed transcript snapshot mirrored to the render layer.
     pub transcript: Arc<Mutex<SessionTranscript>>,
     /// Queued workflow rows that must survive active-project snapshot reloads.
@@ -710,6 +745,7 @@ impl SessionHandles {
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
+            steerable_turn: Arc::default(),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             transcript_is_hydrated: AtomicBool::new(true),
         }
@@ -725,6 +761,7 @@ impl SessionHandles {
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
+            steerable_turn: Arc::default(),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             transcript_is_hydrated: AtomicBool::new(false),
         }
@@ -746,6 +783,7 @@ impl SessionHandles {
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
+            steerable_turn: Arc::default(),
             transcript: Arc::new(Mutex::new(transcript)),
             transcript_is_hydrated: AtomicBool::new(true),
         }
@@ -789,13 +827,33 @@ impl SessionHandles {
 
     /// Returns queued chat messages in submission order so callers can mirror
     /// queue contents into render snapshots.
+    ///
+    /// The copies are steerable only while [`Self::steerable_turn`] is set,
+    /// so the snapshot never offers to send a prompt into a turn that cannot
+    /// receive it.
     pub fn queued_message_snapshot(&self) -> Vec<QueuedMessage> {
+        let has_steerable_turn = self.has_steerable_turn();
+
         // Sync critical section (read-only clone, no `.await`);
         // `std::sync::Mutex` is the correct choice per CLAUDE.md §"Mutex
         // Selection".
-        self.queued_messages
-            .lock()
-            .map_or_default(|guard| guard.iter().cloned().collect::<Vec<_>>())
+        self.queued_messages.lock().map_or_default(|guard| {
+            guard
+                .iter()
+                .cloned()
+                .map(|message| {
+                    let is_steerable = has_steerable_turn && message.is_steerable();
+
+                    message.with_steering(is_steerable)
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
+    /// Returns whether the worker is running a chat turn that queued prompts
+    /// can join.
+    pub(crate) fn has_steerable_turn(&self) -> bool {
+        self.steerable_turn.load(Ordering::Acquire)
     }
 
     /// Stores one queued workflow row beside the worker-owned queue state.

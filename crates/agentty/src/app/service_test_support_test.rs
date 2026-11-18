@@ -12,8 +12,10 @@ use ag_contracts::{
 };
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
+use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_worker::{RunClient, SessionRunClient};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::{AppServices, SessionRunFactory};
 use crate::domain::agent::AgentKind;
@@ -151,6 +153,81 @@ impl AppServices {
     /// runs.
     pub(crate) fn set_run_client(&mut self, client: Arc<dyn RunClient>) {
         self.run_client = client;
+    }
+}
+
+/// Session channel whose turns run until [`Self::release`] fires and which
+/// records accepted steering prompts; prompts starting with `reject` are
+/// refused, and ones starting with `late` are refused once
+/// [`Self::late_steer`] fires.
+#[derive(Default)]
+pub(crate) struct SteerableSessionChannel {
+    /// Answers the steering prompts that start with `late`.
+    pub(crate) late_steer: CancellationToken,
+    /// Completes every waiting and later turn with a plain answer.
+    pub(crate) release: CancellationToken,
+    /// Steering prompt texts in delivery order.
+    pub(crate) steered: Mutex<Vec<String>>,
+}
+
+impl AgentChannel for SteerableSessionChannel {
+    fn start_session(
+        &self,
+        req: StartSessionRequest,
+    ) -> AgentFuture<Result<SessionRef, AgentError>> {
+        Box::pin(async move {
+            Ok(SessionRef {
+                session_id: req.session_id,
+            })
+        })
+    }
+
+    fn run_turn(
+        &self,
+        _session_id: String,
+        _req: TurnRequest,
+        _events: mpsc::UnboundedSender<TurnEvent>,
+    ) -> AgentFuture<Result<TurnResult, AgentError>> {
+        let release = self.release.clone();
+
+        Box::pin(async move {
+            release.cancelled().await;
+
+            Ok(TurnResult {
+                assistant_message: AgentResponse::plain("done"),
+                context_reset: false,
+                harness_report: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                provider_conversation_id: None,
+            })
+        })
+    }
+
+    fn steer_turn(
+        &self,
+        _session_id: String,
+        prompt: TurnPrompt,
+    ) -> AgentFuture<Result<(), AgentError>> {
+        if prompt.text.starts_with("reject") {
+            return Box::pin(async { Err(AgentError::Runtime("turn ended".to_string())) });
+        }
+        if prompt.text.starts_with("late") {
+            let late_steer = self.late_steer.clone();
+
+            return Box::pin(async move {
+                late_steer.cancelled().await;
+
+                Err(AgentError::Runtime("turn ended".to_string()))
+            });
+        }
+        self.steered.lock().expect("steered").push(prompt.text);
+
+        Box::pin(async { Ok(()) })
+    }
+
+    fn shutdown_session(&self, _session_id: String) -> AgentFuture<Result<(), AgentError>> {
+        Box::pin(async { Ok(()) })
     }
 }
 

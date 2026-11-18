@@ -2,6 +2,7 @@
 //! replacement, and isolated context resets.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
@@ -14,8 +15,9 @@ use crate::agent::app_server::client::{
 use crate::app_server;
 use crate::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
-    AppServerStreamEvent, AppServerTurnRequest, BorrowedAppServerFuture,
+    AppServerStreamEvent, AppServerTurnRequest, BorrowedAppServerFuture, TurnSteeringInbox,
 };
+use crate::telemetry::TRACER_PROVIDER_LOCK;
 
 // Counter assertions share one async lock across complete test scenarios.
 static COUNTER_LOCK: Mutex<()> = Mutex::const_new(());
@@ -76,6 +78,7 @@ impl RuntimeClientProvider for TestProvider {
         _reasoning_level: ReasoningLevel,
         _speed_mode: SpeedMode,
         _stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        _steering: Option<Arc<TurnSteeringInbox>>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
         Box::pin(async {
             RUN_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -356,9 +359,216 @@ impl RuntimeClientProvider for ResetProvider {
         reasoning: ReasoningLevel,
         speed: SpeedMode,
         stream: mpsc::UnboundedSender<AppServerStreamEvent>,
+        steering: Option<Arc<TurnSteeringInbox>>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
-        TestProvider::run_turn(runtime, prompt, profile, reasoning, speed, stream)
+        TestProvider::run_turn(runtime, prompt, profile, reasoning, speed, stream, steering)
     }
+}
+
+/// Provider whose turns wait for one steering prompt before completing.
+///
+/// A turn prompt containing [`DROP_STEER_ACK`] discards the acknowledgement,
+/// as a turn that ends before the provider answers would. One containing
+/// [`FAIL_AFTER_STEER`] accepts the prompt and then fails, and its retry
+/// echoes its prompt with what the inbox accepted. Others accept and echo the
+/// steering prompt.
+struct SteeringProvider;
+
+/// Turn-prompt marker making [`SteeringProvider`] drop its acknowledgement.
+const DROP_STEER_ACK: &str = "DROP_STEER_ACKNOWLEDGEMENT";
+
+/// Turn-prompt marker making [`SteeringProvider`] fail after accepting.
+const FAIL_AFTER_STEER: &str = "FAIL_AFTER_STEER";
+
+impl RuntimeClientProvider for SteeringProvider {
+    type Runtime = TestRuntime;
+
+    fn label() -> &'static str {
+        "Steering fixture"
+    }
+
+    fn schema_instruction_mode() -> ProtocolSchemaInstructionMode {
+        TestProvider::schema_instruction_mode()
+    }
+
+    fn retain_runtime_after_turn() -> bool {
+        false
+    }
+
+    fn supports_steering() -> bool {
+        true
+    }
+
+    fn start_runtime(
+        request: AppServerTurnRequest,
+    ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
+        // Separate counter: shared-counter scenarios assert exact totals.
+        static STEERING_SHUTDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        Box::pin(async move {
+            Ok(TestRuntime {
+                on_reset: None,
+                panic_on_drop: false,
+                folder: request.folder,
+                model: request.model,
+                pid: 7,
+                provider_conversation_id: None,
+                restored_context: true,
+                shutdown_count: &STEERING_SHUTDOWN_COUNT,
+            })
+        })
+    }
+
+    fn run_turn<'scope>(
+        _runtime: &'scope mut Self::Runtime,
+        prompt: &'scope TurnPrompt,
+        _profile: ProtocolRequestProfile,
+        _reasoning: ReasoningLevel,
+        _speed: SpeedMode,
+        _stream: mpsc::UnboundedSender<AppServerStreamEvent>,
+        steering: Option<Arc<TurnSteeringInbox>>,
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
+        Box::pin(async move {
+            let Some(steering) = steering else {
+                return Ok(("not steerable".to_string(), 0, 0));
+            };
+            let fails_after_steer = prompt.text.contains(FAIL_AFTER_STEER);
+            let resent_prompt = steering.prompt_with_accepted(prompt);
+            if fails_after_steer && resent_prompt.text != prompt.text {
+                return Ok((resent_prompt.text, 0, 0));
+            }
+            let steer = steering.next().await;
+            if fails_after_steer {
+                steer.acknowledge(Ok(()));
+
+                return Err(AppServerError::Provider("runtime exited".to_string()));
+            }
+            let steer_text = steer.prompt.text.clone();
+            if !prompt.text.contains(DROP_STEER_ACK) {
+                steer.acknowledge(Ok(()));
+            }
+
+            Ok((steer_text, 0, 0))
+        })
+    }
+}
+
+/// Retries steering until the spawned turn registers its inbox.
+async fn steer_running_turn(
+    client: &ProviderRuntimeClient<SteeringProvider>,
+    text: &str,
+) -> Result<(), AppServerError> {
+    loop {
+        match client
+            .sessions
+            .turn_steering()
+            .submit("session-1", text.into())
+        {
+            Ok(acknowledgement) => {
+                return acknowledgement
+                    .await
+                    .unwrap_or_else(|_| Err(app_server::steering::turn_not_steerable_error()));
+            }
+            Err(_) => tokio::task::yield_now().await,
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_turns_receive_steering_prompts_until_they_end() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let client = Arc::new(ProviderRuntimeClient::<SteeringProvider>::new());
+    let (stream, _) = mpsc::unbounded_channel();
+    let turn = tokio::spawn({
+        let client = Arc::clone(&client);
+
+        async move { client.run_turn(make_request(), stream).await }
+    });
+
+    // Act
+    let steer_result = steer_running_turn(&client, "also add tests").await;
+    let response = turn.await.expect("turn task").expect("turn");
+    let late = client
+        .steer_turn("session-1".to_string(), "too late".into())
+        .await;
+
+    // Assert
+    assert!(steer_result.is_ok());
+    assert_eq!(response.assistant_message, "also add tests");
+    assert!(matches!(late, Err(AppServerError::Provider(_))));
+}
+
+#[tokio::test]
+async fn steering_reports_rejection_when_the_turn_drops_its_acknowledgement() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let client = Arc::new(ProviderRuntimeClient::<SteeringProvider>::new());
+    let (stream, _) = mpsc::unbounded_channel();
+    let mut request = make_request();
+    request.prompt = TurnPrompt::from(DROP_STEER_ACK);
+    let turn = tokio::spawn({
+        let client = Arc::clone(&client);
+
+        async move { client.run_turn(request, stream).await }
+    });
+
+    // Act
+    let steer_result = steer_running_turn(&client, "ignored").await;
+    let _ = turn.await.expect("turn task");
+
+    // Assert
+    assert_eq!(
+        steer_result.expect_err("dropped").to_string(),
+        "No running turn can receive this message"
+    );
+}
+
+#[tokio::test]
+async fn restarted_attempt_shares_the_inbox_the_failed_attempt_answered() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let client = Arc::new(ProviderRuntimeClient::<SteeringProvider>::new());
+    let (stream, _) = mpsc::unbounded_channel();
+    let mut request = make_request();
+    request.prompt = TurnPrompt::from(FAIL_AFTER_STEER);
+    let turn = tokio::spawn({
+        let client = Arc::clone(&client);
+
+        async move { client.run_turn(request, stream).await }
+    });
+
+    // Act
+    let steer_result = steer_running_turn(&client, "also add tests").await;
+    let response = turn.await.expect("turn task").expect("retried turn");
+
+    // Assert
+    assert!(steer_result.is_ok());
+    assert!(
+        response
+            .assistant_message
+            .ends_with(&format!("{FAIL_AFTER_STEER}\n\nalso add tests"))
+    );
+}
+
+#[tokio::test]
+async fn utility_turns_and_non_steering_providers_open_no_inbox() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let client = ProviderRuntimeClient::<SteeringProvider>::new();
+    let (stream, _) = mpsc::unbounded_channel();
+    let mut request = make_request();
+    request.request_kind = AgentRequestKind::UtilityPrompt;
+
+    // Act
+    let response = client.run_turn(request, stream).await.expect("turn");
+    let unsupported = ProviderRuntimeClient::<TestProvider>::new()
+        .steer_turn("session-1".to_string(), "hello".into())
+        .await;
+
+    // Assert
+    assert_eq!(response.assistant_message, "not steerable");
+    assert!(unsupported.is_err());
 }
 
 #[tokio::test]

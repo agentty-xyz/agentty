@@ -1257,7 +1257,7 @@ async fn test_session_live_activity() -> E2eResult {
             let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-input=$(cat)
+IFS= read -r input
 case "$input" in
   *"Generate a concise, commit-style title"*) answer='Activity demo' ;;
   *"Stream activity demo"*)

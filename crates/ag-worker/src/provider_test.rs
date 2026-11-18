@@ -13,7 +13,7 @@ use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, Ha
 
 use crate::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
-    uses_persistent_session,
+    supports_turn_steering, uses_persistent_session,
 };
 
 #[test]
@@ -151,6 +151,10 @@ fn workspace_services_preserve_provider_capabilities_and_cleanup() {
             assert!(setup_backend(*kind, directory.path()).is_ok());
         }
         assert_eq!(persistent, *kind != AgentKind::Claude);
+        assert_eq!(
+            supports_turn_steering(*kind),
+            matches!(kind, AgentKind::Claude | AgentKind::Codex)
+        );
     }
     // Act / Assert
     assert!(cleanup_session_worktree_artifacts(directory.path()).is_ok());

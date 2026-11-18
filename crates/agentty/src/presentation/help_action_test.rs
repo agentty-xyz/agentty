@@ -88,6 +88,7 @@ fn test_view_actions_in_progress_shows_stop_sync_and_queue_and_hides_open_and_co
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::InProgress,
     };
@@ -109,6 +110,39 @@ fn test_view_actions_in_progress_shows_stop_sync_and_queue_and_hides_open_and_co
 }
 
 #[test]
+fn in_progress_help_offers_send_now_only_for_steerable_queued_chat() {
+    // Arrange
+    let state = |can_steer_queued_messages, session_state| ViewHelpState {
+        can_fork_session: ViewActionAvailability::Disabled,
+        can_merge_session_branch: ViewActionAvailability::Disabled,
+        can_open_worktree: ViewActionAvailability::Disabled,
+        can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages,
+        publish_pull_request_action: None,
+        session_state,
+    };
+    let has_send_now = |state| {
+        view_actions(state)
+            .iter()
+            .any(|action| action.key == "Ctrl+s" && action.footer_label == "send now")
+    };
+
+    // Act / Assert
+    assert!(has_send_now(state(
+        ViewActionAvailability::Enabled,
+        ViewSessionState::InProgress
+    )));
+    assert!(!has_send_now(state(
+        ViewActionAvailability::Disabled,
+        ViewSessionState::InProgress
+    )));
+    assert!(!has_send_now(state(
+        ViewActionAvailability::Enabled,
+        ViewSessionState::Review
+    )));
+}
+
+#[test]
 fn test_view_actions_hide_open_when_worktree_is_unavailable() {
     // Arrange
     let state = ViewHelpState {
@@ -116,6 +150,7 @@ fn test_view_actions_hide_open_when_worktree_is_unavailable() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Disabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Review,
     };
@@ -147,6 +182,7 @@ fn test_view_actions_show_diff_in_every_session_state() {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
+            can_steer_queued_messages: ViewActionAvailability::Disabled,
             publish_pull_request_action: None,
             session_state,
         };
@@ -170,6 +206,7 @@ fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Enabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::Merged,
     };
@@ -195,6 +232,7 @@ fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::Rebasing,
     };
@@ -222,6 +260,7 @@ fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::MergeQueue,
     };
@@ -244,6 +283,7 @@ fn test_view_actions_review_shows_diff() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::Review,
     };
@@ -284,6 +324,7 @@ fn test_view_actions_review_hides_fork_when_unavailable() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::Review,
     };
@@ -303,6 +344,7 @@ fn test_view_actions_review_hides_merge_when_merge_gate_is_disabled_but_keeps_sy
         can_merge_session_branch: ViewActionAvailability::Disabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Review,
     };
@@ -324,6 +366,7 @@ fn test_view_actions_agent_review_shows_sync() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::AgentReview,
     };
@@ -347,6 +390,7 @@ fn test_view_actions_interactive_hides_review_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Interactive,
     };
@@ -369,6 +413,7 @@ fn test_view_actions_new_session_shows_add_draft_and_start() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Enabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::NewSession,
     };
@@ -399,6 +444,7 @@ fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Done,
     };
@@ -428,6 +474,7 @@ fn test_view_actions_canceled_shows_continue_without_edit_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Canceled,
     };
@@ -458,6 +505,7 @@ fn test_view_actions_terminal_sessions_hide_linked_review_comments() {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
+            can_steer_queued_messages: ViewActionAvailability::Disabled,
             publish_pull_request_action: None,
             session_state,
         };
@@ -492,6 +540,7 @@ fn test_view_actions_non_terminal_review_comments_follow_availability() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Review,
     };
@@ -521,6 +570,7 @@ fn test_view_actions_review_hides_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Review,
     };
@@ -671,6 +721,7 @@ fn review_watch_action_follows_toggle_before_trailing_help_actions() {
         can_merge_session_branch: ViewActionAvailability::Disabled,
         can_open_worktree: ViewActionAvailability::Disabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
         session_state: ViewSessionState::Review,
     };

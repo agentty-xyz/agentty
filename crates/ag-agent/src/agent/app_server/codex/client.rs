@@ -1,5 +1,7 @@
 //! Codex app-server client orchestration.
 
+use std::sync::Arc;
+
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_session::AgentKind;
@@ -10,7 +12,7 @@ use super::super::stdio_transport::AppServerStdioTransport;
 use super::lifecycle::{self, CodexRuntimeState};
 use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
-    BorrowedAppServerFuture,
+    BorrowedAppServerFuture, TurnSteeringInbox,
 };
 use crate::{agent, app_server_transport};
 
@@ -33,6 +35,10 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
     }
 
     fn retain_runtime_after_turn() -> bool {
+        true
+    }
+
+    fn supports_steering() -> bool {
         true
     }
 
@@ -75,15 +81,19 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         reasoning_level: ReasoningLevel,
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        steering: Option<Arc<TurnSteeringInbox>>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
         Box::pin(async move {
             lifecycle::run_turn_with_runtime(
                 &mut runtime.transport,
                 &mut runtime.state,
                 prompt,
-                protocol_profile,
-                reasoning_level,
-                speed_mode,
+                lifecycle::CodexTurnOptions {
+                    protocol_profile,
+                    reasoning_level,
+                    speed_mode,
+                    steering: steering.as_deref(),
+                },
                 stream_tx,
             )
             .await

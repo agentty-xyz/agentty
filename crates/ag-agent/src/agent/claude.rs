@@ -3,7 +3,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use ag_protocol::{SchemaRequiredPolicy, protocol_output_schema};
+use ag_protocol::{SchemaRequiredPolicy, TurnPrompt, protocol_output_schema};
+use serde_json::Value;
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
@@ -13,9 +14,10 @@ use crate::model::{reasoning, session};
 ///
 /// Worker policies can select `--strict-mcp-config` so provider-level MCP
 /// connector defaults (for example Claude.ai account connectors) are ignored
-/// unless explicitly configured by Agentty. Claude runs in `stream-json` mode
-/// so progress and tool-use events can surface live while the final turn still
-/// honors native schema validation.
+/// unless explicitly configured by Agentty. Claude reads `stream-json` user
+/// messages from stdin, so session turns can receive steering prompts while
+/// they run, and writes `stream-json` so progress and tool-use events surface
+/// live while the final turn still honors native schema validation.
 pub(super) struct ClaudeBackend;
 
 impl AgentBackend for ClaudeBackend {
@@ -72,7 +74,7 @@ impl AgentBackend for ClaudeBackend {
         command
             .arg("--append-system-prompt")
             .arg(ag_protocol::workspace_instructions(folder));
-        command.arg("--input-format").arg("text");
+        command.arg("--input-format").arg("stream-json");
         if execution_policy.mcp == ag_contracts::McpPolicy::Disabled {
             command.arg("--strict-mcp-config");
         }
@@ -100,6 +102,46 @@ impl AgentBackend for ClaudeBackend {
 
         Ok(command)
     }
+}
+
+/// Renders one prompt as a newline-terminated Claude `stream-json` user
+/// message.
+pub(super) fn stream_json_user_message(prompt_text: &str) -> Vec<u8> {
+    let message = serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": prompt_text,
+        },
+        "parent_tool_use_id": null,
+    });
+    let mut line = message.to_string().into_bytes();
+    line.push(b'\n');
+
+    line
+}
+
+/// Renders one steering prompt for a running Claude turn.
+///
+/// Claude reads the message once its running tool calls finish, or answers it
+/// in a follow-up turn of the same process when the turn ends first. Images
+/// wait for a later turn, which grants Claude access to their directories.
+///
+/// # Errors
+/// Returns an error when the prompt carries image attachments.
+pub(super) fn encode_steering_prompt(prompt: &TurnPrompt) -> Result<Vec<u8>, AgentBackendError> {
+    if !prompt.attachments.is_empty() {
+        return Err(AgentBackendError::command_build(
+            "Claude cannot receive images during a turn",
+        ));
+    }
+
+    Ok(stream_json_user_message(&prompt.agent_text()))
+}
+
+/// Returns whether one Claude `stream-json` payload ends a turn.
+pub(super) fn is_turn_result(payload: &Value) -> bool {
+    payload.get("type").and_then(Value::as_str) == Some("result")
 }
 
 /// Appends per-turn Claude Code permission and sandbox settings.

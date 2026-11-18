@@ -1,10 +1,11 @@
 //! Queued status transition and queued-action snapshot tests for sessions.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use ag_session::SessionStatus as Status;
 
-use super::super::SessionHandles;
+use super::super::{QueuedMessage, SessionHandles};
 use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
@@ -80,6 +81,37 @@ fn queued_action_snapshot_tracks_updates_and_clear() {
     assert_eq!(queued_actions, vec![branch_publish, sync.clone()]);
     assert_eq!(after_resolve, vec![sync]);
     assert_eq!(handles.queued_action_snapshot(), []);
+}
+
+#[test]
+fn queued_message_snapshot_is_steerable_only_during_a_steerable_turn() {
+    // Arrange
+    let handles = SessionHandles::new(Status::InProgress);
+    handles.queued_messages.lock().expect("queue").extend([
+        QueuedMessage::new(0, "steerable".into()).with_steering(true),
+        QueuedMessage::new(1, "waits".into()),
+    ]);
+
+    // Act
+    let without_turn = handles.queued_message_snapshot();
+    handles.steerable_turn.store(true, Ordering::Release);
+    let during_turn = handles.queued_message_snapshot();
+
+    // Assert: a task or graph turn leaves the flag unset.
+    assert_eq!(
+        without_turn
+            .iter()
+            .map(QueuedMessage::is_steerable)
+            .collect::<Vec<_>>(),
+        [false, false]
+    );
+    assert_eq!(
+        during_turn
+            .iter()
+            .map(QueuedMessage::is_steerable)
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
 }
 
 #[test]

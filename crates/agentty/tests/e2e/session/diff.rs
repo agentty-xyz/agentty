@@ -247,7 +247,7 @@ async fn seed_line_comment_review_stub(env: &BuilderEnv) -> Result<(), Box<dyn s
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\":[\"No review findings.\"],\"suggestions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;

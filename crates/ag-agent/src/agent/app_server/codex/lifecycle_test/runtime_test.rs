@@ -953,6 +953,7 @@ fn turn_event_loop_input<'a>(
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         reasoning_level: ReasoningLevel::default(),
         speed_mode: SpeedMode::default(),
+        steering: None,
         stream_tx,
         thread_id: "thread-1",
         turn_timeout,

@@ -9,7 +9,10 @@ use serde::Deserialize;
 pub(crate) struct ParsedResponse {
     /// Final response text from the agent.
     pub content: String,
-    /// Token usage statistics associated with `content`.
+    /// Final response texts of later turns the same run answered, in order,
+    /// such as Claude replying to a steering prompt after its turn ended.
+    pub follow_up_contents: Vec<String>,
+    /// Token usage statistics associated with every returned content.
     pub stats: SessionStats,
 }
 
@@ -57,6 +60,7 @@ struct CodexItem {
 pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) -> ParsedResponse {
     parse_claude_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
+        follow_up_contents: Vec::new(),
         stats: SessionStats::default(),
     })
 }
@@ -65,6 +69,7 @@ pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) ->
 pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> ParsedResponse {
     parse_codex_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
+        follow_up_contents: Vec::new(),
         stats: SessionStats::default(),
     })
 }
@@ -77,6 +82,7 @@ pub(super) fn parse_antigravity_response_with_fallback(
 ) -> ParsedResponse {
     parse_antigravity_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
+        follow_up_contents: Vec::new(),
         stats: SessionStats::default(),
     })
 }
@@ -150,7 +156,11 @@ fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
     })?;
     let stats = latest_stats.unwrap_or_default();
 
-    Some(ParsedResponse { content, stats })
+    Some(ParsedResponse {
+        content,
+        follow_up_contents: Vec::new(),
+        stats,
+    })
 }
 
 /// Records final content, streamed deltas, and usage from one Antigravity
@@ -276,41 +286,49 @@ fn antigravity_token_count(usage: &serde_json::Value, field: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// Parses one full Claude turn payload from stream-json stdout.
+/// Parses one full Claude run payload from stream-json stdout.
 ///
-/// Prefers the final schema-validated `structured_output` or non-empty
-/// `result` field when present. When Claude emits neither field (observed in
-/// some stream-json runs), this falls back to the latest assistant stream
-/// message content so callers still receive the assistant reply instead of
-/// raw NDJSON.
+/// Prefers each turn's schema-validated `structured_output` or non-empty
+/// `result` field. A steerable run answers a steering prompt that arrived
+/// after its turn ended in a follow-up turn, so results after the first are
+/// kept in order as `follow_up_contents` and usage is summed across results.
+/// When Claude emits neither field (observed in some stream-json runs), this
+/// falls back to the latest assistant stream message content so callers still
+/// receive the assistant reply instead of raw NDJSON.
 fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     let trimmed_stdout = stdout.trim();
     if trimmed_stdout.is_empty() {
         return None;
     }
 
-    let mut latest_result_stats: Option<SessionStats> = None;
-    let mut latest_non_empty_result: Option<ParsedResponse> = None;
+    if let Some(parsed_response) = parse_claude_complete_payload(trimmed_stdout) {
+        return (!parsed_response.content.trim().is_empty()).then_some(parsed_response);
+    }
+
+    let mut turn_contents = Vec::new();
+    let mut stats = SessionStats::default();
     let mut latest_stream_message_content: Option<String> = None;
 
-    record_claude_complete_payload(
-        trimmed_stdout,
-        &mut latest_result_stats,
-        &mut latest_non_empty_result,
-    );
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Some(parsed_response) = parse_claude_complete_payload(line) {
+            add_claude_turn_usage(&mut stats, &parsed_response.stats);
+            if !parsed_response.content.trim().is_empty() {
+                turn_contents.push(parsed_response.content);
+            }
 
-    for line in stdout.lines() {
-        let trimmed_line = line.trim();
-        let Some(stream_event) = record_claude_line_payload(
-            trimmed_line,
-            &mut latest_result_stats,
-            &mut latest_non_empty_result,
-        ) else {
+            continue;
+        }
+
+        let Ok(stream_event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
 
-        if let Some(stats) = extract_claude_usage_stats(&stream_event) {
-            latest_result_stats = Some(stats);
+        if let Some(turn_stats) = extract_claude_usage_stats(&stream_event) {
+            add_claude_turn_usage(&mut stats, &turn_stats);
         }
 
         if let Some(content) = extract_claude_stream_assistant_content(&stream_event) {
@@ -318,8 +336,13 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
         }
     }
 
-    if let Some(parsed_response) = latest_non_empty_result {
-        return Some(parsed_response);
+    let mut turn_contents = turn_contents.into_iter();
+    if let Some(content) = turn_contents.next() {
+        return Some(ParsedResponse {
+            content,
+            follow_up_contents: turn_contents.collect(),
+            stats,
+        });
     }
 
     let content = latest_stream_message_content?;
@@ -327,78 +350,26 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
         return None;
     }
 
-    let stats = latest_result_stats.unwrap_or_default();
-
-    Some(ParsedResponse { content, stats })
+    Some(ParsedResponse {
+        content,
+        follow_up_contents: Vec::new(),
+        stats,
+    })
 }
 
-/// Records complete Claude payload formats from one stdout segment.
-fn record_claude_complete_payload(
-    payload: &str,
-    latest_result_stats: &mut Option<SessionStats>,
-    latest_non_empty_result: &mut Option<ParsedResponse>,
-) {
-    if let Some(parsed_response) = parse_claude_response_payload(payload) {
-        record_claude_parsed_response(
-            parsed_response,
-            latest_result_stats,
-            latest_non_empty_result,
-        );
-    }
-
-    if let Some(parsed_response) = parse_claude_response_array_payload(payload) {
-        record_claude_parsed_response(
-            parsed_response,
-            latest_result_stats,
-            latest_non_empty_result,
-        );
-    }
+/// Parses one complete Claude payload, either a flat result object or a JSON
+/// event array.
+fn parse_claude_complete_payload(payload: &str) -> Option<ParsedResponse> {
+    parse_claude_response_payload(payload).or_else(|| parse_claude_response_array_payload(payload))
 }
 
-/// Records a Claude line payload and returns stream JSON that still needs
-/// parsing.
-fn record_claude_line_payload(
-    trimmed_line: &str,
-    latest_result_stats: &mut Option<SessionStats>,
-    latest_non_empty_result: &mut Option<ParsedResponse>,
-) -> Option<serde_json::Value> {
-    if trimmed_line.is_empty() {
-        return None;
-    }
-
-    if let Some(parsed_response) = parse_claude_response_payload(trimmed_line) {
-        record_claude_parsed_response(
-            parsed_response,
-            latest_result_stats,
-            latest_non_empty_result,
-        );
-
-        return None;
-    }
-
-    if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_line) {
-        record_claude_parsed_response(
-            parsed_response,
-            latest_result_stats,
-            latest_non_empty_result,
-        );
-
-        return None;
-    }
-
-    serde_json::from_str::<serde_json::Value>(trimmed_line).ok()
-}
-
-/// Updates latest Claude result state from one parsed complete response.
-fn record_claude_parsed_response(
-    parsed_response: ParsedResponse,
-    latest_result_stats: &mut Option<SessionStats>,
-    latest_non_empty_result: &mut Option<ParsedResponse>,
-) {
-    latest_result_stats.replace(parsed_response.stats.clone());
-    if !parsed_response.content.trim().is_empty() {
-        latest_non_empty_result.replace(parsed_response);
-    }
+/// Adds one Claude turn's token usage to the run total.
+///
+/// In `stream-json` input mode each `result` reports usage for its own turn
+/// only, so a run that answers several turns is the sum of its results.
+fn add_claude_turn_usage(total: &mut SessionStats, turn: &SessionStats) {
+    total.input_tokens = total.input_tokens.saturating_add(turn.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(turn.output_tokens);
 }
 
 /// Classifies one parsed Claude stream-line payload into display text and
@@ -462,7 +433,11 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
 
     last_agent_message
         .or(last_reasoning_message)
-        .map(|content| ParsedResponse { content, stats })
+        .map(|content| ParsedResponse {
+            content,
+            follow_up_contents: Vec::new(),
+            stats,
+        })
 }
 
 /// Adds token usage from one Codex turn completion event.
@@ -586,7 +561,11 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
             .cast_unsigned(),
     };
 
-    Some(ParsedResponse { content, stats })
+    Some(ParsedResponse {
+        content,
+        follow_up_contents: Vec::new(),
+        stats,
+    })
 }
 
 /// Parses one Claude JSON-array payload and extracts the best assistant
@@ -631,7 +610,11 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
         .or(latest_assistant_content)?;
     let stats = latest_stats.unwrap_or_default();
 
-    Some(ParsedResponse { content, stats })
+    Some(ParsedResponse {
+        content,
+        follow_up_contents: Vec::new(),
+        stats,
+    })
 }
 
 /// Extracts Claude usage statistics from one JSON stream event.

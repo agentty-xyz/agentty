@@ -4,5 +4,7 @@
 mod command;
 #[path = "claude_test/permission_test.rs"]
 mod permission;
+#[path = "claude_test/steering_test.rs"]
+mod steering;
 #[path = "claude_test/support_test.rs"]
 mod support;

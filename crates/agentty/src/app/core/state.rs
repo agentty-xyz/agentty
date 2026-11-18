@@ -1000,6 +1000,14 @@ impl App {
         Ok(())
     }
 
+    /// Sends a running session's queued chat prompts into its current turn
+    /// when the harness accepts mid-turn input; undelivered prompts stay
+    /// queued. Returns whether any prompt was sent for delivery.
+    pub(crate) fn steer_queued_messages(&mut self, session_id: &str) -> bool {
+        self.sessions
+            .steer_queued_messages(&self.services, session_id)
+    }
+
     /// Returns the active agent profile used for focused review generation.
     pub(crate) fn review_agent(&self) -> app::review::ReviewAgent {
         (

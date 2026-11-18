@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use ag_contracts::{AgentError, TurnEvent, TurnRequest, TurnResult};
+use ag_protocol::TurnPrompt;
 use ag_scheduler::SessionAdmission;
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use tokio::sync::mpsc;
@@ -189,6 +190,29 @@ impl SessionRunClient {
         drop(turn_permit);
 
         result
+    }
+
+    /// Delivers one user prompt into this client's running session turn so
+    /// the agent reads it before the turn ends.
+    ///
+    /// Hosts may call this outside the serial worker while [`Self::submit`]
+    /// runs; it never starts a turn. `Ok` means the provider accepted the
+    /// prompt, and the host records it in the transcript. On error the
+    /// prompt was not delivered, so the host keeps it for a later turn.
+    /// Check [`crate::supports_turn_steering`] before offering steering.
+    ///
+    /// # Errors
+    /// Returns a runtime error when the harness cannot steer, no session turn
+    /// is running, or the provider rejects the prompt.
+    pub async fn steer(&self, prompt: TurnPrompt) -> Result<(), AgentError> {
+        let mut span = Span::child("agent.steer");
+        span.identify("agentty.session.id", self.session_id.clone());
+
+        span.run(
+            self.runtime.steer_turn(self.runtime_id.clone(), prompt),
+            |_| Outcome::Failed,
+        )
+        .await
     }
 
     /// Releases the runtime after the session mailbox drains or is abandoned.

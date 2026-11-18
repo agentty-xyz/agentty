@@ -533,7 +533,7 @@ async fn execute_one_shot_command(
         child_pid: request.child_pid,
     };
     let output =
-        execution::execute_cli_command(backend, agent_kind, build_request, &observer, None)
+        execution::execute_cli_command(backend, agent_kind, build_request, &observer, None, None)
             .await
             .map_err(format_one_shot_execution_error)?;
 

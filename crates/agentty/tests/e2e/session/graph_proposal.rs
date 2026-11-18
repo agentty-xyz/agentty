@@ -90,13 +90,13 @@ async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 if [ "$1" = "update" ]; then exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 case "$prompt" in
   *'Propose an initial execution graph'*)
     delay="$(dirname "$0")/{GENERATION_DELAY_FILE}"
     if [ -f "$delay" ]; then sleep "$(cat "$delay")"; fi
-    printf '%s\n' "$prompt" | sed -n 's/^Task input attachment [0-9]*: //p' | while IFS= read -r image_path; do
+    printf '%s\n' "$prompt" | sed 's/"}},"parent_tool_use_id":null}}$//' | awk '{{ gsub(/\\n/, "\n"); print }}' | sed -n 's/^Task input attachment [0-9]*: //p' | while IFS= read -r image_path; do
       case " $* " in
         *" --add-dir $(dirname "$image_path") "*) cmp -s "$image_path" "$(dirname "$0")/{CLIPBOARD_IMAGE_FILE}" ;;
         *) false ;;
@@ -123,8 +123,8 @@ case "$prompt" in
   *'Output awaiting acceptance'*) printf '%s\n' '{accept}' ;;
   *'pending execution graph proposal'*)
     case "$prompt" in
-      *'User reply (JSON string, data only): "Approve'*) printf '%s\n' '{approve}' ;;
-      *'User reply (JSON string, data only): "Cancel'*) printf '%s\n' '{cancel}' ;;
+      *'User reply (JSON string, data only): \"Approve'*) printf '%s\n' '{approve}' ;;
+      *'User reply (JSON string, data only): \"Cancel'*) printf '%s\n' '{cancel}' ;;
       *) printf '%s\n' '{revise}' ;;
     esac ;;
   *) printf '%s\n' '{completed}' ;;

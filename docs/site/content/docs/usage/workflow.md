@@ -133,6 +133,14 @@ During **InProgress**, `Ctrl+C` removes the newest queued message; with none lef
 stops the turn and cancels queued branch actions. Rebases cannot be interrupted. Queued
 chat survives project switching but not an Agentty restart.
 
+Harnesses that accept input mid-turn, currently Claude and Codex, show `Ctrl+s` below
+queued chat. It sends the queued messages into the running turn, oldest first, so the
+agent reads them before it finishes; they then appear in the transcript as your prompts.
+Messages with images still wait for the next turn, and any message the agent does not
+accept stays queued with a notice. Stopping the turn discards them like the rest of the
+queue. Other harnesses keep queued chat for the next turn, and so do task and graph
+runs, which work in their own conversations.
+
 While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/style`, and `/fast`.
 `/model` and `/fast` changes wait until the active work and queue finish and appear as
 the last queued action; choosing the current value cancels the change. Pending changes

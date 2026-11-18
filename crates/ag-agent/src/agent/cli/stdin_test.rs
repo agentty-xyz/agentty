@@ -2,15 +2,20 @@
 
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tokio::io::AsyncWrite;
+use ag_protocol::TurnPrompt;
+use tokio::io::{AsyncReadExt as _, AsyncWrite};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
+use crate::agent::AgentBackendError;
 use crate::agent::cli::stdin::{
-    await_optional_stdin_write, is_broken_pipe_error, spawn_optional_stdin_write,
-    write_optional_stdin,
+    StdinSteering, await_optional_stdin_write, is_broken_pipe_error, spawn_optional_stdin_write,
+    spawn_steering_stdin_write, write_optional_stdin, write_steering_stdin,
 };
+use crate::app_server::TurnSteeringInbox;
 
 /// Test-only error type used to verify generic error formatting.
 #[derive(Debug, PartialEq)]
@@ -219,4 +224,218 @@ fn test_non_broken_pipe_returns_false() {
 
     // Act / Assert
     assert!(!is_broken_pipe_error(&error));
+}
+
+// --- write_steering_stdin ---
+
+/// Encodes one steering prompt as its text followed by a newline.
+const ENCODE_LINE: fn(&TurnPrompt) -> Result<Vec<u8>, AgentBackendError> =
+    |prompt| Ok(format!("{}\n", prompt.text).into_bytes());
+
+/// Rejects every steering prompt as unencodable.
+fn reject_prompt(_prompt: &TurnPrompt) -> Result<Vec<u8>, AgentBackendError> {
+    Err(AgentBackendError::command_build("unencodable prompt"))
+}
+
+/// Builds steering over a fresh inbox with the given encoder.
+fn stdin_steering(
+    encode_prompt: fn(&TurnPrompt) -> Result<Vec<u8>, AgentBackendError>,
+) -> StdinSteering {
+    StdinSteering {
+        encode_prompt,
+        inbox: Arc::new(TurnSteeringInbox::new()),
+    }
+}
+
+#[tokio::test]
+async fn steering_writer_delivers_prompts_until_the_turn_ends() {
+    // Arrange
+    let steering = stdin_steering(ENCODE_LINE);
+    let turn_ended = CancellationToken::new();
+    let acknowledgement = steering
+        .inbox
+        .submit("also add tests".into())
+        .expect("open inbox");
+    let (writer, mut reader) = tokio::io::duplex(1024);
+    let writing = tokio::spawn({
+        let turn_ended = turn_ended.clone();
+
+        async move {
+            write_steering_stdin(
+                writer,
+                b"initial\n".to_vec(),
+                &steering,
+                &turn_ended,
+                make_test_error,
+            )
+            .await
+        }
+    });
+
+    // Act
+    let delivered = acknowledgement.await.expect("reply");
+    turn_ended.cancel();
+    let result = writing.await.expect("writer task");
+    let mut written = String::new();
+    reader
+        .read_to_string(&mut written)
+        .await
+        .expect("closed stdin");
+
+    // Assert
+    assert!(delivered.is_ok());
+    assert_eq!(result, Ok(()));
+    assert_eq!(written, "initial\nalso add tests\n");
+}
+
+#[tokio::test]
+async fn steering_writer_rejects_unencodable_and_refused_prompts() {
+    // Arrange
+    let unencodable = stdin_steering(reject_prompt);
+    let unencodable_ack = unencodable.inbox.submit("image".into()).expect("open");
+    let refused = stdin_steering(ENCODE_LINE);
+    let refused_ack = refused.inbox.submit("late".into()).expect("open");
+    let turn_ended = CancellationToken::new();
+    let (writer, _reader) = tokio::io::duplex(1024);
+    let unencodable_writing = tokio::spawn({
+        let turn_ended = turn_ended.clone();
+
+        async move {
+            write_steering_stdin(
+                writer,
+                Vec::new(),
+                &unencodable,
+                &turn_ended,
+                make_test_error,
+            )
+            .await
+        }
+    });
+    let refusing_stdin = FailingStdin {
+        shutdown_error: None,
+        write_error: None,
+    };
+    let refusing_writer = RefuseAfterFirstWrite {
+        inner: refusing_stdin,
+        writes: 0,
+    };
+
+    // Act
+    let unencodable_reply = unencodable_ack.await.expect("reply");
+    turn_ended.cancel();
+    let unencodable_result = unencodable_writing.await.expect("writer task");
+    let refused_result = write_steering_stdin(
+        refusing_writer,
+        b"initial\n".to_vec(),
+        &refused,
+        &CancellationToken::new(),
+        make_test_error,
+    )
+    .await;
+    let refused_reply = refused_ack.await.expect("reply");
+
+    // Assert
+    assert_eq!(
+        unencodable_reply.expect_err("unencodable").to_string(),
+        "unencodable prompt"
+    );
+    assert_eq!(unencodable_result, Ok(()));
+    assert!(refused_reply.is_err());
+    assert_eq!(refused_result, Ok(()));
+}
+
+#[tokio::test]
+async fn steering_writer_tolerates_closed_pipes_and_reports_other_failures() {
+    // Arrange
+    let cases = [
+        (Some(io::ErrorKind::BrokenPipe), None, None),
+        (
+            Some(io::ErrorKind::PermissionDenied),
+            None,
+            Some("Failed to write stdin payload: permission denied"),
+        ),
+        (None, Some(io::ErrorKind::BrokenPipe), None),
+        (
+            None,
+            Some(io::ErrorKind::PermissionDenied),
+            Some("Failed to close stdin payload: permission denied"),
+        ),
+    ];
+    let turn_ended = CancellationToken::new();
+    turn_ended.cancel();
+
+    for (write_error, shutdown_error, expected_error) in cases {
+        let child_stdin = FailingStdin {
+            shutdown_error,
+            write_error,
+        };
+
+        // Act
+        let result = write_steering_stdin(
+            child_stdin,
+            b"prompt".to_vec(),
+            &stdin_steering(ENCODE_LINE),
+            &turn_ended,
+            make_test_error,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result,
+            expected_error.map_or(Ok(()), |message| Err(TestError(message.to_string())))
+        );
+    }
+}
+
+#[tokio::test]
+async fn spawned_steering_writer_closes_the_inbox_when_stdin_is_unavailable() {
+    // Arrange
+    let steering = stdin_steering(ENCODE_LINE);
+    let inbox = Arc::clone(&steering.inbox);
+
+    // Act
+    let result = spawn_steering_stdin_write::<TestError>(
+        None,
+        b"prompt".to_vec(),
+        steering,
+        CancellationToken::new(),
+        "stdin unavailable",
+        make_test_error,
+    )
+    .await
+    .expect("writer task");
+
+    // Assert
+    assert_eq!(result, Err(TestError("stdin unavailable".to_string())));
+    assert!(inbox.submit("late".into()).is_err());
+}
+
+/// Stdin stand-in that accepts the first write and refuses later ones.
+struct RefuseAfterFirstWrite {
+    inner: FailingStdin,
+    writes: usize,
+}
+
+impl AsyncWrite for RefuseAfterFirstWrite {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.writes += 1;
+        if self.writes > 1 {
+            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+        }
+
+        Pin::new(&mut self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
+    }
 }

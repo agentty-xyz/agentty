@@ -159,6 +159,20 @@ pub trait AppServerClient: Send + Sync {
         self.run_turn(request, stream_tx)
     }
 
+    /// Delivers one user prompt into the session's in-flight interactive turn
+    /// and resolves once the provider accepts or rejects it. Clients without
+    /// mid-turn input reject every prompt.
+    fn steer_turn(
+        &self,
+        session_id: String,
+        prompt: TurnPrompt,
+    ) -> AppServerFuture<Result<(), AppServerError>> {
+        // Nothing is delivered; callers keep their own copy for a later turn.
+        drop((session_id, prompt));
+
+        Box::pin(async { Err(crate::app_server::steering::turn_not_steerable_error()) })
+    }
+
     /// Stops and forgets a session runtime, if one exists.
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()>;
 }

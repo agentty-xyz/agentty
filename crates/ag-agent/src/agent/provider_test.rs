@@ -5,9 +5,10 @@ use ag_session::AgentKind;
 
 use crate::agent::backend::{AgentPromptTransport, AgentTransport};
 use crate::agent::provider::{
-    is_app_server_thought_chunk, parse_turn_response, prompt_transport,
-    protocol_schema_instruction_mode, transport_mode,
+    cli_turn_steering, is_app_server_thought_chunk, parse_turn_response, prompt_transport,
+    protocol_schema_instruction_mode, supports_turn_steering, transport_mode,
 };
+use crate::app_server::TurnSteeringInbox;
 
 #[test]
 /// Ensures transport capability is provided by infra backend descriptors,
@@ -30,6 +31,23 @@ fn test_transport_mode_reports_expected_transport_by_provider() {
 }
 
 #[test]
+fn claude_and_codex_session_turns_accept_steering() {
+    // Arrange
+    let kinds = [
+        AgentKind::Antigravity,
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Harness,
+    ];
+
+    // Act
+    let steerable = kinds.map(supports_turn_steering);
+
+    // Assert
+    assert_eq!(steerable, [false, true, true, false]);
+}
+
+#[test]
 /// Ensures prompt delivery is also derived from the shared provider
 /// descriptor.
 fn test_prompt_transport_reports_expected_mode_by_provider() {
@@ -45,7 +63,7 @@ fn test_prompt_transport_reports_expected_mode_by_provider() {
 
     // Assert
     assert_eq!(antigravity_transport, AgentPromptTransport::Argv);
-    assert_eq!(claude_transport, AgentPromptTransport::Stdin);
+    assert_eq!(claude_transport, AgentPromptTransport::StreamJsonStdin);
     assert_eq!(codex_transport, AgentPromptTransport::Argv);
 }
 
@@ -111,4 +129,18 @@ fn test_is_app_server_thought_chunk_reports_codex_phase_labels() {
         true,
         Some("thinking"),
     ));
+}
+
+#[test]
+fn only_stdin_prompt_providers_steer_cli_turns() {
+    // Arrange
+    let inbox = std::sync::Arc::new(TurnSteeringInbox::new());
+
+    // Act
+    let claude = cli_turn_steering(AgentKind::Claude, std::sync::Arc::clone(&inbox));
+    let codex = cli_turn_steering(AgentKind::Codex, inbox);
+
+    // Assert
+    assert!(claude.is_some());
+    assert!(codex.is_none());
 }

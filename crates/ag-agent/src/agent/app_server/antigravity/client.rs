@@ -1,5 +1,7 @@
 //! Antigravity persistent-runtime client orchestration.
 
+use std::sync::Arc;
+
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_session::AgentKind;
@@ -10,7 +12,7 @@ use super::super::stdio_transport::AppServerStdioTransport;
 use super::lifecycle::{self, AntigravityRuntimeState};
 use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
-    BorrowedAppServerFuture,
+    BorrowedAppServerFuture, TurnSteeringInbox,
 };
 use crate::{agent, app_server_transport};
 
@@ -50,6 +52,7 @@ impl RuntimeClientProvider for AntigravityRuntimeProvider {
         _reasoning_level: ReasoningLevel,
         _speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        _steering: Option<Arc<TurnSteeringInbox>>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
         Box::pin(async move {
             lifecycle::run_turn_with_runtime(

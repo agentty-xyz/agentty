@@ -160,6 +160,13 @@ pub fn uses_persistent_session(kind: AgentKind) -> bool {
     ag_runtime::uses_persistent_session(kind)
 }
 
+/// Whether [`crate::SessionRunClient::steer`] can deliver prompts into this
+/// harness's running session turns. Hosts queue prompts as later turns for
+/// other harnesses.
+pub fn supports_turn_steering(kind: AgentKind) -> bool {
+    ag_runtime::supports_turn_steering(kind)
+}
+
 /// Reclaims runtime artifacts while deleting a settled session workspace.
 ///
 /// # Errors

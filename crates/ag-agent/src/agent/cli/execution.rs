@@ -11,6 +11,7 @@ use ag_telemetry::FutureExt as _;
 use rustix::process::{self, Pid, Signal, WaitId, WaitIdOptions};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
+use tokio_util::sync::CancellationToken;
 
 use super::stdin;
 use crate::agent::{self as agent, AgentBackend, AgentBackendError, BuildCommandRequest};
@@ -65,6 +66,19 @@ impl CliStdoutPayload {
     pub(crate) fn trimmed(&self) -> Option<&Value> {
         self.value.as_ref()
     }
+}
+
+/// Mid-turn steering for one CLI run whose provider reads user messages from
+/// stdin while it works.
+///
+/// Stdin stays open until the first provider turn ends, so prompts from the
+/// inbox reach that turn. Closing stdin then lets the provider answer every
+/// prompt it already read and exit.
+pub(crate) struct CliTurnSteering {
+    /// Whether one stdout payload ends the provider turn.
+    pub(crate) is_turn_end: fn(&Value) -> bool,
+    /// Prompt source and encoder for the stdin writer.
+    pub(crate) stdin: stdin::StdinSteering,
 }
 
 /// Classified process termination state independent of caller policy.
@@ -137,6 +151,7 @@ pub(crate) async fn execute_cli_command(
     build_request: BuildCommandRequest<'_>,
     observer: &dyn CliExecutionObserver,
     timeout: Option<Duration>,
+    steering: Option<CliTurnSteering>,
 ) -> Result<CliExecutionOutput, CliExecutionError> {
     let span = ag_telemetry::Span::child("agent.attempt");
     span.attribute("agentty.transport", "cli");
@@ -178,12 +193,9 @@ pub(crate) async fn execute_cli_command(
         let _pid_guard = ChildPidObserverGuard::new(observer, child.id());
         let stdout = require_pipe(child.stdout.take(), "stdout")?;
         let stderr = require_pipe(child.stderr.take(), "stderr")?;
-        let mut stdin_write_task = stdin::spawn_optional_stdin_write(
-            child.stdin.take(),
-            stdin_payload,
-            "stdin pipe unavailable after spawn",
-            CliExecutionError::StdinWrite,
-        );
+        let turn_ended = CancellationToken::new();
+        let (mut stdin_write_task, turn_end) =
+            spawn_stdin_writer(child.stdin.take(), stdin_payload, steering, &turn_ended);
 
         let _stdin_guard = StdinAbortGuard(
             stdin_write_task
@@ -207,7 +219,12 @@ pub(crate) async fn execute_cli_command(
 
                 child.wait().await.map_err(CliExecutionError::Wait)
             };
-            let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer, kind);
+            let stdout_capture = capture_stdout(
+                tokio::io::BufReader::new(stdout),
+                observer,
+                kind,
+                turn_end.as_ref(),
+            );
             let stderr_capture = capture_stderr(stderr);
             let (exit_status, stdout, stderr) =
                 tokio::try_join!(wait, stdout_capture, stderr_capture)?;
@@ -226,6 +243,8 @@ pub(crate) async fn execute_cli_command(
             }
             None => execution.await,
         };
+        // The provider exited, so nothing can read later steering prompts.
+        turn_ended.cancel();
         let (exit_status, stdout, stderr) =
             finish_cli_execution(stdin_write_task, execution_result).await?;
 
@@ -245,6 +264,44 @@ pub(crate) async fn execute_cli_command(
     });
 
     result
+}
+
+/// Starts the stdin writer for one run and returns it with the turn-end
+/// signal stdout capture fires for steerable runs.
+///
+/// Steerable runs keep stdin open for prompts until `turn_ended` fires; other
+/// runs write the prompt and close stdin at once.
+fn spawn_stdin_writer(
+    child_stdin: Option<tokio::process::ChildStdin>,
+    stdin_payload: Option<Vec<u8>>,
+    steering: Option<CliTurnSteering>,
+    turn_ended: &CancellationToken,
+) -> (
+    Option<tokio::task::JoinHandle<Result<(), CliExecutionError>>>,
+    Option<CliTurnEnd>,
+) {
+    let turn_end = steering.as_ref().map(|steering| CliTurnEnd {
+        ended: turn_ended.clone(),
+        is_turn_end: steering.is_turn_end,
+    });
+    let stdin_write_task = match (steering, stdin_payload) {
+        (Some(steering), Some(stdin_payload)) => Some(stdin::spawn_steering_stdin_write(
+            child_stdin,
+            stdin_payload,
+            steering.stdin,
+            turn_ended.clone(),
+            "stdin pipe unavailable after spawn",
+            CliExecutionError::StdinWrite,
+        )),
+        (_, stdin_payload) => stdin::spawn_optional_stdin_write(
+            child_stdin,
+            stdin_payload,
+            "stdin pipe unavailable after spawn",
+            CliExecutionError::StdinWrite,
+        ),
+    };
+
+    (stdin_write_task, turn_end)
 }
 
 /// Owns the isolated process group, including tool descendants after parent
@@ -360,11 +417,21 @@ fn require_pipe<Pipe>(
     pipe.ok_or(CliExecutionError::PipeUnavailable(pipe_name))
 }
 
-/// Captures stdout exactly while reporting completed lines to the observer.
+/// Signal fired when stdout reports the end of a steerable provider turn.
+struct CliTurnEnd {
+    /// Cancelled once the first turn-ending payload arrives.
+    ended: CancellationToken,
+    /// Whether one stdout payload ends the provider turn.
+    is_turn_end: fn(&Value) -> bool,
+}
+
+/// Captures stdout exactly while reporting completed lines to the observer
+/// and, for steerable runs, signaling the end of the provider turn.
 async fn capture_stdout<Reader>(
     mut reader: Reader,
     observer: &dyn CliExecutionObserver,
     kind: AgentKind,
+    turn_end: Option<&CliTurnEnd>,
 ) -> Result<String, CliExecutionError>
 where
     Reader: AsyncBufRead + Unpin,
@@ -400,6 +467,11 @@ where
             operation_trace.observe(kind, value);
         }
         observer.stdout_line(line_text_without_terminator, &payload);
+        if let Some(turn_end) = turn_end
+            && payload.trimmed().is_some_and(turn_end.is_turn_end)
+        {
+            turn_end.ended.cancel();
+        }
     }
 
     Ok(decode_lossy(output))

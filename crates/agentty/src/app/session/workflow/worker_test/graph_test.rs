@@ -2,6 +2,7 @@
 //! routing, and node settlement on the session worker.
 
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentError, MockAgentChannel, PermissionMode, ProviderCallBudget};
@@ -45,6 +46,8 @@ async fn selected_graph_writers_wait_for_background_reviews_before_running() {
         graph_wake: tokio::sync::watch::channel(0).0,
         message_traces: Arc::default(),
         run_client: Arc::new(MockRunClient::new()),
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
     let work = host.execute(ScheduledWork::Command(ScheduledSessionCommand::immediate(
         SessionCommand::RunGraphTask(Box::new(task)),
@@ -61,6 +64,9 @@ async fn selected_graph_writers_wait_for_background_reviews_before_running() {
     // Assert: selecting a graph writer waits without blocking ordinary sync.
     assert!(waiting);
     assert!(environment.clone().try_write_owned().is_ok());
+    // The running graph turn owns its own conversation, so queued chat
+    // cannot be steered into it.
+    assert!(!host.steerable_turn.load(Ordering::Acquire));
     drop(review);
     work.await;
     receiver
@@ -93,6 +99,8 @@ async fn graph_gate_waits_cancel_and_release_partial_leases_without_provider_wor
             graph_wake: tokio::sync::watch::channel(0).0,
             message_traces: Arc::default(),
             run_client: Arc::new(MockRunClient::new()),
+            steerable_turn: Arc::default(),
+            steering_deliveries: Arc::default(),
         };
         let work = host.execute(ScheduledWork::Command(ScheduledSessionCommand::immediate(
             SessionCommand::RunGraphTask(Box::new(task)),

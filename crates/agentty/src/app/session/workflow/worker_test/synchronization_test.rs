@@ -457,6 +457,8 @@ async fn test_session_sync_root_parents_its_conflicted_rebase_step() {
         graph_wake: watch::channel(0).0,
         message_traces: Arc::default(),
         run_client: auto_commit_run_client(),
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
 
     // Act

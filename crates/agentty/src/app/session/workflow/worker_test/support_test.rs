@@ -1574,6 +1574,8 @@ pub(super) fn spawn_session_worker(
             message_traces: Arc::default(),
             context,
             run_client,
+            steerable_turn: Arc::default(),
+            steering_deliveries: Arc::default(),
         },
         wakeup,
         receiver,

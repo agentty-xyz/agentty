@@ -9,6 +9,7 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
 use super::super::end_in_progress_turn;
 use super::support::{handle, new_test_app_with_session, queued_message};
+use crate::app::test_support::{SteerableSessionChannel, TestSessionRunFactory};
 use crate::domain::session::Status;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -329,4 +330,78 @@ async fn test_end_in_progress_turn_second_press_after_empty_queue_cancels_turn()
             .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn ctrl_s_sends_queued_chat_into_the_running_turn() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    let channel = std::sync::Arc::new(SteerableSessionChannel::default());
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, channel.clone());
+    app.sessions
+        .reply(&app.services, &session_id, "Initial")
+        .await;
+    wait_for_snapshot_status(&mut app, Status::InProgress).await;
+    let handles = app
+        .sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .expect("handles");
+    // The key is offered only once the worker runs the chat turn.
+    for _ in 0..200 {
+        if handles.has_steerable_turn() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let order = handles.next_queued_work_order();
+    handles
+        .queued_messages
+        .lock()
+        .expect("queue")
+        .push_back(queued_message(order, "also add tests").with_steering(true));
+    app.sessions.sync_from_handles();
+    app.mode = AppMode::View {
+        session_id: session_id.clone().into(),
+        scroll_offset: None,
+    };
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+
+    // Act
+    let result = handle(
+        &mut app,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+    )
+    .await
+    .expect("send-now key should be handled");
+    for _ in 0..200 {
+        if !channel.steered.lock().expect("steered").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Assert
+    assert!(matches!(result, EventResult::Continue));
+    assert_eq!(
+        *channel.steered.lock().expect("steered"),
+        ["also add tests"]
+    );
+    assert_eq!(app.sessions.sessions()[0].queued_messages, Vec::new());
+    channel.release.cancel();
+}
+
+/// Polls handle-backed snapshots until the only session reaches `status`.
+async fn wait_for_snapshot_status(app: &mut crate::app::App, status: Status) {
+    for _ in 0..200 {
+        app.sessions.sync_from_handles();
+        if app.sessions.sessions()[0].status == status {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(app.sessions.sessions()[0].status, status);
 }

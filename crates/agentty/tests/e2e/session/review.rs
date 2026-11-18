@@ -27,7 +27,7 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 const SYNC_FOCUSED_REVIEW_PROVIDER_SCRIPT: &str = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat >/dev/null
+IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 while [ ! -f "$AGENTTY_TEST_REVIEW_RELEASE" ]; do
     [ -d "${AGENTTY_TEST_REVIEW_RELEASE%/*}" ] || exit 0
@@ -75,7 +75,7 @@ async fn test_focused_review_evidence_and_project_rules() -> E2eResult {
             let script = format!(r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Check request authorization"*) ;;
   *) printf 'project criteria missing\n' >&2; exit 1 ;;
@@ -235,7 +235,7 @@ if [ -f "$count_file" ]; then read count < "$count_file"; fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 rmdir "$count_file.lock"
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Keep answer within "*)
     printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"All changed fragments affect the same workflow.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
@@ -346,7 +346,7 @@ async fn seed_boundary_review_with_partial_retry(env: &BuilderEnv) -> E2eResult 
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 state_dir=${0%/*}
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Keep answer within "*)
     printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"All changed fragments affect the same workflow.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
@@ -472,7 +472,7 @@ async fn seed_many_fragment_review_with_shared_context(env: &BuilderEnv) -> E2eR
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Keep answer within "*)
     printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"CALLER_CONTRACT and CALLEE_CONTRACT change a shared workflow across modules.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
@@ -649,7 +649,7 @@ if [ -f "$review_count_file" ]; then
 else
   review_count=0
 fi
-prompt=$(cat)
+IFS= read -r prompt
 
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)

@@ -435,6 +435,34 @@ pub trait AgentChannel: Send + Sync {
         events: mpsc::UnboundedSender<TurnEvent>,
     ) -> AgentFuture<Result<TurnResult, AgentError>>;
 
+    /// Delivers one user prompt to the in-flight interactive session turn for
+    /// `session_id`, so the agent reads it before that turn ends.
+    ///
+    /// `Ok` means the provider accepted the prompt into the running turn; the
+    /// caller then owns recording it in the transcript. Any error leaves the
+    /// prompt undelivered so callers can submit it as a later turn. Only
+    /// session-start and session-resume turns accept steering; utility and
+    /// review turns reject it. The default reports that the harness cannot
+    /// steer.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Runtime`] when the harness cannot steer, no
+    /// interactive turn is running, or the provider rejects the prompt.
+    fn steer_turn(
+        &self,
+        session_id: String,
+        prompt: TurnPrompt,
+    ) -> AgentFuture<Result<(), AgentError>> {
+        // Nothing is delivered; callers keep their own copy for a later turn.
+        drop((session_id, prompt));
+
+        Box::pin(async {
+            Err(AgentError::Runtime(
+                "This agent cannot receive messages during a turn".to_string(),
+            ))
+        })
+    }
+
     /// Tears down the provider session associated with `session_id`.
     ///
     /// Cancellation must be idempotent and must never start an unpolled turn.

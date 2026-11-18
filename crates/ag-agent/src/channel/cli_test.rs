@@ -6,5 +6,7 @@ mod cancellation;
 mod execution;
 #[path = "cli_test/repair_test.rs"]
 mod repair;
+#[path = "cli_test/steering_test.rs"]
+mod steering;
 #[path = "cli_test/support_test.rs"]
 mod support;

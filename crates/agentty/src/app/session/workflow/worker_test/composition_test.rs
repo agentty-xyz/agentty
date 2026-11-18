@@ -66,6 +66,7 @@ async fn workers_reuse_channels_and_recompose_after_model_switch_and_shutdown() 
         session_id: "first".into(),
         session_update_versions: context.session_update_versions,
         status: context.status,
+        steerable_turn: Arc::default(),
         transcript: context.transcript,
     };
     let mut workers = SessionWorkerService::new();

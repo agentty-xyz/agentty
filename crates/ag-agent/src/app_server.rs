@@ -8,6 +8,7 @@ mod error;
 pub(crate) mod prompt;
 mod registry;
 mod retry;
+pub(crate) mod steering;
 
 pub(crate) use contract::BorrowedAppServerFuture;
 #[cfg(any(test, feature = "test-utils"))]
@@ -19,3 +20,4 @@ pub use contract::{
 pub use error::AppServerError;
 pub(crate) use registry::AppServerSessionRegistry;
 pub(crate) use retry::{RuntimeInspector, run_turn_with_restart_retry};
+pub(crate) use steering::{TurnSteer, TurnSteeringInbox, TurnSteeringRegistration};

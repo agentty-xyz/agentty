@@ -33,8 +33,9 @@ impl AgentTransport {
 pub(crate) enum AgentPromptTransport {
     /// Prompt is passed inline through argv.
     Argv,
-    /// Prompt is streamed through stdin.
-    Stdin,
+    /// Prompt is streamed through stdin as `stream-json` user messages, which
+    /// the provider also reads while a turn runs.
+    StreamJsonStdin,
 }
 
 /// Managed-runtime thought-stream classification policy for one provider.

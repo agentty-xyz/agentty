@@ -71,7 +71,7 @@ async fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn s
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-input=$(cat)
+IFS= read -r input
 case "$input" in
   *"Generate a concise, commit-style title"*)
     sleep 2
@@ -116,7 +116,7 @@ async fn install_delayed_question_claude_stub(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 sleep 1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 2
@@ -564,7 +564,7 @@ async fn install_question_image_claude_stub(env: &BuilderEnv) -> E2eResult {
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-input=$(cat)
+IFS= read -r input
 case "$input" in
   *"Clarifications:"*)
     answer='{QUESTION_IMAGE_MISSING}'

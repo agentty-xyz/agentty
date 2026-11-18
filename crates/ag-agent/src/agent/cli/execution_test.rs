@@ -162,6 +162,7 @@ async fn claude_stdout_operations_are_children_of_the_attempt_and_preserve_raw_o
             build_request(&[], folder.path(), "prompt", &request_kind),
             &CollectingCliObserver,
             None,
+            None,
         ))
         .await
         .expect("execution");
@@ -233,6 +234,7 @@ async fn cli_attempt_spans_classify_unsuccessful_exits_without_changing_raw_outp
                 build_request(&[], folder.path(), "prompt", &request_kind),
                 &CollectingCliObserver,
                 None,
+                None,
             ))
             .await
             .expect("raw execution result");
@@ -276,6 +278,7 @@ async fn test_execute_cli_command_returns_command_build_failure() {
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
         None,
+        None,
     )
     .await
     .expect_err("command construction should fail");
@@ -314,6 +317,7 @@ async fn test_execute_cli_command_returns_stdin_build_failure() {
         ),
         &CollectingCliObserver,
         None,
+        None,
     )
     .await
     .expect_err("stdin rendering should fail");
@@ -338,6 +342,7 @@ async fn test_execute_cli_command_returns_spawn_failure() {
         AgentKind::Codex,
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
+        None,
         None,
     )
     .await
@@ -366,6 +371,7 @@ async fn test_execute_cli_command_collects_output_and_streams_lines() {
         AgentKind::Codex,
         build_request(&[], folder.path(), "prompt", &request_kind),
         &observer,
+        None,
         None,
     )
     .await
@@ -417,6 +423,7 @@ async fn test_parent_exit_terminates_descendants_before_draining_output() {
                 build_request(&[], folder.path(), "prompt", &request_kind),
                 &observer,
                 None,
+                None,
             ),
         )
         .await
@@ -466,6 +473,7 @@ async fn test_execute_cli_command_disables_optional_git_locks_for_tools() {
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
         None,
+        None,
     )
     .await
     .expect("process should complete");
@@ -492,6 +500,7 @@ async fn test_execute_cli_command_classifies_non_zero_exit() {
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
         None,
+        None,
     )
     .await
     .expect("non-zero termination should still return raw output");
@@ -516,6 +525,7 @@ async fn test_execute_cli_command_classifies_signal_termination() {
         AgentKind::Codex,
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
+        None,
         None,
     )
     .await
@@ -542,6 +552,7 @@ async fn test_execute_cli_command_enforces_timeout() {
         build_request(&[], folder.path(), "prompt", &request_kind),
         &CollectingCliObserver,
         Some(Duration::from_millis(20)),
+        None,
     )
     .await
     .expect_err("process should time out");
@@ -593,6 +604,7 @@ async fn test_capture_stdout_returns_read_error() {
         tokio::io::BufReader::new(FailingReader),
         &observer,
         AgentKind::Claude,
+        None,
     )
     .await
     .expect_err("stdout read should fail");
@@ -681,6 +693,7 @@ async fn capture_stdout_traces_only_valid_utf8_lines_and_reports_lossy_payloads(
                 tokio::io::BufReader::new(&raw[..]),
                 &observer,
                 AgentKind::Claude,
+                None,
             ))
             .await
             .expect("stdout capture");
