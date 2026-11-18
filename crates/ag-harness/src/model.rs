@@ -14,7 +14,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use ag_router::ModelMessage as RoutedMessage;
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
@@ -32,18 +36,28 @@ use crate::error::ErrorKind;
 use crate::event::{self, EventSink, RunEventKind};
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver};
 pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-use crate::provider::{self, ProviderSpec, ProviderSpecError};
+use crate::provider::{self};
 #[cfg(feature = "providers-openai")]
 use crate::provider::{ChatGptConfig, OpenAiConfig};
 #[cfg(feature = "providers-compat")]
 use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+use crate::provider::{ProviderSpec, ProviderSpecError};
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
@@ -158,7 +172,11 @@ pub trait Model: Send + Sync {
 /// [`ModelClient::complete`], which owns telemetry while `ag-router` validates
 /// structured output. Its constructors require the provider's `providers-*`
 /// feature.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 pub struct ModelClient {
     router: ag_router::Router,
     router_model: String,
@@ -167,7 +185,11 @@ pub struct ModelClient {
     profile: Option<ModelProfile>,
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 impl ModelClient {
     /// Creates a client backed by Moonshot AI's Kimi API.
     ///
@@ -617,7 +639,11 @@ impl ModelClient {
     }
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[async_trait]
 impl Model for ModelClient {
     fn metadata(&self) -> Option<ModelMetadata> {
@@ -1088,7 +1114,12 @@ impl ModelRequest {
         self.tools.iter().any(|tool| tool.name() == name)
     }
 
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai",
+        test
+    ))]
     pub(crate) fn lifecycle_observed(&self) -> bool {
         self.lifecycle_observed
     }
@@ -1185,7 +1216,11 @@ impl ReasoningEffort {
     }
 
     /// Returns the router's equivalent effort.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) const fn to_router(self) -> ag_router::ReasoningEffort {
         match self {
             Self::Low => ag_router::ReasoningEffort::Low,
@@ -1322,7 +1357,11 @@ impl ModelCompletion {
         }
     }
 
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) fn with_reasoning_content(mut self, reasoning_content: Option<String>) -> Self {
         self.reasoning_content = reasoning_content;
 

@@ -393,7 +393,7 @@ repos:
         entry: >-
           bash -eu -o pipefail -c 'export CARGO_RESOLVER_FEATURE_UNIFICATION=selected;
           cargo clippy -q --locked -p ag-harness --all-targets --no-default-features -- -D warnings;
-          for feature in native-sandbox otel providers-compat providers-openai sqlite; do
+          for feature in native-sandbox otel providers-anthropic providers-compat providers-openai sqlite; do
           cargo clippy -q --locked -p ag-harness --all-targets --no-default-features --features "$feature" -- -D warnings; done'
         language: system
         always_run: true
@@ -416,7 +416,7 @@ repos:
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags" cargo llvm-cov "$@"; };
           coverage clean --workspace;
-          for features in "" providers-openai providers-compat providers-compat,providers-openai; do
+          for features in "" providers-anthropic providers-openai providers-compat providers-compat,providers-openai; do
           coverage nextest --no-report --timings -p ag-harness --no-default-features
           ${features:+--features "$features"} --lib --tests --locked --profile ci; done;
           coverage report --lcov

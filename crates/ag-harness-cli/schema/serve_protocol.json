@@ -1231,7 +1231,7 @@
           ],
           "format": "uint64",
           "minimum": 0,
-          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; no supported provider reports them yet."
+          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; of the built-in protocols only Anthropic\nMessages reports them."
         },
         "reasoning": {
           "type": "integer",

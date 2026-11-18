@@ -1,7 +1,6 @@
 //! Recorded model snapshot decoding, generation overflow, and cross-family
 //! history projection tests.
 
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::borrow::Cow;
 
 #[cfg(feature = "sqlite")]
@@ -311,6 +310,55 @@ fn notes_quote_reasoning_as_one_bounded_json_string() {
             .collect::<Vec<_>>(),
         [TEXT.trim_end()],
         "quoted reasoning never starts a harness line"
+    );
+}
+
+#[test]
+fn anthropic_thinking_replays_signed_between_claude_models_and_as_notes_elsewhere() {
+    // Arrange
+    let signed = r#"[{"type":"thinking","thinking":"Check a.txt first.","signature":"sig"},{"type":"text"}]"#;
+    let redacted = r#"[{"type":"redacted_thinking","data":"opaque-redacted"},{"type":"text"}]"#;
+    let turn = |reasoning: &str| {
+        turn_from(
+            "anthropic",
+            "claude-opus-5-5",
+            vec![ModelMessage::AssistantReasoning {
+                content: "{}".to_string(),
+                reasoning_content: reasoning.to_string(),
+            }],
+        )
+    };
+    let claude = ModelMetadata::new("anthropic", "claude-sonnet-5-5").expect("valid metadata");
+    let switched = |reasoning: &str| {
+        project_turn(
+            &turn(reasoning),
+            &target(telemetry::PROVIDER_OPENAI, "gpt-6-luna", false),
+        )
+        .messages
+        .clone()
+    };
+
+    // Act
+    let recorded = turn(signed);
+    let native = project_turn(&recorded, &ReplayTarget::new(Some(&claude), 1));
+    let summarized = switched(signed);
+    let omitted = switched(redacted);
+
+    // Assert
+    assert!(matches!(native, Cow::Borrowed(turn) if *turn == recorded));
+    assert_eq!(
+        summarized,
+        vec![
+            ModelMessage::Assistant(format!("{SUMMARY}{}", quoted("Check a.txt first."))),
+            ModelMessage::Assistant("{}".to_string()),
+        ]
+    );
+    assert_eq!(
+        omitted,
+        vec![
+            ModelMessage::Assistant(OMITTED.to_string()),
+            ModelMessage::Assistant("{}".to_string()),
+        ]
     );
 }
 

@@ -1,22 +1,25 @@
 //! Open provider specifications: the wire protocol, endpoint,
 //! authentication, extra headers and query parameters, and request policy
-//! that let a host add any OpenAI-compatible or Responses provider without
-//! code changes, served through [`crate::model::ModelClient::from_spec`].
+//! that let a host add any OpenAI-compatible, Responses, or Anthropic
+//! Messages provider without code changes, served through
+//! [`crate::model::ModelClient::from_spec`].
 
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 
+#[cfg(feature = "providers-anthropic")]
+use super::AnthropicConfig;
 #[cfg(feature = "providers-openai")]
 use super::{ChatGptConfig, OpenAiConfig};
 #[cfg(feature = "providers-compat")]
 use super::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
 use crate::model::{ModelMetadataError, ReasoningEffort, ReasoningFamily};
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use crate::telemetry;
 
 /// Routing prefix of every host-defined specification; each client routes
@@ -24,11 +27,13 @@ use crate::telemetry;
 const CUSTOM_ROUTE: &str = "custom";
 
 /// Wire API a provider implements.
-///
-/// The Anthropic Messages API is reserved for a later variant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WireProtocol {
+    /// The Anthropic Messages API (`POST {base_url}/messages`), sent
+    /// unstreamed: Claude models with signed thinking replayed verbatim to
+    /// models of the same reasoning family.
+    AnthropicMessages,
     /// The `OpenAI` Chat Completions API (`POST {base_url}/chat/completions`),
     /// implemented by most OpenAI-compatible servers.
     ChatCompletions,
@@ -108,9 +113,19 @@ impl Auth {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum StructuredOutputMode {
-    /// Constrain output natively with the `json_schema` response format. The
-    /// only mode the Responses API supports.
+    /// Constrain output natively: the `json_schema` response format, or the
+    /// Anthropic Messages `output_config.format`. The only mode the Responses
+    /// API supports.
     JsonSchema,
+    /// Advertise a `structured_output` tool whose input schema is the output
+    /// schema, and read its input as the answer (Anthropic Messages only).
+    /// A request without tools or a reasoning effort forces that tool; one
+    /// with tools requires some tool call; one with an effort, which turns
+    /// thinking on and so forbids forcing a tool, lets the model choose and
+    /// also reads a text answer. For models without native structured
+    /// output or with schemas it rejects; current Claude models reject a
+    /// forced tool.
+    ForcedTool,
     /// State the schema in a leading system message and request the
     /// `json_object` response format.
     JsonObject,
@@ -124,6 +139,7 @@ impl StructuredOutputMode {
     /// Converts to the routed structured-output mode.
     const fn to_router(self) -> ag_router::StructuredOutputMode {
         match self {
+            Self::ForcedTool => ag_router::StructuredOutputMode::ForcedTool,
             Self::JsonSchema => ag_router::StructuredOutputMode::JsonSchema,
             Self::JsonObject => ag_router::StructuredOutputMode::JsonObject,
             Self::SchemaPrompt => ag_router::StructuredOutputMode::SchemaPrompt,
@@ -138,7 +154,9 @@ pub enum ReasoningMapping {
     /// Send no reasoning control.
     None,
     /// Send the effort under these wire names: `reasoning_effort` for Chat
-    /// Completions, `reasoning.effort` for the Responses API.
+    /// Completions, `reasoning.effort` for the Responses API, and
+    /// `output_config.effort` beside summarized adaptive thinking for
+    /// Anthropic Messages.
     Effort(EffortNames),
     /// Send `enable_thinking`, off for the low effort (Chat Completions
     /// only).
@@ -226,7 +244,7 @@ pub enum MaxTokensField {
     /// The Responses API's `max_output_tokens`, at least 16.
     MaxOutputTokens,
     /// The original Chat Completions `max_tokens`, which most compatible
-    /// servers read.
+    /// servers read, and the field Anthropic Messages requires.
     MaxTokens,
 }
 
@@ -423,7 +441,13 @@ impl ProviderSpec {
     /// preset, such as [`Self::openai_compatible`], enables those its provider
     /// needs. The Responses API starts with native structured output, efforts
     /// under their own names, image input, `prompt_cache_key`, and
-    /// `max_output_tokens`. Either names no model yet ([`Self::for_model`])
+    /// `max_output_tokens`. Anthropic Messages starts with native structured
+    /// output, efforts under their own names, image input, and the required
+    /// `max_tokens`, filled from [`Self::with_default_max_output_tokens`] when
+    /// a request sets no bound; it needs `x-api-key` authentication
+    /// ([`Auth::Header`]) and an `anthropic-version` header
+    /// ([`Self::with_header`]), which the `Self::anthropic` preset sets. Each
+    /// names no model yet ([`Self::for_model`])
     /// and starts in the reasoning family [`ModelMetadata::new`] assigns
     /// `name`, so a built-in provider name keeps its built-in family.
     ///
@@ -435,6 +459,7 @@ impl ProviderSpec {
     ) -> Self {
         let name = name.into();
         let protocol = match protocol {
+            WireProtocol::AnthropicMessages => ag_router::WireProtocol::AnthropicMessages,
             WireProtocol::ChatCompletions => ag_router::WireProtocol::ChatCompletions,
             WireProtocol::Responses => ag_router::WireProtocol::Responses,
         };
@@ -446,6 +471,23 @@ impl ProviderSpec {
             name,
             spec,
         }
+    }
+
+    /// Claude models through the Anthropic Messages API, authenticated by
+    /// `config.api_key` in the `x-api-key` header: native structured output,
+    /// image input, and, for the models that take them, efforts with
+    /// summarized adaptive thinking. Every Claude model shares one reasoning
+    /// family, so a switch between Claude models replays signed thinking,
+    /// which the API ignores for a model that cannot read it, while a switch
+    /// to another provider carries it as a short note. Serve it with
+    /// [`crate::model::ModelClient::from_spec`]; the catalog lists no Claude
+    /// model yet, so the host declares the context profile and prices.
+    #[cfg(feature = "providers-anthropic")]
+    pub fn anthropic(config: AnthropicConfig) -> Self {
+        Self::preset(
+            telemetry::PROVIDER_ANTHROPIC,
+            ag_router::preset::anthropic(config.base_url, config.api_key, &config.model),
+        )
     }
 
     /// `OpenAI` models through the Responses API billed to an API key, as
@@ -569,6 +611,16 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.spec = self.spec.with_auth(auth.into_router());
+
+        self
+    }
+
+    /// Sets the output-token bound sent when a request sets none (Anthropic
+    /// Messages only, which requires a bound; other protocols then send
+    /// none). It starts at 32,000 tokens.
+    #[must_use]
+    pub fn with_default_max_output_tokens(mut self, max_output_tokens: NonZeroU32) -> Self {
+        self.spec = self.spec.with_default_max_output_tokens(max_output_tokens);
 
         self
     }
@@ -724,7 +776,6 @@ impl ProviderSpec {
 
     /// Wraps the routed preset `spec` of the built-in provider `name`, in
     /// that provider's reasoning family.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     fn preset(name: &'static str, spec: ag_router::ProviderSpec) -> Self {
         Self {
             name: Cow::Borrowed(name),

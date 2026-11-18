@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::anthropic::{self, AnthropicBackend};
 use crate::chat_completion::{self, ChatCompletionBackend};
 use crate::http::HttpTransport;
 use crate::model::{
@@ -20,6 +21,7 @@ type SpecKey = (String, Option<String>);
 
 /// Single entry point for configured model providers.
 pub struct Router {
+    anthropic: Arc<HttpTransport>,
     client: Arc<dyn chat_completion::ChatCompletionClient>,
     responses: Arc<HttpTransport>,
     specs: HashMap<SpecKey, ProviderSpec>,
@@ -38,6 +40,7 @@ impl Router {
     /// ([`ProviderSpec::validate`]) before any network access.
     pub fn new(specs: impl IntoIterator<Item = ProviderSpec>) -> Self {
         let mut router = Self {
+            anthropic: anthropic::default_transport(),
             client: chat_completion::default_client(),
             responses: responses::default_transport(),
             specs: HashMap::new(),
@@ -165,6 +168,16 @@ impl Router {
         };
         let headers = spec.request_headers(bearer.as_deref())?;
         let response = match spec.protocol {
+            WireProtocol::AnthropicMessages => {
+                AnthropicBackend::new(
+                    spec,
+                    model.to_string(),
+                    headers,
+                    Arc::clone(&self.anthropic),
+                )
+                .generate(&request)
+                .await?
+            }
             WireProtocol::ChatCompletions => {
                 ChatCompletionBackend::new(
                     spec,

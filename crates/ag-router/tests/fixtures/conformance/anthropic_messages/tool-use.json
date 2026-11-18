@@ -1,0 +1,40 @@
+{
+  "id": "msg_conformance_2",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Read both files.",
+      "signature": "sig-conformance-2"
+    },
+    {
+      "type": "text",
+      "text": "Reading the files."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_1",
+      "name": "read",
+      "input": {"path": "a.txt"}
+    },
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "sig-conformance-3"
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_2",
+      "name": "read",
+      "input": {"path": "b.txt"}
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 300,
+    "output_tokens": 40
+  }
+}

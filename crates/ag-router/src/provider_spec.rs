@@ -1,9 +1,10 @@
 //! Data-driven provider specifications: the wire protocol, endpoint,
 //! authentication, extra headers and query parameters, and request policy of
-//! one provider, so a host adds an OpenAI-compatible or Responses provider
-//! without code changes.
+//! one provider, so a host adds an OpenAI-compatible, Responses, or Anthropic
+//! Messages provider without code changes.
 
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
@@ -17,15 +18,21 @@ use crate::schema::OutputSchema;
 /// Smallest `max_output_tokens` the Responses API accepts.
 const MIN_MAX_OUTPUT_TOKENS: u32 = 16;
 
+/// Output-token bound an Anthropic Messages request sends when the request
+/// sets none, since the API requires one: room for long adaptive thinking
+/// and an answer within one non-streamed response.
+const DEFAULT_MAX_OUTPUT_TOKENS: NonZeroU32 = NonZeroU32::MIN.saturating_add(31_999);
+
 /// Headers the router sets itself, which an extra header must not repeat.
 const RESERVED_HEADERS: [&str; 4] = ["authorization", "content-length", "content-type", "host"];
 
 /// Wire API a provider implements.
-///
-/// The Anthropic Messages API is reserved for a later variant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WireProtocol {
+    /// The Anthropic Messages API (`POST {base_url}/messages`), sent
+    /// unstreamed: Claude models with signed thinking replayed verbatim.
+    AnthropicMessages,
     /// The `OpenAI` Chat Completions API (`POST {base_url}/chat/completions`),
     /// implemented by most OpenAI-compatible servers.
     ChatCompletions,
@@ -72,9 +79,19 @@ impl fmt::Debug for Auth {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum StructuredOutputMode {
-    /// Constrain output natively with the `json_schema` response format. The
-    /// only mode the Responses API supports.
+    /// Constrain output natively: the `json_schema` response format, or the
+    /// Anthropic Messages `output_config.format`. The only mode the Responses
+    /// API supports.
     JsonSchema,
+    /// Advertise a `structured_output` tool whose input schema is the output
+    /// schema, and read its input as the answer (Anthropic Messages only).
+    /// A request without tools or a reasoning effort forces that tool; one
+    /// with tools requires some tool call; one with an effort, which turns
+    /// thinking on and so forbids forcing a tool, lets the model choose and
+    /// also reads a text answer. For models without native structured
+    /// output or with schemas it rejects; current Claude models reject a
+    /// forced tool.
+    ForcedTool,
     /// State the schema in a leading system message and request the
     /// `json_object` response format.
     JsonObject,
@@ -92,7 +109,9 @@ pub enum ReasoningMapping {
     /// Send no reasoning control.
     None,
     /// Send the effort under these wire names: `reasoning_effort` for Chat
-    /// Completions, `reasoning.effort` for the Responses API.
+    /// Completions, `reasoning.effort` for the Responses API, and
+    /// `output_config.effort` beside summarized adaptive thinking for
+    /// Anthropic Messages.
     Effort(EffortNames),
     /// Send `enable_thinking`, off for the low effort (Chat Completions
     /// only).
@@ -198,7 +217,7 @@ pub enum MaxTokensField {
     /// The Responses API's `max_output_tokens`, at least 16.
     MaxOutputTokens,
     /// The original Chat Completions `max_tokens`, which most compatible
-    /// servers read.
+    /// servers read, and the field Anthropic Messages requires.
     MaxTokens,
 }
 
@@ -220,6 +239,7 @@ pub enum MaxTokensField {
 pub struct ProviderSpec {
     pub(crate) auth: Auth,
     pub(crate) base_url: String,
+    pub(crate) default_max_output_tokens: NonZeroU32,
     pub(crate) display_name: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) id: String,
@@ -272,6 +292,7 @@ impl fmt::Debug for ProviderSpec {
             .field("structured_output", &self.structured_output)
             .field("reasoning", &self.reasoning)
             .field("max_tokens_field", &self.max_tokens_field)
+            .field("default_max_output_tokens", &self.default_max_output_tokens)
             .field("image_input", &self.image_input)
             .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
@@ -302,41 +323,49 @@ impl ProviderSpec {
     /// reasoning-content replay, and tool-result names; the presets in
     /// [`crate::preset`] enable those their provider needs. The Responses API
     /// starts with native structured output, efforts under their own names,
-    /// image input, `prompt_cache_key`, and `max_output_tokens`.
+    /// image input, `prompt_cache_key`, and `max_output_tokens`. Anthropic
+    /// Messages starts with native structured output (`output_config.format`),
+    /// efforts under their own names, image input, and the required
+    /// `max_tokens` field, filled from [`Self::with_default_max_output_tokens`]
+    /// when a request sets no bound; it needs `x-api-key` authentication and
+    /// an `anthropic-version` header, which the [`crate::preset::anthropic`]
+    /// preset sets.
     pub fn new(id: impl Into<String>, protocol: WireProtocol, base_url: impl Into<String>) -> Self {
         let id = id.into();
+        let chat = protocol == WireProtocol::ChatCompletions;
         let responses = protocol == WireProtocol::Responses;
 
         Self {
             auth: Auth::None,
             base_url: base_url.into(),
+            default_max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             display_name: id.clone(),
             headers: Vec::new(),
             id,
-            image_input: responses,
+            image_input: !chat,
             instruction_placement: InstructionPlacement::Separate,
-            max_tokens_field: Some(if responses {
-                MaxTokensField::MaxOutputTokens
-            } else {
-                MaxTokensField::MaxCompletionTokens
+            max_tokens_field: Some(match protocol {
+                WireProtocol::AnthropicMessages => MaxTokensField::MaxTokens,
+                WireProtocol::ChatCompletions => MaxTokensField::MaxCompletionTokens,
+                WireProtocol::Responses => MaxTokensField::MaxOutputTokens,
             }),
             model: None,
             overflow_markers: Vec::new(),
             prompt_cache_key: responses,
             protocol,
             query: Vec::new(),
-            reasoning: if responses {
-                ReasoningMapping::Effort(EffortNames::default())
-            } else {
+            reasoning: if chat {
                 ReasoningMapping::None
+            } else {
+                ReasoningMapping::Effort(EffortNames::default())
             },
             replay: HistoryReplay::default(),
             response_format_with_tools: false,
             retry: RetryPolicy::default(),
-            structured_output: if responses {
-                StructuredOutputMode::JsonSchema
-            } else {
+            structured_output: if chat {
                 StructuredOutputMode::SchemaPrompt
+            } else {
+                StructuredOutputMode::JsonSchema
             },
         }
     }
@@ -377,6 +406,16 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.auth = auth;
+
+        self
+    }
+
+    /// Sets the output-token bound sent when a request sets none (Anthropic
+    /// Messages only, which requires a bound; other protocols then send
+    /// none). It starts at 32,000 tokens.
+    #[must_use]
+    pub fn with_default_max_output_tokens(mut self, max_output_tokens: NonZeroU32) -> Self {
+        self.default_max_output_tokens = max_output_tokens;
 
         self
     }
@@ -700,9 +739,16 @@ impl ProviderSpec {
     /// Rejects an option the protocol cannot express.
     fn validate_protocol(&self) -> Result<(), ModelError> {
         let unsupported = match self.protocol {
-            WireProtocol::ChatCompletions => (self.max_tokens_field
-                == Some(MaxTokensField::MaxOutputTokens))
-            .then_some("the `max_output_tokens` field"),
+            WireProtocol::AnthropicMessages => self.unsupported_by_anthropic(),
+            WireProtocol::ChatCompletions => {
+                if self.max_tokens_field == Some(MaxTokensField::MaxOutputTokens) {
+                    Some("the `max_output_tokens` field")
+                } else if self.structured_output == StructuredOutputMode::ForcedTool {
+                    Some("forced-tool structured output")
+                } else {
+                    None
+                }
+            }
             WireProtocol::Responses => {
                 if self.structured_output != StructuredOutputMode::JsonSchema {
                     Some("a structured-output mode other than JSON Schema")
@@ -732,6 +778,33 @@ impl ProviderSpec {
                 self.protocol
             ))),
             None => Ok(()),
+        }
+    }
+
+    /// Names the first option the Anthropic Messages protocol cannot
+    /// express, which requires the `max_tokens` field and has no prompt
+    /// cache key.
+    fn unsupported_by_anthropic(&self) -> Option<&'static str> {
+        if !matches!(
+            self.structured_output,
+            StructuredOutputMode::JsonSchema | StructuredOutputMode::ForcedTool
+        ) {
+            Some("a structured-output mode other than JSON Schema or a forced tool")
+        } else if !matches!(
+            self.reasoning,
+            ReasoningMapping::None | ReasoningMapping::Effort(_)
+        ) {
+            Some("a reasoning mapping other than effort names")
+        } else if self.max_tokens_field != Some(MaxTokensField::MaxTokens) {
+            Some("an output-token field other than `max_tokens`")
+        } else if self.instruction_placement != InstructionPlacement::Separate {
+            Some("instructions placed other than as their own content")
+        } else if self.replay.reasoning_text || self.replay.tool_result_name {
+            Some("reasoning-content replay or tool-result names")
+        } else if self.prompt_cache_key {
+            Some("a prompt cache key")
+        } else {
+            None
         }
     }
 }

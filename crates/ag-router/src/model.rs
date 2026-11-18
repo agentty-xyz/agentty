@@ -135,8 +135,10 @@ impl JsonSchemaFormat {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenerationOptions {
     /// Upper bound on generated tokens, reasoning included, sent as
-    /// `max_output_tokens` to the Responses API and as the provider's
-    /// `max_tokens` or `max_completion_tokens` to Chat Completions. A
+    /// `max_output_tokens` to the Responses API, as the provider's
+    /// `max_tokens` or `max_completion_tokens` to Chat Completions, and as
+    /// `max_tokens` to Anthropic Messages, which sends
+    /// [`crate::ProviderSpec::with_default_max_output_tokens`] without one. A
     /// provider that rejects the bound, such as the ChatGPT-plan backend or
     /// the Responses API below its minimum of 16, fails the request with
     /// [`ModelError::UnsupportedGeneration`] before sending it (see
@@ -288,6 +290,9 @@ impl CompletionMetadata {
 pub struct CompletionUsage {
     cache_hit: Option<u64>,
     cache_miss: Option<u64>,
+    /// Absent from usage recorded before providers reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_write: Option<u64>,
     input: Option<u64>,
     output: Option<u64>,
     reasoning: Option<u64>,
@@ -307,11 +312,22 @@ impl CompletionUsage {
         Self {
             cache_hit,
             cache_miss,
+            cache_write: None,
             input,
             output,
             reasoning,
             total,
         }
+    }
+
+    /// Returns these counts with `cache_write` input tokens written to the
+    /// provider's prompt cache, which are part of the input and of the
+    /// non-cached input.
+    #[must_use]
+    pub fn with_cache_write_tokens(mut self, cache_write: Option<u64>) -> Self {
+        self.cache_write = cache_write;
+
+        self
     }
 
     /// Returns cached input tokens.
@@ -322,6 +338,12 @@ impl CompletionUsage {
     /// Returns non-cached input tokens.
     pub fn cache_miss_tokens(self) -> Option<u64> {
         self.cache_miss
+    }
+
+    /// Returns input tokens written to the provider's prompt cache, when the
+    /// provider reports them.
+    pub fn cache_write_tokens(self) -> Option<u64> {
+        self.cache_write
     }
 
     /// Returns all input tokens.

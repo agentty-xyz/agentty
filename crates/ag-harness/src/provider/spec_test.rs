@@ -3,6 +3,7 @@
 //! invalid or modelless specifications fail before any client exists.
 
 use std::error::Error;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,6 +107,14 @@ fn maps_every_option_onto_the_routed_specification() {
                 .with_max_tokens_field(Some(ag_router::MaxTokensField::MaxTokens))
                 .with_reasoning(ag_router::ReasoningMapping::EnableThinking)
                 .with_structured_output(ag_router::StructuredOutputMode::SchemaPrompt),
+        ),
+        (
+            ProviderSpec::new("gateway", WireProtocol::AnthropicMessages, BASE_URL)
+                .with_default_max_output_tokens(NonZeroU32::MIN)
+                .with_structured_output(StructuredOutputMode::ForcedTool),
+            router_spec(ag_router::WireProtocol::AnthropicMessages)
+                .with_default_max_output_tokens(NonZeroU32::MIN)
+                .with_structured_output(ag_router::StructuredOutputMode::ForcedTool),
         ),
         (
             ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL)
@@ -516,4 +525,74 @@ async fn chatgpt_sign_in_is_a_harness_credential_source() {
     // Assert
     assert!(token.is_err(), "no sign-in is stored");
     assert!(spec.validate().is_ok());
+}
+
+#[cfg(feature = "providers-anthropic")]
+#[tokio::test]
+async fn anthropic_preset_serves_claude_with_an_api_key_and_cache_writes() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_1",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "{\"name\":\"Ada\"}"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 90,
+                "output_tokens": 5
+            }
+        })))
+        .mount(&server)
+        .await;
+    let spec = ProviderSpec::anthropic(super::super::AnthropicConfig {
+        api_key: "claude-key".to_string(),
+        base_url: format!("{}/v1", server.uri()),
+        model: "claude-opus-5-5".to_string(),
+    });
+    let schema = OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+        "additionalProperties": false
+    }))
+    .expect("valid schema");
+
+    // Act
+    let family = spec.reasoning_family().clone();
+    let client = ModelClient::from_spec(spec).expect("valid specification");
+    let completion = client
+        .complete(ModelRequest::new("Find the name", schema))
+        .await
+        .expect("the request should succeed");
+
+    // Assert
+    assert_eq!(
+        super::super::DEFAULT_ANTHROPIC_BASE_URL,
+        "https://api.anthropic.com/v1"
+    );
+    assert_eq!(family, ReasoningFamily::Provider);
+    assert_eq!(client.metadata().provider(), telemetry::PROVIDER_ANTHROPIC);
+    assert_eq!(client.metadata().model(), "claude-opus-5-5");
+    let usage = completion
+        .metadata()
+        .and_then(|metadata| metadata.usage().copied())
+        .expect("usage");
+    assert_eq!(usage.input_tokens(), Some(100));
+    assert_eq!(usage.cache_write_tokens(), Some(90));
+    let requests = server.received_requests().await.expect("recording");
+    assert_eq!(
+        requests[0].headers.get("x-api-key").expect("api key"),
+        "claude-key"
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("anthropic-version")
+            .expect("version"),
+        "2023-06-01"
+    );
+    assert!(requests[0].headers.get("authorization").is_none());
 }

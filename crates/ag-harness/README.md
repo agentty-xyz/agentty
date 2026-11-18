@@ -554,17 +554,17 @@ so resumed sessions keep plan billing.
 
 ### Custom providers
 
-`provider::ProviderSpec` describes any OpenAI-compatible Chat Completions or Responses
-provider as data, and `ModelClient::from_spec` serves one of its models without new
-code. A specification names its `WireProtocol`, base URL, `Auth` (none, a bearer key, a
-named header, or a refreshing `CredentialSource`), extra headers and query parameters,
-and request policy: structured-output mode, reasoning mapping, reasoning-text replay,
-output-bound field, image input, prompt cache key, and context-overflow markers. Its
-`ReasoningFamily` decides which recorded turns its models replay with their provider
-reasoning intact after a model switch; other turns replay their reasoning as short
-notes. `ProviderSpec::new` starts from the standard request for the protocol with no
-optional capabilities, bounding Chat Completions output with the current `OpenAI` field
-`max_completion_tokens`; a server that ignores it needs
+`provider::ProviderSpec` describes any OpenAI-compatible Chat Completions, Responses, or
+Anthropic Messages provider as data, and `ModelClient::from_spec` serves one of its
+models without new code. A specification names its `WireProtocol`, base URL, `Auth`
+(none, a bearer key, a named header, or a refreshing `CredentialSource`), extra headers
+and query parameters, and request policy: structured-output mode, reasoning mapping,
+reasoning-text replay, output-bound field, image input, prompt cache key, and
+context-overflow markers. Its `ReasoningFamily` decides which recorded turns its models
+replay with their provider reasoning intact after a model switch; other turns replay
+their reasoning as short notes. `ProviderSpec::new` starts from the standard request for
+the protocol with no optional capabilities, bounding Chat Completions output with the
+current `OpenAI` field `max_completion_tokens`; a server that ignores it needs
 `with_max_tokens_field(Some(MaxTokensField::MaxTokens))`. Provider quirks, such as that
 legacy field or turn instructions joined to the preceding user message
 (`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`), are opt-ins that
@@ -615,6 +615,39 @@ credentials or a query in the base URL, and requests follow no redirect.
 `ModelClient::from_spec` declares no context profile, even for a preset whose
 constructor, such as `ModelClient::kimi`, attaches the catalog's, so hosts set the
 budget explicitly.
+
+### Claude through the Anthropic Messages API
+
+`WireProtocol::AnthropicMessages` serves Claude models, and `ProviderSpec::anthropic`
+presets it with an `AnthropicConfig` (the API key, a base URL such as
+`DEFAULT_ANTHROPIC_BASE_URL`, and the model), sending the key as `x-api-key` with an
+`anthropic-version` header. The catalog lists no Claude model yet, so serve it with
+`ModelClient::from_spec` and declare its context profile and prices:
+
+```rust
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{AnthropicConfig, DEFAULT_ANTHROPIC_BASE_URL, ProviderSpec};
+
+let model = ModelClient::from_spec(ProviderSpec::anthropic(AnthropicConfig {
+    api_key: std::env::var("ANTHROPIC_API_KEY")?,
+    base_url: DEFAULT_ANTHROPIC_BASE_URL.to_string(),
+    model: "claude-opus-5-5".to_string(),
+}))?;
+```
+
+Requests are unstreamed. Structured output uses the native `output_config.format`;
+`StructuredOutputMode::ForcedTool` instead reads the answer from a forced
+`structured_output` tool call, for models or schemas native output rejects (current
+Claude models reject forced tools). A reasoning effort turns on summarized adaptive
+thinking for the models that take one. Signed `thinking` and `redacted_thinking` blocks
+are recorded and replayed verbatim in their original place on later requests; every
+Claude model shares one reasoning family, and a switch to another provider carries that
+reasoning as a short note. A request without an output bound sends
+`ProviderSpec::with_default_max_output_tokens` (32,000 by default), since the API
+requires one. Usage counts cache reads and cache writes as input, and
+`Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop fails as an
+incomplete response, a `model_context_window_exceeded` stop or a "prompt is too long"
+`400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and
@@ -820,19 +853,20 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `otel`                | yes     | OpenTelemetry request metrics, `LifecycleMetrics`, `LifecycleTraceObserver`, span context |
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
-| `providers-anthropic` | no      | Reserved for the Anthropic Messages client; enables nothing yet                           |
+| `providers-anthropic` | yes     | The Anthropic Messages preset, `ProviderSpec::anthropic`, for Claude models               |
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
-Either provider feature builds the `provider` module, `ModelClient`, `ProviderSpec` with
-`ModelClient::from_spec` for both wire protocols, and `ModelCatalog::from_environment`
-with every provider's catalog entries; each `ProviderSpec` preset needs its family's
-feature. `ModelProvider::is_enabled` reports whether the build includes a provider's
-family; a client whose family is off fails with
-`ModelConfigurationError::ProviderDisabled` before any credential is read, and
-`ModelCatalog::from_environment` skips it. Without `native-sandbox`, `BashConfig::new`
-is absent and Bash requires `BashConfig::for_executor`. Without `sqlite`, durable
-sessions require `Harness::store`. Features are additive: error enums whose variants
-depend on them are `#[non_exhaustive]`.
+Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
+with `ModelClient::from_spec` for every wire protocol; `providers-openai` or
+`providers-compat` also builds `ModelCatalog::from_environment` with every cataloged
+provider's entries. Each `ProviderSpec` preset needs its family's feature.
+`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
+client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
+any credential is read, and `ModelCatalog::from_environment` skips it. Without
+`native-sandbox`, `BashConfig::new` is absent and Bash requires
+`BashConfig::for_executor`. Without `sqlite`, durable sessions require `Harness::store`.
+Features are additive: error enums whose variants depend on them are
+`#[non_exhaustive]`.
 
 ## Where things live
 
