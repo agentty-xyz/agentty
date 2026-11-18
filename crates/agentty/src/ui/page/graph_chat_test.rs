@@ -1,5 +1,5 @@
-//! Graph chat sidebar sizing, node status, dependency connector, and
-//! overflow rendering unit tests.
+//! Graph chat sidebar sizing, node status, dependency rail, and overflow
+//! rendering unit tests.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -17,9 +17,13 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use unicode_width::UnicodeWidthStr;
 
-use super::{NodeStatus, areas, render, status_label_width, status_spans, summary};
+use super::{
+    NodeStatus, areas, graph_status, render, status_glyph, status_label, status_label_width,
+    summary,
+};
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::style::palette;
@@ -53,12 +57,16 @@ fn sidebar_shows_proposal_lifecycle_and_stale_status() {
     };
 
     // Act / Assert
-    assert!(summary(None).contains("Describe your task"));
-    assert!(summary(Some(&snapshot)).contains("Generating preview"));
+    assert!(summary_text(None).contains("Describe your task"));
+    assert!(summary_text(Some(&snapshot)).contains("Generating preview"));
+    let generating = render_rows(Some(&snapshot), 56, 24);
+    assert!(generating[0].contains("Execution graph · v1"));
+    assert!(!generating[0].contains("done"));
+    assert!(render_rows(None, 56, 24)[0].contains("Execution graph──"));
     snapshot.error = Some("offline".into());
     snapshot.proposal.version.outcome = GraphProposalVersionOutcome::Failed("invalid graph".into());
-    assert!(summary(Some(&snapshot)).contains("Status unavailable (last snapshot): offline"));
-    assert!(summary(Some(&snapshot)).contains("Generation failed: invalid graph"));
+    assert!(summary_text(Some(&snapshot)).contains("Status unavailable (last snapshot): offline"));
+    assert!(summary_text(Some(&snapshot)).contains("Generation failed: invalid graph"));
     snapshot.proposal.version.outcome = GraphProposalVersionOutcome::Generated {
         launch: None,
         response: GraphProposalResponse {
@@ -71,7 +79,55 @@ fn sidebar_shows_proposal_lifecycle_and_stale_status() {
     assert!(sidebar.contains("Needs your input"));
     assert!(!sidebar.contains("Which target?"));
     snapshot.proposal.version.is_cancelled = true;
-    assert!(summary(Some(&snapshot)).contains("Cancelled. No graph was launched."));
+    assert!(summary_text(Some(&snapshot)).contains("Cancelled. No graph was launched."));
+}
+
+#[test]
+fn every_graph_status_has_a_glyph_label_and_semantic_color() {
+    // Arrange
+    let statuses = [
+        (
+            ExecutionGraphStatus::Running,
+            "◐",
+            "Running",
+            palette::info(),
+        ),
+        (
+            ExecutionGraphStatus::Blocked,
+            "●",
+            "Blocked",
+            palette::warning(),
+        ),
+        (
+            ExecutionGraphStatus::Paused,
+            "‖",
+            "Paused",
+            palette::text_muted(),
+        ),
+        (
+            ExecutionGraphStatus::Completed,
+            "✓",
+            "Completed",
+            palette::success(),
+        ),
+        (
+            ExecutionGraphStatus::Failed,
+            "✗",
+            "Failed",
+            palette::danger(),
+        ),
+        (
+            ExecutionGraphStatus::Cancelled,
+            "⊘",
+            "Canceled",
+            palette::text_subtle(),
+        ),
+    ];
+
+    for (status, glyph, label, color) in statuses {
+        // Act / Assert
+        assert_eq!(graph_status(status, 0), (glyph, label, color));
+    }
 }
 
 #[test]
@@ -122,86 +178,161 @@ fn every_node_status_has_a_styled_label_and_matching_width() {
 
     for (status, expected_text, expected_color) in statuses {
         // Act
-        let spans = status_spans(status);
+        let (glyph, color) = status_glyph(status, 0);
         let width = status_label_width(status);
 
         // Assert
-        let text = spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        assert_eq!(text, expected_text);
+        assert_eq!(format!("{glyph} {}", status_label(status)), expected_text);
         assert_eq!(width, expected_text.width());
-        assert!(
-            spans
-                .iter()
-                .all(|span| span.style.fg == Some(expected_color))
-        );
+        assert_eq!(color, expected_color);
     }
 }
 
 #[test]
-fn sidebar_draws_dependency_connectors_and_live_node_status() {
+fn sidebar_draws_dependency_rail_objectives_and_live_node_status() {
     // Arrange
     let mut snapshot = dependency_snapshot();
     let progress = snapshot.progress.take();
+    let row = |left: &str, right: &str| spread(left, right, 58);
 
     // Act
     let preview = inner_rows(Some(&snapshot), 60, 20);
+    let without_objectives = inner_rows(Some(&snapshot), 60, 16);
     snapshot.proposal.version.approval = Some(GraphProposalApproval {
         graph_id: "graph".into(),
         limits: snapshot.proposal.limits.clone(),
         version: 1,
     });
-    let approved = summary(Some(&snapshot));
+    let approved = summary_text(Some(&snapshot));
     snapshot.progress = progress;
-    let buffer = render_buffer(Some(&snapshot), 60, 20);
+    let buffer = render_buffer(Some(&snapshot), 60, 22);
     let running = buffer_inner_rows(&buffer);
 
     // Assert
     assert_eq!(
-        preview[..15],
+        preview,
         [
-            "Proposal v1",
             "Awaiting your approval",
             "",
-            "inspect   ○ Waiting",
-            "  │",
-            "  ▼",
-            "followup  ○ Waiting",
-            "  │ from inspect · accepted summary",
-            "  │ notes",
-            "  ▼",
-            "report    ○ Waiting",
+            row("○ inspect", "Waiting").as_str(),
+            "┊ Inspect the requested change",
+            "┊ after inspect",
+            "┊",
+            row("○ followup", "Waiting").as_str(),
+            "┊ Inspect the requested change",
+            "┊ needs summary accepted from inspect",
+            "┊ needs notes",
+            "┊",
+            row("○ report", "Waiting").as_str(),
+            "  Inspect the requested change",
             "",
-            "audit     ○ Waiting",
+            row("○ audit", "Waiting").as_str(),
+            "  Inspect the requested change",
+            "",
+            "w: details and actions",
+        ]
+    );
+    assert_eq!(
+        without_objectives,
+        [
+            "Awaiting your approval",
+            "",
+            row("○ inspect", "Waiting").as_str(),
+            "┊ after inspect",
+            "┊",
+            row("○ followup", "Waiting").as_str(),
+            "┊ needs summary accepted from inspect",
+            "┊ needs notes",
+            "┊",
+            row("○ report", "Waiting").as_str(),
+            "",
+            row("○ audit", "Waiting").as_str(),
             "",
             "w: details and actions",
         ]
     );
     assert!(approved.contains("Approved; loading execution status"));
     assert_eq!(
-        running[..15],
+        running[..17],
         [
-            "Proposal v1",
-            "Status: Running",
+            "◐ Running",
+            bar(29, 29).as_str(),
             "",
-            "inspect   ✓ Done",
-            "  │ ✓",
-            "  ▼",
-            "followup  ◐ Working",
-            "  │ from inspect · accepted summary ✓",
-            "  │ notes",
-            "  ▼",
-            "report    ○ Waiting",
+            row("✓ inspect", "Done").as_str(),
+            "│ Inspect the requested change",
+            "│ after inspect",
+            "│",
+            row("◐ followup", "Working").as_str(),
+            "┊ Inspect the requested change",
+            "│ needs summary accepted from inspect",
+            "┊ needs notes",
+            "┊",
+            row("○ report", "Waiting").as_str(),
+            "  Inspect the requested change",
             "",
-            "audit     ✗ Failed",
-            "",
-            "w: details and actions",
+            row("✗ audit", "Failed").as_str(),
+            "  Inspect the requested change",
         ]
     );
-    assert_eq!(buffer[(3, 5)].fg, palette::success());
-    assert_eq!(buffer[(3, 10)].fg, palette::text_muted());
+    let title = (0..60)
+        .map(|column| buffer[(column, 0)].symbol())
+        .collect::<String>();
+    assert!(title.starts_with("┌Execution graph · v1"), "{title}");
+    assert!(title.ends_with("1/4 done┐"), "{title}");
+    assert_eq!(buffer[(1, 5)].fg, palette::success());
+    assert_eq!(buffer[(1, 9)].fg, palette::text_muted());
+    assert_eq!(buffer[(1, 4)].fg, palette::success());
+    assert_eq!(buffer[(3, 6)].fg, palette::success());
+    assert_eq!(buffer[(1, 7)].fg, palette::success());
+    assert_eq!(buffer[(1, 12)].fg, palette::text_muted());
+    assert_eq!(buffer[(1, 8)].fg, palette::info());
+    assert!(!buffer[(3, 4)].modifier.contains(Modifier::BOLD));
+    assert!(buffer[(3, 8)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buffer[(1, 20)].fg, palette::accent());
+}
+
+#[test]
+fn active_work_rotates_glyphs_and_sweeps_the_progress_bar() {
+    // Arrange
+    let mut snapshot = dependency_snapshot();
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
+    let highlight_column =
+        |buffer: &Buffer| (1..59u16).find(|column| buffer[(*column, 2)].fg == palette::text());
+
+    // Act
+    let first = render_frame(Some(&snapshot), 60, 20, 0);
+    let second = render_frame(Some(&snapshot), 60, 20, 2);
+    let wrapped = render_frame(Some(&snapshot), 60, 20, 30);
+    let mut settled = snapshot.clone();
+    snapshot.proposal.version.outcome = GraphProposalVersionOutcome::Generating;
+    let generating = summary(Some(&snapshot), 2);
+    let progress = settled.progress.as_mut().expect("progress");
+    progress.status = ExecutionGraphStatus::Completed;
+    progress.nodes[1].status = GraphNodeStatus::Succeeded;
+    let settled = render_frame(Some(&settled), 60, 20, 2);
+
+    // Assert
+    assert_eq!(first[(1, 1)].symbol(), "◐");
+    assert_eq!(first[(1, 7)].symbol(), "◐");
+    assert_eq!(second[(1, 1)].symbol(), "◓");
+    assert_eq!(second[(1, 7)].symbol(), "◓");
+    assert_eq!(first[(14, 2)].fg, palette::success());
+    assert_eq!(first[(16, 2)].fg, palette::info());
+    assert_eq!(first[(30, 2)].fg, palette::text_subtle());
+    assert_eq!(highlight_column(&first), Some(15));
+    assert_eq!(highlight_column(&second), Some(16));
+    assert_eq!(highlight_column(&wrapped), Some(15));
+    assert_eq!(
+        generating.last().map(|(text, _)| text.as_str()),
+        Some("◓ Generating preview...")
+    );
+    assert_eq!(buffer_inner_rows(&settled)[1], bar(29, 29));
+    assert_eq!(highlight_column(&settled), None);
+    assert_eq!(settled[(29, 2)].fg, palette::success());
 }
 
 #[test]
@@ -221,6 +352,8 @@ fn overflowing_sidebar_prioritizes_intervention_and_reserves_controls() {
     progress.nodes[9].status = GraphNodeStatus::Cancelled;
     progress.nodes.remove(8);
 
+    let row = |left: &str, right: &str| spread(left, right, 26);
+
     // Act
     let rows = inner_rows(Some(&snapshot), 28, 14);
 
@@ -228,16 +361,16 @@ fn overflowing_sidebar_prioritizes_intervention_and_reserves_controls() {
     assert_eq!(
         rows,
         [
-            "Proposal v1",
-            "Status: Running",
-            "node-12  ✗ Failed",
-            "nod...  ? Needs your input",
-            "node-13  ○ Waiting",
-            "node-11  ◐ Working",
-            "node-14  ◐ Working",
-            "node-8   ○ Waiting",
-            "node-10  ○ Waiting",
-            "node-0   ✓ Done",
+            "◐ Running",
+            "Awaiting your approval",
+            row("✗ node-12", "Failed").as_str(),
+            "? nod...  Needs your input",
+            row("○ node-13", "Waiting").as_str(),
+            row("◐ node-11", "Working").as_str(),
+            row("◐ node-14", "Working").as_str(),
+            row("○ node-8", "Waiting").as_str(),
+            row("○ node-10", "Waiting").as_str(),
+            row("✓ node-0", "Done").as_str(),
             "+8 more nodes",
             "w: details and actions",
         ]
@@ -263,17 +396,18 @@ fn awaited_output_shows_approval_on_its_producer_and_prioritizes_it() {
     let compact = inner_rows(Some(&snapshot), 72, 8);
 
     // Assert
+    let awaiting = spread("● inspect", "Awaiting your approval", 70);
     assert_eq!(
         full[..5],
         [
-            "Proposal v1",
-            "Status: Blocked",
+            "● Blocked",
             "inspect awaits your approval; reply in chat to accept or revise it",
+            bar(35, 35).as_str(),
             "",
-            "inspect   ● Awaiting your approval",
+            awaiting.as_str(),
         ]
     );
-    assert_eq!(compact[2], "inspect  ● Awaiting your approval");
+    assert_eq!(compact[2], awaiting);
 }
 
 #[test]
@@ -282,7 +416,7 @@ fn awaited_output_without_a_task_conversation_offers_only_acceptance() {
     let snapshot = awaiting_snapshot();
 
     // Act
-    let text = summary(Some(&snapshot));
+    let text = summary_text(Some(&snapshot));
 
     // Assert
     assert!(
@@ -312,7 +446,7 @@ fn awaited_output_a_started_dependent_consumed_offers_only_acceptance() {
         }];
 
     // Act
-    let text = summary(Some(&snapshot));
+    let text = summary_text(Some(&snapshot));
 
     // Assert
     assert!(
@@ -379,20 +513,93 @@ fn long_node_names_wrap_status_or_shorten_without_displacing_controls() {
     }
 
     // Act
-    let full = inner_rows(Some(&snapshot), 28, 13);
+    let full = inner_rows(Some(&snapshot), 28, 15);
     let compact = inner_rows(Some(&snapshot), 28, 8);
 
     // Assert
-    assert!(full[4].starts_with('界'));
-    assert_eq!(full[5], "  ○ Waiting");
-    assert_eq!(full[6], "");
-    assert_eq!(full[8], "  ○ Waiting");
-    assert_eq!(full[10], "w: details and actions");
-    assert!(compact[2].starts_with('界'));
-    assert!(compact[2].ends_with("○ Waiting"));
-    assert!(compact[3].ends_with("○ Waiting"));
+    let wrapped_status = spread("", "Waiting", 26);
+    assert_eq!(full[2], bar(0, 26));
+    for name_row in [4, 8] {
+        assert!(full[name_row].starts_with("○ 界"), "{full:#?}");
+        assert_eq!(full[name_row + 1], wrapped_status);
+        assert!(full[name_row + 2].starts_with("  Inspect"));
+    }
+    assert_eq!(full[7], "");
+    assert_eq!(full[12], "w: details and actions");
+    for row in &compact[2..4] {
+        assert!(row.starts_with("○ 界"), "{compact:#?}");
+        assert!(row.ends_with("  Waiting"));
+    }
     assert_eq!(compact[4], "All nodes (compact)");
     assert_eq!(compact[5], "w: details and actions");
+}
+
+#[test]
+fn long_objectives_wrap_to_a_capped_width_and_shrink_before_hiding() {
+    // Arrange
+    let mut snapshot = graph_snapshot(2);
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        for node in &mut launch.graph.nodes {
+            node.objective = ["alpha"; 30].join(" ");
+        }
+        launch.graph.nodes[1].dependencies = vec![dependency(
+            "node-0",
+            GraphCompletionGate::ResultAccepted {
+                output_name: "plan".into(),
+            },
+        )];
+    }
+    let progress = snapshot.progress.as_mut().expect("progress");
+    progress.nodes[0].status = GraphNodeStatus::Running;
+    progress.nodes[1].status = GraphNodeStatus::Pending;
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
+    let wrapped_row = "alpha alpha alpha alpha";
+
+    // Act
+    let tall = render_buffer(Some(&snapshot), 30, 23);
+    let wrapped = buffer_inner_rows(&tall);
+    let one_row = inner_rows(Some(&snapshot), 30, 13);
+    let hidden = inner_rows(Some(&snapshot), 30, 11);
+
+    // Assert
+    assert_eq!(wrapped[3], spread("◐ node-0", "Working", 28));
+    let rail_row = format!("┊ {wrapped_row}");
+    assert_eq!(
+        wrapped[4..12],
+        [
+            rail_row.as_str(),
+            rail_row.as_str(),
+            rail_row.as_str(),
+            rail_row.as_str(),
+            rail_row.as_str(),
+            "┊ alpha...",
+            "┊ needs plan accepted",
+            "┊",
+        ],
+        "{wrapped:#?}"
+    );
+    assert_eq!(wrapped[12], spread("○ node-1", "Waiting", 28));
+    assert_eq!(wrapped[13], format!("  {wrapped_row}"));
+    assert_eq!(wrapped[18], "  alpha...");
+    assert_eq!(tall[(3, 5)].fg, palette::text_muted());
+    assert!(!tall[(3, 5)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(tall[(3, 11)].fg, palette::accent());
+    assert!(tall[(3, 11)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(one_row[4], format!("┊ {wrapped_row}..."));
+    assert_eq!(one_row[5], "┊ needs plan accepted");
+    assert_eq!(one_row[6], "┊");
+    assert_eq!(one_row[8], format!("  {wrapped_row}..."));
+    assert_eq!(hidden[4], "┊ needs plan accepted");
+    assert_eq!(hidden[5], "┊");
+    assert_eq!(hidden[8], "w: details and actions");
 }
 
 #[test]
@@ -401,10 +608,11 @@ fn sidebar_keeps_full_details_when_they_fit_and_handles_non_node_overflow() {
     let mut snapshot = graph_snapshot(1);
 
     // Act / Assert
-    let text = inner_rows(Some(&snapshot), 80, 24).join("\n");
-    assert!(text.contains("node-0  ✓ Done"));
-    assert!(text.contains("w: details and actions"));
-    assert!(!text.contains("compact"));
+    let rows = inner_rows(Some(&snapshot), 80, 24);
+    assert!(rows.contains(&spread("✓ node-0", "Done", 78)));
+    assert!(rows.contains(&"  Inspect the requested change".to_string()));
+    assert_eq!(rows[21], "w: details and actions");
+    assert!(!rows.join("\n").contains("compact"));
     snapshot.proposal.version.is_cancelled = true;
     snapshot.error = Some("long error ".repeat(50));
     let rows = inner_rows(Some(&snapshot), 28, 12);
@@ -436,13 +644,47 @@ fn sidebar_tolerates_resizing_to_tiny_areas() {
     }
 }
 
+/// Joins summary rows into plain text for content assertions.
+fn summary_text(snapshot: Option<&GraphChatSnapshot>) -> String {
+    summary(snapshot, 0)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Places `left` and `right` at opposite edges of a `width`-column row, as
+/// node rows render their right-aligned status.
+fn spread(left: &str, right: &str, width: usize) -> String {
+    format!(
+        "{left}{}{right}",
+        " ".repeat(width - left.width() - right.width())
+    )
+}
+
 fn render_buffer(snapshot: Option<&GraphChatSnapshot>, width: u16, height: u16) -> Buffer {
+    render_frame(snapshot, width, height, 0)
+}
+
+/// Renders the sidebar at one animation `spinner_frame`.
+fn render_frame(
+    snapshot: Option<&GraphChatSnapshot>,
+    width: u16,
+    height: u16,
+    spinner_frame: usize,
+) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
-        .draw(|frame| render(frame, frame.area(), snapshot))
+        .draw(|frame| render(frame, frame.area(), snapshot, spinner_frame))
         .expect("draw");
 
     terminal.backend().buffer().clone()
+}
+
+/// Progress bar text with `filled` finished or active cells followed by
+/// `track` remaining cells.
+fn bar(filled: usize, track: usize) -> String {
+    format!("{}{}", "━".repeat(filled), "─".repeat(track))
 }
 
 fn render_rows(snapshot: Option<&GraphChatSnapshot>, width: u16, height: u16) -> Vec<String> {

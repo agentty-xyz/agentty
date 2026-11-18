@@ -5,6 +5,7 @@ use crate::app::tab::Tab;
 use crate::domain::agent::AgentKind;
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::PromptGraphState;
 
 impl App {
@@ -171,14 +172,19 @@ impl App {
     }
 
     /// Returns whether the visible session view for `session_id` contains any
-    /// spinner, elapsed-timer, or animated nerpa-greeting state.
+    /// spinner, elapsed-timer, animated nerpa-greeting, or animated graph
+    /// sidebar state.
     fn session_has_tick_driven_ui(&self, session_id: &str) -> bool {
-        self.sessions
-            .state()
-            .session_for_id(session_id)
-            .is_some_and(|session| {
-                session.awaits_first_message() || Self::session_tick_driven_ui_active(session)
-            })
+        self.graph_chat
+            .snapshot(session_id)
+            .is_some_and(GraphChatSnapshot::is_animating)
+            || self
+                .sessions
+                .state()
+                .session_for_id(session_id)
+                .is_some_and(|session| {
+                    session.awaits_first_message() || Self::session_tick_driven_ui_active(session)
+                })
     }
 
     /// Returns whether one session snapshot currently renders any time-driven

@@ -7,6 +7,7 @@ use ag_store::{DbError, MockGraphProposalRepository, MockGraphRepository};
 
 use crate::domain::session::SessionId;
 use crate::presentation::app_mode::AppMode;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::test_support::new_test_app;
 
 #[tokio::test]
@@ -58,6 +59,35 @@ async fn graph_sidebar_loads_saved_proposals_only_for_the_visible_enabled_sessio
     };
     assert!(!app.refresh_graph_chat_if_needed().await);
     assert!(app.graph_chat.snapshot("other").is_none());
+}
+
+#[tokio::test]
+async fn generating_graph_sidebar_drives_periodic_redraws_for_its_session() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    let mut snapshot = GraphChatSnapshot {
+        error: None,
+        progress: None,
+        proposal: test_support::graph_proposal_state("proposal", "session"),
+    };
+    app.mode = AppMode::View {
+        session_id: "session".into(),
+        scroll_offset: None,
+    };
+    let now = app.services.clock().now_instant();
+    app.graph_chat
+        .complete("session".into(), 1, now, Ok(Some(snapshot.clone())));
+
+    // Act
+    let generating_ticks = app.has_visible_tick_driven_ui();
+    snapshot.proposal.version.is_cancelled = true;
+    app.graph_chat
+        .complete("session".into(), 1, now, Ok(Some(snapshot)));
+    let cancelled_ticks = app.has_visible_tick_driven_ui();
+
+    // Assert
+    assert!(generating_ticks);
+    assert!(!cancelled_ticks);
 }
 
 #[tokio::test]

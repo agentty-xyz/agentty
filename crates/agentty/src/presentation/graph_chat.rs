@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    ExecutionGraphProgress, GraphCompletionGate, GraphContext, GraphNode, GraphProposalState,
-    GraphProposalVersionOutcome, QuestionItem, SessionId, push_numbered_questions,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphCompletionGate, GraphContext, GraphNode,
+    GraphNodeStatus, GraphProposalState, GraphProposalVersionOutcome, QuestionItem, SessionId,
+    push_numbered_questions,
 };
 
 /// Short chat report for a settled proposal version. Clarification questions
@@ -291,6 +292,29 @@ pub(crate) struct GraphChatSnapshot {
     pub(crate) error: Option<String>,
     pub(crate) progress: Option<ExecutionGraphProgress>,
     pub(crate) proposal: GraphProposalState,
+}
+
+impl GraphChatSnapshot {
+    /// Returns whether the sidebar animates this snapshot: a preview is
+    /// generating, the launched graph is running, or any node is still queued
+    /// or running (a graph reports `Failed` while siblings keep working).
+    pub(crate) fn is_animating(&self) -> bool {
+        let version = &self.proposal.version;
+        if version.is_cancelled {
+            return false;
+        }
+
+        matches!(version.outcome, GraphProposalVersionOutcome::Generating)
+            || self.progress.as_ref().is_some_and(|progress| {
+                progress.status == ExecutionGraphStatus::Running
+                    || progress.nodes.iter().any(|node| {
+                        matches!(
+                            node.status,
+                            GraphNodeStatus::Queued | GraphNodeStatus::Running
+                        )
+                    })
+            })
+    }
 }
 
 /// Keeps only the visible session. Session updates and proposal creation
