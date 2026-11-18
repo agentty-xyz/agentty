@@ -26,7 +26,7 @@ use crate::repetition::REPETITION_STOP_AT;
 use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::store::MemoryStore;
-use crate::tool::{ReadAction, Tool, ToolCall};
+use crate::tool::{ReadAction, ToolCall, ToolSet};
 use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnOutcome};
 
 /// Scripts the model's responses in order and records every request it
@@ -129,7 +129,7 @@ async fn identical_reads_are_answered_by_pointing_to_the_earlier_result() {
     let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(
             b"line one of a longer manifest\n".repeat(20),
             &opened,
@@ -183,8 +183,7 @@ async fn a_write_between_identical_reads_runs_the_read_again() {
     let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .file_system(counting_file_system(
             b"line one of a longer manifest\n".repeat(20),
             &opened,
@@ -241,7 +240,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
     let harness = Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(file_content(), &opened));
 
     // Act
@@ -266,13 +265,13 @@ async fn superseded_reads_are_cleared_first_and_reported() {
     assert_eq!(notice["superseded_by"], json!("all_lines"));
 }
 
-/// Returns a harness for `model` that allows only `tool`, whose registered
+/// Returns a harness for `model` that offers only `tools`, whose registered
 /// profile declares a window of `budget` tokens, serving every file from
 /// `file_system`.
 fn budgeted_harness(
     model: crate::model::MockModel,
     budget: u64,
-    tool: Tool,
+    tools: ToolSet,
     file_system: MockFileSystem,
 ) -> Harness {
     let mut registry = ModelRegistry::new();
@@ -291,7 +290,7 @@ fn budgeted_harness(
     Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(tool)
+        .tools(tools)
         .file_system(file_system)
 }
 
@@ -317,7 +316,7 @@ async fn read_results_enter_the_request_as_whole_line_pages_within_one_result_sh
     let harness = budgeted_harness(
         model,
         budget,
-        Tool::Read,
+        ToolSet::empty().with_read(),
         counting_file_system(content, &opened),
     );
 
@@ -384,7 +383,7 @@ async fn an_oversized_batch_keeps_its_first_whole_results_and_defers_the_rest() 
     let harness = budgeted_harness(
         model,
         2_200,
-        Tool::Read,
+        ToolSet::empty().with_read(),
         counting_file_system(file_content(), &opened),
     );
 
@@ -453,7 +452,7 @@ async fn malformed_calls_get_error_results_while_their_siblings_run() {
     let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(b"notes\n".to_vec(), &opened));
 
     // Act
@@ -468,7 +467,7 @@ async fn malformed_calls_get_error_results_while_their_siblings_run() {
     let activities = outcome.report().tool_calls();
     assert!(matches!(
         &activities[0],
-        ToolActivity::MalformedArguments { tool: Tool::Read, reason, .. }
+        ToolActivity::MalformedArguments { reason, .. }
             if reason.contains("unknown field `path src/`")
     ));
     assert_eq!((activities[0].name(), activities[0].path()), ("read", ""));
@@ -483,7 +482,7 @@ async fn malformed_calls_get_error_results_while_their_siblings_run() {
         std::panic::resume_unwind(Box::new("batched calls expected"));
     };
     let bad = calls[0].malformed_arguments().expect("kept malformed");
-    assert_eq!((bad.raw(), bad.tool()), (MALFORMED_READ, Tool::Read));
+    assert_eq!((bad.raw(), calls[0].name()), (MALFORMED_READ, "read"));
     assert_eq!(calls[0].arguments_json().expect("raw"), MALFORMED_READ);
     let result = result_for(&requests[1], "bad_read");
     assert_eq!(result["status"], json!("rejected"));
@@ -515,7 +514,7 @@ async fn only_consecutive_all_malformed_responses_count_toward_the_limit() {
     let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(b"notes\n".to_vec(), &opened));
 
     // Act
@@ -540,7 +539,7 @@ async fn consecutive_all_malformed_responses_fail_the_turn_at_the_limit() {
     ]);
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(MockFileSystem::new());
 
     // Act
@@ -576,7 +575,7 @@ async fn malformed_call_results_mark_required_fields() {
     ]);
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_write())
         .file_system(MockFileSystem::new());
 
     // Act
@@ -597,22 +596,25 @@ async fn malformed_call_results_mark_required_fields() {
 
 #[tokio::test]
 async fn denied_unknown_and_malformed_denied_calls_get_unavailable_results() {
-    // Arrange
+    // Arrange: the set offers only `read`, so `bash` is a built-in it
+    // leaves out, while the `read` call beside it runs.
     let (model, requests) = scripted(vec![
         Ok(ModelResponse::ToolCalls(vec![
             malformed("denied_bash", "bash", r#"{"command":"ls"}"#),
             malformed("bad_bash", "bash", "{"),
             malformed("invented", "read_file", r#"{"file":"notes.txt"}"#),
             malformed("dotted", "container.exec", r#"{"cmd":["ls"]}"#),
+            read_of("allowed_read", &json!({"path": "notes.txt"})),
         ])),
         Ok(output()),
     ]);
     let events = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&events);
+    let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
-        .file_system(MockFileSystem::new())
+        .tools(ToolSet::empty().with_read())
+        .file_system(counting_file_system(b"notes\n".to_vec(), &opened))
         .with_lifecycle_observer(move |event: LifecycleEvent| {
             recorded.lock().expect("events lock").push(event);
         });
@@ -652,7 +654,7 @@ async fn denied_unknown_and_malformed_denied_calls_get_unavailable_results() {
     let activity = outcome.report().tool_calls();
     assert_eq!(
         activity.iter().map(ToolActivity::name).collect::<Vec<_>>(),
-        ["bash", "bash", "read_file", "container_exec"]
+        ["bash", "bash", "read_file", "container_exec", "read"]
     );
     assert_eq!(
         activity
@@ -662,7 +664,14 @@ async fn denied_unknown_and_malformed_denied_calls_get_unavailable_results() {
                 _ => None,
             })
             .collect::<Vec<_>>(),
-        reasons.map(Some)
+        [reasons.map(Some).as_slice(), &[None]].concat()
+    );
+    assert!(matches!(activity[4], ToolActivity::Read { .. }));
+    assert_eq!(opened.load(Ordering::SeqCst), 1, "the offered `read` runs");
+    assert!(
+        result_for(&requests[1], "allowed_read")
+            .to_string()
+            .contains("notes")
     );
     let denied = events
         .lock()
@@ -801,7 +810,7 @@ async fn an_unavailable_call_between_identical_reads_keeps_the_repeat() {
     let opened = Arc::new(AtomicUsize::new(0));
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(
             b"line one of a longer manifest\n".repeat(20),
             &opened,
@@ -843,7 +852,7 @@ async fn a_denied_read_past_the_round_share_is_answered_as_unavailable_not_defer
     let harness = budgeted_harness(
         model,
         2_200,
-        Tool::Write,
+        ToolSet::empty().with_write(),
         counting_file_system(file_content(), &opened),
     );
 
@@ -925,8 +934,7 @@ fn repetition_harness(
 
     Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .file_system(counting_file_system(
             b"line one of a longer manifest\n".repeat(20),
             &opened,
@@ -1077,7 +1085,7 @@ fn overflow_harness(model: crate::model::MockModel, budget: u64) -> Harness {
         ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
     )
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .file_system(counting_file_system(
         file_content(),
         &Arc::new(AtomicUsize::new(0)),
@@ -1137,7 +1145,7 @@ async fn run_against_dense_provider(
     let harness = Harness::from_registry(&registry, "dense")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(counting_file_system(
             file_content(),
             &Arc::new(AtomicUsize::new(0)),
@@ -1450,7 +1458,7 @@ async fn requests_only_append_between_rare_context_reductions() {
     let harness = budgeted_harness(
         model,
         12_000,
-        Tool::Read,
+        ToolSet::empty().with_read(),
         counting_file_system(content, &opened),
     );
 
@@ -1551,7 +1559,7 @@ async fn notes_in_reasoning_outlive_the_results_they_describe() {
     let harness = budgeted_harness(
         model,
         12_000,
-        Tool::Read,
+        ToolSet::empty().with_read(),
         counting_file_system(content, &opened),
     );
 

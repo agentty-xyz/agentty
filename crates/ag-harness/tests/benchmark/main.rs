@@ -18,7 +18,7 @@ use ag_harness::lifecycle::{
 use ag_harness::model::ModelClient;
 use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
 use ag_harness::turn::{ModelRequestActivity, ToolActivity};
-use ag_harness::{Harness, OutputSchema, Repository, Tool, TurnOutcome};
+use ag_harness::{Harness, OutputSchema, Repository, ToolSet, TurnOutcome};
 use opentelemetry::global;
 use opentelemetry::trace::SpanId;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
@@ -207,7 +207,7 @@ fn parallel_read(provider: Provider) -> CaseFuture {
         let repository = benchmark_repository(repository.path())?;
         let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .run_once(
                 "In one response, call read twice using exactly the paths alpha.txt and beta.txt \
                  without a ./ prefix. Combine their values as first-second.",
@@ -261,7 +261,7 @@ fn read_recovery(provider: Provider) -> CaseFuture {
         let repository = benchmark_repository(repository.path())?;
         let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .run_once(
                 "First read missing.txt. When that is rejected, recover by reading fallback.txt \
                  and return its code.",
@@ -300,7 +300,7 @@ fn write(provider: Provider) -> CaseFuture {
         let repository = benchmark_repository(repository.path())?;
         let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
-            .allow(Tool::Write)
+            .tools(ToolSet::empty().with_write())
             .run_once(
                 "Use the write tool to change status.txt from status=pending to status=complete.",
                 schema,

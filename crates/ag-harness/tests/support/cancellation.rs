@@ -22,8 +22,8 @@ use ag_harness::store::{
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::{SettlementError, SettlementPhase};
 use ag_harness::{
-    ErrorKind, Harness, Model, ModelError, OutputSchema, RunOutput, RunRequest, SessionError, Tool,
-    ToolPolicy, TurnControl, TurnError, TurnOptions, TurnOutcome,
+    ErrorKind, Harness, Model, ModelError, OutputSchema, RunOutput, RunRequest, SessionError,
+    ToolSet, TurnControl, TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -40,7 +40,7 @@ fn schema() -> OutputSchema {
 }
 
 fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default())
+    TurnOptions::from_output(schema())
 }
 
 async fn bounded<T>(future: impl Future<Output = T>) -> T {
@@ -699,7 +699,7 @@ impl FileSystem for DeferredReplacement {
 }
 
 fn write_options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write))
+    TurnOptions::from_output(schema()).with_tools(ToolSet::empty().with_write())
 }
 
 #[tokio::test]
@@ -1658,8 +1658,7 @@ async fn run_cancelled_during_a_write_settles_it_before_reporting() {
         .create()
         .await
         .expect("session");
-    let run =
-        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let run = session.run(RunRequest::new("write").tools(ToolSet::empty().with_write()));
     let token = run.cancel_token();
     let outcome = tokio::spawn(run.into_future());
     bounded(entered.notified()).await;
@@ -1822,8 +1821,7 @@ async fn run_reports_an_unsettled_write_beside_its_own_result() {
         .create()
         .await
         .expect("session");
-    let run =
-        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let run = session.run(RunRequest::new("write").tools(ToolSet::empty().with_write()));
     let token = run.cancel_token();
     let outcome = tokio::spawn(run.into_future());
     bounded(gate.entered.notified()).await;

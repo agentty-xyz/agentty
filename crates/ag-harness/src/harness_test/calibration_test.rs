@@ -22,7 +22,7 @@ use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
-use crate::tool::{Tool, ToolCall};
+use crate::tool::{ToolCall, ToolSet};
 use crate::turn::{ModelRequestActivity, TurnOutcome};
 
 const BUDGET: u64 = 6_000;
@@ -119,7 +119,7 @@ fn budget() -> ContextBudget {
 fn read_loop_harness(model: InflatingModel) -> Harness {
     Harness::new(model, budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(notes_file_system())
 }
 
@@ -240,7 +240,7 @@ async fn switching_models_discards_the_calibration() {
     let harness = Harness::from_registry(&registry, "inflated")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(notes_file_system())
         .store(Arc::new(MemoryStore::new()));
     let mut session = harness
@@ -310,7 +310,7 @@ async fn registered_profiles_weigh_requests_with_their_estimator() {
         Harness::from_registry(&registry, key)
             .expect("harness")
             .repository(Repository::fixture("repo"))
-            .allow(Tool::Read)
+            .tools(ToolSet::empty().with_read())
             .file_system(notes_file_system())
             .store(Arc::new(MemoryStore::new()))
     };

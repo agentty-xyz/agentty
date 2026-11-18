@@ -14,7 +14,7 @@ use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolCall;
 use ag_harness::{
     CancelToken, ErrorKind, Harness, Model, ModelError, OutputSchema, Run, RunHandle, RunOutcome,
-    RunOutput, RunRequest, Tool, ToolPolicy, Usage,
+    RunOutput, RunRequest, ToolSet, Usage,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -335,7 +335,7 @@ async fn one_shot_run_lists_its_bash_commands() -> Result<(), Box<dyn Error>> {
     .repository(repository_with_host_git(&root));
     let request = RunRequest::new("printf scripted")
         .output(OutputSchema::new(json!({"type": "object"}))?)
-        .tool_policy(ToolPolicy::default().allow(Tool::Bash))
+        .tools(ToolSet::empty().with_bash())
         .bash(configuration);
 
     // Act

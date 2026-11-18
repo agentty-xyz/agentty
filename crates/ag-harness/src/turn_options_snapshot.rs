@@ -9,7 +9,8 @@ use thiserror::Error;
 
 use crate::comparison::ComparisonIdentity;
 use crate::request_option::GenerationParams;
-use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
+use crate::tool_handler::BuiltinPermissions;
+use crate::{OutputSchema, OutputSchemaError, TurnOptions};
 
 /// Versioned durable metadata, independent of live repository validation.
 #[derive(Debug, Deserialize)]
@@ -34,9 +35,10 @@ pub struct StoredTurnOptions {
     max_tool_calls: Option<NonZeroUsize>,
     /// Output schema, or, from version 6, `null` for a plain-text turn.
     output_schema: Value,
-    tool_policy: ToolPolicy,
-    /// Tool names of a turn whose tool set was not the built-in default,
-    /// in advertised order; absent for the default set.
+    /// Built-in tools the turn offered.
+    tool_policy: BuiltinPermissions,
+    /// Tool names of a turn whose tool set held more than built-ins in
+    /// their advertised order, in advertised order; absent otherwise.
     #[serde(default)]
     tools: Option<Vec<String>>,
     version: u8,
@@ -57,7 +59,7 @@ impl StoredTurnOptions {
             output_schema: options
                 .schema()
                 .map_or(Value::Null, |schema| schema.value().clone()),
-            tool_policy: options.tool_policy(),
+            tool_policy: options.tools().permissions(),
             tools: options.tools().recorded_names(),
             version: 6,
         };
@@ -141,7 +143,8 @@ impl StoredTurnOptions {
             value["instructions"] = json!(self.instructions);
             value["generation"] = json!(self.generation);
         }
-        // Absent for the default set, so earlier fingerprints still match.
+        // Absent for built-ins in their advertised order, so earlier
+        // fingerprints still match.
         if let Some(tools) = &self.tools {
             value["tools"] = json!(tools);
         }

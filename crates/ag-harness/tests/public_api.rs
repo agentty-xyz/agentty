@@ -126,8 +126,8 @@ use ag_harness::{ComparisonBase, Session, SessionBuilder};
 use ag_harness::{
     ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent, ImageMediaType, InputBlock,
     Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, Role, RunError, RunOutput, RunRequest, SessionError, Tool, ToolPolicy,
-    TurnError, TurnInput, TurnInputError, TurnOptions,
+    RepositoryError, Role, RunError, RunOutput, RunRequest, SessionError, ToolSet, TurnError,
+    TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -274,7 +274,7 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
                 .store(store)
                 .repository(repository)
                 .file_system(NameFileSystem)
-                .allow(Tool::Read);
+                .tools(ToolSet::empty().with_read());
             let mut chat = harness
                 .session(format!("external-{batched}"), extraction_schema()?)
                 .system_prompt("Extract names")
@@ -400,7 +400,7 @@ fn external_adapter_constructs_a_validated_write_call() -> Result<(), Box<dyn Er
     let malformed = invalid
         .malformed_arguments()
         .ok_or("unsafe path kept as malformed")?;
-    assert_eq!(malformed.tool(), ag_harness::Tool::Write);
+    assert_eq!(invalid.name(), "write");
     assert_eq!(malformed.raw(), r#"{"path":"../secret","patch":"patch"}"#);
     assert!(malformed.reason().contains("path"));
     assert!(matches!(
@@ -513,7 +513,6 @@ async fn external_consumer_runs_a_turn_with_its_tool_handler() -> Result<(), Box
     // Arrange
     let definition = ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"}))?;
     let tools = ag_harness::ToolSet::builder()
-        .read()
         .handler(Arc::new(Clock(definition)))
         .build()?;
     let harness = Harness::builder()
@@ -545,6 +544,162 @@ async fn external_consumer_runs_a_turn_with_its_tool_handler() -> Result<(), Box
     ));
 
     Ok(())
+}
+
+/// Calls `read` and `write` together, records the tools each request
+/// advertises, and answers with every tool result by call ID.
+struct ReadAndWriteModel {
+    advertised: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+#[async_trait]
+impl Model for ReadAndWriteModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        self.advertised
+            .lock()
+            .map_err(|_| ModelError::request(io::Error::other("advertised lock poisoned")))?
+            .push(
+                request
+                    .tools()
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .collect(),
+            );
+        let results = request
+            .messages()
+            .iter()
+            .filter_map(|message| match message {
+                ModelMessage::ToolResult {
+                    call_id, content, ..
+                } => Some((call_id.clone(), json!(content))),
+                _ => None,
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let response = if results.is_empty() {
+            ModelResponse::ToolCalls(vec![
+                ToolCall::from_json("read".into(), "read", r#"{"path":"name.txt"}"#, None)?,
+                ToolCall::from_json(
+                    "write".into(),
+                    "write",
+                    r#"{"path":"name.txt","patch":"+Grace"}"#,
+                    None,
+                )?,
+            ])
+        } else {
+            ModelResponse::Output(serde_json::Value::Object(results))
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn external_consumer_restricts_built_ins_with_a_tool_set_alone() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let read_only = ToolSet::empty().with_read();
+    let advertised = Arc::new(Mutex::new(Vec::new()));
+    let directory = tempfile::tempdir()?;
+    let unrepositoried = Harness::builder()
+        .model(Arc::new(ExternalModel))
+        .context_budget(unbounded_context_budget())
+        .tools(read_only.clone())
+        .build()
+        .err()
+        .ok_or("a built-in needs a repository")?;
+    let harness = Harness::builder()
+        .model(Arc::new(ReadAndWriteModel {
+            advertised: Arc::clone(&advertised),
+        }))
+        .context_budget(unbounded_context_budget())
+        .repository(repository_fixture::repository_with_host_git(
+            directory.path(),
+        ))
+        .file_system(NameFileSystem)
+        .tools(read_only)
+        .build()?;
+
+    // Act
+    let outcome = harness
+        .run(
+            RunRequest::new("Read and write the name")
+                .output(OutputSchema::new(json!({"type": "object"}))?),
+        )
+        .await;
+
+    // Assert
+    assert!(matches!(
+        unrepositoried.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::RepositoryRequired)
+    ));
+    let RunOutput::Json(results) = outcome.result? else {
+        return Err("JSON output expected".into());
+    };
+    assert!(
+        results["read"]
+            .as_str()
+            .is_some_and(|read| read.contains("Ada")),
+        "{results}"
+    );
+    let write: serde_json::Value =
+        serde_json::from_str(results["write"].as_str().ok_or("write result")?)?;
+    assert_eq!(write["status"], "unavailable");
+    assert_eq!(
+        advertised
+            .lock()
+            .map_err(|_| io::Error::other("advertised lock poisoned"))?[0],
+        ["read"]
+    );
+    assert!(matches!(
+        outcome.report.tool_calls(),
+        [
+            ag_harness::turn::ToolActivity::Read { .. },
+            ag_harness::turn::ToolActivity::Unavailable { tool, .. },
+        ] if tool == "write"
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[expect(
+    deprecated,
+    reason = "covers the deprecated policy mapping for external callers"
+)]
+fn external_consumer_deprecated_tool_policy_maps_onto_a_tool_set() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let read_only = ToolSet::empty().with_read();
+    let policy = ag_harness::ToolPolicy::default().allow(ag_harness::Tool::Read);
+    let definition =
+        ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"})).expect("tool");
+    let host_only = ToolSet::builder()
+        .handler(Arc::new(Clock(definition)))
+        .build()
+        .expect("tool set");
+
+    // Act
+    let options = TurnOptions::from_output(schema.clone()).with_tools(read_only.clone());
+    let legacy = TurnOptions::new(schema.clone(), policy);
+    let legacy_hosted = TurnOptions::new(schema, policy).with_tools(host_only.clone());
+
+    // Assert
+    assert_eq!(legacy.tools(), &read_only);
+    assert_eq!(legacy, options, "equal options offer the same tools");
+    assert_eq!(legacy.tool_policy(), policy);
+    assert_eq!(legacy.tool_policy(), options.tool_policy());
+    assert_eq!(
+        legacy.with_tools(ToolSet::builtins()),
+        options.with_tools(ToolSet::builtins()),
+        "equal options stay interchangeable after a later set"
+    );
+    assert_eq!(legacy_hosted.tools(), &host_only);
+    assert_eq!(
+        legacy_hosted.tool_policy(),
+        ag_harness::ToolPolicy::default(),
+        "the getter reports the built-ins of the offered set"
+    );
+    assert_eq!(ag_harness::Tool::Read.name(), "read");
 }
 
 #[test]
@@ -1207,7 +1362,7 @@ async fn external_consumer_observes_a_repeated_call_nudge_then_stop() -> Result<
             directory.path(),
         ))
         .file_system(NameFileSystem)
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .with_lifecycle_observer(move |event: ag_harness::lifecycle::LifecycleEvent| {
             if let LifecycleEventKind::ToolCallsRepeated {
                 repeats, stopped, ..
@@ -1320,7 +1475,7 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
             .database(directory.path().join("harness.db"))
             .repository(repository)
             .file_system(file_system)
-            .allow(Tool::Write);
+            .tools(ToolSet::empty().with_write());
         let harness = if memory {
             harness.store(store.clone())
         } else {
@@ -1388,8 +1543,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         ))
         .file_system(NameFileSystem);
     let schema = extraction_schema()?;
-    let policy = ToolPolicy::default().allow(Tool::Read);
-    let options = TurnOptions::new(schema.clone(), policy);
+    let options = TurnOptions::from_output(schema.clone()).with_tools(ToolSet::empty().with_read());
 
     // Act
     let once = harness.turn("Read the name", options.clone()).await?;
@@ -1398,7 +1552,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .turn("Read the name")
         .options(options.clone())
         .await?;
-    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read));
+    let denied = TurnOptions::from_output(schema.clone());
     let recalled = session.turn("Recall the name").options(denied).await?;
 
     // Assert
@@ -1453,7 +1607,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     };
     assert_eq!((repeated.name(), repeated.path()), ("read", "name.txt"));
     assert_eq!(options.schema(), Some(&schema));
-    assert!(options.tool_policy().allows(Tool::Read));
+    assert_eq!(options.tools().names().collect::<Vec<_>>(), ["read"]);
     let requests = requests
         .lock()
         .map_err(|_| io::Error::other("requests lock poisoned"))?;
@@ -1514,14 +1668,12 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
     let harness = Harness::new(ExternalComparisonModel, unbounded_context_budget())
         .repository(repository)
         .database(directory.path().join("comparison.db"));
-    let options = TurnOptions::new(
-        extraction_schema()?,
-        ToolPolicy::default().allow(Tool::Read),
-    )
-    .with_comparison_base(base.clone());
+    let options = TurnOptions::from_output(extraction_schema()?)
+        .with_tools(ToolSet::empty().with_read())
+        .with_comparison_base(base.clone());
     let run_request = RunRequest::new("inspect base")
         .output(extraction_schema()?)
-        .tool_policy(ToolPolicy::default().allow(Tool::Read))
+        .tools(ToolSet::empty().with_read())
         .comparison_base(base.clone());
 
     // Act
@@ -1878,7 +2030,7 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
     .store(Arc::new(MemoryStore::new()))
     .execution_identity(ExecutionIdentity::new("echo", "1").expect("identity"));
     let schema = extraction_schema()?;
-    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let options = || TurnOptions::from_output(schema.clone());
     let mut session = harness
         .session("host-images", schema.clone())
         .create()
@@ -2039,11 +2191,9 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
         256,
     )?
     .with_host_information();
-    let options = TurnOptions::new(
-        OutputSchema::new(json!({"type": "object"}))?,
-        ToolPolicy::default().allow(Tool::Bash),
-    )
-    .with_bash(configuration);
+    let options = TurnOptions::from_output(OutputSchema::new(json!({"type": "object"}))?)
+        .with_tools(ToolSet::empty().with_bash())
+        .with_bash(configuration);
     let advertised = Arc::new(Mutex::new(Vec::new()));
     let model = BashDrivingModel {
         advertised: Arc::clone(&advertised),

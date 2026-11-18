@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicUsize;
 
 use ag_harness::model::ModelProfile;
 use ag_harness::provider::ModelProvider;
-use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnOptions};
+use ag_harness::{Harness, Repository, ToolSet, TurnOptions};
 use serde_json::json;
 use tokio::io::BufReader;
 
@@ -33,7 +33,7 @@ fn test_models()
 }
 
 fn test_options() -> TurnOptions {
-    TurnOptions::new(chat_schema().expect("schema"), ToolPolicy::default())
+    TurnOptions::from_output(chat_schema().expect("schema"))
 }
 
 #[tokio::test]
@@ -48,7 +48,7 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
     )
     .database(directory.path().join("harness.db"))
     .repository(repository)
-    .allow(Tool::Read);
+    .tools(ToolSet::empty().with_read());
     let mut session = harness
         .session(
             "session-a",

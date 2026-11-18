@@ -1,7 +1,7 @@
 //! Shell commands run through a host-selected executor.
 //!
-//! Bash is the only tool that needs per-turn configuration: enable
-//! `Tool::Bash` in the policy and attach a [`BashConfig`] with
+//! Bash is the only tool that needs per-turn configuration: add `bash` to
+//! the turn's `ToolSet` and attach a [`BashConfig`] with
 //! `TurnOptions::with_bash`. `BashConfig::new` selects the native sandbox
 //! with the `native-sandbox` feature; [`BashConfig::for_executor`] selects a
 //! host [`BashExecutor`] such as [`UnsandboxedExecutor`], which enforces no

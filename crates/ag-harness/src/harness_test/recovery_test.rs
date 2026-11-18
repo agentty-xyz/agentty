@@ -18,9 +18,12 @@ use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
 use crate::store_fixture::{image_input, png_image};
-use crate::{
-    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
-};
+use crate::{InputBlock, OutputSchema, SessionError, ToolSet, TurnError, TurnInput, TurnOptions};
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated policy API"
+)]
+use crate::{Tool, ToolPolicy};
 
 #[tokio::test]
 async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_schema() {
@@ -29,7 +32,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object","properties":{"first":{"type":"string"},"second":{"type":"string"}}})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let options = TurnOptions::from_output(schema.clone());
     let mut session = harness
         .session("session", schema)
         .create()
@@ -41,7 +44,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
 
     // Act / Assert
     let reordered = OutputSchema::new(serde_json::from_str(r#"{"properties":{"second":{"type":"string"},"first":{"type":"string"}},"type":"object"}"#).expect("json")).expect("schema");
-    let reordered = TurnOptions::new(reordered, ToolPolicy::default());
+    let reordered = TurnOptions::from_output(reordered);
     assert_eq!(
         request,
         session
@@ -49,14 +52,8 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
             .expect("canonical")
     );
     for changed in [
-        TurnOptions::new(
-            OutputSchema::new(json!({"type":"object"})).expect("schema"),
-            ToolPolicy::default(),
-        ),
-        TurnOptions::new(
-            options.output().clone(),
-            ToolPolicy::default().allow(Tool::Read),
-        ),
+        TurnOptions::from_output(OutputSchema::new(json!({"type":"object"})).expect("schema")),
+        options.clone().with_tools(ToolSet::empty().with_read()),
         options.clone().with_bash(
             BashConfig::for_executor(
                 Arc::new(UnsandboxedExecutor::without_isolation()),
@@ -129,7 +126,7 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let options = TurnOptions::from_output(schema.clone());
     let mut session = harness
         .session("session", schema)
         .create()
@@ -207,6 +204,11 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: fingerprints recorded through the deprecated `ToolPolicy` \
+              stay recognizable"
+)]
 async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
     // Arrange
     let mut registry = ModelRegistry::new();
@@ -238,15 +240,85 @@ async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
         .host_request("id".into(), &TurnInput::from("input"), &options)
         .expect("registered request");
 
+    let selected_by_set = session
+        .host_request(
+            "id".into(),
+            &TurnInput::from("input"),
+            &TurnOptions::from_output(options.output().clone()),
+        )
+        .expect("set-selected request");
+
     // Assert
     assert_eq!(
         unregistered.fingerprint(),
         "v1:4da118733f1dc225fd3d6836bafb287d27bb611b81af0f03202074545abef38e"
     );
     assert_eq!(
+        selected_by_set.fingerprint(),
+        registered.fingerprint(),
+        "an empty tool set records what an empty policy recorded"
+    );
+    assert_eq!(
         registered.fingerprint(),
         "v1:60d02cbde3eee3f8aea370b7c97b13abcba7b33ee707fb21a99f77e44825f0a0"
     );
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated policy keeps the fingerprint it recorded"
+)]
+async fn built_in_selections_keep_the_fingerprints_their_policies_recorded() {
+    // Arrange
+    let harness = Harness::new(model(), unbounded_context_budget())
+        .store(Arc::new(MemoryStore::new()))
+        .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
+    let session = harness
+        .session("session", schema.clone())
+        .create()
+        .await
+        .expect("session");
+    // Fingerprints the `read`-only and all-built-ins policies recorded
+    // before tool sets existed.
+    let cases = [
+        (
+            ToolPolicy::default().allow(Tool::Read),
+            ToolSet::empty().with_read(),
+            "v1:027fb7acc14e17791afa1df094542d884fbdc56cf082235c3f8fb0cda0656315",
+        ),
+        (
+            ToolPolicy::default()
+                .allow(Tool::Read)
+                .allow(Tool::Write)
+                .allow(Tool::Bash),
+            ToolSet::empty().with_bash().with_write().with_read(),
+            "v1:f011cf5ed35073ec4fe8d6d547d1280902596fdd2ee21f8dc4f6c5b70f700fb8",
+        ),
+    ];
+
+    for (policy, tools, recorded) in cases {
+        // Act
+        let legacy = session
+            .host_request(
+                "id".into(),
+                &TurnInput::from("input"),
+                &TurnOptions::new(schema.clone(), policy),
+            )
+            .expect("policy request");
+        let selected = session
+            .host_request(
+                "id".into(),
+                &TurnInput::from("input"),
+                &TurnOptions::from_output(schema.clone()).with_tools(tools),
+            )
+            .expect("set request");
+
+        // Assert
+        assert_eq!(legacy.fingerprint(), recorded);
+        assert_eq!(selected.fingerprint(), recorded);
+    }
 }
 
 #[tokio::test]

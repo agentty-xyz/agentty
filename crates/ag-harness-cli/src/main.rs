@@ -21,8 +21,8 @@ use ag_harness::provider::{
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
 use ag_harness::{
-    ComparisonBase, Harness, Model, OutputSchema, Repository, Session, Tool, ToolPolicy,
-    TurnOptions, TurnOutcome,
+    ComparisonBase, Harness, Model, OutputSchema, Repository, Session, ToolSet, TurnOptions,
+    TurnOutcome,
 };
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
@@ -814,11 +814,8 @@ async fn comparison_options(
     revision: Option<&str>,
     allow_write: bool,
 ) -> Result<TurnOptions, CliError> {
-    let mut policy = ToolPolicy::default().allow(Tool::Read);
-    if allow_write {
-        policy = policy.allow(Tool::Write);
-    }
-    let options = TurnOptions::new(chat_schema()?, policy);
+    let options =
+        TurnOptions::from_output(chat_schema()?).with_tools(repository_tools(allow_write));
 
     match revision {
         Some(revision) => {
@@ -840,17 +837,26 @@ fn configured_harness(
         .database(database)
         .model_reasoning_effort(reasoning_effort)
         .repository(repository)
-        .allow(Tool::Read);
+        .tools(repository_tools(allow_write));
     if trace {
         harness = harness.with_lifecycle_observer(LifecycleTraceObserver::new());
     }
     if allow_write {
-        harness = harness.allow(Tool::Write);
-
         (harness, READ_WRITE_SYSTEM_PROMPT)
     } else {
         (harness, READ_ONLY_SYSTEM_PROMPT)
     }
+}
+
+/// Returns the built-in repository tools a turn offers: `read`, plus
+/// `write` when writes are allowed.
+fn repository_tools(allow_write: bool) -> ToolSet {
+    let tools = ToolSet::empty().with_read();
+    if allow_write {
+        return tools.with_write();
+    }
+
+    tools
 }
 
 fn stored_model_identity(info: &SessionInfo) -> Result<(ModelProvider, String), CliError> {

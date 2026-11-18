@@ -7,19 +7,16 @@ use super::{AdmissionState, ModelSwitch, NewTurn, TurnAdmission};
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::policy::ToolPolicy;
 use crate::recovery::{
     ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
 };
 use crate::schema_contract::OutputSchema;
 use crate::store::{Admission, StoredTurnOptions};
-use crate::{SessionError, Tool, TurnOptions};
+use crate::{SessionError, ToolSet, TurnOptions};
 
-fn options(tool_policy: ToolPolicy) -> TurnOptions {
-    TurnOptions::new(
-        OutputSchema::new(json!({"type": "object"})).expect("schema"),
-        tool_policy,
-    )
+fn options(tools: ToolSet) -> TurnOptions {
+    TurnOptions::from_output(OutputSchema::new(json!({"type": "object"})).expect("schema"))
+        .with_tools(tools)
 }
 
 fn request(fingerprint: &str) -> HostRequest {
@@ -58,7 +55,7 @@ fn recorded_request_is_classified_before_generation_and_busy_state() {
     // Arrange
     let admission = TurnAdmission::new(
         TurnInput::from("retry"),
-        options(ToolPolicy::default()),
+        options(ToolSet::empty()),
         Some(request("same")),
         0,
     );
@@ -82,7 +79,7 @@ fn reused_host_id_with_another_request_conflicts() {
     // Arrange
     let admission = TurnAdmission::new(
         TurnInput::from("retry"),
-        options(ToolPolicy::default()),
+        options(ToolSet::empty()),
         Some(request("changed")),
         0,
     );
@@ -103,7 +100,7 @@ fn turn_admission_requires_current_generation_and_an_idle_session() {
     // Arrange
     let admission = TurnAdmission::new(
         TurnInput::from("prompt"),
-        options(ToolPolicy::default()),
+        options(ToolSet::empty()),
         None,
         0,
     );
@@ -133,7 +130,7 @@ fn turn_admission_requires_current_generation_and_an_idle_session() {
 #[test]
 fn admitted_turn_records_the_selected_options_whatever_the_latest_options() {
     // Arrange
-    let selected = options(ToolPolicy::default());
+    let selected = options(ToolSet::empty());
     let admission = TurnAdmission::new(
         TurnInput::from("prompt"),
         selected.clone(),
@@ -144,7 +141,7 @@ fn admitted_turn_records_the_selected_options_whatever_the_latest_options() {
         latest_options,
         ..AdmissionState::default()
     };
-    let changed = StoredTurnOptions::encode(&options(ToolPolicy::default().allow(Tool::Read)));
+    let changed = StoredTurnOptions::encode(&options(ToolSet::empty().with_read()));
 
     // Act
     let admitted = [
@@ -167,7 +164,7 @@ fn undecodable_latest_options_reject_admission() {
     // Arrange
     let admission = TurnAdmission::new(
         TurnInput::from("prompt"),
-        options(ToolPolicy::default()),
+        options(ToolSet::empty()),
         None,
         0,
     );

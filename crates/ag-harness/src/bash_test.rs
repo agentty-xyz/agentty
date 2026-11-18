@@ -13,7 +13,8 @@ use crate::bash::{
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
 use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
-use crate::{OutputSchema, Tool, ToolPolicy, TurnOptions};
+#[expect(deprecated, reason = "covers the legacy policy serialization")]
+use crate::{OutputSchema, Tool, ToolPolicy, ToolSet, TurnOptions};
 
 /// Returns the native sandbox configuration, or a host executor's without
 /// the `native-sandbox` feature.
@@ -88,11 +89,9 @@ fn grant_limits_reject_the_next_entry_without_changing_the_original() {
 }
 
 fn options(configuration: BashConfig) -> TurnOptions {
-    TurnOptions::new(
-        OutputSchema::new(json!({"type":"object"})).expect("schema"),
-        ToolPolicy::default().allow(Tool::Bash),
-    )
-    .with_bash(configuration)
+    TurnOptions::from_output(OutputSchema::new(json!({"type":"object"})).expect("schema"))
+        .with_tools(ToolSet::empty().with_bash())
+        .with_bash(configuration)
 }
 
 #[test]
@@ -149,6 +148,7 @@ fn validates_arguments_and_exposes_bounded_tool_contract_without_debug_content()
 }
 
 #[test]
+#[expect(deprecated, reason = "covers the legacy policy serialization")]
 fn default_denial_and_legacy_policy_serialization_remain_stable() {
     // Arrange
     let policy = ToolPolicy::default();

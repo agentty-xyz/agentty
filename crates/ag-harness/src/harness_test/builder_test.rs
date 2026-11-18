@@ -7,12 +7,14 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
+use async_trait::async_trait;
+use serde_json::{Value, json};
 
 use super::support::{model, object_schema, response_without_metadata};
 use crate::catalog::{CatalogError, ModelCatalog, ModelSpec, Role};
 use crate::context::{
-    ContextBudget, ContextBudgetError, ContextSummaryPolicy, HeuristicContextEstimator,
+    ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
+    HeuristicContextEstimator,
 };
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::error::{ErrorKind, HarnessError};
@@ -22,11 +24,17 @@ use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
 use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
-use crate::policy::ToolPolicy;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::SessionStore;
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated `Harness::allow`"
+)]
 use crate::tool::Tool;
+use crate::tool::{
+    ToolContext, ToolDefinition, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet,
+};
 
 /// Request weight declared by the profile estimator, distinguishing it
 /// from the default estimator's zero request cost.
@@ -99,10 +107,15 @@ fn build_with_an_invalid_declared_profile_reports_it() {
 #[test]
 fn build_with_repository_tools_but_no_repository_reports_it() {
     // Arrange
-    let builders = [Tool::Bash, Tool::Read, Tool::Write].map(|tool| {
+    let tool_sets = [
+        ToolSet::empty().with_bash(),
+        ToolSet::empty().with_read(),
+        ToolSet::empty().with_write(),
+    ];
+    let builders = tool_sets.map(|tools| {
         Harness::builder()
             .model(Arc::new(profiled_model(Some(declared_profile()))))
-            .allow(tool)
+            .tools(tools)
     });
 
     // Act
@@ -320,8 +333,7 @@ async fn build_applies_every_configured_option() {
         .model(Arc::new(profiled_model(Some(declared_profile()))))
         .store(Arc::clone(&store))
         .repository(Repository::fixture("root"))
-        .allow(Tool::Read)
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .file_system(file_system)
         .max_history_bytes(NonZeroUsize::new(64).expect("non-zero"))
         .model_reasoning_effort(ReasoningEffort::High)
@@ -341,8 +353,8 @@ async fn build_applies_every_configured_option() {
     );
     assert_eq!(config.repository, Some(Repository::fixture("root")));
     assert_eq!(
-        config.policy,
-        ToolPolicy::default().allow(Tool::Read).allow(Tool::Write)
+        config.tools.resolve().names().collect::<Vec<_>>(),
+        ["read", "write"]
     );
     assert_eq!(
         config
@@ -548,6 +560,103 @@ async fn registered_context_window_sets_the_history_budget_unless_overridden() {
 }
 
 #[tokio::test]
+async fn the_window_history_budget_weighs_the_default_set_definitions() {
+    // Arrange
+    let host: Arc<dyn ToolHandler> = Arc::new(Clock);
+    let hosted = ToolSet::builder()
+        .handler(Arc::clone(&host))
+        .build()
+        .expect("tool set");
+    let estimator = HeuristicContextEstimator::DEFAULT;
+    let cases = [
+        (hosted, estimator.tool_definition_weight(&host.definition())),
+        (
+            ToolSet::empty().with_read(),
+            estimator.tool_definition_weight(&ToolDefinition::read_with_comparison_base(None)),
+        ),
+    ];
+    let no_tools = windowed_session_history_bytes(|harness| harness).await;
+
+    for (tools, weight) in cases {
+        // Act
+        let with_tools = windowed_session_history_bytes(move |harness| harness.tools(tools)).await;
+
+        // Assert
+        // Four history bytes per token of every advertised definition.
+        assert_eq!(
+            no_tools - with_tools,
+            4 * usize::try_from(weight).expect("weight")
+        );
+    }
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated default policy weighs only its built-ins"
+)]
+async fn the_window_history_budget_weighs_the_built_ins_a_deprecated_policy_allows() {
+    // Act
+    let allowed = windowed_session_history_bytes(|harness| harness.allow(Tool::Read)).await;
+    let selected =
+        windowed_session_history_bytes(|harness| harness.tools(ToolSet::empty().with_read())).await;
+
+    // Assert
+    assert_eq!(allowed, selected);
+}
+
+/// Returns the retained history bytes of a new session on a registered
+/// harness with a declared context window, after `configure`.
+async fn windowed_session_history_bytes(configure: impl FnOnce(Harness) -> Harness) -> usize {
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("windowed", "1").expect("identity"),
+            model(),
+            ModelCapabilities::new(declared_profile()),
+        )
+        .expect("register");
+    let harness = Harness::from_registry(&registry, "windowed")
+        .expect("registered harness")
+        .store(Arc::new(MemoryStore::new()));
+
+    configure(harness)
+        .session("windowed", object_schema())
+        .create()
+        .await
+        .expect("session should be created")
+        .history
+        .max_bytes
+}
+
+/// A host tool whose definition the history budget weighs; it never runs.
+struct Clock;
+
+#[async_trait]
+impl ToolHandler for Clock {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "clock",
+            "Return the current time.",
+            json!({"type": "object"}),
+        )
+        .expect("valid definition")
+    }
+
+    fn effects(&self) -> ToolEffects {
+        ToolEffects::ReadOnly
+    }
+
+    async fn call(
+        &self,
+        _arguments: Value,
+        _context: ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        unreachable!("the history budget never runs a tool")
+    }
+}
+
+#[tokio::test]
 async fn undeclared_context_window_keeps_the_default_history_budget() {
     // Arrange
     let harness = Harness::builder()
@@ -653,14 +762,14 @@ fn reconfiguring_a_clone_leaves_the_shared_configuration_unchanged() {
     assert!(Arc::ptr_eq(&harness.inner, &shared.inner));
 
     // Act
-    let reconfigured = shared.allow(Tool::Read);
+    let reconfigured = shared.tools(ToolSet::empty().with_read());
 
     // Assert
     assert!(!Arc::ptr_eq(&harness.inner, &reconfigured.inner));
-    assert_eq!(harness.inner.policy, ToolPolicy::default());
+    assert!(harness.inner.tools.resolve().is_empty());
     assert_eq!(
-        reconfigured.inner.policy,
-        ToolPolicy::default().allow(Tool::Read)
+        reconfigured.inner.tools.resolve(),
+        ToolSet::empty().with_read()
     );
     #[cfg(feature = "sqlite")]
     assert!(Arc::ptr_eq(

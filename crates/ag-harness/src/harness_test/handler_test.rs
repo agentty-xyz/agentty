@@ -28,7 +28,12 @@ use crate::tool::{
     ToolCall, ToolContext, ToolDefinition, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet,
 };
 use crate::turn::{HostToolOutcome, ToolActivity, TurnError};
-use crate::{ComparisonBase, Repository, RunRequest, Tool, ToolPolicy, TurnOptions};
+use crate::{ComparisonBase, Repository, RunRequest, TurnOptions};
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage of the deprecated policy API"
+)]
+use crate::{Tool, ToolPolicy};
 
 /// SHA-256 of the built-in definitions advertised with every built-in
 /// allowed, no comparison base, and an unsandboxed `bash`, serialized as
@@ -502,8 +507,8 @@ async fn a_durable_turn_names_its_session_and_replays_host_calls() {
 #[tokio::test]
 async fn a_host_id_reused_with_another_tool_set_conflicts() {
     // Arrange
-    let (model, _requests) = scripted(vec![output()]);
-    let harness = harness(model, ToolSet::builtins())
+    let (model, requests) = scripted(vec![output()]);
+    let harness = harness(model, ToolSet::empty())
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("scripted", "1").expect("identity"));
     let mut session = harness
@@ -511,7 +516,7 @@ async fn a_host_id_reused_with_another_tool_set_conflicts() {
         .create()
         .await
         .expect("session");
-    let options = || TurnOptions::new(object_schema(), ToolPolicy::default());
+    let options = || TurnOptions::from_output(object_schema());
     let host_only = tool_set(Recorder::new(Answer::Echo));
 
     // Act
@@ -523,7 +528,7 @@ async fn a_host_id_reused_with_another_tool_set_conflicts() {
         .expect("first turn");
     let retried = session
         .turn("ask")
-        .options(options().with_tools(ToolSet::builtins()))
+        .options(options().with_tools(ToolSet::empty()))
         .host_id("job")
         .await
         .expect("same request");
@@ -536,6 +541,70 @@ async fn a_host_id_reused_with_another_tool_set_conflicts() {
     // Assert
     assert_eq!(retried.output(), first.output());
     assert!(matches!(changed, Err(SessionError::HostTurnConflict)));
+    assert_eq!(
+        requests.lock().expect("requests lock").len(),
+        1,
+        "the equivalent request replays the recorded turn"
+    );
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: requests recorded through the deprecated `ToolPolicy` \
+              replay"
+)]
+async fn a_host_request_recorded_with_a_deprecated_policy_replays_with_its_tool_set() {
+    // Arrange
+    let cases: [&[Tool]; 3] = [&[], &[Tool::Read], &[Tool::Read, Tool::Write, Tool::Bash]];
+    let (model, requests) = scripted(cases.iter().map(|_| output()).collect());
+    let harness = harness(model, ToolSet::empty())
+        .repository(Repository::fixture("repo"))
+        .store(Arc::new(MemoryStore::new()))
+        .execution_identity(ExecutionIdentity::new("scripted", "1").expect("identity"));
+    let mut session = harness
+        .session("legacy", object_schema())
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let mut replays = Vec::new();
+    for (index, allowed) in cases.into_iter().enumerate() {
+        let host_id = format!("job_{index}");
+        let policy = allowed
+            .iter()
+            .fold(ToolPolicy::default(), |policy, tool| policy.allow(*tool));
+        let recorded = session
+            .turn("ask")
+            .options(
+                TurnOptions::new(object_schema(), policy).with_bash(bash_config(Enforcement::None)),
+            )
+            .host_id(host_id.clone())
+            .await
+            .expect("recorded turn");
+        let replayed = session
+            .turn("ask")
+            .options(
+                TurnOptions::from_output(object_schema())
+                    .with_tools(selected_builtins(allowed))
+                    .with_bash(bash_config(Enforcement::None)),
+            )
+            .host_id(host_id)
+            .await
+            .expect("replayed turn");
+        replays.push((recorded.output().clone(), replayed.output().clone()));
+    }
+
+    // Assert
+    assert_eq!(
+        requests.lock().expect("requests lock").len(),
+        cases.len(),
+        "every replay returns the recorded turn without a model call"
+    );
+    for (recorded, replayed) in replays {
+        assert_eq!(replayed, recorded);
+    }
 }
 
 /// A host tool that hands its context's cancellation to a task, which
@@ -633,13 +702,13 @@ async fn a_run_tool_set_replaces_the_default_and_orders_host_and_built_in_tools(
         .write()
         .build()
         .expect("tool set");
-    let write = call("write_0", "write", r#"{"path":"a.txt","patch":"+x"}"#);
-    let (model, requests) = scripted(vec![ModelResponse::ToolCall(write), output()]);
+    let bash = call("bash_0", "bash", r#"{"command":"ls"}"#);
+    let (model, requests) = scripted(vec![ModelResponse::ToolCall(bash), output()]);
     let harness = Harness::builder()
         .model(Arc::new(model))
         .context_budget(unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .build()
         .expect("harness");
 
@@ -660,21 +729,68 @@ async fn a_run_tool_set_replaces_the_default_and_orders_host_and_built_in_tools(
         .iter()
         .map(ToolDefinition::name)
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        ["fetch", "read"],
-        "write is in the set but not allowed"
-    );
+    assert_eq!(names, ["fetch", "read", "write"]);
     let unavailable: Value =
-        serde_json::from_str(&result_for(&requests[1], "write_0")).expect("JSON result");
+        serde_json::from_str(&result_for(&requests[1], "bash_0")).expect("JSON result");
     assert_eq!(
         unavailable["hint"],
-        "This call did not run. Call only the available tools (`fetch`, `read`) with their \
-         documented arguments, or give your final response."
+        "This call did not run. Call only the available tools (`fetch`, `read`, `write`) with \
+         their documented arguments, or give your final response."
     );
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated run policy offers its built-ins unless a set \
+              wins"
+)]
+async fn a_deprecated_run_policy_offers_its_built_ins_unless_the_run_gives_a_set() {
+    // Arrange
+    let default_set = tool_set(Recorder::new(Answer::Echo))
+        .to_builder()
+        .read()
+        .write()
+        .build()
+        .expect("tool set");
+    let read_only = || ToolPolicy::default().allow(Tool::Read);
+    let requests = [
+        request().tool_policy(read_only()),
+        request().tool_policy(read_only()).tools(ToolSet::empty()),
+        request().tools(ToolSet::empty()).tool_policy(read_only()),
+    ];
+
+    // Act
+    let mut advertised = Vec::new();
+    for run in requests {
+        let (model, sent) = scripted(vec![output()]);
+        let harness = Harness::builder()
+            .model(Arc::new(model))
+            .context_budget(unbounded_context_budget())
+            .repository(Repository::fixture("repo"))
+            .tools(default_set.clone())
+            .build()
+            .expect("harness");
+        harness.run(run).await.result.as_ref().expect("run output");
+        let names = sent.lock().expect("requests lock")[0]
+            .tools()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>();
+        advertised.push(names);
+    }
+
+    // Assert
+    // The policy replaces the harness's default set with its built-ins, and
+    // a run's own set wins whatever the call order.
+    assert_eq!(advertised, [vec!["read".to_string()], vec![], vec![]]);
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: a deprecated harness policy never filters a set"
+)]
 async fn built_ins_need_a_repository_only_in_turns_that_offer_them() {
     // Arrange: the builder's set offers only `fetch`, so the allowed `read`
     // needs no repository until a turn's own set offers it again.
@@ -745,24 +861,14 @@ impl BashExecutor for Claiming {
     }
 }
 
-/// Returns the definitions one turn sends to the model when `allowed`
-/// tools are allowed, with a comparison base when `compared`, and `bash`
-/// claiming `enforcement`.
-async fn sent_definitions(
-    compared: bool,
-    enforcement: Enforcement,
-    allowed: &[Tool],
-) -> Vec<ToolDefinition> {
-    let (model, requests) = scripted(vec![output()]);
-    let harness = harness(model, ToolSet::builtins()).repository(Repository::fixture("repo"));
-    let policy = allowed
-        .iter()
-        .fold(ToolPolicy::default(), |policy, tool| policy.allow(*tool));
+/// Returns a `bash` configuration whose executor claims `enforcement`.
+fn bash_config(enforcement: Enforcement) -> BashConfig {
     let executor: Arc<dyn BashExecutor> = match enforcement {
         Enforcement::None => Arc::new(UnsandboxedExecutor::without_isolation()),
         _ => Arc::new(Claiming(enforcement)),
     };
-    let bash = BashConfig::for_executor(
+
+    BashConfig::for_executor(
         executor,
         "/bin/bash".into(),
         "revision".into(),
@@ -770,8 +876,54 @@ async fn sent_definitions(
         1024,
     )
     .expect("bash configuration")
-    .with_host_information();
-    let mut options = TurnOptions::new(object_schema(), policy).with_bash(bash);
+    .with_host_information()
+}
+
+/// Returns the built-ins in `allowed` as a set, in their advertised order.
+#[expect(deprecated, reason = "maps the deprecated `Tool` cases onto sets")]
+fn selected_builtins(allowed: &[Tool]) -> ToolSet {
+    let mut tools = ToolSet::empty();
+    if allowed.contains(&Tool::Read) {
+        tools = tools.with_read();
+    }
+    if allowed.contains(&Tool::Write) {
+        tools = tools.with_write();
+    }
+    if allowed.contains(&Tool::Bash) {
+        tools = tools.with_bash();
+    }
+
+    tools
+}
+
+/// Returns the definitions one turn sends to the model when it offers the
+/// built-ins in `allowed`, with a comparison base when `compared`, and
+/// `bash` claiming `enforcement`. The built-ins are selected through a
+/// [`ToolSet`], or through the deprecated [`ToolPolicy`] when `legacy` is
+/// set.
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: the deprecated `ToolPolicy` sends the same definitions"
+)]
+async fn sent_definitions(
+    compared: bool,
+    enforcement: Enforcement,
+    allowed: &[Tool],
+    legacy: bool,
+) -> Vec<ToolDefinition> {
+    let (model, requests) = scripted(vec![output()]);
+    let harness = harness(model, ToolSet::empty()).repository(Repository::fixture("repo"));
+    let bash = bash_config(enforcement);
+    let options = if legacy {
+        let policy = allowed
+            .iter()
+            .fold(ToolPolicy::default(), |policy, tool| policy.allow(*tool));
+
+        TurnOptions::new(object_schema(), policy)
+    } else {
+        TurnOptions::from_output(object_schema()).with_tools(selected_builtins(allowed))
+    };
+    let mut options = options.with_bash(bash);
     if compared {
         options = options.with_comparison_base(ComparisonBase::fixture("repo"));
     }
@@ -791,6 +943,10 @@ fn triple(definition: &ToolDefinition) -> Value {
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "legacy-mapping coverage: the deprecated `ToolPolicy` sends the same definitions"
+)]
 async fn built_in_definitions_sent_to_the_model_are_unchanged() {
     // Arrange
     let golden: Value = serde_json::from_str(BUILTIN_DEFINITIONS).expect("golden JSON");
@@ -829,12 +985,15 @@ async fn built_in_definitions_sent_to_the_model_are_unchanged() {
 
     // Act
     let mut sent = Vec::new();
+    let mut sent_with_policy = Vec::new();
     for (compared, enforcement, allowed, _keys) in cases {
-        let definitions = sent_definitions(compared, enforcement, allowed).await;
-        sent.push(json!({
-            "case": format!("compared: {compared}, enforcement: {enforcement:?}, allowed: {allowed:?}"),
-            "definitions": definitions.iter().map(triple).collect::<Vec<_>>(),
-        }));
+        for (legacy, sent) in [(false, &mut sent), (true, &mut sent_with_policy)] {
+            let definitions = sent_definitions(compared, enforcement, allowed, legacy).await;
+            sent.push(json!({
+                "case": format!("compared: {compared}, enforcement: {enforcement:?}, allowed: {allowed:?}"),
+                "definitions": definitions.iter().map(triple).collect::<Vec<_>>(),
+            }));
+        }
     }
 
     // Assert
@@ -848,6 +1007,7 @@ async fn built_in_definitions_sent_to_the_model_are_unchanged() {
         })
         .collect::<Vec<_>>();
     assert_eq!(sent, expected);
+    assert_eq!(sent_with_policy, expected);
     let legacy = ["read", "write", "bash_none"]
         .map(|key| golden[key].clone())
         .to_vec();

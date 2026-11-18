@@ -15,7 +15,7 @@ use ag_harness::store::{
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
-    SessionError, ToolPolicy, TurnError, TurnInput, TurnOptions,
+    SessionError, TurnError, TurnInput, TurnOptions,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -28,7 +28,7 @@ pub(crate) fn schema() -> OutputSchema {
 }
 
 pub(crate) fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default())
+    TurnOptions::from_output(schema())
 }
 
 pub(crate) fn png_image(payload: &[u8]) -> ImageContent {

@@ -22,7 +22,7 @@ use crate::harness::Harness;
 use crate::model::{MockModel, ModelMessage, ModelRequest, ModelResponse};
 use crate::repository::Repository;
 use crate::store::MemoryStore;
-use crate::tool::{Tool, ToolCall};
+use crate::tool::{ToolCall, ToolSet};
 
 /// Turns each scenario runs; enough for history to outgrow its limit
 /// several times.
@@ -149,7 +149,7 @@ async fn turns_append_to_the_history_earlier_turns_sent_within_the_byte_budget()
     let directory = tempdir().expect("temporary directory");
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(notes_file_system())
         .database(directory.path().join("harness.db"))
         .max_history_bytes(NonZeroUsize::new(16 * 1024).expect("nonzero"));
@@ -183,7 +183,7 @@ async fn turns_append_to_the_history_earlier_turns_sent_within_the_context_budge
         ContextBudget::new(NonZeroU64::new(6_000).expect("nonzero")),
     )
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .file_system(notes_file_system())
     .store(Arc::new(MemoryStore::new()));
 

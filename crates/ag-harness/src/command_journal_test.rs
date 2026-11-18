@@ -11,7 +11,7 @@ use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTer
 #[cfg(feature = "sqlite")]
 use crate::store::SqliteStore;
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, TurnOwner};
-use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnOptions};
+use crate::{OutputSchema, SessionError, TurnInput, TurnOptions};
 
 /// Returns an empty memory store and an empty in-memory SQLite store.
 #[cfg(feature = "sqlite")]
@@ -78,7 +78,7 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
     // Arrange
     for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+        let options = TurnOptions::from_output(schema.clone());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
@@ -171,7 +171,7 @@ async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
     // Arrange
     for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+        let options = TurnOptions::from_output(schema.clone());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
@@ -227,7 +227,7 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
     // Arrange
     for store in command_stores().await {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+        let options = TurnOptions::from_output(schema.clone());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await

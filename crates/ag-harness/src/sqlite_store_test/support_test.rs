@@ -469,7 +469,7 @@ pub(super) async fn wait_for_interrupted_turn(database: &Database, turn_position
 }
 
 pub(super) fn turn_options() -> crate::TurnOptions {
-    crate::TurnOptions::new(schema(), crate::ToolPolicy::default())
+    crate::TurnOptions::from_output(schema())
 }
 
 /// Makes every owned-turn interruption fail until [`allow_interrupts`].

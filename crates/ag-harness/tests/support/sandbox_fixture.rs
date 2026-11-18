@@ -10,9 +10,7 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SqliteStore;
 use ag_harness::tool::ToolCall;
-use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnOptions,
-};
+use ag_harness::{Harness, Model, ModelError, OutputSchema, Repository, ToolSet, TurnOptions};
 use async_trait::async_trait;
 use serde_json::json;
 use tempfile::TempDir;
@@ -108,7 +106,8 @@ impl Workspace {
         .with_write("output".into())
         .expect("write grant");
 
-        TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+        TurnOptions::from_output(schema())
+            .with_tools(ToolSet::empty().with_bash())
             .with_bash(with_runtime(configuration, extra))
     }
 
@@ -133,7 +132,8 @@ impl Workspace {
                 .with_write("output".into())
                 .expect("write grant");
 
-                TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+                TurnOptions::from_output(schema())
+                    .with_tools(ToolSet::empty().with_bash())
                     .with_bash(configuration)
             }
         }

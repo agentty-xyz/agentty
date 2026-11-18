@@ -2,7 +2,7 @@
 
 use std::env;
 
-use ag_harness::{Repository, Tool};
+use ag_harness::Repository;
 use clap::Parser;
 
 use super::support::test_git_executable;
@@ -119,10 +119,12 @@ async fn comparison_selection_is_explicit_validated_and_preserves_permissions() 
 
     // Assert
     assert!(absent.comparison_base().is_none());
-    assert!(absent.tool_policy().allows(Tool::Read));
-    assert!(!absent.tool_policy().allows(Tool::Write));
+    assert_eq!(absent.tools().names().collect::<Vec<_>>(), ["read"]);
     assert!(selected.comparison_base().is_some());
-    assert!(selected.tool_policy().allows(Tool::Write));
+    assert_eq!(
+        selected.tools().names().collect::<Vec<_>>(),
+        ["read", "write"]
+    );
     assert!(matches!(invalid, Err(CliError::ComparisonBase(_))));
 }
 

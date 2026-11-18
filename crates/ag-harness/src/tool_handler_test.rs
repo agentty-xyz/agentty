@@ -61,9 +61,9 @@ fn builtins_are_ordered_read_write_bash() {
     assert_eq!(built, builtins);
     assert_eq!(builtins.len(), 3);
     assert!(!builtins.is_empty());
-    assert!(builtins.includes(Tool::Bash));
+    assert!(builtins.has_builtin());
     assert!(ToolSet::empty().is_empty());
-    assert!(!ToolSet::empty().includes(Tool::Read));
+    assert!(!ToolSet::empty().has_builtin());
     assert_eq!(format!("{builtins:?}"), r#"["read", "write", "bash"]"#);
 }
 
@@ -102,7 +102,7 @@ fn builder_keeps_insertion_order_and_compares_handlers_by_instance() {
 
     // Assert
     assert_eq!(set.names().collect::<Vec<_>>(), ["echo", "read"]);
-    assert!(!set.includes(Tool::Write));
+    assert!(!set.permissions().allows(Builtin::Write));
     assert_eq!(set, same);
     assert_ne!(set, other_instance);
     assert_ne!(set, other_builtin);
@@ -218,13 +218,103 @@ fn a_set_extends_another_through_its_builder() {
 }
 
 #[test]
-fn only_a_set_other_than_the_built_ins_is_recorded() {
+fn with_builtin_methods_add_each_built_in_once_in_advertised_order() {
+    // Arrange
+    let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
+    let hosted = ToolSet::builder()
+        .handler(Arc::clone(&echo))
+        .write()
+        .build()
+        .expect("tool set");
+
+    // Act
+    let selected = ToolSet::empty().with_read().with_write().with_bash();
+    let reversed = ToolSet::empty().with_bash().with_write().with_read();
+    let repeated = ToolSet::empty().with_read().with_read();
+    let extended = hosted.with_bash().with_read();
+
+    // Assert
+    assert_eq!(selected, ToolSet::builtins());
+    // Call order changes neither the set nor how it is recorded.
+    assert_eq!(reversed, ToolSet::builtins());
+    assert_eq!(reversed.recorded_names(), None);
+    assert_eq!(repeated.names().collect::<Vec<_>>(), ["read"]);
+    assert_eq!(
+        extended.names().collect::<Vec<_>>(),
+        ["echo", "read", "write", "bash"]
+    );
+}
+
+#[test]
+fn permissions_list_the_built_ins_a_set_holds_and_restrict_it() {
+    // Arrange
+    let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
+    let set = ToolSet::builder()
+        .bash()
+        .handler(echo)
+        .read()
+        .build()
+        .expect("tool set");
+    let read_only = BuiltinPermissions::default().allow(Builtin::Read);
+
+    // Act
+    let permissions = set.permissions();
+    let restricted = set.restricted_to(read_only);
+
+    // Assert
+    assert_eq!(
+        permissions,
+        BuiltinPermissions::default()
+            .allow(Builtin::Bash)
+            .allow(Builtin::Read)
+    );
+    assert!(!permissions.deny(Builtin::Bash).allows(Builtin::Bash));
+    assert_eq!(restricted.names().collect::<Vec<_>>(), ["echo", "read"]);
+    assert_eq!(
+        serde_json::to_value(permissions).expect("permissions"),
+        json!({"bash": true, "read": true, "write": false})
+    );
+    assert_eq!(
+        serde_json::to_value(read_only).expect("permissions"),
+        json!({"read": true, "write": false})
+    );
+}
+
+#[test]
+fn a_selection_offers_its_set_or_else_the_built_ins_a_legacy_policy_allows() {
+    // Arrange
+    let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
+    let hosted = ToolSet::builder()
+        .handler(echo)
+        .write()
+        .build()
+        .expect("tool set");
+    let mut legacy = ToolSelection::default();
+    legacy.allow(Builtin::Read);
+    let mut both = legacy.clone();
+    both.tools = Some(hosted.clone());
+
+    // Act
+    let nothing = ToolSelection::default().resolve();
+    let legacy_builtins = legacy.resolve();
+    let set_wins = both.resolve();
+
+    // Assert
+    assert!(nothing.is_empty());
+    assert_eq!(legacy_builtins.names().collect::<Vec<_>>(), ["read"]);
+    // The deprecated policy never filters a set: `write` stays offered.
+    assert_eq!(set_wins, hosted);
+}
+
+#[test]
+fn only_a_set_other_than_built_ins_in_advertised_order_is_recorded() {
     // Arrange
     let set = ToolSet::builder()
         .handler(Arc::new(Echo("echo")))
         .bash()
         .build()
         .expect("tool set");
+    let reordered = ToolSet::builder().bash().read().build().expect("tool set");
 
     // Act
     let names = set.recorded_names();
@@ -233,6 +323,12 @@ fn only_a_set_other_than_the_built_ins_is_recorded() {
     // Assert
     assert_eq!(ToolSet::builtins().recorded_names(), None);
     assert_eq!(ToolSet::builtins().identity(), None);
+    assert_eq!(ToolSet::empty().with_write().recorded_names(), None);
+    assert_eq!(ToolSet::empty().identity(), None);
+    assert_eq!(
+        reordered.recorded_names(),
+        Some(vec!["bash".to_string(), "read".to_string()])
+    );
     assert_eq!(names, Some(vec!["echo".to_string(), "bash".to_string()]));
     assert_eq!(
         identity,

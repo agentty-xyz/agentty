@@ -17,8 +17,8 @@ use tokio::time::Instant;
 /// is recorded as failed like any other failure, or as interrupted when the
 /// wall-clock limit drops a running tool call, its outcome keeps the usage
 /// of every completed model request, and the session accepts the next run.
-/// Counted limits are nonzero; to run without tools, use
-/// [`crate::ToolPolicy`].
+/// Counted limits are nonzero; to run without tools, give the run an empty
+/// [`crate::ToolSet`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RunLimits {

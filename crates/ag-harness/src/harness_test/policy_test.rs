@@ -22,7 +22,7 @@ use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
 use crate::model::{MockModel, ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::tool::{ToolCall, ToolDefinition};
 use crate::turn::TurnError;
-use crate::{Repository, Tool, ToolPolicy, TurnOptions};
+use crate::{Repository, ToolSet, TurnOptions};
 
 #[tokio::test]
 async fn rejects_schema_invalid_output_from_injected_model() {
@@ -459,7 +459,8 @@ async fn bash_permission_requires_host_configuration_and_host_information_grant(
     model.expect_complete().never();
     let harness =
         Harness::new(model, unbounded_context_budget()).repository(Repository::fixture("repo"));
-    let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Bash));
+    let options =
+        TurnOptions::from_output(object_schema()).with_tools(ToolSet::empty().with_bash());
     let configuration = BashConfig::for_executor(
         Arc::new(UnsandboxedExecutor::without_isolation()),
         "/bin/bash".into(),

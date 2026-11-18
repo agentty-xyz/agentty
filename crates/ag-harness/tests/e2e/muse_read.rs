@@ -4,7 +4,7 @@ use std::io::{self, Write as _};
 use std::path::PathBuf;
 
 use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
-use ag_harness::{Harness, OutputSchema, Repository, Tool};
+use ag_harness::{Harness, OutputSchema, Repository, ToolSet};
 use serde_json::json;
 
 use crate::DynError;
@@ -49,7 +49,7 @@ async fn inspect_manifest(model: Muse, git_executable: PathBuf) -> Result<(), Dy
     let repository = Repository::new(env!("CARGO_MANIFEST_DIR"), git_executable)?;
     let output = Harness::new(model, unbounded_context_budget())
         .repository(repository)
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .run_once(PROMPT, schema)
         .await?;
     let output = serde_json::to_string_pretty(output.output())?;

@@ -2,7 +2,8 @@
 //!
 //! Every tool a turn advertises is a [`ToolHandler`]: the built-in `read`,
 //! `write`, and `bash` tools are handlers too. A [`ToolSet`] lists the
-//! handlers in the order their definitions are sent to the model.
+//! handlers in the order their definitions are sent to the model, and a
+//! turn offers exactly the tools its set holds.
 
 use std::error::Error;
 use std::fmt;
@@ -10,12 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::cancellation::TurnControl;
 use crate::event::{RunId, SessionId};
-use crate::tool::{Tool, ToolDefinition};
+use crate::tool::{Builtin, ToolDefinition};
 use crate::turn::{ToolActivity, TurnError};
 
 /// Whether a result fits the share of the context budget one result may
@@ -264,11 +266,11 @@ impl Error for ToolError {
 
 /// An ordered set of tools with unique names.
 ///
-/// A turn advertises its tools in this order. The default,
-/// [`Self::builtins`], holds `read`, `write`, and `bash`; a built-in in a
-/// set is offered only while the turn's [`crate::ToolPolicy`] allows it.
-/// Host [`ToolHandler`]s are offered whenever they are in the set, and do
-/// not need a repository.
+/// A turn offers exactly the tools of its set, in this order, and runs
+/// every call through the handler of its name. [`Self::builtins`] holds
+/// `read`, `write`, and `bash`, which need a repository; host
+/// [`ToolHandler`]s do not. The harness offers no tools until the host
+/// gives it a set.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ToolSet {
@@ -280,7 +282,7 @@ pub struct ToolSet {
 pub(crate) enum ToolEntry {
     /// A built-in tool, bound to the turn's repository and options when the
     /// turn starts.
-    Builtin(Tool),
+    Builtin(Builtin),
     /// A host handler with the definition read when it was added, which the
     /// turn advertises and dispatches by.
     Handler {
@@ -301,13 +303,48 @@ impl ToolEntry {
 impl ToolSet {
     /// Returns the built-in tools in their advertised order: `read`,
     /// `write`, then `bash`.
+    ///
+    /// The set holds `bash`, so every turn offering it needs a
+    /// [`crate::bash::BashConfig`], as [`Self::with_bash`] describes. For
+    /// harness defaults used without one, select
+    /// `ToolSet::empty().with_read().with_write()` instead.
     pub fn builtins() -> Self {
         Self {
-            entries: [Tool::Read, Tool::Write, Tool::Bash]
-                .into_iter()
-                .map(ToolEntry::Builtin)
-                .collect(),
+            entries: Builtin::ALL.into_iter().map(ToolEntry::Builtin).collect(),
         }
+    }
+
+    /// Returns this set with the built-in `read`, unless the set already
+    /// holds it.
+    ///
+    /// Built-ins added this way keep their advertised order, `read`, `write`,
+    /// then `bash`, whatever order the calls come in, so equal selections
+    /// record and fingerprint alike; handlers keep their positions.
+    ///
+    /// Unlike [`ToolSetBuilder::read`], which rejects a second `read` with
+    /// [`ToolSetError::DuplicateName`], this is idempotent: it cannot fail.
+    #[must_use]
+    pub fn with_read(self) -> Self {
+        self.with_builtin(Builtin::Read)
+    }
+
+    /// Returns this set with the built-in `write`, unless the set already
+    /// holds it; ordered and idempotent like [`Self::with_read`].
+    #[must_use]
+    pub fn with_write(self) -> Self {
+        self.with_builtin(Builtin::Write)
+    }
+
+    /// Returns this set with the built-in `bash`, unless the set already
+    /// holds it; ordered and idempotent like [`Self::with_read`].
+    ///
+    /// A turn offering `bash` fails unless it has a
+    /// [`crate::bash::BashConfig`], which the harness defaults never carry:
+    /// give it with [`crate::RunRequest::bash`] or
+    /// [`crate::TurnOptions::with_bash`] for each run or turn.
+    #[must_use]
+    pub fn with_bash(self) -> Self {
+        self.with_builtin(Builtin::Bash)
     }
 
     /// Starts a builder holding this set's tools, to extend a default set,
@@ -354,24 +391,82 @@ impl ToolSet {
         &self.entries
     }
 
-    /// Returns whether the set holds the built-in `tool`.
-    pub(crate) fn includes(&self, tool: Tool) -> bool {
+    /// Returns this set with `builtin` added before the first built-in that
+    /// follows it in the advertised order, or last, unless the set already
+    /// holds it. Built-ins so keep their advertised order whatever order they
+    /// are added in, and handlers keep their positions. No handler takes a
+    /// built-in's name, so the name stays unique.
+    fn with_builtin(mut self, builtin: Builtin) -> Self {
+        if self.permissions().allows(builtin) {
+            return self;
+        }
+
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| matches!(entry, ToolEntry::Builtin(held) if *held > builtin))
+            .unwrap_or(self.entries.len());
+        self.entries.insert(index, ToolEntry::Builtin(builtin));
+
+        self
+    }
+
+    /// Returns whether the set holds any built-in tool, which needs a
+    /// repository.
+    pub(crate) fn has_builtin(&self) -> bool {
         self.entries
             .iter()
-            .any(|entry| matches!(entry, ToolEntry::Builtin(builtin) if *builtin == tool))
+            .any(|entry| matches!(entry, ToolEntry::Builtin(_)))
     }
 
-    /// Returns the tool names in order, or `None` for [`Self::builtins`],
-    /// which durable records leave out so earlier records stay comparable.
+    /// Returns the built-ins the set holds, as durable records and request
+    /// fingerprints store them.
+    pub(crate) fn permissions(&self) -> BuiltinPermissions {
+        self.entries.iter().fold(
+            BuiltinPermissions::default(),
+            |permissions, entry| match entry {
+                ToolEntry::Builtin(builtin) => permissions.allow(*builtin),
+                ToolEntry::Handler { .. } => permissions,
+            },
+        )
+    }
+
+    /// Returns this set without the built-ins `allowed` denies, mapping a
+    /// deprecated [`crate::ToolPolicy`] onto the set.
+    pub(crate) fn restricted_to(&self, allowed: BuiltinPermissions) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| match entry {
+                    ToolEntry::Builtin(builtin) => allowed.allows(*builtin),
+                    ToolEntry::Handler { .. } => true,
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Returns whether the set holds only built-ins, in their advertised
+    /// order: the sets a [`crate::ToolPolicy`] selected before tool sets
+    /// existed, which durable records describe by their permissions alone.
+    fn is_builtin_selection(&self) -> bool {
+        *self == Self::builtins().restricted_to(self.permissions())
+    }
+
+    /// Returns the tool names in order, or `None` for a set of built-ins in
+    /// their advertised order, which durable records describe by their
+    /// permissions alone so earlier records stay comparable.
     pub(crate) fn recorded_names(&self) -> Option<Vec<String>> {
-        (*self != Self::builtins()).then(|| self.names().map(str::to_string).collect())
+        (!self.is_builtin_selection()).then(|| self.names().map(str::to_string).collect())
     }
 
-    /// Returns what identifies the set in a host request, or `None` for
-    /// [`Self::builtins`]: each built-in by name and each host tool by its
-    /// advertised definition, in order.
+    /// Returns what identifies the set in a host request, or `None` for a
+    /// set of built-ins in their advertised order, which the request's
+    /// permissions identify: each built-in by name and each host tool by
+    /// its advertised definition, in order.
     pub(crate) fn identity(&self) -> Option<Value> {
-        (*self != Self::builtins()).then(|| {
+        (!self.is_builtin_selection()).then(|| {
             self.entries
                 .iter()
                 .map(|entry| match entry {
@@ -423,19 +518,24 @@ pub struct ToolSetBuilder {
 }
 
 impl ToolSetBuilder {
-    /// Adds the built-in `read`; the turn's policy must still allow it.
+    /// Adds the built-in `read`. Like every name, it may be added once:
+    /// adding it again makes [`Self::build`] return
+    /// [`ToolSetError::DuplicateName`], unlike the idempotent
+    /// [`ToolSet::with_read`].
     pub fn read(self) -> Self {
-        self.push(ToolEntry::Builtin(Tool::Read))
+        self.push(ToolEntry::Builtin(Builtin::Read))
     }
 
-    /// Adds the built-in `write`; the turn's policy must still allow it.
+    /// Adds the built-in `write`, once, like [`Self::read`].
     pub fn write(self) -> Self {
-        self.push(ToolEntry::Builtin(Tool::Write))
+        self.push(ToolEntry::Builtin(Builtin::Write))
     }
 
-    /// Adds the built-in `bash`; the turn's policy must still allow it.
+    /// Adds the built-in `bash`, once, like [`Self::read`]; a turn offering
+    /// it needs a [`crate::bash::BashConfig`], as [`ToolSet::with_bash`]
+    /// describes.
     pub fn bash(self) -> Self {
-        self.push(ToolEntry::Builtin(Tool::Bash))
+        self.push(ToolEntry::Builtin(Builtin::Bash))
     }
 
     /// Adds a host `handler` under its definition's name, which must not
@@ -468,10 +568,7 @@ impl ToolSetBuilder {
             return self;
         }
         let name = entry.name();
-        let reserved = matches!(entry, ToolEntry::Handler { .. })
-            && [Tool::Bash, Tool::Read, Tool::Write]
-                .into_iter()
-                .any(|tool| tool.name() == name);
+        let reserved = matches!(entry, ToolEntry::Handler { .. }) && Builtin::named(name).is_some();
         if reserved {
             self.error = Some(ToolSetError::ReservedName {
                 name: name.to_string(),
@@ -485,6 +582,77 @@ impl ToolSetBuilder {
         }
 
         self
+    }
+}
+
+/// The tools a harness offers by default: a set, or, without one, the
+/// built-ins a deprecated [`crate::ToolPolicy`] allows.
+#[derive(Clone, Default)]
+pub(crate) struct ToolSelection {
+    /// Built-ins a deprecated policy allows.
+    pub(crate) legacy_permissions: Option<BuiltinPermissions>,
+    pub(crate) tools: Option<ToolSet>,
+}
+
+impl ToolSelection {
+    /// Allows `builtin` in the deprecated policy, which starts denying
+    /// every built-in.
+    pub(crate) fn allow(&mut self, builtin: Builtin) {
+        self.legacy_permissions = Some(self.legacy_permissions.unwrap_or_default().allow(builtin));
+    }
+
+    /// Returns the set a turn offers: the selected set whenever there is
+    /// one, otherwise the built-ins a deprecated policy allows, otherwise no
+    /// tools.
+    pub(crate) fn resolve(&self) -> ToolSet {
+        match (&self.tools, self.legacy_permissions) {
+            (Some(tools), _) => tools.clone(),
+            (None, Some(allowed)) => ToolSet::builtins().restricted_to(allowed),
+            (None, None) => ToolSet::empty(),
+        }
+    }
+}
+
+/// Which built-in tools a set holds, or a deprecated [`crate::ToolPolicy`]
+/// allows, in the shape durable turn options and request fingerprints have
+/// always stored.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BuiltinPermissions {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    bash: bool,
+    read: bool,
+    write: bool,
+}
+
+impl BuiltinPermissions {
+    /// Returns these permissions with `builtin` allowed.
+    #[must_use]
+    pub(crate) fn allow(mut self, builtin: Builtin) -> Self {
+        *self.flag(builtin) = true;
+
+        self
+    }
+
+    /// Returns these permissions with `builtin` denied.
+    #[must_use]
+    pub(crate) fn deny(mut self, builtin: Builtin) -> Self {
+        *self.flag(builtin) = false;
+
+        self
+    }
+
+    /// Returns whether `builtin` is allowed.
+    pub(crate) fn allows(mut self, builtin: Builtin) -> bool {
+        *self.flag(builtin)
+    }
+
+    fn flag(&mut self, builtin: Builtin) -> &mut bool {
+        match builtin {
+            Builtin::Bash => &mut self.bash,
+            Builtin::Read => &mut self.read,
+            Builtin::Write => &mut self.write,
+        }
     }
 }
 

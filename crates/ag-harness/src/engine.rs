@@ -42,7 +42,7 @@ use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
 use crate::tool::{
-    MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, Tool, ToolCall, ToolCallArguments,
+    Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
     ToolDefinition, UnknownToolCall,
 };
 use crate::tool_handler::{SharedResultFits, ToolContext, ToolEntry, ToolErrorKind, ToolHandler};
@@ -870,34 +870,19 @@ impl Engine<'_> {
         {
             return Err(TurnError::ComparisonRepositoryMismatch);
         }
-        let policy = self.options.tool_policy();
-        let builtin_enabled = self
-            .options
-            .tools()
-            .entries()
-            .iter()
-            .any(|entry| matches!(entry, ToolEntry::Builtin(tool) if policy.allows(*tool)));
-        let repository = if builtin_enabled {
-            Some(self.repository.ok_or(TurnError::RepositoryRequired)?)
-        } else {
-            None
-        };
         let mut tools = Tools::default();
         for entry in self.options.tools().entries() {
-            let (definition, handler) = match (entry, repository) {
-                (
-                    ToolEntry::Handler {
-                        definition,
-                        handler,
-                    },
-                    _,
-                ) => (definition.clone(), Arc::clone(handler)),
-                (ToolEntry::Builtin(tool), Some(repository)) if policy.allows(*tool) => {
-                    let handler = self.builtin_handler(*tool, repository, journal)?;
+            let (definition, handler) = match entry {
+                ToolEntry::Handler {
+                    definition,
+                    handler,
+                } => (definition.clone(), Arc::clone(handler)),
+                ToolEntry::Builtin(builtin) => {
+                    let repository = self.repository.ok_or(TurnError::RepositoryRequired)?;
+                    let handler = self.builtin_handler(*builtin, repository, journal)?;
 
                     (handler.definition(), handler)
                 }
-                (ToolEntry::Builtin(_), _) => continue,
             };
             tools
                 .handlers
@@ -908,19 +893,19 @@ impl Engine<'_> {
         Ok((request, tools))
     }
 
-    /// Binds the built-in `tool` to this turn's `repository`, `journal`, and
-    /// options.
+    /// Binds `builtin` to this turn's `repository`, `journal`, and options
+    /// as the handler its calls run through.
     fn builtin_handler(
         &self,
-        tool: Tool,
+        builtin: Builtin,
         repository: &Repository,
         journal: Option<&WriteJournal>,
     ) -> Result<Arc<dyn ToolHandler>, TurnError> {
-        let definition = context::builtin_definition(tool, self.options);
+        let definition = context::builtin_definition(builtin, self.options);
         let root = repository.root().to_path_buf();
 
-        Ok(match tool {
-            Tool::Read => Arc::new(ReadHandler {
+        Ok(match builtin {
+            Builtin::Read => Arc::new(ReadHandler {
                 definition,
                 tool: ReadTool::with_git(
                     Arc::clone(self.file_system),
@@ -929,14 +914,14 @@ impl Engine<'_> {
                     self.options.comparison_base().cloned(),
                 ),
             }),
-            Tool::Write => {
+            Builtin::Write => {
                 let mut tool = WriteTool::new(Arc::clone(self.file_system), root);
                 tool.journal = journal.cloned();
                 tool.effects = self.effects.clone();
 
                 Arc::new(WriteHandler { tool })
             }
-            Tool::Bash => Arc::new(BashHandler {
+            Builtin::Bash => Arc::new(BashHandler {
                 definition,
                 tool: BashTool::new(
                     self.options
@@ -1600,11 +1585,6 @@ impl Tools {
 
         self.handler(call.name())
     }
-
-    /// Whether the turn offers the built-in `tool`.
-    fn allows(&self, tool: Tool) -> bool {
-        self.handler(tool.name()).is_some()
-    }
 }
 
 /// How a `read` call is answered without running it.
@@ -1732,7 +1712,7 @@ async fn execute_tool(
             ToolActivity::MalformedArguments {
                 duration: started_at.elapsed(),
                 reason: sanitize_report_text(arguments.reason()),
-                tool: arguments.tool(),
+                tool: arguments.builtin().into(),
             },
         )),
         ToolExecution::RepeatedRead(arguments, earlier) => Ok((
@@ -1899,11 +1879,11 @@ fn count_malformed(
 /// tool `tools` offers with arguments that tool cannot decode.
 fn malformed_call(call: &ToolCall, tools: &Tools) -> Option<(String, String)> {
     if let Some(arguments) = call.malformed_arguments() {
-        let tool = arguments.tool();
+        let name = arguments.name();
 
         return tools
-            .allows(tool)
-            .then(|| (tool.name().to_string(), arguments.reason().to_string()));
+            .handler(name)
+            .map(|_| (name.to_string(), arguments.reason().to_string()));
     }
     call.unknown_tool()?;
     tools.handler_for(call)?;
@@ -1951,7 +1931,7 @@ fn unavailable_tool_result(name: &str, options: &TurnOptions) -> String {
 /// Renders the error result that answers a call with malformed arguments,
 /// naming the decoding failure and every argument field of the called tool.
 fn malformed_arguments_result(arguments: &MalformedArguments, options: &TurnOptions) -> String {
-    let name = arguments.tool().name();
+    let name = arguments.name();
     let fields = context::advertised_tools(options)
         .into_iter()
         .find(|tool| tool.name() == name)

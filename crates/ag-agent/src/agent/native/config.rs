@@ -20,8 +20,8 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, Tool, ToolPolicy,
-    TurnInput, TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, ToolSet, TurnInput,
+    TurnOptions,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -699,16 +699,14 @@ pub(crate) fn turn_options(
     permission_mode: PermissionMode,
     environment: &BTreeMap<String, String>,
 ) -> Result<TurnOptions, String> {
-    let schema = output_schema(profile)?;
-    let policy = ToolPolicy::default().allow(Tool::Read);
+    let options = TurnOptions::from_output(output_schema(profile)?);
     if permission_mode == PermissionMode::ReadOnly {
-        return Ok(TurnOptions::new(schema, policy));
+        return Ok(options.with_tools(ToolSet::empty().with_read()));
     }
 
-    Ok(
-        TurnOptions::new(schema, policy.allow(Tool::Write).allow(Tool::Bash))
-            .with_bash(bash_config(environment)?),
-    )
+    Ok(options
+        .with_tools(ToolSet::builtins())
+        .with_bash(bash_config(environment)?))
 }
 
 /// Configures unsandboxed `bash` with the host environment minus provider

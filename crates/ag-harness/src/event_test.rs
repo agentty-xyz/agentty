@@ -13,7 +13,7 @@ use crate::error::{ErrorKind, RunError};
 use crate::lifecycle::ToolUnavailableReason;
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
-use crate::tool::{ReadAction, Tool, ToolCall};
+use crate::tool::{ReadAction, ToolCall};
 use crate::turn::{ContextActivity, HostToolOutcome, ToolActivity, TurnError, TurnReport};
 use crate::usage::Cost;
 
@@ -163,7 +163,7 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
             ToolActivity::Unavailable {
                 duration,
                 reason: ToolUnavailableReason::Denied,
-                tool: Tool::Bash.name().into(),
+                tool: "bash".into(),
             },
             ToolCallStatus::Unavailable,
         ),

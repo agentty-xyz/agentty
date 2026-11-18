@@ -14,7 +14,7 @@ use crate::harness::Harness;
 use crate::model::{ModelError, ModelResponse};
 use crate::repository::Repository;
 use crate::session::SessionError;
-use crate::tool::Tool;
+use crate::tool::ToolSet;
 use crate::turn::TurnError;
 use crate::write_journal::WriteStatus;
 
@@ -54,7 +54,7 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
             .database(directory.path().join("harness.db"))
             .repository(Repository::fixture(directory.path()))
             .max_history_bytes(NonZeroUsize::new(1).expect("positive budget"))
-            .allow(Tool::Write);
+            .tools(ToolSet::empty().with_write());
         let mut session = harness
             .session("session-a", object_schema())
             .create()
@@ -165,7 +165,7 @@ async fn run_once_writes_without_opening_the_session_database() {
     let harness = Harness::new(model, unbounded_context_budget())
         .database(&database)
         .repository(Repository::fixture(directory.path()))
-        .allow(Tool::Write);
+        .tools(ToolSet::empty().with_write());
 
     // Act
     let result = harness

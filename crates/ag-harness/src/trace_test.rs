@@ -41,7 +41,7 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
 use crate::store::{HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission};
 use crate::telemetry;
-use crate::tool::{ReadArguments, Tool, ToolCall};
+use crate::tool::{ReadArguments, ToolCall, ToolSet};
 use crate::turn::{TurnError, TurnOutcome};
 use crate::write_journal::{WriteRecord, WriteStatus};
 
@@ -663,7 +663,7 @@ async fn propagates_model_and_tool_contexts_to_nested_spans() {
     )
     .file_system(file_system)
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Read)
+    .tools(ToolSet::empty().with_read())
     .with_lifecycle_observer(LifecycleTraceObserver::new());
 
     // Act
@@ -1243,7 +1243,7 @@ async fn assert_retained_write_context(drop_caller: bool) {
         observed_baggage: Arc::clone(&observed_baggage),
     })
     .repository(Repository::fixture("repo"))
-    .allow(Tool::Write)
+    .tools(ToolSet::empty().with_write())
     .with_lifecycle_observer(LifecycleTraceObserver::new());
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
     let mut session = harness

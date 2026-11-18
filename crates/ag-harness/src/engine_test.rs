@@ -23,7 +23,7 @@ use crate::model::{
 use crate::request_option::OutputMode;
 use crate::tool::{ReadArguments, ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
-use crate::{OutputSchema, ToolPolicy, TurnOptions, schema_contract};
+use crate::{OutputSchema, TurnOptions, schema_contract};
 
 fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({"type": "object"})).expect("valid schema")
@@ -36,7 +36,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     model.expect_metadata().return_const(None);
     let model: Arc<dyn Model> = Arc::new(model);
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
-    let options = TurnOptions::new(object_schema(), ToolPolicy::default());
+    let options = TurnOptions::from_output(object_schema());
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();
@@ -103,7 +103,7 @@ async fn run_scripted(
     });
     let model: Arc<dyn Model> = Arc::new(model);
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
-    let options = TurnOptions::new(object_schema(), ToolPolicy::default());
+    let options = TurnOptions::from_output(object_schema());
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();

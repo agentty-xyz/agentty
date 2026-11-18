@@ -21,8 +21,7 @@ use crate::recovery::{ExecutionIdentity, HostTurnStatus};
 use crate::repository::Repository;
 use crate::store::MemoryStore;
 use crate::{
-    ComparisonBase, LimitKind, RunLimits, RunRequest, SessionError, Tool, ToolPolicy, TurnError,
-    TurnOptions,
+    ComparisonBase, LimitKind, RunLimits, RunRequest, SessionError, ToolSet, TurnError, TurnOptions,
 };
 
 /// Returns a model reporting `metadata` that accepts every input.
@@ -134,7 +133,7 @@ async fn wall_time_limit_during_a_tool_call_interrupts_the_host_turn() {
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"))
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .tools(ToolSet::empty().with_read())
         .file_system(PendingToolFileSystem {
             started: Arc::new(Notify::new()),
         });
@@ -143,7 +142,8 @@ async fn wall_time_limit_during_a_tool_call_interrupts_the_host_turn() {
         .create()
         .await
         .expect("session should be created");
-    let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Read))
+    let options = TurnOptions::from_output(object_schema())
+        .with_tools(ToolSet::empty().with_read())
         .with_limits(RunLimits::default().with_max_wall_time(Duration::from_secs(1)));
 
     // Act
