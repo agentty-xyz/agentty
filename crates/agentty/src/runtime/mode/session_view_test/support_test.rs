@@ -133,7 +133,6 @@ pub(super) fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
     ViewSessionSnapshot {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
-        inspect_diff: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,

@@ -372,7 +372,6 @@ impl<'a> SessionChatPage<'a> {
                     at_mention_state: at_mention_state.as_ref(),
                     current_index: *current_index,
                     focus: *focus,
-                    has_session_diff: session.stats.should_show_diff(),
                     input,
                     is_pasting_image: attachment_state.composer.is_pasting_image(),
                     questions,
@@ -644,7 +643,6 @@ struct QuestionPanelState<'a> {
     at_mention_state: Option<&'a PromptAtMentionState>,
     current_index: usize,
     focus: ChatFocus,
-    has_session_diff: bool,
     input: &'a input::InputState,
     is_pasting_image: bool,
     questions: &'a [QuestionItem],
@@ -665,7 +663,6 @@ fn render_question_panel(
         at_mention_state,
         current_index,
         focus,
-        has_session_diff,
         input,
         is_pasting_image,
         questions,
@@ -755,7 +752,6 @@ fn render_question_panel(
         panel_areas.help_area,
         &QuestionFooterState {
             focus,
-            has_session_diff,
             is_navigating_options: !is_free_text_mode,
             is_pasting_image,
             lookup_state,
@@ -767,7 +763,6 @@ fn render_question_panel(
 /// Question-mode state that selects the help footer's action hints.
 struct QuestionFooterState {
     focus: ChatFocus,
-    has_session_diff: bool,
     is_navigating_options: bool,
     is_pasting_image: bool,
     lookup_state: question_format::QuestionLookupState,
@@ -775,9 +770,6 @@ struct QuestionFooterState {
 }
 
 /// Renders the question-mode help footer with context-aware action hints.
-///
-/// `has_session_diff` controls whether the chat-focused footer advertises the
-/// diff preview.
 ///
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a sessions-list shortcut, so the footer can surface it whenever the
@@ -792,7 +784,6 @@ fn render_question_help_footer(frame: &mut Frame, area: Rect, footer_state: &Que
 
     let mut footer_line = question_format::question_help_footer_line(
         footer_state.focus,
-        footer_state.has_session_diff,
         footer_state.is_navigating_options,
         footer_state.lookup_state,
     );

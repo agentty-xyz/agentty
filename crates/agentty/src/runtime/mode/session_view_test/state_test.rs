@@ -39,7 +39,6 @@ async fn test_handle_view_key_ignores_status_gated_actions() {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
-            inspect_diff: ViewActionState::Disabled,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
