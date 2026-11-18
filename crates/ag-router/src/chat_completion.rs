@@ -13,7 +13,8 @@ use serde_json::Value;
 use crate::http::{HttpTransport, ProviderRequest, TransportError, deserialize_optional};
 use crate::model::GeneratedResponse;
 use crate::provider_spec::{
-    MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode, ThinkingOptions,
+    InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
+    ThinkingOptions,
 };
 use crate::{input, model, schema as schema_contract, tool};
 
@@ -208,7 +209,11 @@ impl<'spec> ChatCompletionBackend<'spec> {
                     });
                 }
                 model::ModelMessage::Instructions(content) => {
-                    Self::push_instructions(&mut messages, content);
+                    Self::push_instructions(
+                        &mut messages,
+                        content,
+                        self.policy.instruction_placement,
+                    );
                 }
                 model::ModelMessage::System(content) => {
                     messages.push(ChatCompletionMessagePayload::Text {
@@ -249,12 +254,22 @@ impl<'spec> ChatCompletionBackend<'spec> {
         Ok(messages)
     }
 
-    /// Appends turn `instructions` to the user message they follow, so
-    /// templates that require alternating roles never see two user messages
-    /// in a row; without a preceding user message they form their own.
-    fn push_instructions(messages: &mut Vec<ChatCompletionMessagePayload>, instructions: &str) {
+    /// Pushes turn `instructions` as their own user message or, under
+    /// [`InstructionPlacement::JoinPreviousUser`], appends them to the user
+    /// message they follow, so templates that require alternating roles
+    /// never see two user messages in a row; without a preceding user
+    /// message they always form their own.
+    fn push_instructions(
+        messages: &mut Vec<ChatCompletionMessagePayload>,
+        instructions: &str,
+        placement: InstructionPlacement,
+    ) {
         let block = format!("{TURN_INSTRUCTIONS_HEADING}{instructions}");
-        match messages.last_mut() {
+        let last = match placement {
+            InstructionPlacement::JoinPreviousUser => messages.last_mut(),
+            InstructionPlacement::Separate => None,
+        };
+        match last {
             Some(ChatCompletionMessagePayload::Text {
                 content,
                 role: "user",

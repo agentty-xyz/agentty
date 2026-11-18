@@ -11,8 +11,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    Auth, CredentialSource, EffortNames, MaxTokensField, ProviderSpec, ProviderSpecError,
-    ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
+    Auth, CredentialSource, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec,
+    ProviderSpecError, ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 use crate::model::{
     Model, ModelClient, ModelMetadata, ModelMetadataError, ModelRequest, ReasoningEffort,
@@ -72,6 +72,7 @@ fn maps_every_option_onto_the_routed_specification() {
         .with_response_format_with_tools(true)
         .with_structured_output(StructuredOutputMode::JsonObject)
         .with_reasoning_text_replay(true)
+        .with_instruction_placement(InstructionPlacement::JoinPreviousUser)
         .with_tool_result_name(true)
         .with_overflow_marker("Prompt is too long");
     let variants = [
@@ -107,9 +108,11 @@ fn maps_every_option_onto_the_routed_specification() {
         (
             ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL)
                 .with_auth(Auth::None)
+                .with_instruction_placement(InstructionPlacement::Separate)
                 .with_max_tokens_field(None)
                 .with_reasoning(ReasoningMapping::None),
             router_spec(ag_router::WireProtocol::ChatCompletions)
+                .with_instruction_placement(ag_router::InstructionPlacement::Separate)
                 .with_max_tokens_field(None)
                 .with_reasoning(ag_router::ReasoningMapping::None),
         ),
@@ -132,6 +135,7 @@ fn maps_every_option_onto_the_routed_specification() {
         .with_response_format_with_tools(true)
         .with_structured_output(ag_router::StructuredOutputMode::JsonObject)
         .with_reasoning_text_replay(true)
+        .with_instruction_placement(ag_router::InstructionPlacement::JoinPreviousUser)
         .with_tool_result_name(true)
         .with_overflow_marker("Prompt is too long");
 

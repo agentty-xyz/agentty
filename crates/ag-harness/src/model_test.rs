@@ -1551,10 +1551,10 @@ fn clients_declare_the_cataloged_profile_of_their_model() {
             provider::openai_profile(GPT_6_LUNA),
             provider::chatgpt_profile(CHATGPT_GPT_6_SOL),
             provider::qwen_profile(QWEN3_8_FLASH),
-            None,
+            provider::kimi_profile(KIMI_K3),
         ]
     );
-    assert!(profiles[..3].iter().all(Option::is_some));
+    assert!(profiles.iter().all(Option::is_some));
 }
 
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]

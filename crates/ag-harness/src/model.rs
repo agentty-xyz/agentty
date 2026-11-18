@@ -61,8 +61,8 @@ pub trait Model: Send + Sync {
     /// [`crate::Harness::builder`] derives the request budget and estimator
     /// from this profile unless the host sets an explicit budget.
     /// [`ModelClient`] declares the cataloged profile of `OpenAI`, `ChatGPT`,
-    /// and Qwen models; Kimi, Muse, OpenAI-compatible, and uncataloged models
-    /// declare none, so hosts set their budget explicitly.
+    /// Kimi, Muse, and Qwen flash models; OpenAI-compatible and uncataloged
+    /// models declare none, so hosts set their budget explicitly.
     fn profile(&self) -> Option<ModelProfile> {
         None
     }
@@ -171,9 +171,10 @@ impl ModelClient {
     /// empty or contains only whitespace.
     #[cfg(feature = "providers-compat")]
     pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::kimi_profile(&config.model);
         let model = config.model.clone();
 
-        Self::routed(ProviderSpec::kimi(config), &model, None)
+        Self::routed(ProviderSpec::kimi(config), &model, profile)
     }
 
     /// Creates a client backed by Meta's Model API for Muse models.
@@ -184,9 +185,10 @@ impl ModelClient {
     /// empty or contains only whitespace.
     #[cfg(feature = "providers-compat")]
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::muse_profile(&config.model);
         let model = config.model.clone();
 
-        Self::routed(ProviderSpec::muse(config), &model, None)
+        Self::routed(ProviderSpec::muse(config), &model, profile)
     }
 
     /// Creates a client backed by `OpenAI`'s Responses API. Requests are
@@ -258,8 +260,10 @@ impl ModelClient {
     /// model, or the one [`ProviderSpec::for_model`] names) through any
     /// provider `spec` describes, such as an OpenAI-compatible gateway with
     /// its own headers or query parameters. The client declares no context
-    /// profile, so hosts set the budget explicitly; telemetry and persisted
-    /// metadata carry [`ProviderSpec::name`].
+    /// profile, even for a preset such as `ProviderSpec::kimi` whose
+    /// constructor (`ModelClient::kimi`) attaches the catalog's, so hosts set
+    /// the budget explicitly; telemetry and persisted metadata carry
+    /// [`ProviderSpec::name`].
     ///
     /// # Errors
     ///

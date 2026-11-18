@@ -10,8 +10,8 @@ use crate::credential::CredentialSource;
 use crate::model::ReasoningEffort;
 use crate::preset;
 use crate::provider_spec::{
-    Auth, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode, ThinkingOptions,
-    WireProtocol,
+    Auth, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 
 const BASE_URL: &str = "https://example.com/v1";
@@ -105,6 +105,42 @@ fn selects_reasoning_and_structured_output_by_model() {
         Some(MaxTokensField::MaxCompletionTokens)
     );
     assert!(kimi.prompt_cache_key && muse.prompt_cache_key && !qwen_plus.prompt_cache_key);
+}
+
+#[test]
+fn chat_completions_presets_opt_in_to_their_compat_quirks() {
+    // Arrange
+    // The golden requests place instructions after a tool result, where both
+    // placements send the same messages, so the opt-in is pinned here.
+    let cases = [
+        (
+            preset::kimi(BASE_URL, "key", "kimi-k3"),
+            MaxTokensField::MaxTokens,
+        ),
+        (
+            preset::muse(BASE_URL, "key", "muse-spark-1.3"),
+            MaxTokensField::MaxCompletionTokens,
+        ),
+        (
+            preset::openai_compatible(BASE_URL, None),
+            MaxTokensField::MaxTokens,
+        ),
+        (
+            preset::qwen(BASE_URL, "key", "qwen3.8-max"),
+            MaxTokensField::MaxTokens,
+        ),
+    ];
+
+    for (spec, field) in cases {
+        // Act / Assert
+        assert_eq!(
+            spec.instruction_placement,
+            InstructionPlacement::JoinPreviousUser,
+            "{}",
+            spec.id()
+        );
+        assert_eq!(spec.max_tokens_field, Some(field), "{}", spec.id());
+    }
 }
 
 #[test]

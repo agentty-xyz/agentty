@@ -464,8 +464,7 @@ impl App {
             return Err(ApiSessionError::Operation(
                 "Harness sessions need `agentty --experimental-harness` and a runnable model: a \
                  local Ollama or OpenAI-compatible server serving a model, `MODEL_API_KEY`, \
-                 `KIMI_API_KEY` with `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with \
-                 `DASHSCOPE_BASE_URL`."
+                 `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`."
                     .to_string(),
             ));
         }

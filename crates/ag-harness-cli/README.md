@@ -111,9 +111,10 @@ each method's result.
   for Kimi, Qwen, OpenAI, OpenAI-compatible, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
-- Muse, Kimi, and Qwen models are assumed to have a 128k-token context window; cataloged
-  OpenAI and Qwen flash models use their documented windows; OpenAI-compatible models
-  use `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
+- Uncataloged models and Qwen models other than the flash ones are assumed to have a
+  128k-token context window; cataloged OpenAI, Muse, Kimi, and Qwen flash models use
+  their documented windows; OpenAI-compatible models use
+  `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
   `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default a quarter of the window, at most
   8,192). Each request replays the most recent turns that fit, and a turn fails once its
   own tool traffic no longer fits.

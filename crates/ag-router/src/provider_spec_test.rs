@@ -13,8 +13,8 @@ use crate::credential::CredentialSource;
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::{GenerationOptions, ModelError, ReasoningEffort};
 use crate::provider_spec::{
-    Auth, EffortNames, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
-    ThinkingOptions, WireProtocol,
+    Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 use crate::schema::OutputSchema;
 
@@ -59,8 +59,13 @@ fn starts_from_a_conservative_policy_per_protocol() {
     assert!(matches!(chat.auth, Auth::None));
     assert_eq!(chat.structured_output, StructuredOutputMode::SchemaPrompt);
     assert_eq!(chat.reasoning, ReasoningMapping::None);
-    assert_eq!(chat.max_tokens_field, Some(MaxTokensField::MaxTokens));
+    assert_eq!(
+        chat.max_tokens_field,
+        Some(MaxTokensField::MaxCompletionTokens)
+    );
     assert!(!chat.image_input && !chat.prompt_cache_key);
+    assert_eq!(chat.instruction_placement, InstructionPlacement::Separate);
+    assert!(!chat.replay.reasoning_text && !chat.replay.tool_result_name);
     assert!(chat.keeps_prefix_across_schemas());
     assert_eq!(
         responses.structured_output,
@@ -317,6 +322,32 @@ fn assert_rejects<'expected>(cases: impl IntoIterator<Item = (ProviderSpec, &'ex
             "{spec:?}: {result:?}"
         );
     }
+}
+
+#[test]
+fn joined_instructions_are_a_chat_completions_opt_in() {
+    // Arrange
+    let chat = chat().with_instruction_placement(InstructionPlacement::JoinPreviousUser);
+    let separate = responses().with_instruction_placement(InstructionPlacement::Separate);
+    let joined = responses().with_instruction_placement(InstructionPlacement::JoinPreviousUser);
+
+    // Act
+    let result = joined.validate();
+
+    // Assert
+    assert_eq!(
+        chat.instruction_placement,
+        InstructionPlacement::JoinPreviousUser
+    );
+    assert!(chat.validate().is_ok() && separate.validate().is_ok());
+    assert!(
+        matches!(
+            &result,
+            Err(ModelError::InvalidProviderConfig { reason })
+                if reason.contains("cannot express instructions placed other than as their own message")
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]

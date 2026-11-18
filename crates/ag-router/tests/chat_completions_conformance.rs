@@ -10,8 +10,8 @@ use std::error::Error;
 
 use ag_router::ReasoningEffort::{High, Low, Max, Medium};
 use ag_router::{
-    Auth, Completion, ErrorClass, ModelError, ProviderSpec, Router, StructuredOutputMode,
-    WireProtocol, preset,
+    Auth, Completion, ErrorClass, InstructionPlacement, MaxTokensField, ModelError, ProviderSpec,
+    Router, StructuredOutputMode, WireProtocol, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -243,6 +243,75 @@ async fn structured_output_modes_select_the_response_format() -> Result<(), Box<
                 .is_some_and(|content| content.contains("JSON Schema:")),
             states_schema
         );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn compat_quirks_apply_only_when_opted_in() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let instructions = "[application instructions for this turn]\nBe brief.";
+    let separate = json!([
+        {"content": "Who wrote it?", "role": "user"},
+        {"content": instructions, "role": "user"}
+    ]);
+    let joined = json!([{
+        "content": format!("Who wrote it?\n\n{instructions}"),
+        "role": "user"
+    }]);
+    // Each quirk flips alone, so neither opt-in implies the other.
+    let cases = [
+        (None, None, "max_completion_tokens", &separate),
+        (
+            Some(InstructionPlacement::JoinPreviousUser),
+            None,
+            "max_completion_tokens",
+            &joined,
+        ),
+        (
+            None,
+            Some(MaxTokensField::MaxTokens),
+            "max_tokens",
+            &separate,
+        ),
+        (
+            Some(InstructionPlacement::JoinPreviousUser),
+            Some(MaxTokensField::MaxTokens),
+            "max_tokens",
+            &joined,
+        ),
+    ];
+
+    for (placement, field, bound_field, messages) in cases {
+        let server = server(200, COMPLETION).await;
+        let mut spec = custom(&server);
+        if let Some(placement) = placement {
+            spec = spec.with_instruction_placement(placement);
+        }
+        if let Some(field) = field {
+            spec = spec.with_max_tokens_field(Some(field));
+        }
+        let opted_in = (placement, field);
+        let mut request = ag_router::ModelRequest::text_chat(
+            "custom/llama3.3",
+            vec![
+                ag_router::ModelMessage::User("Who wrote it?".to_string()),
+                ag_router::ModelMessage::Instructions("Be brief.".to_string()),
+            ],
+            Vec::new(),
+        );
+        request.options.max_output_tokens = std::num::NonZeroU32::new(64);
+
+        // Act
+        let _ = Router::new([spec]).execute(request).await;
+        let received = conformance::only_request(&server).await?;
+
+        // Assert
+        let body: Value = serde_json::from_slice(&received.body)?;
+        assert_eq!(&body["messages"], messages, "opted in: {opted_in:?}");
+        assert_eq!(body[bound_field], 64, "opted in: {opted_in:?}");
+        assert_eq!(body.as_object().ok_or("object")?.len(), 3);
     }
 
     Ok(())

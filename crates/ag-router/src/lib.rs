@@ -33,8 +33,8 @@ pub use model::{
 };
 pub use provider::Router;
 pub use provider_spec::{
-    Auth, EffortNames, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
-    ThinkingOptions, WireProtocol,
+    Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 pub use responses::{ReasoningView, reasoning_view};
 pub use schema::{

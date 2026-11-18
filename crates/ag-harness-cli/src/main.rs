@@ -575,7 +575,7 @@ async fn execute_chat<Input, Output>(
     cli: Cli,
     mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     input: Input,
-    output: Output,
+    mut output: Output,
     mode: ChatMode,
 ) -> Result<(), CliError>
 where
@@ -619,7 +619,6 @@ where
                 .system_prompt(system_prompt)
                 .create()
                 .await?;
-            let mut output = output;
             announce_session(&mut output, &session_id).await?;
 
             run_chat(
@@ -658,7 +657,6 @@ where
                 trace,
             );
             let mut session = harness.resume(&args.session).await?;
-            let mut output = output;
             announce_session(&mut output, &args.session).await?;
 
             run_chat(
@@ -672,14 +670,15 @@ where
             )
             .await
         }
-        Command::Login(_) => login::login(
-            environment,
-            &login::SystemBrowser,
-            &mut io::stdout().lock(),
-            login::DEFAULT_PORT,
-        )
-        .await
-        .map_err(CliError::from),
+        Command::Login(_) => {
+            login::login(
+                environment,
+                &login::SystemBrowser,
+                &mut io::stdout().lock(),
+                login::DEFAULT_PORT,
+            )
+            .await
+        }
         Command::Serve(args) => run_serve(args, reasoning_effort, environment, input, output).await,
     }
 }
@@ -802,6 +801,13 @@ fn model_client(
     let mut configuration = ModelConfiguration::new(provider, model);
     if let Some(base_url) = base_url {
         configuration = configuration.base_url(base_url);
+    }
+    // Only the `ChatGPT` provider reads a sign-in; the harness keeps no
+    // default location, so the CLI passes the one it shares with Agentty.
+    if provider.requires_sign_in() {
+        let auth_file =
+            login::chatgpt_auth_file(environment).ok_or(CliError::ChatGptAuthFileLocation)?;
+        configuration = configuration.auth_file(auth_file);
     }
 
     configuration
@@ -1197,6 +1203,8 @@ enum CliError {
     ContextBudget(#[from] ContextBudgetError),
     #[error("--base-url or {name} is required")]
     BaseUrlRequired { name: &'static str },
+    #[error("CHATGPT_AUTH_FILE, AGENTTY_ROOT, or HOME is required to locate the ChatGPT sign-in")]
+    ChatGptAuthFileLocation,
     #[error("one or more chat turns failed")]
     ChatTurnsFailed,
     #[error(transparent)]
