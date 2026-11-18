@@ -168,6 +168,7 @@ dependencies = [
 name = "ag-release"
 version = "0.19.3"
 dependencies = [
+ "askama",
  "clap",
  "flate2",
  "hex",

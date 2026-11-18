@@ -16,13 +16,14 @@ use serde_json::json;
 use crate::cli::{AssembleOptions, Host};
 use crate::plan::ReleasePlan;
 use crate::process::ProcessCommand;
+use crate::shell_installer::ShellInstaller;
 use crate::tag::ReleaseTag;
 use crate::workspace::Workspace;
 use crate::{archive, artifact, checksum};
 
-/// Verifies the archives in `options.artifacts_dir`, writes the source
-/// archive, checksum list, and manifest into it, and prints the written
-/// paths.
+/// Verifies the archives in `options.artifacts_dir`, writes the configured
+/// installers, the source archive, the checksum list, and the manifest into
+/// it, and prints the written paths.
 ///
 /// # Errors
 /// Returns an error when the tag is invalid, an expected archive or checksum
@@ -37,6 +38,12 @@ pub(crate) fn run(
     let workspace = Workspace::load(host.process, host.cargo.clone())?;
     let plan = ReleasePlan::new(&workspace, Some(&tag))?;
     let mut assembly = Assembly::verify(host, &options.artifacts_dir, &plan)?;
+    for app in &plan.apps {
+        if let Some(name) = &app.shell_installer {
+            let script = ShellInstaller::render(&plan, app, &tag.name, &assembly.sha256)?;
+            assembly.publish(name, script.as_bytes())?;
+        }
+    }
     let source = source_archive(host, &workspace, &plan)?;
     assembly.publish_with_checksum(artifact::SOURCE_ARCHIVE, &source)?;
     let written = assembly.finish()?;
