@@ -71,7 +71,7 @@ runs:
     - name: Upload coverage test results to Trunk
       if: ${{ !cancelled() && inputs.trunk-token != '' }}
       continue-on-error: true
-      uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+      uses: trunk-io/analytics-uploader@39e806ceaad33705d78c996bcc8510a600e82e21 # v2.1.7
       env:
         TRUNK_API_TOKEN: ${{ inputs.trunk-token }}
       with:
