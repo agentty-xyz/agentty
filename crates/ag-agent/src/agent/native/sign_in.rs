@@ -3,15 +3,19 @@
 
 use std::collections::BTreeMap;
 
-use ag_harness::provider::ChatGptSignIn;
+use ag_harness::provider::{CHATGPT_AUTH_URL_ENV, ChatGptSignIn};
 use ag_session::{ChatGptSignInOutcome, ChatGptSignInUrlHandler};
 
-use super::config::lookup;
+use super::config::chatgpt_auth_file;
 
-/// Runs the `ChatGPT` browser sign-in configured by `environment`
-/// (`CHATGPT_AUTH_FILE`, `CHATGPT_AUTH_URL`), passing the sign-in URL to
-/// `on_url` before waiting for the browser callback, and stores the
-/// credential the `chatgpt` provider reads.
+/// Failure when no variable locates Agentty's `ChatGPT` credential file.
+const UNLOCATED_AUTH_FILE: &str =
+    "set CHATGPT_AUTH_FILE, AGENTTY_ROOT, or HOME to locate the ChatGPT sign-in";
+
+/// Runs the `ChatGPT` browser sign-in configured by `environment` (the
+/// credential file Agentty reads, and `CHATGPT_AUTH_URL`), passing the
+/// sign-in URL to `on_url` before waiting for the browser callback, and
+/// stores the credential the `chatgpt` provider reads.
 ///
 /// # Errors
 /// Returns a user-facing message when the credential file cannot be
@@ -21,8 +25,14 @@ pub(crate) async fn sign_in_chatgpt(
     environment: &BTreeMap<String, String>,
     on_url: ChatGptSignInUrlHandler,
 ) -> Result<ChatGptSignInOutcome, String> {
-    let sign_in =
-        ChatGptSignIn::from_environment(lookup(environment)).map_err(|error| error.to_string())?;
+    let auth_file = chatgpt_auth_file(environment).ok_or(UNLOCATED_AUTH_FILE)?;
+    // A blank variable counts as unset, keeping `OpenAI`'s server.
+    let sign_in = ChatGptSignIn::new(auth_file).with_issuer(
+        environment
+            .get(CHATGPT_AUTH_URL_ENV)
+            .filter(|issuer| !issuer.trim().is_empty())
+            .cloned(),
+    );
     let pending = sign_in.start().await.map_err(|error| error.to_string())?;
     on_url(pending.authorize_url());
     let credentials = pending

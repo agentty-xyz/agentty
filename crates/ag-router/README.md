@@ -13,10 +13,16 @@ Each provider is a `ProviderSpec`: its `WireProtocol` (`ChatCompletions` or
 `CredentialSource`), extra headers and query parameters, and request policy:
 structured-output mode, reasoning mapping, reasoning-text replay, output-bound field,
 image input, prompt cache key, and context-overflow markers. `ProviderSpec::new` starts
-from a conservative policy for the protocol, so a host adds an OpenAI-compatible or
-Responses provider without code changes. The built-in providers are `preset`s routed as
-`chatgpt`, `kimi`, `muse`, `openai`, `openai-compatible`, and `qwen`; every preset
-except `openai_compatible` is tailored to one model and serves only that model
+from the standard request for the protocol with no optional capabilities, so a host adds
+an OpenAI-compatible or Responses provider without code changes. Provider quirks are
+opt-ins: the legacy `max_tokens` field (`with_max_tokens_field`; the default is the
+current `OpenAI` field `max_completion_tokens`, which some compatible servers ignore,
+leaving output unbounded), turn instructions joined to the preceding user message
+(`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`), reasoning-text
+replay, and tool-result names. Each Chat Completions preset states its output-bound
+field and enables the quirks its provider needs. The built-in providers are `preset`s
+routed as `chatgpt`, `kimi`, `muse`, `openai`, `openai-compatible`, and `qwen`; every
+preset except `openai_compatible` is tailored to one model and serves only that model
 (`ProviderSpec::for_model`). A router routes `provider/model` to the specification for
 that model, else to the provider's model-independent one, so it can hold one preset per
 model; a model no specification serves fails with `ModelError::NoProviderSpec`. Of
@@ -80,8 +86,11 @@ selection is explicit; routing does not retry a request on another provider.
 
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
-carry only `model`, `messages`, `tools`, and `response_format`, with no
-`prompt_cache_key`, reasoning controls, or image input. The schema is stated in a
+carry only `model`, `messages`, `tools`, `response_format`, and the legacy `max_tokens`,
+with no `prompt_cache_key`, reasoning controls, or image input, and turn instructions
+join the preceding user message for chat templates that require alternating roles. A
+server that supports more opts in with the preset's `with_*` methods, such as
+`with_image_input(true)` or `JsonSchema` structured output. The schema is stated in a
 leading system message like Kimi and Qwen, worded to invite tool calls before the final
 JSON answer because small local models read an unconditional "return only JSON" as
 forbidding them; requests without tools also send the `json_schema` response format,

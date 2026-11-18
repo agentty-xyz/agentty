@@ -16,7 +16,8 @@ use ag_harness::model::{
     ModelRequest, ReasoningEffort,
 };
 use ag_harness::provider::{
-    ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider, chatgpt_auth_file,
+    ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider,
+    chatgpt_auth_file_in,
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
@@ -57,6 +58,9 @@ const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
 /// Command that stores the sign-in [`ModelProvider::ChatGpt`] needs.
 const CHATGPT_SIGN_IN_COMMAND: &str = "ag-harness login chatgpt";
+/// Environment variable naming Agentty's data directory, `~/.agentty` by
+/// default.
+const AGENTTY_ROOT_ENV: &str = "AGENTTY_ROOT";
 /// Environment prefixes that carry provider keys, credential files, and
 /// endpoints, withheld from `bash`. `OPENAI_` covers both `OpenAI` and
 /// OpenAI-compatible variables.
@@ -333,6 +337,24 @@ pub(super) fn lookup(
     }
 }
 
+/// Returns the `ChatGPT` credential file Agentty signs in to and reads,
+/// shared with `ag-harness login chatgpt` through [`chatgpt_auth_file_in`]:
+/// `CHATGPT_AUTH_FILE`, else `auth/chatgpt.json` under `AGENTTY_ROOT` or
+/// `~/.agentty`, or `None` when none of them is set. A data-directory
+/// variable is used as given unless it is empty, as `agentty`'s data
+/// directory reads it.
+pub(super) fn chatgpt_auth_file(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        environment
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let data_dir = set(AGENTTY_ROOT_ENV).or_else(|| set("HOME").map(|home| home.join(".agentty")));
+
+    chatgpt_auth_file_in(lookup(environment), data_dir.as_deref())
+}
+
 /// Keeps the variables whose name and value are both valid Unicode.
 fn unicode_environment(
     variables: impl IntoIterator<Item = (OsString, OsString)>,
@@ -353,7 +375,7 @@ fn configuration_status(
 ) -> HarnessModelStatus {
     if provider.requires_sign_in() {
         let signed_in =
-            chatgpt_auth_file(lookup(environment)).is_ok_and(|auth_file| is_signed_in(&auth_file));
+            chatgpt_auth_file(environment).is_some_and(|auth_file| is_signed_in(&auth_file));
 
         return if signed_in {
             HarnessModelStatus::Ready
@@ -501,7 +523,15 @@ impl ModelSelection {
         provider_call_budget: Option<&ProviderCallBudget>,
         running_context_window: Option<u64>,
     ) -> Result<ModelRegistry, String> {
-        let client = ModelConfiguration::new(self.provider, &self.model)
+        let mut configuration = ModelConfiguration::new(self.provider, &self.model);
+        // Only the `ChatGPT` provider reads a sign-in, and the harness keeps
+        // no default location for it.
+        if self.provider.requires_sign_in()
+            && let Some(auth_file) = chatgpt_auth_file(environment)
+        {
+            configuration = configuration.auth_file(auth_file);
+        }
+        let client = configuration
             .client_from_environment(lookup(environment))
             .map_err(|error| {
                 let remedy = if self.provider.requires_sign_in() {

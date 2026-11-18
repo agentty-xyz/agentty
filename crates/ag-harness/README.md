@@ -466,8 +466,8 @@ silently.
 
 ## Models
 
-`provider::Muse::from_env` builds the Muse client from environment variables. For any
-built-in provider selected at runtime, use `provider::ModelConfiguration`:
+For any built-in provider selected at runtime, use `provider::ModelConfiguration`, which
+reads the provider's key and endpoint through an injected environment lookup:
 
 ```rust
 use ag_harness::provider::{KIMI_K3, ModelConfiguration, ModelProvider};
@@ -508,7 +508,9 @@ let profile = match server.running_context_window("qwen3:latest").await? {
 Its requests carry only portable fields: the schema is stated in the prompt (with the
 `json_schema` response format when no tools are offered), reasoning is neither requested
 nor replayed, and no prompt cache key or image input is sent. The server must support
-tool calls.
+tool calls. A server that supports more opts in through
+`ProviderSpec::openai_compatible(config)` and `ModelClient::from_spec`, such as
+`with_image_input(true)` for a vision model or `JsonSchema` structured output for vLLM.
 
 `ModelProvider::OpenAi` serves `OpenAI` models such as `GPT_6_1_SOL` through the
 Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
@@ -516,8 +518,10 @@ Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
 resends its history, encrypted reasoning from earlier responses is replayed verbatim,
 and output is constrained by a native JSON Schema format. `declared_profile` returns
 each cataloged model's documented window under the default estimator with a 50% margin,
-as it does for the Qwen flash models, and `None` for other models and the remaining
-Muse, Kimi, and Qwen models, whose hosts declare their own:
+as it does for the Qwen flash models. For the Muse and Kimi models it returns the
+documented window under an estimator fitted to the provider's reported tokens, and
+`None` for other models and the remaining Qwen models, whose hosts declare their own.
+Kimi defaults to `https://api.moonshot.ai/v1` (override with `KIMI_BASE_URL`):
 
 ```rust
 use ag_harness::provider::GPT_6_1_SOL;
@@ -531,9 +535,13 @@ let profile = ModelProvider::OpenAi
 
 `ModelProvider::ChatGpt` serves the same Responses API billed to the user's ChatGPT plan
 through OpenAI's "Sign in with ChatGPT". Instead of an API key it reads the sign-in
-stored at `chatgpt_auth_file` (`CHATGPT_AUTH_FILE`, else `auth/chatgpt.json` under
-`AGENTTY_ROOT` or `~/.agentty`), written by `ag-harness login chatgpt` or by a host
-through `ChatGptLogin`. `client_from_environment` fails with
+stored in a credential file the host chooses with `ModelConfiguration::auth_file`, else
+the one `CHATGPT_AUTH_FILE` names; the harness has no default location. A host writes it
+with `ChatGptSignIn::new(auth_file)` or `ChatGptLogin`, and
+`ModelCatalog::from_environment_with_auth_file` catalogs its models from it.
+`chatgpt_auth_file_in(environment, data_dir)` locates the file under a host's data
+directory, so `ag-harness login chatgpt` and Agentty share
+`~/.agentty/auth/chatgpt.json`. `client_from_environment` fails with
 `ModelConfigurationError::SignIn` until the user signs in, and each request refreshes
 the one-hour access token shortly before it expires, serializing rotating refreshes
 across processes with a lock file. Its models report `openai_chatgpt` as their provider,
@@ -549,13 +557,18 @@ and request policy: structured-output mode, reasoning mapping, reasoning-text re
 output-bound field, image input, prompt cache key, and context-overflow markers. Its
 `ReasoningFamily` decides which recorded turns its models replay with their provider
 reasoning intact after a model switch; other turns replay their reasoning as short
-notes. `ProviderSpec::new` starts from a conservative policy for the protocol. Keys are
-literal values the host resolved, so the harness reads no environment variables for a
-specification. The built-in providers are presets of the same type, such as
-`ProviderSpec::kimi`, behind their family's `providers-*` feature, and the `ModelClient`
-constructors send exactly what their preset does. A preset serves its configured model
-under a policy tailored to it; a custom specification names its model with
-`ProviderSpec::for_model`:
+notes. `ProviderSpec::new` starts from the standard request for the protocol with no
+optional capabilities, bounding Chat Completions output with the current `OpenAI` field
+`max_completion_tokens`; a server that ignores it needs
+`with_max_tokens_field(Some(MaxTokensField::MaxTokens))`. Provider quirks, such as that
+legacy field or turn instructions joined to the preceding user message
+(`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`), are opt-ins that
+each Chat Completions preset enables for its provider. Keys are literal values the host
+resolved, so the harness reads no environment variables for a specification. The
+built-in providers are presets of the same type, such as `ProviderSpec::kimi`, behind
+their family's `providers-*` feature, and the `ModelClient` constructors send exactly
+what their preset does. A preset serves its configured model under a policy tailored to
+it; a custom specification names its model with `ProviderSpec::for_model`:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -586,16 +599,20 @@ name or overflow marker, or an option its protocol cannot express. It fails with
 `ProviderSpecError::MissingModel` for a specification that names no model. Header and
 query values are sent as secrets: debug output and errors never print them, nor
 credentials or a query in the base URL, and requests follow no redirect.
-`ModelClient::from_spec` declares no context profile, so hosts set the budget
-explicitly.
+`ModelClient::from_spec` declares no context profile, even for a preset whose
+constructor, such as `ModelClient::kimi`, attaches the catalog's, so hosts set the
+budget explicitly.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and
 `ModelProvider::capabilities` its image, reasoning, native structured output, and tool
 support. `ModelProvider::cost_tier` derives each cataloged model's `CostTier` from those
 prices (`Cheap` up to $2.50 per million output tokens, `Premium` from $15, `Standard`
-between), with `Plan` for every ChatGPT plan model and `Local` for every
-OpenAI-compatible model, so a host can route simple tasks to a cheap model.
+between), with `Plan` for every ChatGPT plan model, so a host can route simple tasks to
+a cheap model. An OpenAI-compatible server's price depends on where it runs:
+`ModelProvider::cost_tier` returns `None` for it, as for an uncataloged model, and
+`ModelProvider::cost_tier_at(model, base_url)` returns `Local` for a local or
+private-network endpoint and `None` for a hosted one, such as OpenRouter.
 `ModelProvider::trains_on_prompts` flags tiers, such as `muse-spark-1.3-contributor`,
 that let the provider train on requests:
 
@@ -673,7 +690,8 @@ use ag_harness::recovery::ExecutionIdentity;
 let mut models = ModelRegistry::new();
 models.register(
     ExecutionIdentity::new("review-model", "config-v1")?,
-    Muse::from_env(MUSE_SPARK_1_3)?,
+    ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
+        .client_from_environment(|name| std::env::var(name))?,
     ModelCapabilities {
         image_input: true,
         tool_calls: true,

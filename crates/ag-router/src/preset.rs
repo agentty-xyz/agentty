@@ -8,6 +8,12 @@
 //! an ordinary specification, so a host can adjust it with the `with_*`
 //! methods, such as adding a header.
 //!
+//! [`ProviderSpec::new`] sends the standard Chat Completions request, so each
+//! Chat Completions preset opts in to the quirks its provider needs: the
+//! legacy `max_tokens` field for Kimi, Qwen, and OpenAI-compatible servers,
+//! and turn instructions joined to the preceding user message for every
+//! one of them.
+//!
 //! A preset given a model it does not know serves it under the provider's
 //! shared policy alone, without the model-specific options: [`kimi`] and
 //! [`qwen`] then send no reasoning control and accept no image input or
@@ -20,8 +26,8 @@ use std::sync::Arc;
 use crate::credential::CredentialSource;
 use crate::model::ReasoningEffort;
 use crate::provider_spec::{
-    Auth, EffortNames, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
-    ThinkingOptions, WireProtocol,
+    Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 
 /// Kimi's `400` message for input over the window, as in "Your request
@@ -95,6 +101,8 @@ pub fn kimi(base_url: impl Into<String>, api_key: impl Into<String>, model: &str
             model,
             "kimi-k2.6" | "kimi-k2.7-code" | "kimi-k2.7-code-highspeed" | "kimi-k3"
         ))
+        .with_instruction_placement(InstructionPlacement::JoinPreviousUser)
+        .with_max_tokens_field(Some(MaxTokensField::MaxTokens))
         .with_overflow_marker(KIMI_CONTEXT_OVERFLOW)
         .with_prompt_cache_key(true)
         .with_reasoning(reasoning)
@@ -113,6 +121,7 @@ pub fn muse(base_url: impl Into<String>, api_key: impl Into<String>, model: &str
             model,
             "muse-spark-1.3" | "muse-spark-1.3-contributor"
         ))
+        .with_instruction_placement(InstructionPlacement::JoinPreviousUser)
         .with_max_tokens_field(Some(MaxTokensField::MaxCompletionTokens))
         .with_overflow_marker(MUSE_CONTEXT_OVERFLOW)
         .with_prompt_cache_key(true)
@@ -134,12 +143,19 @@ pub fn openai(
 }
 
 /// Any server implementing the `OpenAI` Chat Completions API, such as
-/// Ollama, llama.cpp, LM Studio, or vLLM, under the conservative policy of
-/// [`ProviderSpec::new`]; `None` sends no `Authorization` header.
+/// Ollama, llama.cpp, LM Studio, or vLLM, under the portable capabilities of
+/// [`ProviderSpec::new`] with the quirks local servers need: the legacy
+/// `max_tokens` field and turn instructions joined to the preceding user
+/// message. A server that supports more opts in with the `with_*` methods,
+/// such as [`ProviderSpec::with_image_input`] for a vision model or
+/// [`ProviderSpec::with_structured_output`] for native JSON Schema; `None`
+/// sends no `Authorization` header.
 pub fn openai_compatible(base_url: impl Into<String>, api_key: Option<String>) -> ProviderSpec {
     ProviderSpec::new("openai-compatible", WireProtocol::ChatCompletions, base_url)
         .with_auth(api_key.map_or(Auth::None, Auth::Bearer))
         .with_display_name("OpenAI-compatible server")
+        .with_instruction_placement(InstructionPlacement::JoinPreviousUser)
+        .with_max_tokens_field(Some(MaxTokensField::MaxTokens))
         .with_overflow_marker(LLAMA_CPP_CONTEXT_OVERFLOW)
 }
 
@@ -172,6 +188,8 @@ pub fn qwen(base_url: impl Into<String>, api_key: impl Into<String>, model: &str
                     "qwen-plus" | "qwen3.8-27b" | "qwen3.8-flash" | "qwen3.8-max"
                 ),
         )
+        .with_instruction_placement(InstructionPlacement::JoinPreviousUser)
+        .with_max_tokens_field(Some(MaxTokensField::MaxTokens))
         .with_overflow_marker(QWEN_CONTEXT_OVERFLOW)
         .with_reasoning(reasoning)
         .with_structured_output(StructuredOutputMode::JsonObject)

@@ -801,6 +801,62 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
     Ok(())
 }
 
+#[tokio::test]
+async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2eResult {
+    // Arrange
+    let ollama = local_ollama().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_kimi_default_endpoint")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "")
+        .env("CHATGPT_AUTH_FILE", "")
+        // Kimi has a default endpoint, so a blank base URL needs nothing.
+        .env("KIMI_API_KEY", "test-key")
+        .env("KIMI_BASE_URL", "")
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", ollama.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/openai-compatible/qwen3:latest", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("kimi-k3", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("kimi_ready", "Kimi ready with only its API key")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let picker_text = common::frame_from_capture(&report.captures[0])
+                        .all_text()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    assert!(
+                        picker_text.contains("[paid] kimi-k3 premium · Kimi"),
+                        "{picker_text}"
+                    );
+                    assert!(!picker_text.contains("KIMI_BASE_URL"), "{picker_text}");
+                    assert!(!picker_text.contains("needs KIMI_API_KEY"), "{picker_text}");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Commit message the cheap Qwen model writes.
 const CHEAP_COMMIT_TITLE: &str = "Add notes with a cheap model";
 

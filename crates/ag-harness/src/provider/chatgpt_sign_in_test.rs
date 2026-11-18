@@ -195,16 +195,8 @@ async fn start_rejects_unreadable_sign_in_and_falls_back_from_a_busy_port() {
         .await
         .expect("busy port bound");
     let busy_port = busy_listener.local_addr().expect("busy address").port();
-    let sign_in_for = |auth_file: &Path| {
-        let auth_file = auth_file.to_string_lossy().into_owned();
-
-        ChatGptSignIn::from_environment(move |name| match name {
-            "CHATGPT_AUTH_FILE" => Ok(auth_file.clone()),
-            _ => Err(env::VarError::NotPresent),
-        })
-        .expect("auth file located")
-        .with_port(busy_port)
-    };
+    // The host passes the credential file itself.
+    let sign_in_for = |auth_file: &Path| ChatGptSignIn::new(auth_file).with_port(busy_port);
     let unreadable = sign_in_for(&unreadable_file);
     let fallback = sign_in_for(&missing_file);
 

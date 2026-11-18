@@ -193,6 +193,29 @@ impl EffortNames {
     }
 }
 
+/// Where a Chat Completions request places a turn's instructions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum InstructionPlacement {
+    /// Their own user message, the standard request.
+    #[default]
+    Separate,
+    /// Appended to the user message they follow, for chat templates that
+    /// reject two user messages in a row; without a preceding user message
+    /// they form their own.
+    JoinPreviousUser,
+}
+
+impl InstructionPlacement {
+    /// Converts to the routed instruction placement.
+    const fn to_router(self) -> ag_router::InstructionPlacement {
+        match self {
+            Self::Separate => ag_router::InstructionPlacement::Separate,
+            Self::JoinPreviousUser => ag_router::InstructionPlacement::JoinPreviousUser,
+        }
+    }
+}
+
 /// Body field carrying the output-token bound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -253,11 +276,19 @@ pub struct ProviderSpec {
 impl ProviderSpec {
     /// Creates an unauthenticated specification for the provider `name`.
     ///
-    /// Chat Completions starts like an unknown OpenAI-compatible server: the
-    /// schema stated in the prompt, no reasoning controls, reasoning-text
-    /// replay, prompt cache key, or image input, and the bound sent as
-    /// `max_tokens`. The Responses API starts with native structured output,
-    /// efforts under their own names, image input, `prompt_cache_key`, and
+    /// Chat Completions starts from the standard `OpenAI` request with no
+    /// optional capabilities: the schema stated in the prompt, no reasoning
+    /// controls, reasoning-text replay, prompt cache key, or image input,
+    /// and the bound sent as `max_completion_tokens`, the current `OpenAI`
+    /// field. A server that ignores that field leaves output unbounded, so it
+    /// needs `with_max_tokens_field(Some(MaxTokensField::MaxTokens))`.
+    /// Provider quirks are opt-ins: the legacy `max_tokens` field
+    /// ([`Self::with_max_tokens_field`]), turn instructions joined to the
+    /// preceding user message ([`Self::with_instruction_placement`]),
+    /// reasoning-text replay, and tool-result names; each Chat Completions
+    /// preset, such as [`Self::openai_compatible`], enables those its provider
+    /// needs. The Responses API starts with native structured output, efforts
+    /// under their own names, image input, `prompt_cache_key`, and
     /// `max_output_tokens`. Either names no model yet ([`Self::for_model`])
     /// and starts in the reasoning family [`ModelMetadata::new`] assigns
     /// `name`, so a built-in provider name keeps its built-in family.
@@ -413,6 +444,15 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.spec = self.spec.with_header(name, value);
+
+        self
+    }
+
+    /// Sets where turn instructions go (Chat Completions only; the
+    /// Responses protocol accepts only [`InstructionPlacement::Separate`]).
+    #[must_use]
+    pub fn with_instruction_placement(mut self, placement: InstructionPlacement) -> Self {
+        self.spec = self.spec.with_instruction_placement(placement.to_router());
 
         self
     }

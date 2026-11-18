@@ -175,6 +175,19 @@ fn index(effort: ReasoningEffort) -> usize {
     }
 }
 
+/// Where a Chat Completions request places a turn's instructions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum InstructionPlacement {
+    /// Their own user message, the standard request.
+    #[default]
+    Separate,
+    /// Appended to the user message they follow, for chat templates that
+    /// reject two user messages in a row; without a preceding user message
+    /// they form their own.
+    JoinPreviousUser,
+}
+
 /// Body field carrying [`crate::GenerationOptions::max_output_tokens`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -210,6 +223,7 @@ pub struct ProviderSpec {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) id: String,
     pub(crate) image_input: bool,
+    pub(crate) instruction_placement: InstructionPlacement,
     pub(crate) max_tokens_field: Option<MaxTokensField>,
     pub(crate) model: Option<String>,
     pub(crate) overflow_markers: Vec<String>,
@@ -257,6 +271,7 @@ impl fmt::Debug for ProviderSpec {
             .field("reasoning", &self.reasoning)
             .field("max_tokens_field", &self.max_tokens_field)
             .field("image_input", &self.image_input)
+            .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
             .field(
                 "response_format_with_tools",
@@ -272,9 +287,17 @@ impl ProviderSpec {
     /// Creates an unauthenticated specification for every model under `id`,
     /// whose display name is `id`.
     ///
-    /// Chat Completions starts like an unknown OpenAI-compatible server: the
-    /// schema stated in the prompt, no reasoning controls, prompt cache key,
-    /// or image input, and the bound sent as `max_tokens`. The Responses API
+    /// Chat Completions starts from the standard `OpenAI` request with no
+    /// optional capabilities: the schema stated in the prompt, no reasoning
+    /// controls, prompt cache key, or image input, and the bound sent as
+    /// `max_completion_tokens`, the current `OpenAI` field. A server that
+    /// ignores that field leaves output unbounded, so it needs
+    /// `with_max_tokens_field(Some(MaxTokensField::MaxTokens))`. Provider
+    /// quirks are opt-ins: the legacy `max_tokens` field
+    /// ([`Self::with_max_tokens_field`]), turn instructions joined to the
+    /// preceding user message ([`Self::with_instruction_placement`]),
+    /// reasoning-content replay, and tool-result names; the presets in
+    /// [`crate::preset`] enable those their provider needs. The Responses API
     /// starts with native structured output, efforts under their own names,
     /// image input, `prompt_cache_key`, and `max_output_tokens`.
     pub fn new(id: impl Into<String>, protocol: WireProtocol, base_url: impl Into<String>) -> Self {
@@ -288,10 +311,11 @@ impl ProviderSpec {
             headers: Vec::new(),
             id,
             image_input: responses,
+            instruction_placement: InstructionPlacement::Separate,
             max_tokens_field: Some(if responses {
                 MaxTokensField::MaxOutputTokens
             } else {
-                MaxTokensField::MaxTokens
+                MaxTokensField::MaxCompletionTokens
             }),
             model: None,
             overflow_markers: Vec::new(),
@@ -368,6 +392,15 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+
+        self
+    }
+
+    /// Sets where turn instructions go (Chat Completions only; the
+    /// Responses protocol accepts only [`InstructionPlacement::Separate`]).
+    #[must_use]
+    pub fn with_instruction_placement(mut self, placement: InstructionPlacement) -> Self {
+        self.instruction_placement = placement;
 
         self
     }
@@ -670,6 +703,8 @@ impl ProviderSpec {
                     None | Some(MaxTokensField::MaxOutputTokens)
                 ) {
                     Some("an output-token field other than `max_output_tokens`")
+                } else if self.instruction_placement != InstructionPlacement::Separate {
+                    Some("instructions placed other than as their own message")
                 } else if self.replay.reasoning_text || self.replay.tool_result_name {
                     Some("reasoning-content replay or tool-result names")
                 } else {

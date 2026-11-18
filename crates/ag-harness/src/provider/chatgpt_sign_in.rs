@@ -61,26 +61,44 @@ pub struct ChatGptSignIn {
 }
 
 impl ChatGptSignIn {
-    /// Signs in to the credential file the `chatgpt` provider reads, with
-    /// the authorization server optionally replaced by `CHATGPT_AUTH_URL`.
+    /// Signs in to the host-chosen `auth_file` against `OpenAI`'s
+    /// authorization server.
+    pub fn new(auth_file: impl Into<PathBuf>) -> Self {
+        Self {
+            auth_file: auth_file.into(),
+            issuer: None,
+            port: CALLBACK_PORT,
+            timeout: SIGN_IN_TIMEOUT,
+        }
+    }
+
+    /// Signs in to the credential file `CHATGPT_AUTH_FILE` names, with the
+    /// authorization server optionally replaced by `CHATGPT_AUTH_URL`.
     ///
     /// # Errors
     ///
-    /// Returns [`AuthFileUnavailable`] when the credential file cannot be
-    /// located.
+    /// Returns [`AuthFileUnavailable`] when `CHATGPT_AUTH_FILE` is unset or
+    /// blank; a host with its own location uses [`Self::new`].
     pub fn from_environment(
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Self, AuthFileUnavailable> {
+        // A blank variable counts as unset, keeping `OpenAI`'s server.
         let issuer = environment(CHATGPT_AUTH_URL_ENV)
             .ok()
             .filter(|issuer| !issuer.trim().is_empty());
 
-        Ok(Self {
-            auth_file: auth_file(environment)?,
-            issuer,
-            port: CALLBACK_PORT,
-            timeout: SIGN_IN_TIMEOUT,
-        })
+        Ok(Self::new(auth_file(environment)?).with_issuer(issuer))
+    }
+
+    /// Replaces the authorization server with `issuer`, such as the one
+    /// `CHATGPT_AUTH_URL` names in tests, or keeps `OpenAI`'s for `None`.
+    /// A value is used as given, so a host that reads it from the
+    /// environment maps a blank variable to `None` itself.
+    #[must_use]
+    pub fn with_issuer(mut self, issuer: Option<impl Into<String>>) -> Self {
+        self.issuer = issuer.map(Into::into);
+
+        self
     }
 
     /// Replaces the preferred callback port; a busy port falls back to any
