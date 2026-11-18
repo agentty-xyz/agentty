@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.4] - 2026-11-17
+
+### Changed
+
+- `agentty`: load inherited MCP servers by default for Claude turns, including read-only
+  and review runs, so configured plugin servers and Claude.ai connectors are available.
+- release: stop publishing `ag-harness-cli` to crates.io.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.4`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.19.3] - 2026-11-17
 
 ### Added
