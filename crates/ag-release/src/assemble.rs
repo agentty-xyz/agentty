@@ -22,9 +22,10 @@ use crate::tag::ReleaseTag;
 use crate::workspace::Workspace;
 use crate::{archive, artifact, checksum};
 
-/// Verifies the archives in `options.artifacts_dir`, writes the configured
-/// installers, the source archive, the checksum list, and the manifest into
-/// it, and prints the written paths.
+/// Verifies the archives in `options.artifacts_dir` for the selected targets
+/// (every configured target unless `options.targets` names some), writes
+/// the configured installers, the source archive, the checksum list, and the
+/// manifest into it, and prints the written paths.
 ///
 /// # Errors
 /// Returns an error when the tag is invalid, an expected archive or checksum
@@ -36,7 +37,8 @@ pub(crate) fn run(
     stdout: &mut dyn Write,
 ) -> Result<(), String> {
     let tag = ReleaseTag::parse(&options.tag)?;
-    let workspace = Workspace::load(host.process, host.cargo.clone())?;
+    let mut workspace = Workspace::load(host.process, host.cargo.clone())?;
+    workspace.config.select_targets(&options.targets)?;
     let plan = ReleasePlan::new(&workspace, Some(&tag))?;
     let mtime = archive::modification_time(host.source_date_epoch.as_deref())?;
     let mut assembly = Assembly::verify(host, &options.artifacts_dir, &plan)?;

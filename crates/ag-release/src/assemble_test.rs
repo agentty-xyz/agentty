@@ -98,6 +98,17 @@ fn run(
     process: &MockProcessRunner,
     file_system: &MockFileSystem,
 ) -> (Result<(), String>, String) {
+    run_targets(tag, &[], process, file_system)
+}
+
+/// Runs `assemble` for `tag` restricted to `targets` and returns its result
+/// with the captured output.
+fn run_targets(
+    tag: &str,
+    targets: &[&str],
+    process: &MockProcessRunner,
+    file_system: &MockFileSystem,
+) -> (Result<(), String>, String) {
     let host = Host {
         cargo: OsString::from("cargo"),
         file_system,
@@ -107,6 +118,7 @@ fn run(
     let options = AssembleOptions {
         artifacts_dir: PathBuf::from("artifacts"),
         tag: tag.to_string(),
+        targets: targets.iter().map(ToString::to_string).collect(),
     };
     let mut stdout = Vec::new();
     let result = super::run(&host, &options, &mut stdout);
@@ -188,6 +200,43 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
         .map(|name| (name.to_string(), json!(digest(name))))
         .collect::<Map<_, _>>();
     assert_eq!(manifest["sha256"], Value::Object(expected_sha256));
+}
+
+#[test]
+fn assemble_restricted_to_targets_needs_only_their_archives() {
+    // Arrange
+    let process = git_process(Ok(SOURCE_TAR.to_vec()));
+    let rejected_process = metadata_process(&demo_metadata());
+    let files = demo_artifacts();
+    {
+        let mut files = lock(&files);
+        files.remove(&artifact_path(ARCHIVES[0]));
+        files.remove(&artifact_path(ARCHIVES[2]));
+    }
+    let file_system = memory_file_system(&files);
+    let linux = ["x86_64-unknown-linux-gnu"];
+
+    // Act
+    let (result, _) = run_targets("v1.2.3", &linux, &process, &file_system);
+    let rejected = run_targets(
+        "v1.2.3",
+        &["x86_64-apple-darwin"],
+        &rejected_process,
+        &file_system,
+    );
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    let checksums = String::from_utf8(lock(&files)[&artifact_path("sha256.sum")].clone())
+        .expect("UTF-8 checksum list");
+    assert!(checksums.contains(ARCHIVES[1]), "{checksums}");
+    assert!(!checksums.contains("aarch64-apple-darwin"), "{checksums}");
+    assert!(
+        rejected
+            .0
+            .expect_err("unconfigured target")
+            .starts_with("target `x86_64-apple-darwin` is not configured")
+    );
 }
 
 #[test]

@@ -15,11 +15,8 @@ setup.
    [Configuration](#configuration)).
 1. Set `repository = "https://github.com/<owner>/<name>"` on each released package.
 1. Run `ag-release plan` from anywhere in the workspace to validate the configuration.
-1. In the release workflow, run `ag-release build --target <triple>` on each matrix job,
-   collect every job's output into one directory, and run
-   `ag-release assemble --tag <tag> --artifacts-dir <dir>` on a checkout of the tagged
-   commit. Create the GitHub release with the title and body that `ag-release notes`
-   prints, and upload the directory's files to it.
+1. Add a release workflow that runs the commands as
+   [Release Workflow](#release-workflow) describes.
 
 ## Configuration
 
@@ -60,11 +57,12 @@ Unknown keys, wrong types, and invalid values are errors that name the key.
 
 ## Commands
 
-### `plan [--tag <tag>]`
+### `plan [--tag <tag>] [--target <triple>]...`
 
 Validates the configuration, checks that every `include` file exists, and prints the
 release plan as JSON on stdout. With `--tag`, the tag must be `v<semver>` or `<semver>`
-and name the apps' version. Errors go to stderr with a nonzero exit status.
+and name the apps' version. With `--target`, the plan covers only the named configured
+targets instead of all of them. Errors go to stderr with a nonzero exit status.
 
 | Field                   | Value                                                                                 |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -82,7 +80,7 @@ Each `apps[]` entry has `name`, `binaries`, `description`, `license`, `authors`,
 `archives[]` (`target`, `name`, `checksum`, `directory`), and `shell_installer`,
 `npm_package`, and `npm_tarball`, which are `null` unless that installer is enabled.
 
-### `build --target <triple> [--out-dir <dir>]`
+### `build --target <triple> [--out-dir <dir>] [--profile <name>]`
 
 Runs
 `cargo build --locked --profile <profile> --target <triple> --package <app>... --bins`
@@ -90,13 +88,16 @@ in the workspace root, streaming Cargo's output to stderr, then writes each app'
 `<app>-<target>.tar.gz` and `.sha256` into `<dir>` and prints their paths on stdout. The
 target must be configured, and its Rust target must already be installed (for example
 with `rustup target add`); `ag-release` does not install toolchains. `<dir>` defaults to
-`ag-release.out` in Cargo's target directory.
+`ag-release.out` in Cargo's target directory. `--profile` replaces the configured
+profile, for example `dev` for faster test builds.
 
-### `assemble --tag <tag> --artifacts-dir <dir>`
+### `assemble --tag <tag> --artifacts-dir <dir> [--target <triple>]...`
 
 Checks that `<dir>` holds every archive the plan names, each with a `.sha256` file that
-matches it, and fails with a list of every missing or mismatched file otherwise. Then
-writes each app's `<app>-installer.sh` when the `shell` installer is configured (see
+matches it, and fails with a list of every missing or mismatched file otherwise. With
+`--target`, the plan, and so the archives, installers, and manifest, covers only the
+named configured targets, so one machine can test what it built. Then writes each app's
+`<app>-installer.sh` when the `shell` installer is configured (see
 [Shell Installer](#shell-installer)), its `<app>-npm-package.tar.gz` when the `npm`
 installer is configured (see [npm Package](#npm-package)), `source.tar.gz` and its
 `.sha256`, `sha256.sum`, and `release-manifest.json` into `<dir>` and prints their
@@ -146,6 +147,33 @@ ag-release notes --tag "$TAG" > release-notes.md
 gh release create "$TAG" --title "$(ag-release notes --tag "$TAG" --title)" \
   --notes-file release-notes.md artifacts/*
 ```
+
+## Release Workflow
+
+A GitHub Actions release workflow on a tag push runs one command per job and passes
+files between jobs as workflow artifacts:
+
+| Job       | Runs                                                         | Consumes                         | Produces                    |
+| --------- | ------------------------------------------------------------ | -------------------------------- | --------------------------- |
+| plan      | `ag-release plan --tag "$TAG"`                               | The checkout                     | Plan JSON as a job output   |
+| build     | `rustup target add`, then `ag-release build --target`        | One `matrix` entry of the plan   | That target's archives      |
+| assemble  | `ag-release assemble`, then `ag-release notes` and `--title` | Every archive, on the tag commit | Release files, title, body  |
+| release   | `gh release create` with the title, body, and release files  | The assemble job's output        | The GitHub release          |
+| npm, etc. | `npm publish` of each app's `npm_tarball`                    | The release files and the plan   | Packages, after the release |
+
+Run each build job on its matrix entry's runner, for example with
+`strategy: { matrix: ${{ fromJson(needs.plan.outputs.plan).matrix }} }` and
+`runs-on: ${{ matrix.runner }}`. Publish packages only after the GitHub release exists,
+because their installers download its archives, and skip them when the plan's
+`prerelease` is `true` if prereleases should not reach package registries. Running
+`plan` on pull requests catches configuration errors before a release.
+
+To test a workflow without publishing, build the host target with `--profile dev`, pass
+the same `--target` to `plan` and `assemble`, and install from the artifacts directory
+with `<APP>_DOWNLOAD_URL=file://<dir>`. This repository's
+[`release.yml`](https://github.com/agentty-xyz/agentty/blob/main/.github/workflows/release.yml)
+is a complete example with release checks, attestations, draft-first publishing, and
+these tests.
 
 ## Artifacts
 

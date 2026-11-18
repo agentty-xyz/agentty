@@ -17,7 +17,8 @@ use crate::{artifact, checksum};
 const DEFAULT_OUT_DIR: &str = "ag-release.out";
 
 /// Builds the configured apps for `options.target` with one `cargo build`
-/// call, then writes `<app>-<target>.tar.gz` and its `.sha256` file per app
+/// call, using `options.profile` instead of the configured profile when
+/// given, then writes `<app>-<target>.tar.gz` and its `.sha256` file per app
 /// and prints the written paths.
 ///
 /// # Errors
@@ -29,8 +30,11 @@ pub(crate) fn run(
     options: &BuildOptions,
     stdout: &mut dyn Write,
 ) -> Result<(), String> {
-    let workspace = Workspace::load(host.process, host.cargo.clone())?;
-    let target = configured_target(&workspace, &options.target)?;
+    let mut workspace = Workspace::load(host.process, host.cargo.clone())?;
+    let target = workspace.config.target(&options.target)?;
+    if let Some(profile) = &options.profile {
+        workspace.config.profile.clone_from(profile);
+    }
     host.check_include(&workspace)?;
     let mtime = archive::modification_time(host.source_date_epoch.as_deref())?;
     host.process
@@ -61,27 +65,6 @@ pub(crate) fn run(
     }
 
     Host::report_written(stdout, &written)
-}
-
-/// Returns the configured target spelled `triple`.
-fn configured_target(workspace: &Workspace, triple: &str) -> Result<Target, String> {
-    let targets = &workspace.config.targets;
-
-    targets
-        .keys()
-        .copied()
-        .find(|target| target.triple() == triple)
-        .ok_or_else(|| {
-            format!(
-                "target `{triple}` is not configured in `workspace.metadata.release.targets`; \
-                 configured targets: {}",
-                targets
-                    .keys()
-                    .map(|target| target.triple())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
 }
 
 /// Returns the `cargo build` call that builds every app's binaries.

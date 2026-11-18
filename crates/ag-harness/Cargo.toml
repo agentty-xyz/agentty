@@ -8,10 +8,6 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 
-[package.metadata.dist]
-# Publish this crate only through the crates.io workflow.
-dist = false
-
 # Document every feature and badge each gated item with the one it needs.
 [package.metadata.docs.rs]
 all-features = true

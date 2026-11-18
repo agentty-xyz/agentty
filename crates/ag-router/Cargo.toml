@@ -7,9 +7,6 @@ license.workspace = true
 description = "Provider-neutral structured model API router"
 repository.workspace = true
 
-[package.metadata.dist]
-dist = false
-
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true

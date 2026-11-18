@@ -242,7 +242,6 @@ impl<'host> InstructionCheck<'host> {
             "Cargo.toml",
             "Cargo.lock",
             "rust-toolchain.toml",
-            "dist-workspace.toml",
             ".pre-commit-config.yaml",
         ];
 
