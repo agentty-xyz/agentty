@@ -253,7 +253,7 @@ async fn suggestion_requires_consent_and_remembers_skip() {
     assert!(matches!(
         app.mode,
         AppMode::ProjectCatalog {
-            dialog: ProjectCatalogDialog::SuggestHome { selected: 1, .. }
+            dialog: ProjectCatalogDialog::SuggestHome { selected: 0, .. }
         }
     ));
     // Act

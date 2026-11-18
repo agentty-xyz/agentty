@@ -7,7 +7,7 @@ use crate::domain::input::InputState;
 /// User-facing project catalog dialog, shared by input and rendering.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProjectCatalogDialog {
-    /// One-time startup invitation; skipping is selected initially.
+    /// One-time startup invitation; discovering is selected initially.
     SuggestHome {
         /// Explicit home scan root shown to the user.
         root: PathBuf,

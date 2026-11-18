@@ -14,22 +14,22 @@ async fn key(app: &mut crate::app::App, code: KeyCode) {
 }
 
 #[tokio::test]
-async fn invitation_defaults_to_skip_and_navigation_does_not_scan() {
+async fn invitation_navigation_does_not_scan() {
     // Arrange
     let (mut app, _root) = test_support::new_test_app().await;
     app.mode = AppMode::ProjectCatalog {
         dialog: ProjectCatalogDialog::SuggestHome {
             root: PathBuf::from("/home/test"),
-            selected: 1,
+            selected: 0,
         },
     };
     // Act
-    key(&mut app, KeyCode::Left).await;
+    key(&mut app, KeyCode::Right).await;
     // Assert
     assert!(matches!(
         app.mode,
         AppMode::ProjectCatalog {
-            dialog: ProjectCatalogDialog::SuggestHome { selected: 0, .. }
+            dialog: ProjectCatalogDialog::SuggestHome { selected: 1, .. }
         }
     ));
     // Act
