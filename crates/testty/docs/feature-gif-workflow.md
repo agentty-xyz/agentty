@@ -126,8 +126,9 @@ unexpectedly** dialog. Host-side validation should use `check` mode; intentional
 recording should use the canonical container. Do not suppress macOS crash reporting to
 hide the browser failure.
 
-Use the `e2e-container` hook described in `docs/contributing/feature-test/recording.md`.
-It runs the digest-pinned container natively as the host UID and GID so Linux bind
-mounts remain writable. CI overrides the image user with root for workspace access.
-Recording in the same container that performs the freshness check prevents host-specific
-output from churning committed artifacts.
+Use the `e2e-container` hook described in
+`skills/refresh-feature-recordings/references/recording.md`. It runs the digest-pinned
+container natively as the host UID and GID so Linux bind mounts remain writable. CI
+overrides the image user with root for workspace access. Recording in the same container
+that performs the freshness check prevents host-specific output from churning committed
+artifacts.

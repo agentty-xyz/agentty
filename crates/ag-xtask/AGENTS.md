@@ -19,5 +19,5 @@ Deterministic Rust-based workspace maintenance tasks.
 
 ## Documentation
 
-Keep the relevant `docs/contributing/` recipes aligned with maintenance workflows and
+Keep the relevant `skills/` workflows aligned with maintenance tasks and
 `docs/site/content/docs/architecture/change-recipes.md` aligned with migration guidance.

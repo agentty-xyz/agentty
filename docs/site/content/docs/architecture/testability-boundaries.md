@@ -95,7 +95,7 @@ PTY scenarios can advance monotonic time through the pinned `Clock` adapter; wal
 stays fixed for captures.
 
 Follow `crates/agentty/tests/e2e/AGENTS.md` for PTY scenarios and
-`docs/contributing/feature-test/recording.md` for published recordings.
+`skills/refresh-feature-recordings/SKILL.md` for published recordings.
 
 ## Headless worker boundaries
 
@@ -126,8 +126,8 @@ runtime with an injected provider. Opt-in live evaluations use the same path and
 responses, settings, usage, latency, and bounded grades. Grades are regression signals,
 not a proof of correctness.
 
-See `docs/contributing/prompts.md` for the evaluation workflow and root `AGENTS.md` for
-required gates.
+See `skills/evaluate-prompts/SKILL.md` for the evaluation workflow and root `AGENTS.md`
+for required gates.
 
 ## Trace Export
 

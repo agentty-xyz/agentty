@@ -1,9 +1,17 @@
-# Maintaining the Recording Image
+---
+name: maintain-e2e-image
+description: Build, test, and publish a replacement multi-architecture E2E recording image after changing container/e2e.Containerfile, verify its anonymous pulls, and pin the new digest with re-recorded artifacts.
+---
 
-Only maintainers changing `container/e2e.Containerfile` should build and publish a
-replacement image. Build both supported platforms into one manifest, run affected
-focused feature tests against the native candidate for each available architecture, then
-push `latest`.
+# Maintain the E2E Image
+
+Use this skill only when a maintainer changes `container/e2e.Containerfile`. Ordinary
+recording uses the pinned image through
+`skills/refresh-feature-recordings/references/recording.md`. Build both supported
+platforms into one manifest, run affected focused feature tests against the native
+candidate for each available architecture, then push `latest`.
+
+## Publish Through the Workflow
 
 Prefer the manual **Publish E2E Image** workflow in
 `.github/workflows/publish-e2e-image.yml`, dispatched from the repository's default
@@ -19,25 +27,21 @@ package to this repository or grant this repository write access under the packa
 Containerfile's `org.opencontainers.image.source` label preserves the repository
 association on later publications.
 
-Copy the reported digest into the `container.image` value in
-`.github/workflows/e2e.yml`, which is also the `e2e-container` hook's local image. The
-pinned digest must remain an image index with both platforms; do not update the
-repository when either native test or either platform pull fails. Re-record every
-feature affected by a tool, browser, font, or rendering change and refresh its PNG
-poster, then update the digest and artifacts together.
+## Test a Local Candidate
+
+To test a locally built candidate, set `AGENTTY_E2E_IMAGE` to its image ID from
+`podman image inspect --format '{{.Id}}'` when running the `e2e-container` hook; the
+hook then skips its pull and runs the image with `--pull=never`. Pulling a tag, or
+running `--platform` with one, re-resolves it against the registry and silently replaces
+the local build with a previously published image.
+
+## Publish Locally
 
 Maintainers with GHCR package-write permission can also publish locally. Use an explicit
 registry destination so a later single-image push cannot be confused with the
 manifest-list publication. Because the Containerfile contains `RUN` instructions, the
 combined build requires binfmt/QEMU emulation for the non-native platform; without it,
 use the workflow. Publication verification also requires `jq` on the maintainer host.
-
-To test a locally built candidate, set `AGENTTY_E2E_IMAGE` to its image ID from
-`podman image inspect --format '{{.Id}}'` when running the `e2e-container` hook from
-`docs/contributing/feature-test/recording.md`; the hook then skips its pull and runs the
-image with `--pull=never`. Pulling a tag, or running `--platform` with one, re-resolves
-it against the registry and silently replaces the local build with a previously
-published image.
 
 ```sh
 e2e_repository=ghcr.io/agentty-xyz/agentty-e2e
@@ -85,4 +89,19 @@ podman pull --platform linux/amd64 "${e2e_published_image}"
 podman pull --platform linux/arm64 "${e2e_published_image}"
 ```
 
-Do not update the repository when logout, inspection, or either platform pull fails.
+## Pin the Digest
+
+1. Copy the reported digest into the `container.image` value in
+   `.github/workflows/e2e.yml`, which is also the `e2e-container` hook's local image.
+   The pinned digest must remain an image index with both platforms.
+1. Re-record every feature affected by a tool, browser, font, or rendering change and
+   refresh its PNG poster with `skills/refresh-feature-recordings/SKILL.md`.
+1. Update the digest and artifacts together.
+
+Do not update the repository when logout, inspection, either native test, or either
+platform pull fails.
+
+## Handoff
+
+Report the published digest, the platforms verified, the focused tests run against each
+candidate, and the recordings refreshed or still blocked.

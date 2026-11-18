@@ -71,11 +71,12 @@ rules.
 
 `.pre-commit-config.yaml` owns hook IDs and executable definitions. Invoke checks
 through `prek`. Focused E2E and container recording commands in
-`docs/contributing/feature-test/` are explicit exceptions; keep those commands there.
+`skills/write-feature-tests/` and `skills/refresh-feature-recordings/` are explicit
+exceptions; keep those commands there.
 
 - Follow the required iteration, handoff, and failure-diagnosis procedure in
-  `docs/contributing/validation.md`; use `docs/contributing/setup.md` for setup. Format
-  touched paths before focused tests. Final validation covers every touched file,
+  `skills/validate-changes/SKILL.md`; use `skills/setup-development/SKILL.md` for setup.
+  Format touched paths before focused tests. Final validation covers every touched file,
   changed package, affected dependent, and public contract. Unchanged dependencies need
   no retest.
 - Run required checks once for the final relevant state. Reuse success only while
@@ -94,9 +95,10 @@ through `prek`. Focused E2E and container recording commands in
   Launch a full Chrome or Chromium binary directly only with `--use-mock-keychain` and
   `--password-store=basic`; otherwise each macOS launch requests the user's login
   keychain password.
-- Before container work, read `docs/contributing/feature-test/recording.md`. Use only
-  cataloged hooks and commands in `docs/contributing/feature-test/`; do not compose ad
-  hoc container invocations, images, or wrappers.
+- Before container work, read
+  `skills/refresh-feature-recordings/references/recording.md`. Use only cataloged hooks
+  and the commands in that file and `skills/maintain-e2e-image/SKILL.md`; do not compose
+  ad hoc container invocations, images, or wrappers.
 
 ## Documentation
 
@@ -150,5 +152,5 @@ source routers and doc comments:
 - `docs/site/content/docs/architecture/testability-boundaries.md`: external boundaries.
 - `docs/site/content/docs/architecture/change-recipes.md`: contributor change paths.
 
-Prompt changes follow `docs/contributing/prompts.md` for ownership routing, contract
+Prompt changes follow `skills/evaluate-prompts/SKILL.md` for ownership routing, contract
 checks, and behavioral evaluation.

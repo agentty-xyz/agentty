@@ -36,7 +36,7 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
 
 ## Documentation
 
-Follow `docs/contributing/sqlx.md` for offline-query metadata regeneration and
-`docs/site/content/docs/architecture/change-recipes.md` for schema changes. Update
-`docs/site/content/docs/architecture/testability-boundaries.md` when repository or clock
-contracts change.
+Follow `skills/regenerate-sqlx-metadata/SKILL.md` for offline-query metadata
+regeneration and `docs/site/content/docs/architecture/change-recipes.md` for schema
+changes. Update `docs/site/content/docs/architecture/testability-boundaries.md` when
+repository or clock contracts change.

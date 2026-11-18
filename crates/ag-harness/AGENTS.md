@@ -45,7 +45,7 @@ tools, independent of Agentty UI and orchestration.
 
 - Prefer checked SQLx query macros. Use `sqlx::query_as!` with named row structs for
   row-mapped reads, and keep `crates/ag-harness/.sqlx/` metadata current for offline
-  builds. Regenerate it with `docs/contributing/sqlx.md`.
+  builds. Regenerate it with `skills/regenerate-sqlx-metadata/SKILL.md`.
 
 ## Documentation
 
