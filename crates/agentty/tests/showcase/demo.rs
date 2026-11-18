@@ -172,9 +172,9 @@ async fn create_fake_project_dirs(env: &DemoEnv) -> std::io::Result<Vec<PathBuf>
 /// protocol output with a canned reply.
 async fn install_scripted_claude_stub(env: &DemoEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
-    // Reply text is hard-coded to match session 1's stacked-commits prompt.
-    // Session 2 in the tape never finishes, so the same canned output never
-    // renders on-screen for it.
+    // Reply text is hard-coded to match the Claude session's stacked-commits
+    // prompt. The tape uses Codex for its other session, so this canned
+    // output never renders anywhere else.
     let reply = r"Stacked sessions let you build dependent features in parallel while Agentty keeps your branches clean with a single evolving commit per session.
 
 ```mermaid
@@ -216,12 +216,10 @@ if [ "$1" = "--version" ]; then
 fi
 # Consume stdin so the parent's writer does not block.
 cat > /dev/null 2>&1
-# "Thinking" pause: long enough for the viewer to see InProgress and the
-# timer tick, but short enough that session 1 reaches Review (~6s total
-# with the two trailing sleeps) several seconds before session 2 is
-# submitted. That keeps their `updated_at` (whole-second) values distinct
-# so the list sort (`updated_at DESC, id`) is deterministic: session 2
-# stays the newer top row, with session 1 directly below it.
+# "Thinking" pause: long enough for the viewer to see InProgress in the
+# session and on the list, but short enough (~6s total with the two
+# trailing sleeps) that the session reaches Review before the tape reopens
+# it.
 sleep 4
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 1
@@ -240,7 +238,7 @@ printf '%s\n' '{result_event}'
 }
 
 /// Installs a scripted Codex app-server stub that completes bootstrap and
-/// leaves the demo's second turn running until VHS exits.
+/// leaves the demo's Codex turn running until VHS exits.
 async fn install_scripted_codex_stub(env: &DemoEnv) -> std::io::Result<()> {
     let codex_path = env.stub_bin.join("codex");
     let script = r#"#!/bin/sh
@@ -270,7 +268,7 @@ while IFS= read -r request; do
             request_id=$(extract_id "$request")
             printf '{"id":"%s","result":{"turn":{"id":"demo-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"demo-turn"}}}'
-            sleep 30
+            sleep 60
             ;;
     esac
 done
@@ -328,10 +326,10 @@ async fn symlink_agentty_into_stub_bin(env: &DemoEnv) -> std::io::Result<()> {
 /// `Review`) backed by different agent models, dashboard activity and usage,
 /// and pins a `claude-fable-5-2` default model on the selected project.
 ///
-/// The first live session explicitly selects the Fable default, while the
-/// second selects Codex `gpt-6.1-sol`. The pre-seeded rows never run, so their
-/// models are only ever read by the list renderer to decide the per-row agent
-/// badge.
+/// The first live session selects Codex `gpt-6.1-sol`, while the second
+/// explicitly selects the Fable default. The pre-seeded rows never run, so
+/// their models are only ever read by the list renderer to decide the per-row
+/// agent badge.
 async fn seed_database(
     env: &DemoEnv,
     fake_project_paths: &[PathBuf],
@@ -564,12 +562,17 @@ fn repo_demo_dir() -> PathBuf {
 /// Hand-crafts a VHS tape that shows the user typing `agentty`, landing on
 /// a Sessions list pre-seeded with a mixed-agent fleet, then spinning up
 /// two sessions backed by different agents, returning to the list, and
-/// opening the first session once it transitions to `Review`.
+/// reopening the Claude session once it transitions to `Review`.
 ///
 /// Each session starts from the `New Session` type picker (confirming
-/// `Regular`). The first session explicitly keeps the current Claude default,
-/// `claude-fable-5-2`. The second walks the `/model` picker to Codex and
-/// selects `gpt-6.1-sol`, so two current agents work in parallel.
+/// `Regular`). The first walks the `/model` picker to Codex and selects
+/// `gpt-6.1-sol`. The second explicitly keeps the current Claude default,
+/// `claude-fable-5-2`, so two current agents work in parallel.
+///
+/// The pinned wall clock gives both live sessions identical timestamps, so
+/// their list order falls back to random session ids. The tape therefore
+/// never navigates by row offset: it reopens the Claude session from the
+/// list selection, which follows the session id it last left.
 fn build_demo_tape(env: &DemoEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
@@ -584,7 +587,8 @@ fn build_demo_tape(env: &DemoEnv, gif_path: &Path) -> String {
         )
     };
     let workdir = env.workdir.display().to_string();
-    let second_session = second_session_tape_steps();
+    let codex_session = codex_session_tape_steps();
+    let claude_session = claude_session_tape_steps();
 
     format!(
         r#"Set Shell "bash"
@@ -638,35 +642,9 @@ Sleep 1300ms
 Enter
 Sleep 2200ms
 
-# Session 1: New Session picker -> Regular.
-Type "a"
-Sleep 900ms
-Enter
-Sleep 500ms
+{codex_session}
 
-# Open /model, choose Claude, and keep its default claude-fable-5-2 model.
-Type "/model"
-Sleep 500ms
-Enter
-Sleep 700ms
-
-Down
-Sleep 400ms
-Enter
-Sleep 700ms
-
-Enter
-Sleep 700ms
-
-Type "Explain how agentty's stacked commits work"
-Sleep 900ms
-Enter
-Sleep 2500ms
-
-Type "q"
-Sleep 2500ms
-
-{second_session}
+{claude_session}
 
 Hide
 Type "q"
@@ -680,14 +658,15 @@ Sleep 400ms
         clock_offset_seconds = PINNED_CLOCK_UTC_OFFSET_SECONDS,
         path = path_env,
         cwd = workdir,
-        second_session = second_session,
+        codex_session = codex_session,
+        claude_session = claude_session,
     )
 }
 
-/// Returns the tape steps that launch the parallel Codex session and then
-/// reopen the completed Fable session.
-fn second_session_tape_steps() -> &'static str {
-    r#"# Session 2: New Session picker -> Regular, then choose Codex gpt-6.1-sol.
+/// Returns the tape steps that start the long-running Codex session and
+/// return to the list.
+fn codex_session_tape_steps() -> &'static str {
+    r#"# Session 1: New Session picker -> Regular, then choose Codex gpt-6.1-sol.
 Type "a"
 Sleep 900ms
 Enter
@@ -717,12 +696,43 @@ Enter
 Sleep 2500ms
 
 Type "q"
-Sleep 1500ms
+Sleep 1500ms"#
+}
 
-# Session 2 (the newer row) sits at the top with the cursor on it; step
-# down onto session 1 and open it once it reaches Review.
-Type "j"
+/// Returns the tape steps that launch the parallel Claude session, wait on
+/// the list while it finishes, and reopen it from the list selection.
+fn claude_session_tape_steps() -> &'static str {
+    r#"# Session 2: New Session picker -> Regular.
+Type "a"
+Sleep 900ms
+Enter
+Sleep 500ms
+
+# Open /model, choose Claude, and keep its default claude-fable-5-2 model.
+Type "/model"
+Sleep 500ms
+Enter
+Sleep 700ms
+
+Down
 Sleep 400ms
 Enter
-Sleep 3500ms"#
+Sleep 700ms
+
+Enter
+Sleep 700ms
+
+Type "Explain how agentty's stacked commits work"
+Sleep 900ms
+Enter
+Sleep 2500ms
+
+# Back on the list, the selection stays on the Claude session wherever its
+# row sorts; linger while it moves to Review, then reopen it. Keep the
+# tape no longer than this: the 1600x900 GIF encode already nears the
+# recording VM's memory limit.
+Type "q"
+Sleep 3500ms
+Enter
+Sleep 3000ms"#
 }
