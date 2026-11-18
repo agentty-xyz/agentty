@@ -54,16 +54,25 @@ back to an API key. When the plan limit is reached, requests fail until it reset
 
 Type `/` in the chat to list commands:
 
-- `/model` lists the known models, numbered, with the current model.
-- `/model <MODEL>` switches later turns of the session to a list number, a
+- `/model` lists the cataloged models of every provider with credentials, numbered,
+  with the roles they serve (`smart`, `cheap`, `fast`, `vision`) and their list prices.
+- `/model <MODEL>` switches later turns of the session to a list number, a role, a
   `provider/model` pair, a known model ID, or another model ID from the current
   provider. Completed history is kept, and resuming the session uses the new model.
+- `/usage` shows the session's summed tokens and cost.
+- `/history` shows the session's turns: each prompt and answer.
 - `/help` shows the commands.
 
 Switching needs the target provider's credentials. `--base-url` applies only to the
 provider it was given for; other providers read their base URL environment variable.
-Sessions whose history contains provider reasoning cannot switch models. A model whose
+Reasoning from another provider's model is replayed as short notes. A model whose
 `provider/model` exceeds 256 bytes can start a session but cannot be a switch target.
+
+After each answer, `usage:` shows the turn's tokens and its cost from the model's list
+prices. Turns after a `/model` switch, and models without prices such as ChatGPT-plan,
+local, and uncataloged models, report `cost unavailable`. A provider whose credentials
+are set but unusable, such as a malformed key, stops `run` and `resume` until it is
+fixed or unset.
 
 ## Serve a protocol (unstable)
 

@@ -353,6 +353,64 @@ async fn qwen_3_8_uses_graded_reasoning_effort() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cataloged_models_report_cost_session_usage_and_history() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(bearer_token("test-key"))
+        .and(body_string_contains(r#""model":"qwen3.8-flash""#))
+        .respond_with(response("priced answer", 2_000, 1_000))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let storage = tempfile::tempdir().expect("temporary storage should exist");
+    let mut child = tokio::process::Command::new(cargo_bin!("ag-harness"))
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .args([
+            "run",
+            "qwen3.8-flash",
+            "--provider",
+            "qwen",
+            "--base-url",
+            &server.uri(),
+        ])
+        .env("DASHSCOPE_API_KEY", "test-key")
+        .env("AG_HARNESS_ROOT", storage.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("CLI chat should start");
+
+    // Act
+    child
+        .stdin
+        .take()
+        .expect("stdin should be piped")
+        .write_all(b"Hello\n/usage\n/history\n")
+        .await
+        .expect("prompt and commands should be written");
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("CLI chat should finish");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
+    // 2,000 input tokens at $0.15 and 1,000 output tokens at $0.47 per 1M.
+    assert!(stdout.contains("\nusage: tokens 2000 in, 1000 out; cost $0.00077\n"));
+    assert!(stdout.contains("session usage: 1 turns; tokens 2000 in, 1000 out; cost $0.00077\n"));
+    assert!(stdout.ends_with("turn 1 (completed)\nyou> Hello\nassistant> priced answer\n"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kimi_custom_models_use_supported_reasoning_formats() {
     // Arrange and Act
     for (model, reasoning) in [

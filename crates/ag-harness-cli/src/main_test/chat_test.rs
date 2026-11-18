@@ -2,23 +2,27 @@
 //! failure reporting, slash commands, and model switching.
 
 use std::env;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use ag_harness::model::ModelProfile;
 use ag_harness::provider::ModelProvider;
-use ag_harness::{Harness, Repository, ToolSet, TurnOptions};
+use ag_harness::{ErrorKind, Harness, ModelError, Repository, ToolSet, TurnError};
 use serde_json::json;
 use tokio::io::BufReader;
 
-use super::support::{FailOnceModel, FixedModel, test_git_executable};
+use super::support::{FailOnceModel, FixedModel, test_catalog, test_git_executable};
 use crate::{
     ChatMode, CliError, MODEL_PROFILE, ModelSelection, ModelSwitcher, chat_schema, run_chat,
 };
 
-/// Switcher whose clients answer with the selected model identifier.
+/// Switcher over [`test_catalog`] starting on the uncataloged
+/// `muse/test-model`, whose connected clients answer with the selected
+/// model identifier.
 fn test_models()
 -> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<(FixedModel, ModelProfile), CliError>> {
     ModelSwitcher {
+        catalog: Arc::new(test_catalog()),
         connect: |selection: &ModelSelection| {
             Ok((
                 FixedModel(json!({"message": format!("from {}", selection.model)})),
@@ -30,10 +34,6 @@ fn test_models()
             provider: ModelProvider::Muse,
         },
     }
-}
-
-fn test_options() -> TurnOptions {
-    TurnOptions::from_output(chat_schema().expect("schema"))
 }
 
 #[tokio::test]
@@ -68,7 +68,7 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
         input,
         &mut output,
         ChatMode::Interactive,
-        test_options(),
+        None,
     )
     .await
     .expect("interactive chat should finish at EOF");
@@ -113,7 +113,7 @@ async fn interactive_chat_continues_after_a_failed_turn() {
         input,
         &mut output,
         ChatMode::Interactive,
-        test_options(),
+        None,
     )
     .await
     .expect("interactive chat should recover and finish at EOF");
@@ -155,7 +155,7 @@ async fn noninteractive_chat_reports_a_failure_before_retrying() {
         input,
         &mut output,
         ChatMode::NonInteractive,
-        test_options(),
+        None,
     )
     .await
     .expect_err("a recovered chat should retain its failed exit status");
@@ -197,7 +197,7 @@ async fn noninteractive_chat_returns_the_last_failure_at_eof() {
         input,
         &mut output,
         ChatMode::NonInteractive,
-        test_options(),
+        None,
     )
     .await
     .expect_err("the final failed turn should be returned at EOF");
@@ -238,19 +238,21 @@ async fn chat_rejects_model_output_that_violates_schema() {
         input,
         &mut output,
         ChatMode::OneShot,
-        test_options(),
+        None,
     )
     .await
     .expect_err("schema-invalid output should fail");
 
     // Assert
     assert!(matches!(
-        error,
-        CliError::Session(ag_harness::SessionError::Turn(
-            ag_harness::TurnError::Model(
-                ag_harness::ModelError::SchemaViolation { path, .. }
+        &error,
+        CliError::Run(error) if error.kind() == ErrorKind::InvalidOutput
+            && matches!(
+                error.get_ref().downcast_ref::<ag_harness::SessionError>(),
+                Some(ag_harness::SessionError::Turn(TurnError::Model(
+                    ModelError::SchemaViolation { path, .. }
+                ))) if path == "$"
             )
-        )) if path == "$"
     ));
     assert_eq!(output, [] as [u8; 0]);
 }
@@ -283,7 +285,7 @@ async fn one_shot_chat_does_not_read_follow_up_terminal_input() {
         input,
         &mut output,
         ChatMode::OneShot,
-        test_options(),
+        None,
     )
     .await
     .expect("one-shot chat should finish after the initial prompt");
@@ -325,13 +327,13 @@ async fn one_shot_chat_returns_turn_failures() {
         input,
         &mut output,
         ChatMode::OneShot,
-        test_options(),
+        None,
     )
     .await
     .expect_err("one-shot chat should return its failed turn");
 
     // Assert
-    assert!(matches!(error, CliError::Session(_)));
+    assert!(matches!(error, CliError::Run(_)));
     assert_eq!(output, [] as [u8; 0]);
 }
 
@@ -360,7 +362,7 @@ async fn interactive_chat_lists_commands_models_and_reports_unknown_commands() {
         input,
         &mut output,
         ChatMode::Interactive,
-        test_options(),
+        None,
     )
     .await
     .expect("interactive commands should not fail the chat");
@@ -368,9 +370,8 @@ async fn interactive_chat_lists_commands_models_and_reports_unknown_commands() {
     // Assert
     let output = String::from_utf8(output).expect("chat output should be UTF-8");
     assert!(output.contains(">>> commands:\n  /model            list models\n"));
-    assert!(output.contains(">>> current model: muse/test-model\n"));
-    let first_model = ModelProvider::all()[0].known_models()[0];
-    assert!(output.contains(&format!("  1. {}/{first_model}\n", ModelProvider::all()[0])));
+    assert!(output.contains(">>> current model: muse/test-model\n  1. host/model\n"));
+    assert!(output.contains("  2. kimi/kimi-listed (cheap) $0.60 in, $2.50 out per 1M tokens\n"));
     assert!(output.contains("Type /model <MODEL> to switch.\n"));
     assert!(output.contains("error: unknown command `/bogus`; type /help for commands\n"));
     assert!(!output.contains("assistant>"));
@@ -401,7 +402,7 @@ async fn chat_switches_registered_sessions_to_the_selected_model() {
         input,
         &mut output,
         ChatMode::NonInteractive,
-        test_options(),
+        None,
     )
     .await
     .expect("switched chat should succeed");
@@ -427,9 +428,9 @@ async fn chat_switches_direct_sessions_by_catalog_number() {
         .create()
         .await
         .expect("session should be created");
-    let input = BufReader::new(&b"/model 1\nquestion\n"[..]);
+    let input =
+        BufReader::new(&b"/model 2\nquestion\n/model cheap\n/model qwen-listed\nlast\n"[..]);
     let mut output = Vec::new();
-    let first = ModelSelection::catalog()[0].clone();
 
     // Act
     run_chat(
@@ -439,18 +440,108 @@ async fn chat_switches_direct_sessions_by_catalog_number() {
         input,
         &mut output,
         ChatMode::NonInteractive,
-        test_options(),
+        None,
     )
     .await
     .expect("direct session should switch");
 
     // Assert
     let output = String::from_utf8(output).expect("chat output should be UTF-8");
-    assert!(output.starts_with(&format!(
-        "model: {}\nassistant> from {}\n",
-        first.key(),
-        first.model
-    )));
+    assert!(output.starts_with("model: kimi/kimi-listed\nassistant> from kimi-listed\n"));
+    assert!(output.contains("model: kimi/kimi-listed\nmodel: qwen/qwen-listed\n"));
+    assert!(output.contains("assistant> from qwen-listed\n"));
+    // A registered model has no prices, so switched runs report no cost.
+    assert!(!output.contains("cost $"));
+}
+
+#[tokio::test]
+async fn cataloged_models_report_priced_usage_and_session_history() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let mut models = test_models();
+    models.selection = ModelSelection {
+        model: "kimi-listed".to_string(),
+        provider: ModelProvider::Kimi,
+    };
+    let harness = models
+        .harness(false)
+        .expect("cataloged harness should build")
+        .database(directory.path().join("harness.db"));
+    let mut session = harness
+        .session("session-a", chat_schema().expect("schema"))
+        .create()
+        .await
+        .expect("session should be created");
+    let input = BufReader::new(&b"/history\n/usage\nfirst\nsecond\n/history\n/usage\n"[..]);
+    let mut output = Vec::new();
+
+    // Act
+    run_chat(
+        &mut session,
+        models,
+        None,
+        input,
+        &mut output,
+        ChatMode::NonInteractive,
+        None,
+    )
+    .await
+    .expect("priced chat should succeed");
+
+    // Assert
+    let output = String::from_utf8(output).expect("chat output should be UTF-8");
+    assert!(output.starts_with(
+        "no turns yet\nsession usage: 0 turns; tokens 0 in, 0 out; cost unavailable\n"
+    ));
+    assert!(output.contains(
+        "\nusage: tokens 0 in, 0 out, 1 model calls unreported; cost $0.00\nmodel calls: 1\n"
+    ));
+    assert!(output.contains(
+        "turn 1 (completed)\nyou> first\nassistant> from kimi-listed\nturn 2 (completed)\nyou> \
+         second\nassistant> from kimi-listed\n"
+    ));
+    assert!(output.ends_with(
+        "session usage: 2 turns; tokens 0 in, 0 out, 2 model calls unreported; cost $0.00\n"
+    ));
+}
+
+#[tokio::test]
+async fn cataloged_models_without_a_profile_assume_the_cli_profile() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let mut models = test_models();
+    models.selection = ModelSelection {
+        model: "qwen-listed".to_string(),
+        provider: ModelProvider::Qwen,
+    };
+    let harness = models
+        .harness(false)
+        .expect("a cataloged model without a profile should build")
+        .database(directory.path().join("harness.db"));
+    let mut session = harness
+        .session("session-a", chat_schema().expect("schema"))
+        .create()
+        .await
+        .expect("session should be created");
+    let mut output = Vec::new();
+
+    // Act
+    run_chat(
+        &mut session,
+        models,
+        Some("question".to_string()),
+        BufReader::new(&b""[..]),
+        &mut output,
+        ChatMode::OneShot,
+        None,
+    )
+    .await
+    .expect("unpriced cataloged chat should succeed");
+
+    // Assert
+    let output = String::from_utf8(output).expect("chat output should be UTF-8");
+    assert!(output.starts_with("assistant> from qwen-listed\n"));
+    assert!(output.contains("; cost unavailable\n"));
 }
 
 #[tokio::test]
@@ -480,7 +571,7 @@ async fn noninteractive_chat_reports_failed_switches_and_keeps_the_model() {
         input,
         &mut output,
         ChatMode::NonInteractive,
-        test_options(),
+        None,
     )
     .await
     .expect_err("failed switches should fail the noninteractive chat");
@@ -541,7 +632,7 @@ async fn one_shot_chat_returns_command_failures() {
         BufReader::new(&b""[..]),
         &mut output,
         ChatMode::OneShot,
-        test_options(),
+        None,
     )
     .await
     .expect_err("one-shot command failures should be returned");

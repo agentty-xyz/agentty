@@ -1,18 +1,37 @@
-//! Chat command parsing, model selection and catalog, and model connector
-//! configuration unit tests.
+//! Chat command parsing, model selection from the catalog, model listing,
+//! and model connector configuration unit tests.
 
 use std::env;
+use std::sync::Arc;
 
+use ag_harness::catalog::ModelCatalog;
+use ag_harness::model::ModelProfile;
 use ag_harness::provider::ModelProvider;
 use serde_json::json;
 
-use super::support::FixedModel;
-use crate::{ChatCommand, CliError, MODEL_PROFILE, ModelSelection, model_connector};
+use super::support::{FixedModel, test_catalog};
+use crate::{
+    ChatCommand, CliError, MODEL_PROFILE, ModelSelection, ModelSwitcher, model_catalog,
+    model_connector,
+};
 
 fn muse_selection(model: &str) -> ModelSelection {
     ModelSelection {
         model: model.to_string(),
         provider: ModelProvider::Muse,
+    }
+}
+
+/// Switcher over `catalog` whose connected clients answer with an empty
+/// object.
+fn switcher(
+    catalog: ModelCatalog,
+    selection: ModelSelection,
+) -> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<(FixedModel, ModelProfile), CliError>> {
+    ModelSwitcher {
+        catalog: Arc::new(catalog),
+        connect: |_: &ModelSelection| Ok((FixedModel(json!({})), MODEL_PROFILE)),
+        selection,
     }
 }
 
@@ -23,6 +42,8 @@ fn chat_commands_are_parsed_from_slash_words_but_not_paths() {
     let named_help = ChatCommand::parse(" /help please ");
     let list = ChatCommand::parse("/model");
     let switch = ChatCommand::parse("/model   kimi/kimi-test  ");
+    let usage = ChatCommand::parse("/usage");
+    let history = ChatCommand::parse("/history");
     let unknown = ChatCommand::parse("/models now");
     let path = ChatCommand::parse("/usr/bin/env explain this");
     let prompt = ChatCommand::parse("hello /model");
@@ -35,38 +56,63 @@ fn chat_commands_are_parsed_from_slash_words_but_not_paths() {
         switch,
         Some(ChatCommand::SwitchModel("kimi/kimi-test".to_string()))
     );
+    assert_eq!(usage, Some(ChatCommand::Usage));
+    assert_eq!(history, Some(ChatCommand::History));
     assert_eq!(unknown, Some(ChatCommand::Unknown("/models".to_string())));
     assert_eq!(path, None);
     assert_eq!(prompt, None);
 }
 
 #[test]
-fn model_selection_resolves_numbers_providers_and_known_models() {
+fn model_selection_resolves_numbers_roles_providers_and_known_models() {
     // Arrange
     let current = muse_selection("muse-test");
-    let catalog = ModelSelection::catalog();
+    let catalog = test_catalog();
     let kimi_model = ModelProvider::Kimi.known_models()[0];
 
     // Act
-    let numbered = ModelSelection::parse("1", &current);
-    let qualified = ModelSelection::parse("qwen/qwen-custom", &current);
-    let known = ModelSelection::parse(kimi_model, &current);
-    let custom = ModelSelection::parse("muse-custom", &current);
-    let zero = ModelSelection::parse("0", &current);
-    let out_of_range = ModelSelection::parse(&(catalog.len() + 1).to_string(), &current);
-    let unknown_provider = ModelSelection::parse("unknown/model", &current);
+    let numbered = ModelSelection::parse("2", &current, &catalog);
+    let host = ModelSelection::parse("1", &current, &catalog);
+    let role = ModelSelection::parse("cheap", &current, &catalog);
+    let cataloged = ModelSelection::parse("qwen-listed", &current, &catalog);
+    let qualified = ModelSelection::parse("qwen/qwen-custom", &current, &catalog);
+    let known = ModelSelection::parse(kimi_model, &current, &catalog);
+    let custom = ModelSelection::parse("muse-custom", &current, &catalog);
+    let unassigned_role = ModelSelection::parse("smart", &current, &catalog);
+    let zero = ModelSelection::parse("0", &current, &catalog);
+    let out_of_range = ModelSelection::parse("4", &current, &catalog);
+    let unknown_provider = ModelSelection::parse("unknown/model", &current, &catalog);
 
     // Assert
-    assert_eq!(numbered.expect("first catalog model"), catalog[0]);
     assert_eq!(
-        qualified.expect("qualified model").key(),
+        numbered.expect("listed model").id().as_str(),
+        "kimi/kimi-listed"
+    );
+    assert!(matches!(host, Err(CliError::UnknownModel { model }) if model == "1"));
+    assert_eq!(role.expect("role model").id().as_str(), "kimi/kimi-listed");
+    assert_eq!(
+        cataloged.expect("cataloged model").id().as_str(),
+        "qwen/qwen-listed"
+    );
+    assert_eq!(
+        qualified.expect("qualified model").id().as_str(),
         "qwen/qwen-custom"
     );
     assert_eq!(
-        known.expect("known model").key(),
+        known.expect("known model").id().to_string(),
         format!("kimi/{kimi_model}")
     );
-    assert_eq!(custom.expect("custom model").key(), "muse/muse-custom");
+    assert_eq!(
+        custom.expect("custom model").id().as_str(),
+        "muse/muse-custom"
+    );
+    assert_eq!(
+        unassigned_role
+            .expect("unassigned role is a model ID")
+            .id()
+            .as_str(),
+        "muse/smart"
+    );
     assert!(matches!(zero, Err(CliError::UnknownModel { model }) if model == "0"));
     assert!(matches!(out_of_range, Err(CliError::UnknownModel { .. })));
     assert!(matches!(
@@ -76,24 +122,68 @@ fn model_selection_resolves_numbers_providers_and_known_models() {
 }
 
 #[test]
-fn model_catalog_lists_every_known_provider_model() {
-    // Arrange and Act
-    let catalog = ModelSelection::catalog();
+fn model_list_numbers_catalog_models_with_roles_and_prices() {
+    // Arrange
+    let models = switcher(test_catalog(), muse_selection("muse-test"));
+    let empty = switcher(
+        ModelCatalog::builder().build().expect("empty catalog"),
+        muse_selection("muse-test"),
+    );
+
+    // Act
+    let listed = models.list();
+    let unlisted = empty.list();
 
     // Assert
-    let expected = ModelProvider::all()
-        .iter()
-        .flat_map(|provider| {
-            provider
-                .known_models()
-                .iter()
-                .map(move |model| format!("{provider}/{model}"))
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        catalog.iter().map(ModelSelection::key).collect::<Vec<_>>(),
-        expected
+        listed,
+        "current model: muse/muse-test\n  1. host/model\n  2. kimi/kimi-listed (cheap) $0.60 in, \
+         $2.50 out per 1M tokens\n  3. qwen/qwen-listed\nType /model <MODEL> to switch.\n"
     );
+    assert_eq!(
+        unlisted,
+        "current model: muse/muse-test\n  no model is cataloged; set a provider's credentials to \
+         list its models\nType /model <MODEL> to switch.\n"
+    );
+}
+
+#[test]
+fn model_catalog_applies_an_explicit_base_url_only_to_its_provider() {
+    // Arrange
+    let mut environment = |name: &str| match name {
+        "KIMI_API_KEY" | "DASHSCOPE_API_KEY" => Ok("test-key".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let kimi = ModelProvider::Kimi.known_models()[0];
+
+    // Act
+    let with_kimi_url = model_catalog(
+        ModelProvider::Kimi,
+        Some("https://models.example/v1"),
+        &mut environment,
+    )
+    .expect("Kimi with a base URL should be cataloged");
+    let with_qwen_url = model_catalog(
+        ModelProvider::Qwen,
+        Some("https://models.example/v1"),
+        &mut environment,
+    )
+    .expect("Kimi without a base URL should be skipped");
+    let broken = model_catalog(ModelProvider::Muse, None, &mut |name: &str| match name {
+        "MODEL_API_KEY" => Err(env::VarError::NotUnicode("\u{fffd}".into())),
+        _ => Err(env::VarError::NotPresent),
+    });
+
+    // Assert
+    let kimi_id = ModelSelection {
+        model: kimi.to_string(),
+        provider: ModelProvider::Kimi,
+    }
+    .id();
+    assert!(with_kimi_url.spec(&kimi_id).is_some());
+    assert!(with_qwen_url.spec(&kimi_id).is_none());
+    assert!(with_qwen_url.specs().next().is_some());
+    assert!(matches!(broken, Err(CliError::Catalog(_))));
 }
 
 #[test]
@@ -172,6 +262,7 @@ fn model_identity_is_absent_beyond_the_identity_limit() {
     // Arrange
     let longest = muse_selection(&"m".repeat(256 - "muse/".len()));
     let oversized = muse_selection(&"m".repeat(256 - "muse/".len() + 1));
+    let mut models = switcher(test_catalog(), longest.clone());
 
     // Act
     let identity = longest.identity();
@@ -179,7 +270,7 @@ fn model_identity_is_absent_beyond_the_identity_limit() {
 
     // Assert
     let identity = identity.expect("a 256-byte key should be registrable");
-    assert_eq!(identity.key(), longest.key());
-    assert!(ModelSelection::registry(identity, FixedModel(json!({})), MODEL_PROFILE).is_ok());
+    assert_eq!(identity.key(), longest.id().as_str());
+    assert!(models.registry(identity, &longest).is_ok());
     assert_eq!(missing, None);
 }

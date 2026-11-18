@@ -6,7 +6,9 @@ use ag_harness::Repository;
 use clap::Parser;
 
 use super::support::test_git_executable;
-use crate::{Cli, CliError, comparison_options, repository_from_path, repository_or_default};
+use crate::{
+    Cli, CliError, comparison_base, repository_from_path, repository_or_default, repository_tools,
+};
 
 #[test]
 fn cli_accepts_the_default_git_executable() {
@@ -109,23 +111,22 @@ async fn comparison_selection_is_explicit_validated_and_preserves_permissions() 
         Repository::new(env!("CARGO_MANIFEST_DIR"), test_git_executable()).expect("repository");
 
     // Act
-    let absent = comparison_options(&repository, None, false)
+    let absent = comparison_base(&repository, None)
         .await
         .expect("no base required");
-    let selected = comparison_options(&repository, Some("HEAD"), true)
+    let selected = comparison_base(&repository, Some("HEAD"))
         .await
         .expect("explicit commit");
-    let invalid = comparison_options(&repository, Some("HEAD^{tree}"), false).await;
+    let invalid = comparison_base(&repository, Some("HEAD^{tree}")).await;
+    let read_only = repository_tools(false);
+    let read_write = repository_tools(true);
 
     // Assert
-    assert!(absent.comparison_base().is_none());
-    assert_eq!(absent.tools().names().collect::<Vec<_>>(), ["read"]);
-    assert!(selected.comparison_base().is_some());
-    assert_eq!(
-        selected.tools().names().collect::<Vec<_>>(),
-        ["read", "write"]
-    );
+    assert!(absent.is_none());
+    assert!(selected.is_some());
     assert!(matches!(invalid, Err(CliError::ComparisonBase(_))));
+    assert_eq!(read_only.names().collect::<Vec<_>>(), ["read"]);
+    assert_eq!(read_write.names().collect::<Vec<_>>(), ["read", "write"]);
 }
 
 #[test]

@@ -6,8 +6,13 @@ use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::{env, io};
 
+use ag_harness::catalog::{
+    CatalogError, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec, Role,
+};
+use ag_harness::event::Item;
 use ag_harness::lifecycle::LifecycleTraceObserver;
 use ag_harness::model::{
     ContextBudgetError, ModelCapabilities, ModelProfile, ModelRegistry, ModelRegistryError,
@@ -20,13 +25,16 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
+use ag_harness::transcript::TranscriptInput;
 use ag_harness::{
-    ComparisonBase, Harness, Model, OutputSchema, Repository, Session, ToolSet, TurnOptions,
-    TurnOutcome,
+    ComparisonBase, Cost, Harness, HarnessBuilder, HarnessError, Model, OutputSchema, Repository,
+    RunError, RunOutcome, RunRequest, Session, ToolSet, TurnRange, TurnRecord, TurnReport, Usage,
+    UsageTotals,
 };
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
@@ -37,9 +45,15 @@ mod serve;
 const CHAT_COMMAND_HELP: &str = concat!(
     "commands:\n",
     "  /model            list models\n",
-    "  /model <MODEL>    switch later turns to a list number, provider/model, or model ID\n",
+    "  /model <MODEL>    switch later turns to a list number, role, provider/model, or model ID\n",
+    "  /usage            show the session's tokens and cost\n",
+    "  /history          show the session's turns\n",
     "  /help             show commands\n"
 );
+/// Roles `/model` lists and accepts, in display order.
+const LISTED_ROLES: [Role; 4] = [Role::SMART, Role::CHEAP, Role::FAST, Role::VISION];
+/// One million micro-USD, one US dollar.
+const MICRO_USD_PER_USD: u64 = 1_000_000;
 /// Context profile assumed for hosted chat models whose window the built-in
 /// catalog does not declare: a conservative 128k-token window keeping 16,384
 /// tokens free for the model's response. Cataloged `OpenAI` models declare
@@ -331,7 +345,8 @@ impl ChatMode {
     }
 }
 
-/// Built-in provider model used for chat turns.
+/// Built-in provider model used for chat turns, cataloged as
+/// `provider/model`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelSelection {
     model: String,
@@ -339,18 +354,18 @@ struct ModelSelection {
 }
 
 impl ModelSelection {
-    /// Resolves a `/model` argument: a catalog number, `provider/model`, a
-    /// known model ID, or another model ID served by the current provider.
-    fn parse(target: &str, current: &Self) -> Result<Self, CliError> {
+    /// Resolves a `/model` argument: a number of the `/model` list, a role
+    /// of `catalog`, `provider/model`, a cataloged or known model ID, or
+    /// another model ID served by the current provider.
+    fn parse(target: &str, current: &Self, catalog: &ModelCatalog) -> Result<Self, CliError> {
         let unknown = || CliError::UnknownModel {
             model: target.to_string(),
         };
-        let catalog = Self::catalog();
         if let Ok(number) = target.parse::<usize>() {
             return number
                 .checked_sub(1)
-                .and_then(|index| catalog.get(index))
-                .cloned()
+                .and_then(|index| catalog.specs().nth(index))
+                .and_then(Self::from_spec)
                 .ok_or_else(unknown);
         }
         if let Some((provider, model)) = target.split_once('/') {
@@ -361,9 +376,20 @@ impl ModelSelection {
                 provider,
             });
         }
+        if let Ok(handle) = catalog.resolve(&ModelSelector::Role(Role::new(target.to_string()))) {
+            return Self::from_spec(handle.spec()).ok_or_else(unknown);
+        }
+        let known = ModelProvider::all().iter().flat_map(|provider| {
+            provider.known_models().iter().map(|model| Self {
+                model: (*model).to_string(),
+                provider: *provider,
+            })
+        });
 
         Ok(catalog
-            .into_iter()
+            .specs()
+            .filter_map(Self::from_spec)
+            .chain(known)
             .find(|selection| selection.model == target)
             .unwrap_or_else(|| Self {
                 model: target.to_string(),
@@ -371,50 +397,34 @@ impl ModelSelection {
             }))
     }
 
-    fn catalog() -> Vec<Self> {
-        ModelProvider::all()
-            .iter()
-            .flat_map(|provider| {
-                provider.known_models().iter().map(|model| Self {
-                    model: (*model).to_string(),
-                    provider: *provider,
-                })
-            })
-            .collect()
+    /// Returns the built-in model `spec` describes, or `None` for a model
+    /// no built-in provider serves.
+    fn from_spec(spec: &ModelSpec) -> Option<Self> {
+        let provider = spec.provider()?;
+        let model = spec.id().as_str().strip_prefix(&format!("{provider}/"))?;
+
+        Some(Self {
+            model: model.to_string(),
+            provider,
+        })
     }
 
-    fn key(&self) -> String {
-        format!("{}/{}", self.provider, self.model)
+    fn id(&self) -> ModelId {
+        ModelId::cataloged(self.provider, &self.model)
     }
 
     /// Returns the registration identity, or `None` when `provider/model`
     /// exceeds the 256-byte identity limit.
     fn identity(&self) -> Option<ExecutionIdentity> {
-        ExecutionIdentity::new(self.key(), MODEL_REGISTRATION_REVISION).ok()
-    }
-
-    fn registry(
-        identity: ExecutionIdentity,
-        client: impl Model + 'static,
-        profile: ModelProfile,
-    ) -> Result<ModelRegistry, CliError> {
-        let mut registry = ModelRegistry::new();
-        registry.register(
-            identity,
-            client,
-            ModelCapabilities {
-                tool_calls: true,
-                ..ModelCapabilities::new(profile)
-            },
-        )?;
-
-        Ok(registry)
+        ExecutionIdentity::new(self.id().to_string(), MODEL_REGISTRATION_REVISION).ok()
     }
 }
 
-/// Current chat model and the connector that builds clients, with their
-/// context profiles, for switches.
+/// Current chat model, the catalog it is chosen from, and the connector
+/// that builds clients, with their context profiles, for models the
+/// catalog lacks.
 struct ModelSwitcher<Connect> {
+    catalog: Arc<ModelCatalog>,
     connect: Connect,
     selection: ModelSelection,
 }
@@ -424,43 +434,174 @@ where
     Connect: FnMut(&ModelSelection) -> Result<(Client, ModelProfile), CliError>,
     Client: Model + 'static,
 {
-    /// Builds a harness for the current model. A registered harness records
-    /// its identity for resume; a direct harness resumes sessions stored
-    /// without one and serves models too long to register.
+    /// Builds a harness for the current model. A cataloged model is
+    /// selected from the catalog, which prices its runs; another model is
+    /// connected directly. A registered harness, which resumes sessions
+    /// stored with a registration such as after `/model`, serves the model
+    /// through a registry instead and reports no cost.
     fn harness(&mut self, registered: bool) -> Result<Harness, CliError> {
-        let (client, profile) = (self.connect)(&self.selection)?;
-        let Some(identity) = self.selection.identity().filter(|_| registered) else {
-            return Ok(Harness::new(client, profile.context_budget()?));
-        };
-        let key = identity.key().to_string();
-        let registry = ModelSelection::registry(identity, client, profile)?;
+        let selection = self.selection.clone();
+        if let Some(identity) = selection.identity().filter(|_| registered) {
+            let key = identity.key().to_string();
+            let registry = self.registry(identity, &selection)?;
 
-        Ok(Harness::from_registry(&registry, &key)?)
+            return Ok(Harness::from_registry(&registry, &key)?);
+        }
+        let builder = Harness::builder();
+        let builder = if let Some(handle) = self.cataloged(&selection) {
+            let selector = ModelSelector::Id(handle.id().clone());
+
+            select_cataloged(builder, Arc::clone(&self.catalog), selector)?
+        } else {
+            let (client, profile) = (self.connect)(&selection)?;
+
+            select_direct(builder, Arc::new(client), profile)?
+        };
+
+        Ok(builder.build()?)
     }
 
     async fn switch(&mut self, session: &mut Session, target: &str) -> Result<(), CliError> {
-        let selection = ModelSelection::parse(target, &self.selection)?;
+        let selection = ModelSelection::parse(target, &self.selection, &self.catalog)?;
         let identity = selection
             .identity()
             .ok_or_else(|| CliError::ModelKeyTooLong {
-                key: selection.key(),
+                key: selection.id().to_string(),
             })?;
-        let (client, profile) = (self.connect)(&selection)?;
-        let registry = ModelSelection::registry(identity, client, profile)?;
-        session.switch_model(&registry, &selection.key()).await?;
+        let key = identity.key().to_string();
+        let registry = self.registry(identity, &selection)?;
+        session.switch_model(&registry, &key).await?;
         self.selection = selection;
 
         Ok(())
     }
+
+    /// Registers `selection` as `identity`: the catalog's client and
+    /// profile when cataloged, else a connected client.
+    fn registry(
+        &mut self,
+        identity: ExecutionIdentity,
+        selection: &ModelSelection,
+    ) -> Result<ModelRegistry, CliError> {
+        let (model, profile): (Arc<dyn Model>, _) = if let Some(handle) = self.cataloged(selection)
+        {
+            (handle.model(), handle.profile().unwrap_or(MODEL_PROFILE))
+        } else {
+            let (client, profile) = (self.connect)(selection)?;
+
+            (Arc::new(client), profile)
+        };
+        let mut registry = ModelRegistry::new();
+        registry.register_shared(
+            identity,
+            model,
+            ModelCapabilities {
+                tool_calls: true,
+                ..ModelCapabilities::new(profile)
+            },
+        )?;
+
+        Ok(registry)
+    }
+
+    fn cataloged(&self, selection: &ModelSelection) -> Option<ModelHandle> {
+        self.catalog
+            .resolve(&ModelSelector::Id(selection.id()))
+            .ok()
+    }
+
+    /// Lists the catalog's models, numbered, with the roles they serve and
+    /// their prices.
+    fn list(&self) -> String {
+        let current = self.selection.id().to_string();
+        let mut text = format!("current model: {}\n", single_line_terminal_text(&current));
+        for (index, spec) in self.catalog.specs().enumerate() {
+            let _ = writeln!(text, "  {}. {}", index + 1, self.describe(spec));
+        }
+        if self.catalog.specs().next().is_none() {
+            text.push_str(
+                "  no model is cataloged; set a provider's credentials to list its models\n",
+            );
+        }
+        text.push_str("Type /model <MODEL> to switch.\n");
+
+        text
+    }
+
+    /// Describes one catalog model, such as
+    /// `qwen/qwen3.8-flash (cheap, fast) $0.05 in, $0.40 out per 1M tokens`.
+    fn describe(&self, spec: &ModelSpec) -> String {
+        let id = spec.id().to_string();
+        let mut text = single_line_terminal_text(&id).into_owned();
+        let roles = LISTED_ROLES
+            .iter()
+            .filter(|role| self.catalog.candidates(role).first() == Some(spec.id()))
+            .map(Role::as_str)
+            .collect::<Vec<_>>();
+        if !roles.is_empty() {
+            let _ = write!(text, " ({})", roles.join(", "));
+        }
+        if let Some(pricing) = spec.pricing() {
+            let _ = write!(
+                text,
+                " {} in, {} out per 1M tokens",
+                format_usd(pricing.input_per_mtok_micro_usd()),
+                format_usd(pricing.output_per_mtok_micro_usd())
+            );
+        }
+
+        text
+    }
+}
+
+/// Selects `selector` from `catalog` on `builder`, assuming
+/// [`MODEL_PROFILE`] for a model whose profile the catalog does not
+/// declare, such as a Muse or Kimi model.
+///
+/// # Errors
+/// Returns an invalid [`MODEL_PROFILE`] budget.
+fn select_cataloged(
+    builder: HarnessBuilder,
+    catalog: Arc<ModelCatalog>,
+    selector: ModelSelector,
+) -> Result<HarnessBuilder, ContextBudgetError> {
+    let declared = catalog
+        .resolve(&selector)
+        .is_ok_and(|handle| handle.profile().is_some());
+    let builder = builder.catalog(catalog).model_selector(selector);
+    if declared {
+        return Ok(builder);
+    }
+
+    Ok(builder
+        .context_budget(MODEL_PROFILE.context_budget()?)
+        .context_estimator(MODEL_PROFILE.estimator()))
+}
+
+/// Selects `model` directly on `builder`, bounded by `profile`.
+///
+/// # Errors
+/// Returns an invalid `profile` budget.
+fn select_direct(
+    builder: HarnessBuilder,
+    model: Arc<dyn Model>,
+    profile: ModelProfile,
+) -> Result<HarnessBuilder, ContextBudgetError> {
+    Ok(builder
+        .model(model)
+        .context_budget(profile.context_budget()?)
+        .context_estimator(profile.estimator()))
 }
 
 /// Slash command entered in place of a chat prompt.
 #[derive(Debug, Eq, PartialEq)]
 enum ChatCommand {
     Help,
+    History,
     ListModels,
     SwitchModel(String),
     Unknown(String),
+    Usage,
 }
 
 impl ChatCommand {
@@ -478,8 +619,10 @@ impl ChatCommand {
 
         Some(match (command, argument) {
             ("" | "help", _) => Self::Help,
+            ("history", _) => Self::History,
             ("model", "") => Self::ListModels,
             ("model", model) => Self::SwitchModel(model.to_string()),
+            ("usage", _) => Self::Usage,
             _ => Self::Unknown(name.to_string()),
         })
     }
@@ -591,21 +734,19 @@ where
             let session_id = args
                 .session
                 .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+            let catalog = model_catalog(args.provider, args.base_url.as_deref(), &mut environment)?;
             let mut models = ModelSwitcher {
+                catalog: Arc::new(catalog),
                 connect: model_connector(args.provider, args.base_url, &mut environment),
                 selection: ModelSelection {
                     model: args.model,
                     provider: args.provider,
                 },
             };
-            let harness = models.harness(true)?;
+            let harness = models.harness(false)?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
-            let options = comparison_options(
-                &repository,
-                cli.comparison_base.as_deref(),
-                args.allow_write,
-            )
-            .await?;
+            let comparison_base =
+                comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, system_prompt) = configured_harness(
                 harness,
                 database,
@@ -628,7 +769,7 @@ where
                 input,
                 output,
                 mode,
-                options,
+                comparison_base,
             )
             .await
         }
@@ -636,18 +777,16 @@ where
             let database = database_path(cli.database, &mut environment)?;
             let info = SessionInfo::load(&database, &args.session).await?;
             let (provider, model) = stored_model_identity(&info)?;
+            let catalog = model_catalog(provider, args.base_url.as_deref(), &mut environment)?;
             let mut models = ModelSwitcher {
+                catalog: Arc::new(catalog),
                 connect: model_connector(provider, args.base_url, &mut environment),
                 selection: ModelSelection { model, provider },
             };
             let harness = models.harness(info.registration_identity().is_some())?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
-            let options = comparison_options(
-                &repository,
-                cli.comparison_base.as_deref(),
-                args.allow_write,
-            )
-            .await?;
+            let comparison_base =
+                comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, _) = configured_harness(
                 harness,
                 database,
@@ -666,7 +805,7 @@ where
                 input,
                 output,
                 mode,
-                options,
+                comparison_base,
             )
             .await
         }
@@ -767,10 +906,35 @@ fn repository_from_path(root: &Path, path: Option<&OsStr>) -> Result<Repository,
     Err(CliError::GitExecutableNotFound)
 }
 
-/// Builds clients and context profiles for the starting model and later
-/// `/model` switches. An explicit base URL applies only to the provider it
-/// was given for. A model whose profile the provider catalog or environment
-/// declares uses it; the others assume [`MODEL_PROFILE`].
+/// Loads the catalog of every model whose provider the environment
+/// configures, applying an explicit base URL only to `provider`, the one it
+/// was given for.
+///
+/// # Errors
+/// Returns a configured provider whose models cannot be built.
+fn model_catalog(
+    provider: ModelProvider,
+    base_url: Option<&str>,
+    environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
+) -> Result<ModelCatalog, CliError> {
+    let base_url_name = provider.base_url_environment();
+    // The harness keeps no default sign-in location, so the CLI passes the
+    // one it shares with Agentty.
+    let auth_file = login::chatgpt_auth_file(environment);
+
+    Ok(ModelCatalog::from_environment_with_auth_file(
+        |name| match base_url {
+            Some(base_url) if name == base_url_name => Ok(base_url.to_string()),
+            _ => environment(name),
+        },
+        auth_file.as_deref(),
+    )?)
+}
+
+/// Builds clients and context profiles for models the catalog lacks, at
+/// start and on `/model` switches. An explicit base URL applies only to the
+/// provider it was given for. A model whose profile the provider catalog or
+/// environment declares uses it; the others assume [`MODEL_PROFILE`].
 fn model_connector(
     provider: ModelProvider,
     base_url: Option<String>,
@@ -815,19 +979,15 @@ fn model_client(
         .map_err(CliError::from)
 }
 
-async fn comparison_options(
+/// Resolves the explicit comparison `revision`, if any, once for the whole
+/// chat.
+async fn comparison_base(
     repository: &Repository,
     revision: Option<&str>,
-    allow_write: bool,
-) -> Result<TurnOptions, CliError> {
-    let options =
-        TurnOptions::from_output(chat_schema()?).with_tools(repository_tools(allow_write));
-
+) -> Result<Option<ComparisonBase>, CliError> {
     match revision {
-        Some(revision) => {
-            Ok(options.with_comparison_base(ComparisonBase::resolve(repository, revision).await?))
-        }
-        None => Ok(options),
+        Some(revision) => Ok(Some(ComparisonBase::resolve(repository, revision).await?)),
+        None => Ok(None),
     }
 }
 
@@ -894,7 +1054,7 @@ async fn run_chat<Connect, Client, Input, Output>(
     mut input: Input,
     mut output: Output,
     mode: ChatMode,
-    options: TurnOptions,
+    comparison_base: Option<ComparisonBase>,
 ) -> Result<(), CliError>
 where
     Connect: FnMut(&ModelSelection) -> Result<(Client, ModelProfile), CliError>,
@@ -922,16 +1082,16 @@ where
         if prompt.trim().is_empty() {
             continue;
         }
-        let result = match ChatCommand::parse(&prompt) {
-            Some(command) => run_command(command, session, &mut models, &mut output).await,
-            None => match session.turn(prompt).options(options.clone()).await {
-                Ok(outcome) => {
-                    write_outcome(&mut output, &models.selection.model, &outcome).await?;
+        let result = if let Some(command) = ChatCommand::parse(&prompt) {
+            run_command(command, session, &mut models, &mut output).await
+        } else {
+            let mut request = RunRequest::new(prompt);
+            if let Some(base) = &comparison_base {
+                request = request.comparison_base(base.clone());
+            }
+            let outcome = session.run(request).await;
 
-                    Ok(())
-                }
-                Err(error) => Err(error.into()),
-            },
+            write_outcome(&mut output, &models.selection.model, outcome).await
         };
         match result {
             Ok(()) => {}
@@ -968,23 +1128,16 @@ where
 {
     let text = match command {
         ChatCommand::Help => CHAT_COMMAND_HELP.to_string(),
-        ChatCommand::ListModels => {
-            let current = models.selection.key();
-            let mut text = format!("current model: {}\n", single_line_terminal_text(&current));
-            for (index, selection) in ModelSelection::catalog().iter().enumerate() {
-                let _ = writeln!(text, "  {}. {}", index + 1, selection.key());
-            }
-            text.push_str("Type /model <MODEL> to switch.\n");
-
-            text
-        }
+        ChatCommand::History => history_text(&session.transcript(TurnRange::All).await?),
+        ChatCommand::ListModels => models.list(),
         ChatCommand::SwitchModel(target) => {
             models.switch(session, &target).await?;
-            let current = models.selection.key();
+            let current = models.selection.id().to_string();
 
             format!("model: {}\n", single_line_terminal_text(&current))
         }
         ChatCommand::Unknown(name) => return Err(CliError::UnknownCommand { name }),
+        ChatCommand::Usage => usage_totals_text(&session.usage().await?),
     };
     output.write_all(text.as_bytes()).await?;
     output.flush().await?;
@@ -1018,25 +1171,44 @@ where
     Ok(Some(prompt))
 }
 
+/// Writes the answer of a successful run with its timing, usage, cost, and
+/// activity, or returns why the run failed.
 async fn write_outcome(
     output: &mut (impl AsyncWrite + Unpin),
     requested_model: &str,
-    outcome: &TurnOutcome,
+    outcome: RunOutcome,
 ) -> Result<(), CliError> {
-    let message = outcome
-        .output()
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(CliError::MissingMessage)?;
-    output.write_all(assistant_text(message).as_bytes()).await?;
+    let RunOutcome {
+        cost,
+        report,
+        result,
+        usage,
+        ..
+    } = outcome;
+    let reply = result?.parse::<ChatReply>()?;
+    output
+        .write_all(assistant_text(&reply.message).as_bytes())
+        .await?;
     output.write_all(b"---\n").await?;
     output
-        .write_all(format!("turn: {}\n", format_duration(outcome.report().duration())).as_bytes())
+        .write_all(format!("turn: {}\n", format_duration(report.duration())).as_bytes())
         .await?;
     output
-        .write_all(format!("model calls: {}\n", outcome.report().model_requests().len()).as_bytes())
+        .write_all(format!("usage: {}; {}\n", format_tokens(&usage), format_cost(cost)).as_bytes())
         .await?;
-    for (index, request) in outcome.report().model_requests().iter().enumerate() {
+    write_activity(output, requested_model, &report).await
+}
+
+/// Writes the model requests and tool calls of `report`.
+async fn write_activity(
+    output: &mut (impl AsyncWrite + Unpin),
+    requested_model: &str,
+    report: &TurnReport,
+) -> Result<(), CliError> {
+    output
+        .write_all(format!("model calls: {}\n", report.model_requests().len()).as_bytes())
+        .await?;
+    for (index, request) in report.model_requests().iter().enumerate() {
         let response_type = request.response_type();
         let completion = request.completion();
         let model = completion
@@ -1062,11 +1234,11 @@ async fn write_outcome(
             )
             .await?;
     }
-    if outcome.report().tool_calls().is_empty() {
+    if report.tool_calls().is_empty() {
         output.write_all(b"tools: none\n").await?;
     } else {
         output.write_all(b"tools:\n").await?;
-        for activity in outcome.report().tool_calls() {
+        for activity in report.tool_calls() {
             output
                 .write_all(format!("  {activity}\n").as_bytes())
                 .await?;
@@ -1103,6 +1275,94 @@ fn format_usage(usage: &ag_harness::model::CompletionUsage) -> String {
     format!("tokens {input} in, {output} out, {total} total")
 }
 
+/// Formats summed tokens, such as `tokens 9 in, 3 out, 4 cached`, naming
+/// the model calls whose provider reported no counts.
+fn format_tokens(usage: &Usage) -> String {
+    let mut text = format!("tokens {} in, {} out", usage.input, usage.output);
+    if usage.cache_read > 0 {
+        let _ = write!(text, ", {} cached", usage.cache_read);
+    }
+    if usage.reasoning > 0 {
+        let _ = write!(text, ", {} reasoning", usage.reasoning);
+    }
+    if usage.unreported_requests > 0 {
+        let _ = write!(
+            text,
+            ", {} model calls unreported",
+            usage.unreported_requests
+        );
+    }
+
+    text
+}
+
+/// Formats a cost, or `cost unavailable` for an unpriced model.
+fn format_cost(cost: Option<Cost>) -> String {
+    cost.map_or_else(
+        || "cost unavailable".to_string(),
+        |cost| format!("cost {}", format_usd(cost.micro_usd)),
+    )
+}
+
+/// Formats micro-USD as dollars with at least two decimals and no trailing
+/// zeros beyond them, such as `$0.25` or `$0.000012`.
+fn format_usd(micro_usd: u64) -> String {
+    let fraction = format!("{:06}", micro_usd % MICRO_USD_PER_USD);
+    let significant = fraction.trim_end_matches('0').len().max(2);
+
+    format!(
+        "${}.{}",
+        micro_usd / MICRO_USD_PER_USD,
+        &fraction[..significant]
+    )
+}
+
+/// Formats a session's summed usage for `/usage`.
+fn usage_totals_text(totals: &UsageTotals) -> String {
+    let mut text = format!(
+        "session usage: {} turns; {}; {}",
+        totals.turns,
+        format_tokens(&totals.usage),
+        format_cost(totals.cost)
+    );
+    if totals.unpriced_turns > 0 {
+        let _ = write!(text, "; {} turns unpriced", totals.unpriced_turns);
+    }
+    if totals.unknown_turns > 0 {
+        let _ = write!(text, "; {} turns without usage", totals.unknown_turns);
+    }
+    text.push('\n');
+
+    text
+}
+
+/// Formats settled turns for `/history`: each turn's status, text input,
+/// and answer.
+fn history_text(turns: &[TurnRecord]) -> String {
+    if turns.is_empty() {
+        return "no turns yet\n".to_string();
+    }
+    let mut text = String::new();
+    for turn in turns {
+        let status = format!("{:?}", turn.status).to_lowercase();
+        let _ = writeln!(text, "turn {} ({status})", turn.turn.get() + 1);
+        for input in &turn.input {
+            if let TranscriptInput::Text { text: prompt } = input {
+                text.push_str(&framed_text("you> ", prompt));
+            }
+        }
+        for item in &turn.items {
+            if let Item::Output { output } = item
+                && let Ok(reply) = output.parse::<ChatReply>()
+            {
+                text.push_str(&assistant_text(&reply.message));
+            }
+        }
+    }
+
+    text
+}
+
 fn format_duration(duration: std::time::Duration) -> String {
     if duration.as_millis() == 0 {
         "<1 ms".to_string()
@@ -1121,14 +1381,17 @@ fn trim_line_ending(line: &mut String) {
 }
 
 fn assistant_text(text: &str) -> String {
+    framed_text("assistant> ", text)
+}
+
+/// Frames terminal-safe `text` behind `label`, indenting continuation lines
+/// so no line can pass for CLI output.
+fn framed_text(label: &str, text: &str) -> String {
     let text = terminal_text(text);
+    let indent = " ".repeat(label.len());
     let mut framed = String::new();
     for (index, line) in text.split('\n').enumerate() {
-        framed.push_str(if index == 0 {
-            "assistant> "
-        } else {
-            "           "
-        });
+        framed.push_str(if index == 0 { label } else { &indent });
         framed.push_str(line);
         framed.push('\n');
     }
@@ -1176,6 +1439,12 @@ fn is_terminal_safe(character: char) -> bool {
     !character.is_control() || matches!(character, '\n' | '\t')
 }
 
+/// Answer every chat turn returns, as [`chat_schema`] requires.
+#[derive(Deserialize)]
+struct ChatReply {
+    message: String,
+}
+
 fn chat_schema() -> Result<OutputSchema, CliError> {
     let message = Value::Object(Map::from_iter([(
         "type".to_string(),
@@ -1200,6 +1469,8 @@ enum CliError {
     #[error(transparent)]
     ComparisonBase(#[from] ag_harness::ComparisonBaseError),
     #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    #[error(transparent)]
     ContextBudget(#[from] ContextBudgetError),
     #[error("--base-url or {name} is required")]
     BaseUrlRequired { name: &'static str },
@@ -1213,8 +1484,8 @@ enum CliError {
     DatabaseLocation,
     #[error("No valid Git executable was found in PATH; pass --git-executable <FILE>")]
     GitExecutableNotFound,
-    #[error("model output did not contain a message")]
-    MissingMessage,
+    #[error(transparent)]
+    Harness(#[from] HarnessError),
     #[error("stored session does not identify a supported built-in model")]
     MissingModelIdentity,
     #[error(transparent)]
@@ -1234,9 +1505,9 @@ enum CliError {
     #[error(transparent)]
     Session(#[from] ag_harness::SessionError),
     #[error(transparent)]
-    Telemetry(#[from] OtlpError),
+    Run(#[from] RunError),
     #[error(transparent)]
-    Turn(#[from] ag_harness::TurnError),
+    Telemetry(#[from] OtlpError),
     #[error("unknown command `{name}`; type /help for commands")]
     UnknownCommand { name: String },
     #[error("unknown model `{model}`; type /model to list models")]
