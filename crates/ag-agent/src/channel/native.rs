@@ -28,9 +28,9 @@ use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use crate::agent::native::{
-    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, RunFailure,
-    failure, output_schema, parse_outcome, reject_attachments, repository, running_context_window,
-    settle, system_prompt, token_usage, turn_options,
+    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
+    NativeTurnError, failure, output_schema, parse_outcome, reject_attachments, repository,
+    running_context_window, settle, system_prompt, token_usage, turn_options,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -120,7 +120,7 @@ async fn run_session_turn(
     session_id: String,
     req: TurnRequest,
     events: mpsc::UnboundedSender<TurnEvent>,
-) -> Result<TurnResult, RunFailure> {
+) -> Result<TurnResult, NativeTurnError> {
     execution_policy::validate(AgentKind::Harness, &req.execution_policy)
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
@@ -183,7 +183,7 @@ async fn run_session_turn(
     // A failed settlement stays registered so the next turn retries it.
     settle(&control).await?;
     lock(active).remove(&session_id);
-    let outcome = outcome.map_err(RunFailure::from_run)?;
+    let outcome = outcome.map_err(NativeTurnError::from_run)?;
     let assistant_message = parse_outcome(&outcome, profile)?;
     let (input_tokens, output_tokens) = token_usage(outcome.report());
     // An unversioned id makes the next session turn re-send the session
@@ -278,7 +278,10 @@ impl SessionOpener<'_> {
     /// Resumes the stored session on its recorded model and switches to
     /// `selection` when it differs, or creates the session when it does not
     /// exist. Returns the session with the history the harness loads for it.
-    async fn open(&self, selection: &ModelSelection) -> Result<(Session, LoadedHistory), String> {
+    async fn open(
+        &self,
+        selection: &ModelSelection,
+    ) -> Result<(Session, LoadedHistory), NativeTurnError> {
         let loaded = match self.load().await.map_err(HarnessError::from) {
             Ok(loaded) => loaded,
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -288,11 +291,17 @@ impl SessionOpener<'_> {
                     .system_prompt(system_prompt())
                     .create()
                     .await
-                    .map_err(failure("Failed to create the harness session"))?;
+                    .map_err(NativeTurnError::session_operation(
+                        "Failed to create the harness session",
+                    ))?;
 
                 return Ok((session, LoadedHistory::default()));
             }
-            Err(error) => return Err(failure("Failed to load the harness session")(error)),
+            Err(error) => {
+                return Err(NativeTurnError::session_operation(
+                    "Failed to load the harness session",
+                )(error));
+            }
         };
         let history = LoadedHistory::new(loaded.latest_finished_turn.is_some(), &loaded.turns);
         let stored_selection = loaded
@@ -323,7 +332,7 @@ impl SessionOpener<'_> {
         &self,
         stored_selection: &ModelSelection,
         selection: &ModelSelection,
-    ) -> Result<Session, String> {
+    ) -> Result<Session, NativeTurnError> {
         let registry = selection.registry(
             self.environment,
             self.provider_call_budget,
@@ -336,17 +345,21 @@ impl SessionOpener<'_> {
         session
             .switch_model(&registry, &selection.key())
             .await
-            .map_err(failure("Failed to switch the harness model"))?;
+            .map_err(NativeTurnError::session_operation(
+                "Failed to switch the harness model",
+            ))?;
 
         Ok(session)
     }
 
     /// Resumes the session with `harness`.
-    async fn resume(&self, harness: Harness) -> Result<Session, String> {
+    async fn resume(&self, harness: Harness) -> Result<Session, NativeTurnError> {
         harness
             .resume(self.session_id)
             .await
-            .map_err(failure("Failed to resume the harness session"))
+            .map_err(NativeTurnError::session_operation(
+                "Failed to resume the harness session",
+            ))
     }
 
     /// Builds a harness for `selection` storing history in the session

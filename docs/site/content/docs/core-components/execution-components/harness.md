@@ -29,9 +29,9 @@ when the host enables it; Agentty does so only when started with
 `--experimental-harness`. Without that configuration, harness work fails before
 execution. The native harness charges each model request against a utility's
 provider-call budget. Its adapter decides each failed turn from the harness `ErrorKind`:
-a cancelled run is reported as stopped, and a retryable kind asks the user to send the
-prompt again, after the provider's `Retry-After` when present, rather than replaying the
-turn's tool effects. See
+a cancelled run is reported as stopped, and a retryable kind is noted as possibly
+temporary, with the provider's requested wait when present. The adapter does not replay
+the turn, which would repeat its tool effects. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for its component
 contracts.
 

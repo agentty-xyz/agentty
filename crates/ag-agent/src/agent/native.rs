@@ -2,9 +2,9 @@
 
 mod activity;
 mod config;
-mod run_failure;
 mod sign_in;
 mod turn;
+mod turn_error;
 
 pub(crate) use activity::ActivityBridge;
 pub use config::NativeHarnessConfig;
@@ -12,8 +12,8 @@ pub(crate) use config::{
     HarnessContext, ModelSelection, failure, harness_models, output_schema, process_environment,
     repository, running_context_window, system_prompt, turn_options,
 };
-pub(crate) use run_failure::RunFailure;
 pub(crate) use sign_in::sign_in_chatgpt;
 pub(crate) use turn::{
     NativePrompt, parse_outcome, reject_attachments, run_one_shot, settle, token_usage,
 };
+pub(crate) use turn_error::NativeTurnError;
