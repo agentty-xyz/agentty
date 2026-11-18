@@ -3,6 +3,8 @@ Generate a concise, commit-style title for the session's durable overall goal.
 Rules:
 
 - Use one line in present simple tense, under 72 characters.
+- Write the title in English unless applicable repository instructions specify another
+  language.
 - Describe the session's overall requested work, not merely its latest message, the
   assistant's answer, an observation, or an evaluation.
 - Stay high-level and intent-focused; omit long file names, paths, and symbol names.

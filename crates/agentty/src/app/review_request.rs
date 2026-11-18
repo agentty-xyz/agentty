@@ -71,12 +71,8 @@ impl ReviewRequestGenerator<'_> {
             commit.body.as_deref().unwrap_or_default(),
             self.transcript,
         );
-        let initial = forge::ReviewRequestMetadata {
-            body: String::new(),
-            title: commit.title.clone(),
-        };
         let mut metadata = SessionTaskService::review_request_metadata(
-            current.unwrap_or(&initial),
+            current,
             self.folder,
             &evidence,
             &commit.title,

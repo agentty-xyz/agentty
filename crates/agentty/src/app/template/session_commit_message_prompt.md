@@ -53,6 +53,8 @@ Rules:
   review.
 - Use only read-only inspection. Do not modify files or run builds, tests, or Git
   mutations while generating the message.
+- Write the message in English unless higher-priority user instructions or repository
+  guidance specify another language.
 - The first line is a concise, one-line title in present simple tense.
 - Do not use Conventional Commit prefixes like `feat:` or `fix:` unless higher-priority
   user instructions or repository guidance require them.

@@ -26,7 +26,7 @@ fn test_review_request_metadata_prompt_preserves_payload_boundaries() {
 
     // Act
     let prompt = SessionTaskService::review_request_metadata_prompt(
-        &current_metadata,
+        Some(&current_metadata),
         generated_description,
         generated_title,
     );
@@ -56,9 +56,88 @@ fn test_review_request_metadata_prompt_preserves_payload_boundaries() {
             .contains("examples in existing inline, fenced, indented, or HTML code")
     );
     assert!(prompt.contains("Keep visible content outside HTML comments"));
-    assert!(prompt.contains("HTML comments in PR/MR templates are"));
+    assert!(prompt.contains("HTML comments in PR/MR templates\nare authoring guidance"));
     assert!(prompt.contains("do not copy them into the description"));
     assert!(prompt.contains("code fences and HTML comments explicitly"));
+}
+
+#[test]
+/// Verifies initial creation renders `null` current metadata and asks for
+/// repository title rules and every agent instruction source.
+fn test_review_request_metadata_prompt_marks_initial_creation() {
+    // Arrange
+    let generated_title = "Build release dashboard";
+
+    // Act
+    let prompt = SessionTaskService::review_request_metadata_prompt(
+        None,
+        "Adds the release dashboard.",
+        generated_title,
+    );
+
+    // Assert
+    assert!(prompt.contains("Current remote metadata:\n\nnull\n"));
+    assert!(prompt.contains(generated_title));
+    assert!(prompt.contains("start from the generated title"));
+    assert!(prompt.contains("repository PR/MR title rules"));
+    assert!(prompt.contains(
+        "Write new title and description text in English unless applicable \
+         repository\ninstructions specify another language."
+    ));
+    for source in [
+        "`AGENTS.md`",
+        "`CLAUDE.md`",
+        "`GEMINI.md`",
+        "`skills/`",
+        "`.agents/skills/`",
+        "`.claude/skills/`",
+        "`.codex/skills/`",
+        "`.github/`",
+        "`.gitlab/`",
+    ] {
+        assert!(prompt.contains(source), "missing {source}");
+    }
+}
+
+#[tokio::test]
+/// Verifies initial creation accepts a title rewritten for repository rules
+/// and otherwise keeps the generated title instead of a cosmetic variant.
+async fn review_request_metadata_creation_title_follows_generated_baseline() {
+    for (is_significant, expected_title) in [
+        (true, "CSV-7: Build release dashboard"),
+        (false, "Build release dashboard"),
+    ] {
+        // Arrange
+        let mut run_client = MockRunClient::new();
+        run_client.expect_submit().once().returning(move |_| {
+            Ok(one_shot_submission(
+                &serde_json::json!({
+                    "title": "CSV-7: Build release dashboard",
+                    "description": "## Why?\nRelease visibility.",
+                    "is_title_change_significant": is_significant,
+                })
+                .to_string(),
+                0,
+                0,
+            ))
+        });
+
+        // Act
+        let metadata = SessionTaskService::review_request_metadata(
+            None,
+            Path::new("/tmp/project"),
+            "Adds the release dashboard.",
+            "Build release dashboard",
+            &run_client,
+            model_fixture::codex_selection(),
+        )
+        .await
+        .expect("creation metadata");
+
+        // Assert
+        assert_eq!(metadata.title, expected_title);
+        assert_eq!(metadata.body, "## Why?\nRelease visibility.");
+    }
 }
 
 #[tokio::test]
@@ -86,7 +165,7 @@ async fn review_request_metadata_keeps_candidate_section_placement_and_legacy_no
     for _ in 0..2 {
         // Act
         current = SessionTaskService::review_request_metadata(
-            &current,
+            Some(&current),
             Path::new("project"),
             "New details",
             "Stable title",
@@ -140,7 +219,7 @@ async fn review_request_metadata_preserves_attribution_examples_during_reconcili
 
             // Act
             let result = SessionTaskService::review_request_metadata(
-                &current,
+                Some(&current),
                 Path::new("project"),
                 "New detail.",
                 "Stable title",
@@ -196,7 +275,7 @@ async fn review_request_metadata_rejects_invalid_description_and_worker_failure(
 
         // Act
         let error = SessionTaskService::review_request_metadata(
-            &current,
+            Some(&current),
             Path::new("project"),
             "Change evidence",
             "Title",
@@ -468,7 +547,7 @@ async fn review_request_metadata_preserves_user_details_from_semantic_evaluation
 
     // Act
     let metadata = SessionTaskService::review_request_metadata(
-        &current_metadata,
+        Some(&current_metadata),
         Path::new("/tmp/project"),
         "Adds the release dashboard.",
         "Build release dashboard",
@@ -521,7 +600,7 @@ async fn review_request_metadata_preserves_forged_checksum_valid_sections() {
 
         // Act
         let result = SessionTaskService::review_request_metadata(
-            &current_metadata,
+            Some(&current_metadata),
             Path::new("project"),
             "New detail",
             "Current title",
@@ -559,7 +638,7 @@ async fn review_request_metadata_rejects_invalid_json() {
 
     // Act
     let error = SessionTaskService::review_request_metadata(
-        &current_metadata,
+        Some(&current_metadata),
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
@@ -595,7 +674,7 @@ async fn review_request_metadata_rejects_invalid_title() {
 
     // Act
     let error = SessionTaskService::review_request_metadata(
-        &current_metadata,
+        Some(&current_metadata),
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
@@ -631,7 +710,7 @@ async fn review_request_metadata_rejects_dropped_current_reference() {
 
     // Act
     let error = SessionTaskService::review_request_metadata(
-        &current_metadata,
+        Some(&current_metadata),
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
@@ -668,7 +747,7 @@ async fn review_request_metadata_rejects_dropped_current_note_without_reference(
 
     // Act
     let error = SessionTaskService::review_request_metadata(
-        &current_metadata,
+        Some(&current_metadata),
         Path::new("/tmp/project"),
         "Updated generated details.",
         "Generated title",

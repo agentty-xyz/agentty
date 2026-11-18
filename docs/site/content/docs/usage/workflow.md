@@ -229,7 +229,9 @@ If message generation fails, auto-commit stops and the worktree stays intact.
 <a id="usage-title-refinement"></a> The Fast model also refines session titles from the
 overall goal. Draft titles update as messages are staged, committed work uses the
 session commit title, and failed refinement keeps the provisional title. Commits added
-after publishing leave the title unchanged.
+after publishing leave the title unchanged. Generated session titles, commit messages,
+and review-request titles and descriptions are in English unless the project's agent
+instructions specify another language.
 
 A Git index lock is retried for five seconds, then reported as `[Commit Error]`. Agentty
 never removes the lock; wait for active Git operations to finish, and let only the
@@ -300,13 +302,15 @@ GitLab merge request. During a turn or rebase, publishing waits in the queue.
    same branch automatically when no chat or sync is queued. Retry failed pushes with
    `p`.
 
-Review-request titles stay stable unless the primary objective changes. Descriptions
-follow repository PR/MR instructions, skills, and templates, or else use `Why?`,
-`What?`, and `Impact?` sections. They compare the published branch with the request's
-current target branch and exclude uncommitted edits. Updates preserve existing content,
-notes, and checklists, and the coauthor setting adds one Agentty attribution footer.
-Generation failures are reported for retry. Agentty checks for concurrent remote edits
-before updating, but a later edit can still race.
+A new review request takes its title from the session commit title, adjusted only to
+satisfy repository PR/MR title rules. Titles then stay stable unless the primary
+objective changes. Descriptions follow repository PR/MR instructions (`AGENTS.md`,
+`CLAUDE.md`, or `GEMINI.md`), skills, and templates, or else use `Why?`, `What?`, and
+`Impact?` sections. They compare the published branch with the request's current target
+branch and exclude uncommitted edits. Updates preserve existing content, notes, and
+checklists, and the coauthor setting adds one Agentty attribution footer. Generation
+failures are reported for retry. Agentty checks for concurrent remote edits before
+updating, but a later edit can still race.
 
 <a id="usage-review-request-prerequisites"></a> Publishing requires Git credentials and
 an authenticated forge CLI: `gh` for GitHub or `glab` for GitLab. See

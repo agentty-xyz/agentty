@@ -725,23 +725,32 @@ impl SessionTaskService {
 
     /// Reconciles current remote review-request metadata with the latest
     /// cumulative session state while retaining intentional user additions.
+    ///
+    /// Without `current_metadata`, no review request exists yet: the
+    /// generated title is the baseline, which repository PR/MR title rules
+    /// may rewrite.
     pub(crate) async fn review_request_metadata(
-        current_metadata: &forge::ReviewRequestMetadata,
+        current_metadata: Option<&forge::ReviewRequestMetadata>,
         folder: &Path,
         generated_description: &str,
         generated_title: &str,
         run_client: &dyn RunClient,
         session_agent: AgentSelection,
     ) -> Result<forge::ReviewRequestMetadata, SessionError> {
-        let current_metadata = forge::ReviewRequestMetadata {
-            body: crate::app::review_request::strip_attribution(&current_metadata.body),
-            title: current_metadata.title.clone(),
-        };
+        let current_metadata =
+            current_metadata.map(|current_metadata| forge::ReviewRequestMetadata {
+                body: crate::app::review_request::strip_attribution(&current_metadata.body),
+                title: current_metadata.title.clone(),
+            });
         let prompt = Self::review_request_metadata_prompt(
-            &current_metadata,
+            current_metadata.as_ref(),
             generated_description,
             generated_title,
         );
+        let current_metadata = current_metadata.unwrap_or_else(|| forge::ReviewRequestMetadata {
+            body: String::new(),
+            title: generated_title.to_string(),
+        });
         let submission = run_client
             .submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
@@ -965,16 +974,21 @@ impl SessionTaskService {
     }
 
     /// Renders the semantic review-request metadata reconciliation prompt.
+    /// Missing current metadata renders as `null`, which the prompt treats as
+    /// initial creation.
     fn review_request_metadata_prompt(
-        current_metadata: &forge::ReviewRequestMetadata,
+        current_metadata: Option<&forge::ReviewRequestMetadata>,
         generated_description: &str,
         generated_title: &str,
     ) -> String {
-        let current_metadata_json = serde_json::json!({
-            "description": crate::app::review_request::strip_attribution(&current_metadata.body),
-            "title": current_metadata.title,
-        })
-        .to_string();
+        let current_metadata_json = current_metadata
+            .map_or(serde_json::Value::Null, |current_metadata| {
+                serde_json::json!({
+                    "description": crate::app::review_request::strip_attribution(&current_metadata.body),
+                    "title": current_metadata.title,
+                })
+            })
+            .to_string();
         let generated_metadata_json = serde_json::json!({
             "description": crate::app::review_request::strip_attribution(generated_description),
             "title": generated_title,
