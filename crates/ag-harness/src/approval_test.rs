@@ -131,7 +131,7 @@ async fn replacement_arguments_must_match_a_usable_parameters_schema() {
     // Assert
     assert_eq!(
         valid.expect("valid replacement"),
-        Approved::Run(json!({"target": "staging"}))
+        Approved::Replaced(json!({"target": "staging"}))
     );
     assert!(tool_failure(violation).starts_with(
         "tool `deploy` failed: approved arguments do not match the tool's parameters: /target: "

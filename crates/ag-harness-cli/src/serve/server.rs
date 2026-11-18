@@ -15,8 +15,8 @@ use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::ModelProvider;
 use ag_harness::store::{MemoryStore, SessionInfo};
 use ag_harness::{
-    CancelToken, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError, Repository,
-    RunHandle, RunRequest, Session, SessionError, ToolSet,
+    CancelToken, Decision, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError,
+    Repository, RunHandle, RunRequest, Session, SessionError, ToolSet,
 };
 use futures_core::Stream;
 use serde::Serialize;
@@ -34,6 +34,10 @@ use super::protocol::{
     SessionTranscriptParams, SessionUsage, StoreChoice, Transcript, line,
 };
 use crate::{connect_model, login, select_cataloged, select_direct, stored_model_identity_parts};
+
+/// Feedback for a call whose client answered with something other than a
+/// decision.
+const INVALID_ANSWER: &str = "the client's answer was not a valid decision";
 
 /// Event lines runs may queue before the next one waits for the server to
 /// write them.
@@ -230,8 +234,10 @@ where
     }
 
     /// Hands the client's `answer` to the run waiting for it. An answer
-    /// whose `result` is not a decision is rejected with an error that has
-    /// no `id`, and the run keeps waiting for a valid one.
+    /// whose `result` is not a decision denies the call, so the run does
+    /// not wait out its timeout, and is reported with an error naming the
+    /// server request; the error has no `id`, since it answers no client
+    /// request.
     async fn decide(&mut self, answer: Answer) -> io::Result<()> {
         match answer.decision {
             Ok(decision) => {
@@ -240,6 +246,10 @@ where
                 Ok(())
             }
             Err(reason) => {
+                let denied = Decision::Deny {
+                    feedback: INVALID_ANSWER.to_string(),
+                };
+                self.approvals.answer(&answer.id, denied);
                 let error = ErrorObject::new(
                     INVALID_PARAMS,
                     format!("invalid answer to server request {}: {reason}", answer.id),

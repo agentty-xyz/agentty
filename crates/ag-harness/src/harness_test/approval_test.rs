@@ -10,21 +10,26 @@ use futures_core::Stream;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, oneshot};
 
-use super::support::{model, object_schema, response_without_metadata, write_call};
+use super::support::{
+    LifecycleRecorder, model, object_schema, response_without_metadata, write_call,
+};
 use crate::approval::{ApprovalHandler, ApprovalRequest, Decision};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::error::ErrorKind;
 use crate::event::{EventStream, Item, ItemKind, RunEvent, RunEventKind, ToolCallStatus};
 use crate::file_system::MockFileSystem;
 use crate::harness::{Harness, HarnessBuilder};
+use crate::lifecycle::LifecycleEventKind;
+use crate::limit::{LimitKind, RunLimits};
 use crate::memory_store::MemoryStore;
 use crate::model::{MockModel, ModelError, ModelMessage, ModelRequest, ModelResponse};
+use crate::reservation::TURN_LEASE_SECONDS;
 use crate::tool::{
     ToolCall, ToolContext, ToolDefinition, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet,
 };
 use crate::transcript::TurnRange;
 use crate::turn::{HostToolOutcome, ToolActivity};
-use crate::{Repository, RunRequest};
+use crate::{Repository, RunRequest, TurnOptions};
 
 /// Approval timeout of every harness in this suite.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,6 +41,8 @@ const NO_CALLS: [Value; 0] = [];
 enum Behavior {
     /// Returns this decision at once.
     Decide(Decision),
+    /// Allows the call after this long.
+    AllowAfter(Duration),
     /// Never decides; the pending decision reports its drop.
     Never(Mutex<Option<oneshot::Sender<()>>>),
 }
@@ -86,6 +93,11 @@ impl ApprovalHandler for Approver {
         self.asked.notify_one();
         match &self.behavior {
             Behavior::Decide(decision) => decision.clone(),
+            Behavior::AllowAfter(delay) => {
+                tokio::time::sleep(*delay).await;
+
+                Decision::Allow
+            }
             Behavior::Never(dropped) => {
                 let _dropped = dropped.lock().expect("dropped lock").take();
 
@@ -217,6 +229,20 @@ fn result_for(request: &ModelRequest, call_id: &str) -> String {
         .expect("tool result")
 }
 
+/// Returns the telemetry label of every failed tool call `recorder` saw.
+fn tool_failures(recorder: &LifecycleRecorder) -> Vec<&'static str> {
+    recorder
+        .events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ToolFailed { error_type, .. } => Some(error_type.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Reads every event of a finished run.
 async fn events(mut stream: EventStream) -> Vec<RunEvent> {
     let mut events = Vec::new();
@@ -296,7 +322,11 @@ async fn a_denied_call_returns_the_feedback_to_the_model_and_the_run_continues()
         ModelResponse::ToolCall(call("deploy_0", "deploy", r#"{"target":"prod"}"#)),
         output(),
     ]);
-    let harness = harness(model, tool_set(vec![deploy.clone()]), approver);
+    let recorder = LifecycleRecorder::default();
+    let harness = builder(model, tool_set(vec![deploy.clone()]), approver)
+        .lifecycle_observer(recorder.clone())
+        .build()
+        .expect("harness");
 
     // Act
     let (stream, handle) = harness.run(request()).into_parts();
@@ -318,6 +348,7 @@ async fn a_denied_call_returns_the_feedback_to_the_model_and_the_run_continues()
             .to_string()
             .starts_with("deploy (denied; ")
     );
+    assert_eq!(tool_failures(&recorder), ["approval_denied"]);
     assert!(events.iter().any(|event| matches!(
         &event.kind,
         RunEventKind::ItemCompleted { item: Item::ToolCall(item), .. }
@@ -386,6 +417,11 @@ async fn allow_with_runs_the_call_with_its_validated_replacement_arguments() {
         )),
         "the session keeps the model's call"
     );
+    assert_eq!(
+        result_for(&requests[1], "deploy_0"),
+        r#"{"echo":{"target":"staging"},"approved_arguments":{"target":"staging"}}"#,
+        "the model learns which arguments ran"
+    );
     let error = rejected.result.expect_err("invalid replacement");
     assert_eq!(error.kind(), ErrorKind::ToolFailed);
     assert!(
@@ -410,8 +446,10 @@ async fn a_decision_that_never_comes_times_out_and_releases_the_session() {
         ModelResponse::ToolCall(call("deploy_0", "deploy", r#"{"target":"prod"}"#)),
         output(),
     ]);
+    let recorder = LifecycleRecorder::default();
     let harness = builder(model, tool_set(vec![deploy.clone()]), approver)
         .store(Arc::new(MemoryStore::new()))
+        .lifecycle_observer(recorder.clone())
         .build()
         .expect("harness");
     let session = harness
@@ -422,11 +460,31 @@ async fn a_decision_that_never_comes_times_out_and_releases_the_session() {
     let started_at = tokio::time::Instant::now();
 
     // Act
-    let timed_out = session.run(RunRequest::new("deploy it")).await;
+    let (stream, handle) = session.run(RunRequest::new("deploy it")).into_parts();
+    let (timed_out, events) = tokio::join!(handle.outcome(), events(stream));
     let waited = started_at.elapsed();
     let next = session.run(RunRequest::new("answer")).await;
 
     // Assert
+    let kinds: Vec<&RunEventKind> = events.iter().map(|event| &event.kind).collect();
+    let Some(RunEventKind::ApprovalRequested { id, .. }) = kinds
+        .iter()
+        .find(|kind| matches!(kind, RunEventKind::ApprovalRequested { .. }))
+    else {
+        unreachable!("the call asked for approval: {kinds:?}");
+    };
+    assert!(
+        !kinds.iter().any(
+            |kind| matches!(kind, RunEventKind::ItemCompleted { id: completed, .. } if completed == id)
+        ),
+        "the timed-out call's item never completes"
+    );
+    assert!(matches!(
+        kinds.last(),
+        Some(RunEventKind::Completed(summary))
+            if summary.error.as_ref().map(|failure| failure.kind) == Some(ErrorKind::ApprovalTimeout)
+    ));
+    assert_eq!(tool_failures(&recorder), ["approval_timeout"]);
     let error = timed_out.result.expect_err("approval timed out");
     assert_eq!(error.kind(), ErrorKind::ApprovalTimeout);
     assert!(!error.is_retryable());
@@ -483,4 +541,97 @@ async fn cancelling_a_run_waiting_for_approval_stops_it_promptly() {
         .expect("the pending decision was dropped")
         .expect_err("dropped without a decision");
     assert_eq!(deploy.arguments(), NO_CALLS);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_decision_slower_than_the_turn_lease_keeps_the_turn_owned() {
+    // Arrange
+    let lease = Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
+    let deploy = Echo::new("deploy", ToolEffects::Executes);
+    let approver = Approver::new(Behavior::AllowAfter(lease * 2));
+    let (model, _requests) = scripted(vec![
+        ModelResponse::ToolCall(call("deploy_0", "deploy", r#"{"target":"prod"}"#)),
+        output(),
+        output(),
+    ]);
+    let harness = builder(model, tool_set(vec![deploy.clone()]), approver)
+        .approval_timeout(lease * 3)
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("harness");
+    let session = harness
+        .session("slow", object_schema())
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let slow = session.run(RunRequest::new("deploy it")).await;
+    let next = session.run(RunRequest::new("answer")).await;
+
+    // Assert
+    assert!(
+        TIMEOUT < lease,
+        "the suite's timeout ends a wait within one lease"
+    );
+    slow.result
+        .as_ref()
+        .expect("the renewed lease outlives the wait");
+    assert_eq!(deploy.arguments(), [json!({"target": "prod"})]);
+    next.result.as_ref().expect("the session runs again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_run_wall_time_limit_also_bounds_the_wait() {
+    // Arrange
+    let deploy = Echo::new("deploy", ToolEffects::Executes);
+    let (approver, _dropped) = Approver::never();
+    let (model, _requests) = scripted(vec![ModelResponse::ToolCall(call(
+        "deploy_0",
+        "deploy",
+        r#"{"target":"prod"}"#,
+    ))]);
+    let harness = harness(model, tool_set(vec![deploy]), approver);
+    let wall_time = TIMEOUT / 3;
+
+    // Act
+    let outcome = harness
+        .run(request().limits(RunLimits::default().with_max_wall_time(wall_time)))
+        .await;
+
+    // Assert
+    assert_eq!(
+        outcome.result.expect_err("wall time reached").kind(),
+        ErrorKind::BudgetExhausted(LimitKind::WallTime)
+    );
+}
+
+#[tokio::test]
+async fn a_one_shot_turn_asks_without_a_run_or_events() {
+    // Arrange
+    let deploy = Echo::new("deploy", ToolEffects::Writes);
+    let approver = Approver::deciding(Decision::Allow);
+    let (model, _requests) = scripted(vec![
+        ModelResponse::ToolCall(call("deploy_0", "deploy", r#"{"target":"prod"}"#)),
+        output(),
+    ]);
+    let tools = tool_set(vec![deploy.clone()]);
+    let harness = harness(model, tools.clone(), approver.clone());
+
+    // Act
+    let outcome = harness
+        .turn(
+            "deploy it",
+            TurnOptions::from_output(object_schema()).with_tools(tools),
+        )
+        .start()
+        .await;
+
+    // Assert
+    outcome.expect("turn output");
+    let requests = approver.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].run, None);
+    assert_eq!(requests[0].session, None);
+    assert_eq!(deploy.arguments(), [json!({"target": "prod"})]);
 }

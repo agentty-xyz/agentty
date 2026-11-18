@@ -21,7 +21,7 @@ use tokio::task::{JoinHandle, LocalSet};
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Settings, event_line, serve};
+use super::{INVALID_ANSWER, Settings, event_line, serve};
 use crate::serve::protocol::{
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
 };
@@ -1041,8 +1041,8 @@ fn an_event_time_before_the_epoch_is_sent_as_the_epoch() {
 }
 
 /// Starts a provider that answers prompts containing `Write` with a `write`
-/// call creating `a.txt`, the call's result with `done`, and every other
-/// prompt with `hello`.
+/// call creating `a.txt`, and every request carrying that call's result,
+/// including later turns that replay it, with `done`.
 async fn writing_provider() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1075,12 +1075,6 @@ async fn writing_provider() -> MockServer {
             }]
         })))
         .with_priority(2)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(answer("hello"))
-        .with_priority(3)
         .mount(&server)
         .await;
 
@@ -1165,35 +1159,53 @@ async fn an_approved_write_runs_after_its_event_and_the_clients_answer() {
 }
 
 #[tokio::test]
-async fn invalid_and_error_answers_are_rejected_and_deny_the_write() {
+async fn invalid_and_error_answers_deny_the_write() {
     LocalSet::new()
         .run_until(async {
             // Arrange
             let provider = writing_provider().await;
             let (mut client, repository) = writing_client(&provider, READ_TIMEOUT).await;
-            let started = client
+            let output = json!({"type": "json", "schema": message_schema()});
+            client
                 .call(
                     2,
+                    "session/create",
+                    json!({"session": "t", "model": local_model(), "output": output}),
+                )
+                .await;
+
+            // Act
+            let invalid_run = client
+                .call(
+                    3,
                     "run/start",
                     json!({"session": "s", "input": "Write a.txt"}),
                 )
-                .await;
-            let run = started["result"]["run"].clone();
+                .await["result"]["run"]
+                .clone();
             let asked = client.wait(is_approval_request).await;
-
-            // Act
             client.send(&approval_answer(&asked["id"], "maybe")).await;
             let invalid = client
                 .wait(|message| message["error"]["code"] == INVALID_PARAMS)
                 .await;
+            let invalid_completed = client.completed(&invalid_run).await;
+            let error_run = client
+                .call(
+                    4,
+                    "run/start",
+                    json!({"session": "t", "input": "Write a.txt"}),
+                )
+                .await["result"]["run"]
+                .clone();
+            let asked_again = client.wait(is_approval_request).await;
             client
                 .send(&json!({
                     "jsonrpc": "2.0",
-                    "id": asked["id"],
+                    "id": asked_again["id"],
                     "error": {"code": 1, "message": "the user said no"}
                 }))
                 .await;
-            let completed = client.completed(&run).await;
+            let error_completed = client.completed(&error_run).await;
             let (_, served) = client.finish().await;
 
             // Assert
@@ -1205,15 +1217,23 @@ async fn invalid_and_error_answers_are_rejected_and_deny_the_write() {
                         .starts_with("invalid answer to server request \"approval-0\": ")),
                 "{invalid}"
             );
-            assert_eq!(completed["params"]["event"]["kind"]["error"], Value::Null);
+            for completed in [&invalid_completed, &error_completed] {
+                assert_eq!(completed["params"]["event"]["kind"]["error"], Value::Null);
+            }
             assert!(!repository.path().join("a.txt").exists());
-            let denied_result = provider
+            let bodies: Vec<String> = provider
                 .received_requests()
                 .await
                 .unwrap_or_default()
                 .iter()
-                .any(|request| String::from_utf8_lossy(&request.body).contains("the user said no"));
-            assert!(denied_result, "the model receives the denial");
+                .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+                .collect();
+            for feedback in [INVALID_ANSWER, "the user said no"] {
+                assert!(
+                    bodies.iter().any(|body| body.contains(feedback)),
+                    "the model receives the denial `{feedback}`"
+                );
+            }
             assert!(served.is_ok());
         })
         .await;
@@ -1235,11 +1255,14 @@ async fn an_unanswered_write_times_out_and_the_session_runs_again() {
                 )
                 .await;
             let run = started["result"]["run"].clone();
-            let asked = client.wait(is_approval_request).await;
 
             // Act
+            // The timeout may expire before the request is written, so the
+            // late answer names the first request identifier directly.
             let timed_out = client.completed(&run).await;
-            client.send(&approval_answer(&asked["id"], "allow")).await;
+            client
+                .send(&approval_answer(&json!("approval-0"), "allow"))
+                .await;
             let next = client
                 .call(3, "run/start", json!({"session": "s", "input": "Hi"}))
                 .await;

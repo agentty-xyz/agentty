@@ -108,10 +108,22 @@ async fn abandoned_decisions_are_dropped_and_dropped_asks_deny() {
         let approvals = approvals.clone();
         tokio::spawn(async move { approvals.decide(&approval_request(Some("run-1"))).await })
     };
-    let dropped = asks.recv().await.expect("the run should ask again");
+    let second = asks.recv().await.expect("the run should ask again");
     // A second request sweeps the decision its aborted run abandoned.
-    approvals.request("s".to_string(), dropped);
+    let second_id = serde_json::to_value(approvals.request("s".to_string(), second))
+        .expect("request should encode")["id"]
+        .clone();
+    let pending: Vec<String> = approvals
+        .inner
+        .pending
+        .lock()
+        .expect("pending lock")
+        .keys()
+        .cloned()
+        .collect();
     approvals.answer(&abandoned_id, Decision::Allow);
+    approvals.answer(&second_id, Decision::Allow);
+    let late = late.await.expect("decide task");
     approvals.close(&run);
     let after_close = approvals.decide(&approval_request(Some("run-1"))).await;
     let next = {
@@ -126,10 +138,11 @@ async fn abandoned_decisions_are_dropped_and_dropped_asks_deny() {
         })
     };
     let (dropped_ask, ()) = next.await.expect("decide task");
-    late.abort();
 
     // Assert
     assert_eq!(abandoned_id, Value::String("approval-0".to_string()));
+    assert_eq!(pending, ["approval-1"], "the abandoned decision was swept");
+    assert_eq!(late, Decision::Allow);
     assert_eq!(after_close, no_client());
     assert_eq!(
         dropped_ask,

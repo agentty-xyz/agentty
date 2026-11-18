@@ -2364,7 +2364,9 @@ impl HarnessBuilder {
     /// call, five minutes by default. A handler that has not decided by
     /// then fails the run with [`crate::ErrorKind::ApprovalTimeout`], which
     /// ends the turn and releases its session for the next one. A run's
-    /// wall-time limit also bounds the wait.
+    /// wall-time limit also bounds the wait. A zero timeout accepts only a
+    /// decision the handler returns without waiting; without a handler, the
+    /// timeout has no effect.
     pub fn approval_timeout(mut self, timeout: Duration) -> Self {
         self.approval_timeout = timeout;
 

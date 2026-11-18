@@ -278,7 +278,9 @@ every offered tool runs unasked. The wait is bounded by the harness's approval t
 a timeout fails the turn with `ErrorKind::ApprovalTimeout`, which settles it like any
 failure, so the session's turn lease is released rather than renewed indefinitely.
 Cancellation drops the pending decision. `AllowWith` arguments are validated against the
-tool's parameters schema before the handler runs, and a denial answers the model with a
+tool's parameters schema before the handler runs; the session keeps the model's call,
+its result carries the arguments that ran as `approved_arguments`, and context reduction
+still describes the call by the model's arguments. A denial answers the model with a
 `"status": "denied"` result carrying the feedback.
 
 - `read` — bounded file, list, search, and `show(head)` inspection. A `list` or `search`

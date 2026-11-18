@@ -630,9 +630,11 @@ pub(crate) struct RunEventParams {
 
 /// Server request asking the client to decide on one tool call that
 /// changes state. The client answers with a response carrying the same
-/// `id` and an [`ApprovalDecision`] as its `result`; an error response
-/// denies the call. A run whose answer does not arrive within the
-/// server's approval timeout fails with `approval_timeout`.
+/// `id` and an [`ApprovalDecision`] as its `result`. An error response
+/// denies the call with its message as feedback; a `result` that is not a
+/// decision denies it too, and the server reports it with a `-32602` error
+/// without `id`. A run whose answer does not arrive within the server's
+/// approval timeout fails with `approval_timeout`.
 #[derive(Debug, JsonSchema, Serialize)]
 pub(crate) struct ServerRequest {
     /// Identifier the client's answer must carry, unique within this
@@ -719,13 +721,14 @@ pub(crate) struct Answer {
 }
 
 impl Answer {
-    /// Reads `message` as an answer to a server request: an object without
-    /// `method` that carries `id` and exactly one of `result` and `error`.
-    /// An error answer denies the call with the error's message. Returns
-    /// `None` for any other message, which is read as a request.
+    /// Reads `message` as an answer to a server request: a JSON-RPC 2.0
+    /// object without `method` that carries `id` and exactly one of
+    /// `result` and `error`. An error answer denies the call with the
+    /// error's message. Returns `None` for any other message, which is
+    /// read, and rejected, as a request.
     pub(crate) fn parse(message: &Value) -> Option<Self> {
         let fields = message.as_object()?;
-        if fields.contains_key("method") {
+        if fields.contains_key("method") || fields.get("jsonrpc")? != "2.0" {
             return None;
         }
         let id = fields.get("id")?.clone();

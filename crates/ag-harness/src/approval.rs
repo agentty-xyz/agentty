@@ -32,11 +32,13 @@ pub(crate) const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(5);
 /// Give one to [`crate::HarnessBuilder::approval`]. The harness asks it
 /// about every call to a tool whose [`ToolEffects`] are not
 /// [`ToolEffects::ReadOnly`], after emitting
-/// [`crate::RunEventKind::ApprovalRequested`], and waits for the decision
-/// at most the harness's approval timeout: a handler that has not decided
-/// by then fails the run with [`crate::ErrorKind::ApprovalTimeout`], and the
-/// call never runs. Cancelling the run drops the pending decision. A
-/// handler that panics fails the run as a tool failure.
+/// [`crate::RunEventKind::ApprovalRequested`] when the run streams its
+/// events, and waits for the decision at most the harness's approval
+/// timeout: a handler that has not decided by then fails the run with
+/// [`crate::ErrorKind::ApprovalTimeout`], and the call never runs.
+/// Cancelling the run drops the pending decision. A handler that panics
+/// fails the run as a tool failure. Read-only calls are never gated;
+/// declare a tool [`ToolEffects::Writes`] to have its calls approved.
 #[async_trait]
 pub trait ApprovalHandler: Send + Sync {
     /// Returns whether the call `request` describes runs, runs with other
@@ -72,7 +74,10 @@ pub enum Decision {
     Allow,
     /// Runs the call with these arguments instead of the model's. They must
     /// match the tool's parameters schema, or the run fails as a tool
-    /// failure; the session keeps the model's original call.
+    /// failure. The session keeps the model's original call, and the
+    /// call's result tells the model the arguments that ran, as an
+    /// `approved_arguments` field; context reduction still describes the
+    /// call by the model's arguments.
     AllowWith(Value),
     /// Does not run the call; the model receives `feedback` as its result
     /// and the run continues.
@@ -145,7 +150,7 @@ impl Approval {
                     })
                     .map_err(|reason| tool_failed(ApprovalFailure::InvalidArguments(reason)))?;
 
-                Ok(Approved::Run(arguments))
+                Ok(Approved::Replaced(arguments))
             }
             Decision::Deny { feedback } => Ok(Approved::Denied(feedback)),
         }
@@ -155,8 +160,11 @@ impl Approval {
 /// How an approved or denied call is answered.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Approved {
-    /// The call runs with these arguments.
+    /// The call runs with the model's arguments.
     Run(Value),
+    /// The call runs with these replacement arguments, which its result
+    /// reports to the model.
+    Replaced(Value),
     /// The call does not run; the model receives this feedback.
     Denied(String),
 }

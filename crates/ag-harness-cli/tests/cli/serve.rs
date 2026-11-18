@@ -344,8 +344,9 @@ async fn serve_runs_sessions_and_stops_runs_over_stdio() -> TestResult<()> {
     Ok(())
 }
 
-/// Starts a provider that answers prompts containing `Write` with a `write`
-/// call creating `a.txt`, and the call's result with `done`.
+/// Starts a provider that answers a request carrying the `write` call's
+/// result with `done`, and any other request with that call, creating
+/// `a.txt`.
 async fn writing_provider() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -389,6 +390,8 @@ async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
     let provider = writing_provider().await;
     let repository = tempfile::tempdir()?;
     let root = repository.path().to_string_lossy().into_owned();
+    // The timeout outlasts the test, so only the answer can finish the run;
+    // timeouts are proven in process.
     let mut server = Server::spawn_with(
         &provider,
         &[
@@ -396,25 +399,23 @@ async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
             &root,
             "--allow-write",
             "--approval-timeout-ms",
-            "500",
+            "600000",
         ],
     )?;
     let output = json!({"type": "json", "schema": message_schema()});
     let model = json!({"id": "openai-compatible/local"});
-    for (id, session) in [(1, "approved"), (2, "unanswered")] {
-        server
-            .call(
-                id,
-                "session/create",
-                json!({"session": session, "model": model, "output": output}),
-            )
-            .await?;
-    }
+    server
+        .call(
+            1,
+            "session/create",
+            json!({"session": "approved", "model": model, "output": output}),
+        )
+        .await?;
 
     // Act
     let approved = server
         .call(
-            3,
+            2,
             "run/start",
             json!({"session": "approved", "input": "Write a.txt"}),
         )
@@ -426,16 +427,6 @@ async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
         .send(&json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"decision": "allow"}}))
         .await?;
     let approved_completed = server.completed(&approved["result"]["run"]).await?;
-    let written = repository.path().join("a.txt").is_file();
-    std::fs::remove_file(repository.path().join("a.txt"))?;
-    let unanswered = server
-        .call(
-            4,
-            "run/start",
-            json!({"session": "unanswered", "input": "Write a.txt"}),
-        )
-        .await?;
-    let unanswered_completed = server.completed(&unanswered["result"]["run"]).await?;
     let (_, exited) = server.finish().await?;
 
     // Assert
@@ -446,12 +437,10 @@ async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
         approved_completed["params"]["event"]["kind"]["error"],
         Value::Null
     );
-    assert!(written, "the approved write created the file");
-    assert_eq!(
-        unanswered_completed["params"]["event"]["kind"]["error"]["kind"],
-        json!("approval_timeout")
+    assert!(
+        repository.path().join("a.txt").is_file(),
+        "the approved write created the file"
     );
-    assert!(!repository.path().join("a.txt").exists());
     assert!(exited);
 
     Ok(())

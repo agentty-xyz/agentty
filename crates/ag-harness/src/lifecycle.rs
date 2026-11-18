@@ -404,6 +404,10 @@ pub enum ToolErrorType {
     Cancelled,
     /// The allowed tool failed while executing or encoding its result.
     Execution,
+    /// The approval handler denied the call, which did not run.
+    ApprovalDenied,
+    /// The approval handler did not decide on the call in time.
+    ApprovalTimeout,
 }
 
 impl ToolErrorType {
@@ -412,6 +416,8 @@ impl ToolErrorType {
         match self {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
             Self::Execution => crate::telemetry::ERROR_TOOL_EXECUTION,
+            Self::ApprovalDenied => crate::telemetry::ERROR_APPROVAL_DENIED,
+            Self::ApprovalTimeout => crate::telemetry::ERROR_APPROVAL_TIMEOUT,
         }
     }
 }

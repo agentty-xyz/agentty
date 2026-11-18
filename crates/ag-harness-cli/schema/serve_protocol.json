@@ -2059,7 +2059,7 @@
         "method",
         "params"
       ],
-      "description": "Server request asking the client to decide on one tool call that\nchanges state. The client answers with a response carrying the same\n`id` and an [`ApprovalDecision`] as its `result`; an error response\ndenies the call. A run whose answer does not arrive within the\nserver's approval timeout fails with `approval_timeout`."
+      "description": "Server request asking the client to decide on one tool call that\nchanges state. The client answers with a response carrying the same\n`id` and an [`ApprovalDecision`] as its `result`. An error response\ndenies the call with its message as feedback; a `result` that is not a\ndecision denies it too, and the server reports it with a `-32602` error\nwithout `id`. A run whose answer does not arrive within the server's\napproval timeout fails with `approval_timeout`."
     },
     "ServerMethod": {
       "oneOf": [

@@ -197,7 +197,12 @@ struct ServeArgs {
     allow_write: bool,
     /// Milliseconds the client has to answer each approval request before
     /// the run fails.
-    #[arg(long, value_name = "MS", default_value_t = 300_000)]
+    #[arg(
+        long,
+        value_name = "MS",
+        default_value_t = 300_000,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     approval_timeout_ms: u64,
     /// Prints the JSON Schema of every protocol message and exits.
     #[arg(long)]
@@ -756,7 +761,10 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
-    let effort = cli.reasoning_effort;
+    let git_executable = cli.git_executable;
+    let reasoning_effort = cli.reasoning_effort;
+    let trace = cli.otlp_endpoint.is_some();
+    let serve_host = (reasoning_effort, git_executable.clone());
     match cli.command {
         Command::Run(args) => {
             let database = database_path(cli.database, &mut environment)?;
@@ -770,7 +778,7 @@ where
             let mut models =
                 chat_models(selection, args.base_url, &mut environment, warning_output)?;
             let harness = models.harness(false)?;
-            let repository = repository_or_default(args.read_dir, cli.git_executable)?;
+            let repository = repository_or_default(args.read_dir, git_executable)?;
             let comparison_base =
                 comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, system_prompt) = configured_harness(
@@ -778,8 +786,8 @@ where
                 database,
                 repository,
                 args.allow_write,
-                effort,
-                cli.otlp_endpoint.is_some(),
+                reasoning_effort,
+                trace,
             );
             let mut session = harness
                 .session(&session_id, chat_schema()?)
@@ -807,7 +815,7 @@ where
             let mut models =
                 chat_models(selection, args.base_url, &mut environment, warning_output)?;
             let harness = models.harness(info.registration_identity().is_some())?;
-            let repository = repository_or_default(args.read_dir, cli.git_executable)?;
+            let repository = repository_or_default(args.read_dir, git_executable)?;
             let comparison_base =
                 comparison_base(&repository, cli.comparison_base.as_deref()).await?;
             let (harness, _) = configured_harness(
@@ -815,8 +823,8 @@ where
                 database,
                 repository,
                 args.allow_write,
-                effort,
-                cli.otlp_endpoint.is_some(),
+                reasoning_effort,
+                trace,
             );
             let mut session = harness.resume(&args.session).await?;
             announce_session(&mut output, &args.session).await?;
@@ -841,9 +849,7 @@ where
             )
             .await
         }
-        Command::Serve(args) => {
-            run_serve(args, effort, cli.git_executable, environment, input, output).await
-        }
+        Command::Serve(args) => run_serve(args, serve_host, environment, input, output).await,
     }
 }
 
@@ -851,8 +857,7 @@ where
 /// executable, or prints its schema.
 async fn run_serve<Input, Output>(
     args: ServeArgs,
-    reasoning_effort: ReasoningEffort,
-    git_executable: Option<PathBuf>,
+    (reasoning_effort, git_executable): (ReasoningEffort, Option<PathBuf>),
     environment: impl FnMut(&str) -> Result<String, env::VarError>,
     input: Input,
     mut output: Output,

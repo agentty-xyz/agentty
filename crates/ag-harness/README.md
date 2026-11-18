@@ -221,8 +221,11 @@ let harness = Harness::builder()
 
 - A run emits `RunEventKind::ApprovalRequested` for the call, then asks the handler.
 - `Allow` runs the call; `AllowWith(arguments)` runs it with replacement arguments that
-  must match the tool's parameters schema (the session keeps the model's call);
+  must match the tool's parameters schema. The session keeps the model's call, and the
+  result gains an `approved_arguments` field so the model knows what ran.
   `Deny { feedback }` answers the model with the feedback and the run continues.
+- A run emits `ApprovalRequested` only when its events are streamed; read-only calls are
+  never gated, so declare a host tool `Writes` or `Executes` to have it approved.
 - A handler that does not decide within `approval_timeout` (five minutes by default)
   fails the run with `ErrorKind::ApprovalTimeout`; the call never runs and the session
   is released for its next turn. Cancelling the run drops the pending decision.

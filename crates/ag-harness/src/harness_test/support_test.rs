@@ -4,9 +4,9 @@
 use std::io;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 #[cfg(feature = "sqlite")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 #[cfg(feature = "sqlite")]
 use std::time::Instant;
@@ -20,7 +20,9 @@ use tokio::sync::Notify;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
-use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleId, ModelResponseType};
+use crate::lifecycle::{
+    LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, ModelResponseType,
+};
 use crate::model::{
     CompletionMetadata, CompletionUsage, MockModel, Model, ModelCompletion, ModelResponse,
 };
@@ -388,6 +390,18 @@ pub(super) fn readable_file_system_with(content: Vec<u8>) -> MockFileSystem {
         .return_once(move |_, _| Ok(Box::new(Cursor::new(content))));
 
     file_system
+}
+
+/// Records every lifecycle event.
+#[derive(Clone, Default)]
+pub(super) struct LifecycleRecorder {
+    pub(super) events: Arc<Mutex<Vec<LifecycleEvent>>>,
+}
+
+impl LifecycleObserver for LifecycleRecorder {
+    fn observe(&self, event: LifecycleEvent) {
+        self.events.lock().expect("events lock").push(event);
+    }
 }
 
 pub(super) fn turn_started_id(event: &LifecycleEvent) -> Option<LifecycleId> {

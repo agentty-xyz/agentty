@@ -13,7 +13,9 @@ use crate::context::{
 };
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
-use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare};
+use crate::engine::{
+    Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare, with_approved_arguments,
+};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{
@@ -27,6 +29,26 @@ use crate::{OutputSchema, TurnOptions};
 
 fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({"type": "object"})).expect("valid schema")
+}
+
+#[test]
+fn approved_arguments_join_an_object_result_and_wrap_any_other() {
+    // Arrange
+    let arguments = json!({"path": "b.txt"});
+
+    // Act
+    let object = with_approved_arguments(r#"{"status":"applied"}"#, arguments.clone());
+    let text = with_approved_arguments("done", arguments);
+
+    // Assert
+    assert_eq!(
+        object,
+        r#"{"status":"applied","approved_arguments":{"path":"b.txt"}}"#
+    );
+    assert_eq!(
+        text,
+        r#"{"approved_arguments":{"path":"b.txt"},"result":"done"}"#
+    );
 }
 
 #[test]

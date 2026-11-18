@@ -441,6 +441,7 @@ fn serve_offers_repository_tools_only_with_a_read_dir() {
         "250",
     ]);
     let write_without_dir = Cli::try_parse_from(["ag-harness", "serve", "--allow-write"]);
+    let zero_timeout = Cli::try_parse_from(["ag-harness", "serve", "--approval-timeout-ms", "0"]);
 
     // Assert
     assert!(without_tools.tools.is_none());
@@ -459,6 +460,10 @@ fn serve_offers_repository_tools_only_with_a_read_dir() {
     assert_eq!(writable.approval_timeout, Duration::from_millis(250));
     assert_eq!(ignored, None, "--git-executable applies with --read-dir");
     assert!(write_without_dir.is_err(), "--allow-write needs --read-dir");
+    assert!(
+        zero_timeout.is_err(),
+        "a zero timeout would deny every write"
+    );
 }
 
 #[tokio::test]

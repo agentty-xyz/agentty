@@ -495,6 +495,8 @@ fn answers_decode_into_decisions_and_other_messages_stay_requests() {
         json!({"jsonrpc": "2.0", "result": {}}),
         json!({"jsonrpc": "2.0", "id": 1}),
         json!({"jsonrpc": "2.0", "id": 1, "result": {}, "error": {}}),
+        json!({"id": "approval-0", "result": {"decision": "allow"}}),
+        json!({"jsonrpc": "1.0", "id": "approval-0", "result": {"decision": "allow"}}),
     ];
 
     // Act

@@ -47,7 +47,9 @@ use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
     ToolDefinition, UnknownToolCall,
 };
-use crate::tool_handler::{SharedResultFits, ToolContext, ToolEntry, ToolErrorKind, ToolHandler};
+use crate::tool_handler::{
+    SharedResultFits, ToolContext, ToolEntry, ToolError, ToolErrorKind, ToolHandler, ToolOutput,
+};
 use crate::turn::{
     ContextActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
     TurnError, TurnOptions, TurnOutcome, TurnReport, sanitize_report_text,
@@ -1254,13 +1256,14 @@ impl Engine<'_> {
         match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    if matches!(
-                        ToolCallStatus::from(&result.1),
-                        ToolCallStatus::Rejected | ToolCallStatus::Denied
-                    ) {
-                        tool_lifecycle.failed(ToolErrorType::Execution);
-                    } else {
-                        tool_lifecycle.completed();
+                    match ToolCallStatus::from(&result.1) {
+                        ToolCallStatus::Rejected => {
+                            tool_lifecycle.failed(ToolErrorType::Execution);
+                        }
+                        ToolCallStatus::Denied => {
+                            tool_lifecycle.failed(ToolErrorType::ApprovalDenied);
+                        }
+                        _ => tool_lifecycle.completed(),
                     }
                 }
 
@@ -1268,7 +1271,10 @@ impl Engine<'_> {
             }
             Err(error) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    tool_lifecycle.failed(ToolErrorType::Execution);
+                    tool_lifecycle.failed(match error {
+                        TurnError::ApprovalTimeout { .. } => ToolErrorType::ApprovalTimeout,
+                        _ => ToolErrorType::Execution,
+                    });
                 }
 
                 Err(error)
@@ -1968,10 +1974,15 @@ async fn run_handler(
             ));
         }
     };
-    let arguments = match gate {
+    // A host call's duration starts once it is approved, not while a
+    // decision is pending.
+    let (arguments, replaced, started_at) = match gate {
         Some(gate) if Approval::requires(handler.effects()) => {
             match gate.approve(tool, call, arguments, &tool_context).await? {
-                Approved::Run(arguments) => arguments,
+                Approved::Run(arguments) => (arguments, None, Instant::now()),
+                Approved::Replaced(arguments) => {
+                    (arguments.clone(), Some(arguments), Instant::now())
+                }
                 Approved::Denied(feedback) => {
                     return Ok(rejected_call(
                         name,
@@ -1982,7 +1993,7 @@ async fn run_handler(
                 }
             }
         }
-        _ => arguments,
+        _ => (arguments, None, started_at),
     };
     let result = CatchUnwind(handler.call(arguments, tool_context))
         .await
@@ -1990,6 +2001,22 @@ async fn run_handler(
             source: "the handler panicked".into(),
             tool: name.to_string(),
         })?;
+    let answered = answer_call(name, result, started_at)?;
+
+    Ok(match replaced {
+        Some(arguments) => (with_approved_arguments(&answered.0, arguments), answered.1),
+        None => answered,
+    })
+}
+
+/// Answers a call to `name` with its handler's `result`: a built-in reports
+/// its own result and activity, a host result over the size limit is
+/// dropped, and a rejection is answered with an error result.
+fn answer_call(
+    name: &str,
+    result: Result<ToolOutput, ToolError>,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
     match result {
         Ok(output) => Ok(match output.into_parts() {
             (content, Some(activity)) => (content, activity),
@@ -2015,6 +2042,21 @@ async fn run_handler(
             }),
             ToolErrorKind::Turn(error) => Err(*error),
         },
+    }
+}
+
+/// Tells the model that its call ran with the approved `arguments` instead
+/// of its own: a JSON object result gains an `approved_arguments` field,
+/// keeping its other fields where context reduction reads them, and any
+/// other result is wrapped as `result` beside it.
+fn with_approved_arguments(content: &str, arguments: Value) -> String {
+    match serde_json::from_str::<Value>(content) {
+        Ok(Value::Object(mut result)) => {
+            result.insert("approved_arguments".to_string(), arguments);
+
+            Value::Object(result).to_string()
+        }
+        _ => json!({"approved_arguments": arguments, "result": content}).to_string(),
     }
 }
 
