@@ -22,7 +22,7 @@ use sqlx::SqlitePool;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::{graph, run_request, seed_session, wait_result};
+use super::{driver_session, graph, run_request, seed_session, wait_result};
 use crate::app::App;
 use crate::infra::db::{Database, DbError, MockGraphRepository};
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
@@ -271,16 +271,13 @@ async fn paused_graph_drivers_resume_or_cancel_without_dispatching_early() {
             cancellation.cancel();
         }
         let mut reads = 0;
-        let driver = app.services.drive_graph(
-            &snapshot,
-            &cancellation,
-            &executor,
-            Path::new("workspace"),
-            || {
-                reads += 1;
-                future::ready((reads > 1).then_some(PermissionMode::ReadOnly))
-            },
-        );
+        let session = driver_session();
+        let driver =
+            app.services
+                .drive_graph(&snapshot, &cancellation, &executor, &session, || {
+                    reads += 1;
+                    future::ready((reads > 1).then_some(PermissionMode::ReadOnly))
+                });
         tokio::pin!(driver);
 
         // Act

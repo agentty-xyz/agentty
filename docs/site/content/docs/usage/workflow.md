@@ -531,9 +531,9 @@ Canceled) and `│` / `▼` connectors from its dependencies. When the graph is 
 the pane, a one-row-per-node summary prioritizes nodes needing attention and counts
 hidden nodes. Proposals are restored when you reopen the session or restart Agentty.
 
-While a proposal is generated or a reply is being decided, a **Review** session shows
-**InProgress**. A message sent meanwhile starts at once. `Ctrl+C` cancels generation or
-drops an undecided reply.
+While a proposal is generated or a reply is being decided, a **Draft** or **Review**
+session shows **InProgress**, starting as soon as you send the message. A message sent
+meanwhile starts at once. `Ctrl+C` cancels generation or drops an undecided reply.
 
 Reply in chat to act on a pending proposal. The session model decides what your reply
 means:
@@ -555,10 +555,11 @@ the session to show it again, or reply in chat. A paused graph continues once yo
 it from `w`.
 
 Approval does not accept later outputs. When a node waits for another node's output to
-be accepted, the producer shows **Awaiting your approval**. Your next chat reply accepts
-it, as with "start implementing", or sends revision guidance; replies with images always
-revise. Outputs already consumed by a started dependent, or from nodes without a task
-conversation, can only be accepted.
+be accepted, the producer shows **Awaiting your approval**, and chat shows its output
+with a prompt to approve it. Your next chat reply accepts it, as with "start
+implementing", or sends revision guidance; replies with images always revise. Outputs
+already consumed by a started dependent, or from nodes without a task conversation, can
+only be accepted.
 
 Duplicate approvals do not launch again. Pending proposals and undecided replies survive
 a restart or project switch, though a recovered reply loses its images; stopping the

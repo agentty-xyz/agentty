@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use super::{graph, seed_session};
+use super::{driver_session, graph, seed_session};
 use crate::app::AppServices;
 
 #[tokio::test]
@@ -69,7 +69,7 @@ async fn explicit_relaunch_preserves_failed_receipts_and_remaining_budget() {
         request.clone(),
         CancellationToken::new(),
         executor,
-        "workspace".into(),
+        driver_session(),
     );
     assert_eq!(observed.recv().await, Some(("failure".into(), 1)));
 
@@ -269,7 +269,7 @@ fn spawn_driver(
         },
         CancellationToken::new(),
         executor,
-        "workspace".into(),
+        driver_session(),
     );
 }
 

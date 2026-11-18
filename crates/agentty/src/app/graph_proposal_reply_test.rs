@@ -23,7 +23,7 @@ use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, session};
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, Status};
 use crate::infra::db::GraphProposalReplyRecord;
 use crate::test_support::new_test_app;
 
@@ -92,18 +92,26 @@ async fn revise_reply_answers_clarification_and_generates_the_next_version() {
 }
 
 #[tokio::test]
-async fn approve_reply_targets_the_inspected_version() {
+async fn approve_reply_shows_in_progress_at_once_and_targets_the_inspected_version() {
     // Arrange
     let (mut app, _directory) = pending_app(resolved_state("sess"), "approve").await;
     let _consumer = app.sessions.foreground_consumer();
 
     // Act
     app.submit_prompt(submission("Looks good, run it")).await;
+    let status_after_submit = *app
+        .sessions
+        .session_handles_or_err(&SessionId::from("sess"))
+        .expect("handles")
+        .status
+        .lock()
+        .expect("status");
     apply_next_command(&mut app).await;
     let notice = wait_for_message(&app, "Graph proposal").await;
 
     // Assert
     let state = stored(&app).await;
+    assert_eq!(status_after_submit, Status::InProgress);
     assert_eq!(notice, "Graph proposal v1 approved · execution started");
     assert_eq!(
         state.version.approval.map(|approval| approval.version),

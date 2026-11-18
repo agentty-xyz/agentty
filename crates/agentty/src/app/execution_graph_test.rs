@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_contracts::{MockAgentChannel, PermissionMode, TurnRequest, TurnResult};
 use ag_git::{DiffStats, MockGitClient};
@@ -20,10 +20,12 @@ use ag_session::{
 use ag_worker::SessionRunClient;
 use tokio::sync::{Notify, mpsc, watch};
 
+use super::GraphDriverSession;
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionManager;
 use crate::domain::session::{SessionHandles, Status};
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::infra::db::{AppRepositories, StoredGraphResult};
 use crate::infra::fs::MockFsClient;
 use crate::test_support::{
@@ -384,13 +386,22 @@ async fn assert_ordinary_context(db: &AppRepositories) {
             .expect("ordinary questions")
             .contains("ordinary question")
     );
+    // Graph conversations stay out of chat; only the approval the user owes
+    // is announced there, once.
     assert_eq!(
         db.sessions()
             .load_session_messages("sess")
             .await
             .expect("messages")
-            .len(),
-        0
+            .into_iter()
+            .map(|message| (message.kind, message.content))
+            .collect::<Vec<_>>(),
+        [(
+            SessionMessageKind::WorkflowNotice.as_str().to_string(),
+            "result @decorator\n\n`first` awaits your approval; reply in chat to accept or revise \
+             it."
+            .to_string(),
+        )]
     );
     assert!(
         db.tasks()
@@ -704,6 +715,15 @@ pub(in crate::app) async fn seed_session(manager: &mut SessionManager, db: &AppR
         ],
         HashMap::from([("sess".into(), SessionHandles::new(Status::Review))]),
     );
+}
+
+/// Driver session state for a graph run in the `workspace` folder with an
+/// empty chat.
+fn driver_session() -> GraphDriverSession {
+    GraphDriverSession {
+        folder: PathBuf::from("workspace"),
+        transcript: Arc::new(Mutex::new(SessionTranscript::ephemeral(Vec::new()))),
+    }
 }
 
 async fn wait_result(

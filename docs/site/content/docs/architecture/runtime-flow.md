@@ -174,9 +174,11 @@ executed mutating requests are never replayed.
 <a id="architecture-runtime-flow-status"></a> `Status::can_transition_to()` and workflow
 eligibility policies govern lifecycle changes. See
 [Session Lifecycle](@/docs/usage/workflow.md#session-lifecycle) for visible states.
-Graph proposal generation and reply decisions hold a `Review` session `InProgress`
-through a lease backed by a running operation; the last lease or turn to finish returns
-the session to `Review`, and an older status write never overwrites a newer one.
+Graph proposal generation and reply decisions hold a `Draft` or `Review` session
+`InProgress` through a lease backed by a running operation. The foreground claims the
+lease in memory before spawning the task, which then persists the operation and status;
+the last lease or turn to finish returns the session to `Review`, and an older status
+write never overwrites a newer one.
 
 ## Agent Channel Architecture
 

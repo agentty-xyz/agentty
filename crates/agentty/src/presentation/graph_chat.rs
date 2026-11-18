@@ -50,6 +50,25 @@ pub(crate) fn proposal_chat_notice(state: &GraphProposalState) -> String {
     }
 }
 
+/// Chat message announcing that a node's output waits for the user's
+/// approval, after the output it refers to, with the same reply guidance as
+/// the sidebar.
+pub(crate) fn output_approval_notice(node_id: &str, output: &str, takes_revision: bool) -> String {
+    let action = if takes_revision {
+        "reply in chat to accept or revise it"
+    } else {
+        "reply in chat to accept it"
+    };
+    let output = output.trim();
+    let mut text = String::new();
+    if !output.is_empty() {
+        let _ = write!(text, "{output}\n\n");
+    }
+    let _ = write!(text, "`{node_id}` awaits your approval; {action}.");
+
+    text
+}
+
 /// Retained proposal details for the scrollable inspector, as Markdown.
 ///
 /// Captured request and instruction text, plus multi-line objectives,

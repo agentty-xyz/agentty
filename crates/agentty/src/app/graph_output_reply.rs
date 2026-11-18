@@ -254,8 +254,9 @@ impl App {
             .ok()
             .map(|handles| Arc::clone(&handles.status));
         let attachments = prompt.attachments.clone();
+        let activity = services.begin_graph_activity(&session_id, status);
         spawn::spawn_detached(async move {
-            let activity = services.begin_graph_activity(&session_id, status).await;
+            activity.record(&services).await;
             let node_id = output.node.id.clone();
             let reply = if attachments.is_empty() {
                 decision.decide(run_client.as_ref()).await

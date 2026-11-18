@@ -40,7 +40,26 @@ fn first_lease_holds_a_review_session_in_progress_until_the_last_lease_ends() {
 }
 
 #[test]
-fn lease_on_a_session_outside_review_keeps_its_status() {
+fn lease_on_a_prepared_draft_shows_in_progress_and_ends_in_review() {
+    // Arrange
+    let registry = GraphActivityRegistry::default();
+    let session_id = SessionId::from("sess");
+    let status = Mutex::new(Status::Draft);
+
+    // Act
+    let claimed = registry.acquire(&session_id, &status);
+    let status_during_lease = *status.lock().expect("status");
+    let restored = registry.release(&session_id, &status);
+
+    // Assert
+    assert!(claimed);
+    assert_eq!(status_during_lease, Status::InProgress);
+    assert!(restored);
+    assert_eq!(*status.lock().expect("status"), Status::Review);
+}
+
+#[test]
+fn lease_on_a_busy_or_reviewing_session_keeps_its_status() {
     for kept in [
         Status::InProgress,
         Status::Rebasing,
@@ -166,7 +185,7 @@ fn release_leaves_a_status_the_lease_no_longer_owns() {
 }
 
 #[tokio::test]
-async fn lease_persists_in_progress_and_recovery_until_it_finishes() {
+async fn lease_shows_in_progress_at_once_and_persists_it_with_recovery_until_it_finishes() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
@@ -177,14 +196,18 @@ async fn lease_persists_in_progress_and_recovery_until_it_finishes() {
     // Act
     let activity = app
         .services
-        .begin_graph_activity(&session_id, Some(Arc::clone(&status)))
-        .await;
+        .begin_graph_activity(&session_id, Some(Arc::clone(&status)));
+    let status_before_record = *status.lock().expect("status");
+    let stored_before_record = stored_status(&app.services).await;
+    activity.record(&app.services).await;
     let status_while_held = stored_status(&app.services).await;
     let operations_while_held = unfinished_kinds(&app.services).await;
     let woke_while_held = wake.has_changed().expect("wake");
     activity.finish(&app.services).await;
 
     // Assert
+    assert_eq!(status_before_record, Status::InProgress);
+    assert_eq!(stored_before_record, Status::Review.to_string());
     assert_eq!(status_while_held, Status::InProgress.to_string());
     assert_eq!(operations_while_held, [GRAPH_ACTIVITY_OPERATION_KIND]);
     assert!(!woke_while_held);
@@ -205,7 +228,8 @@ async fn lease_for_an_unloaded_session_only_records_recovery() {
     let session_id = SessionId::from("sess");
 
     // Act
-    let activity = app.services.begin_graph_activity(&session_id, None).await;
+    let activity = app.services.begin_graph_activity(&session_id, None);
+    activity.record(&app.services).await;
     let operations_while_held = unfinished_kinds(&app.services).await;
     activity.finish(&app.services).await;
 
@@ -232,8 +256,8 @@ async fn turn_review_transition_waits_for_the_graph_lease() {
     let status = Arc::clone(&handles.status);
     let activity = app
         .services
-        .begin_graph_activity(&session_id, Some(Arc::clone(&status)))
-        .await;
+        .begin_graph_activity(&session_id, Some(Arc::clone(&status)));
+    activity.record(&app.services).await;
 
     // Act
     let turn_started = status_transition.apply(Status::InProgress).await;
@@ -266,8 +290,8 @@ async fn rebase_review_transition_publishes_the_held_lease_status() {
     let status = Arc::clone(&handles.status);
     let activity = app
         .services
-        .begin_graph_activity(&session_id, Some(Arc::clone(&status)))
-        .await;
+        .begin_graph_activity(&session_id, Some(Arc::clone(&status)));
+    activity.record(&app.services).await;
 
     // Act
     let rebase_started = status_transition.apply(Status::Rebasing).await;
@@ -295,8 +319,8 @@ async fn lease_end_persists_a_turn_status_that_overtook_it() {
     let status = handle_status(&app.sessions, &session_id);
     let activity = app
         .services
-        .begin_graph_activity(&session_id, Some(Arc::clone(&status)))
-        .await;
+        .begin_graph_activity(&session_id, Some(Arc::clone(&status)));
+    activity.record(&app.services).await;
     let registry = app.services.graph_activity.clone();
     let publication = registry.lock_publication().await;
     // A turn that starts after the lease restores `Review` in memory, but

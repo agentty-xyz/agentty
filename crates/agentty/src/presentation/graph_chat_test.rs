@@ -9,7 +9,7 @@ use ag_session::{
     StartExecutionGraphRequest, test_support,
 };
 
-use super::{GraphChatCache, GraphChatSnapshot, proposal_chat_notice};
+use super::{GraphChatCache, GraphChatSnapshot, output_approval_notice, proposal_chat_notice};
 
 #[test]
 fn cache_is_session_scoped_and_refreshes_on_updates_live_status_and_failures() {
@@ -141,4 +141,29 @@ fn chat_notice_reports_each_proposal_outcome_in_one_short_message() {
     }
     state.version.is_cancelled = true;
     assert_eq!(proposal_chat_notice(&state), "Graph proposal v1 cancelled.");
+}
+
+#[test]
+fn output_approval_notice_shows_the_output_and_the_reply_guidance() {
+    // Arrange
+    let cases = [
+        (
+            "Plan body\n",
+            true,
+            "Plan body\n\n`plan` awaits your approval; reply in chat to accept or revise it.",
+        ),
+        (
+            " ",
+            false,
+            "`plan` awaits your approval; reply in chat to accept it.",
+        ),
+    ];
+
+    // Act / Assert
+    for (output, takes_revision, expected) in cases {
+        assert_eq!(
+            output_approval_notice("plan", output, takes_revision),
+            expected
+        );
+    }
 }
