@@ -390,15 +390,15 @@ crate::define_model_response_error! {
         /// The model identifier is not `provider/model`.
         #[error("model identifier must be provider/model")]
         InvalidModelId,
-        /// No configuration exists for the requested provider.
-        #[error("requested provider is not configured")]
+        /// No specification serves the requested provider and model.
+        #[error("requested provider or model is not configured")]
         UnknownProvider,
-        /// A provider was configured more than once.
-        #[error("provider is configured more than once")]
-        DuplicateProvider,
-        /// Provider credentials or URL are blank.
-        #[error("provider API key and base URL must be nonempty")]
-        InvalidProviderConfig,
+        /// The provider specification cannot send a request.
+        #[error("provider specification is invalid: {reason}")]
+        InvalidProviderConfig {
+            /// The field that failed and why.
+            reason: String,
+        },
         /// JSON Schema response format name was invalid.
         #[error("response format name must contain 1-128 bytes")]
         InvalidResponseFormatName,
@@ -441,8 +441,7 @@ impl ModelError {
             | Self::InvalidToolArguments { .. } => ErrorClass::InvalidToolCall,
             Self::InvalidModelId
             | Self::UnknownProvider
-            | Self::DuplicateProvider
-            | Self::InvalidProviderConfig
+            | Self::InvalidProviderConfig { .. }
             | Self::InvalidResponseFormatName => ErrorClass::Request,
         }
     }
@@ -523,14 +522,14 @@ impl ModelError {
     }
 
     pub(crate) fn provider_request(
-        provider: &'static str,
+        provider: &str,
         body: String,
         source: reqwest::Error,
         status: reqwest::StatusCode,
         rejection: ProviderRejection,
     ) -> Self {
         Self::Request(Box::new(ProviderRequestError {
-            provider,
+            provider: provider.to_string(),
             body,
             rejection,
             source,
@@ -660,7 +659,7 @@ pub(crate) struct ProviderRejection {
 #[derive(Debug, Error)]
 #[error("{provider} returned HTTP {status}: {body}")]
 struct ProviderRequestError {
-    provider: &'static str,
+    provider: String,
     body: String,
     rejection: ProviderRejection,
     #[source]

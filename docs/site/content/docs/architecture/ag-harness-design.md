@@ -298,6 +298,20 @@ function calls return to the harness for execution. The harness keeps tool permi
 sessions, lifecycle events, and telemetry. The router has no token streaming to callers
 or automatic provider fallback.
 
+Providers are data, not code. A `ProviderSpec` names its `WireProtocol`, base URL,
+authentication (none, a bearer key, a named header, or a refreshing credential), extra
+headers and query parameters, and request policy: structured-output mode, reasoning
+mapping and reasoning-text replay, output-bound field, image input, prompt cache key,
+and overflow markers. Hosts pass resolved keys; the harness never reads the environment
+for a specification. The built-in providers are presets of the same type, one per model
+where policy depends on the model, and per-protocol conformance suites pin their
+requests byte for byte with golden fixtures. The router keeps the first of duplicate
+specifications and replaces one only through `Router::with_override`. `ag-harness` wraps
+the type as `provider::ProviderSpec`, served by `ModelClient::from_spec`, with presets
+behind `providers-openai` and `providers-compat`. Each specification also declares its
+`ReasoningFamily`, which decides whose recorded reasoning a model replays natively after
+a model switch.
+
 - **`openai`** uses the stateless Responses API, so the harness still owns history.
   Encrypted reasoning items are stored with the response and replayed verbatim.
 - **`chatgpt`** sends the same requests billed to the user's ChatGPT plan through

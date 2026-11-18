@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
-    ModelMessage, ModelRequest, OutputSchema, Provider, ProviderConfig, Router, ToolCall,
-    ToolDefinition, TurnInput,
+    ModelMessage, ModelRequest, OutputSchema, Router, ToolCall, ToolDefinition, TurnInput, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_partial_json, method, path};
@@ -30,22 +29,26 @@ fn request(model: &str) -> Result<ModelRequest, Box<dyn std::error::Error>> {
     ))
 }
 
-fn router(provider: Provider, server: &MockServer) -> Result<Router, ModelError> {
-    Router::new([ProviderConfig {
-        provider,
-        api_key: Some("test-key".to_string()),
-        base_url: format!("{}/v1/", server.uri()),
-        credential: None,
-    }])
+/// Returns a router holding the preset of the `provider/model` identifier
+/// `model`, tailored to that model and authenticated with `test-key`.
+fn router(model: &str, server: &MockServer) -> Router {
+    let base_url = format!("{}/v1/", server.uri());
+    let (provider, name) = model.split_once('/').unwrap_or((model, ""));
+    let spec = match provider {
+        "kimi" => preset::kimi(base_url, "test-key", name),
+        "qwen" => preset::qwen(base_url, "test-key", name),
+        "openai-compatible" => preset::openai_compatible(base_url, Some("test-key".to_string())),
+        _ => preset::muse(base_url, "test-key", name),
+    };
+
+    Router::new([spec])
 }
 
 fn openai_compatible_router(server: &MockServer, api_key: Option<&str>) -> Router {
-    Router::single(ProviderConfig {
-        provider: Provider::OpenAiCompatible,
-        api_key: api_key.map(str::to_string),
-        base_url: format!("{}/v1", server.uri()),
-        credential: None,
-    })
+    Router::new([preset::openai_compatible(
+        format!("{}/v1", server.uri()),
+        api_key.map(str::to_string),
+    )])
 }
 
 /// Returns the JSON body of the `index`th request `server` received.
@@ -110,7 +113,7 @@ async fn routes_muse_with_named_json_schema_and_validated_result()
         .await;
 
     // Act
-    let response = router(Provider::Muse, &server)?
+    let response = router("muse/muse-spark-1.3", &server)
         .execute(request("muse/muse-spark-1.3")?)
         .await
         .expect("valid response must complete");
@@ -140,7 +143,7 @@ async fn preserves_slash_qualified_model_in_provider_request()
         .await;
 
     // Act
-    let response = router(Provider::Muse, &server)?
+    let response = router("muse/team/custom-model", &server)
         .execute(request("muse/team/custom-model")?)
         .await?;
 
@@ -166,7 +169,7 @@ async fn routes_qwen_and_validates_local_json_schema() -> Result<(), Box<dyn std
         .await;
 
     // Act
-    let error = router(Provider::Qwen, &server)?
+    let error = router("qwen/qwen-plus", &server)
         .execute(request("qwen/qwen-plus")?)
         .await
         .expect_err("schema violation must fail locally");
@@ -216,7 +219,7 @@ async fn returns_generic_tool_calls_for_caller_execution() -> Result<(), Box<dyn
     }
 
     // Act
-    let result = router(Provider::Muse, &server)?
+    let result = router("muse/muse-spark-1.3", &server)
         .execute(request)
         .await
         .expect("advertised tool call must decode");
@@ -251,7 +254,7 @@ async fn returns_unadvertised_tool_calls_for_the_caller_to_answer()
         .await;
 
     // Act
-    let result = router(Provider::Muse, &server)?
+    let result = router("muse/muse-spark-1.3", &server)
         .execute(lookup_request()?)
         .await
         .expect("unadvertised tool call must decode");
@@ -289,7 +292,7 @@ async fn returns_malformed_tool_calls_and_replays_them_as_json_objects()
     if let ag_router::Task::Chat(chat) = &mut request.task {
         chat.tools.push(lookup);
     }
-    let router = router(Provider::Muse, &server)?;
+    let router = router("muse/muse-spark-1.3", &server);
 
     // Act
     let result = router.execute(request.clone()).await?;
@@ -342,11 +345,11 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
     // Arrange
     let notes = "Notes: src/a.rs defines alpha_one. Next I read src/b.rs.";
     let cases = [
-        (Provider::Kimi, "kimi/kimi-k2.6", Some("session-1")),
-        (Provider::Muse, "muse/muse-spark-1.3", Some("session-1")),
-        (Provider::Qwen, "qwen/qwen3.8-max", None),
+        ("kimi/kimi-k2.6", Some("session-1")),
+        ("muse/muse-spark-1.3", Some("session-1")),
+        ("qwen/qwen3.8-max", None),
     ];
-    for (provider, model, sent_cache_key) in cases {
+    for (model, sent_cache_key) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -373,7 +376,7 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
             ));
         }
         request.options.prompt_cache_key = Some("session-1".to_string());
-        let router = router(provider, &server)?;
+        let router = router(model, &server);
 
         // Act
         let Completion::ToolCalls { calls, .. } = router.execute(request.clone()).await? else {
@@ -424,7 +427,7 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
 async fn rejects_unknown_provider_before_network() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
     let server = MockServer::start().await;
-    let router = router(Provider::Muse, &server)?;
+    let router = router("muse/muse-spark-1.3", &server);
 
     // Act
     let error = router
@@ -491,7 +494,7 @@ async fn replays_image_and_batched_function_history_for_kimi()
     request.options.reasoning_effort = Some(ag_router::ReasoningEffort::High);
 
     // Act
-    let router = router(Provider::Kimi, &server)?;
+    let router = router("kimi/kimi-k2.6", &server);
     let response = router.execute(request.clone()).await?;
     request.options.reasoning_effort = Some(ag_router::ReasoningEffort::Low);
     let low_response = router.execute(request).await?;
@@ -524,23 +527,13 @@ async fn sends_prompt_cache_key_only_to_providers_that_route_by_it()
 -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
     let cases = [
-        (
-            "muse/muse-spark-1.3",
-            Provider::Muse,
-            Some("session-key"),
-            true,
-        ),
-        ("muse/muse-spark-1.3", Provider::Muse, None, false),
-        ("kimi/kimi-k3", Provider::Kimi, Some("session-key"), true),
-        (
-            "qwen/qwen3.8-max",
-            Provider::Qwen,
-            Some("session-key"),
-            false,
-        ),
+        ("muse/muse-spark-1.3", Some("session-key"), true),
+        ("muse/muse-spark-1.3", None, false),
+        ("kimi/kimi-k3", Some("session-key"), true),
+        ("qwen/qwen3.8-max", Some("session-key"), false),
     ];
 
-    for (model, provider, key, expected) in cases {
+    for (model, key, expected) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -552,7 +545,7 @@ async fn sends_prompt_cache_key_only_to_providers_that_route_by_it()
         request.options.prompt_cache_key = key.map(str::to_string);
 
         // Act
-        router(provider, &server)?.execute(request).await?;
+        router(model, &server).execute(request).await?;
         let requests = server
             .received_requests()
             .await
@@ -580,12 +573,12 @@ async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
         "required": ["answer"]
     }))?;
     let cases = [
-        ("qwen/qwen3.8-max", Provider::Qwen, true),
-        ("kimi/kimi-k3", Provider::Kimi, true),
-        ("muse/muse-spark-1.3", Provider::Muse, false),
+        ("qwen/qwen3.8-max", true),
+        ("kimi/kimi-k3", true),
+        ("muse/muse-spark-1.3", false),
     ];
 
-    for (model, provider, keeps_prefix) in cases {
+    for (model, keeps_prefix) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -593,7 +586,7 @@ async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
             .expect(1)
             .mount(&server)
             .await;
-        let router = router(provider, &server)?;
+        let router = router(model, &server);
         let mut request = request(model)?;
         request.options.prefix_schema = Some(prefix.clone());
 
@@ -625,7 +618,7 @@ async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
         }
     }
     assert!(matches!(
-        Router::new([])?.keeps_prefix_across_schemas("qwen/qwen3.8-max"),
+        Router::new([]).keeps_prefix_across_schemas("qwen/qwen3.8-max"),
         Err(ModelError::UnknownProvider)
     ));
 
@@ -635,7 +628,6 @@ async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
 /// Returns the router error for one request answered with `status` and
 /// `body`.
 async fn failure(
-    provider: Provider,
     model: &str,
     status: u16,
     body: &str,
@@ -649,7 +641,7 @@ async fn failure(
         .mount(&server)
         .await;
 
-    match router(provider, &server)?.execute(request(model)?).await {
+    match router(model, &server).execute(request(model)?).await {
         Ok(_) => Err("unsuccessful response must fail".into()),
         Err(error) => Ok(error),
     }
@@ -661,35 +653,30 @@ async fn classifies_live_context_overflow_bodies_per_provider()
     // Arrange
     let cases = [
         (
-            Provider::Kimi,
             "kimi/kimi-k2.6",
             include_str!("fixtures/context_overflow/kimi-k2.6.json"),
         ),
         (
-            Provider::Muse,
             "muse/muse-spark-1.3",
             include_str!("fixtures/context_overflow/muse-spark-1.3.json"),
         ),
         (
-            Provider::Qwen,
             "qwen/qwen3.8-max",
             include_str!("fixtures/context_overflow/qwen3.8-max.json"),
         ),
         (
-            Provider::Qwen,
             "qwen/qwen-plus",
             include_str!("fixtures/context_overflow/qwen-plus.json"),
         ),
         (
-            Provider::OpenAiCompatible,
             "openai-compatible/qwen3:latest",
             include_str!("fixtures/context_overflow/llama.cpp-qwen3.json"),
         ),
     ];
 
-    for (provider, model, body) in cases {
+    for (model, body) in cases {
         // Act
-        let error = failure(provider, model, 400, body).await?;
+        let error = failure(model, 400, body).await?;
 
         // Assert
         assert_eq!(error.error_class(), ErrorClass::ContextOverflow, "{model}");
@@ -707,8 +694,8 @@ async fn classifies_payload_too_large_and_shared_markers_as_context_overflow()
     let openai_overflow = r#"{"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens."}}"#;
 
     // Act
-    let too_large = failure(Provider::Muse, "muse/muse-spark-1.3", 413, "<html>").await?;
-    let shared_marker = failure(Provider::Qwen, "qwen/qwen-plus", 422, openai_overflow).await?;
+    let too_large = failure("muse/muse-spark-1.3", 413, "<html>").await?;
+    let shared_marker = failure("qwen/qwen-plus", 422, openai_overflow).await?;
 
     // Assert
     assert!(too_large.is_context_overflow());
@@ -727,9 +714,9 @@ async fn keeps_other_provider_failures_out_of_context_overflow()
 
     // Act
     let failures = [
-        failure(Provider::Muse, "muse/muse-spark-1.3", 400, muse_validation).await?,
-        failure(Provider::Muse, "muse/muse-spark-1.3", 400, kimi_overflow).await?,
-        failure(Provider::Kimi, "kimi/kimi-k2.6", 500, kimi_overflow).await?,
+        failure("muse/muse-spark-1.3", 400, muse_validation).await?,
+        failure("muse/muse-spark-1.3", 400, kimi_overflow).await?,
+        failure("kimi/kimi-k2.6", 500, kimi_overflow).await?,
     ];
 
     // Assert
@@ -990,7 +977,7 @@ async fn rejects_terminal_incomplete_and_unsupported_tool_call_completions()
             .await;
 
         // Act
-        let error = router(Provider::Muse, &server)?
+        let error = router("muse/muse-spark-1.3", &server)
             .execute(lookup_request()?)
             .await
             .expect_err("unsupported completion must fail");
@@ -1042,7 +1029,9 @@ async fn replays_assistant_system_reasoning_and_single_tool_call_history()
     }
 
     // Act
-    router(Provider::Muse, &server)?.execute(request).await?;
+    router("muse/muse-spark-1.3", &server)
+        .execute(request)
+        .await?;
     let body = received_body(&server, 0).await?;
     let messages = body["messages"]
         .as_array()
@@ -1070,21 +1059,13 @@ async fn sends_the_output_bound_in_each_providers_field() -> Result<(), Box<dyn 
 {
     // Arrange
     let cases = [
-        (
-            "muse/muse-spark-1.3",
-            Provider::Muse,
-            "max_completion_tokens",
-        ),
-        ("kimi/kimi-k3", Provider::Kimi, "max_tokens"),
-        ("qwen/qwen3.8-max", Provider::Qwen, "max_tokens"),
-        (
-            "openai-compatible/qwen3:8b",
-            Provider::OpenAiCompatible,
-            "max_tokens",
-        ),
+        ("muse/muse-spark-1.3", "max_completion_tokens"),
+        ("kimi/kimi-k3", "max_tokens"),
+        ("qwen/qwen3.8-max", "max_tokens"),
+        ("openai-compatible/qwen3:8b", "max_tokens"),
     ];
 
-    for (model, provider, field) in cases {
+    for (model, field) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -1092,7 +1073,7 @@ async fn sends_the_output_bound_in_each_providers_field() -> Result<(), Box<dyn 
             .expect(2)
             .mount(&server)
             .await;
-        let router = router(provider, &server)?;
+        let router = router(model, &server);
         let mut bounded = request(model)?;
         bounded.options.max_output_tokens = NonZeroU32::new(512);
 
@@ -1145,7 +1126,7 @@ async fn answers_text_requests_with_unvalidated_text_and_marked_instructions()
     );
 
     // Act
-    let completion = router(Provider::Kimi, &server)?.execute(request).await?;
+    let completion = router("kimi/kimi-k3", &server).execute(request).await?;
     let body = received_body(&server, 0).await?;
 
     // Assert
@@ -1232,7 +1213,7 @@ async fn rejects_a_blank_text_answer() -> Result<(), Box<dyn std::error::Error>>
     );
 
     // Act
-    let result = router(Provider::Kimi, &server)?.execute(request).await;
+    let result = router("kimi/kimi-k3", &server).execute(request).await;
 
     // Assert
     let Err(error) = result else {
@@ -1254,7 +1235,7 @@ async fn keeps_the_cached_prefix_and_key_across_turn_instructions()
         .expect(3)
         .mount(&server)
         .await;
-    let router = router(Provider::Kimi, &server)?;
+    let router = router("kimi/kimi-k3", &server);
     let history = vec![
         ModelMessage::User("Who wrote it?".to_string()),
         ModelMessage::Assistant(r#"{"name":"Ada"}"#.to_string()),

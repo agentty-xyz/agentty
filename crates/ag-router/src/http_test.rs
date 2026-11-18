@@ -6,6 +6,7 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 use std::time::Duration;
 
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 
 use super::{
@@ -31,12 +32,11 @@ fn transport(request_timeout: Duration) -> HttpTransport {
 }
 
 /// Returns an authenticated request with an empty body to `address`.
-fn request(address: std::net::SocketAddr) -> ProviderRequest<'static> {
-    ProviderRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    )
+fn request(address: std::net::SocketAddr) -> ProviderRequest {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer test-key"));
+
+    ProviderRequest::new(headers, format!("http://{address}"), serde_json::json!({}))
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn context_overflow_markers_match_case_insensitively() {
     assert!(has_context_overflow_marker(shared, &[]));
     assert!(has_context_overflow_marker(
         provider,
-        &["exceeds the context window"]
+        &["exceeds the context window".to_string()]
     ));
     assert!(!has_context_overflow_marker(provider, &[]));
 }

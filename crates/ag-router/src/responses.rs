@@ -12,6 +12,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,6 +21,7 @@ use crate::http::{
     deserialize_optional,
 };
 use crate::model::{GeneratedResponse, ModelErrorType};
+use crate::provider_spec::{ProviderSpec, ReasoningMapping};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Bound for one whole streamed response. Long reasoning at the highest
@@ -28,96 +30,38 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(30);
 /// Longest silence tolerated on an open stream, matching Codex CLI's default
 /// stream idle timeout.
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
-/// Smallest `max_output_tokens` the Responses API accepts.
-const MIN_MAX_OUTPUT_TOKENS: u32 = 16;
 /// Stream events whose `response` ends the stream.
 const TERMINAL_EVENTS: [&str; 3] = [
     "response.completed",
     "response.failed",
     "response.incomplete",
 ];
+/// Path of the Responses endpoint under a provider base URL.
+pub(crate) const ENDPOINT_PATH: &str = "responses";
 
-/// Provider policy applied by the Responses backend.
-#[derive(Clone, Copy)]
-pub(crate) struct ResponsesProviderPolicy {
-    /// Lowercase provider-specific body markers of a context-window
-    /// overflow, checked beside the markers every provider shares.
-    pub(crate) context_overflow_markers: &'static [&'static str],
-    pub(crate) display_name: &'static str,
-    /// Whether the backend accepts `max_output_tokens`; the ChatGPT-plan
-    /// backend rejects it.
-    pub(crate) max_output_tokens: bool,
-    pub(crate) reasoning_effort: fn(model::ReasoningEffort) -> &'static str,
-    pub(crate) unsupported_schema_reason: &'static str,
-}
-
-/// Structured-output backend for the `OpenAI` Responses API.
-pub(crate) struct ResponsesBackend {
-    api_key: Option<String>,
-    base_url: String,
+/// Structured-output backend for the `OpenAI` Responses API, applying the
+/// request policy of one [`ProviderSpec`].
+pub(crate) struct ResponsesBackend<'spec> {
+    headers: HeaderMap,
     http: Arc<HttpTransport>,
     model: String,
-    policy: ResponsesProviderPolicy,
+    policy: &'spec ProviderSpec,
 }
 
-impl ResponsesBackend {
-    /// Creates a backend sending requests through `http`.
+impl<'spec> ResponsesBackend<'spec> {
+    /// Creates a backend sending `headers` through `http`.
     pub(crate) fn new(
-        api_key: Option<String>,
-        base_url: String,
+        policy: &'spec ProviderSpec,
         model: String,
-        policy: ResponsesProviderPolicy,
+        headers: HeaderMap,
         http: Arc<HttpTransport>,
     ) -> Self {
         Self {
-            api_key,
-            base_url,
+            headers,
             http,
             model,
             policy,
         }
-    }
-
-    /// Requires an object root, the only root structured outputs accept.
-    pub(crate) fn validate_schema(
-        &self,
-        schema: &schema_contract::OutputSchema,
-    ) -> Result<(), model::ModelError> {
-        if !schema.has_object_root() {
-            return Err(model::ModelError::UnsupportedOutputSchema {
-                reason: self.policy.unsupported_schema_reason.to_string(),
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Rejects an output-token bound the backend does not accept: any bound
-    /// where the policy forbids one, and one below
-    /// [`MIN_MAX_OUTPUT_TOKENS`], which the Responses API answers with a
-    /// `400`.
-    pub(crate) fn validate_generation(
-        &self,
-        options: &model::GenerationOptions,
-    ) -> Result<(), model::ModelError> {
-        let Some(max_output_tokens) = options.max_output_tokens else {
-            return Ok(());
-        };
-        let reason = if !self.policy.max_output_tokens {
-            format!(
-                "{} does not accept an output-token bound",
-                self.policy.display_name
-            )
-        } else if max_output_tokens.get() < MIN_MAX_OUTPUT_TOKENS {
-            format!(
-                "{} requires an output-token bound of at least {MIN_MAX_OUTPUT_TOKENS}",
-                self.policy.display_name
-            )
-        } else {
-            return Ok(());
-        };
-
-        Err(model::ModelError::UnsupportedGeneration { reason })
     }
 
     /// Generates raw structured output, or plain text for a request without
@@ -126,22 +70,35 @@ impl ResponsesBackend {
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        if let Some(schema) = request.schema() {
-            self.validate_schema(schema)?;
+        for message in request.messages() {
+            if let model::ModelMessage::UserInput(input) = message {
+                self.policy.validate_input(&self.model, input)?;
+            }
         }
-        self.validate_generation(&request.options)?;
         let payload = ResponsesPayload {
             include: ["reasoning.encrypted_content"],
             input: Self::input(request),
             max_output_tokens: request.options.max_output_tokens.map(NonZeroU32::get),
             model: &self.model,
             parallel_tool_calls: true,
-            prompt_cache_key: request.options.prompt_cache_key.as_deref(),
-            reasoning: request
-                .model_reasoning_effort()
-                .map(|effort| ReasoningPayload {
-                    effort: (self.policy.reasoning_effort)(effort),
-                }),
+            prompt_cache_key: self
+                .policy
+                .prompt_cache_key
+                .then_some(request.options.prompt_cache_key.as_deref())
+                .flatten(),
+            reasoning: match &self.policy.reasoning {
+                ReasoningMapping::Effort(names) => {
+                    request
+                        .model_reasoning_effort()
+                        .map(|effort| ReasoningPayload {
+                            effort: names.name(effort),
+                        })
+                }
+                // The router rejects the other mappings for this protocol.
+                ReasoningMapping::None
+                | ReasoningMapping::EnableThinking
+                | ReasoningMapping::Thinking(_) => None,
+            },
             store: false,
             stream: true,
             text: request.response_format.as_ref().map(|format| TextPayload {
@@ -155,25 +112,22 @@ impl ResponsesBackend {
             tools: request.tools().iter().map(FunctionTool::from).collect(),
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
-        let request_body =
-            ProviderRequest::new(self.api_key.as_deref(), endpoint(&self.base_url), payload);
+        let request_body = ProviderRequest::new(
+            self.headers.clone(),
+            self.policy.endpoint(ENDPOINT_PATH),
+            payload,
+        );
         let response = self.create(&request_body).await.map_err(|error| {
-            error.into_model_error(
-                self.policy.display_name,
-                self.policy.context_overflow_markers,
-            )
+            error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
         })?;
 
         Ok(self.decode(response))
     }
 
-    async fn create(
-        &self,
-        request: &ProviderRequest<'_>,
-    ) -> Result<ResponsesResponse, TransportError> {
+    async fn create(&self, request: &ProviderRequest) -> Result<ResponsesResponse, TransportError> {
         let mut response = self.http.send(request).await?;
         let mut events = EventStream::default();
-        while let Some(chunk) = response.chunk().await.map_err(TransportError::transport)? {
+        while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
             if let Some(response) = events.push(&chunk)? {
                 return Ok(response);
             }
@@ -307,14 +261,12 @@ impl ResponsesBackend {
             failure.code.as_deref().unwrap_or_default(),
             failure.message.as_deref().unwrap_or_default()
         );
-        let error_type = if http::has_context_overflow_marker(
-            &description,
-            self.policy.context_overflow_markers,
-        ) {
-            ModelErrorType::ContextOverflow
-        } else {
-            ModelErrorType::Provider
-        };
+        let error_type =
+            if http::has_context_overflow_marker(&description, &self.policy.overflow_markers) {
+                ModelErrorType::ContextOverflow
+            } else {
+                ModelErrorType::Provider
+            };
 
         model::ModelError::classified_request(
             error_type,
@@ -322,7 +274,7 @@ impl ResponsesBackend {
             Box::new(StreamedFailure {
                 code: failure.code.unwrap_or_else(|| "unknown".to_string()),
                 message: schema_contract::bounded_diagnostic(failure.message.unwrap_or_default()),
-                provider: self.policy.display_name,
+                provider: self.policy.display_name.clone(),
             }),
         )
     }
@@ -432,11 +384,6 @@ impl ResponsesBackend {
 
         Ok(decoded)
     }
-}
-
-/// Builds the Responses endpoint for a provider base URL.
-pub(crate) fn endpoint(base_url: &str) -> String {
-    format!("{}/responses", base_url.trim_end_matches('/'))
 }
 
 /// Creates the production streaming transport for Responses requests.
@@ -610,7 +557,7 @@ struct StreamClosed;
 struct StreamedFailure {
     code: String,
     message: String,
-    provider: &'static str,
+    provider: String,
 }
 
 #[derive(Serialize)]
@@ -624,7 +571,7 @@ struct ResponsesPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<ReasoningPayload>,
+    reasoning: Option<ReasoningPayload<'a>>,
     store: bool,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -634,8 +581,8 @@ struct ResponsesPayload<'a> {
 }
 
 #[derive(Serialize)]
-struct ReasoningPayload {
-    effort: &'static str,
+struct ReasoningPayload<'a> {
+    effort: &'a str,
 }
 
 #[derive(Serialize)]

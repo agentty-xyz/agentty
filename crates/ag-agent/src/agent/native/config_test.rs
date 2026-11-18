@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::lifecycle::LifecycleEvent;
-use ag_harness::model::{ModelProfile, ModelRequest, ReasoningEffort};
+use ag_harness::model::{ModelMetadata, ModelProfile, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
@@ -404,7 +404,10 @@ fn openai_compatible_registration_uses_the_declared_profile() {
         40_960
     );
     assert_eq!(
-        registration.metadata().map(|metadata| metadata.provider()),
+        registration
+            .metadata()
+            .as_ref()
+            .map(ModelMetadata::provider),
         Some("openai_compatible")
     );
     assert!(

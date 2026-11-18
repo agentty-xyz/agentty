@@ -57,8 +57,12 @@ dispatch through the public API.
 
 ## Add a Built-in `ag-router` Model
 
-1. Add the model's wire capabilities and reasoning mapping in `ag-router`, with local
-   HTTP tests for schema format, capabilities, reasoning fields, and error mapping.
+1. Add the model's wire capabilities and reasoning mapping to its `ProviderSpec` preset
+   in `crates/ag-router/src/preset.rs`. A provider that needs no new wire behavior needs
+   no code: hosts describe it with a `ProviderSpec`.
+1. Add local HTTP tests for schema format, capabilities, reasoning fields, and error
+   mapping, and a golden request to the protocol's conformance suite under
+   `crates/ag-router/tests/`.
 1. Expose it through `ag-harness` configuration only if the harness supports its
    capabilities.
 1. To offer it in Agentty Harness sessions, add it to the `Harness` entries of the

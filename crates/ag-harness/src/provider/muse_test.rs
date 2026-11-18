@@ -509,7 +509,7 @@ async fn rejects_schemas_without_explicit_object_root() {
     assert!(matches!(
         error,
         model::ModelError::UnsupportedOutputSchema { reason }
-            if reason == "Muse structured output requires an explicit object root schema"
+            if reason == "Meta Model API structured output requires an explicit object root schema"
     ));
     assert!(
         server

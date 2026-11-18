@@ -6,11 +6,10 @@
 //! derives the [`ContextBudget`] bounding every request through model-aware
 //! history projection.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -34,7 +33,7 @@ pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-use crate::provider;
+use crate::provider::{self, ProviderSpec, ProviderSpecError};
 #[cfg(feature = "providers-openai")]
 use crate::provider::{ChatGptConfig, OpenAiConfig};
 #[cfg(feature = "providers-compat")]
@@ -172,13 +171,9 @@ impl ModelClient {
     /// empty or contains only whitespace.
     #[cfg(feature = "providers-compat")]
     pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
-        Self::routed(
-            ag_router::Provider::Kimi,
-            Some(config.api_key),
-            config.base_url,
-            &config.model,
-            None,
-        )
+        let model = config.model.clone();
+
+        Self::routed(ProviderSpec::kimi(config), &model, None)
     }
 
     /// Creates a client backed by Meta's Model API for Muse models.
@@ -189,13 +184,9 @@ impl ModelClient {
     /// empty or contains only whitespace.
     #[cfg(feature = "providers-compat")]
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
-        Self::routed(
-            ag_router::Provider::Muse,
-            Some(config.api_key),
-            config.base_url,
-            &config.model,
-            None,
-        )
+        let model = config.model.clone();
+
+        Self::routed(ProviderSpec::muse(config), &model, None)
     }
 
     /// Creates a client backed by `OpenAI`'s Responses API. Requests are
@@ -210,14 +201,9 @@ impl ModelClient {
     #[cfg(feature = "providers-openai")]
     pub fn openai(config: OpenAiConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::openai_profile(&config.model);
+        let model = config.model.clone();
 
-        Self::routed(
-            ag_router::Provider::OpenAi,
-            Some(config.api_key),
-            config.base_url,
-            &config.model,
-            profile,
-        )
+        Self::routed(ProviderSpec::openai(config), &model, profile)
     }
 
     /// Creates a client for `OpenAI`'s Responses API billed to the user's
@@ -232,17 +218,9 @@ impl ModelClient {
     #[cfg(feature = "providers-openai")]
     pub fn chatgpt(config: ChatGptConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::chatgpt_profile(&config.model);
+        let model = config.model.clone();
 
-        Self::routed_with_credential(
-            ag_router::Provider::ChatGpt,
-            None,
-            Some(Arc::new(ag_router::chatgpt::ChatGptAuth::new(
-                config.auth_file,
-            ))),
-            config.base_url,
-            &config.model,
-            profile,
-        )
+        Self::routed(ProviderSpec::chatgpt(config), &model, profile)
     }
 
     /// Creates a client backed by a local or self-hosted server implementing
@@ -257,13 +235,9 @@ impl ModelClient {
     /// empty or contains only whitespace.
     #[cfg(feature = "providers-compat")]
     pub fn openai_compatible(config: OpenAiCompatibleConfig) -> Result<Self, ModelMetadataError> {
-        Self::routed(
-            ag_router::Provider::OpenAiCompatible,
-            config.api_key,
-            config.base_url,
-            &config.model,
-            None,
-        )
+        let model = config.model.clone();
+
+        Self::routed(ProviderSpec::openai_compatible(config), &model, None)
     }
 
     /// Creates a client backed by Alibaba Cloud Model Studio's Qwen API.
@@ -275,14 +249,36 @@ impl ModelClient {
     #[cfg(feature = "providers-compat")]
     pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::qwen_profile(&config.model);
+        let model = config.model.clone();
 
-        Self::routed(
-            ag_router::Provider::Qwen,
-            Some(config.api_key),
-            config.base_url,
-            &config.model,
-            profile,
-        )
+        Self::routed(ProviderSpec::qwen(config), &model, profile)
+    }
+
+    /// Creates a client for `model` served by any provider `spec` describes,
+    /// such as an OpenAI-compatible gateway with its own headers or query
+    /// parameters. The client declares no context profile, so hosts set the
+    /// budget explicitly; telemetry and persisted metadata carry
+    /// [`ProviderSpec::name`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderSpecError::Metadata`] when the provider name or
+    /// model identifier is blank, [`ProviderSpecError::Invalid`] when no
+    /// request can be sent with `spec` (see [`ProviderSpec::validate`]), and
+    /// [`ProviderSpecError::ModelMismatch`] when `spec` is a preset built
+    /// for another model.
+    pub fn from_spec(spec: ProviderSpec, model: &str) -> Result<Self, ProviderSpecError> {
+        spec.validate()?;
+        if let Some(served) = spec.model()
+            && served != model
+        {
+            return Err(ProviderSpecError::ModelMismatch {
+                served: served.to_string(),
+                requested: model.to_string(),
+            });
+        }
+
+        Ok(Self::routed(spec, model, None)?)
     }
 
     /// Returns the validated provider and model identity retained by the
@@ -358,31 +354,14 @@ impl ModelClient {
     }
 
     fn routed(
-        provider: ag_router::Provider,
-        api_key: Option<String>,
-        base_url: String,
+        spec: ProviderSpec,
         model: &str,
         profile: Option<ModelProfile>,
     ) -> Result<Self, ModelMetadataError> {
-        Self::routed_with_credential(provider, api_key, None, base_url, model, profile)
-    }
-
-    fn routed_with_credential(
-        provider: ag_router::Provider,
-        api_key: Option<String>,
-        credential: Option<Arc<dyn ag_router::BearerCredential>>,
-        base_url: String,
-        model: &str,
-        profile: Option<ModelProfile>,
-    ) -> Result<Self, ModelMetadataError> {
-        let metadata = ModelMetadata::new(provider_telemetry_name(provider), model)?;
-        let router_model = format!("{}/{model}", provider.as_str());
-        let router = ag_router::Router::single(ag_router::ProviderConfig {
-            provider,
-            api_key,
-            base_url,
-            credential,
-        });
+        let (name, reasoning_family, spec) = spec.into_parts();
+        let metadata = ModelMetadata::new(name, model)?.with_reasoning_family(reasoning_family);
+        let router_model = format!("{}/{model}", spec.id());
+        let router = ag_router::Router::new([spec]);
 
         Ok(Self {
             router,
@@ -424,14 +403,9 @@ impl ModelClient {
             None => ag_router::ModelRequest::text_chat(&self.router_model, messages, tools),
         };
         routed.options.max_output_tokens = request.generation().max_output_tokens;
-        routed.options.reasoning_effort =
-            request.model_reasoning_effort().map(|effort| match effort {
-                ReasoningEffort::Low => ag_router::ReasoningEffort::Low,
-                ReasoningEffort::Medium => ag_router::ReasoningEffort::Medium,
-                ReasoningEffort::High => ag_router::ReasoningEffort::High,
-                ReasoningEffort::XHigh => ag_router::ReasoningEffort::XHigh,
-                ReasoningEffort::Max => ag_router::ReasoningEffort::Max,
-            });
+        routed.options.reasoning_effort = request
+            .model_reasoning_effort()
+            .map(ReasoningEffort::to_router);
         routed
             .options
             .prompt_cache_key
@@ -628,22 +602,6 @@ impl ModelClient {
     }
 }
 
-/// Returns the stable provider name that telemetry and persisted model
-/// metadata use. `ChatGPT` billing stays apart from `OpenAI` API billing so a
-/// resumed session keeps its billing, and OpenAI-compatible servers, which
-/// `gen_ai` semantic conventions do not enumerate, get their own name.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
-    match provider {
-        ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
-        ag_router::Provider::Muse => telemetry::PROVIDER_META,
-        ag_router::Provider::ChatGpt => telemetry::PROVIDER_OPENAI_CHATGPT,
-        ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
-        ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
-        ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
-    }
-}
-
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 #[async_trait]
 impl Model for ModelClient {
@@ -704,20 +662,23 @@ impl Model for ModelClient {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelMetadata {
     model: String,
-    provider: &'static str,
+    provider: Cow<'static, str>,
+    reasoning_family: ReasoningFamily,
 }
 
 impl ModelMetadata {
-    /// Creates metadata for one provider model.
+    /// Creates metadata for one provider model, in the reasoning family
+    /// [`ReasoningFamily::for_provider`] assigns its provider name.
     ///
     /// # Errors
     ///
     /// Returns [`ModelMetadataError`] when `provider` or `model` is empty or
     /// contains only whitespace.
     pub fn new(
-        provider: &'static str,
+        provider: impl Into<Cow<'static, str>>,
         model: impl Into<String>,
     ) -> Result<Self, ModelMetadataError> {
+        let provider = provider.into();
         if provider.trim().is_empty() {
             return Err(ModelMetadataError::EmptyProvider);
         }
@@ -725,8 +686,21 @@ impl ModelMetadata {
         if model.trim().is_empty() {
             return Err(ModelMetadataError::EmptyModel);
         }
+        let reasoning_family = ReasoningFamily::for_provider(&provider);
 
-        Ok(Self { model, provider })
+        Ok(Self {
+            model,
+            provider,
+            reasoning_family,
+        })
+    }
+
+    /// Returns this metadata in `reasoning_family`.
+    #[must_use]
+    pub fn with_reasoning_family(mut self, reasoning_family: ReasoningFamily) -> Self {
+        self.reasoning_family = reasoning_family;
+
+        self
     }
 
     /// Returns the model identifier sent to the provider.
@@ -735,8 +709,67 @@ impl ModelMetadata {
     }
 
     /// Returns the provider identifier used by telemetry.
-    pub fn provider(&self) -> &'static str {
-        self.provider
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// Returns the reasoning family that decides which recorded turns this
+    /// model replays with their provider reasoning intact.
+    pub fn reasoning_family(&self) -> &ReasoningFamily {
+        &self.reasoning_family
+    }
+
+    /// Returns whether a turn the model `model` of the provider named
+    /// `provider` recorded belongs to this model's reasoning family.
+    pub(crate) fn shares_reasoning_with(&self, provider: &str, model: &str) -> bool {
+        let same_provider = provider == self.provider;
+        match &self.reasoning_family {
+            ReasoningFamily::Provider => same_provider,
+            ReasoningFamily::Model => same_provider && model == self.model,
+            ReasoningFamily::Providers(providers) => {
+                same_provider || providers.iter().any(|name| name == provider)
+            }
+        }
+    }
+}
+
+/// Which recorded turns a model replays with their provider reasoning
+/// intact: turns of a model in its reasoning family. After a model switch,
+/// turns another family recorded replay their reasoning as short notes,
+/// because one provider cannot read another's reasoning encoding.
+///
+/// Recorded turns name only their provider and model, so a family is
+/// matched against those names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ReasoningFamily {
+    /// Every model reported under this model's provider name.
+    Provider,
+    /// Only this model, for a provider name that covers unrelated servers,
+    /// such as every OpenAI-compatible server.
+    Model,
+    /// Every model reported under this model's provider name or one of these
+    /// provider names, such as `OpenAI` models reached with an API key and
+    /// those billed to a `ChatGPT` plan, which share encrypted `Responses`
+    /// reasoning items.
+    Providers(Vec<Cow<'static, str>>),
+}
+
+impl ReasoningFamily {
+    /// Returns the family of the built-in provider named `provider`: the
+    /// two `OpenAI` providers share one, each OpenAI-compatible model is its
+    /// own, and every other provider name groups its models.
+    pub fn for_provider(provider: &str) -> Self {
+        match provider {
+            telemetry::PROVIDER_OPENAI => {
+                Self::Providers(vec![Cow::Borrowed(telemetry::PROVIDER_OPENAI_CHATGPT)])
+            }
+            telemetry::PROVIDER_OPENAI_CHATGPT => {
+                Self::Providers(vec![Cow::Borrowed(telemetry::PROVIDER_OPENAI)])
+            }
+            telemetry::PROVIDER_OPENAI_COMPATIBLE => Self::Model,
+            _ => Self::Provider,
+        }
     }
 }
 
@@ -1091,6 +1124,18 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::XHigh => "xhigh",
             Self::Max => "max",
+        }
+    }
+
+    /// Returns the router's equivalent effort.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    pub(crate) const fn to_router(self) -> ag_router::ReasoningEffort {
+        match self {
+            Self::Low => ag_router::ReasoningEffort::Low,
+            Self::Medium => ag_router::ReasoningEffort::Medium,
+            Self::High => ag_router::ReasoningEffort::High,
+            Self::XHigh => ag_router::ReasoningEffort::XHigh,
+            Self::Max => ag_router::ReasoningEffort::Max,
         }
     }
 }

@@ -1495,7 +1495,8 @@ async fn classifies_router_transport_failure() {
     // Arrange
     let client = ModelClient::muse(MuseConfig {
         api_key: "test-key".to_string(),
-        base_url: "not-a-url".to_string(),
+        // Nothing listens on the discard port, so the connection is refused.
+        base_url: "http://127.0.0.1:9/v1".to_string(),
         model: "muse-spark-1.3".to_string(),
     })
     .expect("valid model identity");
@@ -1505,7 +1506,7 @@ async fn classifies_router_transport_failure() {
     let error = client
         .complete(ModelRequest::new("hello", schema))
         .await
-        .expect_err("invalid URL must fail transport");
+        .expect_err("a refused connection must fail transport");
 
     // Assert
     assert_eq!(error.error_type(), ModelErrorType::Transport);
