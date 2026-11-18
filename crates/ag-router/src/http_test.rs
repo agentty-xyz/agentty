@@ -1,5 +1,5 @@
 //! HTTP transport tests for body limits, error classification, timeouts, and
-//! rate-limit retries.
+//! the default policy's connection and rate-limit retries.
 
 use std::io;
 use std::io::{Read as _, Write as _};
@@ -389,58 +389,6 @@ fn streaming_transport_keeps_the_whole_request_bound() {
 
     // Assert
     assert_eq!(transport.request_timeout, Duration::from_secs(70));
-}
-
-#[tokio::test]
-async fn retries_rate_limit_response_before_decoding_success() {
-    // Arrange
-    let listener = TcpListener::bind("127.0.0.1:0").expect("retry listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("retry listener should have an address");
-    let success_body =
-        r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"message\":\"ok\"}"}}]}"#;
-    let server = tokio::task::spawn_blocking(move || {
-        for attempt in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .expect("retry listener should accept a request");
-            let mut request = [0; 2_048];
-            assert!(
-                stream.read(&mut request).expect("request should be read") > 0,
-                "retry request should not be empty"
-            );
-            if attempt == 0 {
-                stream
-                    .write_all(
-                        b"HTTP/1.1 429 Too Many Requests\r\n\
-                          Content-Length: 0\r\n\
-                          Retry-After: 0\r\n\
-                          Connection: close\r\n\r\n",
-                    )
-                    .expect("rate-limit response should be written");
-            } else {
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    success_body.len(),
-                    success_body
-                )
-                .expect("success response should be written");
-            }
-        }
-    });
-    let client = transport(REQUEST_TIMEOUT);
-
-    // Act
-    let body = client
-        .post_json::<Value>(&request(address))
-        .await
-        .expect("retry should recover");
-    server.await.expect("retry server should finish");
-
-    // Assert
-    assert_eq!(body["choices"][0]["finish_reason"], "stop");
 }
 
 #[tokio::test]

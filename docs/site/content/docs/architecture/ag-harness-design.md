@@ -343,11 +343,11 @@ the run's event sink around every model request, so a streamed run emits it as
 `Retrying`; cancelling the run drops the request future and its wait. The harness
 `ErrorKind`, exposed through `RunError` and `HarnessError`, maps these failures to
 `RateLimited`, `Overloaded`, `QuotaExceeded`, and `Auth` with a retryable flag and the
-capped `Retry-After`. Provider context-overflow
-rejections map to `ErrorClass::ContextOverflow` so the engine can refit. Invalid final
-output is re-requested a bounded number of times with request-only feedback, and tool
-calls with undecodable arguments are answered with a rejected result instead of failing
-the response. Diagnostics never include model content.
+capped `Retry-After`. Provider context-overflow rejections map to
+`ErrorClass::ContextOverflow` so the engine can refit. Invalid final output is
+re-requested a bounded number of times with request-only feedback, and tool calls with
+undecodable arguments are answered with a rejected result instead of failing the
+response. Diagnostics never include model content.
 
 ## Input and output
 

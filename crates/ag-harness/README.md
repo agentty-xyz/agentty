@@ -282,17 +282,17 @@ let outcome = session
   run ID before the run starts. Each event has the run ID, a gap-free `seq`, and a
   timestamp in Unix milliseconds. Events report the admitted turn with its session, turn
   index, and catalog model ID, assistant text, reasoning, tool calls with their
-  arguments and results, per-request usage and cost, context reductions, each provider
-  retry (`Retrying`, with its attempt, delay, and `ErrorKind`, before the wait), and a
-  successful run's committed `Output` item. `Completed` is always the last event, also
-  after a failure or cancellation; items still open then were interrupted. It follows
-  settlement, so the transcript then holds the terminal status of a run that emitted
-  `Started`, unless persistence cleanup failed. Delivery is lossless: the run waits
-  while the stream is full, so read it while awaiting the outcome. Cancelling still
-  resolves a run whose stream is full. Dropping the stream discards events without
-  stalling the run. Events carry session content, so never export them as telemetry.
-  Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
-  `crates/ag-harness/schema/run_event.json`.
+  arguments and results, per-request usage and cost, context reductions, each retry a
+  built-in client sends (`Retrying`, with its attempt, delay, and `ErrorKind`, before
+  the wait), and a successful run's committed `Output` item. `Completed` is always the
+  last event, also after a failure or cancellation; items still open then were
+  interrupted. It follows settlement, so the transcript then holds the terminal status
+  of a run that emitted `Started`, unless persistence cleanup failed. Delivery is
+  lossless: the run waits while the stream is full, so read it while awaiting the
+  outcome. Cancelling still resolves a run whose stream is full. Dropping the stream
+  discards events without stalling the run. Events carry session content, so never
+  export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`; the
+  schema is committed in `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy
@@ -594,12 +594,12 @@ let model = ModelClient::from_spec(spec)?;
 ```
 
 `ProviderSpec::with_retry` sets the specification's `RetryPolicy`. The default, which
-every preset keeps, retries a `429` up to five times and one connection failure,
-waiting a backoff from one second doubled up to five, or a longer `Retry-After`
-(delta-seconds or an HTTP date, capped at sixty seconds). `with_retried` opts in server
-errors (`500`, `502`-`504`) and an overloaded `529`; other builder methods set the
-attempts, delays, caps, and `Jitter`. A spent quota and a timed-out request are never
-retried, and cancelling a run stops a pending wait.
+every preset keeps, retries a `429` up to five times and one connection failure, waiting
+a backoff from one second doubled up to five, or a longer `Retry-After` (delta-seconds
+or an HTTP date, capped at sixty seconds). `with_retried` opts in server errors (`500`,
+`502`-`504`) and an overloaded `529`; other builder methods set the attempts, delays,
+caps, and `Jitter`. A spent quota and a timed-out request are never retried, and
+cancelling a run stops a pending wait.
 
 The provider name, here `azure_openai`, is what telemetry, persisted sessions, and
 provider errors record, and a built-in provider name keeps its built-in
@@ -759,10 +759,10 @@ let harness = Harness::from_registry(&models, "review-model")?;
 
 Built-in clients accept JSON wrapped in Markdown fences or prose when the embedded
 object parses; anything else fails with `ModelError::InvalidJson`. Requests time out
-after three minutes and retry under the provider's `RetryPolicy`. A
-provider rejection of input beyond the model's window reports
-`ModelErrorType::ContextOverflow` (`ModelError::is_context_overflow`); custom models
-report it with `ModelError::context_overflow`.
+after three minutes and retry under the provider's `RetryPolicy`. A provider rejection
+of input beyond the model's window reports `ModelErrorType::ContextOverflow`
+(`ModelError::is_context_overflow`); custom models report it with
+`ModelError::context_overflow`.
 
 ## Errors
 
@@ -773,8 +773,8 @@ the original error through `get_ref()` and `into_inner()`. Only `RateLimited` (`
 `Overloaded` (`500`, `502`-`504`, `529`), `Transport`, and `Busy` (including a locked or
 saturated store) are retryable; a retryable provider failure also carries its
 `Retry-After` (delta-seconds or an HTTP date) as `retry_after()`, capped by the
-provider's `RetryPolicy`, by default at sixty seconds. A spent quota (`402`, or a
-`429` with OpenAI's `insufficient_quota` or Kimi's `exceeded_current_quota_error`) is
+provider's `RetryPolicy`, by default at sixty seconds. A spent quota (`402`, or a `429`
+with OpenAI's `insufficient_quota` or Kimi's `exceeded_current_quota_error`) is
 `QuotaExceeded`, not retryable, and not retried internally; `401`/`403` are `Auth`.
 Custom models report the same classes with `ModelError::provider` and
 `ModelError::quota_exceeded`. `TurnErrorType` stays the telemetry label.

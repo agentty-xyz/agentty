@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::retry::{Retry, RetryKind, RetryObserver, RetryPolicy};
+use crate::retry::{RetryKind, RetryNotice, RetryObserver, RetryPolicy};
 use crate::{model, schema as schema_contract};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
@@ -306,9 +306,9 @@ impl HttpTransport {
     ) {
         if let Some(observer) = &request.observer {
             observer
-                .retrying(Retry {
+                .retrying(RetryNotice {
+                    after: delay,
                     attempt,
-                    delay,
                     kind,
                     status,
                 })

@@ -73,6 +73,7 @@ fn opt_ins_and_budgets_select_what_is_retried() {
         .with_max_connection_retries(2);
     let none = RetryPolicy::none();
     let single = RetryPolicy::default().with_max_attempts(0);
+    let without_rate_limits = RetryPolicy::default().with_retried(RetryKind::RateLimited, false);
 
     // Act / Assert
     assert!(policy.allows(RetryKind::ServerError, 1, 0));
@@ -89,6 +90,8 @@ fn opt_ins_and_budgets_select_what_is_retried() {
         assert!(!none.allows(kind, 0, 0), "{kind:?}");
     }
     assert!(!single.allows(RetryKind::RateLimited, 0, 0));
+    assert!(!without_rate_limits.allows(RetryKind::RateLimited, 0, 0));
+    assert!(without_rate_limits.allows(RetryKind::Connection, 0, 0));
 }
 
 #[test]

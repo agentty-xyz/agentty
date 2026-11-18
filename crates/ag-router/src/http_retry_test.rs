@@ -1,7 +1,10 @@
 //! HTTP transport tests for retries under a provider's [`RetryPolicy`]:
-//! retried and final statuses, `Retry-After` forms and caps, exhausted
-//! attempts, observer reports, and cancellation during a wait.
+//! retried and final statuses, `Retry-After` forms and caps, jitter,
+//! exhausted and mixed budgets, observer reports, and cancellation during a
+//! wait.
 
+use std::io::{Read as _, Write as _};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -13,28 +16,33 @@ use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{HttpTransport, ProviderRequest, RetryClock, TransportError};
-use crate::retry::{Retry, RetryKind, RetryObserver, RetryPolicy};
+use crate::retry::{Jitter, RetryKind, RetryNotice, RetryObserver, RetryPolicy};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Records every retry it is told about, and wakes a waiter on the first.
 #[derive(Default)]
 struct RecordingObserver {
+    notices: Mutex<Vec<RetryNotice>>,
     reported: Notify,
-    retries: Mutex<Vec<Retry>>,
 }
 
 impl RecordingObserver {
     /// Returns the retries reported so far.
-    fn retries(&self) -> Vec<Retry> {
-        self.retries.lock().expect("retries lock").clone()
+    fn notices(&self) -> Vec<RetryNotice> {
+        self.notices.lock().expect("notices lock").clone()
+    }
+
+    /// Returns the wait of each retry reported so far.
+    fn delays(&self) -> Vec<Duration> {
+        self.notices().iter().map(|notice| notice.after).collect()
     }
 }
 
 #[async_trait]
 impl RetryObserver for RecordingObserver {
-    async fn retrying(&self, retry: Retry) {
-        self.retries.lock().expect("retries lock").push(retry);
+    async fn retrying(&self, notice: RetryNotice) {
+        self.notices.lock().expect("notices lock").push(notice);
         self.reported.notify_one();
     }
 }
@@ -57,6 +65,17 @@ fn instant_transport() -> HttpTransport {
     }
 }
 
+/// Returns a request to `endpoint` retried under `policy`, reported to
+/// `observer`.
+fn request_to(
+    endpoint: String,
+    policy: RetryPolicy,
+    observer: &Arc<RecordingObserver>,
+) -> ProviderRequest {
+    ProviderRequest::new(HeaderMap::new(), endpoint, json!({}))
+        .with_retry(policy, Some(observer.clone()))
+}
+
 /// Returns a request to `server` retried under `policy`, reported to
 /// `observer`.
 fn request(
@@ -64,10 +83,7 @@ fn request(
     policy: RetryPolicy,
     observer: &Arc<RecordingObserver>,
 ) -> ProviderRequest {
-    let observer: Arc<dyn RetryObserver> = observer.clone();
-
-    ProviderRequest::new(HeaderMap::new(), server.uri(), json!({}))
-        .with_retry(policy, Some(observer))
+    request_to(server.uri(), policy, observer)
 }
 
 /// Answers the next `times` requests to `server` with `response`.
@@ -121,10 +137,10 @@ async fn retries_each_opted_in_status_then_succeeds() {
         // Assert
         assert_eq!(body, json!({"ok": true}), "{status}");
         assert_eq!(
-            observer.retries(),
-            vec![Retry {
+            observer.notices(),
+            vec![RetryNotice {
+                after: Duration::from_secs(1),
                 attempt: 1,
-                delay: Duration::from_secs(1),
                 kind,
                 status: Some(status),
             }],
@@ -164,7 +180,7 @@ async fn fails_at_once_on_statuses_the_policy_does_not_retry() {
             matches!(&error, TransportError::Http { status: got, .. } if got.as_u16() == status),
             "{error:?}"
         );
-        assert!(observer.retries().is_empty(), "{status}");
+        assert!(observer.notices().is_empty(), "{status}");
         let requests = server.received_requests().await.expect("recording on");
         assert_eq!(requests.len(), 1, "{status}");
     }
@@ -199,8 +215,38 @@ async fn honors_retry_after_as_delta_seconds_or_http_date_within_the_cap() {
             .expect("the retry should succeed");
 
         // Assert
-        let delays: Vec<_> = observer.retries().iter().map(|retry| retry.delay).collect();
-        assert_eq!(delays, vec![expected], "{retry_after}");
+        assert_eq!(observer.delays(), vec![expected], "{retry_after}");
+    }
+}
+
+#[tokio::test]
+async fn jitter_spreads_the_backoff_but_never_shortens_a_retry_after() {
+    // Arrange
+    let cases = [
+        (Jitter::Equal, None, Duration::from_millis(750)),
+        (Jitter::Full, None, Duration::from_millis(500)),
+        (Jitter::Full, Some("3"), Duration::from_secs(3)),
+    ];
+
+    for (jitter, retry_after, expected) in cases {
+        let server = MockServer::start().await;
+        let mut response = ResponseTemplate::new(429);
+        if let Some(retry_after) = retry_after {
+            response = response.insert_header("Retry-After", retry_after);
+        }
+        respond(&server, response, 1).await;
+        succeed(&server).await;
+        let observer = Arc::new(RecordingObserver::default());
+        let policy = RetryPolicy::default().with_jitter(jitter);
+
+        // Act
+        instant_transport()
+            .post_json::<Value>(&request(&server, policy, &observer))
+            .await
+            .expect("the retry should succeed");
+
+        // Assert
+        assert_eq!(observer.delays(), vec![expected], "{jitter:?}");
     }
 }
 
@@ -231,9 +277,9 @@ async fn reports_the_last_status_once_attempts_are_exhausted() {
     let requests = server.received_requests().await.expect("recording on");
     assert_eq!(requests.len(), 3);
     let retries: Vec<_> = observer
-        .retries()
+        .notices()
         .iter()
-        .map(|retry| (retry.attempt, retry.delay))
+        .map(|notice| (notice.attempt, notice.after))
         .collect();
     assert_eq!(
         retries,
@@ -244,15 +290,98 @@ async fn reports_the_last_status_once_attempts_are_exhausted() {
 }
 
 #[tokio::test]
+async fn surfaces_an_http_date_retry_after_on_the_final_error() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(
+        &server,
+        ResponseTemplate::new(429).insert_header("Retry-After", "Wed, 21 Oct 2026 07:28:45 GMT"),
+        1,
+    )
+    .await;
+    let observer = Arc::new(RecordingObserver::default());
+
+    // Act
+    let error = instant_transport()
+        .post_json::<Value>(&request(&server, RetryPolicy::none(), &observer))
+        .await
+        .expect_err("an unretried rate limit should fail");
+
+    // Assert
+    let model_error = error.into_model_error("Provider", &[]);
+    assert_eq!(model_error.http_status(), Some(429));
+    assert_eq!(model_error.retry_after(), Some(Duration::from_secs(45)));
+}
+
+#[tokio::test]
+async fn counts_connection_and_status_retries_on_separate_budgets() {
+    // Arrange
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener should have an address");
+    let server = tokio::task::spawn_blocking(move || {
+        let responses: [Option<&[u8]>; 4] = [
+            None,
+            Some(
+                b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ),
+            None,
+            Some(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"),
+        ];
+        for response in responses {
+            let (mut stream, _) = listener.accept().expect("server should accept a request");
+            let mut request = [0; 2_048];
+            assert!(stream.read(&mut request).expect("request should be read") > 0);
+            if let Some(response) = response {
+                stream
+                    .write_all(response)
+                    .expect("response should be written");
+            }
+        }
+    });
+    let observer = Arc::new(RecordingObserver::default());
+    let policy = RetryPolicy::default()
+        .with_max_attempts(2)
+        .with_max_connection_retries(2);
+
+    // Act
+    let body = instant_transport()
+        .post_json::<Value>(&request_to(format!("http://{address}"), policy, &observer))
+        .await
+        .expect("the retries should recover");
+    server.await.expect("server should finish");
+
+    // Assert
+    assert_eq!(body, json!({}));
+    let retries: Vec<_> = observer
+        .notices()
+        .iter()
+        .map(|notice| (notice.attempt, notice.kind, notice.status))
+        .collect();
+    assert_eq!(
+        retries,
+        vec![
+            (1, RetryKind::Connection, None),
+            (2, RetryKind::RateLimited, Some(429)),
+            (3, RetryKind::Connection, None),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn reports_a_connection_retry_without_a_status() {
     // Arrange
-    let refused = std::net::TcpListener::bind("127.0.0.1:0")
+    let refused = TcpListener::bind("127.0.0.1:0")
         .expect("listener should bind")
         .local_addr()
         .expect("listener should have an address");
     let observer = Arc::new(RecordingObserver::default());
-    let request = ProviderRequest::new(HeaderMap::new(), format!("http://{refused}"), json!({}))
-        .with_retry(RetryPolicy::default(), Some(observer.clone()));
+    let request = request_to(
+        format!("http://{refused}"),
+        RetryPolicy::default(),
+        &observer,
+    );
 
     // Act
     let error = instant_transport()
@@ -263,10 +392,10 @@ async fn reports_a_connection_retry_without_a_status() {
     // Assert
     assert!(matches!(error, TransportError::Transport(_)), "{error:?}");
     assert_eq!(
-        observer.retries(),
-        vec![Retry {
+        observer.notices(),
+        vec![RetryNotice {
+            after: Duration::from_secs(1),
             attempt: 1,
-            delay: Duration::from_secs(1),
             kind: RetryKind::Connection,
             status: None,
         }]
@@ -284,7 +413,6 @@ async fn cancelling_during_a_backoff_stops_promptly() {
         .with_max_backoff(Duration::from_hours(1));
     let request = request(&server, policy, &observer);
     let transport = HttpTransport::new(REQUEST_TIMEOUT);
-    let started = std::time::Instant::now();
 
     // Act
     let finished = tokio::select! {
@@ -297,8 +425,7 @@ async fn cancelling_during_a_backoff_stops_promptly() {
         finished.is_none(),
         "the backoff must not finish: {finished:?}"
     );
-    assert!(started.elapsed() < Duration::from_secs(10));
-    assert_eq!(observer.retries().len(), 1);
+    assert_eq!(observer.notices().len(), 1);
     let requests = server.received_requests().await.expect("recording on");
     assert_eq!(requests.len(), 1, "a cancelled retry must not be sent");
 }

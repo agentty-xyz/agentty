@@ -19,6 +19,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use super::ModelClient;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use super::RetryEvents;
 use super::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
     ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse, ProviderStatus,
@@ -1577,4 +1579,36 @@ fn reasoning_messages_route_with_their_answer_and_reasoning() {
             reasoning_content: "reasoning".to_string(),
         }
     );
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn retry_kinds_report_the_failure_kind_their_final_error_would() {
+    // Arrange
+    let cases = [
+        (
+            ag_router::RetryKind::RateLimited,
+            crate::ErrorKind::RateLimited,
+        ),
+        (
+            ag_router::RetryKind::ServerError,
+            crate::ErrorKind::Overloaded,
+        ),
+        (
+            ag_router::RetryKind::Overloaded,
+            crate::ErrorKind::Overloaded,
+        ),
+        (
+            ag_router::RetryKind::Connection,
+            crate::ErrorKind::Transport,
+        ),
+    ];
+
+    for (kind, expected) in cases {
+        // Act
+        let reported = RetryEvents::error_kind(kind);
+
+        // Assert
+        assert_eq!(reported, expected, "{kind:?}");
+    }
 }

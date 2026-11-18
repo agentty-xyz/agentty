@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, Jitter, JsonSchemaFormat,
-    ModelError, ModelMessage, ModelRequest, OutputSchema, Retry, RetryKind, RetryObserver,
+    ModelError, ModelMessage, ModelRequest, OutputSchema, RetryKind, RetryNotice, RetryObserver,
     RetryPolicy, Router, ToolCall, ToolDefinition, TurnInput, preset,
 };
 use serde_json::{Value, json};
@@ -1283,13 +1283,13 @@ async fn keeps_the_cached_prefix_and_key_across_turn_instructions()
 
 /// Records the retries a router reports.
 #[derive(Default)]
-struct RecordedRetries(std::sync::Mutex<Vec<Retry>>);
+struct RecordedRetries(std::sync::Mutex<Vec<RetryNotice>>);
 
 #[async_trait::async_trait]
 impl RetryObserver for RecordedRetries {
-    async fn retrying(&self, retry: Retry) {
-        if let Ok(mut retries) = self.0.lock() {
-            retries.push(retry);
+    async fn retrying(&self, notice: RetryNotice) {
+        if let Ok(mut notices) = self.0.lock() {
+            notices.push(notice);
         }
     }
 }
@@ -1335,7 +1335,7 @@ async fn retries_an_opted_in_overload_under_the_spec_policy_and_reports_it()
     assert_eq!(retries[0].attempt, 1);
     assert_eq!(retries[0].kind, RetryKind::Overloaded);
     assert_eq!(retries[0].status, Some(529));
-    assert!(retries[0].delay <= Duration::from_millis(1));
+    assert!(retries[0].after <= Duration::from_millis(1));
 
     Ok(())
 }

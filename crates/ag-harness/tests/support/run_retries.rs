@@ -69,6 +69,7 @@ fn retries(events: &[RunEvent]) -> Vec<(u32, ErrorKind, Duration)> {
                 after,
                 attempt,
                 kind,
+                ..
             } => Some((*attempt, *kind, *after)),
             _ => None,
         })
@@ -118,15 +119,18 @@ async fn streams_each_retry_before_the_run_completes() -> Result<(), Box<dyn Err
             (2, ErrorKind::Overloaded, Duration::from_millis(2)),
         ]
     );
-    let retrying = events
+    let last_retrying = events
         .iter()
-        .position(|event| matches!(event.kind, RunEventKind::Retrying { .. }))
+        .rposition(|event| matches!(event.kind, RunEventKind::Retrying { .. }))
         .ok_or("a retry is streamed")?;
     let requested = events
         .iter()
         .position(|event| matches!(event.kind, RunEventKind::ModelRequestCompleted { .. }))
         .ok_or("the request completes")?;
-    assert!(retrying < requested);
+    assert!(
+        last_retrying < requested,
+        "every retry precedes the request's completion"
+    );
     assert!(matches!(
         events.last().map(|event| &event.kind),
         Some(RunEventKind::Completed(summary)) if summary.error.is_none()

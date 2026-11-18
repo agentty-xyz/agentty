@@ -40,13 +40,13 @@ impl RetryKind {
         }
     }
 
-    /// Returns the position of this kind in [`RetryPolicy`]'s retried set.
-    const fn index(self) -> usize {
+    /// Returns this kind's bit in [`RetryPolicy`]'s retried set.
+    const fn bit(self) -> u8 {
         match self {
-            Self::RateLimited => 0,
-            Self::ServerError => 1,
-            Self::Overloaded => 2,
-            Self::Connection => 3,
+            Self::RateLimited => 1,
+            Self::ServerError => 1 << 1,
+            Self::Overloaded => 1 << 2,
+            Self::Connection => 1 << 3,
         }
     }
 }
@@ -93,6 +93,11 @@ impl Jitter {
 /// errors (`500`, `502`-`504`) and an overloaded `529` are opt-ins through
 /// [`Self::with_retried`]; a spent quota (`402`, or a `429` reporting one)
 /// and a timed-out request are never retried.
+///
+/// Unsuccessful statuses and connection failures have separate budgets: a
+/// call sends at most [`Self::with_max_attempts`] requests answered with
+/// retried statuses, and retries at most
+/// [`Self::with_max_connection_retries`] connection failures beside them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RetryPolicy {
@@ -102,34 +107,18 @@ pub struct RetryPolicy {
     max_backoff: Duration,
     max_connection_retries: u32,
     max_retry_after: Duration,
-    /// Whether each [`RetryKind`], by its [`RetryKind::index`], is retried.
-    retried: [bool; 4],
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        let mut retried = [false; 4];
-        retried[RetryKind::RateLimited.index()] = true;
-        retried[RetryKind::Connection.index()] = true;
-
-        Self {
-            base_delay: Duration::from_secs(1),
-            jitter: Jitter::None,
-            max_attempts: 6,
-            max_backoff: Duration::from_secs(5),
-            max_connection_retries: 1,
-            max_retry_after: Duration::from_mins(1),
-            retried,
-        }
-    }
+    /// The [`RetryKind::bit`]s of the retried kinds.
+    retried: u8,
 }
 
 impl RetryPolicy {
-    /// Returns a policy that retries nothing.
+    /// Returns a policy that retries nothing, with the default delays and
+    /// budgets for any kind [`Self::with_retried`] turns back on.
     pub fn none() -> Self {
-        Self::default()
-            .with_retried(RetryKind::RateLimited, false)
-            .with_retried(RetryKind::Connection, false)
+        Self {
+            retried: 0,
+            ..Self::default()
+        }
     }
 
     /// Sets the backoff before the first status retry, doubled for each
@@ -149,8 +138,10 @@ impl RetryPolicy {
         self
     }
 
-    /// Sets the most requests sent for one call answered with retried
-    /// statuses, the first included; `0` reads as `1`, sending no retry.
+    /// Sets the most requests one call sends while each is answered with a
+    /// retried status, the first included, so at most `max_attempts - 1`
+    /// status retries; `0` reads as `1`, retrying no status. Connection
+    /// retries do not count against it.
     #[must_use]
     pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
         self.max_attempts = max_attempts.max(1);
@@ -167,7 +158,9 @@ impl RetryPolicy {
     }
 
     /// Sets how many connection failures one call retries, beside its
-    /// status retries.
+    /// status attempts; they are retried only while
+    /// [`RetryKind::Connection`] is, so `0` and turning that kind off both
+    /// disable them.
     #[must_use]
     pub fn with_max_connection_retries(mut self, max_connection_retries: u32) -> Self {
         self.max_connection_retries = max_connection_retries;
@@ -188,7 +181,11 @@ impl RetryPolicy {
     /// Sets whether failures of `kind` are retried.
     #[must_use]
     pub fn with_retried(mut self, kind: RetryKind, retried: bool) -> Self {
-        self.retried[kind.index()] = retried;
+        if retried {
+            self.retried |= kind.bit();
+        } else {
+            self.retried &= !kind.bit();
+        }
 
         self
     }
@@ -209,7 +206,7 @@ impl RetryPolicy {
             }
         };
 
-        self.retried[kind.index()] && within_budget
+        self.retried & kind.bit() != 0 && within_budget
     }
 
     /// Returns the provider's `Retry-After` in `headers`, read as
@@ -256,15 +253,30 @@ impl RetryPolicy {
     }
 }
 
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            base_delay: Duration::from_secs(1),
+            jitter: Jitter::None,
+            max_attempts: 6,
+            max_backoff: Duration::from_secs(5),
+            max_connection_retries: 1,
+            max_retry_after: Duration::from_mins(1),
+            retried: RetryKind::RateLimited.bit() | RetryKind::Connection.bit(),
+        }
+    }
+}
+
 /// One retry a transport is about to wait for, reported to a
 /// [`RetryObserver`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct Retry {
-    /// One-based number of this retry within its call.
-    pub attempt: u32,
+pub struct RetryNotice {
     /// How long the transport waits before sending the retry.
-    pub delay: Duration,
+    pub after: Duration,
+    /// One-based number of this retry within its call, counting status and
+    /// connection retries together.
+    pub attempt: u32,
     /// The failure being retried.
     pub kind: RetryKind,
     /// HTTP status of the failed response, or `None` for a connection
@@ -276,9 +288,9 @@ pub struct Retry {
 /// shows a run waiting out a rate limit.
 #[async_trait]
 pub trait RetryObserver: Send + Sync {
-    /// Reports `retry`; the transport waits for this call before its delay,
-    /// and cancelling the request while either runs stops the call.
-    async fn retrying(&self, retry: Retry);
+    /// Reports `notice`; the transport waits for this call before its
+    /// delay, and cancelling the request while either runs stops the call.
+    async fn retrying(&self, notice: RetryNotice);
 }
 
 #[cfg(test)]

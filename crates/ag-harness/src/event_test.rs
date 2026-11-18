@@ -443,6 +443,30 @@ fn retrying_encodes_its_delay_in_milliseconds_matching_the_schema() -> Result<()
     Ok(())
 }
 
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn retrying_reads_its_delay_to_the_millisecond_as_the_wire_does() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let jittered = Duration::new(1, 234_567_891);
+
+    // Act
+    let kind = RunEventKind::retrying(jittered, 1, ErrorKind::Overloaded);
+    let decoded: RunEventKind = serde_json::from_value(serde_json::to_value(&kind)?)?;
+
+    // Assert
+    assert_eq!(
+        kind,
+        RunEventKind::Retrying {
+            after: Duration::from_millis(1_234),
+            attempt: 1,
+            kind: ErrorKind::Overloaded,
+        }
+    );
+    assert_eq!(decoded, kind);
+
+    Ok(())
+}
+
 #[test]
 fn budget_failures_carry_their_limit_beside_a_string_kind() -> Result<(), Box<dyn Error>> {
     // Arrange

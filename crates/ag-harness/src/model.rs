@@ -679,21 +679,30 @@ impl Model for ModelClient {
 struct RetryEvents(Arc<EventSink>);
 
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-#[async_trait]
-impl ag_router::RetryObserver for RetryEvents {
-    async fn retrying(&self, retry: ag_router::Retry) {
-        let kind = match retry.kind {
+impl RetryEvents {
+    /// Returns the failure kind a retry of `kind` reports: `5xx` statuses
+    /// read as [`ErrorKind::Overloaded`], as their final failure would.
+    /// The router's retry kinds are non-exhaustive; a kind added there is
+    /// mapped here in the same change, and until then reads as overloaded.
+    fn error_kind(kind: ag_router::RetryKind) -> ErrorKind {
+        match kind {
             ag_router::RetryKind::RateLimited => ErrorKind::RateLimited,
             ag_router::RetryKind::Connection => ErrorKind::Transport,
             _ => ErrorKind::Overloaded,
-        };
+        }
+    }
+}
 
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[async_trait]
+impl ag_router::RetryObserver for RetryEvents {
+    async fn retrying(&self, notice: ag_router::RetryNotice) {
         self.0
-            .emit(RunEventKind::Retrying {
-                after: retry.delay,
-                attempt: retry.attempt,
-                kind,
-            })
+            .emit(RunEventKind::retrying(
+                notice.after,
+                notice.attempt,
+                Self::error_kind(notice.kind),
+            ))
             .await;
     }
 }

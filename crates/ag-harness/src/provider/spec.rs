@@ -298,11 +298,17 @@ impl Jitter {
 /// opt-ins through [`Self::with_retried`]; a spent quota (`402`, or a `429`
 /// reporting one) and a timed-out request are never retried. Cancelling a
 /// run stops a pending wait.
+///
+/// Unsuccessful statuses and connection failures have separate budgets: a
+/// model request sends at most [`Self::with_max_attempts`] requests
+/// answered with retried statuses, and retries at most
+/// [`Self::with_max_connection_retries`] connection failures beside them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RetryPolicy(ag_router::RetryPolicy);
 
 impl RetryPolicy {
-    /// Returns a policy that retries nothing.
+    /// Returns a policy that retries nothing, with the default delays and
+    /// budgets for any kind [`Self::with_retried`] turns back on.
     pub fn none() -> Self {
         Self(ag_router::RetryPolicy::none())
     }
@@ -320,8 +326,10 @@ impl RetryPolicy {
         Self(self.0.with_jitter(jitter.to_router()))
     }
 
-    /// Sets the most requests sent for one model request answered with
-    /// retried statuses, the first included; `0` reads as `1`.
+    /// Sets the most requests one model request sends while each is
+    /// answered with a retried status, the first included, so at most
+    /// `max_attempts - 1` status retries; `0` reads as `1`, retrying no
+    /// status. Connection retries do not count against it.
     #[must_use]
     pub fn with_max_attempts(self, max_attempts: u32) -> Self {
         Self(self.0.with_max_attempts(max_attempts))
@@ -334,7 +342,9 @@ impl RetryPolicy {
     }
 
     /// Sets how many connection failures one model request retries, beside
-    /// its status retries.
+    /// its status attempts; they are retried only while
+    /// [`RetryKind::Connection`] is, so `0` and turning that kind off both
+    /// disable them.
     #[must_use]
     pub fn with_max_connection_retries(self, max_connection_retries: u32) -> Self {
         Self(self.0.with_max_connection_retries(max_connection_retries))
@@ -676,6 +686,15 @@ impl ProviderSpec {
         self
     }
 
+    /// Sets how failed requests are retried; every specification, preset
+    /// or not, starts from [`RetryPolicy::default`].
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.spec = self.spec.with_retry(retry.0);
+
+        self
+    }
+
     /// Sets how the provider is asked for structured output.
     #[must_use]
     pub fn with_structured_output(mut self, structured_output: StructuredOutputMode) -> Self {
@@ -691,15 +710,6 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_tool_result_name(mut self, tool_result_name: bool) -> Self {
         self.spec = self.spec.with_tool_result_name(tool_result_name);
-
-        self
-    }
-
-    /// Sets how failed requests are retried; every specification, preset
-    /// or not, starts from [`RetryPolicy::default`].
-    #[must_use]
-    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
-        self.spec = self.spec.with_retry(retry.0);
 
         self
     }

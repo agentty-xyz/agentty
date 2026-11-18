@@ -466,20 +466,20 @@ impl ProviderSpec {
         self
     }
 
-    /// Sets how failed requests are retried; every specification starts
-    /// from [`RetryPolicy::default`].
-    #[must_use]
-    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
-        self.retry = retry;
-
-        self
-    }
-
     /// Sets whether Chat Completions requests that advertise tools also
     /// carry the response format; many providers reject the combination.
     #[must_use]
     pub fn with_response_format_with_tools(mut self, response_format_with_tools: bool) -> Self {
         self.response_format_with_tools = response_format_with_tools;
+
+        self
+    }
+
+    /// Sets how failed requests are retried; every specification starts
+    /// from [`RetryPolicy::default`].
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
 
         self
     }

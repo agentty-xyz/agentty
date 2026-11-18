@@ -234,12 +234,21 @@ pub enum RunEventKind {
     /// turn's [`crate::turn::HistoryActivity`] counts what its first request
     /// still evicted.
     Compacted(CompactionReport),
-    /// A model request failed transiently and is retried after `after`, as
-    /// its provider's [`crate::provider::RetryPolicy`] allows; emitted
-    /// before the wait, so cancelling the run then stops it. A request that
-    /// still fails after its last retry fails the run with that failure.
+    /// A model request of the run, a turn request or a compaction or round
+    /// summary request, failed transiently and is retried after `after`, as
+    /// its provider's [`crate::provider::RetryPolicy`] allows. It is
+    /// emitted before the wait, so cancelling the run then stops it. A turn
+    /// request that still fails after its last retry fails the run; a
+    /// summary request's failure is handled as that summary's failure.
+    ///
+    /// Only the built-in [`crate::model::ModelClient`] reports retries, and
+    /// only from the task that sends the request; a custom
+    /// [`crate::Model`] that retries on its own emits none. Later fields
+    /// may be added, so match it with `..`.
+    #[non_exhaustive]
     Retrying {
-        /// Delay before the retry is sent; on the wire, whole milliseconds.
+        /// Delay before the retry is sent, to the millisecond; on the wire,
+        /// whole milliseconds.
         #[schemars(with = "u64")]
         #[serde(
             deserialize_with = "RunEventKind::deserialize_after",
@@ -247,6 +256,7 @@ pub enum RunEventKind {
         )]
         after: Duration,
         /// One-based number of this retry within its model request.
+        #[schemars(range(min = 1))]
         attempt: u32,
         /// The failure being retried: [`ErrorKind::RateLimited`] for a
         /// `429`, [`ErrorKind::Overloaded`] for a `5xx`, or
@@ -263,10 +273,26 @@ pub enum RunEventKind {
 }
 
 impl RunEventKind {
+    /// Returns a [`Self::Retrying`] event whose delay is truncated to the
+    /// millisecond, so the event reads the same in process and on the wire.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    pub(crate) fn retrying(after: Duration, attempt: u32, kind: ErrorKind) -> Self {
+        Self::Retrying {
+            after: Duration::from_millis(Self::whole_millis(after)),
+            attempt,
+            kind,
+        }
+    }
+
     /// Encodes a [`Self::Retrying`] delay as whole milliseconds, saturating
     /// at `u64::MAX`.
     fn serialize_after<S: Serializer>(after: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u64(u64::try_from(after.as_millis()).unwrap_or(u64::MAX))
+        serializer.serialize_u64(Self::whole_millis(*after))
+    }
+
+    /// Returns `duration` in whole milliseconds, saturating at `u64::MAX`.
+    fn whole_millis(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
     }
 
     /// Decodes a [`Self::Retrying`] delay from milliseconds.
