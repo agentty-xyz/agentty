@@ -13,8 +13,9 @@ use tokio::sync::mpsc;
 
 use super::super::{
     AUTO_COMMIT_ERROR_TRUNCATED_SECTION_MARKER, AutoCommitOutcome,
-    COMMIT_MESSAGE_MAX_PROVIDER_CALLS, SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER,
-    SessionTaskService, append_agentty_coauthor_trailer, compact_commit_error_for_assist,
+    COMMIT_MESSAGE_MAX_PROVIDER_CALLS, CommitPromptEvidence,
+    SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER, SessionCommitMode, SessionTaskService,
+    append_agentty_coauthor_trailer, compact_commit_error_for_assist, cumulative_commit_message,
 };
 use super::support::{commit_fallback_transcript, insert_review_session, one_shot_submission};
 use crate::app::AppEvent;
@@ -25,6 +26,11 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::COMMITTING_PROGRESS_LABEL;
 use crate::domain::session_message::SessionTranscript;
+
+/// Evolving session commit on an unpublished branch forked from `main`.
+const UNPUBLISHED: SessionCommitMode<'static> = SessionCommitMode::Evolving {
+    base_branch: "main",
+};
 
 #[tokio::test]
 /// Verifies commit helper failure appends a commit error message without
@@ -257,6 +263,128 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     }));
 }
 
+#[tokio::test]
+/// Verifies a published session gets one new commit per turn, described from
+/// the changes pending on `HEAD`, and keeps its session-wide title.
+async fn test_handle_auto_commit_adds_follow_up_commit_to_published_branch() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_is_worktree_clean()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    mock_git_client
+        .expect_diff()
+        .times(1)
+        .withf(|_, evidence_base| evidence_base == "HEAD")
+        .returning(|_, _| Box::pin(async { Ok("+review fix".to_string()) }));
+    mock_git_client.expect_has_commits_since().never();
+    mock_git_client.expect_head_commit_message().never();
+    mock_git_client
+        .expect_commit_all_preserving_single_commit()
+        .never();
+    mock_git_client
+        .expect_commit_all()
+        .times(1)
+        .withf(|_, commit_message| commit_message.starts_with("Address review feedback"))
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_head_short_hash()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+    mock_git_client
+        .expect_check_pre_commit_hook_ready()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(1).returning(|request| {
+        assert!(request.prompt.contains("one follow-up commit"));
+
+        Ok(one_shot_submission("Address review feedback", 0, 0))
+    });
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+    database
+        .sessions()
+        .update_session_title("session-id", "Add login flow")
+        .await
+        .expect("failed to set session title");
+    database
+        .sessions()
+        .update_session_published_upstream_ref("session-id", Some("origin/wt/session".to_string()))
+        .await
+        .expect("failed to publish session branch");
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let context = AssistContext {
+        app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
+        child_pid: Arc::new(Mutex::new(None)),
+        db: database.clone(),
+        folder: PathBuf::from("project"),
+        git_client: Arc::new(mock_git_client),
+        id: "session-id".to_string(),
+        run_client: Arc::new(run_client),
+        session_agent: model_fixture::codex_selection(),
+        session_update_versions: Arc::default(),
+        transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+    };
+
+    // Act
+    let outcome = SessionTaskService::handle_auto_commit(context).await;
+
+    // Assert
+    assert!(matches!(
+        outcome,
+        AutoCommitOutcome::Committed(ref commit) if commit.is_follow_up
+    ));
+    let session = database
+        .sessions()
+        .load_session("session-id")
+        .await
+        .expect("session should load")
+        .expect("session should exist");
+    assert_eq!(session.title.as_deref(), Some("Add login flow"));
+}
+
+#[test]
+/// Verifies one branch message keeps the session commit unchanged until
+/// follow-up commits exist, then lists their titles before the trailer.
+fn test_cumulative_commit_message_lists_follow_up_titles() {
+    // Arrange
+    let session_message = format!(
+        "Add login flow\n\n- Add the form\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}"
+    );
+    let prose_message = "Add login flow\n\nExplain the flow.".to_string();
+    let follow_up_messages = [
+        "Address review feedback\n\n- Rename the handler".to_string(),
+        "Fix the lint failure".to_string(),
+    ];
+    let published_messages = [vec![session_message.clone()], follow_up_messages.to_vec()].concat();
+    let prose_messages = [prose_message, follow_up_messages[1].clone()];
+
+    // Act
+    let no_message = cumulative_commit_message(&[]);
+    let unpublished_message = cumulative_commit_message(std::slice::from_ref(&session_message));
+    let published_message = cumulative_commit_message(&published_messages);
+    let published_prose_message = cumulative_commit_message(&prose_messages);
+
+    // Assert
+    assert_eq!(no_message, None);
+    assert_eq!(unpublished_message, Some(session_message));
+    assert_eq!(
+        published_message,
+        Some(format!(
+            "Add login flow\n\n- Add the form\n- Address review feedback\n- Fix the lint \
+             failure\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}"
+        ))
+    );
+    assert_eq!(
+        published_prose_message.as_deref(),
+        Some("Add login flow\n\nExplain the flow.\n\n- Fix the lint failure")
+    );
+}
+
 /// Verifies a missing configured hook emits an advisory after a successful
 /// normal commit instead of turning the commit into a failure, while other
 /// hook-inspection failures stay out of the transcript.
@@ -450,7 +578,10 @@ async fn commit_generation_bounds_oversized_diff_and_existing_message_without_su
         ),
         &client,
         true,
-        false,
+        CommitPromptEvidence {
+            fallback: false,
+            follow_up: false,
+        },
     )
     .await
     .expect("operation should succeed");
@@ -554,7 +685,10 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
         ),
         &run_client,
         false,
-        false,
+        CommitPromptEvidence {
+            fallback: false,
+            follow_up: false,
+        },
     )
     .await
     .expect_err("plain-text one-shot commit message should fail");
@@ -611,7 +745,10 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
             ),
             &run_client,
             false,
-            false,
+            CommitPromptEvidence {
+                fallback: false,
+                follow_up: false,
+            },
         )
         .await
         .expect("blank answer should fall back to a commit title");
@@ -755,7 +892,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
         let outcome = SessionTaskService::commit_session_changes(
             &git_client,
             Path::new("project"),
-            "main",
+            UNPUBLISHED,
             (
                 model_fixture::codex_selection(),
                 ReasoningLevel::Low,
@@ -918,7 +1055,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
     let outcome = SessionTaskService::commit_session_changes(
         &git_client,
         Path::new("project"),
-        "main",
+        UNPUBLISHED,
         (
             model_fixture::codex_selection(),
             ReasoningLevel::Low,
@@ -965,7 +1102,7 @@ async fn commit_message_generation_records_its_utility_purpose() {
     let outcome = SessionTaskService::commit_session_changes(
         &git_client,
         Path::new("project"),
-        "main",
+        UNPUBLISHED,
         (
             model_fixture::codex_selection(),
             ReasoningLevel::Low,
@@ -1015,7 +1152,7 @@ async fn commit_fallback_cannot_reset_an_exhausted_provider_budget() {
     let result = SessionTaskService::commit_session_changes(
         &git_client,
         Path::new("project"),
-        "main",
+        UNPUBLISHED,
         (
             model_fixture::codex_selection(),
             ReasoningLevel::Low,
@@ -1056,7 +1193,10 @@ async fn oversized_rendered_commit_prompt_is_rejected_before_provider_submission
         ),
         &client,
         false,
-        false,
+        CommitPromptEvidence {
+            fallback: false,
+            follow_up: false,
+        },
     )
     .await;
     // Assert

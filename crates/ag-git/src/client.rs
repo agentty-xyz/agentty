@@ -13,17 +13,17 @@ use super::sync::{
 };
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
-    commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
-    delete_branch, detect_git_info, diff, diff_changed_files, diff_stats, fetch_remote,
-    find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    has_merge_conflicts, has_unmerged_paths, head_commit_message, head_hash, head_short_hash,
-    in_progress_operation, is_rebase_in_progress, is_worktree_clean, list_conflicted_files,
-    list_local_commit_titles, list_staged_conflict_marker_files, list_upstream_commit_titles,
-    main_checkout_working_tree, main_repo_root, pull_rebase, push_current_branch,
-    push_current_branch_to_new_remote_branch, push_current_branch_to_remote_branch, rebase,
-    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
-    remove_worktree, repo_url, run_pre_commit_hook, squash_merge, squash_merge_diff, stage_all,
-    sync, tracked_worktree_status, worktree_status,
+    commit_all_preserving_single_commit, commit_messages_since, create_worktree,
+    current_upstream_reference, delete_branch, detect_git_info, diff, diff_changed_files,
+    diff_stats, fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind,
+    has_commits_since, has_merge_conflicts, has_unmerged_paths, head_commit_message, head_hash,
+    head_short_hash, in_progress_operation, is_rebase_in_progress, is_worktree_clean,
+    list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
+    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
+    push_current_branch, push_current_branch_to_new_remote_branch,
+    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
+    ref_hash, remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
+    squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -358,6 +358,17 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         base_branch: String,
     ) -> GitFuture<Result<bool, GitError>>;
+
+    /// Returns the full messages of the `HEAD` commits not reachable from
+    /// `base_branch`, oldest first.
+    ///
+    /// # Errors
+    /// Returns an error when commit history cannot be read.
+    fn commit_messages_since(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<Vec<String>, GitError>>;
 
     /// Performs a `pull --rebase` in `repo_path`.
     ///
@@ -764,6 +775,14 @@ impl GitClient for RealGitClient {
         base_branch: String,
     ) -> GitFuture<Result<bool, GitError>> {
         Box::pin(async move { has_commits_since(repo_path, base_branch).await })
+    }
+
+    fn commit_messages_since(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<Vec<String>, GitError>> {
+        Box::pin(async move { commit_messages_since(repo_path, base_branch).await })
     }
 
     fn pull_rebase(&self, repo_path: PathBuf) -> GitFuture<Result<PullRebaseResult, GitError>> {

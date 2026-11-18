@@ -1565,6 +1565,30 @@ pub(crate) async fn has_commits_since(
     .await?
 }
 
+/// Returns the full messages of the `HEAD` commits that are not reachable from
+/// `base_branch`, oldest first.
+///
+/// # Errors
+/// Returns a [`GitError`] if commit history cannot be read.
+pub(crate) async fn commit_messages_since(
+    repo_path: PathBuf,
+    base_branch: String,
+) -> Result<Vec<String>, GitError> {
+    let git_output = run_git_command(
+        repo_path,
+        vec![
+            "log".to_string(),
+            "--reverse".to_string(),
+            "--format=%B%x00".to_string(),
+            format!("{base_branch}..HEAD"),
+        ],
+        "Git log failed".to_string(),
+    )
+    .await?;
+
+    Ok(parse_commit_messages(&git_output))
+}
+
 /// Parses one `git rev-list --count` output counted from `base_branch`.
 fn parse_commit_count(rev_list_output: &str, base_branch: &str) -> Result<u32, GitError> {
     rev_list_output.trim().parse::<u32>().map_err(|error| {
@@ -1572,6 +1596,16 @@ fn parse_commit_count(rev_list_output: &str, base_branch: &str) -> Result<u32, G
             "Failed to parse commit count since base branch `{base_branch}`: {error}"
         ))
     })
+}
+
+/// Parses NUL-terminated commit messages from `git log` output.
+fn parse_commit_messages(output: &str) -> Vec<String> {
+    output
+        .split('\0')
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// Parses newline-delimited commit subjects from `git log` output.

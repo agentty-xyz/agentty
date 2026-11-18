@@ -27,7 +27,7 @@ use super::support::{
     new_test_app_with_git_and_db, register_session_backend, session_replay_text,
     wait_for_output_contains, wait_for_path_absent, wait_for_status,
 };
-use crate::app::session::workflow::task::SessionTaskService;
+use crate::app::session::workflow::task::{SessionCommitMode, SessionTaskService};
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{SessionState, Tab};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -1005,7 +1005,9 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     let outcome = SessionTaskService::commit_session_changes(
         &mock_git_client,
         &session_folder,
-        "main",
+        SessionCommitMode::Evolving {
+            base_branch: "main",
+        },
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Low,
@@ -1021,6 +1023,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     // Assert
     assert_eq!(outcome.commit_hash, "def5678");
     assert_eq!(outcome.commit_message, "Refine session work");
+    assert!(!outcome.is_follow_up);
 }
 
 #[tokio::test]

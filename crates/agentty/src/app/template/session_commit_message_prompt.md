@@ -1,5 +1,14 @@
 Generate the canonical session commit message using the supplied context below.
 
+{% if follow_up %}
+
+The session branch is already published, so this message is for one follow-up commit on
+top of it. The context below covers only the changes since the last commit, and earlier
+commits record the prior session work. Describe only those latest changes; do not
+restate earlier work, even when chat history mentions it.
+
+{% endif %}
+
 {% if fallback %}
 
 The diff exceeds the agent's input limit. Use only the changed file list, chat history
@@ -11,10 +20,10 @@ work was completed.
 
 {% else %}
 
-Use the cumulative session diff below. It may contain bounded per-file excerpts with
-explicit omission markers. Describe only supported changes; omitted details are unknown.
-Do not retrieve a replacement full diff or file contents, except the repository
-commit-message guidance requested below.
+Use the {% if follow_up %}follow-up{% else %}cumulative session{% endif %} diff below.
+It may contain bounded per-file excerpts with explicit omission markers. Describe only
+supported changes; omitted details are unknown. Do not retrieve a replacement full diff
+or file contents, except the repository commit-message guidance requested below.
 
 {% endif %}
 
