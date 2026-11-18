@@ -15,7 +15,9 @@ inventories, routine tests, formatting, and mechanical refactors.
 ## Project impact
 
 <!--
-Material user-facing, operational, or maintenance consequences: migration,
-compatibility, configuration, performance, or breaking changes. Delete this whole
-section when the change has none; do not write "N/A".
+Required on every PR. State the concrete effect on users, operators, or maintainers:
+visible behavior or UX changes, workflow or tooling changes, migration, compatibility,
+configuration, performance, or breaking changes. One or two sentences or short
+bullets; when nothing breaks or needs migration, say so explicitly. Do not write "N/A"
+or delete this section.
 -->
