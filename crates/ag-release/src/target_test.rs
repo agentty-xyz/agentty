@@ -95,3 +95,23 @@ fn node_names_follow_the_triple() {
         assert_eq!(names, (platform, arch), "{target}");
     }
 }
+
+#[test]
+fn display_names_name_the_platform() {
+    // Arrange
+    let targets = Target::ALL;
+
+    // Act
+    let names = targets.map(Target::display_name);
+
+    // Assert
+    assert_eq!(
+        names,
+        [
+            "Apple Silicon macOS",
+            "ARM64 Linux",
+            "Intel macOS",
+            "x64 Linux"
+        ]
+    );
+}

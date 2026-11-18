@@ -2,9 +2,10 @@
 
 `ag-release` plans and packages GitHub releases of the binaries in a Cargo workspace. It
 reads its configuration from `Cargo.toml`, prints a release plan (a JSON document that
-release workflows consume), builds deterministic archives, and assembles the
-release-wide checksums and manifest. It is a small, project-agnostic replacement for a
-`dist` (`cargo-dist`) `dist-workspace.toml` setup.
+release workflows consume), builds deterministic archives, assembles the release-wide
+checksums and manifest, and writes the GitHub release notes from `CHANGELOG.md`. It is a
+small, project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml`
+setup.
 
 ## Quick Start
 
@@ -17,7 +18,8 @@ release-wide checksums and manifest. It is a small, project-agnostic replacement
 1. In the release workflow, run `ag-release build --target <triple>` on each matrix job,
    collect every job's output into one directory, and run
    `ag-release assemble --tag <tag> --artifacts-dir <dir>` on a checkout of the tagged
-   commit. Upload the directory's files to the GitHub release.
+   commit. Create the GitHub release with the title and body that `ag-release notes`
+   prints, and upload the directory's files to it.
 
 ## Configuration
 
@@ -114,6 +116,35 @@ of each file that `sha256.sum` lists:
     "source.tar.gz": "<hex>"
   }
 }
+```
+
+### `notes --tag <tag> [--title]`
+
+Prints the GitHub release body as Markdown on stdout, or with `--title` only the release
+title, for a tag that names the apps' version. It reads `CHANGELOG.md` in the workspace
+root and needs no built artifacts.
+
+The release's changelog entry starts at the first level-2 heading that names the
+version, as `v<version>` or `<version>`, optionally in brackets and optionally followed
+by ` - <date>`, such as `## [v1.2.3] - 2026-01-02` in the
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. It runs to the next
+level-1 or level-2 heading outside a fenced code block and is copied verbatim, without
+surrounding blank lines.
+
+- Title: `<tag> - <date>`, or `<tag>` when the entry has no date or there is no entry.
+- Body: `## Release Notes` and the entry, omitted when the entry is missing or empty;
+  then for each app `# <app> <version>` with the configured installers' install
+  commands, a table of the archives with their platforms and checksum files, and how to
+  verify the release's GitHub artifact attestations with `gh attestation verify`.
+
+A missing `CHANGELOG.md` counts as having no entry. The release workflow is expected to
+attest the published files (for example with `actions/attest-build-provenance`), as the
+body says. For example:
+
+```sh
+ag-release notes --tag "$TAG" > release-notes.md
+gh release create "$TAG" --title "$(ag-release notes --tag "$TAG" --title)" \
+  --notes-file release-notes.md artifacts/*
 ```
 
 ## Artifacts

@@ -43,6 +43,16 @@ impl Target {
         }
     }
 
+    /// Returns the platform name that release notes show for this target.
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::Aarch64AppleDarwin => "Apple Silicon macOS",
+            Self::Aarch64UnknownLinuxGnu => "ARM64 Linux",
+            Self::X8664AppleDarwin => "Intel macOS",
+            Self::X8664UnknownLinuxGnu => "x64 Linux",
+        }
+    }
+
     /// Returns the operating system name `uname -s` prints on this target.
     pub(crate) fn uname_system(self) -> &'static str {
         match self {
