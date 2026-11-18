@@ -23,7 +23,9 @@ use tokio::sync::Semaphore;
 use crate::budget::{BudgetLedger, Unlimited};
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
-use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Pricing, Role};
+use crate::catalog::{
+    CatalogError, ModelCatalog, ModelHandle, ModelId, ModelSelector, Pricing, Role,
+};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
@@ -45,11 +47,12 @@ use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
-use crate::session::{LoadedSession, NewSession, SessionError};
+use crate::session::{LoadedSession, ModelSelectionError, NewSession, SessionError};
 use crate::session_model::ReplayTarget;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
+use crate::summary_model::{SizingOverrides, SummaryModel};
 #[expect(deprecated, reason = "maps the deprecated `allow` setters")]
 use crate::tool::Tool;
 use crate::tool::ToolSet;
@@ -103,7 +106,9 @@ impl Session {
     /// A registered model has no prices, so later runs report no
     /// [`crate::Cost`] and their turns count as unpriced, no catalog
     /// concurrency cap, so later requests no longer take its permits, and
-    /// no cataloged maximum output for budget estimates.
+    /// no cataloged maximum output for budget estimates. The switch also
+    /// drops the catalog and its summary model, so compaction and round
+    /// summaries run on the registered model.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
     /// handle. The session keeps its stored history byte budget (see
@@ -140,6 +145,11 @@ impl Session {
         config.context_budget = registration.context_budget();
         config.context_calibration = ContextCalibration::default();
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
+        // The registration replaces the cataloged model, so summaries and
+        // compaction follow it instead of the catalog.
+        config.catalog = None;
+        config.summary_model = None;
+        config.summary_overrides = SizingOverrides::default();
         if config.execution_identity.is_none()
             || config.model_registration.as_ref().is_some_and(|previous| {
                 config.execution_identity.as_ref() == Some(previous.identity())
@@ -192,18 +202,24 @@ impl Session {
     /// uncovered finished turns, replacing covered turns with a structured
     /// summary in later outgoing requests.
     ///
-    /// Generation runs the session's current model through the shared engine
-    /// with every tool denied, outside store writer transactions, and bounded
-    /// by the effective context budget: the previous checkpoint's summary and
-    /// the oldest uncovered turns that fit render, as JSON, into its source.
-    /// The checkpoint covers exactly the rendered turns, so turns left out for
-    /// size stay uncovered until a later call summarizes them. Dropping the
-    /// returned future cancels generation before anything is published.
-    /// Publication is atomic and only succeeds while the model selection and
-    /// existing coverage are still current. On any failure the previous
-    /// checkpoint stays usable and projection falls back to bounded recent
-    /// history. Canonical messages, host requests, model provenance, and
-    /// write journals always remain intact.
+    /// Generation runs the harness's summary model (see
+    /// [`HarnessBuilder::summary_model_selector`]), or the session's current
+    /// model when none resolved; [`Self::compact_with`] selects the model
+    /// explicitly. The checkpoint records the generating model as its
+    /// provenance, or none when that model reports no metadata, and the
+    /// lifecycle attributes the generation requests to it. Generation runs
+    /// through the shared engine with every tool denied, outside store
+    /// writer transactions, and bounded by that model's effective context
+    /// budget: the previous checkpoint's summary and the oldest uncovered
+    /// turns that fit render, as JSON, into its source. The checkpoint
+    /// covers exactly the rendered turns, so turns left out for size stay
+    /// uncovered until a later call summarizes them. Dropping the returned
+    /// future cancels generation before anything is published. Publication
+    /// is atomic and only succeeds while the model selection and existing
+    /// coverage are still current. On any failure the previous checkpoint
+    /// stays usable and projection falls back to bounded recent history.
+    /// Canonical messages, host requests, model provenance, and write
+    /// journals always remain intact.
     ///
     /// Returns `None` without a model call when no finished turn is
     /// uncovered.
@@ -214,6 +230,49 @@ impl Session {
     /// smaller than its source, or a publication rejected as
     /// [`SessionError::CheckpointStale`].
     pub async fn compact(&mut self) -> Result<Option<SessionCheckpoint>, SessionError> {
+        let summary_model = self.harness.inner.summary_model.clone();
+
+        self.compact_using(summary_model).await
+    }
+
+    /// Generates and publishes a compaction checkpoint like
+    /// [`Self::compact`], but on the model `selector` resolves from the
+    /// harness's catalog in place of the summary model. The session's
+    /// model, or the configured summary model, keeps its own calibration;
+    /// any other model is sized like a summary model and calibrated afresh
+    /// for this call.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::ModelSelection`] before any model call when
+    /// the harness's model did not come from a catalog, the catalog cannot
+    /// resolve `selector`, or the selected model lacks structured output or
+    /// rejects the checkpoint schema, and otherwise the errors of
+    /// [`Self::compact`].
+    pub async fn compact_with(
+        &mut self,
+        selector: impl Into<ModelSelector>,
+    ) -> Result<Option<SessionCheckpoint>, SessionError> {
+        let summary_model = self
+            .harness
+            .inner
+            .resolve_summary_model(&selector.into())
+            .map_err(SessionError::ModelSelection)?;
+
+        self.compact_using(summary_model).await
+    }
+
+    /// Returns the checkpoint this handle currently projects ahead of recent
+    /// turns. Acquisition refreshes it together with replayed history.
+    pub fn checkpoint(&self) -> Option<&SessionCheckpoint> {
+        self.checkpoint.as_ref()
+    }
+
+    /// Generates and publishes a compaction checkpoint with
+    /// `summary_model`, or the session's model when `None`.
+    async fn compact_using(
+        &mut self,
+        summary_model: Option<SummaryModel>,
+    ) -> Result<Option<SessionCheckpoint>, SessionError> {
         let loaded = self.database.load_session(&self.id).await?;
         crate::session_model::check_generation(
             &self.id,
@@ -231,14 +290,31 @@ impl Session {
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
         let options = TurnOptions::from_output(schema);
-        let (input, covered_through, source_bytes) = self.compaction_input(&source, &options)?;
-        let outcome = self.harness.run_compaction(input, &options).await?;
+        // Selection already checked that a summary model serves the schema.
+        let summary_model = summary_model.as_ref();
+        let (input, covered_through, source_bytes) =
+            self.compaction_input(summary_model, &source, &options)?;
+        let outcome = self
+            .harness
+            .run_compaction(summary_model, input, &options)
+            .await?;
         compaction::accept_summary(outcome.output(), MAX_SUMMARY_BYTES, source_bytes)?;
+        // Provenance names the generating model; one reporting no metadata
+        // is unknown rather than the session's model.
+        let (provider, model) = match summary_model {
+            Some(summary) => summary.model.metadata().map_or((None, None), |metadata| {
+                (
+                    Some(metadata.provider().to_string()),
+                    Some(metadata.model().to_string()),
+                )
+            }),
+            None => (loaded.provider, loaded.model),
+        };
         let checkpoint = SessionCheckpoint::new(
             covered_through,
             self.model_generation,
-            loaded.provider,
-            loaded.model,
+            provider,
+            model,
             outcome.output().clone(),
         )?;
         self.database
@@ -249,19 +325,15 @@ impl Session {
         Ok(Some(checkpoint))
     }
 
-    /// Returns the checkpoint this handle currently projects ahead of recent
-    /// turns. Acquisition refreshes it together with replayed history.
-    pub fn checkpoint(&self) -> Option<&SessionCheckpoint> {
-        self.checkpoint.as_ref()
-    }
-
     /// Renders the bounded generation source: the previous summary plus the
-    /// oldest uncovered turns that fit the effective context budget, dropping
-    /// the newest while the source does not fit. Returns the source with the
-    /// position of the newest rendered turn, which the checkpoint covers
-    /// through, and the source's rendered bytes.
+    /// oldest uncovered turns that fit the effective context budget of
+    /// `summary_model`, or else the session's model, dropping the newest
+    /// while the source does not fit. Returns the source with the position
+    /// of the newest rendered turn, which the checkpoint covers through,
+    /// and the source's rendered bytes.
     fn compaction_input(
         &self,
+        summary_model: Option<&SummaryModel>,
         source: &CompactionSource,
         options: &TurnOptions,
     ) -> Result<(TurnInput, i64, usize), SessionError> {
@@ -277,6 +349,7 @@ impl Session {
             let source_bytes = rendered.len();
             let input = TurnInput::text(rendered);
             match self.harness.admit_mandatory_content(
+                summary_model,
                 Some(compaction::GENERATION_INSTRUCTIONS),
                 &input,
                 options,
@@ -595,7 +668,7 @@ impl Session {
         self.harness.check_output_capability(options)?;
         let available_history_weight = self
             .harness
-            .admit_mandatory_content(self.system_prompt.as_deref(), &input, options)
+            .admit_mandatory_content(None, self.system_prompt.as_deref(), &input, options)
             .map_err(SessionError::from)?;
         self.check_image_history_budget(&input)?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
@@ -1106,6 +1179,7 @@ impl Harness {
             model_selector: None,
             repository: None,
             storage: None,
+            summary_selector: None,
             tools: ToolSelection::default(),
         }
     }
@@ -1284,12 +1358,19 @@ impl Harness {
     /// [`TurnError::ContextBudgetExceeded`] before acquisition. Estimates are
     /// deterministic approximations, never exact provider token counts;
     /// provider-reported input tokens calibrate them in memory, and replacing
-    /// the estimator discards that calibration.
+    /// the estimator discards that calibration. The estimator also sizes
+    /// summary model requests, like [`HarnessBuilder::context_estimator`].
     #[must_use]
     pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
         let config = self.config_mut();
-        config.context_estimator = Arc::new(estimator);
+        let estimator: Arc<dyn ContextEstimator> = Arc::new(estimator);
+        config.context_estimator = Arc::clone(&estimator);
         config.context_calibration = ContextCalibration::default();
+        if let Some(summary) = &mut config.summary_model {
+            summary.context_estimator = Arc::clone(&estimator);
+            summary.context_calibration = ContextCalibration::default();
+        }
+        config.summary_overrides.context_estimator = Some(estimator);
 
         self
     }
@@ -1504,7 +1585,7 @@ impl Harness {
     ) -> Result<TurnOutcome, TurnError> {
         self.check_input_capability(&input)?;
         self.check_output_capability(&options)?;
-        self.admit_mandatory_content(None, &input, &options)?;
+        self.admit_mandatory_content(None, None, &input, &options)?;
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.output().clone())
             .with_instructions(options.instructions())
@@ -1531,33 +1612,50 @@ impl Harness {
     /// Admits mandatory content against the context budget scaled by the
     /// provider-reported calibration shared with this harness's sessions,
     /// and returns the calibrated weight left for history.
+    ///
+    /// With a `summary_model`, admits against its budget, calibration, and
+    /// estimator instead of the session model's.
     fn admit_mandatory_content(
         &self,
+        summary_model: Option<&SummaryModel>,
         system_prompt: Option<&str>,
         input: &TurnInput,
         options: &TurnOptions,
     ) -> Result<u64, TurnError> {
         let config = &self.inner;
-        let (budget, calibration) = config
-            .context_calibration
-            .effective_budget(config.context_budget);
+        let (context_budget, context_calibration, context_estimator) = match summary_model {
+            Some(summary) => (
+                summary.context_budget,
+                &summary.context_calibration,
+                &summary.context_estimator,
+            ),
+            None => (
+                config.context_budget,
+                &config.context_calibration,
+                &config.context_estimator,
+            ),
+        };
+        let (budget, calibration) = context_calibration.effective_budget(context_budget);
 
         context::admit_mandatory_content(
-            config.context_estimator.as_ref(),
+            context_estimator.as_ref(),
             budget,
             system_prompt,
             input,
             options,
         )
-        .map_err(|error| {
-            ContextCalibration::declared_failure(config.context_budget, calibration, error)
-        })
+        .map_err(|error| ContextCalibration::declared_failure(context_budget, calibration, error))
     }
 
     /// Runs one bounded, tool-free summarization turn for checkpoint
     /// generation, owned by the caller's lifecycle like an ephemeral turn.
+    /// A `summary_model` answers it in place of the session model: sized
+    /// by and calibrating its own estimates at its own reasoning depth,
+    /// metered by its own concurrency cap, and priced at its prices, as the
+    /// turn's only model.
     async fn run_compaction(
         &self,
+        summary_model: Option<&SummaryModel>,
         input: TurnInput,
         options: &TurnOptions,
     ) -> Result<TurnOutcome, TurnError> {
@@ -1570,7 +1668,25 @@ impl Harness {
         );
         let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let engine = self.engine(options);
+        let engine = match summary_model {
+            Some(summary) => Engine {
+                concurrency: summary.concurrency.as_deref(),
+                context_budget: summary.context_budget,
+                context_calibration: &summary.context_calibration,
+                context_estimator: &summary.context_estimator,
+                max_output: summary.max_output,
+                model: &summary.model,
+                model_id: Some(&summary.id),
+                model_reasoning_effort: summary.reasoning_effort,
+                pricing: summary.pricing,
+                summary_model: None,
+                ..self.engine(options)
+            },
+            None => Engine {
+                summary_model: None,
+                ..self.engine(options)
+            },
+        };
         let result = engine.run(request, turn_id, None).await;
 
         Self::finish_turn(turn, result)
@@ -1741,11 +1857,13 @@ impl Harness {
             lifecycle: &config.lifecycle,
             max_output: config.max_output,
             model: &config.model,
+            model_id: config.model_id.as_ref(),
             model_reasoning_effort: config.model_reasoning_effort,
             options,
             pricing: config.pricing,
             repository: config.repository.as_ref(),
             session: None,
+            summary_model: config.summary_model.as_ref(),
         }
     }
 }
@@ -1774,6 +1892,7 @@ pub struct HarnessBuilder {
     model_selector: Option<ModelSelector>,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
+    summary_selector: Option<ModelSelector>,
     tools: ToolSelection,
 }
 
@@ -1807,6 +1926,9 @@ impl HarnessBuilder {
     /// and run of every harness built from `catalog`; it limits requests,
     /// not runs, so a run waits for a permit before each request and holds
     /// none between them. A model set with [`Self::model`] has no cap.
+    ///
+    /// The catalog also selects the summary model; see
+    /// [`Self::summary_model_selector`].
     pub fn catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
         self.catalog = Some(catalog);
 
@@ -1831,6 +1953,50 @@ impl HarnessBuilder {
     /// fails without a catalog or together with an explicit [`Self::model`].
     pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.model_selector = Some(selector.into());
+
+        self
+    }
+
+    /// Chooses which [`Self::catalog`] model writes compaction checkpoints
+    /// and in-turn round summaries.
+    ///
+    /// Summaries go to the resolved model unless it is the session's own
+    /// model. Building fails when the catalog cannot resolve `selector`,
+    /// when the resolved model lacks structured output or rejects the
+    /// summary schema ([`HarnessBuildError::SummaryModelUnsupported`]),
+    /// without a catalog, or together with an explicit [`Self::model`].
+    ///
+    /// Without this selector, a harness whose model came from the catalog
+    /// summarizes on the first [`Role::CHEAP`] candidate that has structured
+    /// output, accepts the summary schema, has prices when the session
+    /// model has them, and is served by the session model's provider, so
+    /// session content stays with that provider; otherwise summaries stay
+    /// on the session's model. Host-implemented models count as one
+    /// provider only when both report [`crate::model::ModelMetadata`] with
+    /// the same provider name, so host catalogs that summarize on another
+    /// model without such metadata need this selector.
+    ///
+    /// The summary model sizes its requests with an explicit
+    /// [`Self::context_estimator`], else with its declared profile's
+    /// estimator, else with the session's, and with the smaller of an
+    /// explicit [`Self::context_budget`] and its declared profile's budget,
+    /// else whichever is set, else the session's budget; it calibrates its
+    /// own estimates and asks for low reasoning effort when its
+    /// specification declares reasoning, and none otherwise. An in-turn
+    /// summary request that does not fit its budget goes to the session's
+    /// model instead.
+    ///
+    /// Each request the summary model answers is priced at its own
+    /// [`crate::catalog::Pricing`] and summed into the run's cost, reserves
+    /// the summary model's own estimate from the run's budget ledger, waits
+    /// for a permit of the summary model's own
+    /// [`crate::catalog::ModelSpec::max_concurrency`], and counts toward
+    /// the turn's run limits like any other model request. A run's cost is
+    /// `None` once any of its requests went to an unpriced model, so a
+    /// selected summary model without prices leaves every run that
+    /// summarizes on it unpriced, even when the session model has prices.
+    pub fn summary_model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
+        self.summary_selector = Some(selector.into());
 
         self
     }
@@ -1967,6 +2133,9 @@ impl HarnessBuilder {
             (Some(_), _, Some(_)) => {
                 return Err(HarnessBuildError::ConflictingModelSelection.into());
             }
+            (Some(_), _, None) if self.summary_selector.is_some() => {
+                return Err(HarnessBuildError::ConflictingModelSelection.into());
+            }
             (Some(model), _, None) => {
                 let profile = model.profile();
 
@@ -1978,7 +2147,7 @@ impl HarnessBuilder {
                     .resolve(&selector)
                     .map_err(HarnessBuildError::Catalog)?;
 
-                (handle.model(), handle.profile(), Some(handle))
+                (handle.model(), handle.profile(), Some((catalog, handle)))
             }
             (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
             (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
@@ -1987,6 +2156,10 @@ impl HarnessBuilder {
             return Err(HarnessBuildError::RepositoryRequired.into());
         }
         let mut config = Self::direct_config(model, profile, self.context_budget)?;
+        config.summary_overrides = SizingOverrides {
+            context_budget: self.context_budget,
+            context_estimator: self.context_estimator.clone(),
+        };
         if let Some(context_estimator) = self.context_estimator {
             config.context_estimator = context_estimator;
         }
@@ -2008,11 +2181,25 @@ impl HarnessBuilder {
         if let Some(budget) = self.budget {
             config.budget = budget;
         }
-        if let Some(handle) = cataloged {
+        if let Some((catalog, handle)) = cataloged {
             config.concurrency = handle.concurrency();
             config.max_output = handle.spec().max_output();
             config.model_id = Some(handle.id().clone());
             config.pricing = handle.spec().pricing();
+            config.summary_model = match self.summary_selector {
+                Some(selector) => {
+                    let summary = catalog
+                        .resolve(&selector)
+                        .map_err(HarnessBuildError::Catalog)?;
+
+                    config
+                        .supported_summary_model(&summary)
+                        .map_err(|id| HarnessBuildError::SummaryModelUnsupported { id })?
+                }
+                None => Self::default_summary_model(&catalog, &handle)
+                    .and_then(|summary| config.summary_model_for(&summary)),
+            };
+            config.catalog = Some(catalog);
         }
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
@@ -2021,6 +2208,42 @@ impl HarnessBuilder {
         config.tools = self.tools;
 
         Ok(Harness::from_config(config))
+    }
+
+    /// Returns the default summary model for the session model `session`:
+    /// the first [`Role::CHEAP`] candidate that serves summaries, has
+    /// prices when `session` has them, and is served by the session model's
+    /// provider, so summarized session content never reaches another
+    /// provider and a priced run never turns unpriced.
+    fn default_summary_model(catalog: &ModelCatalog, session: &ModelHandle) -> Option<ModelHandle> {
+        catalog
+            .candidates(&Role::CHEAP)
+            .iter()
+            .filter_map(|id| catalog.resolve(&ModelSelector::Id(id.clone())).ok())
+            .find(|summary| {
+                (session.spec().pricing().is_none() || summary.spec().pricing().is_some())
+                    && Self::same_provider(summary, session)
+                    && serves_summaries(summary)
+            })
+    }
+
+    /// Returns whether one provider serves `summary` and `session`: the
+    /// same built-in provider, or host models reporting the same provider
+    /// name in their metadata. A host model without metadata is never
+    /// known to share a provider.
+    fn same_provider(summary: &ModelHandle, session: &ModelHandle) -> bool {
+        #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+        if summary.spec().provider().is_some() || session.spec().provider().is_some() {
+            return summary.spec().provider() == session.spec().provider();
+        }
+        let host_provider = |handle: &ModelHandle| {
+            handle
+                .model()
+                .metadata()
+                .map(|metadata| metadata.provider())
+        };
+
+        host_provider(summary).is_some_and(|provider| host_provider(session) == Some(provider))
     }
 
     /// Returns the configuration of a directly supplied model, bounded by
@@ -2065,12 +2288,20 @@ pub enum HarnessBuildError {
     /// A model selector was set without a catalog to resolve it.
     #[error("model selector requires a catalog; call `catalog`")]
     CatalogRequired,
-    /// The catalog could not resolve the model selector.
+    /// The catalog could not resolve the model or summary model selector.
     #[error("cannot select the model from the catalog")]
     Catalog(#[source] CatalogError),
-    /// Both an explicit model and a model selector were set.
-    #[error("set either `model` or `model_selector`, not both")]
+    /// An explicit model was set together with a model or summary model
+    /// selector.
+    #[error("set either `model` or a model selector, not both")]
     ConflictingModelSelection,
+    /// The summary model selector resolved a model that lacks structured
+    /// output or rejects the summary schema.
+    #[error("summary model `{id}` cannot write summaries")]
+    SummaryModelUnsupported {
+        /// Catalog identifier of the resolved model.
+        id: ModelId,
+    },
     /// No budget was set and the model declares no context profile.
     #[error("model declares no context profile; call `context_budget`")]
     ContextBudgetRequired,
@@ -2099,6 +2330,9 @@ struct HarnessConfig {
     /// Ledger that reserves every model request; a run's own ledger
     /// replaces it in that run's copy of the configuration.
     budget: Arc<dyn BudgetLedger>,
+    /// Catalog the builder selected [`Self::model`] from, which resolves
+    /// [`Session::compact_with`] selectors.
+    catalog: Option<Arc<ModelCatalog>>,
     /// Concurrency cap of [`Self::model`], from the catalog entry the
     /// builder selected and shared with every harness built from that
     /// catalog; `None` for any other model.
@@ -2132,6 +2366,11 @@ struct HarnessConfig {
     pricing: Option<Pricing>,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,
+    /// Cataloged model that writes compaction checkpoints and round
+    /// summaries in place of [`Self::model`]; `None` summarizes with it.
+    summary_model: Option<SummaryModel>,
+    /// Explicit budget and estimator that also size summary models.
+    summary_overrides: SizingOverrides,
     tools: ToolSelection,
 }
 
@@ -2141,6 +2380,7 @@ impl HarnessConfig {
     fn new(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
         Self {
             budget: Arc::new(Unlimited),
+            catalog: None,
             concurrency: None,
             context_budget,
             context_calibration: ContextCalibration::default(),
@@ -2163,6 +2403,8 @@ impl HarnessConfig {
             pricing: None,
             repository: None,
             store: None,
+            summary_model: None,
+            summary_overrides: SizingOverrides::default(),
             tools: ToolSelection::default(),
         }
     }
@@ -2198,6 +2440,64 @@ impl HarnessConfig {
             .unwrap_or(DEFAULT_MAX_HISTORY_BYTES),
         }
     }
+
+    /// Returns the model `handle` resolved to summarize in place of
+    /// [`Self::model`], or `None` when it is that cataloged model itself.
+    fn summary_model_for(&self, handle: &ModelHandle) -> Option<SummaryModel> {
+        (self.model_id.as_ref() != Some(handle.id())).then(|| {
+            SummaryModel::new(
+                handle,
+                &self.summary_overrides,
+                self.context_budget,
+                &self.context_estimator,
+            )
+        })
+    }
+
+    /// Returns [`Self::summary_model_for`] `handle`, or the identifier of
+    /// a model other than [`Self::model`] that cannot serve summaries.
+    fn supported_summary_model(
+        &self,
+        handle: &ModelHandle,
+    ) -> Result<Option<SummaryModel>, ModelId> {
+        let summary = self.summary_model_for(handle);
+        if summary.is_some() && !serves_summaries(handle) {
+            return Err(handle.id().clone());
+        }
+
+        Ok(summary)
+    }
+
+    /// Resolves `selector` from [`Self::catalog`] to a summary model, or
+    /// `None` for the session's own model, reusing the configured summary
+    /// model, with its calibration, when `selector` resolves to it.
+    fn resolve_summary_model(
+        &self,
+        selector: &ModelSelector,
+    ) -> Result<Option<SummaryModel>, ModelSelectionError> {
+        let catalog = self
+            .catalog
+            .as_ref()
+            .ok_or(ModelSelectionError::NoCatalog)?;
+        let handle = catalog
+            .resolve(selector)
+            .map_err(ModelSelectionError::Catalog)?;
+
+        match &self.summary_model {
+            Some(summary) if summary.id == *handle.id() => Ok(Some(summary.clone())),
+            _ => self
+                .supported_summary_model(&handle)
+                .map_err(|id| ModelSelectionError::Unsupported { id }),
+        }
+    }
+}
+
+/// Returns whether the model `handle` can write summaries: it declares
+/// structured output and accepts the summary schema.
+fn serves_summaries(handle: &ModelHandle) -> bool {
+    handle.spec().capabilities().structured_output()
+        && compaction::summary_schema()
+            .is_ok_and(|schema| handle.model().validate_schema(&schema).is_ok())
 }
 
 /// How a [`Harness`] chooses the retained history bytes of new sessions.

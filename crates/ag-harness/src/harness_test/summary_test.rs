@@ -5,36 +5,41 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_core::Stream;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use super::support::object_schema;
 use crate::budget::{BudgetLedger, Estimate, Reservation};
-use crate::compaction::summary_schema;
+use crate::calibration::ContextCalibration;
+use crate::catalog::{Capabilities, ModelCatalog, ModelId, ModelSpec, Pricing, Role};
+use crate::compaction::{GENERATION_INSTRUCTIONS, summary_schema};
 use crate::context::{
     ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
 };
 use crate::error::{ErrorKind, RunError};
 use crate::event::RunEventKind;
 use crate::file_system::MockFileSystem;
-use crate::harness::Harness;
+use crate::harness::{Harness, HarnessBuilder};
 use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEvent, LifecycleEventKind,
 };
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{
-    Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
+    CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelMessage,
+    ModelMetadata, ModelProfile, ModelRequest, ModelResponse, ReasoningEffort,
 };
 use crate::repository::Repository;
-use crate::request_option::OutputMode;
+use crate::request_option::{GenerationParams, OutputMode};
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
 use crate::run::{RunOutcome, RunRequest, Usage};
+use crate::schema_contract::OutputSchema;
 use crate::store::MemoryStore;
-use crate::tool::{ToolCall, ToolSet};
+use crate::tool::{ToolCall, ToolDefinition, ToolSet};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
 use crate::usage::Cost;
 
@@ -49,12 +54,23 @@ const ROOMY_BUDGET: u64 = 14_000;
 /// Rounds each turn reads, one distinct file per round, before answering.
 const READS: usize = 10;
 
+/// Provider name every named host model reports, so the cataloged models
+/// share one provider.
+const HOST_PROVIDER: &str = "host";
+
 /// Answers turn requests by reading `f<n>.txt` for [`READS`] rounds and then
 /// answering, and summary requests with the scripted responses, in order,
 /// then with a valid summary.
 struct SummarizingModel {
     keeps_prefix: bool,
+    /// Model name reported, under the [`HOST_PROVIDER`] provider, as
+    /// metadata, if any.
+    name: Option<&'static str>,
+    /// Permits observed while answering each summary request.
+    permits: Option<PermitProbe>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
+    /// Input tokens reported as the usage of every summary, if any.
+    summary_input_tokens: Option<u64>,
     summaries: Mutex<VecDeque<Result<ModelResponse, ModelError>>>,
 }
 
@@ -65,11 +81,36 @@ impl SummarizingModel {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = Self {
             keeps_prefix: false,
+            name: None,
+            permits: None,
             requests: Arc::clone(&requests),
+            summary_input_tokens: None,
             summaries: Mutex::new(summaries.into()),
         };
 
         (model, requests)
+    }
+
+    /// Returns this model reporting `name` as its metadata.
+    fn named(mut self, name: &'static str) -> Self {
+        self.name = Some(name);
+
+        self
+    }
+
+    /// Returns this model reporting `input_tokens` with every summary.
+    fn reporting_summary_usage(mut self, input_tokens: u64) -> Self {
+        self.summary_input_tokens = Some(input_tokens);
+
+        self
+    }
+
+    /// Returns this model recording the free permits of `probe`'s caps
+    /// while it answers each summary request.
+    fn probing_permits(mut self, probe: PermitProbe) -> Self {
+        self.permits = Some(probe);
+
+        self
     }
 
     /// Returns a model that keeps its cached prefix across output schemas,
@@ -94,16 +135,34 @@ impl Model for SummarizingModel {
         true
     }
 
+    fn metadata(&self) -> Option<ModelMetadata> {
+        self.name
+            .map(|name| ModelMetadata::new(HOST_PROVIDER, name).expect("metadata"))
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         let mut requests = self.requests.lock().expect("requests lock");
         requests.push(request.clone());
         if is_summary_request(&request) {
             drop(requests);
+            if let Some(probe) = &self.permits {
+                probe.observe();
+            }
             let scripted = self.summaries.lock().expect("summaries lock").pop_front();
+            let response =
+                scripted.unwrap_or_else(|| Ok(ModelResponse::Output(valid_summary())))?;
 
-            return scripted
-                .unwrap_or_else(|| Ok(ModelResponse::Output(valid_summary())))
-                .map(ModelCompletion::from_response);
+            return Ok(match self.summary_input_tokens {
+                Some(input_tokens) => {
+                    let usage =
+                        CompletionUsage::new(None, None, Some(input_tokens), None, None, None);
+                    let metadata =
+                        CompletionMetadata::new("stop".to_string(), None, None, None, Some(usage));
+
+                    ModelCompletion::new(metadata, response)
+                }
+                None => ModelCompletion::from_response(response),
+            });
         }
         let turn_requests = requests
             .iter()
@@ -128,11 +187,14 @@ impl Model for SummarizingModel {
     }
 }
 
+/// Returns whether `request` asks for a round summary or a compaction
+/// checkpoint.
 fn is_summary_request(request: &ModelRequest) -> bool {
-    request.messages().first()
-        == Some(&ModelMessage::System(
-            ROUND_SUMMARY_INSTRUCTIONS.to_string(),
-        ))
+    [ROUND_SUMMARY_INSTRUCTIONS, GENERATION_INSTRUCTIONS]
+        .iter()
+        .any(|instructions| {
+            request.messages().first() == Some(&ModelMessage::System((*instructions).to_string()))
+        })
         || request.prefix_schema().is_some()
 }
 
@@ -914,4 +976,765 @@ async fn a_refused_summary_request_ends_the_run_at_the_ledger_cap() {
             ..
         }
     )));
+}
+
+/// Free permits of the session and summary models' concurrency caps, set
+/// once their catalog is built, which a summary model records while it
+/// answers each summary request.
+#[derive(Clone, Default)]
+struct PermitProbe {
+    caps: Arc<OnceLock<(Arc<Semaphore>, Arc<Semaphore>)>>,
+    observed: Arc<Mutex<Vec<(usize, usize)>>>,
+}
+
+impl PermitProbe {
+    /// Records the free permits of the session and summary caps.
+    fn observe(&self) {
+        if let Some((session, summary)) = self.caps.get() {
+            self.observed
+                .lock()
+                .expect("observed lock")
+                .push((session.available_permits(), summary.available_permits()));
+        }
+    }
+}
+
+/// Returns `host/smart` bounded by [`BUDGET`].
+fn smart_spec() -> ModelSpec {
+    ModelSpec::new("host/smart").with_profile(ModelProfile::new(BUDGET))
+}
+
+/// Returns `host/cheap` with structured output, reasoning when `reasoning`
+/// is set, and `profile` when given.
+fn cheap_spec(reasoning: bool, profile: Option<ModelProfile>) -> ModelSpec {
+    let spec = ModelSpec::new("host/cheap").with_capabilities(
+        Capabilities::NONE
+            .with_structured_output(true)
+            .with_reasoning(reasoning),
+    );
+
+    match profile {
+        Some(profile) => spec.with_profile(profile),
+        None => spec,
+    }
+}
+
+/// Returns a catalog assigning `smart`, named `smart` and described by
+/// `smart_spec`, the smart role and `cheap`, named `cheap` and described
+/// by `cheap_spec`, the cheap role.
+fn summary_catalog(
+    (smart, smart_spec): (SummarizingModel, ModelSpec),
+    (cheap, cheap_spec): (SummarizingModel, ModelSpec),
+) -> Arc<ModelCatalog> {
+    let catalog = ModelCatalog::builder()
+        .model(smart_spec, Arc::new(smart.named("smart")))
+        .model(cheap_spec, Arc::new(cheap.named("cheap")))
+        .assign(Role::SMART, ["host/smart"])
+        .assign(Role::CHEAP, ["host/cheap"])
+        .build()
+        .expect("catalog should build");
+
+    Arc::new(catalog)
+}
+
+/// Builds a summarizing, session-capable harness on `catalog` and returns
+/// it with its recorded lifecycle events.
+fn cataloged_harness(catalog: Arc<ModelCatalog>) -> (Harness, Arc<Mutex<Vec<LifecycleEvent>>>) {
+    cataloged_harness_with(catalog, |builder| builder)
+}
+
+/// Builds [`cataloged_harness`] after `configure` adjusts its builder.
+fn cataloged_harness_with(
+    catalog: Arc<ModelCatalog>,
+    configure: impl FnOnce(HarnessBuilder) -> HarnessBuilder,
+) -> (Harness, Arc<Mutex<Vec<LifecycleEvent>>>) {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&events);
+    let harness = configure(Harness::builder().catalog(catalog))
+        .repository(Repository::fixture("repo"))
+        .tools(ToolSet::empty().with_read())
+        .file_system(files())
+        .context_summaries(ContextSummaryPolicy::Enabled)
+        .lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        })
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("cataloged harness should build");
+
+    (harness, events)
+}
+
+/// Returns the model name each lifecycle `ModelRequestStarted` event in
+/// `events` reports.
+fn started_models(events: &Mutex<Vec<LifecycleEvent>>) -> Vec<Option<String>> {
+    events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ModelRequestStarted { model, .. } => {
+                Some(model.as_ref().map(|model| model.model().to_string()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns whether `calibration` learned from provider usage.
+fn calibrated(calibration: &ContextCalibration, budget: ContextBudget) -> bool {
+    calibration.effective_budget(budget).1.envelope().is_some()
+}
+
+/// Returns the [`RunEventKind::ModelRequestCompleted`] costs in `events`
+/// attributed to the model `id`.
+fn costs_of(events: &[RunEventKind], id: &str) -> Vec<Option<Cost>> {
+    events
+        .iter()
+        .filter_map(|kind| match kind {
+            RunEventKind::ModelRequestCompleted {
+                cost,
+                model: Some(model),
+                ..
+            } if model.as_str() == id => Some(*cost),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns the summary requests of `outcome`'s report.
+fn reported_summaries(outcome: &RunOutcome) -> usize {
+    outcome
+        .report
+        .model_requests()
+        .iter()
+        .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+        .count()
+}
+
+#[tokio::test]
+async fn round_summaries_go_to_the_cataloged_summary_model_and_are_attributed_to_it() {
+    // Arrange
+    let (smart, smart_requests) = SummarizingModel::keeping_prefix(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+    let (harness, lifecycle) = cataloged_harness(summary_catalog(
+        (smart, smart_spec()),
+        (cheap, cheap_spec(true, None)),
+    ));
+
+    // Act
+    let (events, outcome) = limited_run(&harness, RunLimits::default()).await;
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    let smart_requests = smart_requests.lock().expect("requests lock").clone();
+    let cheap_requests = cheap_requests.lock().expect("requests lock").clone();
+    let summaries = reported_summaries(&outcome);
+    assert!(!smart_requests.iter().any(is_summary_request));
+    assert_ne!(cheap_requests, Vec::<ModelRequest>::new());
+    // The summary model never continues the turn model's cached prefix,
+    // and asks for low effort because it declares reasoning.
+    assert!(cheap_requests.iter().all(|request| {
+        request.prefix_schema().is_none()
+            && request.model_reasoning_effort() == Some(ReasoningEffort::Low)
+            && request.messages().first()
+                == Some(&ModelMessage::System(
+                    ROUND_SUMMARY_INSTRUCTIONS.to_string(),
+                ))
+    }));
+    assert_eq!(costs_of(&events, "host/cheap").len(), cheap_requests.len());
+    assert_eq!(cheap_requests.len(), summaries);
+    assert_eq!(costs_of(&events, "host/smart").len(), smart_requests.len());
+    assert!(outcome.report.model_requests().iter().all(|request| {
+        let expected = match request.purpose() {
+            ModelRequestPurpose::ContextSummary => "host/cheap",
+            ModelRequestPurpose::Turn => "host/smart",
+        };
+
+        request.model().map(ModelId::as_str) == Some(expected)
+    }));
+    assert!(events.iter().any(|kind| matches!(
+        kind,
+        RunEventKind::Started { model: Some(model), .. } if model.as_str() == "host/smart"
+    )));
+    // The lifecycle attributes each request to the model that answered it.
+    let started = started_models(&lifecycle);
+    let started_by = |name: &str| {
+        started
+            .iter()
+            .filter(|model| model.as_deref() == Some(name))
+            .count()
+    };
+    assert_eq!(started_by("cheap"), summaries);
+    assert_eq!(started_by("smart"), smart_requests.len());
+    assert_eq!(started.len(), smart_requests.len() + summaries);
+}
+
+#[tokio::test]
+async fn summary_usage_calibrates_only_the_summary_model() {
+    // Arrange
+    let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+    let (harness, _) = cataloged_harness(summary_catalog(
+        (smart, smart_spec()),
+        (
+            cheap.reporting_summary_usage(100),
+            cheap_spec(false, Some(ModelProfile::new(1_000_000))),
+        ),
+    ));
+    let config = &harness.inner;
+    let summary = config.summary_model.clone().expect("summary model");
+    let mut session = harness
+        .session("calibrated", object_schema())
+        .create()
+        .await
+        .expect("session created");
+
+    // Act
+    session
+        .send("read every file")
+        .await
+        .expect("turn succeeds");
+    let after_turn = (
+        calibrated(&config.context_calibration, config.context_budget),
+        calibrated(&summary.context_calibration, summary.context_budget),
+    );
+    let checkpoint = session
+        .compact()
+        .await
+        .expect("compact")
+        .expect("checkpoint");
+
+    // Assert
+    assert_eq!(after_turn, (false, true));
+    assert!(!calibrated(
+        &config.context_calibration,
+        config.context_budget
+    ));
+    assert_eq!(checkpoint.model(), Some("cheap"));
+    let cheap_requests = cheap_requests.lock().expect("requests lock");
+    assert!(
+        cheap_requests
+            .iter()
+            .all(|request| request.model_reasoning_effort().is_none()),
+        "a summary model without reasoning gets no reasoning effort"
+    );
+    assert!(
+        cheap_requests
+            .iter()
+            .any(|request| request.messages().first()
+                == Some(&ModelMessage::System(GENERATION_INSTRUCTIONS.to_string())))
+    );
+}
+
+#[tokio::test]
+async fn round_summaries_too_large_for_the_summary_model_go_to_the_turn_model() {
+    // Arrange
+    let (smart, smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+    let (harness, _) = cataloged_harness(summary_catalog(
+        (smart, smart_spec()),
+        (cheap, cheap_spec(true, Some(ModelProfile::new(1_000)))),
+    ));
+
+    // Act
+    let (events, outcome) = limited_run(&harness, RunLimits::default()).await;
+
+    // Assert
+    let smart_requests = smart_requests.lock().expect("requests lock").clone();
+    let summaries = reported_summaries(&outcome);
+    assert!(outcome.result.is_ok());
+    assert!(cheap_requests.lock().expect("requests lock").is_empty());
+    assert_eq!(costs_of(&events, "host/cheap").len(), 0);
+    assert_ne!(summaries, 0);
+    assert_eq!(
+        smart_requests
+            .iter()
+            .filter(|request| is_summary_request(request))
+            .count(),
+        summaries
+    );
+    assert_eq!(costs_of(&events, "host/smart").len(), smart_requests.len());
+}
+
+#[tokio::test]
+async fn summary_requests_are_priced_at_the_summary_models_prices() {
+    // Arrange
+    let smart_pricing = Pricing::new(1_000_000, 0);
+    let cheap_pricing = Pricing::new(3_000_000, 0);
+    let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, _cheap_requests) = SummarizingModel::new(Vec::new());
+    let (harness, _) = cataloged_harness(summary_catalog(
+        (smart, smart_spec().with_pricing(smart_pricing)),
+        (
+            cheap.reporting_summary_usage(1_000),
+            cheap_spec(false, Some(ModelProfile::new(1_000_000))).with_pricing(cheap_pricing),
+        ),
+    ));
+
+    // Act
+    let (events, outcome) = limited_run(&harness, RunLimits::default()).await;
+
+    // Assert
+    let summary_usage = Usage {
+        input: 1_000,
+        unreported_requests: 1,
+        ..Usage::default()
+    };
+    let summary_cost = Cost::of(&summary_usage, cheap_pricing);
+    assert_eq!(summary_cost.micro_usd, 3_000);
+    assert_ne!(summary_cost, Cost::of(&summary_usage, smart_pricing));
+    let summaries = reported_summaries(&outcome);
+    assert_ne!(summaries, 0);
+    assert_eq!(
+        costs_of(&events, "host/cheap"),
+        vec![Some(summary_cost); summaries]
+    );
+    assert!(
+        costs_of(&events, "host/smart")
+            .iter()
+            .all(|cost| cost.map(|cost| cost.micro_usd) == Some(0))
+    );
+    assert!(
+        outcome
+            .report
+            .model_requests()
+            .iter()
+            .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+            .all(|request| request.cost() == Some(summary_cost))
+    );
+    let summed = 3_000 * u64::try_from(summaries).expect("summary count fits");
+    assert_eq!(outcome.cost.map(|cost| cost.micro_usd), Some(summed));
+    assert!(matches!(
+        events.last(),
+        Some(RunEventKind::Completed(summary))
+            if summary.cost.map(|cost| cost.micro_usd) == Some(summed)
+    ));
+}
+
+#[tokio::test]
+async fn priced_runs_turn_unpriced_once_an_unpriced_model_answers_a_request() {
+    // Arrange: a priced session model summarizing on an explicitly selected
+    // unpriced model, and an unpriced session model summarizing on a priced
+    // one.
+    let pricing = Pricing::new(1_000_000, 0);
+    let run = |smart_pricing: Option<Pricing>, cheap_pricing: Option<Pricing>| {
+        let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+        let (cheap, _cheap_requests) = SummarizingModel::new(Vec::new());
+        let price = |spec: ModelSpec, pricing: Option<Pricing>| match pricing {
+            Some(pricing) => spec.with_pricing(pricing),
+            None => spec,
+        };
+        let catalog = summary_catalog(
+            (smart, price(smart_spec(), smart_pricing)),
+            (
+                cheap.reporting_summary_usage(1_000),
+                price(
+                    cheap_spec(false, Some(ModelProfile::new(1_000_000))),
+                    cheap_pricing,
+                ),
+            ),
+        );
+        let (harness, _) = cataloged_harness_with(catalog, |builder| {
+            builder.summary_model_selector(Role::CHEAP)
+        });
+
+        async move { limited_run(&harness, RunLimits::default()).await }
+    };
+
+    // Act
+    let (unpriced_summary_events, unpriced_summary) = run(Some(pricing), None).await;
+    let (priced_summary_events, priced_summary) = run(None, Some(pricing)).await;
+
+    // Assert
+    for (events, outcome) in [
+        (&unpriced_summary_events, &unpriced_summary),
+        (&priced_summary_events, &priced_summary),
+    ] {
+        assert!(outcome.result.is_ok());
+        assert_ne!(reported_summaries(outcome), 0);
+        assert_eq!(outcome.cost, None);
+        assert!(matches!(
+            events.last(),
+            Some(RunEventKind::Completed(summary)) if summary.cost.is_none()
+        ));
+    }
+    assert!(
+        costs_of(&unpriced_summary_events, "host/smart")
+            .iter()
+            .all(Option::is_some)
+    );
+    assert!(
+        costs_of(&unpriced_summary_events, "host/cheap")
+            .iter()
+            .all(Option::is_none)
+    );
+    assert!(
+        costs_of(&priced_summary_events, "host/smart")
+            .iter()
+            .all(Option::is_none)
+    );
+    let priced_summaries = costs_of(&priced_summary_events, "host/cheap");
+    assert_ne!(priced_summaries, Vec::new());
+    assert!(
+        priced_summaries
+            .iter()
+            .all(|cost| cost.map(|cost| cost.micro_usd) == Some(1_000))
+    );
+}
+
+/// Prefix of the feedback that asks a model to correct a rejected output.
+const CORRECTION_FEEDBACK: &str = "[harness] Your previous final response was rejected";
+
+/// Heuristic estimator that weighs correction feedback past any summary
+/// model's window, so a corrected request outgrows it.
+struct HeavyCorrectionEstimator;
+
+impl ContextEstimator for HeavyCorrectionEstimator {
+    fn message_weight(&self, message: &ModelMessage) -> u64 {
+        match message {
+            ModelMessage::User(text) if text.starts_with(CORRECTION_FEEDBACK) => 1_000_000,
+            _ => HeuristicContextEstimator::DEFAULT.message_weight(message),
+        }
+    }
+
+    fn tool_definition_weight(&self, tool: &ToolDefinition) -> u64 {
+        HeuristicContextEstimator::DEFAULT.tool_definition_weight(tool)
+    }
+
+    fn request_weight(&self, schema: Option<&OutputSchema>) -> u64 {
+        HeuristicContextEstimator::DEFAULT.request_weight(schema)
+    }
+}
+
+#[tokio::test]
+async fn corrections_that_outgrow_the_summary_model_go_to_the_turn_model() {
+    // Arrange: the cheap model's window holds the first summary request but
+    // not its correction.
+    let smart_pricing = Pricing::new(1_000_000, 0);
+    let cheap_pricing = Pricing::new(3_000_000, 0);
+    let rejected = Ok(ModelResponse::Output(json!({"context": "missing fields"})));
+    let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(vec![rejected]);
+    let (harness, _) = cataloged_harness_with(
+        summary_catalog(
+            (smart, smart_spec().with_pricing(smart_pricing)),
+            (
+                cheap.reporting_summary_usage(1_000),
+                cheap_spec(true, Some(ModelProfile::new(100_000))).with_pricing(cheap_pricing),
+            ),
+        ),
+        |builder| builder.context_estimator(HeavyCorrectionEstimator),
+    );
+
+    // Act
+    let (_, outcome) = limited_run(&harness, RunLimits::default()).await;
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    let summaries: Vec<_> = outcome
+        .report
+        .model_requests()
+        .iter()
+        .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+        .collect();
+    let (rejected, corrected) = (summaries[0], summaries[1]);
+    assert!(rejected.rejected_output());
+    assert_eq!(rejected.model().map(ModelId::as_str), Some("host/cheap"));
+    assert_eq!(rejected.cost().map(|cost| cost.micro_usd), Some(3_000));
+    assert!(!corrected.rejected_output());
+    assert_eq!(corrected.model().map(ModelId::as_str), Some("host/smart"));
+    let cheap_requests = cheap_requests.lock().expect("requests lock");
+    assert!(
+        !cheap_requests
+            .iter()
+            .any(|request| carries(request, CORRECTION_FEEDBACK)),
+        "the correction never reaches the summary model"
+    );
+}
+
+/// Ledger that admits every model request and records its estimate and
+/// the cost it was charged.
+#[derive(Default)]
+struct RecordingLedger {
+    charged: Mutex<Vec<Option<Cost>>>,
+    estimates: Mutex<Vec<Estimate>>,
+}
+
+#[async_trait]
+impl BudgetLedger for RecordingLedger {
+    async fn reserve(&self, estimate: Estimate) -> Result<Reservation, LimitKind> {
+        self.estimates
+            .lock()
+            .expect("estimates lock")
+            .push(estimate);
+
+        Ok(Reservation::new(estimate, drop))
+    }
+
+    fn commit(&self, _reservation: Reservation, _actual: &Usage, cost: Option<Cost>) {
+        self.charged.lock().expect("charged lock").push(cost);
+    }
+}
+
+/// Returns `host/cheap` priced at `pricing`, with a [`ModelProfile`] whose
+/// estimator weighs every request at least 5,000, and a maximum output of
+/// 777, each telling its estimates apart from the turn model's.
+fn distinct_cheap_spec(pricing: Pricing) -> ModelSpec {
+    let profile = ModelProfile::new(1_000_000)
+        .with_estimator(HeuristicContextEstimator::DEFAULT.with_request_tokens(5_000));
+
+    cheap_spec(false, Some(profile))
+        .with_max_output(777)
+        .with_pricing(pricing)
+}
+
+#[tokio::test]
+async fn summary_requests_reserve_the_summary_models_estimate_from_the_run_ledger() {
+    // Arrange
+    let cheap_pricing = Pricing::new(3_000_000, 5_000_000);
+    let (smart, smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+    let (harness, _) = cataloged_harness(summary_catalog(
+        (smart, smart_spec().with_max_output(333)),
+        (
+            cheap.reporting_summary_usage(1_000),
+            distinct_cheap_spec(cheap_pricing),
+        ),
+    ));
+    let ledger = Arc::new(RecordingLedger::default());
+    let max_output = NonZeroU32::new(222).expect("nonzero output");
+
+    // Act
+    let outcome = harness
+        .run(
+            RunRequest::new("read every file")
+                .output(object_schema())
+                .generation(GenerationParams::default().with_max_output_tokens(max_output))
+                .budget(Arc::clone(&ledger) as Arc<dyn BudgetLedger>),
+        )
+        .await;
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    let estimates = ledger.estimates.lock().expect("estimates lock").clone();
+    let requests = outcome.report.model_requests();
+    assert_eq!(estimates.len(), requests.len());
+    let (summaries, turns): (Vec<_>, Vec<_>) = estimates
+        .iter()
+        .zip(requests)
+        .partition(|(_, request)| request.purpose() == ModelRequestPurpose::ContextSummary);
+    assert_eq!(
+        summaries.len(),
+        cheap_requests.lock().expect("requests lock").len()
+    );
+    assert!(summaries.len() >= 2, "a later summary is calibrated");
+    assert_eq!(
+        turns.len(),
+        smart_requests.lock().expect("requests lock").len()
+    );
+    // The run's output cap bounds only the turn model's estimates.
+    assert!(turns.iter().all(|(estimate, request)| {
+        estimate.output_tokens == 222
+            && estimate.cost.is_none()
+            && estimate.input_tokens == request.estimated_weight()
+            && request.calibrated_weight().is_none()
+    }));
+    // The summary model's estimator weighs, and its calibration scales,
+    // each summary estimate's input.
+    assert!(summaries.iter().all(|(estimate, request)| {
+        let usage = Usage {
+            input: estimate.input_tokens,
+            output: estimate.output_tokens,
+            ..Usage::default()
+        };
+
+        estimate.output_tokens == 777
+            && request.estimated_weight() >= 5_000
+            && estimate.input_tokens
+                == request
+                    .calibrated_weight()
+                    .unwrap_or(request.estimated_weight())
+            && estimate.cost == Some(Cost::of(&usage, cheap_pricing))
+    }));
+    assert!(summaries[1..].iter().all(|(estimate, request)| {
+        request.calibrated_weight() == Some(estimate.input_tokens)
+            && estimate.input_tokens != request.estimated_weight()
+    }));
+}
+
+#[tokio::test]
+async fn compaction_requests_reserve_and_are_charged_at_the_summary_model() {
+    // Arrange
+    let cheap_pricing = Pricing::new(3_000_000, 0);
+    let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, _cheap_requests) = SummarizingModel::new(Vec::new());
+    let ledger = Arc::new(RecordingLedger::default());
+    let (harness, _) = cataloged_harness_with(
+        summary_catalog(
+            (
+                smart,
+                smart_spec()
+                    .with_max_output(333)
+                    .with_pricing(Pricing::new(1_000_000, 0)),
+            ),
+            (
+                cheap.reporting_summary_usage(1_000),
+                distinct_cheap_spec(cheap_pricing),
+            ),
+        ),
+        |builder| builder.budget(Arc::clone(&ledger) as Arc<dyn BudgetLedger>),
+    );
+    let mut session = harness
+        .session("charged", object_schema())
+        .create()
+        .await
+        .expect("session created");
+    session
+        .send("read every file")
+        .await
+        .expect("turn succeeds");
+    ledger.estimates.lock().expect("estimates lock").clear();
+    ledger.charged.lock().expect("charged lock").clear();
+
+    // Act
+    let checkpoint = session
+        .compact()
+        .await
+        .expect("compact")
+        .expect("checkpoint");
+
+    // Assert
+    assert_eq!(checkpoint.model(), Some("cheap"));
+    let estimates = ledger.estimates.lock().expect("estimates lock").clone();
+    assert_eq!(estimates.len(), 1);
+    assert_eq!(estimates[0].output_tokens, 777);
+    let usage = Usage {
+        input: estimates[0].input_tokens,
+        output: 777,
+        ..Usage::default()
+    };
+    assert_eq!(estimates[0].cost, Some(Cost::of(&usage, cheap_pricing)));
+    let charged = ledger.charged.lock().expect("charged lock").clone();
+    assert_eq!(
+        charged
+            .iter()
+            .map(|cost| cost.map(|cost| cost.micro_usd))
+            .collect::<Vec<_>>(),
+        vec![Some(3_000)]
+    );
+}
+
+#[tokio::test]
+async fn summary_requests_take_the_summary_models_concurrency_permit() {
+    // Arrange
+    let one = NonZeroU32::new(1).expect("nonzero cap");
+    let probe = PermitProbe::default();
+    let (smart, _smart_requests) = SummarizingModel::new(Vec::new());
+    let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+    let catalog = summary_catalog(
+        (smart, smart_spec().with_max_concurrency(one)),
+        (
+            cheap.probing_permits(probe.clone()),
+            cheap_spec(false, Some(ModelProfile::new(1_000_000))).with_max_concurrency(one),
+        ),
+    );
+    let cap = |id: &str| {
+        catalog
+            .resolve(&ModelId::new(id).into())
+            .expect("cataloged model")
+            .concurrency()
+            .expect("concurrency cap")
+    };
+    let _ = probe.caps.set((cap("host/smart"), cap("host/cheap")));
+    let (harness, _) = cataloged_harness(Arc::clone(&catalog));
+
+    let mut session = harness
+        .session("permits", object_schema())
+        .create()
+        .await
+        .expect("session created");
+
+    // Act
+    let (_, outcome) = limited_run(&harness, RunLimits::default()).await;
+    let summarized = probe.observed.lock().expect("observed lock").len();
+    session
+        .send("read every file")
+        .await
+        .expect("turn succeeds");
+    let compacted = session
+        .compact()
+        .await
+        .expect("compact")
+        .expect("checkpoint");
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    assert_eq!(compacted.model(), Some("cheap"));
+    let observed = probe.observed.lock().expect("observed lock").clone();
+    assert_ne!(summarized, 0);
+    assert!(observed.len() > summarized, "compaction is observed too");
+    assert_eq!(
+        observed.len(),
+        cheap_requests.lock().expect("requests lock").len()
+    );
+    assert!(
+        observed.iter().all(|permits| *permits == (1, 0)),
+        "summary and compaction requests hold the summary model's permit, not the session model's"
+    );
+    assert_eq!(cap("host/cheap").available_permits(), 1);
+}
+
+#[tokio::test]
+async fn summary_model_requests_count_toward_the_runs_limits() {
+    // Arrange
+    let catalog = || {
+        let (smart, smart_requests) = SummarizingModel::new(Vec::new());
+        let (cheap, cheap_requests) = SummarizingModel::new(Vec::new());
+        let catalog = summary_catalog(
+            (smart, smart_spec()),
+            (
+                cheap.reporting_summary_usage(100),
+                cheap_spec(false, Some(ModelProfile::new(1_000_000))),
+            ),
+        );
+
+        (catalog, smart_requests, cheap_requests)
+    };
+    let (unlimited, smart_requests, cheap_requests) = catalog();
+    let (_, unlimited) = limited_run(&cataloged_harness(unlimited).0, RunLimits::default()).await;
+    let sent = smart_requests.lock().expect("requests lock").len()
+        + cheap_requests.lock().expect("requests lock").len();
+    let limit = u32::try_from(sent - 1).expect("request count fits");
+    let (by_requests, _, _) = catalog();
+    let (by_tokens, _, cheap_requests) = catalog();
+
+    // Act
+    let (_, request_limited) = limited_run(
+        &cataloged_harness(by_requests).0,
+        RunLimits::default()
+            .with_max_model_requests(NonZeroU32::new(limit).expect("nonzero limit")),
+    )
+    .await;
+    let (_, token_limited) = limited_run(
+        &cataloged_harness(by_tokens).0,
+        RunLimits::default().with_max_total_tokens(NonZeroU64::new(1).expect("nonzero limit")),
+    )
+    .await;
+
+    // Assert
+    assert!(unlimited.result.is_ok());
+    assert_ne!(reported_summaries(&unlimited), 0);
+    assert_eq!(
+        request_limited.result.err().map(|error| error.kind()),
+        Some(ErrorKind::BudgetExhausted(LimitKind::ModelRequests)),
+        "summary model requests count toward the request limit"
+    );
+    assert_eq!(request_limited.report.model_requests().len(), sent - 1);
+    assert_eq!(
+        token_limited.result.err().map(|error| error.kind()),
+        Some(ErrorKind::BudgetExhausted(LimitKind::Tokens)),
+        "only the summary model reports tokens, so its usage reached the limit"
+    );
+    assert_eq!(cheap_requests.lock().expect("requests lock").len(), 1);
 }

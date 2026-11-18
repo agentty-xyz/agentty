@@ -326,6 +326,11 @@ async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error
         .sum();
     assert_eq!(streamed_output, outcome.usage.output);
     assert_eq!(streamed_output, 12);
+    // A model the host supplied directly has no catalog identifier.
+    assert!(events.iter().all(|event| !matches!(
+        &event.kind,
+        RunEventKind::ModelRequestCompleted { model: Some(_), .. }
+    )));
     assert_eq!(completed_error(&events)?, None);
     assert!(outcome.result.is_ok());
 

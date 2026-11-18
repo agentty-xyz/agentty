@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::support::{model, object_schema, response_without_metadata};
-use crate::catalog::{CatalogError, ModelCatalog, ModelSpec, Role};
+use crate::calibration::Calibration;
+use crate::catalog::{
+    Capabilities, CatalogError, ModelCatalog, ModelId, ModelSelector, ModelSpec, Pricing, Role,
+};
 use crate::context::{
     ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
     HeuristicContextEstimator,
@@ -22,11 +25,16 @@ use crate::file_system::MockFileSystem;
 use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, HarnessBuildError, HistoryBudget};
 use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
-use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
+use crate::model::{
+    MockModel, Model, ModelError, ModelMetadata, ModelProfile, ModelResponse, ReasoningEffort,
+};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelProvider;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::SessionStore;
+use crate::summary_model::SummaryModel;
 #[expect(
     deprecated,
     reason = "legacy-mapping coverage of the deprecated `Harness::allow`"
@@ -776,4 +784,520 @@ fn reconfiguring_a_clone_leaves_the_shared_configuration_unchanged() {
         &harness.inner.database,
         &reconfigured.inner.database
     ));
+}
+
+/// Window of the session model's profile in the summary catalogs.
+const SESSION_WINDOW: u64 = 20_000;
+
+/// Models of a summary catalog.
+struct SummaryModels {
+    catalog: Arc<ModelCatalog>,
+    cheap: Arc<dyn Model>,
+    review: Arc<dyn Model>,
+    smart: Arc<dyn Model>,
+}
+
+/// Returns `host/cheap` with structured output under the declared profile.
+fn structured_cheap_spec() -> ModelSpec {
+    ModelSpec::new("host/cheap")
+        .with_profile(declared_profile())
+        .with_capabilities(Capabilities::NONE.with_structured_output(true))
+}
+
+/// Returns `host/smart` under a [`SESSION_WINDOW`] profile.
+fn session_spec() -> ModelSpec {
+    ModelSpec::new("host/smart").with_profile(ModelProfile::new(SESSION_WINDOW))
+}
+
+/// Returns a host model reporting `provider` in its metadata, when set,
+/// that accepts every output schema unless `rejects_schemas` is set.
+fn hosted_model(provider: Option<&'static str>, rejects_schemas: bool) -> Arc<dyn Model> {
+    let mut model = MockModel::new();
+    model.expect_metadata().return_const(
+        provider.map(|provider| ModelMetadata::new(provider, "model").expect("metadata")),
+    );
+    model.expect_profile().return_const(None);
+    model.expect_validate_input().returning(|_| Ok(()));
+    model.expect_validate_schema().returning(move |_| {
+        if rejects_schemas {
+            return Err(ModelError::UnsupportedOutputSchema {
+                reason: "no summaries".to_string(),
+            });
+        }
+
+        Ok(())
+    });
+
+    Arc::new(model)
+}
+
+/// Returns a catalog assigning the smart role to the `host/smart` session
+/// model and the cheap role to the `cheap` candidates, in order, each a
+/// host model of the given metadata provider.
+fn candidate_catalog(
+    session_provider: Option<&'static str>,
+    session_spec: ModelSpec,
+    cheap: Vec<(ModelSpec, Option<&'static str>)>,
+) -> Arc<ModelCatalog> {
+    let ids: Vec<ModelId> = cheap.iter().map(|(spec, _)| spec.id().clone()).collect();
+    let builder = cheap.into_iter().fold(
+        ModelCatalog::builder().model(session_spec, hosted_model(session_provider, false)),
+        |builder, (spec, provider)| builder.model(spec, hosted_model(provider, false)),
+    );
+
+    Arc::new(
+        builder
+            .assign(Role::SMART, ["host/smart"])
+            .assign(Role::CHEAP, ids)
+            .build()
+            .expect("catalog should build"),
+    )
+}
+
+/// Returns the identifier of the summary model `catalog` gives by default.
+fn default_summary_id(catalog: &Arc<ModelCatalog>) -> Option<String> {
+    Harness::builder()
+        .catalog(Arc::clone(catalog))
+        .build()
+        .expect("cataloged model should build")
+        .inner
+        .summary_model
+        .as_ref()
+        .map(|summary| summary.id.as_str().to_string())
+}
+
+/// Returns a catalog assigning `host/smart` the smart role under a
+/// [`SESSION_WINDOW`] profile, `host/cheap` described by `cheap_spec` the
+/// cheap role, and `host/review`, a reasoning model with structured output
+/// and without a profile, a host-defined review role, all from one host
+/// provider.
+fn summary_catalog(cheap_spec: ModelSpec) -> SummaryModels {
+    let smart = hosted_model(Some("host"), false);
+    let cheap = hosted_model(Some("host"), false);
+    let review = hosted_model(Some("host"), false);
+    let catalog = ModelCatalog::builder()
+        .model(session_spec(), Arc::clone(&smart))
+        .model(cheap_spec, Arc::clone(&cheap))
+        .model(
+            ModelSpec::new("host/review").with_capabilities(
+                Capabilities::NONE
+                    .with_reasoning(true)
+                    .with_structured_output(true),
+            ),
+            Arc::clone(&review),
+        )
+        .assign(Role::SMART, ["host/smart"])
+        .assign(Role::CHEAP, ["host/cheap"])
+        .assign(Role::new("review"), ["host/review"])
+        .build()
+        .expect("catalog should build");
+
+    SummaryModels {
+        catalog: Arc::new(catalog),
+        cheap,
+        review,
+        smart,
+    }
+}
+
+/// Returns the configured summary model of `harness`.
+fn summary_model(harness: &Harness) -> &SummaryModel {
+    harness.inner.summary_model.as_ref().expect("summary model")
+}
+
+#[test]
+fn build_resolves_the_cheap_role_as_the_summary_model_under_its_profile() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec());
+
+    // Act
+    let harness = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .build()
+        .expect("cataloged model should build");
+
+    // Assert
+    let summary = summary_model(&harness);
+    assert!(Arc::ptr_eq(&harness.inner.model, &models.smart));
+    assert!(Arc::ptr_eq(&summary.model, &models.cheap));
+    assert_eq!(summary.id.as_str(), "host/cheap");
+    assert_eq!(
+        summary.context_budget,
+        declared_profile().context_budget().expect("valid profile")
+    );
+    assert_eq!(
+        summary
+            .context_estimator
+            .request_weight(Some(&object_schema())),
+        PROFILE_REQUEST_TOKENS
+    );
+    assert_eq!(summary.reasoning_effort, None);
+}
+
+#[test]
+fn explicit_budgets_size_the_summary_model_up_to_its_declared_budget() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec());
+    let build = |budget: u64| {
+        Harness::builder()
+            .catalog(Arc::clone(&models.catalog))
+            .context_budget(ContextBudget::new(
+                NonZeroU64::new(budget).expect("non-zero"),
+            ))
+            .context_estimator(HeuristicContextEstimator::DEFAULT)
+            .build()
+            .expect("cataloged model should build")
+    };
+
+    // Act
+    let lowered = build(500);
+    let raised = build(1_000_000);
+
+    // Assert
+    let summary = summary_model(&lowered);
+    assert_eq!(
+        summary.context_budget,
+        ContextBudget::new(NonZeroU64::new(500).expect("non-zero"))
+    );
+    assert!(Arc::ptr_eq(
+        &summary.context_estimator,
+        &lowered.inner.context_estimator
+    ));
+    assert_eq!(
+        summary_model(&raised).context_budget,
+        declared_profile().context_budget().expect("valid profile"),
+        "an explicit budget never raises the summary model past its window"
+    );
+}
+
+#[test]
+fn explicit_summary_selector_resolves_a_model_without_a_profile_under_the_session_budget() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec());
+
+    // Act
+    let harness = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .summary_model_selector(Role::new("review"))
+        .build()
+        .expect("cataloged model should build");
+
+    // Assert
+    let summary = summary_model(&harness);
+    assert!(Arc::ptr_eq(&summary.model, &models.review));
+    assert_eq!(
+        summary.context_budget,
+        ModelProfile::new(SESSION_WINDOW)
+            .context_budget()
+            .expect("valid profile")
+    );
+    assert!(Arc::ptr_eq(
+        &summary.context_estimator,
+        &harness.inner.context_estimator
+    ));
+    assert_eq!(summary.reasoning_effort, Some(ReasoningEffort::Low));
+}
+
+#[test]
+fn replacing_the_estimator_also_resizes_the_summary_model() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec());
+    let harness = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .build()
+        .expect("cataloged model should build");
+    summary_model(&harness)
+        .context_calibration
+        .observe_overflow(1);
+
+    // Act
+    let harness = harness.context_estimator(HeuristicContextEstimator::DEFAULT);
+
+    // Assert
+    let summary = summary_model(&harness);
+    assert!(Arc::ptr_eq(
+        &summary.context_estimator,
+        &harness.inner.context_estimator
+    ));
+    assert_eq!(
+        summary
+            .context_calibration
+            .effective_budget(summary.context_budget)
+            .1,
+        Calibration::default(),
+        "the previous estimator's calibration is discarded"
+    );
+}
+
+#[test]
+fn default_summaries_stay_on_the_session_model_without_a_capable_same_provider_cheap_model() {
+    // Arrange
+    let smart: Arc<dyn Model> = Arc::new(profiled_model(None));
+    let smart_only = Arc::new(
+        ModelCatalog::builder()
+            .model(
+                ModelSpec::new("host/smart").with_profile(ModelProfile::new(SESSION_WINDOW)),
+                Arc::clone(&smart),
+            )
+            .assign(Role::SMART, ["host/smart"])
+            .build()
+            .expect("catalog should build"),
+    );
+    let unstructured = summary_catalog(ModelSpec::new("host/cheap"));
+    let structured = summary_catalog(structured_cheap_spec());
+
+    // Act
+    let build = |catalog: &Arc<ModelCatalog>| {
+        Harness::builder()
+            .catalog(Arc::clone(catalog))
+            .build()
+            .expect("cataloged model should build")
+    };
+    let unassigned = build(&smart_only);
+    let missing_capability = build(&unstructured.catalog);
+    let same_model = Harness::builder()
+        .catalog(Arc::clone(&structured.catalog))
+        .model_selector(Role::CHEAP)
+        .build()
+        .expect("cheap model should build");
+    let explicit_model = Harness::builder()
+        .model(Arc::clone(&smart))
+        .catalog(Arc::clone(&structured.catalog))
+        .context_budget(unbounded_context_budget())
+        .build()
+        .expect("explicit model should build");
+
+    // Assert
+    assert!(unassigned.inner.summary_model.is_none());
+    assert!(missing_capability.inner.summary_model.is_none());
+    assert!(Arc::ptr_eq(&same_model.inner.model, &structured.cheap));
+    assert!(same_model.inner.summary_model.is_none());
+    assert!(explicit_model.inner.summary_model.is_none());
+    assert!(explicit_model.inner.catalog.is_none());
+}
+
+#[test]
+fn default_summary_models_are_the_first_capable_same_provider_cheap_candidate() {
+    // Arrange
+    let structured = |id: &str| {
+        ModelSpec::new(id).with_capabilities(Capabilities::NONE.with_structured_output(true))
+    };
+    let pricing = Pricing::new(1_000_000, 0);
+    let ordered = candidate_catalog(
+        Some("host"),
+        session_spec(),
+        vec![
+            (structured("other/cheap"), Some("other")),
+            (ModelSpec::new("host/unstructured"), Some("host")),
+            (structured("host/cheap"), Some("host")),
+        ],
+    );
+    let other_vendor = candidate_catalog(
+        Some("host"),
+        session_spec(),
+        vec![(structured("other/cheap"), Some("other"))],
+    );
+    let without_metadata =
+        candidate_catalog(None, session_spec(), vec![(structured("host/cheap"), None)]);
+    let priced = candidate_catalog(
+        Some("host"),
+        session_spec().with_pricing(pricing),
+        vec![
+            (structured("host/unpriced"), Some("host")),
+            (
+                structured("host/priced").with_pricing(pricing),
+                Some("host"),
+            ),
+        ],
+    );
+    let rejecting = Arc::new(
+        ModelCatalog::builder()
+            .model(session_spec(), hosted_model(Some("host"), false))
+            .model(structured("host/cheap"), hosted_model(Some("host"), true))
+            .assign(Role::SMART, ["host/smart"])
+            .assign(Role::CHEAP, ["host/cheap"])
+            .build()
+            .expect("catalog should build"),
+    );
+
+    // Act
+    let selected = [
+        default_summary_id(&ordered),
+        default_summary_id(&other_vendor),
+        default_summary_id(&without_metadata),
+        default_summary_id(&priced),
+        default_summary_id(&rejecting),
+    ];
+
+    // Assert
+    assert_eq!(
+        selected,
+        [
+            Some("host/cheap".to_string()),
+            None,
+            None,
+            Some("host/priced".to_string()),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn build_rejects_summary_selectors_of_models_that_cannot_summarize() {
+    // Arrange
+    let unstructured = summary_catalog(ModelSpec::new("host/cheap"));
+    let rejecting = Arc::new(
+        ModelCatalog::builder()
+            .model(session_spec(), hosted_model(Some("host"), false))
+            .model(structured_cheap_spec(), hosted_model(Some("host"), true))
+            .assign(Role::SMART, ["host/smart"])
+            .assign(Role::CHEAP, ["host/cheap"])
+            .build()
+            .expect("catalog should build"),
+    );
+    let failure = |catalog: &Arc<ModelCatalog>| {
+        build_error(
+            Harness::builder()
+                .catalog(Arc::clone(catalog))
+                .summary_model_selector(Role::CHEAP)
+                .build(),
+        )
+    };
+
+    // Act
+    let errors = [failure(&unstructured.catalog), failure(&rejecting)];
+
+    // Assert
+    for error in &errors {
+        assert!(matches!(
+            error.get_ref().downcast_ref::<HarnessBuildError>(),
+            Some(HarnessBuildError::SummaryModelUnsupported { id }) if id.as_str() == "host/cheap"
+        ));
+    }
+    assert_eq!(
+        errors[0].get_ref().to_string(),
+        "summary model `host/cheap` cannot write summaries"
+    );
+}
+
+#[test]
+fn compaction_selectors_reuse_the_configured_summary_model_calibration() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec());
+    let harness = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .build()
+        .expect("cataloged model should build");
+    let config = &harness.inner;
+    let resolve = |selector: Role| {
+        config
+            .resolve_summary_model(&selector.into())
+            .expect("cataloged selector")
+    };
+
+    // Act
+    let configured = resolve(Role::CHEAP).expect("configured summary model");
+    let other = resolve(Role::new("review")).expect("review summary model");
+    let session = resolve(Role::SMART);
+    configured.context_calibration.observe_overflow(1);
+
+    // Assert
+    let learned = |summary: &SummaryModel| {
+        summary
+            .context_calibration
+            .effective_budget(summary.context_budget)
+            .1
+            != Calibration::default()
+    };
+    assert!(
+        learned(summary_model(&harness)),
+        "a ceiling learned through a selector applies to compact()"
+    );
+    assert!(!learned(&other));
+    assert!(session.is_none());
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn only_explicit_summary_selectors_cross_providers() {
+    // Arrange
+    let models = summary_catalog(structured_cheap_spec().with_provider(ModelProvider::Kimi));
+
+    // Act
+    let default = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .build()
+        .expect("cataloged model should build");
+    let explicit = Harness::builder()
+        .catalog(Arc::clone(&models.catalog))
+        .summary_model_selector(Role::CHEAP)
+        .build()
+        .expect("cataloged model should build");
+
+    // Assert
+    assert!(default.inner.summary_model.is_none());
+    assert!(Arc::ptr_eq(&summary_model(&explicit).model, &models.cheap));
+}
+
+#[test]
+fn build_reports_summary_selectors_it_cannot_resolve() {
+    // Arrange
+    let models = summary_catalog(ModelSpec::new("host/cheap"));
+    let failure = |selector: ModelSelector| {
+        build_error(
+            Harness::builder()
+                .catalog(Arc::clone(&models.catalog))
+                .summary_model_selector(selector)
+                .build(),
+        )
+    };
+
+    // Act
+    let with_model = build_error(
+        Harness::builder()
+            .model(Arc::clone(&models.smart))
+            .catalog(Arc::clone(&models.catalog))
+            .context_budget(unbounded_context_budget())
+            .summary_model_selector(Role::CHEAP)
+            .build(),
+    );
+    let unknown = failure(ModelId::new("host/missing").into());
+    let unassigned = failure(Role::FAST.into());
+    let incapable = failure(ModelSelector::Require {
+        role: Role::CHEAP,
+        needs: Capabilities::NONE.with_structured_output(true),
+    });
+
+    // Assert
+    let message = |error: &HarnessError| {
+        error
+            .get_ref()
+            .downcast_ref::<HarnessBuildError>()
+            .map(ToString::to_string)
+    };
+    assert!(matches!(
+        with_model.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::ConflictingModelSelection)
+    ));
+    assert!(matches!(
+        unknown.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::Catalog(CatalogError::UnknownModel { id }))
+            if id.as_str() == "host/missing"
+    ));
+    assert!(matches!(
+        unassigned.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::Catalog(
+            CatalogError::UnassignedRole { .. }
+        ))
+    ));
+    assert!(matches!(
+        incapable.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::Catalog(
+            CatalogError::MissingCapability { .. }
+        ))
+    ));
+    assert_eq!(
+        message(&with_model).as_deref(),
+        Some("set either `model` or a model selector, not both")
+    );
 }

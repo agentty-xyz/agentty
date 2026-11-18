@@ -898,6 +898,16 @@ impl ModelRequest {
         self
     }
 
+    /// Replaces the requested reasoning depth, clearing it with `None`.
+    pub(crate) fn with_optional_reasoning_effort(
+        mut self,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Self {
+        self.model_reasoning_effort = reasoning_effort;
+
+        self
+    }
+
     /// Places the turn's host `instructions`, if any, right after its input
     /// and before any tool round, so they follow the cached prompt prefix.
     pub(crate) fn with_instructions(mut self, instructions: Option<&str>) -> Self {

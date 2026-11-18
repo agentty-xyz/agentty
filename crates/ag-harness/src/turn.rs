@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::bash::{BashConfig, BashError};
 pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, TurnControl};
+use crate::catalog::ModelId;
 use crate::comparison::ComparisonBase;
 pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
@@ -32,6 +33,7 @@ use crate::schema_contract::OutputSchema;
 )]
 use crate::tool::Tool;
 use crate::tool::{ReadAction, ToolSet};
+use crate::usage::Cost;
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -421,9 +423,13 @@ pub struct ModelRequestActivity {
     completion: Option<CompletionMetadata>,
     #[serde(default)]
     context: ContextActivity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cost: Option<Cost>,
     duration: Duration,
     #[serde(default)]
     estimated_weight: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<ModelId>,
     #[serde(default)]
     purpose: ModelRequestPurpose,
     #[serde(default)]
@@ -463,6 +469,14 @@ impl ModelRequestActivity {
         self.context
     }
 
+    /// Returns the price of this request's reported usage at the prices of
+    /// the model that answered it, such as a summary model's, or `None`
+    /// when that model has no [`crate::catalog::Pricing`] and for reports
+    /// recorded before this field existed.
+    pub fn cost(&self) -> Option<Cost> {
+        self.cost
+    }
+
     /// Returns the elapsed provider-request time.
     pub fn duration(&self) -> Duration {
         self.duration
@@ -473,6 +487,15 @@ impl ModelRequestActivity {
     /// Reports recorded before this field existed report zero.
     pub fn estimated_weight(&self) -> u64 {
         self.estimated_weight
+    }
+
+    /// Returns the catalog identifier of the model that answered this
+    /// request, such as the summary model answering a round summary, when
+    /// the harness selected it from a [`crate::ModelCatalog`]; `None` for a
+    /// model the host supplied directly and for reports recorded before
+    /// this field existed.
+    pub fn model(&self) -> Option<&ModelId> {
+        self.model.as_ref()
     }
 
     /// Returns why the harness sent the request. Reports recorded before
@@ -511,8 +534,10 @@ impl ModelRequestActivity {
             calibrated_weight: None,
             completion,
             context: ContextActivity::default(),
+            cost: None,
             duration,
             estimated_weight: 0,
+            model: None,
             purpose: ModelRequestPurpose::Turn,
             rejected_output: false,
             response_type,
@@ -554,6 +579,15 @@ impl ModelRequestActivity {
 
     pub(crate) fn with_purpose(mut self, purpose: ModelRequestPurpose) -> Self {
         self.purpose = purpose;
+
+        self
+    }
+
+    /// Attributes the request to the cataloged `model` that answered it,
+    /// priced at that model's `cost`.
+    pub(crate) fn with_answerer(mut self, model: Option<ModelId>, cost: Option<Cost>) -> Self {
+        self.cost = cost;
+        self.model = model;
 
         self
     }

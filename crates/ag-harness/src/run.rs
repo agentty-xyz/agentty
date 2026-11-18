@@ -405,7 +405,9 @@ pub struct RunOutcome {
     /// order; empty unless the request configured `bash`.
     pub commands: Vec<CommandRecord>,
     /// Price of [`Self::usage`], the sum of each model request's
-    /// [`Cost`], or `None` when the run's model has no
+    /// [`Cost`] at the prices of the model that answered it, or `None`
+    /// when the run's model, or any other model that answered one of its
+    /// requests such as a summary model, has no
     /// [`crate::catalog::Pricing`].
     pub cost: Option<Cost>,
     /// Files the run's `write` tool calls targeted, in order, with each

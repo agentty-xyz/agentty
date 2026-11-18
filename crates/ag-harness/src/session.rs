@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
+use crate::catalog::{CatalogError, ModelId};
 use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::context::{HistoryProjection, HistoryTurn};
 use crate::recovery::ExecutionIdentity;
@@ -172,6 +173,9 @@ pub enum SessionError {
     /// The host selected a key absent from its registry.
     #[error(transparent)]
     Registry(#[from] crate::model::ModelRegistryError),
+    /// [`crate::Session::compact_with`] could not select its model.
+    #[error("cannot select the compaction model")]
+    ModelSelection(#[source] ModelSelectionError),
     /// The harness's registration differs from the session's current
     /// selection.
     #[error("persistent session `{id}` has a different model registration")]
@@ -293,6 +297,28 @@ pub enum SessionError {
         turn: TurnError,
         /// Failure returned while recording the turn failure.
         persistence: Box<SessionError>,
+    },
+}
+
+/// Why [`crate::Session::compact_with`] could not select its model,
+/// reported inside [`SessionError::ModelSelection`].
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ModelSelectionError {
+    /// The session's model did not come from a catalog, such as a model
+    /// set with [`crate::HarnessBuilder::model`] or registered by
+    /// [`crate::Session::switch_model`].
+    #[error("the session's model did not come from a catalog")]
+    NoCatalog,
+    /// The catalog could not resolve the selector.
+    #[error("cannot select the model from the catalog")]
+    Catalog(#[source] CatalogError),
+    /// The selected model lacks structured output or rejects the summary
+    /// schema, so it cannot write summaries.
+    #[error("model `{id}` cannot write summaries")]
+    Unsupported {
+        /// Catalog identifier of the selected model.
+        id: ModelId,
     },
 }
 
