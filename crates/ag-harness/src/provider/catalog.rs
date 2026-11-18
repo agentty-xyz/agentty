@@ -428,7 +428,6 @@ impl ModelProvider {
         client.map_err(ModelConfigurationError::from)
     }
 
-    /// Returns the catalog record of `model`, if this provider lists it.
     /// Returns the context profile and output limit this catalog declares
     /// for `model`, independent of the environment; an OpenAI-compatible
     /// server declares neither, since its limits come from the server.
@@ -443,6 +442,7 @@ impl ModelProvider {
         }
     }
 
+    /// Returns the catalog record of `model`, if this provider lists it.
     fn cataloged(self, model: &str) -> Option<&'static CatalogedModel> {
         CATALOGED_MODELS
             .iter()

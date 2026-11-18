@@ -155,9 +155,10 @@ impl ModelCatalog {
     }
 
     /// Catalogs like [`Self::from_environment_with`], reading the `ChatGPT`
-    /// sign-in from the host-chosen `auth_file`, such as one located with
-    /// [`crate::provider::chatgpt_auth_file_in`], in place of
-    /// `CHATGPT_AUTH_FILE`.
+    /// sign-in from the host-chosen `auth_file`, such as the one
+    /// [`crate::provider::chatgpt_auth_file_in`] locates, in place of
+    /// `CHATGPT_AUTH_FILE`; `None` catalogs exactly like
+    /// [`Self::from_environment_with`].
     ///
     /// # Errors
     ///
@@ -165,9 +166,9 @@ impl ModelCatalog {
     #[cfg(feature = "providers-openai")]
     pub fn from_environment_with_auth_file(
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
-        auth_file: impl AsRef<std::path::Path>,
+        auth_file: Option<&std::path::Path>,
     ) -> Result<Self, CatalogError> {
-        Self::catalog_environment(environment, Some(auth_file.as_ref()))
+        Self::catalog_environment(environment, auth_file)
     }
 
     /// Catalogs the configured providers' models, passing `auth_file` to

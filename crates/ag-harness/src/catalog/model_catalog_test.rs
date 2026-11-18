@@ -540,9 +540,12 @@ fn environment_reads_a_chatgpt_sign_in_at_a_host_chosen_path() {
     let environment = lookup(&[("MODEL_API_KEY", "muse-key")]);
 
     // Act
-    let unset = ModelCatalog::from_environment_with(lookup(&[("MODEL_API_KEY", "muse-key")]))
-        .expect("valid environment");
-    let injected = ModelCatalog::from_environment_with_auth_file(environment, &auth_file)
+    let unset = ModelCatalog::from_environment_with_auth_file(
+        lookup(&[("MODEL_API_KEY", "muse-key")]),
+        None,
+    )
+    .expect("valid environment");
+    let injected = ModelCatalog::from_environment_with_auth_file(environment, Some(&auth_file))
         .expect("valid environment");
 
     // Assert

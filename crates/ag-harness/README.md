@@ -505,10 +505,12 @@ let profile = match server.running_context_window("qwen3:latest").await? {
 .expect("OpenAI-compatible models declare their profile");
 ```
 
-Its requests carry only portable fields: the schema is stated in the prompt (with the
-`json_schema` response format when no tools are offered), reasoning is neither requested
-nor replayed, and no prompt cache key or image input is sent. The server must support
-tool calls. A server that supports more opts in through
+Its requests carry only portable fields plus the quirks local servers need: the schema
+is stated in the prompt (with the `json_schema` response format when no tools are
+offered), the output bound is sent as the legacy `max_tokens`, turn instructions join
+the preceding user message for chat templates that require alternating roles, reasoning
+is neither requested nor replayed, and no prompt cache key or image input is sent. The
+server must support tool calls. A server that supports more opts in through
 `ProviderSpec::openai_compatible(config)` and `ModelClient::from_spec`, such as
 `with_image_input(true)` for a vision model or `JsonSchema` structured output for vLLM.
 
@@ -537,10 +539,10 @@ let profile = ModelProvider::OpenAi
 through OpenAI's "Sign in with ChatGPT". Instead of an API key it reads the sign-in
 stored in a credential file the host chooses with `ModelConfiguration::auth_file`, else
 the one `CHATGPT_AUTH_FILE` names; the harness has no default location. A host writes it
-with `ChatGptSignIn::new(auth_file)` or `ChatGptLogin`, and
-`ModelCatalog::from_environment_with_auth_file` catalogs its models from it.
-`chatgpt_auth_file_in(environment, data_dir)` locates the file under a host's data
-directory, so `ag-harness login chatgpt` and Agentty share
+with `ChatGptSignIn::from_environment_with_auth_file(environment, auth_file)` or
+`ChatGptLogin`, and `ModelCatalog::from_environment_with_auth_file` catalogs its models
+from it. `chatgpt_auth_file_in(environment, data_dir)` locates the file under a host's
+data directory, so `ag-harness login chatgpt` and Agentty share
 `~/.agentty/auth/chatgpt.json`. `client_from_environment` fails with
 `ModelConfigurationError::SignIn` until the user signs in, and each request refreshes
 the one-hour access token shortly before it expires, serializing rotating refreshes

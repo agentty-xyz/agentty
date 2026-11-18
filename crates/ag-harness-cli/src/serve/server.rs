@@ -353,12 +353,11 @@ where
     ) -> Result<HarnessBuilder, ServeError> {
         // The harness keeps no default sign-in location, so the server
         // passes the one the CLI shares with Agentty.
-        let catalog = match login::chatgpt_auth_file(&mut self.environment) {
-            Some(auth_file) => {
-                ModelCatalog::from_environment_with_auth_file(&mut self.environment, auth_file)
-            }
-            None => ModelCatalog::from_environment_with(&mut self.environment),
-        }
+        let auth_file = login::chatgpt_auth_file(&mut self.environment);
+        let catalog = ModelCatalog::from_environment_with_auth_file(
+            &mut self.environment,
+            auth_file.as_deref(),
+        )
         .map_err(ServeError::config)?;
         let selector = match model {
             ModelChoice::Role(role) => ModelSelector::Role(Role::new(role.clone())),

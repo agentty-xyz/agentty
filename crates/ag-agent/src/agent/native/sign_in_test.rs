@@ -112,16 +112,25 @@ fn environment(auth_file: &std::path::Path, server: &MockServer) -> BTreeMap<Str
 }
 
 #[tokio::test]
-async fn sign_in_chatgpt_opens_the_url_and_stores_the_approved_credential() {
+async fn sign_in_chatgpt_opens_the_url_and_stores_the_approved_credential_under_agentty_root() {
     // Arrange
     let server = token_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let auth_file = directory.path().join("auth/chatgpt.json");
+    // Only the data directory locates the file, as for a user who never
+    // set `CHATGPT_AUTH_FILE`.
+    let environment = BTreeMap::from([
+        (
+            "AGENTTY_ROOT".to_string(),
+            directory.path().to_string_lossy().into_owned(),
+        ),
+        ("CHATGPT_AUTH_URL".to_string(), server.uri()),
+    ]);
     let browser = ApprovingBrowser::new();
 
     // Act
     let outcome = sign_in_chatgpt(
-        &environment(&auth_file, &server),
+        &environment,
         browser.handler("&code=code&client_id=oaiapp_issued"),
     )
     .await;

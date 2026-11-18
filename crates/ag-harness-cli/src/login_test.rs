@@ -120,23 +120,27 @@ fn environment(
 }
 
 #[tokio::test]
-async fn login_stores_the_approved_sign_in() {
+async fn login_stores_the_approved_sign_in_under_agentty_root() {
     // Arrange
     let server = token_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let auth_file = directory.path().join("auth/chatgpt.json");
+    let root = directory.path().to_string_lossy().into_owned();
+    let issuer = server.uri();
+    // Only the data directory locates the file, as for a user who never
+    // set `CHATGPT_AUTH_FILE`.
+    let environment = move |name: &str| match name {
+        "AGENTTY_ROOT" => Ok(root.clone()),
+        "CHATGPT_AUTH_URL" => Ok(issuer.clone()),
+        _ => Err(env::VarError::NotPresent),
+    };
     let browser = ApprovingBrowser::new("&code=code&client_id=oaiapp_issued");
     let mut output = Vec::new();
 
     // Act
-    login(
-        environment(auth_file.to_string_lossy().into_owned(), &server),
-        &browser,
-        &mut output,
-        0,
-    )
-    .await
-    .expect("sign-in should succeed");
+    login(environment, &browser, &mut output, 0)
+        .await
+        .expect("sign-in should succeed");
 
     // Assert
     let stored = ChatGptCredentials::load(&auth_file).expect("stored sign-in");

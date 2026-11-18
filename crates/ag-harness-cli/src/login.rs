@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::{env, io};
 
-use ag_harness::provider::{CHATGPT_AUTH_URL_ENV, ChatGptSignIn, chatgpt_auth_file_in};
+use ag_harness::provider::{ChatGptSignIn, chatgpt_auth_file_in};
 
 use crate::CliError;
 
@@ -66,14 +66,8 @@ pub(crate) async fn login(
     port: u16,
 ) -> Result<(), CliError> {
     let auth_file = chatgpt_auth_file(&mut environment).ok_or(CliError::ChatGptAuthFileLocation)?;
-    // A blank variable counts as unset, keeping `OpenAI`'s server.
-    let sign_in = ChatGptSignIn::new(auth_file)
-        .with_issuer(
-            environment(CHATGPT_AUTH_URL_ENV)
-                .ok()
-                .filter(|issuer| !issuer.trim().is_empty()),
-        )
-        .with_port(port);
+    let sign_in =
+        ChatGptSignIn::from_environment_with_auth_file(&mut environment, auth_file).with_port(port);
     let auth_file = sign_in.auth_file().to_path_buf();
     let pending = sign_in.start().await?;
     let url = pending.authorize_url();
