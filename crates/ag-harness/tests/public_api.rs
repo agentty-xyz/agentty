@@ -107,9 +107,8 @@ use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTra
 #[cfg(feature = "sqlite")]
 use ag_harness::model::ContextSummaryPolicy;
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
-    ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
-    ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
+    ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ModelResponse,
 };
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{
@@ -844,7 +843,7 @@ async fn send_large_turns(
 ) -> Result<Vec<ag_harness::turn::HistoryActivity>, Box<dyn Error>> {
     let mut session = harness
         .store(Arc::new(MemoryStore::new()))
-        .session("history", request()?.schema().clone())
+        .session("history", request()?.output().clone())
         .create()
         .await?;
     let mut activity = Vec::with_capacity(turns);
