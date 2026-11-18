@@ -1,15 +1,15 @@
 //! Compact execution graph rendering beside the regular chat composer.
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    GraphBlockedReason, GraphCompletionGate, GraphDependency, GraphNode, GraphNodeProgress,
-    GraphNodeStatus, GraphProposalVersionOutcome,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate,
+    GraphDependency, GraphNode, GraphNodeProgress, GraphNodeStatus, GraphProposalVersionOutcome,
 };
 use ag_tui_text::text_util::{
-    truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines_breaking_long_words,
+    inline_text, truncate_spans_with_ellipsis, truncate_with_ellipsis,
+    wrap_lines_breaking_long_words,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -21,16 +21,40 @@ use unicode_width::UnicodeWidthStr;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::execution_graph::{outputs_awaiting_acceptance, takes_revision_guidance};
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::ui::help_format;
 use crate::ui::style::palette;
 
-/// Indent of edge rows and wrapped status rows below node names.
+/// Indent of objective rows below node names, aligned past the status glyph.
 const DETAIL_INDENT: &str = "  ";
 
-/// Gap between the node-name column and its status.
-const STATUS_GAP: &str = "  ";
+/// Display-width cap of a wrapped objective, keeping it to a few rows.
+const OBJECTIVE_MAX_WIDTH: usize = 128;
 
-/// Inspector shortcut shown below the graph.
-const INSPECTOR_HINT: &str = "w: details and actions";
+/// Minimum gap between a node name and its right-aligned status.
+const STATUS_GAP: usize = 2;
+
+/// Rail drawn for a satisfied dependency.
+const SATISFIED_RAIL: &str = "│";
+
+/// Rail drawn for a dependency that still blocks its dependent.
+const PENDING_RAIL: &str = "┊";
+
+/// Inspector shortcut label shown after its key at the bottom of the panel.
+const INSPECTOR_LABEL: &str = ": details and actions";
+
+/// Rotating phases of the glyph marking active work. The first phase is the
+/// static working glyph, so frame zero matches the settled rendering.
+const ACTIVE_GLYPHS: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// Spinner frames per animation phase, so each phase stays visible at the
+/// runtime's forced redraw cadence.
+const FRAMES_PER_PHASE: usize = 2;
+
+/// Progress bar cell for finished and active nodes.
+const BAR_FILLED: &str = "━";
+
+/// Progress bar cell for nodes that have not started or did not succeed.
+const BAR_TRACK: &str = "─";
 
 /// Shared painting and scroll geometry. Integer division rounds the sidebar
 /// down so it never exceeds 35% of the available width, even when resized.
@@ -46,72 +70,150 @@ pub(crate) fn areas(area: Rect, mode: &AppMode, has_graph: bool) -> (Rect, Optio
     (chat, Some(graph))
 }
 
-/// Renders the proposal status and the node graph with vertical connectors.
-/// Oversized graphs collapse to one prioritized row per node.
-pub(crate) fn render(frame: &mut Frame, area: Rect, snapshot: Option<&GraphChatSnapshot>) {
-    let block = Block::default()
-        .title("Execution graph")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::border()));
+/// Renders the proposal status and a timeline of nodes whose status glyphs
+/// sit on a dependency rail. When space runs out, wrapped objectives first
+/// shrink to one row and are then dropped; oversized graphs then collapse to
+/// one prioritized row per node.
+/// The inspector shortcut stays pinned to the bottom row. Active work
+/// animates at `spinner_frame`: working glyphs rotate, and a progress bar
+/// below the status sweeps a highlight through the nodes in flight.
+pub(crate) fn render(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: Option<&GraphChatSnapshot>,
+    spinner_frame: usize,
+) {
+    let block = panel_block(snapshot);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = usize::from(inner.width);
-    let text = summary(snapshot);
+    let header = summary(snapshot, spinner_frame);
     let graph = snapshot.and_then(launched_nodes);
     let awaited = graph.map_or_default(|(snapshot, _)| awaited_producers(snapshot));
-    let mut lines = wrap_lines_breaking_long_words(&text, width);
-    if let Some((snapshot, nodes)) = graph {
-        lines.push(Line::default());
-        lines.extend(graph_lines(snapshot, nodes, &awaited, width));
+    let reserved_rows = if snapshot.is_some() { 2 } else { 0 };
+    let room = usize::from(inner.height).saturating_sub(reserved_rows);
+    let mut header_lines = wrap_summary(&header, width);
+    if let Some((snapshot, nodes)) = graph
+        && let Some(progress) = &snapshot.progress
+    {
+        header_lines.extend(progress_bar(progress, nodes.len(), width, spinner_frame));
     }
-    if snapshot.is_some() {
-        lines.push(Line::default());
-        lines.push(Line::styled(INSPECTOR_HINT, muted_style()));
-    }
-    if lines.len() <= usize::from(inner.height) {
-        frame.render_widget(Paragraph::new(lines), inner);
+    let detail_levels: &[ObjectiveDetail] = if graph.is_some() {
+        &[
+            ObjectiveDetail::Wrapped,
+            ObjectiveDetail::OneRow,
+            ObjectiveDetail::Hidden,
+        ]
+    } else {
+        &[ObjectiveDetail::Hidden]
+    };
+    let fitting = detail_levels.iter().find_map(|&objective_detail| {
+        let mut lines = header_lines.clone();
+        if let Some((snapshot, nodes)) = graph {
+            lines.push(Line::default());
+            lines.extend(graph_lines(
+                snapshot,
+                nodes,
+                &awaited,
+                width,
+                objective_detail,
+                spinner_frame,
+            ));
+        }
+
+        (lines.len() <= room).then_some(lines)
+    });
+    if let Some(lines) = fitting {
+        let [body, hint] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        if snapshot.is_some() {
+            frame.render_widget(Paragraph::new(lines), body);
+            frame.render_widget(Paragraph::new(inspector_hint()), hint);
+        } else {
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
 
         return;
     }
     let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
     let (lines, overflow) = if let Some((snapshot, nodes)) = graph {
-        compact_lines(snapshot, nodes, &awaited, &text, body)
+        compact_lines(snapshot, nodes, &awaited, &header, body, spinner_frame)
     } else {
         (
-            lines.into_iter().take(usize::from(body.height)).collect(),
+            header_lines
+                .into_iter()
+                .take(usize::from(body.height))
+                .collect(),
             "More details".into(),
         )
     };
     frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(overflow),
-            Line::styled(INSPECTOR_HINT, muted_style()),
-        ]),
+        Paragraph::new(vec![Line::from(overflow), inspector_hint()]),
         footer,
     );
 }
 
-/// Proposal lifecycle rows shown above the node graph.
-fn summary(snapshot: Option<&GraphChatSnapshot>) -> String {
+/// Bordered panel titled with the proposal version and, once a graph is
+/// resolved, a right-aligned count of finished nodes.
+fn panel_block(snapshot: Option<&GraphChatSnapshot>) -> Block<'static> {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::border()));
     let Some(snapshot) = snapshot else {
-        return "Describe your task in chat to propose an execution graph.\n\nNo nodes run before \
-                you approve the exact proposal version."
-            .into();
+        return block.title("Execution graph");
     };
-    let proposal = &snapshot.proposal;
-    let version = &proposal.version;
-    let mut text = format!("Proposal v{}", version.number);
+    let block = block.title(format!(
+        "Execution graph · v{}",
+        snapshot.proposal.version.number
+    ));
+    let Some((_, nodes)) = launched_nodes(snapshot) else {
+        return block;
+    };
+    let done = snapshot
+        .progress
+        .iter()
+        .flat_map(|progress| &progress.nodes)
+        .filter(|state| state.status == GraphNodeStatus::Succeeded)
+        .count();
+
+    block.title_top(
+        Line::styled(format!("{done}/{} done", nodes.len()), muted_style()).right_aligned(),
+    )
+}
+
+/// Proposal lifecycle rows shown above the node graph, each with one style.
+/// Running graphs and generating previews lead with a rotating glyph.
+fn summary(snapshot: Option<&GraphChatSnapshot>, spinner_frame: usize) -> Vec<(String, Style)> {
+    let Some(snapshot) = snapshot else {
+        return vec![
+            (
+                "Describe your task in chat to propose an execution graph.".into(),
+                Style::default(),
+            ),
+            (String::new(), Style::default()),
+            (
+                "No nodes run before you approve the exact proposal version.".into(),
+                muted_style(),
+            ),
+        ];
+    };
+    let version = &snapshot.proposal.version;
+    let mut rows = Vec::new();
     if let Some(error) = &snapshot.error {
-        let _ = write!(text, "\nStatus unavailable (last snapshot): {error}");
+        rows.push((
+            format!("Status unavailable (last snapshot): {error}"),
+            color_style(palette::warning()),
+        ));
     }
     if version.is_cancelled {
-        text.push_str("\nCancelled. No graph was launched.");
+        rows.push(("Cancelled. No graph was launched.".into(), muted_style()));
 
-        return text;
+        return rows;
     }
     if let Some(progress) = &snapshot.progress {
-        let _ = write!(text, "\nStatus: {:?}", progress.status);
+        let (glyph, label, color) = graph_status(progress.status, spinner_frame);
+        rows.push((format!("{glyph} {label}"), color_style(color)));
         if let Some((producer, _)) = outputs_awaiting_acceptance(progress).first() {
             let takes_revision = launched_nodes(snapshot).is_some_and(|(_, nodes)| {
                 takes_revision_guidance(nodes, progress, &producer.node_id)
@@ -121,31 +223,114 @@ fn summary(snapshot: Option<&GraphChatSnapshot>) -> String {
             } else {
                 "reply in chat to accept it"
             };
-            let _ = write!(
-                text,
-                "\n{} awaits your approval; {action}",
-                producer.node_id
-            );
+            rows.push((
+                format!("{} awaits your approval; {action}", producer.node_id),
+                color_style(palette::warning()),
+            ));
         }
     } else if version.approval.is_some() {
-        text.push_str("\nApproved; loading execution status");
+        rows.push(("Approved; loading execution status".into(), muted_style()));
     }
     match &version.outcome {
-        GraphProposalVersionOutcome::Generating => text.push_str("\nGenerating preview..."),
+        GraphProposalVersionOutcome::Generating => {
+            rows.push((
+                format!("{} Generating preview...", active_glyph(spinner_frame)),
+                muted_style(),
+            ));
+        }
         GraphProposalVersionOutcome::Failed(error) => {
-            let _ = write!(text, "\nGeneration failed: {error}");
+            rows.push((
+                format!("Generation failed: {error}"),
+                color_style(palette::danger()),
+            ));
         }
         GraphProposalVersionOutcome::Generated { launch, response } => {
             if let GraphProposalOutcome::Clarification { .. } = &response.outcome {
-                text.push_str("\nNeeds your input");
+                rows.push(("Needs your input".into(), color_style(palette::question())));
             }
             if launch.is_some() && version.approval.is_none() {
-                text.push_str("\nAwaiting your approval");
+                rows.push((
+                    "Awaiting your approval".into(),
+                    color_style(palette::warning()),
+                ));
             }
         }
     }
 
-    text
+    rows
+}
+
+/// Returns the glyph, label, and semantic color of the overall graph status;
+/// a running graph's glyph rotates with `spinner_frame`.
+fn graph_status(
+    status: ExecutionGraphStatus,
+    spinner_frame: usize,
+) -> (&'static str, &'static str, Color) {
+    match status {
+        ExecutionGraphStatus::Running => (active_glyph(spinner_frame), "Running", palette::info()),
+        ExecutionGraphStatus::Blocked => ("●", "Blocked", palette::warning()),
+        ExecutionGraphStatus::Paused => ("‖", "Paused", palette::text_muted()),
+        ExecutionGraphStatus::Completed => ("✓", "Completed", palette::success()),
+        ExecutionGraphStatus::Failed => ("✗", "Failed", palette::danger()),
+        ExecutionGraphStatus::Cancelled => ("⊘", "Canceled", palette::text_subtle()),
+    }
+}
+
+/// Returns the rotating active-work glyph for one spinner frame.
+fn active_glyph(spinner_frame: usize) -> &'static str {
+    ACTIVE_GLYPHS[spinner_frame / FRAMES_PER_PHASE % ACTIVE_GLYPHS.len()]
+}
+
+/// Full-width bar of finished nodes in the success color, then active nodes
+/// in the info color with a highlight sweeping through them, then a muted
+/// track for the rest. Active nodes always claim at least one cell.
+fn progress_bar(
+    progress: &ExecutionGraphProgress,
+    node_count: usize,
+    width: usize,
+    spinner_frame: usize,
+) -> Option<Line<'static>> {
+    if node_count == 0 || width == 0 {
+        return None;
+    }
+    let count = |matches: fn(GraphNodeStatus) -> bool| {
+        progress
+            .nodes
+            .iter()
+            .filter(|state| matches(state.status))
+            .count()
+            .min(node_count)
+    };
+    let done = count(|status| status == GraphNodeStatus::Succeeded);
+    let active =
+        count(|status| matches!(status, GraphNodeStatus::Queued | GraphNodeStatus::Running));
+    let done_cells = done * width / node_count;
+    let active_cells = if active == 0 {
+        0
+    } else {
+        ((done + active).min(node_count) * width / node_count)
+            .saturating_sub(done_cells)
+            .max(1)
+            .min(width - done_cells)
+    };
+    let highlight = (spinner_frame / FRAMES_PER_PHASE)
+        .checked_rem(active_cells)
+        .map(|offset| done_cells + offset);
+    let spans = (0..width)
+        .map(|cell| {
+            if cell < done_cells {
+                Span::styled(BAR_FILLED, color_style(palette::success()))
+            } else if Some(cell) == highlight {
+                Span::styled(BAR_FILLED, color_style(palette::text()))
+            } else if cell < done_cells + active_cells {
+                Span::styled(BAR_FILLED, color_style(palette::info()))
+            } else {
+                Span::styled(BAR_TRACK, color_style(palette::text_subtle()))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Some(Line::from(spans))
 }
 
 /// Returns the resolved nodes of a proposal that is not cancelled.
@@ -172,86 +357,207 @@ fn awaited_producers(snapshot: &GraphChatSnapshot) -> BTreeSet<&str> {
         .collect()
 }
 
-/// Vertical node list in declaration order. Each dependency draws a `│`
-/// edge, labeled with its source when it is not the preceding node, and a
-/// `▼` into its dependent; unconnected roots are separated by a blank row.
+/// Word-wraps styled summary rows to the panel width.
+fn wrap_summary(rows: &[(String, Style)], width: usize) -> Vec<Line<'static>> {
+    rows.iter()
+        .flat_map(|(text, style)| {
+            wrap_lines_breaking_long_words(text, width)
+                .into_iter()
+                .map(|line| Line::styled(line.to_string(), *style))
+        })
+        .collect()
+}
+
+/// How much of each node objective the timeline shows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObjectiveDetail {
+    /// Word-wrapped beside the rail, capped at [`OBJECTIVE_MAX_WIDTH`].
+    Wrapped,
+    /// One row, shortened with an ellipsis.
+    OneRow,
+    /// Not shown.
+    Hidden,
+}
+
+/// Vertical node timeline in declaration order. Each node row leads with its
+/// status glyph, and the rail column below it carries one highlighted label
+/// row per dependency of the next node: solid once satisfied, dotted while it
+/// still blocks. A bare rail row sets those labels apart from the next node.
+/// Each node's objective follows its name beside the rail at
+/// `objective_detail`. Unconnected roots are separated by a blank row.
 fn graph_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
     awaited: &BTreeSet<&str>,
     width: usize,
+    objective_detail: ObjectiveDetail,
+    spinner_frame: usize,
 ) -> Vec<Line<'static>> {
-    let statuses = nodes
+    let satisfied = nodes
         .iter()
-        .map(|node| node_status(snapshot, node, awaited))
+        .map(|node| {
+            node.dependencies
+                .iter()
+                .map(|dependency| is_dependency_satisfied(snapshot, node, dependency))
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    let name_width = nodes
-        .iter()
-        .map(|node| node.id.width())
-        .max()
-        .unwrap_or_default();
-    let status_width = statuses
-        .iter()
-        .map(|status| status_label_width(*status))
-        .max()
-        .unwrap_or_default();
-    let fits_inline = name_width + STATUS_GAP.width() + status_width <= width;
     let mut lines = Vec::new();
-    for (index, (node, status)) in nodes.iter().zip(statuses).enumerate() {
+    for (index, node) in nodes.iter().enumerate() {
         let previous = index
             .checked_sub(1)
             .map(|previous| nodes[previous].id.as_str());
         if node.dependencies.is_empty() && index > 0 {
             lines.push(Line::default());
         }
-        let mut all_satisfied = true;
-        for dependency in &node.dependencies {
-            let is_satisfied = is_dependency_satisfied(snapshot, node, dependency);
-            all_satisfied &= is_satisfied;
-            let label = edge_label(dependency, previous);
-            let mut edge = if label.is_empty() {
-                "│".to_string()
-            } else {
-                format!("│ {label}")
-            };
-            if is_satisfied {
-                edge.push_str(" ✓");
-            }
+        for (dependency, is_satisfied) in node.dependencies.iter().zip(&satisfied[index]) {
             lines.push(fitted_line(
                 vec![
-                    Span::raw(DETAIL_INDENT),
-                    Span::styled(edge, edge_style(is_satisfied)),
+                    rail(*is_satisfied),
+                    Span::raw(" "),
+                    Span::styled(
+                        edge_label(dependency, previous),
+                        edge_label_style(*is_satisfied),
+                    ),
                 ],
                 width,
             ));
         }
         if !node.dependencies.is_empty() {
-            lines.push(fitted_line(
+            let is_satisfied = satisfied[index].iter().all(|is_satisfied| *is_satisfied);
+            lines.push(Line::from(rail(is_satisfied)));
+        }
+        lines.extend(node_lines(
+            node,
+            node_status(snapshot, node, awaited),
+            width,
+            spinner_frame,
+        ));
+        if objective_detail == ObjectiveDetail::Hidden {
+            continue;
+        }
+        let prefix = match satisfied.get(index + 1) {
+            Some(next) if !next.is_empty() => {
                 vec![
-                    Span::raw(DETAIL_INDENT),
-                    Span::styled("▼", edge_style(all_satisfied)),
-                ],
-                width,
-            ));
-        }
-        let name = Span::styled(node.id.clone(), name_style());
-        if fits_inline {
-            let padding = name_width - node.id.width();
-            let mut spans = vec![
-                name,
-                Span::raw(format!("{}{STATUS_GAP}", " ".repeat(padding))),
-            ];
-            spans.extend(status_spans(status));
-            lines.push(fitted_line(spans, width));
-        } else {
-            lines.push(fitted_line(vec![name], width));
-            let mut spans = vec![Span::raw(DETAIL_INDENT)];
-            spans.extend(status_spans(status));
-            lines.push(fitted_line(spans, width));
-        }
+                    rail(next.iter().all(|is_satisfied| *is_satisfied)),
+                    Span::raw(" "),
+                ]
+            }
+            _ => vec![Span::raw(DETAIL_INDENT)],
+        };
+        lines.extend(objective_lines(
+            &node.objective,
+            &prefix,
+            width,
+            objective_detail,
+        ));
     }
 
     lines
+}
+
+/// Objective rows after `prefix`: one shortened row, or word-wrapped rows of
+/// at most [`OBJECTIVE_MAX_WIDTH`] columns in total.
+fn objective_lines(
+    objective: &str,
+    prefix: &[Span<'static>],
+    width: usize,
+    objective_detail: ObjectiveDetail,
+) -> Vec<Line<'static>> {
+    let objective = inline_text(objective);
+    let row = |text: String| {
+        let mut spans = prefix.to_vec();
+        spans.push(Span::styled(text, muted_style()));
+
+        fitted_line(spans, width)
+    };
+    if objective_detail == ObjectiveDetail::OneRow {
+        return vec![row(objective)];
+    }
+    let objective = truncate_with_ellipsis(&objective, OBJECTIVE_MAX_WIDTH);
+    let room = width.saturating_sub(DETAIL_INDENT.width());
+
+    wrap_lines_breaking_long_words(&objective, room)
+        .into_iter()
+        .map(|line| row(line.to_string()))
+        .collect()
+}
+
+/// Draws one rail cell, solid and green once its dependency is satisfied.
+fn rail(is_satisfied: bool) -> Span<'static> {
+    if is_satisfied {
+        Span::styled(SATISFIED_RAIL, color_style(palette::success()))
+    } else {
+        Span::styled(PENDING_RAIL, muted_style())
+    }
+}
+
+/// Italic dependency labels stand apart from muted objectives: accent while
+/// the dependency blocks, green once satisfied.
+fn edge_label_style(is_satisfied: bool) -> Style {
+    let color = if is_satisfied {
+        palette::success()
+    } else {
+        palette::accent()
+    };
+
+    color_style(color).add_modifier(Modifier::ITALIC)
+}
+
+/// Names what a dependency waits for, omitting the source of an output gate
+/// when it is the node drawn directly above.
+fn edge_label(dependency: &GraphDependency, previous: Option<&str>) -> String {
+    let source = dependency.node_id.as_str();
+    let from = if previous == Some(source) {
+        String::new()
+    } else {
+        format!(" from {source}")
+    };
+
+    match &dependency.gate {
+        GraphCompletionGate::ExecutionSucceeded => format!("after {source}"),
+        GraphCompletionGate::ResultValidated { output_name } => {
+            format!("needs {output_name}{from}")
+        }
+        GraphCompletionGate::ResultAccepted { output_name } => {
+            format!("needs {output_name} accepted{from}")
+        }
+    }
+}
+
+/// One node row with a right-aligned status, or the name and status on two
+/// rows when both do not fit.
+fn node_lines(
+    node: &GraphNode,
+    status: NodeStatus,
+    width: usize,
+    spinner_frame: usize,
+) -> Vec<Line<'static>> {
+    if node.id.width() + STATUS_GAP + status_label_width(status) <= width {
+        return vec![node_row(node.id.clone(), status, width, spinner_frame)];
+    }
+    let (glyph, color) = status_glyph(status, spinner_frame);
+    let label = status_label(status);
+    let padding = width
+        .saturating_sub(label.width())
+        .max(DETAIL_INDENT.width());
+
+    vec![
+        fitted_line(
+            vec![
+                Span::styled(format!("{glyph} "), color_style(color)),
+                Span::styled(node.id.clone(), name_style(status)),
+            ],
+            width,
+        ),
+        fitted_line(
+            vec![
+                Span::raw(" ".repeat(padding)),
+                Span::styled(label, color_style(color)),
+            ],
+            width,
+        ),
+    ]
 }
 
 /// Fits one row per node, keeping intervention and active work ahead of
@@ -261,14 +567,15 @@ fn compact_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
     awaited: &BTreeSet<&str>,
-    text: &str,
+    header: &[(String, Style)],
     area: Rect,
+    spinner_frame: usize,
 ) -> (Vec<Line<'static>>, String) {
     let width = usize::from(area.width);
-    let mut lines = text
-        .lines()
+    let mut lines = header
+        .iter()
         .take(2.min(usize::from(area.height)))
-        .map(|line| Line::from(truncate_with_ellipsis(line, width)))
+        .map(|(text, style)| Line::styled(truncate_with_ellipsis(text, width), *style))
         .collect::<Vec<_>>();
     let capacity = usize::from(area.height).saturating_sub(lines.len());
     let mut ordered = nodes
@@ -276,23 +583,15 @@ fn compact_lines(
         .map(|node| (node, node_progress(snapshot, node)))
         .collect::<Vec<_>>();
     ordered.sort_by_key(|(node, progress)| node_priority(awaited, node, *progress));
-    let shown = &ordered[..capacity.min(ordered.len())];
-    let name_column = shown
-        .iter()
-        .map(|(node, _)| node.id.width())
-        .max()
-        .unwrap_or_default();
-    for (node, _) in shown {
+    for (node, _) in &ordered[..capacity.min(ordered.len())] {
         let status = node_status(snapshot, node, awaited);
-        let name_room = width.saturating_sub(status_label_width(status) + STATUS_GAP.width());
-        let name = truncate_with_ellipsis(&node.id, name_room);
-        let padding = name_column.min(name_room).saturating_sub(name.width());
-        let mut spans = vec![
-            Span::styled(name, name_style()),
-            Span::raw(format!("{}{STATUS_GAP}", " ".repeat(padding))),
-        ];
-        spans.extend(status_spans(status));
-        lines.push(fitted_line(spans, width));
+        let name_room = width.saturating_sub(status_label_width(status) + STATUS_GAP);
+        lines.push(node_row(
+            truncate_with_ellipsis(&node.id, name_room),
+            status,
+            width,
+            spinner_frame,
+        ));
     }
     let hidden = nodes.len().saturating_sub(capacity);
     let overflow = if hidden == 0 {
@@ -341,20 +640,32 @@ fn node_status(
     )
 }
 
-/// Returns the glyph and label spans for one node status.
-fn status_spans(status: NodeStatus) -> [Span<'static>; 2] {
-    let (glyph, color) = status_glyph(status);
-    let style = Style::default().fg(color);
+/// Status glyph and node name on the left with the status label
+/// right-aligned, keeping at least [`STATUS_GAP`] columns between them.
+fn node_row(name: String, status: NodeStatus, width: usize, spinner_frame: usize) -> Line<'static> {
+    let (glyph, color) = status_glyph(status, spinner_frame);
+    let label = status_label(status);
+    let padding = width
+        .saturating_sub(name.width() + status_label_width(status))
+        .max(STATUS_GAP);
+    let name_style = name_style(status);
 
-    [
-        Span::styled(format!("{glyph} "), style),
-        Span::styled(status_label(status), style),
-    ]
+    fitted_line(
+        vec![
+            Span::styled(format!("{glyph} "), color_style(color)),
+            Span::styled(name, name_style),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(label, color_style(color)),
+        ],
+        width,
+    )
 }
 
-/// Returns the rendered width of one status glyph plus label.
+/// Returns the width of one status glyph, its separating space, and label.
+/// Every animation phase of a glyph has the same width, so the first frame
+/// measures all of them.
 fn status_label_width(status: NodeStatus) -> usize {
-    status_glyph(status).0.width() + 1 + status_label(status).width()
+    status_glyph(status, 0).0.width() + 1 + status_label(status).width()
 }
 
 /// Returns the user-facing label for one node status.
@@ -370,19 +681,41 @@ fn status_label(status: NodeStatus) -> &'static str {
     }
 }
 
-/// Returns the per-status glyph and semantic color.
-fn status_glyph(status: NodeStatus) -> (&'static str, Color) {
+/// Returns the per-status glyph and semantic color; working nodes' glyphs
+/// rotate with `spinner_frame`.
+fn status_glyph(status: NodeStatus, spinner_frame: usize) -> (&'static str, Color) {
     match status {
         NodeStatus::AwaitingApproval => ("●", palette::warning()),
         NodeStatus::Live(GraphNodeStatus::Pending) => ("○", palette::text_muted()),
         NodeStatus::Live(GraphNodeStatus::Queued | GraphNodeStatus::Running) => {
-            ("◐", palette::info())
+            (active_glyph(spinner_frame), palette::info())
         }
         NodeStatus::Live(GraphNodeStatus::AwaitingAnswers) => ("?", palette::question()),
         NodeStatus::Live(GraphNodeStatus::Succeeded) => ("✓", palette::success()),
         NodeStatus::Live(GraphNodeStatus::Failed) => ("✗", palette::danger()),
         NodeStatus::Live(GraphNodeStatus::Cancelled) => ("⊘", palette::text_subtle()),
     }
+}
+
+/// Bold names mark nodes that are working or need the user; settled and
+/// waiting nodes stay regular weight.
+fn name_style(status: NodeStatus) -> Style {
+    let style = color_style(palette::text());
+    let needs_attention = matches!(
+        status,
+        NodeStatus::AwaitingApproval
+            | NodeStatus::Live(
+                GraphNodeStatus::Queued
+                    | GraphNodeStatus::Running
+                    | GraphNodeStatus::AwaitingAnswers
+                    | GraphNodeStatus::Failed
+            )
+    );
+    if needs_attention {
+        return style.add_modifier(Modifier::BOLD);
+    }
+
+    style
 }
 
 /// A dependency is satisfied once its source succeeded and the dependent no
@@ -408,26 +741,6 @@ fn is_dependency_satisfied(
                 )
             })
         })
-}
-
-/// Names the source unless it is the node drawn directly above, and the
-/// output a result gate waits for.
-fn edge_label(dependency: &GraphDependency, previous: Option<&str>) -> String {
-    let source = (previous != Some(dependency.node_id.as_str()))
-        .then(|| format!("from {}", dependency.node_id));
-    let gate = match &dependency.gate {
-        GraphCompletionGate::ExecutionSucceeded => None,
-        GraphCompletionGate::ResultValidated { output_name } => Some(output_name.clone()),
-        GraphCompletionGate::ResultAccepted { output_name } => {
-            Some(format!("accepted {output_name}"))
-        }
-    };
-
-    [source, gate]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 fn node_priority(
@@ -469,22 +782,20 @@ fn node_priority(
     }
 }
 
-fn edge_style(is_satisfied: bool) -> Style {
-    if is_satisfied {
-        Style::default().fg(palette::success())
-    } else {
-        muted_style()
-    }
+/// Inspector shortcut with the key emphasized like other footer hints.
+fn inspector_hint() -> Line<'static> {
+    Line::from(vec![
+        help_format::footer_key_span("w"),
+        help_format::footer_muted_span(INSPECTOR_LABEL),
+    ])
 }
 
-fn name_style() -> Style {
-    Style::default()
-        .fg(palette::text())
-        .add_modifier(Modifier::BOLD)
+fn color_style(color: Color) -> Style {
+    Style::default().fg(color)
 }
 
 fn muted_style() -> Style {
-    Style::default().fg(palette::text_muted())
+    color_style(palette::text_muted())
 }
 
 /// Keeps every graph row on one terminal row so line counts match painting.

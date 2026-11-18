@@ -526,10 +526,18 @@ keeps your draft. The composer title shows `Graph`, and pasted images reach gene
 and every proposed node. Generation reads the workspace; no node runs until you approve.
 
 Chat and questions stay in the left pane. The right pane, at most 35% of the width,
-shows each node with its status (Waiting, Working, Needs your input, Done, Failed, or
-Canceled) and `│` / `▼` connectors from its dependencies. When the graph is taller than
-the pane, a one-row-per-node summary prioritizes nodes needing attention and counts
-hidden nodes. Proposals are restored when you reopen the session or restart Agentty.
+shows the proposal version and how many nodes are done in its title. Below the overall
+status, a progress bar fills green for finished nodes and blue for working ones, with a
+highlight sweeping through active work. Status glyphs spin while a preview generates or
+nodes work. Nodes form a timeline: each node's status glyph leads its name, with the
+status (Waiting, Working, Needs your input, Done, Failed, or Canceled) on the right and
+its objective wrapped underneath, up to 128 characters. The rail between nodes names
+what each one waits for, such as `after inspect` or `needs report accepted`, in a
+highlighted label; it is dotted (`┊`) while blocked and solid (`│`) once satisfied. When
+space runs out, objectives shrink to one row and are then hidden; when the graph is
+still taller than the pane, a one-row-per-node summary prioritizes nodes needing
+attention and counts hidden nodes. Proposals are restored when you reopen the session or
+restart Agentty.
 
 While a proposal is generated or a reply is being decided, a **Draft** or **Review**
 session shows **InProgress**, starting as soon as you send the message. A message sent

@@ -10,6 +10,7 @@ use ag_protocol::{
 };
 use ag_session::{GraphProposalVersionOutcome, test_support as fixture};
 use testty::assertion;
+use testty::frame::CellColor;
 use testty::region::Region;
 
 use crate::common::{self, BuilderEnv, FeatureTest, SessionSeed};
@@ -166,7 +167,7 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                     .write_text("Approve it")
                     .press_key("Enter")
                     .wait_for_text("Graph proposal v1 approved · execution started", 10000)
-                    .wait_for_text("Status: Completed", 10000)
+                    .wait_for_text("2/2 done", 10000)
                     .capture_labeled("execution", "Chat approval runs the graph beside chat")
                     .press_key("Enter")
                     .write_text("Explain the overall execution")
@@ -206,14 +207,14 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                         preview.rows(),
                     );
                     let chat = Region::new(0, 0, preview.cols() - sidebar_width, preview.rows());
-                    assertion::assert_text_in_region(&preview, "Execution graph", &sidebar);
+                    assertion::assert_text_in_region(&preview, "Execution graph · v1", &sidebar);
                     assertion::assert_text_in_region(&preview, "Awaiting your approval", &sidebar);
-                    assertion::assert_text_in_region(&preview, "inspect  ○ Waiting", &sidebar);
-                    assertion::assert_text_in_region(&preview, "▼", &sidebar);
-                    assertion::assert_text_in_region(&preview, "node-1   ○ Waiting", &sidebar);
-                    assertion::assert_text_in_region(&execution, "Status: Completed", &sidebar);
-                    assertion::assert_text_in_region(&execution, "│ ✓", &sidebar);
-                    assertion::assert_text_in_region(&execution, "node-1   ✓ Done", &sidebar);
+                    assertion::assert_text_in_region(&preview, "○ inspect", &sidebar);
+                    assertion::assert_text_in_region(&preview, "┊ after inspect", &sidebar);
+                    assertion::assert_text_in_region(&preview, "○ node-1", &sidebar);
+                    assertion::assert_text_in_region(&execution, "✓ Completed", &sidebar);
+                    assertion::assert_text_in_region(&execution, "│ after inspect", &sidebar);
+                    assertion::assert_text_in_region(&execution, "✓ node-1", &sidebar);
                     assertion::assert_text_in_region(
                         &discussion,
                         "Graph execution complete",
@@ -287,7 +288,7 @@ async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2e
                     .wait_for_text("Use this layout [Image #", 5000)
                     .press_key("Enter")
                     .wait_for_text("Graph proposal v2 ready: 1 node", 10000)
-                    .wait_for_text("Proposal v2", 5000)
+                    .wait_for_text("Execution graph · v2", 5000)
                     .wait_for_text("Awaiting your approval", 5000)
                     .capture_labeled("revision", "Revision image reaches regeneration")
             },
@@ -318,6 +319,7 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
     FeatureTest::new("graph_output_acceptance_reply_continues_the_graph")
         .with_git()
         .with_terminal_size(160, 50)
+        .env("NO_COLOR", "")
         .args(["--experimental-graph".into()])
         .setup(move |env| Box::pin(seed_gated(env, 2, gate)))
         .run(
@@ -337,12 +339,12 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                     .press_key("Enter")
                     .write_text("Approve it")
                     .press_key("Enter")
-                    .wait_for_text("inspect  ● Awaiting your approval", 10000)
+                    .wait_for_text("● inspect", 10000)
                     .capture_labeled("awaiting", "Accepted-output gate awaits chat approval")
                     .press_key("Enter")
                     .write_text("Start implementing")
                     .press_key("Enter")
-                    .wait_for_text("Status: Completed", 10000)
+                    .wait_for_text("2/2 done", 10000)
                     .capture_labeled("continued", "Chat acceptance continues the graph")
             },
             |_, report| {
@@ -358,20 +360,45 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                         awaiting.rows(),
                     );
                     let chat = Region::new(0, 0, awaiting.cols() - sidebar_width, awaiting.rows());
-                    assertion::assert_text_in_region(&awaiting, "Status: Blocked", &sidebar);
+                    assertion::assert_text_in_region(&awaiting, "● Blocked", &sidebar);
                     assertion::assert_text_in_region(
                         &awaiting,
                         "inspect awaits your approval",
                         &sidebar,
                     );
-                    assertion::assert_text_in_region(&awaiting, "node-1   ○ Waiting", &sidebar);
+                    assertion::assert_text_in_region(&awaiting, "Awaiting your approval", &sidebar);
+                    assertion::assert_text_in_region(
+                        &awaiting,
+                        "┊ needs report accepted",
+                        &sidebar,
+                    );
+                    // Pending dependency labels use the accent color, apart
+                    // from muted objectives.
+                    assertion::assert_text_has_fg_color(
+                        &awaiting,
+                        "needs report accepted",
+                        &CellColor::new(0, 128, 128),
+                    );
+                    assertion::assert_text_in_region(&awaiting, "○ node-1", &sidebar);
                     assertion::assert_text_in_region(
                         &continued,
                         "Accepted report from inspect · continuing",
                         &chat,
                     );
-                    assertion::assert_text_in_region(&continued, "node-1   ✓ Done", &sidebar);
-                    assertion::assert_text_in_region(&continued, "│ accepted report ✓", &sidebar);
+                    assertion::assert_text_in_region(&continued, "✓ Completed", &sidebar);
+                    let full_bar = "━".repeat(usize::from(sidebar_width - 2));
+                    assertion::assert_text_in_region(&continued, &full_bar, &sidebar);
+                    assertion::assert_text_in_region(&continued, "✓ node-1", &sidebar);
+                    assertion::assert_text_in_region(
+                        &continued,
+                        "│ needs report accepted",
+                        &sidebar,
+                    );
+                    assertion::assert_text_has_fg_color(
+                        &continued,
+                        "needs report accepted",
+                        &CellColor::new(0, 128, 0),
+                    );
                     assertion::assert_not_visible(&continued, "Awaiting your approval");
                 })
             },
@@ -381,6 +408,9 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
     Ok(())
 }
 
+/// Generation keeps the session working while the sidebar marks the preview
+/// as generating. The E2E clock is pinned, so glyph rotation is covered by the
+/// sidebar unit tests.
 #[tokio::test]
 async fn graph_generation_shows_the_session_working_until_the_proposal_is_ready() -> E2eResult {
     // Arrange
@@ -402,6 +432,7 @@ async fn graph_generation_shows_the_session_working_until_the_proposal_is_ready(
                     .write_text("query the current architecture")
                     .press_key("Enter")
                     .wait_for_text("Working...", 5000)
+                    .wait_for_text("Generating preview...", 2000)
                     .capture_labeled("generating", "Generation keeps the session working")
                     .wait_for_text("Graph proposal v1 ready: 1 node", 10000)
                     .step(common::wait_for_frame_text(
@@ -414,7 +445,19 @@ async fn graph_generation_shows_the_session_working_until_the_proposal_is_ready(
                     // Assert
                     let generating = common::frame_from_capture(&report.captures[0]);
                     let chat = Region::new(0, 0, generating.cols() * 65 / 100, generating.rows());
+                    let sidebar = Region::new(
+                        chat.width,
+                        0,
+                        generating.cols() - chat.width,
+                        generating.rows(),
+                    );
                     assertion::assert_text_in_region(&generating, "Working...", &chat);
+                    let sidebar_text = generating.text_in_region(&sidebar);
+                    assert!(
+                        ["◐", "◓", "◑", "◒"].iter().any(|glyph| sidebar_text
+                            .contains(&format!("{glyph} Generating preview..."))),
+                        "{sidebar_text}"
+                    );
                     assertion::assert_not_visible(&generating, "Graph proposal v1 ready");
                     assertion::assert_text_in_region(
                         frame,
@@ -650,7 +693,7 @@ async fn graph_sidebar_overflow_keeps_chat_and_controls_visible() -> E2eResult {
                     .press_key("Enter")
                     .write_text("Inspect the requested change")
                     .press_key("Enter")
-                    .wait_for_text("+8 more nodes", 10000)
+                    .wait_for_text("+7 more nodes", 10000)
                     .press_key("Enter")
                     .write_text("Discuss overall execution")
                     .wait_for_text("Discuss overall execution", 5000)
@@ -659,8 +702,8 @@ async fn graph_sidebar_overflow_keeps_chat_and_controls_visible() -> E2eResult {
                 Box::pin(async move {
                     // Assert
                     let sidebar = Region::new(78, 0, 42, 16);
-                    assertion::assert_text_in_region(frame, "+8 more nodes", &sidebar);
-                    assertion::assert_text_in_region(frame, "node-1   ○ Waiting", &sidebar);
+                    assertion::assert_text_in_region(frame, "+7 more nodes", &sidebar);
+                    assertion::assert_text_in_region(frame, "○ node-1", &sidebar);
                     assertion::assert_text_in_region(frame, "w: details and actions", &sidebar);
                     assertion::assert_text_in_region(
                         frame,

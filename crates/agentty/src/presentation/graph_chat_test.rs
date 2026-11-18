@@ -1,11 +1,13 @@
 //! Graph chat snapshot cache refresh and proposal-outcome notice unit tests.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, QuestionItem};
 use ag_session::{
-    ExecutionGraph, GraphProposalResolution, GraphProposalVersionOutcome,
+    ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphNodeProgress,
+    GraphNodeStatus, GraphProposalResolution, GraphProposalVersionOutcome,
     StartExecutionGraphRequest, test_support,
 };
 
@@ -48,6 +50,63 @@ fn cache_is_session_scoped_and_refreshes_on_updates_live_status_and_failures() {
     assert!(cache.snapshot("session").is_none());
     assert!(cache.snapshot("other").is_none());
     assert!(cache.needs_refresh("other", 2, now + Duration::from_secs(1)));
+}
+
+#[test]
+fn snapshot_animates_only_while_a_preview_generates_or_graph_work_runs() {
+    // Arrange
+    let mut snapshot = GraphChatSnapshot {
+        error: None,
+        progress: None,
+        proposal: test_support::graph_proposal_state("proposal", "session"),
+    };
+    let generating = snapshot.is_animating();
+    snapshot.proposal.version.is_cancelled = true;
+    let cancelled = snapshot.is_animating();
+    snapshot.proposal.version.is_cancelled = false;
+    snapshot.proposal.version.outcome = GraphProposalVersionOutcome::Failed("invalid".into());
+    let failed = snapshot.is_animating();
+    let mut progress = ExecutionGraphProgress {
+        graph_id: "graph".into(),
+        nodes: Vec::new(),
+        revision: NonZeroU64::MIN,
+        session_id: "session".into(),
+        status: ExecutionGraphStatus::Running,
+    };
+    snapshot.progress = Some(progress.clone());
+
+    // Act
+    let running = snapshot.is_animating();
+    progress.status = ExecutionGraphStatus::Failed;
+    progress.nodes = [GraphNodeStatus::Failed, GraphNodeStatus::Running]
+        .into_iter()
+        .map(|status| GraphNodeProgress {
+            blocked: Vec::new(),
+            executions: Vec::new(),
+            last_error: None,
+            node_id: format!("{status:?}"),
+            questions: Vec::new(),
+            results: Vec::new(),
+            status,
+        })
+        .collect();
+    snapshot.progress = Some(progress.clone());
+    let failed_with_running_sibling = snapshot.is_animating();
+    progress.nodes.pop();
+    snapshot.progress = Some(progress.clone());
+    let failed_settled = snapshot.is_animating();
+    progress.status = ExecutionGraphStatus::Completed;
+    snapshot.progress = Some(progress);
+    let completed = snapshot.is_animating();
+
+    // Assert
+    assert!(generating);
+    assert!(!cancelled);
+    assert!(!failed);
+    assert!(running);
+    assert!(failed_with_running_sibling);
+    assert!(!failed_settled);
+    assert!(!completed);
 }
 
 #[test]

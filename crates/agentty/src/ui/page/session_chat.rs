@@ -236,7 +236,12 @@ impl<'a> SessionChatPage<'a> {
     fn render_session(&self, frame: &mut Frame, area: Rect, session: &Session) {
         let (area, graph_area) = graph_chat::areas(area, self.mode, self.graph_chat.is_some());
         if let Some(graph_area) = graph_area {
-            graph_chat::render(frame, graph_area, self.graph_chat);
+            graph_chat::render(
+                frame,
+                graph_area,
+                self.graph_chat,
+                Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
+            );
         }
         let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
