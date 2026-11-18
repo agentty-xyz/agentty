@@ -13,5 +13,7 @@ Add exactly one `review_comment_outcomes` item for every supplied thread ID:
   open.
 - Copy `thread_id` exactly. In every case, make `reply` a very short statement of what
   was done and why, suitable for posting to the forge conversation.
+- Write each `reply` in the language of that thread's latest reviewer comment, even when
+  other instructions set a different response language.
 
 {{ fenced_review_comments }}

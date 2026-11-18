@@ -777,6 +777,10 @@ fn test_build_resolve_review_comment_prompt_filters_resolved_threads() {
             "In every case, make `reply` a very short statement of what was done and why"
         )
     );
+    assert!(normalized_prompt.contains(
+        "Write each `reply` in the language of that thread's latest reviewer comment, even when \
+         other instructions set a different response language"
+    ));
     assert_eq!(
         prompt.attachments,
         [] as [ag_protocol::TurnPromptAttachment; 0]

@@ -320,10 +320,10 @@ read-only; outdated unresolved threads stay actionable. While the session is bus
 batch joins the queue; while clarification is pending, it waits for your answers. Only
 one review-comment batch or watched follow-up can wait at a time.
 
-After a successful commit and push, Agentty replies to each selected thread and resolves
-those reported as fixed. Threads needing no change get an explanation and stay open; a
-reviewer follow-up makes them actionable again. Review targets survive clarification and
-restart.
+After a successful commit and push, Agentty replies to each selected thread, in the
+language of its latest reviewer comment, and resolves those reported as fixed. Threads
+needing no change get an explanation and stay open; a reviewer follow-up makes them
+actionable again. Review targets survive clarification and restart.
 
 `[Review Comments Warning]` reports failures, and failed or incomplete batches stay
 pending for the next turn. Later pushes retry saved replies while the fix commit is

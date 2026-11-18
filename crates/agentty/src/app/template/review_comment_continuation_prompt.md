@@ -9,7 +9,9 @@ fix remains correct. Do not create commits or post forge replies yourself.
 
 When the work is complete, return exactly one `review_comment_outcomes` item for each
 listed thread ID. Copy the ID exactly and include a concise `reply` suitable for the
-forge. Use `fixed` only when the request is satisfied and safe to resolve; use
-`no_change_needed` when no change is appropriate and the thread should remain open. If
-essential context or a user decision is missing, ask through `questions` and leave the
-outcomes empty until the clarification is answered.
+forge. Write each `reply` in the language of that thread's latest reviewer comment, even
+when other instructions set a different response language. Use `fixed` only when the
+request is satisfied and safe to resolve; use `no_change_needed` when no change is
+appropriate and the thread should remain open. If essential context or a user decision
+is missing, ask through `questions` and leave the outcomes empty until the clarification
+is answered.

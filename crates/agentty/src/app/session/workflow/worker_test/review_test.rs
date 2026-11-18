@@ -449,6 +449,11 @@ async fn apply_review_result_with_queued_follow_up(
         .expect("restore pending targets");
     assert_eq!(metadata.review_comment_thread_ids, ["thread-42"]);
     assert!(prompt.text.starts_with("Make another change"));
+    let normalized_prompt = prompt.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized_prompt.contains(
+        "Write each `reply` in the language of that thread's latest reviewer comment, even when \
+         other instructions set a different response language"
+    ));
     context.git_client = publishing_git_client;
 }
 
