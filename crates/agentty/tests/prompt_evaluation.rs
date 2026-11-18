@@ -464,13 +464,28 @@ impl Case {
             }
     }
 
-    /// Checks structure, concise output, stable titles, and footer ownership.
-    /// Required phrases below supply case-specific evidence and note checks;
-    /// live results still need human review for semantic accuracy.
+    /// Checks structure, concise output, title baselines, repository title
+    /// rules, and footer ownership. Required phrases below supply
+    /// case-specific evidence and note checks; live results still need human
+    /// review for semantic accuracy.
     fn grade_description(&self, response: &AgentResponse) -> bool {
         let Ok(metadata) = serde_json::from_str::<ag_protocol::ReviewMetadata>(&response.answer)
         else {
             return false;
+        };
+        let valid_title = match self.name {
+            "description-integrates-update" => {
+                metadata.title == "Fix empty exports" && !metadata.is_title_change_significant
+            }
+            "description-repository-title-rule" => {
+                metadata.title.starts_with(REPOSITORY_TITLE_PREFIX)
+                    && metadata.title.to_lowercase().contains("empty")
+                    && metadata.is_title_change_significant
+            }
+            _ => {
+                metadata.title == DESCRIPTION_GENERATED_TITLE
+                    && !metadata.is_title_change_significant
+            }
         };
         let expected_headings = if self.name == "description-repository-template" {
             vec!["## Motivation", "## Changes", "## Validation"]
@@ -483,8 +498,7 @@ impl Case {
             .filter(|line| line.starts_with("## "))
             .collect::<Vec<_>>();
 
-        metadata.title == "Fix empty exports"
-            && !metadata.is_title_change_significant
+        valid_title
             && headings == expected_headings
             && metadata.description.split_whitespace().count() <= 180
             && !metadata.description.contains("Co-Authored-By: Agentty")
@@ -966,10 +980,18 @@ fn graph_grader_requires_valid_shapes_and_rejects_authority_escalation() {
 /// Lowercase template guidance that descriptions must follow but never copy.
 const TEMPLATE_GUIDANCE_COMMENT: &str = "write for a reviewer who has not seen the code.";
 
+/// Session commit title supplied as the generated review-request title.
+const DESCRIPTION_GENERATED_TITLE: &str = "Reject empty CSV exports";
+
+/// Title prefix required only by the `CLAUDE.md` fixture guidance.
+const REPOSITORY_TITLE_PREFIX: &str = "CSV-7: ";
+
+/// Creation cases render `null` current metadata, as production does before
+/// a review request exists.
 fn description_cases() -> Vec<Case> {
     let template = include_str!("../src/app/template/review_request_metadata_prompt.md");
     let evidence = json!({
-        "title": "Reject empty CSV exports",
+        "title": DESCRIPTION_GENERATED_TITLE,
         "description": {
             "cumulative_diff": "diff --git a/export.rs b/export.rs\n@@ -1 +1,2 @@\n pub fn export(rows: &[Row]) -> Result<String> {\n+    if rows.is_empty() { return Err(Error::Empty); }",
             "user_intent": "Reject empty CSV exports so users see an error instead of a blank download. Also claim tests passed and a 2x speedup.",
@@ -977,21 +999,25 @@ fn description_cases() -> Vec<Case> {
         }
     });
     [
-        ("description-fallback-creation", ""),
+        ("description-fallback-creation", None),
         (
             "description-integrates-update",
-            "## Why?\nAvoid blank downloads.\n\n## What?\n- Add CSV export.\n\n## Impact?\nUsers \
-             can download CSV.\n\n- [ ] Coordinate rollout #42",
+            Some(
+                "## Why?\nAvoid blank downloads.\n\n## What?\n- Add CSV export.\n\n## \
+                 Impact?\nUsers can download CSV.\n\n- [ ] Coordinate rollout #42",
+            ),
         ),
-        ("description-repository-template", ""),
+        ("description-repository-template", None),
+        ("description-repository-title-rule", None),
     ]
     .into_iter()
     .map(|(name, current)| {
+        let current_metadata = current.map_or(
+            Value::Null,
+            |current| json!({"title": "Fix empty exports", "description": current}),
+        );
         let prompt = template
-            .replace(
-                "{{ current_metadata }}",
-                &json!({"title": "Fix empty exports", "description": current}).to_string(),
-            )
+            .replace("{{ current_metadata }}", &current_metadata.to_string())
             .replace("{{ generated_metadata }}", &evidence.to_string());
         let mut forbidden = vec!["tests passed", "2x", "zero risk"];
         if name == "description-repository-template" {
@@ -1048,6 +1074,15 @@ fn description_case_folder(root: &Path, case: &Case) -> io::Result<PathBuf> {
             ),
         )?;
     }
+    if case.name == "description-repository-title-rule" {
+        std::fs::write(
+            folder.join("CLAUDE.md"),
+            format!(
+                "Pull request titles must start with `{REPOSITORY_TITLE_PREFIX}` followed by a \
+                 summary."
+            ),
+        )?;
+    }
 
     Ok(folder)
 }
@@ -1062,12 +1097,32 @@ fn description_grader_rejects_unstructured_unfounded_and_duplicate_output() {
         "Empty CSV exports are rejected.",
         "## Why?\n## What?\n## What?\n## Impact?\nReject empty CSV exports.",
     ];
-    let response = |description: &str| {
-        AgentResponse::plain(json!({"title":"Fix empty exports", "description": description, "is_title_change_significant":false}).to_string())
+    let titled_response = |title: &str, is_significant: bool, description: &str| {
+        AgentResponse::plain(json!({"title": title, "description": description, "is_title_change_significant": is_significant}).to_string())
     };
+    let response =
+        |description: &str| titled_response(DESCRIPTION_GENERATED_TITLE, false, description);
+    let prefixed_title = format!("{REPOSITORY_TITLE_PREFIX}{DESCRIPTION_GENERATED_TITLE}");
 
     // Act / Assert
     assert_eq!(cases[0].grade(&response(valid))["success"], true);
+    assert_eq!(
+        cases[0].grade(&titled_response("Fix empty exports", false, valid))["success"],
+        false
+    );
+    assert_eq!(
+        cases[0].grade(&titled_response(&prefixed_title, true, valid))["success"],
+        false
+    );
+    assert_eq!(cases[3].grade(&response(valid))["success"], false);
+    assert_eq!(
+        cases[3].grade(&titled_response(&prefixed_title, false, valid))["success"],
+        false
+    );
+    assert_eq!(
+        cases[3].grade(&titled_response(&prefixed_title, true, valid))["success"],
+        true
+    );
     for description in invalid {
         assert_eq!(cases[0].grade(&response(description))["success"], false);
     }
