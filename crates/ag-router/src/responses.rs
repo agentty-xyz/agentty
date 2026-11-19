@@ -9,7 +9,7 @@
 //! another provider's reasoning, is omitted.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use reqwest::header::HeaderMap;
@@ -393,8 +393,19 @@ impl<'spec> ResponsesBackend<'spec> {
     }
 }
 
-/// Creates the production streaming transport for Responses requests.
+/// Production streaming transport for Responses requests, built on first
+/// use and shared by every router, so hosts that build a router per model
+/// do not build an HTTP client per router.
+static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> = LazyLock::new(new_default_transport);
+
+/// Returns the shared production streaming transport for Responses
+/// requests.
 pub(crate) fn default_transport() -> Arc<HttpTransport> {
+    Arc::clone(&DEFAULT_TRANSPORT)
+}
+
+/// Creates the production streaming transport for Responses requests.
+fn new_default_transport() -> Arc<HttpTransport> {
     Arc::new(HttpTransport::streaming(
         STREAM_IDLE_TIMEOUT,
         REQUEST_TIMEOUT,

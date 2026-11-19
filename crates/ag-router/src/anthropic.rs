@@ -16,7 +16,7 @@
 //! the caller cleared to save context or another provider's reasoning, is
 //! omitted.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use reqwest::header::HeaderMap;
@@ -282,9 +282,15 @@ impl<'spec> AnthropicBackend<'spec> {
     }
 }
 
-/// Creates the production transport for Messages requests.
+/// Production transport for Messages requests, built on first use and
+/// shared by every router, so hosts that build many routers without an
+/// Anthropic model pay for no extra HTTP client.
+static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> =
+    LazyLock::new(|| Arc::new(HttpTransport::new(REQUEST_TIMEOUT)));
+
+/// Returns the shared production transport for Messages requests.
 pub(crate) fn default_transport() -> Arc<HttpTransport> {
-    Arc::new(HttpTransport::new(REQUEST_TIMEOUT))
+    Arc::clone(&DEFAULT_TRANSPORT)
 }
 
 /// Returns the readable view of reasoning content holding Anthropic

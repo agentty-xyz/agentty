@@ -2,7 +2,7 @@
 //! Completions APIs.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -543,11 +543,18 @@ pub(crate) trait ChatCompletionClient: Send + Sync {
     ) -> Result<Option<ChatCompletion>, TransportError>;
 }
 
-/// Creates the production Chat Completions client implementation.
-pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
+/// Production Chat Completions client, built on first use and shared by
+/// every router, so hosts that build a router per model do not build an
+/// HTTP client per router.
+static DEFAULT_CLIENT: LazyLock<Arc<ReqwestChatCompletionClient>> = LazyLock::new(|| {
     Arc::new(ReqwestChatCompletionClient {
         http: HttpTransport::new(REQUEST_TIMEOUT),
     })
+});
+
+/// Returns the shared production Chat Completions client implementation.
+pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
+    Arc::clone(&DEFAULT_CLIENT) as Arc<dyn ChatCompletionClient>
 }
 
 struct ReqwestChatCompletionClient {
