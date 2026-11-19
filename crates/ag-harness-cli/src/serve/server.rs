@@ -32,7 +32,7 @@ use super::protocol::{
     SessionCreateParams, SessionOpened, SessionResumeParams, SessionTranscriptParams, SessionUsage,
     StoreChoice, Transcript, line,
 };
-use crate::{MODEL_PROFILE, login, model_client, stored_model_identity_parts};
+use crate::{connect_model, login, select_cataloged, select_direct, stored_model_identity_parts};
 
 /// Event lines runs may queue before the next one waits for the server to
 /// write them.
@@ -367,7 +367,7 @@ where
             ModelChoice::Id(id) => return self.provider_model(builder, id),
         };
 
-        Ok(builder.catalog(Arc::new(catalog)).model_selector(selector))
+        select_cataloged(builder, Arc::new(catalog), selector).map_err(ServeError::config)
     }
 
     /// Selects the uncataloged `provider/model` `id`, with the context
@@ -381,18 +381,10 @@ where
             .split_once('/')
             .and_then(|(provider, model)| Some((provider.parse::<ModelProvider>().ok()?, model)))
             .ok_or_else(|| ServeError::UnknownModel(id.to_string()))?;
-        let client = model_client(provider, model, None, &mut self.environment)
+        let (client, profile) = connect_model(provider, model, None, &mut self.environment)
             .map_err(ServeError::config)?;
-        let profile = provider
-            .declared_profile(model, &mut self.environment)
-            .map_err(ServeError::config)?
-            .unwrap_or(MODEL_PROFILE);
-        let context_budget = profile.context_budget().map_err(ServeError::config)?;
 
-        Ok(builder
-            .model(Arc::new(client))
-            .context_budget(context_budget)
-            .context_estimator(profile.estimator()))
+        select_direct(builder, Arc::new(client), profile).map_err(ServeError::config)
     }
 
     fn ensure_closed(&self, id: &str) -> Result<(), ServeError> {

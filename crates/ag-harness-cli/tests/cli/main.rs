@@ -130,10 +130,16 @@ fn response(message: &str, input_tokens: u64, output_tokens: u64) -> ResponseTem
     }))
 }
 
+/// Command storing sessions in a temporary root, whose model catalog
+/// ignores the developer's own `ChatGPT` sign-in.
 fn harness_command() -> std::io::Result<(tempfile::TempDir, Command)> {
     let storage = tempfile::tempdir()?;
     let mut command = Command::new(cargo_bin!("ag-harness"));
-    command.env("AG_HARNESS_ROOT", storage.path());
+    command
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("HOME", storage.path())
+        .env_remove("AGENTTY_ROOT")
+        .env_remove("CHATGPT_AUTH_FILE");
 
     Ok((storage, command))
 }
@@ -350,6 +356,67 @@ async fn qwen_3_8_uses_graded_reasoning_effort() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("assistant> provider response"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cataloged_models_report_cost_session_usage_and_history() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(bearer_token("test-key"))
+        .and(body_string_contains(r#""model":"qwen3.8-flash""#))
+        .respond_with(response("priced answer", 2_000, 1_000))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let storage = tempfile::tempdir().expect("temporary storage should exist");
+    let mut child = tokio::process::Command::new(cargo_bin!("ag-harness"))
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .args([
+            "run",
+            "qwen3.8-flash",
+            "--provider",
+            "qwen",
+            "--base-url",
+            &server.uri(),
+        ])
+        .env("DASHSCOPE_API_KEY", "test-key")
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("HOME", storage.path())
+        .env_remove("AGENTTY_ROOT")
+        .env_remove("CHATGPT_AUTH_FILE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("CLI chat should start");
+
+    // Act
+    child
+        .stdin
+        .take()
+        .expect("stdin should be piped")
+        .write_all(b"Hello\n/usage\n/history\n")
+        .await
+        .expect("prompt and commands should be written");
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("CLI chat should finish");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
+    // 2,000 input tokens at $0.15 and 1,000 output tokens at $0.47 per 1M.
+    assert!(stdout.contains("\nusage: tokens 2000 in, 1000 out; cost $0.00077\n"));
+    assert!(stdout.contains("session usage: 1 turns; tokens 2000 in, 1000 out; cost $0.00077\n"));
+    assert!(stdout.ends_with("turn 1 (completed)\nyou> Hello\nassistant> priced answer\n"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -886,7 +953,7 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("kimi-key"))
-        .and(body_string_contains(r#""model":"kimi-test""#))
+        .and(body_string_contains(format!(r#""model":"{KIMI_K2_6}""#)))
         .and(body_string_contains(
             r#""content":"{\"message\":\"muse answer\"}","role":"assistant""#,
         ))
@@ -922,7 +989,7 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
         .stdin
         .take()
         .expect("stdin should be piped")
-        .write_all(b"/model kimi/kimi-test\nsecond question\n")
+        .write_all(format!("/model kimi/{KIMI_K2_6}\nsecond question\n").as_bytes())
         .await
         .expect("switch and prompt should be written");
     let output = child
@@ -948,13 +1015,19 @@ async fn model_command_switches_providers_and_resume_keeps_the_switch() {
     );
     let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
     assert!(stdout.contains("assistant> muse answer\n---\n"));
-    assert!(stdout.contains("model: kimi/kimi-test\nassistant> kimi answer\n---\n"));
+    assert!(stdout.contains(&format!(
+        "model: kimi/{KIMI_K2_6}\nassistant> kimi answer\n---\n"
+    )));
     assert!(
         resumed.status.success(),
         "resume failed: {}",
         String::from_utf8_lossy(&resumed.stderr)
     );
-    assert!(String::from_utf8_lossy(&resumed.stdout).contains("assistant> kimi answer\n---\n"));
+    // The switch registered the cataloged Kimi model, so the resumed session
+    // runs through the registry, which has no prices.
+    let resumed = String::from_utf8_lossy(&resumed.stdout);
+    assert!(resumed.contains("assistant> kimi answer\n---\n"));
+    assert!(resumed.contains("\nusage: tokens 8 in, 2 out; cost unavailable\n"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

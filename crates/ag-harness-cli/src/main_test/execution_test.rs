@@ -61,6 +61,15 @@ async fn execute_advertises_repository_reads_by_default() {
     );
 }
 
+/// Returns a test key for every variable except the `ChatGPT` sign-in
+/// locations, so the catalog skips the `ChatGPT` models a test does not use.
+fn api_keys_without_sign_in(name: &str) -> Result<String, env::VarError> {
+    match name {
+        "AGENTTY_ROOT" | "CHATGPT_AUTH_FILE" | "HOME" => Err(env::VarError::NotPresent),
+        _ => Ok("test-key".to_string()),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_resumes_a_saved_session_with_its_model_identity_and_history() {
     // Arrange
@@ -128,7 +137,7 @@ async fn execute_resumes_a_saved_session_with_its_model_identity_and_history() {
     // Act
     execute(
         run,
-        |_| Ok("test-key".to_string()),
+        api_keys_without_sign_in,
         BufReader::new(&b""[..]),
         &mut first_output,
         ChatMode::OneShot,
@@ -137,7 +146,7 @@ async fn execute_resumes_a_saved_session_with_its_model_identity_and_history() {
     .expect("first process should create the session");
     execute(
         resume,
-        |_| Ok("test-key".to_string()),
+        api_keys_without_sign_in,
         BufReader::new(&b""[..]),
         &mut second_output,
         ChatMode::OneShot,
@@ -146,7 +155,7 @@ async fn execute_resumes_a_saved_session_with_its_model_identity_and_history() {
     .expect("second process should resume the session");
     let invalid_error = execute(
         invalid_resume,
-        |_| Ok("test-key".to_string()),
+        api_keys_without_sign_in,
         BufReader::new(&b""[..]),
         Vec::new(),
         ChatMode::OneShot,

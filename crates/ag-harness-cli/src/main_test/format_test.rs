@@ -3,9 +3,13 @@
 
 use std::process::ExitCode;
 
+use ag_harness::{ModelError, RunError, TurnError, TurnRecord, Usage, UsageTotals};
+use serde_json::json;
+
 use crate::{
-    CliError, assistant_text, format_duration, format_usage, report_exit,
-    single_line_terminal_text, terminal_text, trim_line_ending,
+    CliError, assistant_text, format_duration, format_request_usage, format_summed_tokens,
+    format_usd, framed_text, history_text, report_exit, single_line_terminal_text, terminal_text,
+    trim_line_ending, usage_totals_text,
 };
 
 #[test]
@@ -13,11 +17,11 @@ fn exit_reporting_sanitizes_errors_and_preserves_success() {
     // Arrange
     let mut success_output = Vec::new();
     let mut error_output = Vec::new();
-    let error = CliError::Turn(ag_harness::TurnError::Model(
-        ag_harness::ModelError::IncompleteResponse {
+    let error = CliError::Run(RunError::from(TurnError::Model(
+        ModelError::IncompleteResponse {
             reason: "stop\u{1b}]52;c;Y2xpcGJvYXJk\u{7}".to_string(),
         },
-    ));
+    )));
 
     // Act
     let success = report_exit(Ok(()), &mut success_output);
@@ -109,6 +113,109 @@ fn single_line_terminal_text_replaces_all_control_characters() {
 }
 
 #[test]
+fn dollars_keep_two_decimals_and_every_significant_micro_usd() {
+    // Arrange and Act
+    let amounts = [0, 12, 75_000, 250_000, 1_500_000, 12_345_678].map(format_usd);
+
+    // Assert
+    assert_eq!(
+        amounts,
+        [
+            "$0.00",
+            "$0.000012",
+            "$0.075",
+            "$0.25",
+            "$1.50",
+            "$12.345678"
+        ]
+    );
+}
+
+#[test]
+fn token_totals_name_cached_reasoning_and_unreported_counts() {
+    // Arrange
+    let plain = Usage::default();
+    let mut detailed = Usage::default();
+    detailed.input = 9;
+    detailed.output = 3;
+    detailed.cache_read = 4;
+    detailed.reasoning = 2;
+    detailed.unreported_requests = 1;
+
+    // Act
+    let plain = format_summed_tokens(&plain);
+    let detailed = format_summed_tokens(&detailed);
+
+    // Assert
+    assert_eq!(plain, "tokens 0 in, 0 out");
+    assert_eq!(
+        detailed,
+        "tokens 9 in, 3 out, 4 cached, 2 reasoning, 1 model calls unreported"
+    );
+}
+
+#[test]
+fn session_usage_names_unpriced_and_unknown_turns() {
+    // Arrange
+    let mut totals = UsageTotals::default();
+    totals.turns = 3;
+    totals.unpriced_turns = 1;
+    totals.unknown_turns = 1;
+
+    // Act
+    let text = usage_totals_text(&totals);
+
+    // Assert
+    assert_eq!(
+        text,
+        "session usage: 3 turns; tokens 0 in, 0 out; cost unavailable; 1 turns unpriced; 1 turns \
+         without usage\n"
+    );
+}
+
+#[test]
+fn history_shows_text_prompts_and_answers_but_not_images_or_reasoning() {
+    // Arrange
+    let turn: TurnRecord = serde_json::from_value(json!({
+        "cost": null,
+        "error": {"kind": "cancelled"},
+        "finished_at": 2,
+        "input": [
+            {"type": "text", "text": "describe\nthis"},
+            {"type": "image", "data": "AA==", "media_type": "image/png"}
+        ],
+        "instructions": null,
+        "items": [
+            {"type": "reasoning", "text": "private"},
+            {"type": "output", "output": {"type": "json", "value": {"message": "a cat"}}}
+        ],
+        "started_at": 1,
+        "status": "interrupted",
+        "turn": 4,
+        "usage": null
+    }))
+    .expect("transcript turn should deserialize");
+
+    // Act
+    let text = history_text(&[turn]);
+
+    // Assert
+    assert_eq!(
+        text,
+        "turn 5 (interrupted)\nyou> describe\n     this\nassistant> a cat\n"
+    );
+}
+
+#[test]
+fn framed_text_indents_continuation_lines_to_its_label() {
+    // Arrange and Act
+    let framed = framed_text("you> ", "first\nsecond\u{1b}");
+
+    // Assert
+    assert_eq!(framed, "you> first\n     second\u{fffd}\n");
+}
+
+#[test]
 fn usage_format_marks_missing_counts() {
     // Arrange
     let usage = ag_harness::model::CompletionUsage::new(None, None, None, Some(4), None, None);
@@ -116,8 +223,8 @@ fn usage_format_marks_missing_counts() {
         ag_harness::model::CompletionUsage::new(None, None, Some(3), None, None, Some(7));
 
     // Act
-    let formatted = format_usage(&usage);
-    let missing_output_formatted = format_usage(&missing_output_usage);
+    let formatted = format_request_usage(&usage);
+    let missing_output_formatted = format_request_usage(&missing_output_usage);
 
     // Assert
     assert_eq!(formatted, "tokens ? in, 4 out, ? total");

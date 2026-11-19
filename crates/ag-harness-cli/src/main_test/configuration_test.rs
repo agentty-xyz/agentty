@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::support::{parse_cli, resume_arguments, run_arguments};
 use crate::{
-    ChatMode, CliError, chat_schema, database_path, model_client, stored_model_identity_parts,
+    ChatMode, CliError, chat_schema, connect_model, database_path, stored_model_identity_parts,
 };
 
 #[test]
@@ -296,13 +296,13 @@ fn chatgpt_client_reads_the_sign_in_under_agentty_root_without_chatgpt_auth_file
     let mut nothing = |_: &str| Err(env::VarError::NotPresent);
 
     // Act
-    let signed_in = model_client(
+    let signed_in = connect_model(
         ModelProvider::ChatGpt,
         "gpt-6.1-sol",
         None,
         &mut agentty_root,
     );
-    let unlocated = model_client(ModelProvider::ChatGpt, "gpt-6.1-sol", None, &mut nothing);
+    let unlocated = connect_model(ModelProvider::ChatGpt, "gpt-6.1-sol", None, &mut nothing);
 
     // Assert
     assert!(signed_in.is_ok(), "{:?}", signed_in.err());

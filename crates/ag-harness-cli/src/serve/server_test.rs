@@ -11,7 +11,7 @@ use std::{env, io};
 use ag_harness::catalog::ModelId;
 use ag_harness::event::RunEvent;
 use ag_harness::model::ReasoningEffort;
-use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
+use ag_harness::provider::{GPT_6_LUNA, MUSE_SPARK_1_3, ModelProvider};
 use serde_json::{Value, json};
 use tokio::io::{
     AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader, DuplexStream, Lines,
@@ -760,6 +760,7 @@ async fn catalog_roles_and_identifiers_select_configured_models() {
     // Arrange
     let output = json!({"type": "json", "schema": message_schema()});
     let cataloged = ModelId::cataloged(ModelProvider::OpenAi, GPT_6_LUNA);
+    let unprofiled = ModelId::cataloged(ModelProvider::Muse, MUSE_SPARK_1_3);
     let input = lines(&[
         request(
             1,
@@ -771,6 +772,12 @@ async fn catalog_roles_and_identifiers_select_configured_models() {
             "session/create",
             json!({"model": {"id": cataloged.as_str()}, "output": output}),
         ),
+        // Muse catalog entries declare no profile, so the CLI's applies.
+        request(
+            3,
+            "session/create",
+            json!({"model": {"id": unprofiled.as_str()}, "output": output}),
+        ),
     ]);
     let broken = Box::new(|name: &str| match name {
         "OPENAI_API_KEY" => Err(env::VarError::NotUnicode("\u{fffd}".into())),
@@ -780,7 +787,13 @@ async fn catalog_roles_and_identifiers_select_configured_models() {
     // Act
     let (configured, configured_served) = exchange(
         &input,
-        environment("http://127.0.0.1:9", &[("OPENAI_API_KEY", "test-key")]),
+        environment(
+            "http://127.0.0.1:9",
+            &[
+                ("OPENAI_API_KEY", "test-key"),
+                ("MODEL_API_KEY", "test-key"),
+            ],
+        ),
     )
     .await;
     let (failed, failed_served) = exchange(
@@ -797,6 +810,11 @@ async fn catalog_roles_and_identifiers_select_configured_models() {
     assert!(configured_served.is_ok() && failed_served.is_ok());
     assert!(configured[0]["result"]["session"].is_string());
     assert!(configured[1]["result"]["session"].is_string());
+    assert!(
+        configured[2]["result"]["session"].is_string(),
+        "{}",
+        configured[2]
+    );
     assert_eq!(error_kind(&failed[0]), &json!("config"));
 }
 
