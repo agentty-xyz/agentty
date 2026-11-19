@@ -125,22 +125,19 @@ async fn successful_reservations_report_creation_types() {
         speed_mode: source.speed_mode,
     };
     let mut manager = session_manager_with_one_session(source);
-    let (analytics, receiver) = capture_events(4);
+    let (analytics, receiver) = capture_events(3);
     services.set_analytics(Some(analytics));
 
     // Act
-    for parent in [None, Some(source_id.as_str())] {
-        manager
-            .create_draft_session_for_project_with_parent(
-                &services,
-                project_id,
-                "main",
-                parent,
-                Some(settings.clone()),
-            )
-            .await
-            .expect("draft reservation");
-    }
+    manager
+        .create_draft_session_for_project_with_settings(
+            &services,
+            project_id,
+            "main",
+            Some(settings.clone()),
+        )
+        .await
+        .expect("draft reservation");
     manager
         .reserve_fork_session(&services, &source_id)
         .await
@@ -163,7 +160,7 @@ async fn successful_reservations_report_creation_types() {
         })
         .collect::<Vec<_>>();
     types.sort_unstable();
-    assert_eq!(types, vec!["draft", "fork", "regular", "stacked",]);
+    assert_eq!(types, vec!["draft", "fork", "regular"]);
 }
 
 #[tokio::test]
@@ -685,7 +682,6 @@ enum CreationFailure {
     DraftMetadataRejected,
     ForkFolderExists,
     ForkWithoutProject,
-    StackedWithoutProject,
 }
 
 #[tokio::test]
@@ -700,10 +696,6 @@ async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata
         (
             CreationFailure::ForkWithoutProject,
             "Source session has no project association",
-        ),
-        (
-            CreationFailure::StackedWithoutProject,
-            "Parent session has no project association",
         ),
     ] {
         // Arrange
@@ -720,7 +712,7 @@ async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata
                 "CREATE TRIGGER reject_creation BEFORE INSERT ON session BEGIN SELECT \
                  RAISE(ABORT, 'creation rejected'); END",
             ),
-            CreationFailure::ForkWithoutProject | CreationFailure::StackedWithoutProject => {
+            CreationFailure::ForkWithoutProject => {
                 Some("UPDATE session SET project_id = NULL WHERE id = 'session-id'")
             }
             CreationFailure::DraftFolderExists | CreationFailure::ForkFolderExists => None,
@@ -764,15 +756,6 @@ async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata
             CreationFailure::ForkFolderExists | CreationFailure::ForkWithoutProject => {
                 manager.fork_session(&services, "session-id").await
             }
-            CreationFailure::StackedWithoutProject => {
-                manager
-                    .create_stacked_draft_session_with_optional_settings(
-                        &services,
-                        "session-id",
-                        None,
-                    )
-                    .await
-            }
         };
 
         // Assert
@@ -795,11 +778,10 @@ async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata
 }
 
 #[tokio::test]
-async fn stacked_draft_materialization_records_the_parent_tip() {
+async fn draft_materialization_creates_the_session_worktree() {
     // Arrange
     let mut session = test_session("", Status::Draft, None, "");
     session.is_draft = true;
-    session.parent_session_id = Some("parent-id".into());
     let database = database_with_session(&session).await;
     let mut manager = session_manager_with_one_session(session);
     let mut filesystem = fs::MockFsClient::new();
@@ -811,9 +793,6 @@ async fn stacked_draft_materialization_records_the_parent_tip() {
     git.expect_create_worktree()
         .once()
         .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-    git.expect_head_hash()
-        .once()
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
     let services = test_services_with_fs_client(
         &database,
         Arc::new(RealClock),
@@ -830,12 +809,11 @@ async fn stacked_draft_materialization_records_the_parent_tip() {
     // Assert
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(
-        database
-            .sessions()
-            .get_session_stack_base_commit_hash("session-id")
-            .await
-            .expect("stack base lookup"),
-        Some("parent-tip".to_string())
+        manager
+            .session_worktree_availability()
+            .get("session-id")
+            .copied(),
+        Some(true)
     );
 }
 
@@ -993,40 +971,29 @@ async fn draft_title_generation_runs_in_the_worktree_once_it_exists() {
 
 #[tokio::test]
 async fn staged_session_start_requires_a_startable_staged_draft() {
-    for (is_draft, status, prompt, parent_session_id, expected_error) in [
+    for (is_draft, status, prompt, expected_error) in [
         (
             false,
             Status::Draft,
             "Staged",
-            None,
             "Only draft sessions can be started from staged drafts",
         ),
         (
             true,
             Status::Review,
             "Staged",
-            None,
             "Only `Draft` sessions can be started from staged drafts",
         ),
         (
             true,
             Status::Draft,
             "",
-            None,
             "Stage at least one draft before starting the session",
-        ),
-        (
-            true,
-            Status::Draft,
-            "Staged",
-            Some("missing-parent"),
-            "Stacked sessions can only start",
         ),
     ] {
         // Arrange
         let mut session = test_session(prompt, status, None, "");
         session.is_draft = is_draft;
-        session.parent_session_id = parent_session_id.map(Into::into);
         let database = database_with_session(&session).await;
         let mut manager = session_manager_with_one_session(session);
         let services = test_services(

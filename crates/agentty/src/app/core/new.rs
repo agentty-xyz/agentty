@@ -254,7 +254,7 @@ impl App {
     > {
         let phase = Span::child("sessions.load");
         let mut sessions =
-            Self::load_and_restack_startup_sessions(services, active_project_id, working_dir)
+            Self::load_active_project_startup_sessions(services, active_project_id, working_dir)
                 .with_context(phase.context())
                 .await
                 .with_resource_client(resource_client);
@@ -348,9 +348,8 @@ impl App {
         review::review_cache_from_rows(focused_review_rows)
     }
 
-    /// Loads startup sessions and requeues durable post-merge stack restacks
-    /// that were interrupted after persistence had recorded the stack base.
-    async fn load_and_restack_startup_sessions(
+    /// Loads startup sessions for the active project with its default model.
+    async fn load_active_project_startup_sessions(
         services: &AppServices,
         active_project_id: i64,
         startup_working_dir: &Path,
@@ -361,7 +360,7 @@ impl App {
             AgentKind::Antigravity.default_model(),
         )
         .await;
-        let mut sessions = AppStartup::load_startup_sessions(
+        AppStartup::load_startup_sessions(
             services,
             StartupSessionLoadContext {
                 active_project_id,
@@ -369,14 +368,7 @@ impl App {
                 startup_working_dir,
             },
         )
-        .await;
-        let failures = sessions
-            .rebase_pending_stack_restacks_for_project(services, active_project_id)
-            .await;
-        sessions
-            .append_stacked_rebase_failure_notices(failures, "Pending stacked child sync failed");
-
-        sessions
+        .await
     }
 
     /// Returns the optional agent availability probe used by the background

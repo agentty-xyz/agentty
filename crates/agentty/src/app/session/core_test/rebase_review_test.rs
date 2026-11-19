@@ -20,7 +20,6 @@ async fn rejected_rebase_admission_preserves_completed_and_partial_reviews() {
     for review_status in [FocusedReviewStatus::Ready, FocusedReviewStatus::Partial] {
         for (status, expected_error) in [
             (Status::Done, "must be in review"),
-            (Status::AgentReview, "no other stack session is active"),
             (Status::InProgress, "active session worker is unavailable"),
             (Status::Review, "operation admission failed"),
         ] {
@@ -35,13 +34,6 @@ async fn rejected_rebase_admission_preserves_completed_and_partial_reviews() {
             let (request_id, text) = seed_review(&mut app, &id, review_status).await;
             if status == Status::Review {
                 reject_operation_admission(&pool).await;
-            } else if status == Status::AgentReview {
-                let mut child = crate::test_support::SessionFixtureBuilder::new()
-                    .id("active-child")
-                    .status(Status::InProgress)
-                    .build();
-                child.parent_session_id = Some(id.as_str().into());
-                app.sessions.push_session(child);
             }
 
             // Act

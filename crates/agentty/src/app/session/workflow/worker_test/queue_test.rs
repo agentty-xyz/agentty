@@ -23,7 +23,7 @@ use super::super::{
 };
 use super::support::{
     apply_worker_turn_result, auto_commit_run_client, empty_transcript,
-    preparation_test_worker_context, queue_helper_context, queue_saved_stacked_prompt,
+    preparation_test_worker_context, queue_helper_context, queue_saved_draft_prompt,
     queue_test_context, queued_message, resume_command, successful_turn_result,
     test_graph_resources,
 };
@@ -296,29 +296,27 @@ async fn test_clear_queued_messages_updates_shared_queue_state() {
 async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
     // Arrange
     let (mut app, _directory) = crate::test_support::new_git_test_app().await;
-    let parent_id = app.create_session().await.expect("parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_id, Status::Review);
-    let (child_id, mut receiver) = queue_saved_stacked_prompt(&mut app, &parent_id).await;
+    let (draft_id, mut receiver) = queue_saved_draft_prompt(&mut app).await;
     let original = app
         .services
         .db()
         .sessions()
-        .load_session_preparation(&child_id)
+        .load_session_preparation(&draft_id)
         .await
         .expect("load")
         .expect("preparation");
 
     // Act: repeat the public start action and the direct retry while
     // the first command remains queued and the session remains Draft.
-    let repeated_start = app.start_staged_session(&child_id).await;
+    let repeated_start = app.start_staged_session(&draft_id).await;
     let repeated_retry = app
-        .retry_workspace_preparation(&child_id, "session.create")
+        .retry_workspace_preparation(&draft_id, "session.create")
         .await;
     let after_retry = app
         .services
         .db()
         .sessions()
-        .load_session_preparation(&child_id)
+        .load_session_preparation(&draft_id)
         .await
         .expect("load")
         .expect("preparation");
@@ -339,7 +337,7 @@ async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
     assert_eq!(after_retry.state, original.state);
     assert_eq!(after_retry.prompt, original.prompt);
     assert_eq!(after_retry.error, original.error);
-    assert!(!app.sessions.can_start_staged_session(&child_id));
+    assert!(!app.sessions.can_start_staged_session(&draft_id));
 
     // Act: the original worker can still atomically accept its saved
     // prompt after both rejected repeats.
@@ -350,11 +348,11 @@ async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
         .expect("gate")
         .await
         .expect("released");
-    let context = preparation_test_worker_context(&app, &child_id);
+    let context = preparation_test_worker_context(&app, &draft_id);
     let accepted = SessionWorkerService::begin_preparation_prompt(
         &context,
         command.command.operation_id(),
-        "saved child prompt",
+        "saved draft prompt",
     )
     .await
     .expect("accept original");
@@ -362,7 +360,7 @@ async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
         .services
         .db()
         .sessions()
-        .load_session_preparation(&child_id)
+        .load_session_preparation(&draft_id)
         .await
         .expect("load")
         .expect("preparation");
@@ -378,7 +376,7 @@ async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
         app.services
             .db()
             .sessions()
-            .load_session_messages(&child_id)
+            .load_session_messages(&draft_id)
             .await
             .expect("messages")
             .len(),
@@ -489,33 +487,31 @@ async fn review_commands_wait_for_question_answers_even_when_immediate() {
 }
 
 #[tokio::test]
-async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance() {
+async fn test_queued_saved_draft_blocks_start_until_worker_rejects_acceptance() {
     // Arrange
     let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let parent_id = app.create_session().await.expect("parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_id, Status::Review);
 
     // Act: pause the worker after foreground enqueue, before acceptance.
-    let (child_id, receiver) = queue_saved_stacked_prompt(&mut app, &parent_id).await;
+    let (draft_id, receiver) = queue_saved_draft_prompt(&mut app).await;
+    let repeated_start = app
+        .sessions
+        .start_staged_session(&app.services, &draft_id)
+        .await;
 
-    // Assert: the child is still Draft but the parent cannot claim branch
-    // work.
+    // Assert: the draft cannot start again while its saved prompt is queued.
     assert_eq!(
         app.sessions
-            .session_for_id(&child_id)
-            .expect("child")
+            .session_for_id(&draft_id)
+            .expect("draft")
             .status,
         Status::Draft
     );
-    assert!(!app.sessions.can_reply_to_session_in_stack(&parent_id));
-    assert!(!app.sessions.can_rebase_session_branch_in_stack(&parent_id));
-    assert!(!app.sessions.can_merge_session_branch_in_stack(&parent_id));
-    assert!(!app.sessions.can_mutate_session_branch_in_stack(&parent_id));
-    assert!(!app.sessions.can_start_staged_session(&child_id));
+    assert!(!app.sessions.can_start_staged_session(&draft_id));
     assert!(
-        !app.sessions
-            .reply(&app.services, &parent_id, "competing turn")
-            .await
+        repeated_start
+            .expect_err("queued draft start")
+            .to_string()
+            .contains("Session workspace preparation is already queued")
     );
 
     // Act: let the real worker reject the durable transfer.
@@ -527,7 +523,7 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
     .await
     .expect("reject acceptance");
     super::support::spawn_session_worker(
-        preparation_test_worker_context(&app, &child_id),
+        preparation_test_worker_context(&app, &draft_id),
         auto_commit_run_client(),
         Arc::default(),
         receiver,
@@ -536,7 +532,7 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
         while app
             .sessions
             .worker_service
-            .has_preparation_reservation(&child_id)
+            .has_preparation_reservation(&draft_id)
         {
             tokio::task::yield_now().await;
         }
@@ -544,14 +540,13 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
     .await
     .expect("worker releases reservation");
 
-    // Assert: rejection releases branch work without consuming the prompt.
-    assert!(app.sessions.can_reply_to_session_in_stack(&parent_id));
-    assert!(app.sessions.can_start_staged_session(&child_id));
+    // Assert: rejection releases the start without consuming the prompt.
+    assert!(app.sessions.can_start_staged_session(&draft_id));
     let preparation = app
         .services
         .db()
         .sessions()
-        .load_session_preparation(&child_id)
+        .load_session_preparation(&draft_id)
         .await
         .expect("load")
         .expect("preparation");
@@ -562,15 +557,15 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
     assert!(preparation.prompt.is_some());
     assert!(
         app.sessions
-            .session_for_id(&child_id)
-            .expect("child")
+            .session_for_id(&draft_id)
+            .expect("draft")
             .is_draft_session()
     );
     assert_eq!(
         app.services
             .db()
             .sessions()
-            .load_session_messages(&child_id)
+            .load_session_messages(&draft_id)
             .await
             .expect("messages"),
         []

@@ -201,7 +201,6 @@ pub(super) fn session_row() -> SessionRow {
         is_draft: true,
         model: model_fixture::CODEX_MODEL_ID.to_string(),
         output_tokens: 60,
-        parent_session_id: Some("parent-1".to_string()),
         permission_mode: "read_only".to_string(),
         project_id: Some(7),
         prompt: "staged prompt".to_string(),

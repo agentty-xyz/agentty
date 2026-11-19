@@ -40,9 +40,6 @@ pub(crate) struct BranchPublishTaskSession {
 
 impl BranchPublishTaskSession {
     /// Builds one background-task snapshot from a live session row.
-    ///
-    /// The app layer may override `base_branch` with a stacked parent publish
-    /// target before moving this snapshot into the background task.
     pub(crate) fn from_session(session: &Session) -> Self {
         Self {
             base_branch: session.base_branch.clone(),

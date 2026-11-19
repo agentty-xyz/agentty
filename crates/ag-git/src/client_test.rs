@@ -10,7 +10,7 @@ use tempfile::tempdir;
 
 use crate::client::{GitClient, RealGitClient};
 use crate::merge::{SquashMergeOutcome, squash_merge};
-use crate::rebase::{RebaseStepResult, abort_rebase, rebase_onto_start};
+use crate::rebase::abort_rebase;
 use crate::repo::main_repo_root;
 use crate::sync::{
     DiffStats, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
@@ -710,42 +710,6 @@ async fn test_ref_hash_resolves_branch_head() {
 
     // Assert
     assert_eq!(resolved_hash, expected_hash);
-}
-
-#[tokio::test]
-async fn test_rebase_onto_start_replays_commits_after_old_base() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    setup_test_git_repo(dir.path());
-    run_git_command(dir.path(), &["checkout", "-b", "parent"]);
-    fs::write(dir.path().join("parent.txt"), "parent").expect("failed to write parent file");
-    run_git_command(dir.path(), &["add", "parent.txt"]);
-    run_git_command(dir.path(), &["commit", "-m", "Parent change"]);
-    let parent_tip = run_git_command_stdout(dir.path(), &["rev-parse", "HEAD"]);
-    run_git_command(dir.path(), &["checkout", "-b", "child"]);
-    fs::write(dir.path().join("child.txt"), "child").expect("failed to write child file");
-    run_git_command(dir.path(), &["add", "child.txt"]);
-    run_git_command(dir.path(), &["commit", "-m", "Child change"]);
-    run_git_command(dir.path(), &["checkout", "main"]);
-    fs::write(dir.path().join("main.txt"), "main").expect("failed to write main file");
-    run_git_command(dir.path(), &["add", "main.txt"]);
-    run_git_command(dir.path(), &["commit", "-m", "Main change"]);
-    run_git_command(dir.path(), &["checkout", "child"]);
-
-    // Act
-    let result = rebase_onto_start(dir.path().to_path_buf(), "main".to_string(), parent_tip)
-        .await
-        .expect("failed to start rebase --onto");
-    let child_only_subjects = run_git_command_stdout(
-        dir.path(),
-        &["log", "--format=%s", "--reverse", "main..HEAD"],
-    );
-
-    // Assert
-    assert_eq!(result, RebaseStepResult::Completed);
-    assert_eq!(child_only_subjects, "Child change");
-    assert!(!dir.path().join("parent.txt").exists());
-    assert!(dir.path().join("child.txt").exists());
 }
 
 #[tokio::test]

@@ -1,6 +1,5 @@
 //! Prompt editing, focus, paste, and file lookup.
 
-use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -10,7 +9,7 @@ use super::fixture::{
     seed_review_ready_session, seed_sessions_startup_tab,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest};
 
 /// Draft text typed into the composer by the chat-focus toggle test.
 const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
@@ -41,60 +40,6 @@ fn seed_described_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std:
     std::fs::write(
         env.workdir.join("described_lookup.py"),
         "\"\"\"Python lookup summary.\"\"\"\n",
-    )?;
-
-    Ok(())
-}
-
-/// Seeds two unmaterialized stacked drafts whose nearest materialized ancestor
-/// contains a new file that is absent from the project checkout.
-async fn seed_nested_stacked_at_lookup_session(
-    env: &BuilderEnv,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let ancestor_session_id = "atparent-0001";
-    let parent_session_id = "atmiddle-0001";
-    let child_session_id = "atchildx-0001";
-    common::seed_session(
-        env,
-        SessionSeed::regular(
-            ancestor_session_id,
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "Review",
-        )
-        .with_title("Ancestor with lookup file"),
-    )
-    .await?;
-    common::seed_session(
-        env,
-        SessionSeed::stacked_draft(
-            parent_session_id,
-            model_fixture::CODEX_MODEL_ID,
-            "wt/atparent",
-            "Draft",
-            ancestor_session_id,
-        )
-        .with_title("Unmaterialized middle draft"),
-    )
-    .await?;
-    common::seed_session(
-        env,
-        SessionSeed::stacked_draft(
-            child_session_id,
-            model_fixture::CODEX_MODEL_ID,
-            "wt/atmiddle",
-            "Draft",
-            parent_session_id,
-        )
-        .with_title("Nested lookup child"),
-    )
-    .await?;
-
-    let parent_worktree = env.agentty_root.join("wt").join("atparent");
-    std::fs::create_dir_all(&parent_worktree)?;
-    std::fs::write(
-        parent_worktree.join("ancestor_lookup_target.txt"),
-        "ancestor lookup target\n",
     )?;
 
     Ok(())
@@ -435,39 +380,6 @@ async fn at_lookup_shows_file_descriptions() -> E2eResult {
                     assertion::assert_text_in_region(frame, "Rust lookup summary.", &full);
                     assertion::assert_text_in_region(frame, "described_lookup.py", &full);
                     assertion::assert_text_in_region(frame, "Python lookup summary.", &full);
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Verify that a nested unmaterialized stacked draft resolves `@` suggestions
-/// from its nearest materialized ancestor worktree.
-#[tokio::test]
-async fn stacked_session_at_lookup() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("stacked_session_at_lookup")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_nested_stacked_at_lookup_session(env).await }))
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Nested lookup child", 5000)
-                    .compose(&common::open_selected_session_view())
-                    .press_key("Enter")
-                    .wait_for_text("Enter: stage draft", 3000)
-                    .write_text("@ancestor_lookup")
-                    .wait_for_text("ancestor_lookup_target.txt", 5000)
-            },
-            |frame, _report| {
-                Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "ancestor_lookup_target.txt", &full);
-                    assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
                 })
             },
         )

@@ -15,10 +15,7 @@ use super::prompt::{
 };
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
-use crate::domain::session::{
-    PublishBranchAction, ReviewWatchToggle, Session, SessionId, Status,
-    can_reply_to_session_in_stack,
-};
+use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, SessionId};
 
 /// Side of a unified diff that owns one selected changed line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -442,7 +439,7 @@ pub enum ConfirmationIntent {
     CancelSession,
     /// Confirms creating a continuation draft from one terminal session.
     ContinueSession,
-    /// Confirms forking a root review-ready session into a new session.
+    /// Confirms forking a review-ready session into a new session.
     ForkSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
@@ -719,13 +716,10 @@ impl DiffRestoreTarget {
 /// Returns whether the visible diff may collect and submit diff comments.
 pub(crate) fn allows_diff_line_comment_reply(
     session: &Session,
-    sessions: &[Session],
     restore: Option<&DiffRestoreTarget>,
 ) -> bool {
     !matches!(restore, Some(DiffRestoreTarget::Question(_)))
         && session.status.allows_chat_composer()
-        && (session.status == Status::Draft
-            || can_reply_to_session_in_stack(sessions, session.id.as_str()))
 }
 
 /// Tracks which panel has input focus on the session chat page.
@@ -758,14 +752,6 @@ pub enum AppMode {
     SessionCreation {
         /// Highlighted session creation option.
         selected_option_index: usize,
-    },
-    /// Displays eligible parent sessions for moving one review-ready session
-    /// into an existing stack.
-    StackAppendParentSelection {
-        /// Highlighted eligible parent row.
-        selected_parent_index: usize,
-        /// Review-ready session that will become a stacked child.
-        session_id: SessionId,
     },
     /// Displays an advisory before opening the session creation selector.
     PreCommitHookWarning {
@@ -1056,14 +1042,8 @@ pub enum HelpContext {
         can_fork_session: bool,
         /// Whether the session branch may enter the merge queue.
         can_merge_session_branch: bool,
-        /// Whether any session-branch mutation may begin.
-        can_mutate_session_branch: bool,
         /// Whether the session worktree may be opened externally.
         can_open_worktree: bool,
-        /// Whether the session branch may be rebased.
-        can_rebase_session_branch: bool,
-        /// Whether a follow-up agent turn may be submitted.
-        can_reply_to_session: bool,
         /// Whether a staged draft session may begin its first turn.
         can_start_staged_session: bool,
         /// Whether linked forge review comments may be opened.
@@ -1118,10 +1098,7 @@ impl HelpContext {
             HelpContext::View {
                 can_fork_session,
                 can_merge_session_branch,
-                can_mutate_session_branch,
                 can_open_worktree,
-                can_rebase_session_branch,
-                can_reply_to_session,
                 can_start_staged_session,
                 can_view_review_comments,
                 publish_pull_request_action,
@@ -1134,14 +1111,7 @@ impl HelpContext {
                     can_merge_session_branch: ViewActionAvailability::from_bool(
                         *can_merge_session_branch,
                     ),
-                    can_mutate_session_branch: ViewActionAvailability::from_bool(
-                        *can_mutate_session_branch,
-                    ),
                     can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
-                    can_rebase_session_branch: ViewActionAvailability::from_bool(
-                        *can_rebase_session_branch,
-                    ),
-                    reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
                     can_start_staged_session: ViewActionAvailability::from_bool(
                         *can_start_staged_session,
                     ),

@@ -543,20 +543,6 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
         expected: "Err(git rebase: Failed to rebase onto missing)",
     },
     ContractCase {
-        operation: "rebase_onto_start",
-        prepare: KEEP_STANDARD_LAYOUT,
-        observe: |repository| {
-            Box::pin(async move {
-                let step = RealGitClient
-                    .rebase_onto_start(repository.local, "missing".to_string(), "main".to_string())
-                    .await;
-
-                render_rebase_step(step)
-            })
-        },
-        expected: "Err(git rebase --onto: Failed to rebase onto missing after main)",
-    },
-    ContractCase {
         operation: "rebase_continue",
         prepare: start_conflicting_rebase,
         observe: |repository| {
@@ -590,24 +576,6 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
             Box::pin(async move {
                 let step = RealGitClient
                     .rebase_start(repository.local.clone(), "main".to_string())
-                    .await;
-
-                format!("{step:?} parent={}", repository.subject("HEAD~1"))
-            })
-        },
-        expected: "Ok(Completed) parent=Advance main",
-    },
-    ContractCase {
-        operation: "rebase_onto_start",
-        prepare: diverge_feature_from_main,
-        observe: |repository| {
-            Box::pin(async move {
-                let step = RealGitClient
-                    .rebase_onto_start(
-                        repository.local.clone(),
-                        "main".to_string(),
-                        "feature~1".to_string(),
-                    )
                     .await;
 
                 format!("{step:?} parent={}", repository.subject("HEAD~1"))

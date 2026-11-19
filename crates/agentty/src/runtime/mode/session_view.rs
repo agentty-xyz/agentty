@@ -112,11 +112,8 @@ struct ViewSessionSnapshot {
     follow_up_task_action: Option<FollowUpTaskAction>,
     fork_session: ViewActionState,
     merge_session_branch: ViewActionState,
-    mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
     publish_pull_request_action: Option<PublishBranchAction>,
-    rebase_session_branch: ViewActionState,
-    reply_to_session: ViewActionState,
     review_comments: ViewActionState,
     review_watch_toggle: Option<ReviewWatchToggle>,
     session_state: ViewSessionState,
@@ -125,7 +122,7 @@ struct ViewSessionSnapshot {
 }
 
 impl ViewSessionSnapshot {
-    /// Projects cached session and stack state without querying host services.
+    /// Projects cached session state without querying host services.
     fn from_sessions(
         sessions: &SessionManager,
         view_context: &ViewContext,
@@ -147,20 +144,9 @@ impl ViewSessionSnapshot {
             fork_session: ViewActionState::from_bool(session.allows_fork_action()),
             follow_up_task_action: sessions
                 .selected_follow_up_task_action(&view_context.session_id),
-            merge_session_branch: ViewActionState::from_bool(
-                sessions.can_merge_session_branch_in_stack(view_context.session_id.as_str()),
-            ),
-            mutate_session_branch: ViewActionState::from_bool(
-                sessions.can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
-            ),
+            merge_session_branch: ViewActionState::from_bool(!session.has_review_request()),
             open_worktree: ViewActionState::from_bool(can_open_worktree),
             publish_pull_request_action: session.publish_pull_request_action(),
-            rebase_session_branch: ViewActionState::from_bool(
-                sessions.can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
-            ),
-            reply_to_session: ViewActionState::from_bool(
-                sessions.can_reply_to_session_in_stack(view_context.session_id.as_str()),
-            ),
             review_comments: ViewActionState::from_bool(
                 session.has_review_request() && session.allows_review_comment_reply(),
             ),
@@ -180,17 +166,13 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can enter the merge queue from view
     /// mode.
     fn can_merge_session(&self) -> bool {
-        self.session_status.allows_session_actions()
-            && self.can_merge_session_branch()
-            && self.session_state != ViewSessionState::StackedDraft
+        self.session_status.allows_session_actions() && self.can_merge_session_branch()
     }
 
     /// Returns whether the active session can start the session sync action
     /// from view mode.
     fn can_rebase_session(&self) -> bool {
         self.session_status.allows_rebase_action()
-            && self.can_rebase_session_branch()
-            && self.session_state != ViewSessionState::StackedDraft
     }
 
     /// Returns whether a terminal session can launch a continuation draft.
@@ -203,13 +185,7 @@ impl ViewSessionSnapshot {
         self.fork_session.is_enabled()
     }
 
-    /// Returns whether this session can start branch-mutating stack work.
-    fn can_mutate_session_branch(&self) -> bool {
-        self.mutate_session_branch.is_enabled()
-    }
-
-    /// Returns whether this session can enter the merge queue under stack
-    /// rules.
+    /// Returns whether this session can enter the local merge queue.
     fn can_merge_session_branch(&self) -> bool {
         self.merge_session_branch.is_enabled()
     }
@@ -217,16 +193,6 @@ impl ViewSessionSnapshot {
     /// Returns whether this session's local worktree can be opened.
     fn can_open_worktree(&self) -> bool {
         self.open_worktree.is_enabled()
-    }
-
-    /// Returns whether this session can start sync work under stack rules.
-    fn can_rebase_session_branch(&self) -> bool {
-        self.rebase_session_branch.is_enabled()
-    }
-
-    /// Returns whether this session can accept a reply under stack rules.
-    fn can_reply_to_session(&self) -> bool {
-        self.reply_to_session.is_enabled()
     }
 
     /// Returns whether the session has a linked forge review request whose
@@ -242,22 +208,12 @@ impl ViewSessionSnapshot {
 
     /// Returns whether `Enter` may open a prompt composer from view mode.
     fn can_open_prompt_composer(&self) -> bool {
-        if !self.session_status.allows_chat_composer() {
-            return false;
-        }
-
-        self.can_edit_without_branch_work() || self.can_reply_to_session()
+        self.session_status.allows_chat_composer()
     }
 
     /// Returns whether `/` may open the slash-command composer from view mode.
     fn can_launch_configuration_composer(&self) -> bool {
-        if !self.session_status.allows_session_actions() {
-            return false;
-        }
-
-        self.can_edit_without_branch_work()
-            || self.can_mutate_session_branch()
-            || self.can_reply_to_session()
+        self.session_status.allows_session_actions()
     }
 
     /// Returns whether image paste can open a draft prompt composer directly
@@ -269,10 +225,7 @@ impl ViewSessionSnapshot {
     /// Returns whether editing the viewed session only stages local draft
     /// content and therefore does not mutate a session branch.
     fn can_edit_without_branch_work(&self) -> bool {
-        matches!(
-            self.session_state,
-            ViewSessionState::NewSession | ViewSessionState::StackedDraft
-        )
+        self.session_state == ViewSessionState::NewSession
     }
 }
 
@@ -959,10 +912,7 @@ fn open_view_help_overlay(
         context: HelpContext::View {
             can_fork_session: view_session_snapshot.can_fork_session(),
             can_merge_session_branch: view_session_snapshot.can_merge_session_branch(),
-            can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),
             can_open_worktree: view_session_snapshot.can_open_worktree(),
-            can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
-            can_reply_to_session: view_session_snapshot.can_reply_to_session(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,

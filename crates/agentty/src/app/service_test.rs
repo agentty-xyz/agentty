@@ -909,15 +909,6 @@ fn session_event_labels_preserve_variant_identity() {
             attempt_id: "implementer".to_string(),
             session_id: session_id.clone(),
         },
-        AppEvent::StackedParentTurnCompleted {
-            session_id: session_id.clone(),
-        },
-        AppEvent::StackedParentSyncCompleted {
-            session_id: session_id.clone(),
-        },
-        AppEvent::StackedParentMergeCompleted {
-            child_session_ids: vec![session_id.clone()],
-        },
         AppEvent::SessionWorkflowNoticeUpdated {
             notice: "Working".to_string(),
             session_id: session_id.clone(),

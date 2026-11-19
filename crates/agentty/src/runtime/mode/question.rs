@@ -784,7 +784,7 @@ async fn submit_response(app: &mut App, response: String) {
     // just-answered panel before the worker transitions to `InProgress`. The
     // send eligibility check runs against the pre-send `Question` status, so
     // this must happen after `send_message()`. Skip the advance when the reply
-    // never reached the worker (for example a rejected stacked reply) so the
+    // never reached the worker (for example a rejected reply) so the
     // pending question is not hidden behind a stalled `InProgress` state.
     if reply_enqueued {
         app.clear_diff_comment_progress(&session_id);

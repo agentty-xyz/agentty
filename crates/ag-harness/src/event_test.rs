@@ -401,6 +401,73 @@ fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Erro
 }
 
 #[test]
+fn retrying_encodes_its_delay_in_milliseconds_matching_the_schema() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let event = RunEvent {
+        at: UNIX_EPOCH,
+        kind: RunEventKind::Retrying {
+            after: Duration::from_millis(1_500),
+            attempt: 2,
+            kind: ErrorKind::RateLimited,
+        },
+        run: RunId::generate(),
+        seq: 3,
+    };
+    let unbounded = RunEventKind::Retrying {
+        after: Duration::MAX,
+        attempt: 1,
+        kind: ErrorKind::Overloaded,
+    };
+    let validator = Validator::new(&serde_json::to_value(schemars::schema_for!(RunEvent))?)?;
+
+    // Act
+    let encoded = serde_json::to_value(&event)?;
+    let decoded: RunEvent = serde_json::from_value(encoded.clone())?;
+    let saturated = serde_json::to_value(&unbounded)?;
+
+    // Assert
+    assert_eq!(decoded, event);
+    assert!(validator.is_valid(&encoded), "{encoded} matches the schema");
+    assert_eq!(
+        encoded["kind"],
+        json!({"type": "retrying", "after": 1_500, "attempt": 2, "kind": "rate_limited"})
+    );
+    assert_eq!(saturated["after"], u64::MAX);
+    assert!(
+        serde_json::from_value::<RunEventKind>(json!({
+            "type": "retrying", "after": -1, "attempt": 1, "kind": "transport"
+        }))
+        .is_err()
+    );
+
+    Ok(())
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn retrying_reads_its_delay_to_the_millisecond_as_the_wire_does() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let jittered = Duration::new(1, 234_567_891);
+
+    // Act
+    let kind = RunEventKind::retrying(jittered, 1, ErrorKind::Overloaded);
+    let decoded: RunEventKind = serde_json::from_value(serde_json::to_value(&kind)?)?;
+
+    // Assert
+    assert_eq!(
+        kind,
+        RunEventKind::Retrying {
+            after: Duration::from_millis(1_234),
+            attempt: 1,
+            kind: ErrorKind::Overloaded,
+        }
+    );
+    assert_eq!(decoded, kind);
+
+    Ok(())
+}
+
+#[test]
 fn budget_failures_carry_their_limit_beside_a_string_kind() -> Result<(), Box<dyn Error>> {
     // Arrange
     let failure = RunFailure {

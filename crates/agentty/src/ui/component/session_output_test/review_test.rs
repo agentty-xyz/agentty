@@ -10,7 +10,7 @@ use super::support::{
     line_context, output_lines, session_fixture, set_assistant_transcript,
     set_conversation_transcript, set_review_transient,
 };
-use crate::domain::session::{SessionId, Status};
+use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -54,44 +54,6 @@ fn test_output_layout_cache_tracks_manual_branch_publish_loader() {
             .to_string()
             .contains("Publishing review request...")
     );
-}
-
-#[test]
-fn test_output_layout_cache_keys_stacked_draft_preview() {
-    // Arrange
-    let mut session = session_fixture();
-    session.is_draft = true;
-    session.prompt = "First staged draft".to_string();
-    let markdown_render_cache = markdown::MarkdownRenderCache::default();
-    let output_layout_cache = SessionOutputLayoutCache::default();
-    let context = line_context();
-
-    // Act
-    let root_layout = output_layout_cache.layout(
-        &session,
-        Rect::new(0, 0, 80, 12),
-        context,
-        Some(&markdown_render_cache),
-    );
-    session.parent_session_id = Some(SessionId::from("parent-session"));
-    let stacked_layout = output_layout_cache.layout(
-        &session,
-        Rect::new(0, 0, 80, 12),
-        context,
-        Some(&markdown_render_cache),
-    );
-    let stacked_text = stacked_layout
-        .lines
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Assert
-    assert!(!Arc::ptr_eq(&root_layout.lines, &stacked_layout.lines));
-    assert!(stacked_text.contains("start the stacked"));
-    assert!(stacked_text.contains("bundle from its parent"));
-    assert!(stacked_text.contains("parent"));
 }
 
 #[test]
@@ -250,30 +212,6 @@ fn test_output_lines_render_draft_preview_with_status_lines() {
 }
 
 #[test]
-fn test_output_lines_render_staged_draft_preview_for_stacked_session() {
-    // Arrange
-    let mut session = session_fixture();
-    session.is_draft = true;
-    session.parent_session_id = Some(SessionId::from("parent-session"));
-    session.prompt = "Stacked draft".to_string();
-
-    // Act
-    let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
-    let text = lines
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Assert
-    assert!(text.contains("Draft Session"));
-    assert!(text.contains("start the stacked"));
-    assert!(text.contains("bundle from its parent"));
-    assert!(text.contains("parent"));
-    assert!(text.contains("Stacked draft"));
-}
-
-#[test]
 fn test_output_lines_render_empty_draft_preview_for_new_session() {
     // Arrange
     let mut session = session_fixture();
@@ -291,27 +229,6 @@ fn test_output_lines_render_empty_draft_preview_for_new_session() {
     assert!(text.contains("Draft Session"));
     assert!(text.contains("No draft messages staged yet."));
     assert!(text.contains("Use Enter to stage the first draft locally"));
-}
-
-#[test]
-fn test_output_lines_render_empty_draft_preview_for_stacked_session() {
-    // Arrange
-    let mut session = session_fixture();
-    session.is_draft = true;
-    session.parent_session_id = Some(SessionId::from("parent-session"));
-
-    // Act
-    let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
-    let text = lines
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Assert
-    assert!(text.contains("Draft Session"));
-    assert!(text.contains("No draft messages staged yet."));
-    assert!(text.contains("start action appears after the parent is review-ready"));
 }
 
 /// Verifies merge failures render after focused review content.

@@ -417,9 +417,6 @@ pub(super) fn setup_mock_merge_and_rebase_expectations(mock: &mut git::MockGitCl
     mock.expect_rebase_start()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-    mock.expect_rebase_onto_start()
-        .times(0..)
-        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
     mock.expect_run_pre_commit_hook()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(()) }));
@@ -539,10 +536,10 @@ pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitC
         .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
     mock.expect_head_hash()
         .times(0..)
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
+        .returning(|_| Box::pin(async { Ok("head-commit".to_string()) }));
     mock.expect_ref_hash()
         .times(0..)
-        .returning(|_, _| Box::pin(async { Ok("parent-tip".to_string()) }));
+        .returning(|_, _| Box::pin(async { Ok("head-commit".to_string()) }));
     mock.expect_delete_branch()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -705,7 +702,6 @@ pub(super) fn add_manual_session_with_status(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: PermissionMode::AutoEdit,
         project_name: String::new(),
         prompt: prompt.to_string(),
@@ -764,7 +760,6 @@ pub(super) fn test_session_manager_with_clock(
             in_progress_total_seconds: 0,
             is_draft: false,
             agent: model_fixture::codex_selection(),
-            parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
             project_name: "project".to_string(),
             prompt: String::new(),

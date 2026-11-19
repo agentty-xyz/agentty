@@ -7,9 +7,6 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
-use agentty::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-};
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
@@ -314,90 +311,6 @@ async fn seed_bypass_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std
     std::fs::write(&gh_path, gh_script)?;
 
     Ok(())
-}
-
-/// Seeds a merged parent and merged stacked child whose review target still
-/// names the parent branch, plus a remote for the manual main sync.
-async fn seed_merged_stacked_review_requests(
-    env: &BuilderEnv,
-) -> Result<(), Box<dyn std::error::Error>> {
-    common::seed_session(
-        env,
-        SessionSeed::regular(
-            "stack-parent-0001",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "Merged",
-        )
-        .with_title("Merged stack parent"),
-    )
-    .await?;
-    common::seed_session(
-        env,
-        SessionSeed::stacked_draft(
-            "stack-child-0001",
-            model_fixture::CODEX_MODEL_ID,
-            "wt/stack-pa",
-            "Merged",
-            "stack-parent-0001",
-        )
-        .with_title("Merged stack child"),
-    )
-    .await?;
-
-    (async {
-        let database = common::open_database(env).await?;
-        let parent_review_request = ReviewRequest {
-            last_refreshed_at: 55,
-            summary: ReviewRequestSummary {
-                display_id: "#42".to_string(),
-                forge_kind: ForgeKind::GitHub,
-                source_branch: "wt/stack-pa".to_string(),
-                state: ReviewRequestState::Merged,
-                status_summary: None,
-                target_branch: "main".to_string(),
-                title: "Merged stack parent".to_string(),
-                web_url: "https://github.com/example/project/pull/42".to_string(),
-            },
-        };
-        let child_review_request = ReviewRequest {
-            last_refreshed_at: 55,
-            summary: ReviewRequestSummary {
-                display_id: "#43".to_string(),
-                forge_kind: ForgeKind::GitHub,
-                source_branch: "wt/stack-ch".to_string(),
-                state: ReviewRequestState::Merged,
-                status_summary: None,
-                target_branch: "wt/stack-pa".to_string(),
-                title: "Merged stack child".to_string(),
-                web_url: "https://github.com/example/project/pull/43".to_string(),
-            },
-        };
-
-        database
-            .reviews()
-            .update_session_review_request("stack-parent-0001", Some(parent_review_request))
-            .await?;
-        database
-            .reviews()
-            .update_session_review_request("stack-child-0001", Some(child_review_request))
-            .await
-    })
-    .await?;
-
-    std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-pa"))?;
-    std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-ch"))?;
-    let sync_origin = env.agentty_root.join("sync-origin.git");
-    std::fs::create_dir_all(&sync_origin)?;
-    run_git(&sync_origin, &["init", "--bare", "."])?;
-    let sync_origin_path = sync_origin.to_string_lossy().into_owned();
-    run_git(
-        &env.workdir,
-        &["remote", "add", "origin", sync_origin_path.as_str()],
-    )?;
-    run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
-
-    install_delayed_worktree_remove_stub(env, 1)
 }
 
 /// Installs a git wrapper that delays worktree removal while forwarding all
@@ -1058,47 +971,6 @@ async fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Done", &full);
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Verify one successful manual main sync archives both reviews in a fully
-/// merged stack, including the child that still targets the parent branch.
-#[tokio::test]
-async fn merged_stacked_reviews_complete_together_after_manual_sync() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("merged_stacked_reviews_complete_together_after_manual_sync")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_merged_stacked_review_requests(env).await }))
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Merged stack child", 5000)
-                    .press_key("s")
-                    .wait_for_text("Synced test-project/main", 10_000)
-                    .wait_for_text("Done", 10_000)
-                    .capture_labeled(
-                        "merged_stack_done",
-                        "Manual main sync archives both merged stack sessions",
-                    )
-            },
-            |frame, _report| {
-                Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    let session_list_text = frame.text_in_region(&full);
-
-                    assertion::assert_text_in_region(frame, "Merged stack parent", &full);
-                    assertion::assert_text_in_region(frame, "Merged stack child", &full);
-                    assert!(
-                        session_list_text.matches("Done").count() >= 2,
-                        "expected both merged stack rows to be Done:\n{session_list_text}"
-                    );
                 })
             },
         )

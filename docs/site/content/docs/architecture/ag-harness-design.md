@@ -334,15 +334,20 @@ decides whose recorded reasoning a model replays natively after a model switch.
   profile; choosing a model for a task stays the host's decision.
 
 Durable sessions send a stable prompt-cache key where the provider policy enables it.
-Requests have bounded timeouts and limited retries for connection failures and `429`
-responses; a spent quota (`402`, or a `429` reporting an exhausted quota) is not
-retried. The harness `ErrorKind`, exposed through `RunError` and `HarnessError`, maps
-these failures to `RateLimited`, `Overloaded`, `QuotaExceeded`, and `Auth` with a
-retryable flag and a `Retry-After` capped at sixty seconds. Provider context-overflow
-rejections map to `ErrorClass::ContextOverflow` so the engine can refit. Invalid final
-output is re-requested a bounded number of times with request-only feedback, and tool
-calls with undecodable arguments are answered with a rejected result instead of failing
-the response. Diagnostics never include model content.
+Requests have bounded timeouts and retry under each provider specification's
+`RetryPolicy`: by default connection failures and `429` responses, with `5xx` and `529`
+as opt-ins, honoring a capped `Retry-After` as delta-seconds or an HTTP date; a spent
+quota (`402`, or a `429` reporting an exhausted quota) and a timed-out request are not
+retried. The router's transport reports each retry before waiting, and the engine scopes
+the run's event sink around every model request, so a streamed run emits it as
+`Retrying`; cancelling the run drops the request future and its wait. The harness
+`ErrorKind`, exposed through `RunError` and `HarnessError`, maps these failures to
+`RateLimited`, `Overloaded`, `QuotaExceeded`, and `Auth` with a retryable flag and the
+capped `Retry-After`. Provider context-overflow rejections map to
+`ErrorClass::ContextOverflow` so the engine can refit. Invalid final output is
+re-requested a bounded number of times with request-only feedback, and tool calls with
+undecodable arguments are answered with a rejected result instead of failing the
+response. Diagnostics never include model content.
 
 ## Input and output
 
