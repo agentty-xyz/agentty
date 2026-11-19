@@ -8,8 +8,9 @@ use serde_json::json;
 use super::support::{ByteEstimator, FixedEstimator, budget, read_call, result};
 use crate::bash::{BashConfig, Enforcement};
 use crate::context::{
-    ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
-    admit_mandatory_content, advertised_tools, window_history_bytes,
+    ContextBudgetError, ContextEstimator, ContextPolicy, HeuristicContextEstimator, HistoryTurn,
+    TurnStop, admit_mandatory_content, advertised_tools, payload_bytes_within,
+    window_history_bytes,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
@@ -21,6 +22,58 @@ fn options_with(tools: ToolSet) -> TurnOptions {
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
 
     TurnOptions::from_output(schema).with_tools(tools)
+}
+
+#[test]
+fn payload_bytes_follow_each_estimator_measured_rate() {
+    // Arrange
+    let default = HeuristicContextEstimator::DEFAULT;
+    let dense = HeuristicContextEstimator::DEFAULT.with_messages(500, 9);
+
+    // Act
+    let bytes = (
+        payload_bytes_within(&default, 100),
+        payload_bytes_within(&dense, 100),
+        payload_bytes_within(&ByteEstimator, 100),
+        payload_bytes_within(&FixedEstimator, 100),
+    );
+
+    // Assert
+    // The default heuristic holds four bytes per weight unit, the denser one
+    // two, and an estimator whose weight ignores payload length has no rate.
+    assert_eq!(bytes, (Some(400), Some(200), Some(100), None));
+}
+
+#[test]
+fn context_policies_compact_above_their_threshold() {
+    // Arrange
+    let at = |threshold_percent| {
+        ContextPolicy::auto_compact_at(threshold_percent).expect("threshold in range")
+    };
+
+    // Act
+    let thresholds = [
+        ContextPolicy::Evict.compaction_threshold(1_000),
+        ContextPolicy::auto_compact().compaction_threshold(1_000),
+        at(1).compaction_threshold(1_000),
+        at(100).compaction_threshold(1_000),
+    ];
+
+    // Assert
+    assert_eq!(ContextPolicy::default(), ContextPolicy::Evict);
+    assert_eq!(thresholds, [None, Some(900), Some(10), Some(1_000)]);
+}
+
+#[test]
+fn auto_compaction_thresholds_outside_one_to_a_hundred_are_rejected() {
+    // Arrange
+    let thresholds = [0, 101, u8::MAX];
+
+    // Act
+    let policies = thresholds.map(ContextPolicy::auto_compact_at);
+
+    // Assert
+    assert_eq!(policies, [None, None, None]);
 }
 
 #[test]

@@ -1,6 +1,8 @@
 //! Unit tests for `Harness` turns and sessions, split by behavior. Suites
 //! that inspect SQLite persistence need the `sqlite` feature.
 
+#[path = "harness_test/auto_compact_test.rs"]
+mod auto_compact;
 #[path = "harness_test/builder_test.rs"]
 mod builder;
 #[path = "harness_test/calibration_test.rs"]

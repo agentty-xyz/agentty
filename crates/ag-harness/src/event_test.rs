@@ -5,8 +5,9 @@ use jsonschema::Validator;
 use serde_json::json;
 
 use super::{
-    EVENT_BUFFER, EventSink, EventStream, Item, ItemId, ItemKind, RunEvent, RunEventKind,
-    RunFailure, RunId, RunSummary, SessionId, ToolCallItem, ToolCallStatus, TurnIndex,
+    CompactionOutcome, CompactionReport, EVENT_BUFFER, EventSink, EventStream, Item, ItemId,
+    ItemKind, RunEvent, RunEventKind, RunFailure, RunId, RunSummary, SessionId, ToolCallItem,
+    ToolCallStatus, TurnIndex,
 };
 use crate::catalog::{ModelId, Pricing};
 use crate::error::{ErrorKind, RunError};
@@ -341,6 +342,60 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
     let unpriced = serde_json::to_value(request_completed())?;
     assert_eq!(unpriced["cost"], json!(null));
     assert_eq!(unpriced["model"], json!(null));
+
+    Ok(())
+}
+
+#[test]
+fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let (sink, _stream) = EventSink::channel(RunId::generate());
+    let events: Vec<RunEvent> = [
+        RunEventKind::Compacted(CompactionReport {
+            outcome: CompactionOutcome::Compacted {
+                covered_through: TurnIndex(1),
+                model: Some(ModelId::new("host/cheap")),
+            },
+        }),
+        RunEventKind::Compacted(CompactionReport {
+            outcome: CompactionOutcome::NothingToCover,
+        }),
+        RunEventKind::Compacted(CompactionReport {
+            outcome: CompactionOutcome::Failed(RunFailure {
+                kind: ErrorKind::InvalidOutput,
+                message: "summary rejected".to_string(),
+                retryable: false,
+            }),
+        }),
+    ]
+    .into_iter()
+    .zip(0_u64..)
+    .map(|(kind, seq)| RunEvent {
+        at: UNIX_EPOCH,
+        kind,
+        run: sink.run.clone(),
+        seq,
+    })
+    .collect();
+    let validator = Validator::new(&serde_json::to_value(schemars::schema_for!(RunEvent))?)?;
+
+    // Act
+    let encoded = serde_json::to_value(&events)?;
+    let decoded: Vec<RunEvent> = serde_json::from_value(encoded.clone())?;
+
+    // Assert
+    assert_eq!(decoded, events);
+    for event in encoded.as_array().ok_or("an array of events")? {
+        assert!(validator.is_valid(event), "{event} matches the schema");
+    }
+    assert_eq!(encoded[0]["kind"]["type"], "compacted");
+    assert_eq!(encoded[0]["kind"]["outcome"]["status"], "compacted");
+    assert_eq!(encoded[0]["kind"]["outcome"]["covered_through"], 1);
+    assert_eq!(encoded[0]["kind"]["outcome"]["model"], "host/cheap");
+    assert_eq!(encoded[1]["kind"]["outcome"]["status"], "nothing_to_cover");
+    assert_eq!(encoded[2]["kind"]["outcome"]["status"], "failed");
+    assert_eq!(encoded[2]["kind"]["outcome"]["kind"], "invalid_output");
+    assert_eq!(encoded[2]["kind"]["outcome"]["message"], "summary rejected");
 
     Ok(())
 }

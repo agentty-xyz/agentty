@@ -162,7 +162,9 @@ fn model_connector_reads_openai_compatible_profiles_from_the_environment() {
     // Assert
     assert!(matches!(invalid, Err(CliError::ModelConfiguration(_))));
     assert_eq!(local_profile.context_window_tokens(), 40_960);
-    assert_eq!(hosted_profile, MODEL_PROFILE);
+    // The harness catalog declares Muse's profile.
+    assert_eq!(hosted_profile.context_window_tokens(), 1_048_576);
+    assert_ne!(hosted_profile, MODEL_PROFILE);
 }
 
 #[test]

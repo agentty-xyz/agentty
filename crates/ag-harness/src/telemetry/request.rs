@@ -43,7 +43,7 @@ pub(crate) struct RequestMetrics<'a> {
     duration: Histogram<f64>,
     is_active: bool,
     model: &'a str,
-    provider: &'static str,
+    provider: &'a str,
     started_at: Instant,
 }
 
@@ -129,7 +129,7 @@ impl<'a> RequestMetrics<'a> {
     fn attributes(&self, error_type: Option<&str>) -> Vec<KeyValue> {
         let mut attributes = vec![
             KeyValue::new(ATTRIBUTE_OPERATION_NAME, OPERATION_CHAT),
-            KeyValue::new(ATTRIBUTE_PROVIDER_NAME, self.provider),
+            KeyValue::new(ATTRIBUTE_PROVIDER_NAME, self.provider.to_string()),
             KeyValue::new(ATTRIBUTE_REQUEST_MODEL, self.model.to_string()),
         ];
 

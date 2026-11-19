@@ -4,16 +4,19 @@
 use std::error::Error;
 use std::future::{pending, poll_fn};
 use std::io;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_harness::catalog::{ModelId, ModelSpec};
-use ag_harness::event::{Item, ItemKind, RunSummary, ToolCallItem, ToolCallStatus};
+use ag_harness::event::{
+    CompactionOutcome, Item, ItemKind, RunSummary, ToolCallItem, ToolCallStatus,
+};
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelMetadata,
-    ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ContextPolicy, ModelCompletion,
+    ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
@@ -608,6 +611,83 @@ async fn stream_dropped_while_the_run_waits_on_it_releases_the_run() -> Result<(
         outcome.result.map_err(|error| error.kind()).err(),
         Some(ErrorKind::Repetition)
     );
+
+    Ok(())
+}
+
+/// Payload bytes of each compacting turn's input, about a quarter of
+/// [`COMPACTING_BUDGET`].
+const COMPACTING_INPUT_BYTES: usize = 8_000;
+
+/// Weight budget that holds a turn's input beside two finished turns of
+/// history, but not three.
+const COMPACTING_BUDGET: u64 = 8_000;
+
+/// Answers checkpoint requests with a summary and turn requests with a
+/// name.
+struct CompactingModel;
+
+#[async_trait]
+impl Model for CompactingModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let compaction = request
+            .schema()
+            .is_some_and(|schema| schema.value()["properties"].get("decisions").is_some());
+        let response = if compaction {
+            json!({"context": "earlier turns named Ada", "decisions": [], "state": "named"})
+        } else {
+            json!({"name": "Ada"})
+        };
+
+        Ok(completion(ModelResponse::Output(response), 5))
+    }
+}
+
+fn compacting_input(number: usize) -> String {
+    format!("turn-{number} {}", "x".repeat(COMPACTING_INPUT_BYTES))
+}
+
+#[tokio::test]
+async fn auto_compaction_is_configurable_and_matchable_from_outside_the_crate()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let policy = ContextPolicy::auto_compact_at(90).ok_or("threshold in range")?;
+    let harness = Harness::new(
+        CompactingModel,
+        ContextBudget::new(NonZeroU64::new(COMPACTING_BUDGET).ok_or("nonzero budget")?),
+    )
+    .store(Arc::new(MemoryStore::new()))
+    .context_policy(policy);
+    let mut session = harness
+        .session("compacting", name_schema()?)
+        .create()
+        .await?;
+    for number in 1..=3 {
+        session.send(compacting_input(number)).await?;
+    }
+
+    // Act
+    let (events, outcome) = streamed(session.run(RunRequest::new(compacting_input(4)))).await;
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    assert!(matches!(
+        policy,
+        ContextPolicy::AutoCompact {
+            threshold_percent: 90,
+            ..
+        }
+    ));
+    let compacted = events.iter().find_map(|event| match &event.kind {
+        RunEventKind::Compacted(report) => Some(&report.outcome),
+        _ => None,
+    });
+    assert!(matches!(
+        compacted,
+        Some(CompactionOutcome::Compacted { covered_through, model: None, .. })
+            if covered_through.get() == 1
+    ));
+    assert_eq!(last_summary(&events)?.usage, outcome.usage);
 
     Ok(())
 }

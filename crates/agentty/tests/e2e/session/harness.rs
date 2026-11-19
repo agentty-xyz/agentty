@@ -313,6 +313,65 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
 }
 
 #[tokio::test]
+async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).insert_header("Retry-After", "7"))
+        .mount(&server)
+        .await;
+
+    // Act, Assert
+    FeatureTest::new("harness_temporary_failure")
+        .with_git()
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("[Preview] Built-in agent", 5000)
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, "(overloaded);", &full)
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_temporary_failure",
+                        "Harness session noted a temporary provider failure",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Harness turn failed", &full);
+                    assertion::assert_text_in_region(frame, "(overloaded);", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("harness_hidden")
@@ -797,6 +856,62 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
             .is_empty(),
         "the paid provider must never be called"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2eResult {
+    // Arrange
+    let ollama = local_ollama().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_kimi_default_endpoint")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "")
+        .env("CHATGPT_AUTH_FILE", "")
+        // Kimi has a default endpoint, so a blank base URL needs nothing.
+        .env("KIMI_API_KEY", "test-key")
+        .env("KIMI_BASE_URL", "")
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", ollama.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/openai-compatible/qwen3:latest", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("kimi-k3", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("kimi_ready", "Kimi ready with only its API key")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let picker_text = common::frame_from_capture(&report.captures[0])
+                        .all_text()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    assert!(
+                        picker_text.contains("[paid] kimi-k3 premium · Kimi"),
+                        "{picker_text}"
+                    );
+                    assert!(!picker_text.contains("KIMI_BASE_URL"), "{picker_text}");
+                    assert!(!picker_text.contains("needs KIMI_API_KEY"), "{picker_text}");
+                })
+            },
+        )
+        .await?;
 
     Ok(())
 }

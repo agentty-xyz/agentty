@@ -90,11 +90,10 @@ const DEFAULT_ROLES: &[(Role, Candidates)] = &[
 /// A role keeps only the candidates that are cataloged, declare a context
 /// profile, and have the role's required capabilities, so every default
 /// resolves to a model a harness can run without an explicit
-/// [`crate::HarnessBuilder::context_budget`]. The Muse, Kimi, and
-/// `qwen/qwen3.8-max` entries declare no profile yet, so they are cataloged
-/// but not assigned. Plan-billed `ChatGPT` models come first because they
-/// have no per-token charge. Change any assignment with
-/// [`Self::into_builder`] and [`CatalogBuilder::assign`].
+/// [`crate::HarnessBuilder::context_budget`]. The `qwen/qwen3.8-max` entry
+/// declares no profile yet, so it is cataloged but not assigned. Plan-billed
+/// `ChatGPT` models come first because they have no per-token charge. Change
+/// any assignment with [`Self::into_builder`] and [`CatalogBuilder::assign`].
 pub struct ModelCatalog {
     entries: BTreeMap<ModelId, CatalogEntry>,
     requirements: BTreeMap<Role, Capabilities>,
@@ -143,9 +142,41 @@ impl ModelCatalog {
     /// Returns [`CatalogError::Configuration`] when a provider is configured
     /// but broken, such as an API key or base URL that is not valid Unicode,
     /// or a `ChatGPT` credential file that exists but cannot be read.
+    ///
+    /// `ChatGPT` models read the credential file `CHATGPT_AUTH_FILE` names;
+    /// a host with its own sign-in location passes it to
+    /// [`Self::from_environment_with_auth_file`] instead, so its plan-billed
+    /// models keep their place ahead of per-token ones.
     #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     pub fn from_environment_with(
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Self, CatalogError> {
+        Self::catalog_environment(environment, None)
+    }
+
+    /// Catalogs like [`Self::from_environment_with`], reading the `ChatGPT`
+    /// sign-in from the host-chosen `auth_file`, such as the one
+    /// [`crate::provider::chatgpt_auth_file_in`] locates, in place of
+    /// `CHATGPT_AUTH_FILE`; `None` catalogs exactly like
+    /// [`Self::from_environment_with`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError`] like [`Self::from_environment_with`].
+    #[cfg(feature = "providers-openai")]
+    pub fn from_environment_with_auth_file(
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+        auth_file: Option<&std::path::Path>,
+    ) -> Result<Self, CatalogError> {
+        Self::catalog_environment(environment, auth_file)
+    }
+
+    /// Catalogs the configured providers' models, passing `auth_file` to
+    /// each `ChatGPT` model's configuration when the host chose one.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    fn catalog_environment(
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+        auth_file: Option<&std::path::Path>,
     ) -> Result<Self, CatalogError> {
         let mut builder = Self::builder();
         for provider in ModelProvider::all()
@@ -158,9 +189,17 @@ impl ModelCatalog {
                 .filter(|model| !provider.trains_on_prompts(model))
                 .filter_map(|model| Some((*model, provider.model_spec(model)?)));
             for (model, spec) in cataloged {
-                match ModelConfiguration::new(*provider, model)
-                    .client_from_environment(&mut environment)
-                {
+                let configuration = ModelConfiguration::new(*provider, model);
+                #[cfg(feature = "providers-openai")]
+                let configuration = match auth_file {
+                    Some(auth_file) if provider.requires_sign_in() => {
+                        configuration.auth_file(auth_file)
+                    }
+                    Some(_) | None => configuration,
+                };
+                #[cfg(not(feature = "providers-openai"))]
+                let _ = auth_file;
+                match configuration.client_from_environment(&mut environment) {
                     Ok(client) => builder = builder.model(spec, Arc::new(client)),
                     Err(source) if Self::is_unconfigured(&source, &mut environment) => break,
                     Err(source) => {

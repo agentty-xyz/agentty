@@ -34,11 +34,11 @@ pub(crate) const ERROR_UNSUPPORTED_INPUT: &str = "unsupported_input";
 pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
 
 /// Provider names that telemetry and persisted model metadata use.
-#[cfg(any(test, feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(test, feature = "providers-compat"))]
 pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
-#[cfg(any(test, feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(test, feature = "providers-compat"))]
 pub(crate) const PROVIDER_META: &str = "meta";
-#[cfg(any(test, feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(test, feature = "providers-compat"))]
 pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
 pub(crate) const PROVIDER_OPENAI: &str = "openai";
 /// Provider name for `OpenAI` billed to a `ChatGPT` plan, kept apart from

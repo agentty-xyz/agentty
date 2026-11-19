@@ -4,6 +4,7 @@
 use std::env;
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use ag_harness::provider::{ChatGptCredentials, ChatGptSignInError};
@@ -11,7 +12,8 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Browser, login};
+use super::{Browser, chatgpt_auth_file, login};
+use crate::CliError;
 
 /// Browser that answers the sign-in like an approving user: it requests
 /// the callback URL with the given query suffix and the sign-in's state.
@@ -118,23 +120,27 @@ fn environment(
 }
 
 #[tokio::test]
-async fn login_stores_the_approved_sign_in() {
+async fn login_stores_the_approved_sign_in_under_agentty_root() {
     // Arrange
     let server = token_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let auth_file = directory.path().join("auth/chatgpt.json");
+    let root = directory.path().to_string_lossy().into_owned();
+    let issuer = server.uri();
+    // Only the data directory locates the file, as for a user who never
+    // set `CHATGPT_AUTH_FILE`.
+    let environment = move |name: &str| match name {
+        "AGENTTY_ROOT" => Ok(root.clone()),
+        "CHATGPT_AUTH_URL" => Ok(issuer.clone()),
+        _ => Err(env::VarError::NotPresent),
+    };
     let browser = ApprovingBrowser::new("&code=code&client_id=oaiapp_issued");
     let mut output = Vec::new();
 
     // Act
-    login(
-        environment(auth_file.to_string_lossy().into_owned(), &server),
-        &browser,
-        &mut output,
-        0,
-    )
-    .await
-    .expect("sign-in should succeed");
+    login(environment, &browser, &mut output, 0)
+        .await
+        .expect("sign-in should succeed");
 
     // Assert
     let stored = ChatGptCredentials::load(&auth_file).expect("stored sign-in");
@@ -180,9 +186,9 @@ async fn login_reuses_the_registered_app_and_reports_denial() {
     // Assert
     assert!(matches!(
         result,
-        Err(ChatGptSignInError::Auth(
+        Err(CliError::Login(ChatGptSignInError::Auth(
             ag_harness::provider::ChatGptAuthError::Denied { .. }
-        ))
+        )))
     ));
     assert!(browser.page().contains("sign-in failed"));
     let opened = browser.opened.lock().expect("opened lock")[0].clone();
@@ -238,11 +244,65 @@ async fn login_rejects_an_unreadable_sign_in_and_falls_back_to_a_free_port() {
     // Assert
     assert!(matches!(
         invalid_result,
-        Err(ChatGptSignInError::Auth(
+        Err(CliError::Login(ChatGptSignInError::Auth(
             ag_harness::provider::ChatGptAuthError::InvalidCredentials { .. }
-        ))
+        )))
     ));
     assert!(fallback.is_ok());
     assert!(!String::from_utf8_lossy(&output).contains(&format!("127.0.0.1%3A{port}")));
-    assert!(matches!(unlocated, Err(ChatGptSignInError::AuthFile(_))));
+    let unlocated = unlocated.expect_err("no location");
+    assert!(matches!(unlocated, CliError::ChatGptAuthFileLocation));
+    // The message names every variable the CLI reads.
+    assert!(
+        unlocated
+            .to_string()
+            .contains("CHATGPT_AUTH_FILE, AGENTTY_ROOT, or HOME")
+    );
+}
+
+#[test]
+fn chatgpt_auth_file_prefers_the_named_file_then_agentty_root_then_home() {
+    // Arrange
+    let lookup = |values: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+                .ok_or(env::VarError::NotPresent)
+        }
+    };
+    let mut named = lookup(&[
+        ("CHATGPT_AUTH_FILE", "/tmp/sign-in.json"),
+        ("AGENTTY_ROOT", "/data/agentty"),
+    ]);
+    let mut root = lookup(&[
+        ("CHATGPT_AUTH_FILE", " "),
+        ("AGENTTY_ROOT", "/data/agentty"),
+    ]);
+    // A data directory is used as given, as Agentty's `home.rs` reads it.
+    let mut spaced_root = lookup(&[("AGENTTY_ROOT", "/data ")]);
+    let mut home = lookup(&[("AGENTTY_ROOT", ""), ("HOME", "/home/user")]);
+    let mut nothing = lookup(&[]);
+
+    // Act
+    let locations = [
+        chatgpt_auth_file(&mut named),
+        chatgpt_auth_file(&mut root),
+        chatgpt_auth_file(&mut spaced_root),
+        chatgpt_auth_file(&mut home),
+        chatgpt_auth_file(&mut nothing),
+    ];
+
+    // Assert
+    assert_eq!(
+        locations,
+        [
+            Some(PathBuf::from("/tmp/sign-in.json")),
+            Some(PathBuf::from("/data/agentty/auth/chatgpt.json")),
+            Some(PathBuf::from("/data /auth/chatgpt.json")),
+            Some(PathBuf::from("/home/user/.agentty/auth/chatgpt.json")),
+            None,
+        ]
+    );
 }

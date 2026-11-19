@@ -801,6 +801,69 @@ async fn catalog_roles_and_identifiers_select_configured_models() {
 }
 
 #[tokio::test]
+async fn chatgpt_models_read_the_sign_in_under_agentty_root() {
+    // Arrange
+    let root = tempfile::tempdir().expect("data root should exist");
+    let auth_file = root.path().join("auth/chatgpt.json");
+    std::fs::create_dir_all(auth_file.parent().expect("auth directory"))
+        .expect("auth directory should be created");
+    let credentials = json!({
+        "access_token": "access",
+        "client_id": "client",
+        "email": null,
+        "expires_at": u64::MAX,
+        "ext_agent_host_id": "host",
+        "id_token": "id",
+        "refresh_token": "refresh",
+        "scopes": []
+    });
+    std::fs::write(&auth_file, credentials.to_string()).expect("credential file should be written");
+    let root_value = root.path().to_string_lossy().into_owned();
+    let signed_in: Environment = Box::new(move |name| match name {
+        "AGENTTY_ROOT" => Ok(root_value.clone()),
+        _ => Err(env::VarError::NotPresent),
+    });
+    let output = json!({"type": "json", "schema": message_schema()});
+    let create = |id, model: Value| {
+        request(
+            id,
+            "session/create",
+            json!({"model": model, "output": output}),
+        )
+    };
+    let input = lines(&[
+        create(1, json!({"role": "smart"})),
+        create(2, json!({"id": "chatgpt/gpt-custom"})),
+    ]);
+
+    // Act
+    let (configured, configured_served) = exchange(&input, signed_in).await;
+    let (unlocated, unlocated_served) =
+        exchange(&input, environment("http://127.0.0.1:9", &[])).await;
+
+    // Assert
+    assert!(configured_served.is_ok() && unlocated_served.is_ok());
+    assert!(
+        configured[0]["result"]["session"].is_string(),
+        "{:?}",
+        configured[0]
+    );
+    assert!(
+        configured[1]["result"]["session"].is_string(),
+        "{:?}",
+        configured[1]
+    );
+    assert_eq!(error_kind(&unlocated[1]), &json!("config"));
+    assert!(
+        unlocated[1]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("AGENTTY_ROOT")),
+        "{:?}",
+        unlocated[1]
+    );
+}
+
+#[tokio::test]
 async fn sqlite_sessions_resume_in_a_later_server() {
     // Arrange
     let storage = tempfile::tempdir().expect("temporary storage should exist");
