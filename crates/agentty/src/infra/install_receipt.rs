@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use semver::Version;
 use serde_json::Value;
 
 /// Application name the shell installer records for Agentty.
@@ -43,20 +44,60 @@ impl ShellInstallReceipt {
     /// Returns the receipt in `contents` when it proves that `executable` is
     /// this build installed by the `ag-release` shell installer.
     ///
-    /// The receipt must name `ag-release` as its provider, Agentty as its app,
-    /// the running version, and the `cargo-home` layout, and its absolute
-    /// `install_prefix` joined with `bin/agentty` must resolve, through
-    /// `canonicalize`, to the same file as `executable`. `modify_path` is
-    /// ignored because an update rewrites it as `false`.
-    pub(crate) fn for_executable(
+    /// The receipt must name exactly the running version, so install-method
+    /// analytics describe the build that is running. See
+    /// [`Self::for_update`] for the other requirements.
+    pub(crate) fn for_running_build(
         contents: &[u8],
         executable: &Path,
         canonicalize: impl Fn(&Path) -> Option<PathBuf>,
     ) -> Option<Self> {
+        Self::matching(contents, executable, canonicalize, Self::is_running_version)
+    }
+
+    /// Returns the receipt in `contents` when it proves that the
+    /// `ag-release` shell installer owns `executable`, so rerunning the
+    /// installer updates it.
+    ///
+    /// The receipt must name `ag-release` as its provider, Agentty as its app,
+    /// the running version or a newer one, and the `cargo-home` layout, and
+    /// its absolute `install_prefix` joined with `bin/agentty` must resolve,
+    /// through `canonicalize`, to the same file as `executable`. A newer
+    /// version is accepted because the installer rewrites the receipt on
+    /// every run, so an install that another process already updated still
+    /// updates again; an older or unparseable version means something else
+    /// replaced the binary. `modify_path` is ignored because an update
+    /// rewrites it as `false`.
+    pub(crate) fn for_update(
+        contents: &[u8],
+        executable: &Path,
+        canonicalize: impl Fn(&Path) -> Option<PathBuf>,
+    ) -> Option<Self> {
+        Self::matching(
+            contents,
+            executable,
+            canonicalize,
+            Self::is_running_or_newer_version,
+        )
+    }
+
+    /// Returns the install prefix recorded by the installer.
+    pub(crate) fn install_prefix(&self) -> &Path {
+        &self.install_prefix
+    }
+
+    /// Applies the shared receipt checks, accepting the receipt's `version`
+    /// only when `accepts_version` does.
+    fn matching(
+        contents: &[u8],
+        executable: &Path,
+        canonicalize: impl Fn(&Path) -> Option<PathBuf>,
+        accepts_version: fn(&str) -> bool,
+    ) -> Option<Self> {
         let data = serde_json::from_slice::<Value>(contents).ok()?;
         if data["provider"]["source"] != "ag-release"
             || data["source"]["app_name"] != APP_NAME
-            || data["version"] != env!("CARGO_PKG_VERSION")
+            || !data["version"].as_str().is_some_and(accepts_version)
             || data["install_layout"] != "cargo-home"
         {
             return None;
@@ -70,9 +111,21 @@ impl ShellInstallReceipt {
         (canonicalize(executable)? == installed).then_some(Self { install_prefix })
     }
 
-    /// Returns the install prefix recorded by the installer.
-    pub(crate) fn install_prefix(&self) -> &Path {
-        &self.install_prefix
+    /// Returns whether `version` is exactly the running version.
+    fn is_running_version(version: &str) -> bool {
+        version == env!("CARGO_PKG_VERSION")
+    }
+
+    /// Returns whether `version` parses as semver no older than the running
+    /// version.
+    fn is_running_or_newer_version(version: &str) -> bool {
+        match (
+            Version::parse(version),
+            Version::parse(env!("CARGO_PKG_VERSION")),
+        ) {
+            (Ok(receipt), Ok(running)) => receipt >= running,
+            _ => false,
+        }
     }
 }
 

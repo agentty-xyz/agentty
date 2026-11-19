@@ -1046,7 +1046,7 @@ async fn shell_install_reruns_downloaded_installer_and_removes_it() {
 }
 
 /// Requires a manual update, downloading nothing, unless the receipt proves
-/// this build at the running path.
+/// the running path and names this build or a newer one.
 #[tokio::test]
 async fn shell_update_requires_a_receipt_for_the_running_binary() {
     let other_prefix = String::from_utf8(shell_receipt(env!("CARGO_PKG_VERSION")))
@@ -1088,6 +1088,48 @@ async fn shell_update_requires_a_receipt_for_the_running_binary() {
             "{case}"
         );
     }
+}
+
+/// Reruns the installer when another process already updated the install,
+/// leaving a receipt newer than the running build.
+#[tokio::test]
+async fn shell_update_runs_for_a_receipt_newer_than_the_running_build() {
+    // Arrange
+    let running = Version::parse(env!("CARGO_PKG_VERSION")).expect("running version");
+    let newer = Version::new(running.major, running.minor + 1, 0).to_string();
+    let directory = tempdir().expect("fixture directory");
+    let installer = NamedTempFile::new_in(directory.path())
+        .expect("installer file")
+        .into_temp_path();
+    let mut runner = shell_install_runner(Some(shell_receipt(&newer)));
+    runner
+        .expect_create_temp_file()
+        .times(1)
+        .return_once(move || Ok(installer));
+    runner
+        .expect_run_command()
+        .times(5)
+        .returning(|program, _, _, timeout| {
+            if is_unavailable_package_manager(program) {
+                return Err(VersionError::CommandSpawn {
+                    command: program.to_string(),
+                    message: "not installed".to_string(),
+                });
+            }
+
+            Step::Succeed.output(program, timeout)
+        });
+
+    // Act
+    let result = run_update_with_runner(
+        Some(Path::new("/running/agentty")),
+        Some(Path::new(RECEIPT_PATH)),
+        &runner,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(result.expect("shell update").as_str(), "sh done");
 }
 
 /// Stops before downloading when the installer cannot be staged.

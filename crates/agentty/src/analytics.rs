@@ -144,7 +144,7 @@ impl InstallMethod {
 
     fn matches_shell_receipt(executable: &Path, receipt: &Path) -> bool {
         fs::read(receipt).is_ok_and(|contents| {
-            ShellInstallReceipt::for_executable(&contents, executable, |path| {
+            ShellInstallReceipt::for_running_build(&contents, executable, |path| {
                 fs::canonicalize(path).ok()
             })
             .is_some()

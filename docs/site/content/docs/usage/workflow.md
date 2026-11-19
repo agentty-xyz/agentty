@@ -752,7 +752,8 @@ terminal and waits at most three seconds for the final flush.
 When a newer version exists, global `npm`, Bun, and `pnpm` installs update through the
 original package manager when exactly one manager's installation matches the running
 binary. Otherwise, a shell install updates when the shell installer's receipt names the
-running binary and version: Agentty downloads the latest installer and reruns it for the
+running binary and its version or a newer one, such as after an earlier update that
+still awaits a restart: Agentty downloads the latest installer and reruns it for the
 recorded install directory without changing `PATH`. The status bar shows progress and
 asks you to restart. Otherwise, or if the update fails, rerun your original installation
 command. Cargo, local, and `npx` installs always update manually. Shell installs of

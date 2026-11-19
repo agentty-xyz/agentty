@@ -270,7 +270,8 @@ impl PackageManager {
 ///
 /// Package managers take precedence: exactly one match updates through it and
 /// several matches are ambiguous. Only without any match does a shell-installer
-/// receipt at `receipt` that proves this binary select the shell installer.
+/// receipt at `receipt` that proves this binary select the shell installer;
+/// see [`ShellInstallReceipt::for_update`].
 async fn run_update_with_runner(
     executable: Option<&Path>,
     receipt: Option<&Path>,
@@ -290,7 +291,7 @@ async fn run_update_with_runner(
     let receipt = receipt
         .and_then(|path| command_runner.read_file(path))
         .and_then(|contents| {
-            ShellInstallReceipt::for_executable(&contents, &executable, |path| {
+            ShellInstallReceipt::for_update(&contents, &executable, |path| {
                 command_runner.canonicalize_path(path)
             })
         })
