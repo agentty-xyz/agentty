@@ -11,7 +11,7 @@ use crate::plan::ReleasePlan;
 use crate::process::ProcessRunner;
 use crate::tag::ReleaseTag;
 use crate::workspace::Workspace;
-use crate::{assemble, build};
+use crate::{assemble, build, release_note};
 
 /// Plans and packages GitHub releases of Cargo workspace binaries.
 #[derive(Debug, Parser)]
@@ -33,6 +33,9 @@ pub(crate) enum Command {
     /// Verifies every target's archives and writes the release-wide
     /// artifacts next to them.
     Assemble(AssembleOptions),
+    /// Prints the GitHub release body, or only its title, built from the
+    /// `CHANGELOG.md` entry of the tag.
+    Notes(NotesOptions),
 }
 
 /// Options for `plan`.
@@ -68,6 +71,17 @@ pub(crate) struct AssembleOptions {
     pub(crate) tag: String,
 }
 
+/// Options for `notes`.
+#[derive(Debug, Args)]
+pub(crate) struct NotesOptions {
+    /// Release tag, `v<semver>` or `<semver>`, naming the apps' version.
+    #[arg(long)]
+    pub(crate) tag: String,
+    /// Prints only the release title instead of the body.
+    #[arg(long)]
+    pub(crate) title: bool,
+}
+
 /// Host boundaries and settings that commands run against.
 pub(crate) struct Host<'host> {
     /// Cargo executable, normally `$CARGO` or `cargo`.
@@ -89,6 +103,7 @@ impl Host<'_> {
             Command::Plan(options) => self.plan(options, stdout),
             Command::Build(options) => build::run(self, options, stdout),
             Command::Assemble(options) => assemble::run(self, options, stdout),
+            Command::Notes(options) => release_note::run(self, options, stdout),
         }
     }
 

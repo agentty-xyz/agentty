@@ -1,0 +1,41 @@
+# {{ heading }}
+{%- if shell_command.is_some() || npm_command.is_some() %}
+
+## Install {{ heading }}
+{%- if let Some(command) = shell_command %}
+
+### Install prebuilt binaries via shell script
+
+```sh
+{{ command }}
+```
+{%- endif %}
+{%- if let Some(command) = npm_command %}
+
+### Install prebuilt binaries into your npm project
+
+```sh
+{{ command }}
+```
+{%- endif %}
+{%- endif %}
+
+## Download {{ heading }}
+
+|  File  | Platform | Checksum |
+|--------|----------|----------|
+{%- for download in downloads %}
+| [{{ download.file }}]({{ download.file_url }}) | {{ download.platform }} | [checksum]({{ download.checksum_url }}) |
+{%- endfor %}
+
+## Verifying GitHub Artifact Attestations
+
+The artifacts in this release have attestations generated with GitHub Artifact Attestations. These can be verified by using the [GitHub CLI](https://cli.github.com/manual/gh_attestation_verify):
+```sh
+gh attestation verify <file-path of downloaded artifact> --repo {{ repository }}
+```
+
+You can also download the attestation from [GitHub]({{ repository_url }}/attestations) and verify against that directly:
+```sh
+gh attestation verify <file-path of downloaded artifact> --bundle <file-path of downloaded attestation>
+```

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use serde_json::Value;
 
-use crate::cli::{AssembleOptions, BuildOptions, Cli, Command, Host, PlanOptions};
+use crate::cli::{AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions};
 use crate::file_system::MockFileSystem;
 use crate::process::MockProcessRunner;
 use crate::workspace::test_support::{BrokenPipe, demo_metadata, metadata_process};
@@ -73,6 +73,8 @@ fn cli_parses_every_command() {
             "--artifacts-dir",
             "artifacts",
         ],
+        vec!["ag-release", "notes", "--tag", "v1.2.3"],
+        vec!["ag-release", "notes", "--tag", "v1.2.3", "--title"],
     ];
 
     // Act
@@ -82,6 +84,7 @@ fn cli_parses_every_command() {
         Command::Assemble(AssembleOptions { artifacts_dir, tag }) => {
             format!("assemble {tag} {}", artifacts_dir.display())
         }
+        Command::Notes(NotesOptions { tag, title }) => format!("notes {tag} {title}"),
     });
 
     // Assert
@@ -93,6 +96,8 @@ fn cli_parses_every_command() {
             "build aarch64-apple-darwin None",
             "build aarch64-apple-darwin Some(\"dist\")",
             "assemble v1.2.3 artifacts",
+            "notes v1.2.3 false",
+            "notes v1.2.3 true",
         ]
     );
 }
