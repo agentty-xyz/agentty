@@ -313,6 +313,65 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
 }
 
 #[tokio::test]
+async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).insert_header("Retry-After", "7"))
+        .mount(&server)
+        .await;
+
+    // Act, Assert
+    FeatureTest::new("harness_temporary_failure")
+        .with_git()
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("[Preview] Built-in agent", 5000)
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, "(overloaded);", &full)
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_temporary_failure",
+                        "Harness session noted a temporary provider failure",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Harness turn failed", &full);
+                    assertion::assert_text_in_region(frame, "(overloaded);", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("harness_hidden")
