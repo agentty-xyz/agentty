@@ -20,6 +20,7 @@ use thiserror::Error;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 
+use crate::approval::{Approval, ApprovalHandler, DEFAULT_APPROVAL_TIMEOUT};
 use crate::budget::{BudgetLedger, Unlimited};
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
@@ -1500,6 +1501,8 @@ impl Harness {
     /// [`Self::from_registry`] remain available.
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder {
+            approval: None,
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             budget: None,
             catalog: None,
             context_budget: None,
@@ -2233,6 +2236,7 @@ impl Harness {
         let config = &self.inner;
 
         Engine {
+            approval: config.approval.as_ref(),
             budget: config.budget.as_ref(),
             concurrency: config.concurrency.as_deref(),
             context_budget: config.context_budget,
@@ -2268,6 +2272,8 @@ impl Harness {
 /// [`ModelCatalog`] and a [`ModelSelector`].
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
+    approval: Option<Arc<dyn ApprovalHandler>>,
+    approval_timeout: Duration,
     budget: Option<Arc<dyn BudgetLedger>>,
     catalog: Option<Arc<ModelCatalog>>,
     context_budget: Option<ContextBudget>,
@@ -2336,6 +2342,33 @@ impl HarnessBuilder {
     /// ledger. To stack caps, give the run a ledger that reserves from both.
     pub fn budget(mut self, ledger: Arc<dyn BudgetLedger>) -> Self {
         self.budget = Some(ledger);
+
+        self
+    }
+
+    /// Asks `handler` before every call to a tool whose
+    /// [`crate::tool::ToolEffects`] are not
+    /// [`crate::tool::ToolEffects::ReadOnly`], in every run, turn, and
+    /// session of the harness; read-only calls never ask. Without a
+    /// handler, every tool the turn's [`ToolSet`] holds runs unasked, and
+    /// a tool it does not hold is unavailable.
+    ///
+    /// The handler has [`Self::approval_timeout`] to decide each call.
+    pub fn approval(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
+        self.approval = Some(handler);
+
+        self
+    }
+
+    /// Sets how long the [`Self::approval`] handler may take to decide one
+    /// call, five minutes by default. A handler that has not decided by
+    /// then fails the run with [`crate::ErrorKind::ApprovalTimeout`], which
+    /// ends the turn and releases its session for the next one. A run's
+    /// wall-time limit also bounds the wait. A zero timeout accepts only a
+    /// decision the handler returns without waiting; without a handler, the
+    /// timeout has no effect.
+    pub fn approval_timeout(mut self, timeout: Duration) -> Self {
+        self.approval_timeout = timeout;
 
         self
     }
@@ -2600,6 +2633,9 @@ impl HarnessBuilder {
             };
             config.catalog = Some(catalog);
         }
+        config.approval = self
+            .approval
+            .map(|handler| Approval::new(handler, self.approval_timeout));
         config.context_policy = self.context_policy;
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
@@ -2727,6 +2763,9 @@ enum StorageSource {
 /// method copies it first when other handles still share it.
 #[derive(Clone)]
 struct HarnessConfig {
+    /// Handler that decides every call to a tool that changes state, with
+    /// the time it has to decide; `None` runs every offered tool.
+    approval: Option<Approval>,
     /// Ledger that reserves every model request; a run's own ledger
     /// replaces it in that run's copy of the configuration.
     budget: Arc<dyn BudgetLedger>,
@@ -2780,6 +2819,7 @@ impl HarnessConfig {
     /// model, backed by the local filesystem.
     fn new(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
         Self {
+            approval: None,
             budget: Arc::new(Unlimited),
             catalog: None,
             concurrency: None,

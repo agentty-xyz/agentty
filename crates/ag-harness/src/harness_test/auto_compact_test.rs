@@ -14,7 +14,7 @@ use futures_core::Stream;
 use serde_json::json;
 use tokio::sync::Notify;
 
-use super::support::{object_schema, wait_for_fixture};
+use super::support::{LifecycleRecorder, object_schema, wait_for_fixture};
 use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::catalog::{Capabilities, ModelCatalog, ModelId, ModelSpec, Pricing, Role};
 use crate::compaction::{GENERATION_INSTRUCTIONS, SessionCheckpoint};
@@ -23,7 +23,7 @@ use crate::error::{ErrorKind, RunError};
 use crate::event::{CompactionOutcome, CompactionReport, RunEventKind, RunFailure, TurnIndex};
 use crate::fault_store_test::{Fault, FaultStore};
 use crate::harness::{CompactionBackoff, CompactionRequests, EnclosingTurn, Harness, Session};
-use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
+use crate::lifecycle::LifecycleEventKind;
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelMessage,
@@ -168,18 +168,6 @@ impl Model for CompactingModel {
         let metadata = CompletionMetadata::new("stop".to_string(), None, None, None, Some(usage));
 
         Ok(ModelCompletion::new(metadata, response))
-    }
-}
-
-/// Records every lifecycle event.
-#[derive(Clone, Default)]
-struct LifecycleRecorder {
-    events: Arc<Mutex<Vec<LifecycleEvent>>>,
-}
-
-impl LifecycleObserver for LifecycleRecorder {
-    fn observe(&self, event: LifecycleEvent) {
-        self.events.lock().expect("events lock").push(event);
     }
 }
 

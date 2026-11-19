@@ -13,7 +13,9 @@ use crate::context::{
 };
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
-use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare};
+use crate::engine::{
+    Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare, with_approved_arguments,
+};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{
@@ -30,6 +32,26 @@ fn object_schema() -> OutputSchema {
 }
 
 #[test]
+fn approved_arguments_join_an_object_result_and_wrap_any_other() {
+    // Arrange
+    let arguments = json!({"path": "b.txt"});
+
+    // Act
+    let object = with_approved_arguments(r#"{"status":"applied"}"#, arguments.clone());
+    let text = with_approved_arguments("done", arguments);
+
+    // Assert
+    assert_eq!(
+        object,
+        r#"{"status":"applied","approved_arguments":{"path":"b.txt"}}"#
+    );
+    assert_eq!(
+        text,
+        r#"{"approved_arguments":{"path":"b.txt"},"result":"done"}"#
+    );
+}
+
+#[test]
 fn preserves_request_reasoning_effort_over_harness_default() {
     // Arrange
     let mut model = MockModel::new();
@@ -41,6 +63,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();
     let engine = Engine {
+        approval: None,
         budget: &Unlimited,
         concurrency: None,
         context_budget: unbounded_context_budget(),
@@ -111,6 +134,7 @@ async fn run_scripted(
     let context_calibration = ContextCalibration::default();
     let context_estimator = heuristic_estimator();
     let engine = Engine {
+        approval: None,
         budget: &Unlimited,
         concurrency: None,
         context_budget,

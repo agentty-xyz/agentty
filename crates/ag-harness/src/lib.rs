@@ -121,6 +121,7 @@ mod context_budget_fixture;
 mod model_profile_fixture;
 
 mod admission;
+pub mod approval;
 pub mod bash;
 pub mod budget;
 mod builtin_tool;
@@ -184,6 +185,7 @@ mod usage;
 mod write;
 mod write_journal;
 
+pub use approval::{ApprovalHandler, ApprovalRequest, Decision};
 pub use budget::{BudgetLedger, SharedBudget};
 pub use catalog::{ModelCatalog, ModelSelector, Role};
 pub use command_journal::CommandRecord;

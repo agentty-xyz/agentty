@@ -2,7 +2,9 @@
 //! checks, and advertised repository tool permissions.
 
 use std::env;
+use std::time::Duration;
 
+use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::ModelConfigurationError;
 use clap::Parser as _;
 use serde_json::json;
@@ -10,9 +12,11 @@ use tokio::io::BufReader;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::support::{parse_cli, provider_response, with_repository_controlled_git};
+use super::support::{
+    parse_cli, provider_response, test_git_executable, with_repository_controlled_git,
+};
 use crate::serve::PROTOCOL_SCHEMA;
-use crate::{ChatMode, Cli, CliError, READ_WRITE_SYSTEM_PROMPT, execute};
+use crate::{ChatMode, Cli, CliError, Command, READ_WRITE_SYSTEM_PROMPT, execute, serve_settings};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_advertises_repository_reads_by_default() {
@@ -402,6 +406,63 @@ async fn execute_serves_the_protocol_and_prints_its_schema() {
     assert_eq!(
         String::from_utf8(schema).expect("schema should be UTF-8"),
         PROTOCOL_SCHEMA
+    );
+}
+
+#[test]
+fn serve_offers_repository_tools_only_with_a_read_dir() {
+    // Arrange
+    let repository = tempfile::tempdir().expect("temporary repository should exist");
+    let root = repository.path().to_string_lossy().into_owned();
+    let git = test_git_executable().to_string_lossy().into_owned();
+    let parse = |args: &[&str]| {
+        let cli = Cli::try_parse_from(args).expect("serve should parse");
+        let Command::Serve(serve) = &cli.command else {
+            unreachable!("parsed `serve`");
+        };
+        let settings = serve_settings(serve, ReasoningEffort::Low, cli.git_executable.clone())
+            .expect("settings should resolve");
+
+        (cli.option_serve_ignores(), settings)
+    };
+
+    // Act
+    let (_, without_tools) = parse(&["ag-harness", "serve"]);
+    let (_, read_only) = parse(&["ag-harness", "serve", "--read-dir", &root]);
+    let (ignored, writable) = parse(&[
+        "ag-harness",
+        "--git-executable",
+        &git,
+        "serve",
+        "--read-dir",
+        &root,
+        "--allow-write",
+        "--approval-timeout-ms",
+        "250",
+    ]);
+    let write_without_dir = Cli::try_parse_from(["ag-harness", "serve", "--allow-write"]);
+    let zero_timeout = Cli::try_parse_from(["ag-harness", "serve", "--approval-timeout-ms", "0"]);
+
+    // Assert
+    assert!(without_tools.tools.is_none());
+    assert_eq!(without_tools.approval_timeout, Duration::from_secs(300));
+    let tool_names = |settings: &crate::serve::Settings| {
+        settings
+            .tools
+            .as_ref()
+            .map(|(_, tools)| tools.names().map(str::to_string).collect::<Vec<_>>())
+    };
+    assert_eq!(tool_names(&read_only), Some(vec!["read".to_string()]));
+    assert_eq!(
+        tool_names(&writable),
+        Some(vec!["read".to_string(), "write".to_string()])
+    );
+    assert_eq!(writable.approval_timeout, Duration::from_millis(250));
+    assert_eq!(ignored, None, "--git-executable applies with --read-dir");
+    assert!(write_without_dir.is_err(), "--allow-write needs --read-dir");
+    assert!(
+        zero_timeout.is_err(),
+        "a zero timeout would deny every write"
     );
 }
 

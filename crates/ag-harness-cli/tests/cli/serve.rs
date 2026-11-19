@@ -114,6 +114,12 @@ impl Server {
     /// Spawns the server with only the OpenAI-compatible provider at
     /// `provider` configured.
     fn spawn(provider: &MockServer) -> TestResult<Self> {
+        Self::spawn_with(provider, &[])
+    }
+
+    /// Spawns the server like [`Self::spawn`], with the extra `serve`
+    /// arguments `args`.
+    fn spawn_with(provider: &MockServer, args: &[&str]) -> TestResult<Self> {
         let storage = tempfile::tempdir()?;
         let mut command = Command::new(cargo_bin!("ag-harness"));
         for provider in ModelProvider::all() {
@@ -123,6 +129,7 @@ impl Server {
         }
         let mut child = command
             .arg("serve")
+            .args(args)
             .env("AG_HARNESS_ROOT", storage.path())
             .env("CHATGPT_AUTH_FILE", storage.path().join("chatgpt.json"))
             .env("OPENAI_COMPATIBLE_BASE_URL", provider.uri())
@@ -331,6 +338,110 @@ async fn serve_runs_sessions_and_stops_runs_over_stdio() -> TestResult<()> {
     assert_eq!(
         stopped[0]["params"]["event"]["kind"]["error"]["kind"],
         json!("cancelled")
+    );
+    assert!(exited);
+
+    Ok(())
+}
+
+/// Starts a provider that answers a request carrying the `write` call's
+/// result with `done`, and any other request with that call, creating
+/// `a.txt`.
+async fn writing_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("call-write"))
+        .respond_with(answer("done"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-write",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json!({
+                                "path": "a.txt",
+                                "patch": "--- /dev/null\n+++ b/a.txt\n"
+                            }).to_string()
+                        }
+                    }]
+                }
+            }]
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
+    // Arrange
+    let provider = writing_provider().await;
+    let repository = tempfile::tempdir()?;
+    let root = repository.path().to_string_lossy().into_owned();
+    // The timeout outlasts the test, so only the answer can finish the run;
+    // timeouts are proven in process.
+    let mut server = Server::spawn_with(
+        &provider,
+        &[
+            "--read-dir",
+            &root,
+            "--allow-write",
+            "--approval-timeout-ms",
+            "600000",
+        ],
+    )?;
+    let output = json!({"type": "json", "schema": message_schema()});
+    let model = json!({"id": "openai-compatible/local"});
+    server
+        .call(
+            1,
+            "session/create",
+            json!({"session": "approved", "model": model, "output": output}),
+        )
+        .await?;
+
+    // Act
+    let approved = server
+        .call(
+            2,
+            "run/start",
+            json!({"session": "approved", "input": "Write a.txt"}),
+        )
+        .await?;
+    let asked = server
+        .wait(|message| message["method"] == "approval/decide")
+        .await?;
+    server
+        .send(&json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"decision": "allow"}}))
+        .await?;
+    let approved_completed = server
+        .event(&approved["result"]["run"], "completed")
+        .await?;
+    let (_, exited) = server.finish().await?;
+
+    // Assert
+    assert_eq!(asked["params"]["session"], json!("approved"));
+    assert_eq!(asked["params"]["request"]["tool"], json!("write"));
+    assert_eq!(asked["params"]["request"]["effects"], json!("writes"));
+    assert_eq!(
+        approved_completed["params"]["event"]["kind"]["error"],
+        Value::Null
+    );
+    assert!(
+        repository.path().join("a.txt").is_file(),
+        "the approved write created the file"
     );
     assert!(exited);
 

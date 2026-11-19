@@ -5,8 +5,9 @@
 //! stabilized; `crates/ag-harness-cli/schema/serve_protocol.json`, which
 //! `serve --print-schema` prints, describes the current shape.
 
+mod approval;
 mod protocol;
 mod server;
 
 pub(crate) use protocol::PROTOCOL_SCHEMA;
-pub(crate) use server::serve;
+pub(crate) use server::{Settings, serve};

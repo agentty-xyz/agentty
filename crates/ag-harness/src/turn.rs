@@ -856,8 +856,8 @@ pub enum ToolActivity {
         /// Repository-relative path that was rejected.
         path: String,
     },
-    /// A call to a host [`crate::ToolHandler`]. Arguments and results are
-    /// never reported.
+    /// A call to a host [`crate::ToolHandler`], or any call an approval
+    /// handler denied. Arguments and results are never reported.
     #[non_exhaustive]
     Host {
         /// Elapsed tool-execution time.
@@ -884,6 +884,9 @@ pub enum HostToolOutcome {
     /// The handler ran, but its output was over 64 KiB and was dropped; the
     /// model was told the call ran.
     ResultTooLarge,
+    /// The [`crate::approval::ApprovalHandler`] denied the call, so the
+    /// handler did not run; the model received the denial's feedback.
+    Denied,
 }
 
 impl HostToolOutcome {
@@ -900,6 +903,7 @@ impl HostToolOutcome {
             Self::Rejected => "rejected",
             Self::InvalidArguments => "invalid arguments",
             Self::ResultTooLarge => "result too large",
+            Self::Denied => "denied",
         }
     }
 }
@@ -1154,6 +1158,15 @@ pub enum TurnError {
         /// Function name of the handler's tool.
         tool: String,
     },
+    /// The [`crate::approval::ApprovalHandler`] did not decide on a call to
+    /// `tool` within the harness's approval timeout; the call did not run.
+    #[error("approval of tool `{tool}` timed out after {} ms", timeout.as_millis())]
+    ApprovalTimeout {
+        /// The approval timeout the handler exceeded.
+        timeout: Duration,
+        /// Function name of the called tool.
+        tool: String,
+    },
     /// Request content exceeds the effective model's declared context
     /// budget: mandatory content before any history is considered, or a
     /// grown in-turn request that still does not fit after every allowed
@@ -1208,6 +1221,7 @@ impl TurnError {
             | Self::CommandJournal { .. }
             | Self::CommandFailed { .. }
             | Self::ToolFailed { .. } => TurnErrorType::Tool,
+            Self::ApprovalTimeout { .. } => TurnErrorType::ApprovalTimeout,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,

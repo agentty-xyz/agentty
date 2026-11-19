@@ -99,7 +99,8 @@ cargo run --locked -p ag-harness-cli -- serve
   `{"id": "provider/model"}`, with credentials from the environment as for `run`.
   Sessions live in the server's memory unless `store` names a SQLite file;
   `session/resume` reads the model from that file when `model` is omitted. Of the global
-  options only `--reasoning-effort` applies; the others are rejected.
+  options only `--reasoning-effort`, and `--git-executable` with `--read-dir`, apply;
+  the others are rejected.
 - `run/start` answers with a run ID at once. The run's events follow as `run/event`
   notifications and end with a `completed` event that carries its usage, cost, and any
   failure. `run/cancel` succeeds for any run the server started, even a finished one.
@@ -109,12 +110,21 @@ cargo run --locked -p ag-harness-cli -- serve
 - Errors are JSON-RPC errors; harness failures carry `data.kind` and `data.retryable`.
   Malformed lines are answered with an error and the server keeps running. A message
   without `id` is executed but never answered.
-- Tools are denied. `shutdown` or closing standard input cancels runs in flight, writes
-  their last events, and exits.
+- Without `--read-dir <DIR>`, tools are denied. With it, runs may `read` that
+  repository, and with `--allow-write` also `write` to it. Each write first asks the
+  client: the run's `approval_requested` event is followed by an `approval/decide`
+  server request, which the client answers with the same `id` and a `result` of
+  `{"decision": "allow"}`, `{"decision": "allow_with", "arguments": {...}}`, or
+  `{"decision": "deny", "feedback": "..."}`. An error answer, or a `result` that is not
+  a decision (also reported with a `-32602` error), denies the write. A run whose answer
+  does not arrive within `--approval-timeout-ms` (five minutes by default) fails with
+  `approval_timeout`, and a late answer is ignored.
+- `shutdown` or closing standard input cancels runs in flight, writes their last events,
+  and exits.
 
 `serve --print-schema` prints the JSON Schema of every message, committed as
 [`schema/serve_protocol.json`](schema/serve_protocol.json); its `x-method-results` names
-each method's result.
+each method's result, and `x-server-request-results` the answer to each server request.
 
 ## Defaults
 

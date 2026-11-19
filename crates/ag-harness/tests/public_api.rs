@@ -562,6 +562,95 @@ async fn external_consumer_runs_a_turn_with_its_tool_handler() -> Result<(), Box
     Ok(())
 }
 
+/// A host tool that changes state, which an approval handler gates.
+struct Launch(ToolDefinition);
+
+#[async_trait]
+impl ag_harness::ToolHandler for Launch {
+    fn definition(&self) -> ToolDefinition {
+        self.0.clone()
+    }
+
+    fn effects(&self) -> ag_harness::tool::ToolEffects {
+        ag_harness::tool::ToolEffects::Executes
+    }
+
+    async fn call(
+        &self,
+        _arguments: serde_json::Value,
+        _context: ag_harness::tool::ToolContext,
+    ) -> Result<ag_harness::tool::ToolOutput, ag_harness::tool::ToolError> {
+        Err(ag_harness::tool::ToolError::failed(
+            "a denied call never runs",
+        ))
+    }
+}
+
+/// An approval handler an external crate defines, denying every call.
+struct DenyLaunches;
+
+#[async_trait]
+impl ag_harness::ApprovalHandler for DenyLaunches {
+    async fn decide(&self, request: &ag_harness::ApprovalRequest) -> ag_harness::Decision {
+        ag_harness::Decision::Deny {
+            feedback: format!("{} needs a human", request.tool),
+        }
+    }
+}
+
+/// Calls `launch` once, then answers with the call's result.
+struct LaunchModel;
+
+#[async_trait]
+impl Model for LaunchModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response = match request.messages().last() {
+            Some(ModelMessage::ToolResult { content, .. }) => ModelResponse::Output(json!({
+                "launch": serde_json::from_str::<serde_json::Value>(content)
+                    .map_err(ModelError::request)?,
+            })),
+            _ => ModelResponse::ToolCall(ToolCall::from_json(
+                "call_1".to_string(),
+                "launch",
+                "{}",
+                None,
+            )?),
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn external_consumer_denies_a_call_with_its_approval_handler() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let definition = ToolDefinition::new("launch", "Launch it.", json!({"type": "object"}))?;
+    let tools = ag_harness::ToolSet::builder()
+        .handler(Arc::new(Launch(definition)))
+        .build()?;
+    let harness = Harness::builder()
+        .model(Arc::new(LaunchModel))
+        .context_budget(unbounded_context_budget())
+        .tools(tools)
+        .approval(Arc::new(DenyLaunches))
+        .approval_timeout(std::time::Duration::from_secs(60))
+        .build()?;
+
+    // Act
+    let outcome = harness
+        .run(RunRequest::new("Launch.").output(OutputSchema::new(json!({"type": "object"}))?))
+        .await;
+
+    // Assert
+    assert!(matches!(
+        outcome.result?,
+        RunOutput::Json(output)
+            if output == json!({"launch": {"error": "launch needs a human", "status": "denied"}})
+    ));
+
+    Ok(())
+}
+
 /// Calls `read` and `write` together, records the tools each request
 /// advertises, and answers with every tool result by call ID.
 struct ReadAndWriteModel {
