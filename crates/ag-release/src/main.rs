@@ -4,7 +4,11 @@
 //! The crate README is the public contract for configuration, commands, and
 //! artifacts.
 
+mod archive;
 mod artifact;
+mod assemble;
+mod build;
+mod checksum;
 mod cli;
 mod config;
 mod file_system;
@@ -33,6 +37,7 @@ fn main() -> ExitCode {
         cargo: env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
         file_system: &HostFileSystem,
         process: &HostProcessRunner,
+        source_date_epoch: env::var_os(archive::SOURCE_DATE_EPOCH),
     };
 
     match host.run(&cli.command, &mut io::stdout().lock()) {

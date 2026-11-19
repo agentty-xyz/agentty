@@ -41,6 +41,7 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
                     args: ["metadata", "--format-version", "1", "--no-deps"]
                         .map(OsString::from)
                         .to_vec(),
+                    current_dir: None,
                     program: OsString::from("demo-cargo"),
                 }
         })
@@ -72,6 +73,10 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
     assert_eq!(workspace.config.profile, "dist");
     assert_eq!(workspace.repository, demo_repository());
     assert_eq!(workspace.root, PathBuf::from(DEMO_ROOT));
+    assert_eq!(
+        workspace.target_directory,
+        PathBuf::from(DEMO_ROOT).join("target")
+    );
     assert_eq!(workspace.version, version);
 }
 

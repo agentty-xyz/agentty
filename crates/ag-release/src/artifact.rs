@@ -24,6 +24,12 @@ pub(crate) fn archive(app: &str, target: Target) -> String {
     format!("{}.tar.gz", archive_directory(app, target))
 }
 
+/// Returns the top-level directory inside the source archive,
+/// `<repository name>-<version>`.
+pub(crate) fn source_directory(repository: &str, version: &str) -> String {
+    format!("{repository}-{version}")
+}
+
 /// Returns the `sha256sum`-compatible checksum file published next to `file`.
 pub(crate) fn checksum(file: &str) -> String {
     format!("{file}.sha256")

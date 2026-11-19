@@ -22,6 +22,8 @@ pub(crate) struct Workspace {
     pub(crate) repository: GitHubRepository,
     /// Absolute workspace root directory.
     pub(crate) root: PathBuf,
+    /// Cargo build output directory, such as `<root>/target`.
+    pub(crate) target_directory: PathBuf,
     /// Version every app shares; apps release in lockstep.
     pub(crate) version: Version,
 }
@@ -38,6 +40,7 @@ impl Workspace {
             args: ["metadata", "--format-version", "1", "--no-deps"]
                 .map(OsString::from)
                 .to_vec(),
+            current_dir: None,
             program: cargo,
         };
 
@@ -52,6 +55,7 @@ impl Workspace {
     pub(crate) fn from_metadata(metadata: &[u8]) -> Result<Self, String> {
         let CargoMetadata {
             packages,
+            target_directory,
             workspace_metadata,
             workspace_root,
         } = serde_json::from_slice(metadata)
@@ -80,6 +84,7 @@ impl Workspace {
             config,
             repository,
             root: workspace_root,
+            target_directory,
             version,
         })
     }
@@ -159,6 +164,7 @@ impl App {
 #[derive(Deserialize)]
 struct CargoMetadata {
     packages: Vec<MetadataPackage>,
+    target_directory: PathBuf,
     /// The `[workspace.metadata]` table, or `null` when it is absent.
     #[serde(rename = "metadata")]
     workspace_metadata: Option<Value>,
