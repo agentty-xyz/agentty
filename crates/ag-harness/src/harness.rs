@@ -545,10 +545,15 @@ impl Session {
         self.database.load_writes(&self.id).await
     }
 
-    /// Returns the range of the settled turns this handle replays ahead of
-    /// its next turn's input: those after its compaction checkpoint that
-    /// fit its history budget, empty when it replays none. Opening the
-    /// handle and each of its turns refresh the replayed turns; a request
+    /// Returns the range of the settled turns this handle loaded for replay:
+    /// those after its compaction checkpoint that fit its history budget,
+    /// or an empty span, whose bounds carry no meaning, when it loaded none.
+    ///
+    /// Like [`Self::checkpoint`], it is a snapshot taken when the handle was
+    /// resumed and refreshed only when [`Self::turn`] admits a turn, before
+    /// the turn runs. [`Self::run`] runs on a copy and [`Self::compact`]
+    /// does not reload history, so neither refreshes it. Read it right after
+    /// [`Harness::resume`] for the turns the next turn replays; a request
     /// whose context budget is tighter may still leave the oldest out.
     ///
     /// Pass it to [`Self::transcript`] to read those turns in full.

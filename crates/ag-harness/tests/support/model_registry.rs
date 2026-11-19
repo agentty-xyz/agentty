@@ -653,10 +653,13 @@ async fn direct_sessions_cannot_be_silently_adopted_by_a_registration() {
         let output = resumed.send("hello").await.expect("direct execution");
 
         // Assert
-        assert!(matches!(
-            result,
-            Err(SessionError::RegistrationMismatch { .. })
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(SessionError::RegistrationMismatch { stored: None, .. })
+            ),
+            "a direct session stores no registration"
+        );
         assert_eq!(output.output(), &json!({"answer":"first"}));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }

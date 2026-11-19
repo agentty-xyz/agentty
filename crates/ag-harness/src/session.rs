@@ -182,8 +182,10 @@ pub enum SessionError {
     RegistrationMismatch {
         /// Requested session identifier.
         id: String,
-        /// Registration stored with the session, or `None` for a session
-        /// opened without one; resume with a harness built for it.
+        /// Registration stored with the session; resume with a harness
+        /// registered under it. `None` when the session was created by a
+        /// harness without a registration, so only such a harness resumes
+        /// it.
         stored: Option<ExecutionIdentity>,
     },
     /// Host-ID submission requires a stable assertion of execution

@@ -312,7 +312,7 @@ impl SessionOpener<'_> {
                 return Ok((session, LoadedHistory::default()));
             }
         };
-        let history = LoadedHistory::read(&session).await?;
+        let history = LoadedHistory::read(&session).await;
 
         Ok((session, history))
     }
@@ -396,21 +396,18 @@ impl LoadedHistory {
     /// Reads the turns `session` replays from its transcript, and whether
     /// it holds any finished turn when it replays none.
     ///
-    /// # Errors
-    /// Returns an error when the transcript cannot be read.
-    async fn read(session: &Session) -> Result<Self, NativeTurnError> {
-        let read = |range| async {
-            session
-                .transcript(range)
-                .await
-                .map_err(NativeTurnError::session_operation(
-                    "Failed to read the harness transcript",
-                ))
+    /// The transcript decodes every stored field of those turns, which
+    /// replay does not need. When it cannot, the resumed session is assumed
+    /// to hold history whose bootstrap turn is not replayed, so the turn
+    /// re-sends the full contract rather than failing on every later turn.
+    async fn read(session: &Session) -> Self {
+        let newest = match session.transcript(session.replayed_range()).await {
+            Ok(turns) if !turns.is_empty() => return Self::new(true, &turns),
+            Ok(_) => session.transcript(TurnRange::Last(1)).await,
+            Err(error) => Err(error),
         };
-        let turns = read(session.replayed_range()).await?;
-        let has_finished_turn = !turns.is_empty() || !read(TurnRange::Last(1)).await?.is_empty();
 
-        Ok(Self::new(has_finished_turn, &turns))
+        Self::new(!newest.is_ok_and(|newest| newest.is_empty()), &[])
     }
 
     /// Summarizes the replayed `turns`, oldest first.

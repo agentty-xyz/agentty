@@ -106,11 +106,11 @@ same `event::Item`s live runs emit (tool calls report `answered` or `unanswered`
 final output, timestamps, and usage and cost. `TurnRange` selects all turns, the newest
 N, or an index span, and only those turns are read; history the replay budget leaves out
 is still included. `Session::replayed_range` returns the span of turns the handle
-replays ahead of its next input. `Harness::fork` copies a session's settled turns through one index,
-with their write, command, and host request records, into a new session that keeps the
-source's output mode, system prompt, and model. The fork's own ID gives it its own
-prompt-cache key, and the source is unchanged. If the fork cannot be resumed with the
-harness's model, it stays stored; resume it with a matching harness.
+replays ahead of its next input. `Harness::fork` copies a session's settled turns
+through one index, with their write, command, and host request records, into a new
+session that keeps the source's output mode, system prompt, and model. The fork's own ID
+gives it its own prompt-cache key, and the source is unchanged. If the fork cannot be
+resumed with the harness's model, it stays stored; resume it with a matching harness.
 
 `Session::usage` sums the tokens and cost of every settled turn into `UsageTotals`. Each
 turn records its usage when admitted and as its model requests complete, so failed,
