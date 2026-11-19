@@ -8,16 +8,26 @@ mod metric;
 mod propagation;
 #[cfg(all(
     feature = "otel",
-    any(feature = "providers-compat", feature = "providers-openai")
+    any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    )
 ))]
 mod request;
 #[cfg(all(
     not(feature = "otel"),
-    any(feature = "providers-compat", feature = "providers-openai")
+    any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    )
 ))]
 #[path = "telemetry/request_disabled.rs"]
 mod request;
 
+#[cfg(feature = "providers-anthropic")]
+pub(crate) use label::PROVIDER_ANTHROPIC;
 pub(crate) use label::{
     ERROR_BUDGET_LEDGER_COST, ERROR_BUDGET_LEDGER_MODEL_REQUESTS, ERROR_BUDGET_LEDGER_TOKENS,
     ERROR_BUDGET_LEDGER_TOOL_CALLS, ERROR_BUDGET_LEDGER_WALL_TIME, ERROR_CANCELLED,
@@ -47,5 +57,9 @@ pub(crate) use metric::{
     OPERATION_EXECUTE_TOOL, OPERATION_INVOKE_AGENT, OUTPUT_JSON, TOOL_TYPE_FUNCTION,
 };
 pub(crate) use propagation::with_current_context;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 pub(crate) use request::RequestMetrics;

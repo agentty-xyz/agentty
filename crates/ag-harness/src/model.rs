@@ -10,11 +10,19 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use ag_router::ModelMessage as RoutedMessage;
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
@@ -26,24 +34,42 @@ pub use crate::context::{
     ContextBudget, ContextBudgetError, ContextEstimator, ContextPolicy, ContextSummaryPolicy,
     HeuristicContextEstimator,
 };
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::error::ErrorKind;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::event::{self, EventSink, RunEventKind};
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver};
 pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-use crate::provider::{self, ProviderSpec, ProviderSpecError};
+use crate::provider::{self};
 #[cfg(feature = "providers-openai")]
 use crate::provider::{ChatGptConfig, OpenAiConfig};
 #[cfg(feature = "providers-compat")]
 use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+use crate::provider::{ProviderSpec, ProviderSpecError};
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
@@ -121,6 +147,16 @@ pub trait Model: Send + Sync {
         false
     }
 
+    /// Returns whether history replays each earlier turn with its host
+    /// instructions, exactly as the turn first sent them, so a session's
+    /// requests only ever grow, as Anthropic Messages models require of
+    /// history before signed thinking. By default, as for every other
+    /// built-in provider, a turn's instructions apply to that turn only and
+    /// later requests leave them out.
+    fn replays_turn_instructions(&self) -> bool {
+        false
+    }
+
     /// Returns whether the implementation answers requests in
     /// [`OutputMode::Text`] with plain text, returned as
     /// [`ModelResponse::Text`]. The default, `false`, makes text-mode turns
@@ -158,7 +194,11 @@ pub trait Model: Send + Sync {
 /// [`ModelClient::complete`], which owns telemetry while `ag-router` validates
 /// structured output. Its constructors require the provider's `providers-*`
 /// feature.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 pub struct ModelClient {
     router: ag_router::Router,
     router_model: String,
@@ -167,7 +207,11 @@ pub struct ModelClient {
     profile: Option<ModelProfile>,
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 impl ModelClient {
     /// Creates a client backed by Moonshot AI's Kimi API.
     ///
@@ -617,7 +661,11 @@ impl ModelClient {
     }
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[async_trait]
 impl Model for ModelClient {
     fn metadata(&self) -> Option<ModelMetadata> {
@@ -653,6 +701,12 @@ impl Model for ModelClient {
             .unwrap_or(false)
     }
 
+    fn replays_turn_instructions(&self) -> bool {
+        self.router
+            .replays_turn_instructions(&self.router_model)
+            .unwrap_or(false)
+    }
+
     fn supports_text_output(&self) -> bool {
         true
     }
@@ -675,10 +729,18 @@ impl Model for ModelClient {
 
 /// Reports a routed request's retries to the streamed run it belongs to as
 /// [`RunEventKind::Retrying`] events.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 struct RetryEvents(Arc<EventSink>);
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 impl RetryEvents {
     /// Returns the failure kind a retry of `kind` reports: `5xx` statuses
     /// read as [`ErrorKind::Overloaded`], as their final failure would.
@@ -693,7 +755,11 @@ impl RetryEvents {
     }
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[async_trait]
 impl ag_router::RetryObserver for RetryEvents {
     async fn retrying(&self, notice: ag_router::RetryNotice) {
@@ -1088,7 +1154,12 @@ impl ModelRequest {
         self.tools.iter().any(|tool| tool.name() == name)
     }
 
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai",
+        test
+    ))]
     pub(crate) fn lifecycle_observed(&self) -> bool {
         self.lifecycle_observed
     }
@@ -1185,7 +1256,11 @@ impl ReasoningEffort {
     }
 
     /// Returns the router's equivalent effort.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) const fn to_router(self) -> ag_router::ReasoningEffort {
         match self {
             Self::Low => ag_router::ReasoningEffort::Low,
@@ -1322,7 +1397,11 @@ impl ModelCompletion {
         }
     }
 
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) fn with_reasoning_content(mut self, reasoning_content: Option<String>) -> Self {
         self.reasoning_content = reasoning_content;
 

@@ -550,7 +550,8 @@ pub struct Usage {
     /// Input tokens served from the provider's prompt cache.
     pub cache_read: u64,
     /// Input tokens written to the provider's prompt cache, part of `input`,
-    /// or `None` when unknown; no supported provider reports them yet.
+    /// or `None` when unknown; of the built-in protocols only Anthropic
+    /// Messages reports them.
     pub cache_write: Option<u64>,
     /// Reasoning tokens.
     pub reasoning: u64,
@@ -609,7 +610,7 @@ impl Usage {
             input: input.unwrap_or(0),
             output: output.unwrap_or(0),
             cache_read: count(CompletionUsage::cache_hit_tokens).unwrap_or(0),
-            cache_write: None,
+            cache_write: count(CompletionUsage::cache_write_tokens),
             reasoning: count(CompletionUsage::reasoning_tokens).unwrap_or(0),
             unreported_requests: u32::from(input.is_none() || output.is_none()),
         }

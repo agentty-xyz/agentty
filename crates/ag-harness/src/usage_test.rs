@@ -228,6 +228,25 @@ fn request_usage_sums_every_request_and_is_zero_without_one() {
 }
 
 #[test]
+fn request_usage_keeps_cache_writes_only_when_every_request_reports_them() {
+    // Arrange
+    let written = |cache_write| {
+        CompletionUsage::new(Some(5), Some(5), Some(10), Some(1), None, Some(11))
+            .with_cache_write_tokens(cache_write)
+    };
+
+    // Act
+    let reported = Usage::from_request(Some(&written(Some(5))));
+    let summed = reported.saturating_add(Usage::from_request(Some(&written(Some(3)))));
+    let unknown = reported.saturating_add(Usage::from_request(Some(&written(None))));
+
+    // Assert
+    assert_eq!(reported.cache_write, Some(5));
+    assert_eq!(summed.cache_write, Some(8));
+    assert_eq!(unknown.cache_write, None);
+}
+
+#[test]
 fn cost_sums_keep_a_shared_source_and_mix_different_ones() {
     // Arrange
     let host = Cost::of(&usage(1_000, 0, 0), Pricing::new(1_000_000, 0));

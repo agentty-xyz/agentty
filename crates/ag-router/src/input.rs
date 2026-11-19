@@ -104,11 +104,17 @@ impl ImageContent {
     }
 
     pub(crate) fn to_data_url(&self) -> String {
-        format!(
-            "data:{};base64,{}",
-            self.media_type.mime_type(),
-            STANDARD.encode(&self.bytes)
-        )
+        format!("data:{};base64,{}", self.mime_type(), self.to_base64())
+    }
+
+    /// Returns the MIME type of the image, such as `image/png`.
+    pub(crate) fn mime_type(&self) -> &'static str {
+        self.media_type.mime_type()
+    }
+
+    /// Returns the image bytes as standard base64.
+    pub(crate) fn to_base64(&self) -> String {
+        STANDARD.encode(&self.bytes)
     }
 }
 

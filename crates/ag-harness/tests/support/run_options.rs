@@ -162,6 +162,65 @@ async fn instructions_follow_the_cached_prefix_and_steer_only_their_own_run()
     Ok(())
 }
 
+/// Answers like [`TextModel`] but requires history that only grows, as
+/// Anthropic Messages models do before signed thinking.
+struct AppendOnlyModel(TextModel);
+
+#[async_trait]
+impl Model for AppendOnlyModel {
+    fn replays_turn_instructions(&self) -> bool {
+        true
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        self.0.complete(request).await
+    }
+}
+
+#[tokio::test]
+async fn append_only_models_replay_earlier_instructions_where_they_were_sent()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let requests = Requests::default();
+    let harness = Harness::new(
+        AppendOnlyModel(TextModel {
+            requests: Arc::clone(&requests),
+        }),
+        unbounded_context_budget(),
+    )
+    .store(Arc::new(MemoryStore::new()));
+    let session = harness
+        .session("append-only", name_schema()?)
+        .create()
+        .await?;
+
+    // Act
+    let first = session
+        .run(RunRequest::new("first").instructions("Answer tersely."))
+        .await;
+    let second = session.run(RunRequest::new("second")).await;
+
+    // Assert
+    first.result?;
+    second.result?;
+    let requests = recorded(&requests)?;
+    let first_sent = requests[0].messages();
+    assert_eq!(
+        first_sent,
+        [
+            ModelMessage::User("first".into()),
+            ModelMessage::Instructions("Answer tersely.".into()),
+        ]
+    );
+    assert_eq!(
+        requests[1].messages().get(..first_sent.len()),
+        Some(first_sent),
+        "the second request starts with the first one unchanged"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn text_output_overrides_the_json_default_for_one_run_only() -> Result<(), Box<dyn Error>> {
     // Arrange

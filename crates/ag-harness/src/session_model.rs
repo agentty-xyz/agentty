@@ -99,6 +99,9 @@ pub(crate) struct ReplayTarget {
     /// Whether the session switched models since it was created; until then
     /// a turn without a model snapshot is the current model's own.
     switched: bool,
+    /// Whether earlier turns replay with their host instructions (see
+    /// [`crate::Model::replays_turn_instructions`]).
+    turn_instructions: bool,
 }
 
 impl ReplayTarget {
@@ -110,6 +113,7 @@ impl ReplayTarget {
             metadata: metadata.cloned(),
             reasoning_text: false,
             switched: generation != 0,
+            turn_instructions: false,
         }
     }
 
@@ -119,6 +123,19 @@ impl ReplayTarget {
     pub(crate) fn with_reasoning_text(mut self, reasoning_text: bool) -> Self {
         self.reasoning_text = reasoning_text;
         self
+    }
+
+    /// Returns this target replaying earlier turns with their host
+    /// instructions when `turn_instructions` holds.
+    #[must_use]
+    pub(crate) fn with_turn_instructions(mut self, turn_instructions: bool) -> Self {
+        self.turn_instructions = turn_instructions;
+        self
+    }
+
+    /// Returns whether earlier turns replay with their host instructions.
+    pub(crate) fn replays_turn_instructions(&self) -> bool {
+        self.turn_instructions
     }
 
     /// Returns whether `turn` replays its reasoning natively: a turn of the

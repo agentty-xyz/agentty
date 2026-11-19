@@ -588,10 +588,22 @@ impl HistoryTurn {
     /// placeholder result for every tool call without a recorded result, in
     /// the request only, and ends with its stop note.
     pub(crate) fn replay(&self) -> Vec<ModelMessage> {
+        self.replay_with_instructions(false)
+    }
+
+    /// Returns the messages replayed for this turn to `target`: as
+    /// [`Self::replay`], but with the turn's host instructions where they
+    /// were first sent when the target replays them, so its requests only
+    /// grow.
+    pub(crate) fn replay_for(&self, target: &ReplayTarget) -> Vec<ModelMessage> {
+        self.replay_with_instructions(target.replays_turn_instructions())
+    }
+
+    fn replay_with_instructions(&self, instructions: bool) -> Vec<ModelMessage> {
         let replayed = self
             .messages
             .iter()
-            .filter(|message| !matches!(message, ModelMessage::Instructions(_)));
+            .filter(|message| instructions || !matches!(message, ModelMessage::Instructions(_)));
         let Some(stop) = &self.stop else {
             return replayed.cloned().collect();
         };
@@ -1304,7 +1316,7 @@ impl ReplayedHistory {
             if *messages
                 != session_model::project_turn(turn, &self.target)
                     .elided()
-                    .replay()
+                    .replay_for(&self.target)
             {
                 break;
             }

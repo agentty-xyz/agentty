@@ -37,6 +37,10 @@ fn responses() -> ProviderSpec {
     ProviderSpec::new("custom", WireProtocol::Responses, BASE_URL)
 }
 
+fn anthropic() -> ProviderSpec {
+    ProviderSpec::new("custom", WireProtocol::AnthropicMessages, BASE_URL)
+}
+
 fn image_input() -> TurnInput {
     let image = ImageContent::new(
         ImageMediaType::Png,
@@ -82,6 +86,48 @@ fn starts_from_a_conservative_policy_per_protocol() {
     assert!(responses.image_input && responses.prompt_cache_key);
     assert!(!responses.keeps_prefix_across_schemas());
     assert!(chat.validate().is_ok() && responses.validate().is_ok());
+}
+
+#[test]
+fn starts_anthropic_messages_with_native_output_and_a_replaceable_version() {
+    // Arrange
+    let bound = NonZeroU32::new(4_096).expect("nonzero");
+
+    // Act
+    let anthropic = anthropic();
+    let bounded = anthropic
+        .clone()
+        .with_fallback_max_tokens(bound)
+        .with_header("Anthropic-Version", "2026-10-21");
+    let headers = bounded.request_headers(None).expect("valid headers");
+
+    // Assert
+    assert_eq!(
+        anthropic.structured_output,
+        StructuredOutputMode::JsonSchema
+    );
+    assert_eq!(
+        anthropic.reasoning,
+        ReasoningMapping::Effort(EffortNames::default())
+    );
+    assert_eq!(anthropic.max_tokens_field, Some(MaxTokensField::MaxTokens));
+    assert_eq!(anthropic.fallback_max_tokens, None);
+    assert_eq!(
+        anthropic.headers,
+        [("anthropic-version".to_string(), "2023-06-01".to_string())]
+    );
+    assert!(anthropic.image_input && !anthropic.prompt_cache_key);
+    assert!(!anthropic.keeps_prefix_across_schemas());
+    assert!(anthropic.validate().is_ok());
+    assert_eq!(bounded.fallback_max_tokens, Some(bound));
+    assert!(format!("{bounded:?}").contains("fallback_max_tokens: Some(4096)"));
+    assert_eq!(
+        headers
+            .get_all("anthropic-version")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["2026-10-21"]
+    );
 }
 
 #[test]
@@ -236,6 +282,14 @@ fn rejects_specifications_no_request_can_be_sent_with() {
             responses().with_tool_result_name(true),
             "the Responses protocol cannot express reasoning-content replay",
         ),
+        (
+            chat().with_structured_output(StructuredOutputMode::ForcedTool),
+            "the ChatCompletions protocol cannot express forced-tool structured output",
+        ),
+        (
+            responses().with_fallback_max_tokens(NonZeroU32::MIN),
+            "the Responses protocol cannot express a fallback `max_tokens`",
+        ),
     ];
     let valid = [
         chat()
@@ -255,6 +309,48 @@ fn rejects_specifications_no_request_can_be_sent_with() {
     for spec in valid {
         assert!(spec.validate().is_ok(), "{spec:?}");
     }
+}
+
+#[test]
+fn rejects_anthropic_messages_options_it_cannot_express() {
+    // Arrange
+    let invalid = [
+        (
+            anthropic().with_structured_output(StructuredOutputMode::JsonObject),
+            "the AnthropicMessages protocol cannot express a structured-output mode",
+        ),
+        (
+            anthropic().with_reasoning(ReasoningMapping::EnableThinking),
+            "the AnthropicMessages protocol cannot express a reasoning mapping",
+        ),
+        (
+            anthropic().with_max_tokens_field(None),
+            "the AnthropicMessages protocol cannot express an output-token field",
+        ),
+        (
+            anthropic().with_instruction_placement(InstructionPlacement::JoinPreviousUser),
+            "the AnthropicMessages protocol cannot express instructions placed",
+        ),
+        (
+            anthropic().with_tool_result_name(true),
+            "the AnthropicMessages protocol cannot express reasoning-content replay",
+        ),
+        (
+            anthropic().with_reasoning_text_replay(true),
+            "the AnthropicMessages protocol cannot express reasoning-content replay",
+        ),
+        (
+            anthropic().with_prompt_cache_key(true),
+            "the AnthropicMessages protocol cannot express a prompt cache key",
+        ),
+    ];
+    let forced_tool = anthropic()
+        .with_structured_output(StructuredOutputMode::ForcedTool)
+        .with_reasoning(ReasoningMapping::None);
+
+    // Act / Assert
+    assert_rejects(invalid);
+    assert!(forced_tool.validate().is_ok());
 }
 
 #[test]

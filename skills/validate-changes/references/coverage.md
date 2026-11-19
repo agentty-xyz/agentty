@@ -44,8 +44,8 @@ source. Add those dependents to `AGENTTY_TEST_PACKAGES` and keep execution narro
 `ag-harness` also builds without its default features. When a change touches its feature
 gates, lint the crate with no features and with each optional feature that gates code
 alone, then cover the builds without default features, with each provider family alone,
-and with both families but no other backend; one merged report must cover every line
-those builds compile:
+and with every provider family but no other backend; one merged report must cover every
+line those builds compile:
 
 ```sh
 prek run clippy-ag-harness-features --all-files --hook-stage manual

@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::anthropic::{self, AnthropicBackend};
 use crate::chat_completion::{self, ChatCompletionBackend};
 use crate::http::HttpTransport;
 use crate::model::{
@@ -20,6 +21,7 @@ type SpecKey = (String, Option<String>);
 
 /// Single entry point for configured model providers.
 pub struct Router {
+    anthropic: Arc<HttpTransport>,
     client: Arc<dyn chat_completion::ChatCompletionClient>,
     responses: Arc<HttpTransport>,
     specs: HashMap<SpecKey, ProviderSpec>,
@@ -38,6 +40,7 @@ impl Router {
     /// ([`ProviderSpec::validate`]) before any network access.
     pub fn new(specs: impl IntoIterator<Item = ProviderSpec>) -> Self {
         let mut router = Self {
+            anthropic: anthropic::default_transport(),
             client: chat_completion::default_client(),
             responses: responses::default_transport(),
             specs: HashMap::new(),
@@ -120,6 +123,18 @@ impl Router {
         Ok(self.route(model)?.0.replay.reasoning_text)
     }
 
+    /// Returns whether the selected model needs earlier turns replayed with
+    /// their turn instructions, exactly as first sent: Anthropic Messages
+    /// models drop or reject signed thinking that follows an edited earlier
+    /// message, so their history must only grow. Other models replay a
+    /// turn's instructions with that turn only.
+    ///
+    /// # Errors
+    /// Returns a routing error for an unknown or unconfigured model.
+    pub fn replays_turn_instructions(&self, model: &str) -> Result<bool, ModelError> {
+        Ok(self.route(model)?.0.protocol == WireProtocol::AnthropicMessages)
+    }
+
     /// Executes one request and validates terminal JSON against its schema;
     /// a request without a schema returns bounded, nonblank terminal text.
     ///
@@ -165,6 +180,17 @@ impl Router {
         };
         let headers = spec.request_headers(bearer.as_deref())?;
         let response = match spec.protocol {
+            WireProtocol::AnthropicMessages => {
+                AnthropicBackend::new(
+                    spec,
+                    model.to_string(),
+                    headers,
+                    Arc::clone(&self.anthropic),
+                    observer,
+                )
+                .generate(&request)
+                .await?
+            }
             WireProtocol::ChatCompletions => {
                 ChatCompletionBackend::new(
                     spec,
