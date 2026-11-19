@@ -7,8 +7,10 @@ workflows consume. It is a small, project-agnostic replacement for a `dist`
 
 ## Quick Start
 
-1. Install the tool:
-   `cargo install --git https://github.com/agentty-xyz/agentty ag-release --locked`.
+1. Install the tool from a pinned commit:
+   `cargo install --git https://github.com/agentty-xyz/agentty --rev <commit> ag-release --locked`.
+   The tool is not published to crates.io and its configuration, plan, and artifacts
+   change with that repository, so an unpinned install can change a release.
 1. Add `[workspace.metadata.release]` to the workspace `Cargo.toml` (see
    [Configuration](#configuration)).
 1. Set `repository = "https://github.com/<owner>/<name>"` on each released package.
