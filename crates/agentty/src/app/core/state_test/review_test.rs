@@ -863,6 +863,83 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
 }
 
 #[tokio::test]
+async fn closed_review_request_cleans_up_the_session_worktree_once() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = "closed-cleanup";
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            "gemini-3.8-flash",
+            "main",
+            &Status::Review.to_string(),
+            app.active_project_id(),
+        )
+        .await
+        .expect("failed to insert session");
+    let worktree_folder = app.services.base_path().join("closed-c");
+    fs::create_dir_all(&worktree_folder).expect("failed to create session dir");
+    app.refresh_sessions_now().await;
+    let mut git_client = ag_git::MockGitClient::new();
+    git_client
+        .expect_main_repo_root()
+        .once()
+        .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/repo")) }));
+    git_client
+        .expect_prune_worktrees()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    git_client
+        .expect_delete_branch()
+        .once()
+        .withf(|_, branch| branch == "wt/closed-c")
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, git_client);
+    let closed_update = || ReviewRequestStatusUpdate {
+        generation: 0,
+        result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
+            outcome: session::SyncReviewRequestOutcome::Closed {
+                display_id: "#7".to_string(),
+            },
+            summary: Some(test_review_request_summary(
+                "#7",
+                ReviewRequestState::Closed,
+            )),
+        }),
+        session_id: session_id.into(),
+    };
+
+    // Act
+    app.apply_review_request_status_update(closed_update())
+        .await;
+    app.process_pending_app_events().await;
+    app.services.wait_for_cleanup_tasks(None).await;
+    let removed_by_first_cleanup = !worktree_folder.exists();
+    fs::create_dir_all(&worktree_folder).expect("failed to recreate session dir");
+    app.apply_review_request_status_update(closed_update())
+        .await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    let session = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("expected session to remain loaded");
+    assert_eq!(session.status, Status::Canceled);
+    assert!(removed_by_first_cleanup);
+    assert!(
+        worktree_folder.exists(),
+        "an already canceled session starts no second cleanup"
+    );
+}
+
+#[tokio::test]
 async fn session_git_status_targets_include_active_unpublished_sessions() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(

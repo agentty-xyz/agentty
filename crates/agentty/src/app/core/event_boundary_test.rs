@@ -1,5 +1,9 @@
 //! Session-view and failure boundaries of the foreground event reducer.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
 use super::super::App;
 use crate::app::branch_publish::{BranchPublishActionUpdate, BranchPublishTaskSuccess};
 use crate::app::core::state::tests::support::{
@@ -286,27 +290,37 @@ async fn merged_review_persistence_warning_reaches_the_session_transcript() {
 }
 
 #[tokio::test]
-async fn failed_merged_worktree_cleanup_persists_a_warning() {
+async fn failed_merged_worktree_git_cleanup_still_removes_the_directory_and_warns_once() {
     // Arrange
     let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
     let session_id = "cleanup-warning";
     insert_review_session_with_data_dir(&app, session_id).await;
     app.refresh_sessions_now().await;
     let mut git_client = ag_git::MockGitClient::new();
-    git_client.expect_main_repo_root().once().returning(|_| {
+    git_client
+        .expect_main_repo_root()
+        .once()
+        .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/repo")) }));
+    git_client.expect_remove_worktree().never();
+    git_client.expect_prune_worktrees().once().returning(|_| {
         Box::pin(async {
-            Err(ag_git::GitError::OutputParse(
-                "cleanup unavailable".to_string(),
-            ))
+            Err(ag_git::GitError::CommandTimedOut {
+                command: "git worktree prune".to_string(),
+                timeout: Duration::from_secs(30),
+            })
         })
     });
-    git_client.expect_remove_worktree().once().returning(|_| {
-        Box::pin(async {
-            Err(ag_git::GitError::OutputParse(
-                "cleanup unavailable".to_string(),
-            ))
-        })
-    });
+    git_client
+        .expect_delete_branch()
+        .once()
+        .withf(|_, branch| branch == "topic")
+        .returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::OutputParse(
+                    "branch unavailable".to_string(),
+                ))
+            })
+        });
     install_mock_git_client(&mut app, git_client);
     let folder = app
         .sessions
@@ -320,10 +334,16 @@ async fn failed_merged_worktree_cleanup_persists_a_warning() {
         .expect("handles should exist");
 
     // Act
-    app.spawn_externally_merged_session_cleanup(session_id, folder, "topic".to_string(), handles);
+    app.spawn_externally_merged_session_cleanup(
+        session_id,
+        folder.clone(),
+        "topic".to_string(),
+        handles,
+    );
     app.services.wait_for_cleanup_tasks(None).await;
 
     // Assert
+    assert!(!folder.exists());
     let messages = app
         .services
         .db()
@@ -331,10 +351,91 @@ async fn failed_merged_worktree_cleanup_persists_a_warning() {
         .load_session_messages(session_id)
         .await
         .expect("messages should load");
-    assert!(messages.iter().any(|message| {
-        message.content.contains("Worktree cleanup failed:")
-            && message.content.contains("cleanup unavailable")
-    }));
+    let warnings = messages
+        .iter()
+        .filter(|message| message.content.contains("Worktree cleanup failed:"))
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].content.contains("timed out"));
+    assert!(warnings[0].content.contains("branch unavailable"));
+}
+
+#[tokio::test]
+async fn merged_worktree_cleanups_run_one_at_a_time() {
+    // Arrange
+    let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+    let session_ids = ["sequence-first", "sequence-second"];
+    for session_id in session_ids {
+        insert_review_session_with_data_dir(&app, session_id).await;
+    }
+    app.refresh_sessions_now().await;
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release_first = Arc::new(tokio::sync::Notify::new());
+    let mut git_client = ag_git::MockGitClient::new();
+    git_client.expect_main_repo_root().times(2).returning({
+        let release_first = Arc::clone(&release_first);
+
+        move |folder| {
+            let started_tx = started_tx.clone();
+            let release_first = Arc::clone(&release_first);
+
+            Box::pin(async move {
+                let is_first = folder.ends_with("sequence");
+                let _ = started_tx.send(is_first);
+                if is_first {
+                    release_first.notified().await;
+                }
+
+                Ok(PathBuf::from("/tmp/repo"))
+            })
+        }
+    });
+    git_client
+        .expect_prune_worktrees()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    git_client
+        .expect_delete_branch()
+        .times(2)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, git_client);
+    let first_folder = app.services.base_path().join("sequence");
+    let second_folder = app.services.base_path().join("second-folder");
+    tokio::fs::create_dir_all(&second_folder)
+        .await
+        .expect("second folder");
+
+    // Act
+    for (session_id, folder) in session_ids
+        .into_iter()
+        .zip([first_folder.clone(), second_folder.clone()])
+    {
+        let handles = app
+            .sessions
+            .session_handles_or_err(session_id)
+            .expect("handles should exist");
+        app.spawn_externally_merged_session_cleanup(
+            session_id,
+            folder,
+            "topic".to_string(),
+            handles,
+        );
+    }
+    let first_started = started_rx.recv().await.expect("first cleanup starts");
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let second_started_while_first_runs = started_rx.try_recv().is_ok();
+    release_first.notify_one();
+    let second_started = started_rx.recv().await.expect("second cleanup starts");
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert!(first_started);
+    assert!(!second_started_while_first_runs);
+    assert!(!second_started);
+    assert!(!first_folder.exists());
+    assert!(!second_folder.exists());
 }
 
 #[tokio::test]
@@ -345,6 +446,7 @@ async fn review_results_for_a_removed_session_leave_loaded_sessions_unchanged() 
         last_refreshed_at: 0,
         summary: test_review_request_summary("#42", ReviewRequestState::Open),
     };
+    test_support::enable_tracing_log_fallback();
 
     // Act
     app.cancel_externally_closed_session("removed-session")

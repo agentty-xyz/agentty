@@ -19,8 +19,8 @@ use super::{
     has_commits_since, has_merge_conflicts, has_unmerged_paths, head_commit_message, head_hash,
     head_short_hash, in_progress_operation, is_rebase_in_progress, is_worktree_clean,
     list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
-    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
-    push_current_branch, push_current_branch_to_new_remote_branch,
+    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, prune_worktrees,
+    pull_rebase, push_current_branch, push_current_branch_to_new_remote_branch,
     push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_start, ref_hash,
     remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
     squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
@@ -82,6 +82,14 @@ pub trait GitClient: Send + Sync {
     /// Returns an error when the path is not a registered worktree or git
     /// cannot remove it.
     fn remove_worktree(&self, worktree_path: PathBuf) -> GitFuture<Result<(), GitError>>;
+
+    /// Drops Git's records of linked worktrees whose directories no longer
+    /// exist in `repo_path`, leaving every working tree on disk untouched.
+    ///
+    /// # Errors
+    /// Returns an error when `repo_path` is not a repository or git cannot
+    /// prune its worktree records.
+    fn prune_worktrees(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
 
     /// Returns the staged squash-merge preview diff from `source_branch` into
     /// `target_branch` within `repo_path`.
@@ -558,6 +566,10 @@ impl GitClient for RealGitClient {
 
     fn remove_worktree(&self, worktree_path: PathBuf) -> GitFuture<Result<(), GitError>> {
         Box::pin(async move { remove_worktree(worktree_path).await })
+    }
+
+    fn prune_worktrees(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { prune_worktrees(repo_path).await })
     }
 
     fn squash_merge_diff(

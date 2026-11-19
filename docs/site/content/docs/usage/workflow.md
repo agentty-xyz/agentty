@@ -343,7 +343,7 @@ status in the background:
 A remote merge moves the session to read-only **Merged**, keeping its transcript and
 diff in Active. Sync its local target branch with `s` from the list to move it to
 **Done** and remove the worktree; if that fails, follow the warning and retry. Closing
-an unmerged request cancels its session.
+an unmerged request cancels its session and removes its worktree.
 
 ### Watching a Review Request
 
@@ -774,7 +774,8 @@ installed version.
 
 <a id="usage-data-location"></a> Agentty keeps its database, logs, and worktrees in its
 data root, normally `~/.agentty/`. Worktrees are removed when sessions finish, are
-canceled, or are deleted. Set `AGENTTY_ROOT` to use another root; each root allows one
-running Agentty instance. Session state, including staged draft attachments, stays in
-the data root, so a project's `.agentty/` folder holds only configuration you can
-commit.
+canceled, or are deleted; if quitting or a crash interrupts that cleanup, the next
+startup removes what is left in the background. Set `AGENTTY_ROOT` to use another root;
+each root allows one running Agentty instance. Session state, including staged draft
+attachments, stays in the data root, so a project's `.agentty/` folder holds only
+configuration you can commit.

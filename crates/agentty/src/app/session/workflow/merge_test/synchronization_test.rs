@@ -591,54 +591,13 @@ async fn test_cleanup_merged_session_worktree_reports_delete_branch_failure() {
         Arc::new(mock_fs_client),
         Arc::new(mock_git_client),
         source_branch,
-        Some(repo_root),
+        repo_root,
     )
     .await;
 
     // Assert
     let error = result.expect_err("cleanup should fail on branch deletion error");
     assert_eq!(error.to_string(), "delete failed");
-}
-
-/// Verifies merged-session cleanup skips branch deletion when the main
-/// repository root cannot be resolved, while still removing the worktree.
-#[tokio::test]
-async fn test_cleanup_merged_session_worktree_skips_branch_without_repo_root() {
-    // Arrange
-    let temp_dir = tempdir().expect("failed to create temporary test directory");
-    let folder = temp_dir.path().join("session-worktree");
-    let expected_folder = folder.clone();
-    let mut mock_git_client = git::MockGitClient::new();
-    let mut mock_fs_client = fs::MockFsClient::new();
-    mock_git_client
-        .expect_main_repo_root()
-        .times(1)
-        .returning(|_| {
-            Box::pin(async { Err(GitError::OutputParse("repo root unavailable".to_string())) })
-        });
-    mock_git_client
-        .expect_remove_worktree()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok(()) }));
-    mock_git_client.expect_delete_branch().times(0);
-    mock_fs_client
-        .expect_remove_dir_all()
-        .times(1)
-        .withf(move |path| *path == expected_folder)
-        .returning(|_| Box::pin(async { Ok(()) }));
-
-    // Act
-    let result = SessionManager::cleanup_merged_session_worktree(
-        folder,
-        Arc::new(mock_fs_client),
-        Arc::new(mock_git_client),
-        "wt/session-123".to_string(),
-        None,
-    )
-    .await;
-
-    // Assert
-    assert!(result.is_ok(), "cleanup should succeed: {:?}", result.err());
 }
 
 #[tokio::test]
