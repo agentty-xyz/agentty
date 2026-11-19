@@ -33,7 +33,7 @@ the module docstrings directly.
 | `ag-tui-text`    | Markdown, forge HTML, terminal diagrams and text layout          |
 | `agentty`        | Application composition and TUI                                  |
 | `testty`         | PTY assertions and visual recordings                             |
-| `ag-release`     | Release planning, archives, installers, and release notes        |
+| `ag-release`     | Release planning, archives, installers, notes, and the workflow  |
 | `ag-xtask`       | Workspace maintenance checks                                     |
 
 All crates live under `crates/`. See

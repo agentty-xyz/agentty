@@ -1,7 +1,8 @@
 //! `ag-release workflow` command-line contract.
 
 use std::error::Error;
-use std::fs;
+use std::path::Path;
+use std::{fs, io};
 
 use crate::support::{ag_release, demo_workspace, result};
 
@@ -61,6 +62,24 @@ fn workflow_writes_the_file_that_check_then_accepts_until_it_changes() -> Result
     assert!(
         String::from_utf8_lossy(&edited.stderr)
             .contains("`.github/workflows/release.yml` differs from the workflow")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn workflow_check_accepts_this_repository_workflow() -> io::Result<()> {
+    // Act
+    let checked = ag_release(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["workflow", "--check"],
+    )
+    .output()?;
+
+    // Assert
+    assert_eq!(
+        result(&checked),
+        Ok("`.github/workflows/release.yml` is up to date\n".to_string())
     );
 
     Ok(())
