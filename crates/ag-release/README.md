@@ -97,15 +97,16 @@ with `rustup target add`); `ag-release` does not install toolchains. `<dir>` def
 Checks that `<dir>` holds every archive the plan names, each with a `.sha256` file that
 matches it, and fails with a list of every missing or mismatched file otherwise. Then
 writes each app's `<app>-installer.sh` when the `shell` installer is configured (see
-[Shell Installer](#shell-installer)), `source.tar.gz` and its `.sha256`, `sha256.sum`,
-and `release-manifest.json` into `<dir>` and prints their paths. The source archive is
-`git archive HEAD` of the workspace root below a `<repository name>-<version>/`
-directory, so run `assemble` on a checkout of the tagged commit. Other files in `<dir>`
-are ignored.
+[Shell Installer](#shell-installer)), its `<app>-npm-package.tar.gz` when the `npm`
+installer is configured (see [npm Package](#npm-package)), `source.tar.gz` and its
+`.sha256`, `sha256.sum`, and `release-manifest.json` into `<dir>` and prints their
+paths. The source archive is `git archive HEAD` of the workspace root below a
+`<repository name>-<version>/` directory, so run `assemble` on a checkout of the tagged
+commit. Other files in `<dir>` are ignored.
 
-`sha256.sum` lists every archive, installer, and the source archive, sorted by file
-name. `release-manifest.json` holds the release plan for the tag and the SHA-256 of each
-file that `sha256.sum` lists:
+`sha256.sum` lists every archive, installer, npm package, and the source archive, sorted
+by file name. `release-manifest.json` holds the release plan for the tag and the SHA-256
+of each file that `sha256.sum` lists:
 
 ```json
 {
@@ -121,22 +122,23 @@ file that `sha256.sum` lists:
 
 The plan names every file a release publishes:
 
-| File                           | Contents                                                                         |
-| ------------------------------ | -------------------------------------------------------------------------------- |
-| `<app>-<target>.tar.gz`        | The app's binaries and `include` files in `<app>-<target>/`                      |
-| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum: `<hex>  <file name>`                            |
-| `<app>-installer.sh`           | POSIX `sh` installer of the app's binaries                                       |
-| `<app>-npm-package.tar.gz`     | npm package (planned; `assemble` does not write it yet)                          |
-| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit                                              |
-| `sha256.sum`                   | `sha256sum`-compatible checksums of the archives, installers, and source archive |
-| `release-manifest.json`        | The plan and the SHA-256 of every file in `sha256.sum`                           |
+| File                           | Contents                                                                                       |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `<app>-<target>.tar.gz`        | The app's binaries and `include` files in `<app>-<target>/`                                    |
+| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum: `<hex>  <file name>`                                          |
+| `<app>-installer.sh`           | POSIX `sh` installer of the app's binaries                                                     |
+| `<app>-npm-package.tar.gz`     | npm package tarball, files below `package/`, that installs the app's binaries                  |
+| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit                                                            |
+| `sha256.sum`                   | `sha256sum`-compatible checksums of the archives, installers, npm packages, and source archive |
+| `release-manifest.json`        | The plan and the SHA-256 of every file in `sha256.sum`                                         |
 
-Archives are reproducible: the same inputs give byte-identical `.tar.gz` files. Entries
-are sorted, owned by uid and gid 0 without user or group names, and have mode `0755`
-(directories and binaries) or `0644` (other files). Every entry's modification time is
-`SOURCE_DATE_EPOCH` when that variable is set to a number of seconds, and 0 otherwise.
-The gzip header records no file name or timestamp. The source archive's entries carry
-the commit time that `git archive` records.
+Archives and npm packages are reproducible: the same inputs give byte-identical
+`.tar.gz` files. Entries are sorted, owned by uid and gid 0 without user or group names,
+and have mode `0755` (directories, binaries, and npm commands) or `0644` (other files);
+npm packages, like `npm pack` output, have no directory entries. Every entry's
+modification time is `SOURCE_DATE_EPOCH` when that variable is set to a number of
+seconds, and 0 otherwise. The gzip header records no file name or timestamp. The source
+archive's entries carry the commit time that `git archive` records.
 
 ## Shell Installer
 
@@ -204,10 +206,61 @@ installer:
 
 A file that already sources the script is left unchanged.
 
+## npm Package
+
+`<app>-npm-package.tar.gz` is a ready-to-publish npm package named `<npm-scope>/<app>`,
+or `<app>` without a scope. Publish it with public access, which a scoped package needs
+because npm publishes scoped packages as restricted by default:
+
+```sh
+npm publish --access public <app>-npm-package.tar.gz
+```
+
+npm 11 and newer refuse to publish a prerelease version without a dist-tag, so add
+`--tag <dist-tag>` (for example `--tag next`) for one.
+
+Its `package.json` takes `version`, `description`, `license`, `repository`, and
+`contributors` (the authors) from Cargo metadata, declares one `bin` command per binary,
+requires Node 18 or newer, and has no dependencies. Its `os` and `cpu` fields list the
+configured targets' platforms, so npm rejects other platforms before installing. The
+package holds `package.json`, `binary.js`, `install.js`, one `run-<binary>.js` per
+binary, and the workspace root's `README.md`, `LICENSE`, and `CHANGELOG.md` when they
+exist.
+
+`install.js`, the `postinstall` script, picks the target and checks glibc as the
+[shell installer](#shell-installer) does, downloads `<app>-<target>.tar.gz`, fails
+unless its SHA-256 matches the one `assemble` recorded, and extracts it with the system
+`tar`. It installs the binaries into `<package>/node_modules/.bin_real/`, renaming each
+into place. This location is stable: an app can recognize an npm, Bun, or pnpm global
+install by its executable path ending in `<package>/node_modules/.bin_real/<binary>`.
+When install scripts did not run, as with `npm install --ignore-scripts` or a package
+manager that blocks dependency scripts, the first run of a command installs the binaries
+first.
+
+Each command runs its binary with the same arguments, standard streams, and exit status,
+and ends by the binary's signal when the binary is killed. It ignores `SIGINT` and
+`SIGQUIT`, which the terminal also sends to the binary, and passes `SIGHUP` and
+`SIGTERM` on to it.
+
+| Variable                                                                 | Effect                                                                                                   |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `<APP>_DOWNLOAD_URL`                                                     | Archive base URL instead of `https://github.com/<owner>/<name>/releases/download/<tag>`; `file://` works |
+| `npm_config_https_proxy`, `https_proxy`, `npm_config_proxy`, `all_proxy` | Proxy: download with `curl --proxy <proxy>` instead of Node's built-in `fetch`, which ignores proxies    |
+| `npm_config_no_proxy`, `npm_config_noproxy`, `no_proxy`                  | With a proxy, hosts to reach directly, passed as `curl --noproxy <hosts>`                                |
+
+The first variable of each row that is set, in the order listed and each name in lower,
+then upper case, wins, as in `proxy-from-env` 1.x. npm passes its `https-proxy`,
+`proxy`, and `noproxy` settings (from `npm config set` or `.npmrc`) to install scripts
+as these `npm_config_*` variables.
+
+npm, Bun, and pnpm installs update through their package manager, for example
+`npm install --global <package>@latest`.
+
 ## Updates
 
-`ag-release` publishes no updater binaries: the shell installer is the update path. An
-app installed by it updates itself in three steps:
+`ag-release` publishes no updater binaries: the shell installer is the update path for
+shell installs, and package managers update npm installs. An app installed by the shell
+installer updates itself in three steps:
 
 1. Read the receipt. A receipt whose `provider.source` is `ag-release`, whose
    `source.app_name` names the app, and whose `<install_prefix>/bin/<binary>` is the
@@ -225,3 +278,6 @@ app installed by it updates itself in three steps:
 - No Homebrew, MSI, or PowerShell installers, updater binaries, or workflow generation.
 - The shell installer needs `curl` (not a snap) or `wget`, `tar` with gzip support, and
   `sha256sum` or `shasum`.
+- The npm package needs Node 18 or newer, `tar` with gzip support, and `curl` when a
+  proxy variable is set. Yarn Plug'n'Play must unplug it (`preferUnplugged` asks for
+  that).

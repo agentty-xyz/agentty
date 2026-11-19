@@ -1,5 +1,6 @@
 //! `assemble` unit tests with mocked host boundaries.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -73,6 +74,24 @@ fn git_process(result: Result<Vec<u8>, String>) -> MockProcessRunner {
     process
 }
 
+/// Returns the contents of every file in the npm package `tarball` by path.
+fn package_files(tarball: &[u8]) -> BTreeMap<String, String> {
+    let mut archive = tar::Archive::new(GzDecoder::new(tarball));
+
+    archive
+        .entries()
+        .expect("tar entries")
+        .map(|entry| {
+            let mut entry = entry.expect("tar entry");
+            let path = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+            let mut contents = String::new();
+            entry.read_to_string(&mut contents).expect("UTF-8 entry");
+
+            (path, contents)
+        })
+        .collect()
+}
+
 /// Runs `assemble` for `tag` and returns its result with the captured output.
 fn run(
     tag: &str,
@@ -100,6 +119,10 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
     // Arrange
     let process = git_process(Ok(SOURCE_TAR.to_vec()));
     let files = demo_artifacts();
+    lock(&files).insert(
+        PathBuf::from("/workspace/demo/LICENSE"),
+        b"license".to_vec(),
+    );
     let file_system = memory_file_system(&files);
 
     // Act
@@ -107,10 +130,17 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
 
     // Assert
     assert_eq!(result, Ok(()));
-    let installers = ["demo-app-installer.sh", "demo-tool-installer.sh"];
+    let installers = [
+        "demo-app-installer.sh",
+        "demo-app-npm-package.tar.gz",
+        "demo-tool-installer.sh",
+        "demo-tool-npm-package.tar.gz",
+    ];
     let written = [
         installers[0],
         installers[1],
+        installers[2],
+        installers[3],
         "source.tar.gz",
         "source.tar.gz.sha256",
         "sha256.sum",
@@ -132,11 +162,13 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
         read("source.tar.gz.sha256"),
         checksum::line(&digest("source.tar.gz"), "source.tar.gz").into_bytes()
     );
-    let installer = String::from_utf8(read(installers[1])).expect("UTF-8 installer");
-    assert!(installer.contains(&format!(
-        "_sha256='{}'\n",
-        digest("demo-tool-x86_64-unknown-linux-gnu.tar.gz")
-    )));
+    let tool_digest = digest("demo-tool-x86_64-unknown-linux-gnu.tar.gz");
+    let installer = String::from_utf8(read(installers[2])).expect("UTF-8 installer");
+    assert!(installer.contains(&format!("_sha256='{tool_digest}'\n")));
+    let package = package_files(&read(installers[3]));
+    assert_eq!(package["package/LICENSE"], "license");
+    assert!(!package.contains_key("package/README.md"));
+    assert!(package["package/binary.js"].contains(&format!("\"sha256\": \"{tool_digest}\",")));
     let mut published = [&ARCHIVES[..], &installers, &["source.tar.gz"]].concat();
     published.sort_unstable();
     assert_eq!(

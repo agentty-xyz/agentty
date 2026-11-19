@@ -44,6 +44,9 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   provisions in `.github/actions/setup-native-sandbox/action.yml`. Consult
   `.github/actions/setup-rust-prek/action.yml` when reproducing CI tooling.
 
+- **`ag-release` tests:** its npm package tests install and run the package with Node.js
+  18 or newer and `npm`, which GitHub-hosted runners provide.
+
 - **Timing collector:** changes under `.github/actions/test-timing/` or to the hook
   catalog also run `test-timing-action`, which requires Node.js 24. GitHub-hosted
   runners provide it, and the JavaScript action uses the runner's Node.js runtime inside

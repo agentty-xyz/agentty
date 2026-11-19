@@ -77,6 +77,8 @@ impl FileMode {
 pub(crate) struct Archive {
     /// Top-level directory name.
     directory: String,
+    /// Whether the archive records directory entries.
+    directory_entries: bool,
     /// Files by `/`-separated path relative to `directory`.
     files: BTreeMap<String, ArchiveFile>,
 }
@@ -86,7 +88,17 @@ impl Archive {
     pub(crate) fn new(directory: String) -> Self {
         Self {
             directory,
+            directory_entries: true,
             files: BTreeMap::new(),
+        }
+    }
+
+    /// Returns an empty archive with the top-level `directory` that, like
+    /// the tarballs `npm pack` writes, records no directory entries.
+    pub(crate) fn files_only(directory: String) -> Self {
+        Self {
+            directory_entries: false,
+            ..Self::new(directory)
         }
     }
 
@@ -159,13 +171,17 @@ impl Archive {
     }
 
     /// Returns every entry by archive path: the top-level directory, each
-    /// directory holding a file, and the files. Directory paths end in `/`,
-    /// so each directory sorts before its contents.
+    /// directory holding a file, and the files, or only the files without
+    /// directory entries. Directory paths end in `/`, so each directory sorts
+    /// before its contents.
     fn entries(&self) -> BTreeMap<String, Entry<'_>> {
-        let mut directories = BTreeSet::from([String::new()]);
-        for path in self.files.keys() {
-            for (index, _) in path.match_indices('/') {
-                directories.insert(format!("{}/", &path[..index]));
+        let mut directories = BTreeSet::new();
+        if self.directory_entries {
+            directories.insert(String::new());
+            for path in self.files.keys() {
+                for (index, _) in path.match_indices('/') {
+                    directories.insert(format!("{}/", &path[..index]));
+                }
             }
         }
         let directories = directories.into_iter().map(|directory| {

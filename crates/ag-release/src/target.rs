@@ -59,6 +59,24 @@ impl Target {
         }
     }
 
+    /// Returns Node's `process.platform` on this target, which npm's `os`
+    /// field also uses.
+    pub(crate) fn node_platform(self) -> &'static str {
+        match self {
+            Self::Aarch64AppleDarwin | Self::X8664AppleDarwin => "darwin",
+            Self::Aarch64UnknownLinuxGnu | Self::X8664UnknownLinuxGnu => "linux",
+        }
+    }
+
+    /// Returns Node's `process.arch` on this target, which npm's `cpu` field
+    /// also uses.
+    pub(crate) fn node_arch(self) -> &'static str {
+        match self {
+            Self::Aarch64AppleDarwin | Self::Aarch64UnknownLinuxGnu => "arm64",
+            Self::X8664AppleDarwin | Self::X8664UnknownLinuxGnu => "x64",
+        }
+    }
+
     /// Returns whether the target links against glibc, whose minimum version
     /// installers enforce.
     pub(crate) fn is_glibc(self) -> bool {

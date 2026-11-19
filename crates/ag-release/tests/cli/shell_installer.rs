@@ -11,17 +11,14 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::OsString;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{env, fs, io};
 
-use flate2::Compression;
-use flate2::write::GzEncoder;
-use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 
-use crate::support::{HOST_TARGET, ag_release, committed_demo_workspace, isolate_git};
+use crate::support::{HOST_TARGET, Release, SUPPORTED, link_tools, result, sha256};
 
 /// Root manifest of a demo workspace released with the shell installer for
 /// every supported target.
@@ -42,17 +39,8 @@ x86_64-unknown-linux-gnu = "demo-runner"
 [workspace.metadata.release.apps.demo-app]
 "#;
 
-/// Every configured target, as the installer lists them.
-const TARGETS: [&str; 4] = [
-    "aarch64-apple-darwin",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "x86_64-unknown-linux-gnu",
-];
-
-/// The error suffix naming every supported target.
-const SUPPORTED: &str = "demo-app supports aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
-                         x86_64-apple-darwin, x86_64-unknown-linux-gnu";
+/// The installer `assemble` writes.
+const INSTALLER: &str = "demo-app-installer.sh";
 
 /// Host tools the installer and the fake executables run.
 const TOOLS: [&str; 19] = [
@@ -86,61 +74,9 @@ const UNKNOWN_OID: &str = "echo 'sysctl: unknown oid' >&2; exit 1";
 /// The archive the simulated Linux x86-64 platform installs.
 const LINUX_ARCHIVE: &str = "demo-app-x86_64-unknown-linux-gnu.tar.gz";
 
-/// A release of the demo app for every target, assembled by `ag-release`.
-struct Release {
-    _workspace: TempDir,
-    /// Artifacts directory holding the archives and the installer.
-    artifacts: TempDir,
-}
-
-impl Release {
-    /// Writes an archive and checksum file for every target, whose `demo-app`
-    /// binary prints its target, and assembles the release.
-    fn assemble() -> Result<Self, Box<dyn Error>> {
-        let workspace = committed_demo_workspace(MANIFEST)?;
-        let artifacts = tempdir()?;
-        for target in TARGETS {
-            let archive = Self::archive(target, &format!("echo demo-app {target}"))?;
-            let name = format!("demo-app-{target}.tar.gz");
-            fs::write(
-                artifacts.path().join(format!("{name}.sha256")),
-                format!("{}  {name}\n", sha256(&archive)),
-            )?;
-            fs::write(artifacts.path().join(name), archive)?;
-        }
-        let directory = artifacts.path().to_str().ok_or("UTF-8 artifacts path")?;
-        let assemble = ["assemble", "--tag", "v0.1.0", "--artifacts-dir", directory];
-        let output = isolate_git(&mut ag_release(workspace.path(), &assemble)).output()?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).into());
-        }
-
-        Ok(Self {
-            _workspace: workspace,
-            artifacts,
-        })
-    }
-
-    /// Returns a `.tar.gz` holding `demo-app-<target>/demo-app`, a script
-    /// that runs `command`.
-    fn archive(target: &str, command: &str) -> io::Result<Vec<u8>> {
-        let script = format!("#!/bin/sh\n{command}\n");
-        let mut header = tar::Header::new_gnu();
-        header.set_size(script.len() as u64);
-        header.set_mode(0o755);
-        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
-        builder.append_data(
-            &mut header,
-            format!("demo-app-{target}/demo-app"),
-            script.as_bytes(),
-        )?;
-
-        builder.into_inner()?.finish()
-    }
-
-    fn installer(&self) -> PathBuf {
-        self.artifacts.path().join("demo-app-installer.sh")
-    }
+/// Assembles a release whose `demo-app` binary prints its target.
+fn release() -> Result<Release, Box<dyn Error>> {
+    Release::assemble(MANIFEST, |target| format!("echo demo-app {target}"))
 }
 
 /// An isolated environment to run the installer in.
@@ -156,15 +92,7 @@ impl Sandbox {
         for directory in ["fake", "home", "tmp", "tools"] {
             fs::create_dir(sandbox.path(directory))?;
         }
-        let host_path = env::var_os("PATH").unwrap_or_default();
-        for tool in TOOLS {
-            let found = env::split_paths(&host_path)
-                .map(|directory| directory.join(tool))
-                .find(|path| path.is_file());
-            if let Some(path) = found {
-                symlink(path, sandbox.path("tools").join(tool))?;
-            }
-        }
+        link_tools(&sandbox.path("tools"), &TOOLS)?;
 
         Ok(sandbox)
     }
@@ -265,21 +193,6 @@ fn write_executable(path: &Path, command: &str) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
-/// Returns the lowercase hexadecimal SHA-256 of `contents`.
-fn sha256(contents: &[u8]) -> String {
-    hex::encode(Sha256::digest(contents))
-}
-
-/// Returns standard output of a successful run, or standard error.
-fn result(output: &Output) -> Result<String, String> {
-    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
-    if output.status.success() {
-        return Ok(text(&output.stdout));
-    }
-
-    Err(text(&output.stderr))
-}
-
 /// Returns what the installed binary at `path` prints.
 fn run_binary(path: &Path) -> Result<String, String> {
     Command::new(path)
@@ -349,7 +262,7 @@ fn fish_env_script(bin: &str) -> String {
 fn installer_installs_replaces_and_puts_binaries_on_path_idempotently() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let sandbox = Sandbox::new()?;
     let home = sandbox.home();
     let bin = home.join(".cargo/bin");
@@ -361,11 +274,11 @@ fn installer_installs_replaces_and_puts_binaries_on_path_idempotently() -> Resul
     let variables = [("GITHUB_PATH", github_path.clone().into_os_string())];
 
     // Act
-    let first = result(&sandbox.run(&release.installer(), &variables)?);
+    let first = result(&sandbox.run(&release.artifact(INSTALLER), &variables)?);
     let first_binary = run_binary(&bin.join("demo-app"));
     let first_files = files(&home)?;
     sandbox.platform("Linux", "x86_64", GLIBC)?;
-    let second = result(&sandbox.run(&release.installer(), &variables)?);
+    let second = result(&sandbox.run(&release.artifact(INSTALLER), &variables)?);
 
     // Assert
     let bin = bin.display().to_string();
@@ -430,7 +343,7 @@ fn installer_installs_replaces_and_puts_binaries_on_path_idempotently() -> Resul
 #[test]
 fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let opted_out = Sandbox::new()?;
     let custom = Sandbox::new()?;
     let unmanaged = Sandbox::new()?;
@@ -443,7 +356,7 @@ fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn 
 
     // Act
     let opted_out_run = opted_out.run(
-        &release.installer(),
+        &release.artifact(INSTALLER),
         &[
             cargo_home(&opted_out),
             ("XDG_CONFIG_HOME", opted_out.path("config").into_os_string()),
@@ -451,7 +364,7 @@ fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn 
         ],
     )?;
     let custom_run = custom.run(
-        &release.installer(),
+        &release.artifact(INSTALLER),
         &[
             cargo_home(&custom),
             (
@@ -461,7 +374,7 @@ fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn 
         ],
     )?;
     let unmanaged_run = unmanaged.run(
-        &release.installer(),
+        &release.artifact(INSTALLER),
         &[
             (
                 "DEMO_APP_INSTALL_DIR",
@@ -474,7 +387,7 @@ fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn 
         ],
     )?;
     let on_path_run = on_path.run(
-        &release.installer(),
+        &release.artifact(INSTALLER),
         &[("PATH", on_path.search_path(Some(&on_path_bin))?)],
     )?;
 
@@ -535,7 +448,7 @@ fn installer_honors_install_locations_and_path_opt_outs() -> Result<(), Box<dyn 
 #[test]
 fn installer_selects_the_archive_for_the_platform() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let glibc_minimum = "echo 'ldd (Demo GLIBC 2.17-1) 2.17'";
     let cases = [
         (
@@ -576,7 +489,7 @@ fn installer_selects_the_archive_for_the_platform() -> Result<(), Box<dyn Error>
         sandbox.fake("sysctl", sysctl)?;
 
         // Act
-        let (output, flat) = sandbox.install_flat(&release.installer())?;
+        let (output, flat) = sandbox.install_flat(&release.artifact(INSTALLER))?;
 
         // Assert
         let platform = format!("{system} {machine} ({sysctl})");
@@ -594,7 +507,7 @@ fn installer_selects_the_archive_for_the_platform() -> Result<(), Box<dyn Error>
 #[test]
 fn installer_rejects_unsupported_platforms() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let musl = "echo 'musl libc (x86_64)' >&2; echo 'Version 1.2.5' >&2; exit 1";
     let cases = [
         (
@@ -634,7 +547,7 @@ fn installer_rejects_unsupported_platforms() -> Result<(), Box<dyn Error>> {
         sandbox.platform(system, machine, ldd)?;
 
         // Act
-        let (output, flat) = sandbox.install_flat(&release.installer())?;
+        let (output, flat) = sandbox.install_flat(&release.artifact(INSTALLER))?;
 
         // Assert
         assert_eq!(result(&output), Err(format!("error: {message}\n")));
@@ -647,7 +560,7 @@ fn installer_rejects_unsupported_platforms() -> Result<(), Box<dyn Error>> {
 #[test]
 fn installer_rejects_a_32_bit_userland_on_a_64_bit_kernel() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let elf32 = r"printf '\177ELF\001'";
     let elf64 = r"printf '\177ELF\002'";
     let unreadable = "exit 1";
@@ -676,7 +589,7 @@ fn installer_rejects_a_32_bit_userland_on_a_64_bit_kernel() -> Result<(), Box<dy
         )?;
 
         // Act
-        let (output, flat) = sandbox.install_flat(&release.installer())?;
+        let (output, flat) = sandbox.install_flat(&release.artifact(INSTALLER))?;
 
         // Assert
         let headers = format!("{current_exe} / {shell}");
@@ -699,16 +612,16 @@ fn installer_rejects_a_32_bit_userland_on_a_64_bit_kernel() -> Result<(), Box<dy
 #[test]
 fn installer_downloads_with_curl_or_wget_and_fails_closed() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let original = fs::read(release.artifacts.path().join(LINUX_ARCHIVE))?;
     let tampered = Release::archive("x86_64-unknown-linux-gnu", "echo tampered")?;
     let mirror = tempdir()?;
-    let tampered_installer = mirror.path().join("demo-app-installer.sh");
-    fs::copy(release.installer(), &tampered_installer)?;
+    let tampered_installer = mirror.path().join(INSTALLER);
+    fs::copy(release.artifact(INSTALLER), &tampered_installer)?;
     fs::write(mirror.path().join(LINUX_ARCHIVE), &tampered)?;
     let empty = tempdir()?;
-    let empty_installer = empty.path().join("demo-app-installer.sh");
-    fs::copy(release.installer(), &empty_installer)?;
+    let empty_installer = empty.path().join(INSTALLER);
+    fs::copy(release.artifact(INSTALLER), &empty_installer)?;
     let mismatch = format!(
         "checksum mismatch for {LINUX_ARCHIVE}: expected {}, found {}",
         sha256(&original),
@@ -721,7 +634,7 @@ fn installer_downloads_with_curl_or_wget_and_fails_closed() -> Result<(), Box<dy
         empty.path().display()
     );
     let no_downloader = "installing demo-app needs curl or wget".to_string();
-    let installer = release.installer();
+    let installer = release.artifact(INSTALLER);
     let cases = [
         (tampered_installer.as_path(), &[][..], mismatch),
         (&installer, &["sha256sum", "shasum"], unverifiable),
@@ -767,7 +680,7 @@ fn installer_downloads_with_curl_or_wget_and_fails_closed() -> Result<(), Box<dy
 #[test]
 fn installer_prints_usage_and_rejects_other_arguments() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let usage = [
         "Installs demo-app 0.1.0 from https://github.com/demo-org/demo-app.",
         "",
@@ -803,7 +716,7 @@ fn installer_prints_usage_and_rejects_other_arguments() -> Result<(), Box<dyn Er
         sandbox.platform("Linux", "x86_64", GLIBC)?;
 
         // Act
-        let output = sandbox.run_with_arguments(&release.installer(), &[argument], &[])?;
+        let output = sandbox.run_with_arguments(&release.artifact(INSTALLER), &[argument], &[])?;
 
         // Assert
         assert_eq!(result(&output), expected, "{argument}");
@@ -817,7 +730,7 @@ fn installer_prints_usage_and_rejects_other_arguments() -> Result<(), Box<dyn Er
 #[test]
 fn installer_downloads_with_wget_when_curl_is_a_snap() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let release = Release::assemble()?;
+    let release = release()?;
     let with_wget = Sandbox::new()?;
     let without_wget = Sandbox::new()?;
     for sandbox in [&with_wget, &without_wget] {
@@ -845,8 +758,9 @@ fn installer_downloads_with_wget_when_curl_is_a_snap() -> Result<(), Box<dyn Err
     };
 
     // Act
-    let with_wget_run = with_wget.run(&release.installer(), &variables(&with_wget)?)?;
-    let without_wget_run = without_wget.run(&release.installer(), &variables(&without_wget)?)?;
+    let with_wget_run = with_wget.run(&release.artifact(INSTALLER), &variables(&with_wget)?)?;
+    let without_wget_run =
+        without_wget.run(&release.artifact(INSTALLER), &variables(&without_wget)?)?;
 
     // Assert
     assert!(result(&with_wget_run).is_ok(), "{with_wget_run:?}");
