@@ -20,7 +20,8 @@ pub(crate) struct ReleasePlan {
     pub(crate) apps: Vec<AppPlan>,
     /// Release-wide artifact file names.
     pub(crate) artifacts: ReleaseArtifacts,
-    /// Workspace-root files added to every archive.
+    /// Configured paths of the files added to every archive, which are also
+    /// their paths in the archive, whichever directory supplied them.
     pub(crate) include: Vec<String>,
     pub(crate) installers: BTreeSet<Installer>,
     /// GitHub Actions build matrix with one entry per target.

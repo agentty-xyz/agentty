@@ -119,11 +119,30 @@ fn entries(archive: &[u8]) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// Returns the contents of the file at `path` in a `.tar.gz` archive.
+fn file(archive: &[u8], path: &str) -> Vec<u8> {
+    let mut tar = tar::Archive::new(GzDecoder::new(archive));
+    let mut entry = tar
+        .entries()
+        .expect("entries")
+        .map(|entry| entry.expect("entry"))
+        .find(|entry| entry.path_bytes().as_ref() == path.as_bytes())
+        .expect("archive entry");
+    let mut contents = Vec::new();
+    entry.read_to_end(&mut contents).expect("contents");
+
+    contents
+}
+
 #[test]
 fn build_runs_one_cargo_build_and_writes_each_app_archive_with_its_checksum() {
     // Arrange
     let process = build_process(Ok(()));
     let files = demo_inputs();
+    lock(&files).insert(
+        PathBuf::from("/workspace/demo/crates/demo-tool/README.md"),
+        b"# demo-tool\n".to_vec(),
+    );
     let file_system = memory_file_system(&files);
 
     // Act
@@ -162,8 +181,21 @@ fn build_runs_one_cargo_build_and_writes_each_app_archive_with_its_checksum() {
         ["/", "/LICENSE", "/README.md", "/demo-app", "/demo-helper"]
             .map(|path| (format!("{directory}{path}"), 1_700_000_000))
     );
+    assert_eq!(
+        file(demo_app, &format!("{directory}/README.md")),
+        b"# demo\n"
+    );
     let demo_tool = &files[Path::new(&archive("demo-tool"))];
     assert_eq!(entries(demo_tool).len(), 4);
+    let tool_directory = "demo-tool-x86_64-unknown-linux-gnu";
+    assert_eq!(
+        file(demo_tool, &format!("{tool_directory}/README.md")),
+        b"# demo-tool\n"
+    );
+    assert_eq!(
+        file(demo_tool, &format!("{tool_directory}/LICENSE")),
+        b"license\n"
+    );
 }
 
 #[test]
@@ -237,8 +269,8 @@ fn build_rejects_invalid_inputs_before_running_cargo() {
             "x86_64-unknown-linux-gnu",
             memory_files(&[]),
             None,
-            "`workspace.metadata.release.include` entry `README.md` is not a file in the \
-             workspace root",
+            "`workspace.metadata.release.include` entry `README.md` is not a file in the package \
+             directory of app `demo-app` or in the workspace root",
         ),
         (
             "x86_64-unknown-linux-gnu",

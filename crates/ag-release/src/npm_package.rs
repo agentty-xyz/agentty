@@ -17,7 +17,8 @@ use crate::archive::{Archive, FileMode};
 use crate::plan::{AppPlan, ReleasePlan};
 use crate::target::Target;
 
-/// Workspace-root files the package includes when they exist.
+/// Files the package includes when the app's package directory or the
+/// workspace root holds them.
 pub(crate) const DOCUMENTS: [&str; 3] = ["CHANGELOG.md", "LICENSE", "README.md"];
 
 /// Top-level directory of every npm package tarball.

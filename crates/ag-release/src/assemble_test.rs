@@ -131,9 +131,13 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
     // Arrange
     let process = git_process(Ok(SOURCE_TAR.to_vec()));
     let files = demo_artifacts();
-    lock(&files).insert(
-        PathBuf::from("/workspace/demo/LICENSE"),
-        b"license".to_vec(),
+    lock(&files).extend(
+        [
+            ("/workspace/demo/LICENSE", "license"),
+            ("/workspace/demo/README.md", "# demo"),
+            ("/workspace/demo/crates/demo-tool/README.md", "# demo-tool"),
+        ]
+        .map(|(path, contents)| (PathBuf::from(path), contents.as_bytes().to_vec())),
     );
     let file_system = memory_file_system(&files);
 
@@ -177,9 +181,12 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
     let tool_digest = digest("demo-tool-x86_64-unknown-linux-gnu.tar.gz");
     let installer = String::from_utf8(read(installers[2])).expect("UTF-8 installer");
     assert!(installer.contains(&format!("_sha256='{tool_digest}'\n")));
+    let app_package = package_files(&read(installers[1]));
+    assert_eq!(app_package["package/README.md"], "# demo");
     let package = package_files(&read(installers[3]));
     assert_eq!(package["package/LICENSE"], "license");
-    assert!(!package.contains_key("package/README.md"));
+    assert_eq!(package["package/README.md"], "# demo-tool");
+    assert!(!package.contains_key("package/CHANGELOG.md"));
     assert!(package["package/binary.js"].contains(&format!("\"sha256\": \"{tool_digest}\",")));
     let mut published = [&ARCHIVES[..], &installers, &["source.tar.gz"]].concat();
     published.sort_unstable();

@@ -35,7 +35,7 @@ const DEMO_CHANGELOG: &str = r"# Changelog
 #[test]
 fn notes_print_the_release_title_or_body_from_the_changelog() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let workspace = demo_workspace(DEMO_MANIFEST)?;
+    let workspace = demo_workspace(DEMO_MANIFEST, &["demo-app"])?;
     fs::write(workspace.path().join("CHANGELOG.md"), DEMO_CHANGELOG)?;
     let notes = |args: &[&str]| -> Result<Result<String, String>, Box<dyn Error>> {
         Ok(result(&ag_release(workspace.path(), args).output()?))
