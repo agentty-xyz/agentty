@@ -12,7 +12,7 @@ use std::{env, io};
 use ag_harness::catalog::{ModelCatalog, ModelId, ModelSelector, Role};
 use ag_harness::event::{RunEvent, RunId};
 use ag_harness::model::ReasoningEffort;
-use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::provider::ModelProvider;
 use ag_harness::store::{MemoryStore, SessionInfo};
 use ag_harness::{
     CancelToken, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError, RunHandle,
@@ -32,7 +32,7 @@ use super::protocol::{
     SessionCreateParams, SessionOpened, SessionResumeParams, SessionTranscriptParams, SessionUsage,
     StoreChoice, Transcript, line,
 };
-use crate::{MODEL_PROFILE, stored_model_identity_parts};
+use crate::{MODEL_PROFILE, login, model_client, stored_model_identity_parts};
 
 /// Event lines runs may queue before the next one waits for the server to
 /// write them.
@@ -351,8 +351,14 @@ where
         builder: HarnessBuilder,
         model: &ModelChoice,
     ) -> Result<HarnessBuilder, ServeError> {
-        let catalog = ModelCatalog::from_environment_with(&mut self.environment)
-            .map_err(ServeError::config)?;
+        // The harness keeps no default sign-in location, so the server
+        // passes the one the CLI shares with Agentty.
+        let auth_file = login::chatgpt_auth_file(&mut self.environment);
+        let catalog = ModelCatalog::from_environment_with_auth_file(
+            &mut self.environment,
+            auth_file.as_deref(),
+        )
+        .map_err(ServeError::config)?;
         let selector = match model {
             ModelChoice::Role(role) => ModelSelector::Role(Role::new(role.clone())),
             ModelChoice::Id(id) if catalog.spec(&ModelId::new(id.as_str())).is_some() => {
@@ -375,8 +381,7 @@ where
             .split_once('/')
             .and_then(|(provider, model)| Some((provider.parse::<ModelProvider>().ok()?, model)))
             .ok_or_else(|| ServeError::UnknownModel(id.to_string()))?;
-        let client = ModelConfiguration::new(provider, model)
-            .client_from_environment(&mut self.environment)
+        let client = model_client(provider, model, None, &mut self.environment)
             .map_err(ServeError::config)?;
         let profile = provider
             .declared_profile(model, &mut self.environment)

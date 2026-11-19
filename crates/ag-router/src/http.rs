@@ -1,10 +1,11 @@
-//! Shared HTTP transport for provider wire APIs: bearer authentication,
-//! bounded retries, bounded bodies, and context-overflow classification.
+//! Shared HTTP transport for provider wire APIs: provider headers, bounded
+//! retries, bounded bodies, and context-overflow classification.
 
 use std::error::Error;
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -39,7 +40,7 @@ const CONTEXT_OVERFLOW_MARKERS: [&str; 2] = ["context_length_exceeded", "maximum
 pub(crate) fn is_context_overflow(
     status: reqwest::StatusCode,
     body: &str,
-    provider_markers: &[&str],
+    provider_markers: &[String],
 ) -> bool {
     if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
         return true;
@@ -84,37 +85,38 @@ pub(crate) fn is_quota_exceeded(status: reqwest::StatusCode, body: &str) -> bool
 }
 
 /// Returns whether `text`, read case-insensitively, carries a shared or one
-/// of `provider_markers` of a context-window overflow.
-pub(crate) fn has_context_overflow_marker(text: &str, provider_markers: &[&str]) -> bool {
+/// of the lowercase `provider_markers` of a context-window overflow.
+pub(crate) fn has_context_overflow_marker(text: &str, provider_markers: &[String]) -> bool {
     let text = text.to_lowercase();
 
     CONTEXT_OVERFLOW_MARKERS
         .iter()
-        .chain(provider_markers)
+        .copied()
+        .chain(provider_markers.iter().map(String::as_str))
         .any(|marker| text.contains(marker))
 }
 
 /// One provider-authenticated JSON `POST`.
-pub(crate) struct ProviderRequest<'a> {
-    api_key: Option<&'a str>,
+pub(crate) struct ProviderRequest {
     endpoint: String,
+    headers: HeaderMap,
     payload: Value,
 }
 
-impl<'a> ProviderRequest<'a> {
-    /// Creates a request from provider-owned authentication and payload data.
-    pub(crate) fn new(api_key: Option<&'a str>, endpoint: String, payload: Value) -> Self {
+impl ProviderRequest {
+    /// Creates a request from provider-owned headers, such as its
+    /// authentication, and payload data.
+    pub(crate) fn new(headers: HeaderMap, endpoint: String, payload: Value) -> Self {
         Self {
-            api_key,
             endpoint,
+            headers,
             payload,
         }
     }
 
-    /// Returns the provider bearer token, or `None` for an unauthenticated
-    /// request.
-    pub(crate) fn api_key(&self) -> Option<&str> {
-        self.api_key
+    /// Returns the headers sent before the JSON content type.
+    pub(crate) fn headers(&self) -> &HeaderMap {
+        &self.headers
     }
 
     /// Returns the provider request endpoint.
@@ -144,7 +146,7 @@ impl HttpTransport {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         Self {
-            client: reqwest::Client::new(),
+            client: Self::client(reqwest::Client::builder()),
             max_retry_delay: MAX_RETRY_DELAY,
             request_timeout,
             retry_delay: RETRY_DELAY,
@@ -156,12 +158,20 @@ impl HttpTransport {
     /// `idle_timeout`.
     pub(crate) fn streaming(idle_timeout: Duration, request_timeout: Duration) -> Self {
         let mut transport = Self::new(request_timeout);
-        transport.client = reqwest::Client::builder()
-            .read_timeout(idle_timeout)
-            .build()
-            .unwrap_or_default();
+        transport.client = Self::client(reqwest::Client::builder().read_timeout(idle_timeout));
 
         transport
+    }
+
+    /// Builds a client that follows no redirect, so authentication and
+    /// extra headers, which may carry keys, never reach another host; a
+    /// `3xx` fails as an HTTP error. A build failure falls back to
+    /// [`reqwest::Client::default`], which panics on the same failure.
+    fn client(builder: reqwest::ClientBuilder) -> reqwest::Client {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default()
     }
 
     /// Sends `request` and decodes its successful body.
@@ -170,7 +180,7 @@ impl HttpTransport {
     /// Returns a transport, HTTP, size, or decoding failure.
     pub(crate) async fn post_json<Response: DeserializeOwned>(
         &self,
-        request: &ProviderRequest<'_>,
+        request: &ProviderRequest,
     ) -> Result<Response, TransportError> {
         let mut response = self.send(request).await?;
         let body = success_body(&mut response).await?;
@@ -189,16 +199,15 @@ impl HttpTransport {
     /// Returns a transport or HTTP failure.
     pub(crate) async fn send(
         &self,
-        request: &ProviderRequest<'_>,
+        request: &ProviderRequest,
     ) -> Result<reqwest::Response, TransportError> {
         let mut rate_limit_retries = 0_usize;
         let mut transport_retries = 0_usize;
         loop {
-            let mut builder = self.client.post(request.endpoint());
-            if let Some(api_key) = request.api_key() {
-                builder = builder.bearer_auth(api_key);
-            }
-            let response = builder
+            let response = self
+                .client
+                .post(request.endpoint())
+                .headers(request.headers().clone())
                 .timeout(self.request_timeout)
                 .json(request.payload())
                 .send()
@@ -211,7 +220,7 @@ impl HttpTransport {
 
                     continue;
                 }
-                Err(error) => return Err(TransportError::transport(error)),
+                Err(error) => return Err(TransportError::reqwest(error)),
             };
 
             if let Err(source) = response.error_for_status_ref() {
@@ -236,12 +245,16 @@ impl HttpTransport {
                     continue;
                 }
 
+                // Query parameters may carry keys, so no error names the URL.
                 return Err(TransportError::Http {
                     body,
                     retry_after,
-                    source,
+                    source: source.without_url(),
                     status,
                 });
+            }
+            if response.status().is_redirection() {
+                return Err(TransportError::Redirected(response.status()));
             }
 
             return Ok(response);
@@ -294,7 +307,7 @@ async fn error_body_summary(response: &mut reqwest::Response) -> String {
         let chunk = match response.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break None,
-            Err(error) => break Some(error),
+            Err(error) => break Some(error.without_url()),
         };
 
         let remaining = ERROR_BODY_LIMIT_BYTES.saturating_sub(body.len());
@@ -336,7 +349,7 @@ async fn success_body(response: &mut reqwest::Response) -> Result<Vec<u8>, Trans
     }
 
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(TransportError::transport)? {
+    while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
         append_success_chunk(&mut body, &chunk)?;
     }
 
@@ -368,6 +381,10 @@ pub(crate) enum TransportError {
     },
     #[error("model API returned an invalid response: {0}")]
     InvalidResponse(#[source] serde_json::Error),
+    /// A redirect, which the transport never follows; its target is not
+    /// named, since a request's keys must not leave the configured host.
+    #[error("model API answered with redirect HTTP {0}, which is not followed")]
+    Redirected(reqwest::StatusCode),
     #[error("model API response body exceeds the size limit")]
     ResponseBodyTooLarge,
     #[error("model API transport failed: {0}")]
@@ -379,12 +396,18 @@ impl TransportError {
         Self::Transport(Box::new(error))
     }
 
+    /// Wraps a client failure without its URL, whose query parameters may
+    /// carry keys.
+    pub(crate) fn reqwest(error: reqwest::Error) -> Self {
+        Self::transport(error.without_url())
+    }
+
     /// Classifies this failure for `provider`, recognizing a context-window
     /// overflow by the shared markers and `overflow_markers`.
     pub(crate) fn into_model_error(
         self,
-        provider: &'static str,
-        overflow_markers: &[&str],
+        provider: &str,
+        overflow_markers: &[String],
     ) -> model::ModelError {
         match self {
             Self::Http {
@@ -404,6 +427,11 @@ impl TransportError {
             error @ Self::InvalidResponse(_) => model::ModelError::classified_request(
                 model::ModelErrorType::InvalidProviderResponse,
                 None,
+                error.into(),
+            ),
+            error @ Self::Redirected(status) => model::ModelError::classified_request(
+                model::ModelErrorType::Provider,
+                Some(status.as_u16()),
                 error.into(),
             ),
             Self::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,

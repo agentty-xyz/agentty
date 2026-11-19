@@ -4,7 +4,8 @@
 //! Every run happens in a [`Sandbox`]: a cleared environment with a
 //! temporary `HOME` and a `PATH` of symbolic links to the host tools the
 //! installer needs, preceded by fake `uname`, `ldd`, `sysctl`, and `wget`
-//! executables that simulate other platforms. Runs never see the real home
+//! executables that simulate other platforms, and by fake `head` and `curl`
+//! executables where a test needs them. Runs never see the real home
 //! directory or shell startup files.
 
 use std::collections::BTreeMap;
@@ -42,7 +43,7 @@ x86_64-unknown-linux-gnu = "demo-runner"
 const INSTALLER: &str = "demo-app-installer.sh";
 
 /// Host tools the installer and the fake executables run.
-const TOOLS: [&str; 18] = [
+const TOOLS: [&str; 19] = [
     "awk",
     "cat",
     "chmod",
@@ -50,6 +51,7 @@ const TOOLS: [&str; 18] = [
     "curl",
     "grep",
     "gzip",
+    "head",
     "ldd",
     "mkdir",
     "mktemp",
@@ -117,10 +119,7 @@ impl Sandbox {
 
     /// Puts an executable `name` running `command` first on `PATH`.
     fn fake(&self, name: &str, command: &str) -> io::Result<()> {
-        let path = self.path("fake").join(name);
-        fs::write(&path, format!("#!/bin/sh\n{command}\n"))?;
-
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        write_executable(&self.path("fake").join(name), command)
     }
 
     /// Removes the host tool `name` from `PATH`.
@@ -157,11 +156,22 @@ impl Sandbox {
     /// Runs `installer` with only `HOME`, `PATH`, `TMPDIR`, a download URL
     /// naming the installer's directory, and `variables` set.
     fn run(&self, installer: &Path, variables: &[(&str, OsString)]) -> io::Result<Output> {
+        self.run_with_arguments(installer, &[], variables)
+    }
+
+    /// Runs `installer` with `arguments` in the environment of [`Self::run`].
+    fn run_with_arguments(
+        &self,
+        installer: &Path,
+        arguments: &[&str],
+        variables: &[(&str, OsString)],
+    ) -> io::Result<Output> {
         let artifacts = installer.parent().unwrap_or(installer);
         let search_path = self.search_path(None)?;
 
         Command::new("/bin/sh")
             .arg(installer)
+            .args(arguments)
             .current_dir(self.root.path())
             .env_clear()
             .env("HOME", self.home())
@@ -174,6 +184,13 @@ impl Sandbox {
             .envs(variables.iter().cloned())
             .output()
     }
+}
+
+/// Writes an executable `sh` script running `command` to `path`.
+fn write_executable(path: &Path, command: &str) -> io::Result<()> {
+    fs::write(path, format!("#!/bin/sh\n{command}\n"))?;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
 /// Returns what the installed binary at `path` prints.
@@ -541,6 +558,58 @@ fn installer_rejects_unsupported_platforms() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn installer_rejects_a_32_bit_userland_on_a_64_bit_kernel() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let release = release()?;
+    let elf32 = r"printf '\177ELF\001'";
+    let elf64 = r"printf '\177ELF\002'";
+    let unreadable = "exit 1";
+    let rejected = Err(format!(
+        "error: unsupported platform Linux aarch64 with a 32-bit userland; {SUPPORTED}\n"
+    ));
+    // The ELF header of `/proc/self/exe`, then of `/bin/sh`, and whether the
+    // installer rejects the platform.
+    let cases = [
+        (elf32, elf64, true),
+        (unreadable, elf32, true),
+        (elf64, elf32, false),
+        (unreadable, unreadable, false),
+    ];
+
+    for (current_exe, shell, is_rejected) in cases {
+        let sandbox = Sandbox::new()?;
+        sandbox.platform("Linux", "aarch64", GLIBC)?;
+        // `head -c 5 <file>` prints the magic number and class of an ELF file.
+        sandbox.fake(
+            "head",
+            &format!(
+                "case \"$3\" in /proc/self/exe) {current_exe} ;; /bin/sh) {shell} ;; *) exit 1 ;; \
+                 esac"
+            ),
+        )?;
+
+        // Act
+        let (output, flat) = sandbox.install_flat(&release.artifact(INSTALLER))?;
+
+        // Assert
+        let headers = format!("{current_exe} / {shell}");
+        if is_rejected {
+            assert_eq!(result(&output), rejected, "{headers}");
+            assert!(!flat.exists(), "{headers}");
+        } else {
+            assert!(result(&output).is_ok(), "{headers}: {output:?}");
+            assert_eq!(
+                run_binary(&flat.join("demo-app")),
+                Ok("demo-app aarch64-unknown-linux-gnu\n".to_string()),
+                "{headers}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn installer_downloads_with_curl_or_wget_and_fails_closed() -> Result<(), Box<dyn Error>> {
     // Arrange
     let release = release()?;
@@ -604,6 +673,111 @@ fn installer_downloads_with_curl_or_wget_and_fails_closed() -> Result<(), Box<dy
         run_binary(&flat.join("demo-app")),
         Ok("demo-app x86_64-unknown-linux-gnu\n".to_string())
     );
+
+    Ok(())
+}
+
+#[test]
+fn installer_prints_usage_and_rejects_other_arguments() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let release = release()?;
+    let usage = [
+        "Installs demo-app 0.1.0 from https://github.com/demo-org/demo-app.",
+        "",
+        "Usage: sh demo-app-installer.sh [--help]",
+        "",
+        "Environment variables:",
+        "  DEMO_APP_DOWNLOAD_URL: base URL of the release archives.",
+        "  DEMO_APP_INSTALL_DIR: install prefix; binaries go to its bin directory.",
+        "  DEMO_APP_UNMANAGED_INSTALL: directory to install the binaries into",
+        "    directly, without a receipt or PATH changes.",
+        "  DEMO_APP_NO_MODIFY_PATH: 1 leaves PATH and shell startup files unchanged.",
+        "",
+    ]
+    .join("\n");
+    let cases = [
+        ("--help", Ok(usage.clone())),
+        ("-h", Ok(usage)),
+        (
+            "--no-modify-path",
+            Err(
+                "error: unknown argument --no-modify-path; set DEMO_APP_NO_MODIFY_PATH=1 instead\n"
+                    .to_string(),
+            ),
+        ),
+        (
+            "--verbose",
+            Err("error: unknown argument --verbose; the only argument is --help\n".to_string()),
+        ),
+    ];
+
+    for (argument, expected) in cases {
+        let sandbox = Sandbox::new()?;
+        sandbox.platform("Linux", "x86_64", GLIBC)?;
+
+        // Act
+        let output = sandbox.run_with_arguments(&release.artifact(INSTALLER), &[argument], &[])?;
+
+        // Assert
+        assert_eq!(result(&output), expected, "{argument}");
+        assert_eq!(files(&sandbox.home())?, BTreeMap::new(), "{argument}");
+        assert_eq!(fs::read_dir(sandbox.path("tmp"))?.count(), 0, "{argument}");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn installer_downloads_with_wget_when_curl_is_a_snap() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let release = release()?;
+    let with_wget = Sandbox::new()?;
+    let without_wget = Sandbox::new()?;
+    for sandbox in [&with_wget, &without_wget] {
+        sandbox.platform("Linux", "x86_64", GLIBC)?;
+        fs::create_dir_all(sandbox.path("snap/bin"))?;
+        // A strictly confined snap cannot write into the installer's work
+        // directory.
+        write_executable(
+            &sandbox.path("snap/bin/curl"),
+            "echo 'curl: cannot write' >&2; exit 23",
+        )?;
+    }
+    with_wget.fake("wget", "cp \"${4#file://}\" \"$3\"")?;
+    let variables = |sandbox: &Sandbox| -> io::Result<[(&str, OsString); 2]> {
+        Ok([
+            (
+                "PATH",
+                sandbox.search_path(Some(&sandbox.path("snap/bin")))?,
+            ),
+            (
+                "DEMO_APP_UNMANAGED_INSTALL",
+                sandbox.path("flat").into_os_string(),
+            ),
+        ])
+    };
+
+    // Act
+    let with_wget_run = with_wget.run(&release.artifact(INSTALLER), &variables(&with_wget)?)?;
+    let without_wget_run =
+        without_wget.run(&release.artifact(INSTALLER), &variables(&without_wget)?)?;
+
+    // Assert
+    assert!(result(&with_wget_run).is_ok(), "{with_wget_run:?}");
+    assert_eq!(
+        run_binary(&with_wget.path("flat/demo-app")),
+        Ok("demo-app x86_64-unknown-linux-gnu\n".to_string())
+    );
+    let snap_curl = without_wget.path("snap/bin/curl");
+    assert_eq!(
+        result(&without_wget_run),
+        Err(format!(
+            "error: {} is a snap, which cannot write the installer's temporary files; install \
+             wget or a curl that is not a snap\n",
+            snap_curl.display()
+        ))
+    );
+    assert!(!without_wget.path("flat").exists());
 
     Ok(())
 }

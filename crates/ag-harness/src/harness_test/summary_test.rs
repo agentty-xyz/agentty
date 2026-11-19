@@ -1147,7 +1147,7 @@ async fn round_summaries_go_to_the_cataloged_summary_model_and_are_attributed_to
     assert_eq!(costs_of(&events, "host/smart").len(), smart_requests.len());
     assert!(outcome.report.model_requests().iter().all(|request| {
         let expected = match request.purpose() {
-            ModelRequestPurpose::ContextSummary => "host/cheap",
+            ModelRequestPurpose::ContextSummary | ModelRequestPurpose::Compaction => "host/cheap",
             ModelRequestPurpose::Turn => "host/smart",
         };
 

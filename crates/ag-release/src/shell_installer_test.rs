@@ -71,6 +71,8 @@ fn render_bakes_in_every_release_value() {
             .to_string(),
         "_glibc=true\n                ;;\n            *)\n".to_string(),
         "for _binary in 'demo-app' 'demo-helper'; do\n".to_string(),
+        "\nUsage: sh demo-app-installer.sh [--help]\n".to_string(),
+        "set DEMO_APP_NO_MODIFY_PATH=1 instead\"\n".to_string(),
     ] {
         assert!(script.contains(&expected), "missing {expected:?} in:\n{script}");
     }

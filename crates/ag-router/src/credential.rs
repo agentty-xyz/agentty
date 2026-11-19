@@ -5,10 +5,11 @@ use std::error::Error;
 use async_trait::async_trait;
 
 /// Bearer token source for a provider whose token expires, such as a
-/// [`crate::chatgpt::ChatGptAuth`] sign-in. The router asks for a token before
-/// every request, so an implementation refreshes it when needed.
+/// [`crate::chatgpt::ChatGptAuth`] sign-in, configured as
+/// [`crate::Auth::Credential`]. The router asks for a token before every
+/// request, so an implementation refreshes it when needed.
 #[async_trait]
-pub trait BearerCredential: Send + Sync {
+pub trait CredentialSource: Send + Sync {
     /// Returns a bearer token valid for the next request.
     ///
     /// # Errors

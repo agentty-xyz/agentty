@@ -4,6 +4,7 @@ mod activity;
 mod config;
 mod sign_in;
 mod turn;
+mod turn_error;
 
 pub(crate) use activity::ActivityBridge;
 pub use config::NativeHarnessConfig;
@@ -15,3 +16,4 @@ pub(crate) use sign_in::sign_in_chatgpt;
 pub(crate) use turn::{
     NativePrompt, parse_outcome, reject_attachments, run_one_shot, settle, token_usage,
 };
+pub(crate) use turn_error::NativeTurnError;

@@ -595,6 +595,7 @@ impl ModelRequestActivity {
 
 /// Why the harness sent one provider request of a turn.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[non_exhaustive]
 pub enum ModelRequestPurpose {
     /// A request of the turn's own conversation.
     #[default]
@@ -602,6 +603,11 @@ pub enum ModelRequestPurpose {
     /// A tool-free request that summarized earlier tool rounds of the turn,
     /// so later requests carry the summary in their place.
     ContextSummary,
+    /// A tool-free request that compacted earlier session turns into a
+    /// checkpoint before the turn's first request, under
+    /// [`crate::model::ContextPolicy::AutoCompact`]. These requests lead the
+    /// report, before the turn's own.
+    Compaction,
 }
 
 /// Content-free counts of how one provider request was reduced to fit the

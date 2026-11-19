@@ -43,6 +43,8 @@ an authentication method permitted for your account, plan, and usage pattern.
 - Claude turns can always use `WebSearch` and `WebFetch` without a permission prompt,
   and Claude's file-edit tool cannot edit the main checkout. Treat fetched web content
   as untrusted, keep web-backed prompts specific, and review the diff before merging.
+- Codex and Claude load the MCP servers configured for their CLI, including plugin
+  servers and Claude.ai connectors. MCP tools follow the provider's own approval rules.
 - Agentty instructs agents to keep project edits inside the worktree. When permissions
   allow writes, build, test, and recording commands may still use external caches,
   temporary files, and container storage.
@@ -218,10 +220,13 @@ external CLI, against a free local model server or a paid hosted provider:
 | ------------ | ---- | ------------------------------------ | ------------------------------------- |
 | Local server | Free | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
 | Muse         | Paid | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
-| Kimi         | Paid | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
+| Kimi         | Paid | `KIMI_API_KEY`                       | Optional `KIMI_BASE_URL`              |
 | Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
 | OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
 | ChatGPT plan | Plan | `ag-harness login chatgpt` sign-in   | Optional `CHATGPT_BASE_URL`           |
+
+Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
+`KIMI_BASE_URL` to use another, such as `https://api.moonshot.cn/v1`.
 
 Without the flag the session type is hidden; with it but no runnable model, it is shown
 disabled. With a runnable model, Agentty starts even when no backend CLI is installed,
