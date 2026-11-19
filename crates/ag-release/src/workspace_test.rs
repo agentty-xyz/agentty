@@ -77,7 +77,23 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
         workspace.target_directory,
         PathBuf::from(DEMO_ROOT).join("target")
     );
+    assert_eq!(workspace.tool_directory, None);
     assert_eq!(workspace.version, version);
+}
+
+#[test]
+fn from_metadata_finds_the_tool_package_directory() {
+    // Arrange
+    let metadata = demo_metadata_with("/packages/0/name", json!(env!("CARGO_PKG_NAME")));
+
+    // Act
+    let workspace = Workspace::from_metadata(&metadata).expect("workspace");
+
+    // Assert
+    assert_eq!(
+        workspace.tool_directory,
+        Some(PathBuf::from(DEMO_ROOT).join("crates/demo-lib"))
+    );
 }
 
 #[test]

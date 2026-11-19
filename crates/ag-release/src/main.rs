@@ -4,6 +4,7 @@
 //! The crate README is the public contract for configuration, commands, and
 //! artifacts.
 
+mod action_pin;
 mod archive;
 mod artifact;
 mod assemble;
@@ -21,6 +22,8 @@ mod repository;
 mod shell_installer;
 mod tag;
 mod target;
+mod workflow;
+mod workflow_config;
 mod workspace;
 
 use std::env;

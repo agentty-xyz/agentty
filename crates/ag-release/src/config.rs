@@ -11,21 +11,23 @@ use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::target::Target;
+use crate::workflow_config::WorkflowConfig;
 
 /// Dotted path of the release configuration table.
-const TABLE: &str = "workspace.metadata.release";
+pub(crate) const TABLE: &str = "workspace.metadata.release";
 
 /// Cargo profile used when `profile` is not set.
 const DEFAULT_PROFILE: &str = "release";
 
 /// Keys accepted in `[workspace.metadata.release]`.
-const RELEASE_KEYS: [&str; 6] = [
+const RELEASE_KEYS: [&str; 7] = [
     "apps",
     "include",
     "installers",
     "min-glibc",
     "profile",
     "targets",
+    "workflow",
 ];
 
 /// Keys accepted in `[workspace.metadata.release.apps.<app>]`.
@@ -45,6 +47,8 @@ pub(crate) struct ReleaseConfig {
     pub(crate) profile: String,
     /// GitHub Actions runner label for each build target.
     pub(crate) targets: BTreeMap<Target, String>,
+    /// Settings of the generated release workflow.
+    pub(crate) workflow: WorkflowConfig,
 }
 
 impl ReleaseConfig {
@@ -63,7 +67,7 @@ impl ReleaseConfig {
 
         Ok(Self {
             apps: Self::parse_apps(&table)?,
-            include: Self::parse_include(&table)?,
+            include: table.relative_paths("include")?,
             installers: Self::parse_installers(&table)?,
             min_glibc: table
                 .optional_string("min-glibc")?
@@ -71,6 +75,11 @@ impl ReleaseConfig {
                 .transpose()?,
             profile: Self::parse_profile(&table)?,
             targets: Self::parse_targets(&table)?,
+            workflow: table
+                .optional_table("workflow")?
+                .map(|workflow| WorkflowConfig::parse(&workflow))
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -124,26 +133,6 @@ impl ReleaseConfig {
                 let app = ConfigTable::new(value, apps.key(name))?;
 
                 Ok((name.clone(), AppConfig::parse(&app)?))
-            })
-            .collect()
-    }
-
-    fn parse_include(table: &ConfigTable<'_>) -> Result<Vec<String>, String> {
-        table
-            .optional_strings("include")?
-            .into_iter()
-            .map(|path| {
-                if Path::new(path)
-                    .components()
-                    .all(|component| matches!(component, Component::Normal(_)))
-                {
-                    Ok(path.to_string())
-                } else {
-                    Err(format!(
-                        "`{}` entry `{path}` must be a relative path inside the workspace root",
-                        table.key("include")
-                    ))
-                }
             })
             .collect()
     }
@@ -324,13 +313,19 @@ impl Serialize for GlibcVersion {
 }
 
 /// One configuration table with its dotted path for error messages.
-struct ConfigTable<'value> {
-    entries: &'value Map<String, Value>,
-    path: String,
+pub(crate) struct ConfigTable<'value> {
+    /// The table's keys and values, in configured order.
+    pub(crate) entries: &'value Map<String, Value>,
+    /// Dotted path of the table, such as `workspace.metadata.release`.
+    pub(crate) path: String,
 }
 
 impl<'value> ConfigTable<'value> {
-    fn new(value: &'value Value, path: String) -> Result<Self, String> {
+    /// Wraps `value`, which must be a table, at the dotted `path`.
+    ///
+    /// # Errors
+    /// Returns an error naming `path` when `value` is not a table.
+    pub(crate) fn new(value: &'value Value, path: String) -> Result<Self, String> {
         let entries = value
             .as_object()
             .ok_or_else(|| format!("`{path}` must be a table"))?;
@@ -338,11 +333,16 @@ impl<'value> ConfigTable<'value> {
         Ok(Self { entries, path })
     }
 
-    fn key(&self, key: &str) -> String {
+    /// Returns the dotted path of `key` in this table.
+    pub(crate) fn key(&self, key: &str) -> String {
         format!("{}.{key}", self.path)
     }
 
-    fn reject_unknown(&self, known: &[&str]) -> Result<(), String> {
+    /// Fails on the first key that is not in `known`.
+    ///
+    /// # Errors
+    /// Returns an error naming the unknown key and listing `known`.
+    pub(crate) fn reject_unknown(&self, known: &[&str]) -> Result<(), String> {
         match self
             .entries
             .keys()
@@ -357,7 +357,12 @@ impl<'value> ConfigTable<'value> {
         }
     }
 
-    fn optional_string(&self, key: &str) -> Result<Option<&'value str>, String> {
+    /// Returns the nonempty string at `key`, or `None` when it is absent.
+    ///
+    /// # Errors
+    /// Returns an error naming the key when the value is not a nonempty
+    /// string.
+    pub(crate) fn optional_string(&self, key: &str) -> Result<Option<&'value str>, String> {
         self.entries
             .get(key)
             .map(|value| {
@@ -369,8 +374,44 @@ impl<'value> ConfigTable<'value> {
             .transpose()
     }
 
+    /// Returns the nonempty string at `key`.
+    ///
+    /// # Errors
+    /// Returns an error naming the key when it is absent or not a nonempty
+    /// string.
+    pub(crate) fn required_string(&self, key: &str) -> Result<&'value str, String> {
+        self.optional_string(key)?
+            .ok_or_else(|| format!("missing `{}`", self.key(key)))
+    }
+
+    /// Returns the boolean at `key`, `false` when it is absent.
+    ///
+    /// # Errors
+    /// Returns an error naming the key when the value is not a boolean.
+    pub(crate) fn optional_bool(&self, key: &str) -> Result<bool, String> {
+        self.entries.get(key).map_or(Ok(false), |value| {
+            value
+                .as_bool()
+                .ok_or_else(|| format!("`{}` must be `true` or `false`", self.key(key)))
+        })
+    }
+
+    /// Returns the table at `key`, or `None` when it is absent.
+    ///
+    /// # Errors
+    /// Returns an error naming the key when the value is not a table.
+    pub(crate) fn optional_table(&self, key: &str) -> Result<Option<Self>, String> {
+        self.entries
+            .get(key)
+            .map(|value| Self::new(value, self.key(key)))
+            .transpose()
+    }
+
     /// Returns a list of unique nonempty strings, empty when the key is absent.
-    fn optional_strings(&self, key: &str) -> Result<Vec<&'value str>, String> {
+    ///
+    /// # Errors
+    /// Returns an error naming the key when the value is not such a list.
+    pub(crate) fn optional_strings(&self, key: &str) -> Result<Vec<&'value str>, String> {
         let Some(value) = self.entries.get(key) else {
             return Ok(Vec::new());
         };
@@ -389,6 +430,31 @@ impl<'value> ConfigTable<'value> {
         }
 
         Ok(strings)
+    }
+
+    /// Returns a list of unique relative paths inside the workspace root,
+    /// empty when the key is absent.
+    ///
+    /// # Errors
+    /// Returns an error naming the key when the value is not a list of
+    /// unique nonempty strings or an entry leaves the workspace root.
+    pub(crate) fn relative_paths(&self, key: &str) -> Result<Vec<String>, String> {
+        self.optional_strings(key)?
+            .into_iter()
+            .map(|path| {
+                if Path::new(path)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+                {
+                    Ok(path.to_string())
+                } else {
+                    Err(format!(
+                        "`{}` entry `{path}` must be a relative path inside the workspace root",
+                        self.key(key)
+                    ))
+                }
+            })
+            .collect()
     }
 
     /// Returns a required table that holds at least one `entry_kind` entry.

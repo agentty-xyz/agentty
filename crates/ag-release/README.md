@@ -3,9 +3,9 @@
 `ag-release` plans and packages GitHub releases of the binaries in a Cargo workspace. It
 reads its configuration from `Cargo.toml`, prints a release plan (a JSON document that
 release workflows consume), builds deterministic archives, assembles the release-wide
-checksums and manifest, and writes the GitHub release notes from `CHANGELOG.md`. It is a
-small, project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml`
-setup.
+checksums and manifest, writes the GitHub release notes from `CHANGELOG.md`, and
+generates the GitHub Actions workflow that runs these steps. It is a small,
+project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml` setup.
 
 ## Quick Start
 
@@ -16,9 +16,11 @@ setup.
 1. Add `[workspace.metadata.release]` to the workspace `Cargo.toml` (see
    [Configuration](#configuration)).
 1. Set `repository = "https://github.com/<owner>/<name>"` on each released package.
+1. Set `[workspace.metadata.release.workflow]` `tool` to the same repository and commit,
+   so the release jobs install the version you run locally.
 1. Run `ag-release plan` from anywhere in the workspace to validate the configuration.
-1. Add a release workflow that runs the commands as
-   [Release Workflow](#release-workflow) describes.
+1. Run `ag-release workflow` and commit `.github/workflows/release.yml` (see
+   [Release Workflow](#release-workflow)).
 
 ## Configuration
 
@@ -56,6 +58,43 @@ come from the package's resolved Cargo metadata. All apps release in lockstep: t
 share one version and one GitHub `repository`.
 
 Unknown keys, wrong types, and invalid values are errors that name the key.
+
+The optional `workflow` table configures the generated
+[release workflow](#release-workflow):
+
+```toml
+[workspace.metadata.release.workflow]
+tool = { git = "https://github.com/<owner>/<name>", rev = "<commit>" }
+node-version = "24.x"
+smoke-paths = [".github/workflows/publish-npm.yml"]
+
+[workspace.metadata.release.workflow.distributions]  # container image -> expected error
+"ubuntu:22.04" = ""                                    # must install and run
+"ubuntu:20.04" = "needs glibc"                         # must fail with this text
+
+[workspace.metadata.release.workflow.jobs.publish-npm]  # key = job id
+stage = "publish"
+uses = "./.github/workflows/publish-npm.yml"
+permissions = { contents = "read", id-token = "write" }
+plan = true
+```
+
+| Key                     | Default                  | Value                                                                                                   |
+| ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `tool`                  | build from the workspace | `git` (`https://` URL) and `rev` (full 40-digit commit) to install `ag-release` from                    |
+| `node-version`          | the runner's Node.js     | `actions/setup-node` version for `smoke`                                                                |
+| `smoke-paths`           | `[]`                     | Unique relative paths whose change runs `smoke`                                                         |
+| `distributions`         | none                     | Image to `""` (must install) or text the installer's failure contains; needs `shell` and a Linux target |
+| `jobs.<id>.stage`       | required                 | `"check"` or `"publish"`                                                                                |
+| `jobs.<id>.uses`        | required                 | Reusable workflow: `./<path>`, `$/<path>`, or `<owner>/<repo>/<path>@<ref>`, copied verbatim            |
+| `jobs.<id>.permissions` | `{}`                     | `GITHUB_TOKEN` permission names to `read`, `write`, or `none`, as GitHub documents them                 |
+| `jobs.<id>.plan`        | `false`                  | Pass the plan JSON as the reusable workflow's `plan` input                                              |
+| `jobs.<id>.prerelease`  | `false`                  | Run a `publish` job for prereleases too                                                                 |
+
+`tool` is required unless `ag-release` is a package of the workspace. Job ids must be
+valid GitHub job ids that differ, ignoring case, from each other and from the built-in
+`plan`, `smoke`, `build`, `assemble`, `distributions`, and `host`. Values the workflow
+embeds may not contain line breaks, other control characters, or `${{`.
 
 ## Commands
 
@@ -150,32 +189,51 @@ gh release create "$TAG" --title "$(ag-release notes --tag "$TAG" --title)" \
   --notes-file release-notes.md artifacts/*
 ```
 
+### `workflow [--check]`
+
+Writes the [release workflow](#release-workflow) to `.github/workflows/release.yml` in
+the workspace root, creating its directories, and prints its path. For each action it
+uses, it keeps the `uses: <action>@<ref> # <version>` pin it finds in the existing file
+and uses its own default pin only for an action the file lacks, so regenerating never
+reverts a Dependabot update. With `--check`, it writes nothing, prints that the file is
+up to date, and fails, naming `ag-release workflow`, when the file is missing or
+differs.
+
 ## Release Workflow
 
-A GitHub Actions release workflow on a tag push runs one command per job and passes
-files between jobs as workflow artifacts:
+`ag-release workflow` generates the GitHub Actions workflow that runs the commands.
+Commit it and regenerate it after changing the configuration or `ag-release`, never by
+hand: its `plan` job runs `ag-release workflow --check`, so a stale file fails every
+pull request. Generate it with the same `ag-release` version as `tool`, which the jobs
+install, and keep the workspace root at the repository root.
 
-| Job       | Runs                                                         | Consumes                         | Produces                    |
-| --------- | ------------------------------------------------------------ | -------------------------------- | --------------------------- |
-| plan      | `ag-release plan --tag "$TAG"`                               | The checkout                     | Plan JSON as a job output   |
-| build     | `rustup target add`, then `ag-release build --target`        | One `matrix` entry of the plan   | That target's archives      |
-| assemble  | `ag-release assemble`, then `ag-release notes` and `--title` | Every archive, on the tag commit | Release files, title, body  |
-| release   | `gh release create` with the title, body, and release files  | The assemble job's output        | The GitHub release          |
-| npm, etc. | `npm publish` of each app's `npm_tarball`                    | The release files and the plan   | Packages, after the release |
+| Job             | Runs on                                                      | Does                                                                                                     |
+| --------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `plan`          | Every pull request, merge-queue check, tag push, and dry run | `plan` (with the pushed tag), `workflow --check`, and detection of release tooling changes               |
+| `smoke`         | Pull requests that change release tooling                    | On each runner label of `targets`: builds, assembles, and installs the host target, and runs each binary |
+| `build`         | Tag pushes and dry runs                                      | `rustup target add` and `build` for each `matrix` entry, on its runner                                   |
+| `assemble`      | After every build                                            | `assemble`, `notes`, and `notes --title`                                                                 |
+| `distributions` | Dry runs, when configured                                    | Runs the shell installer in each image and checks its success or error                                   |
+| `host`          | Tag pushes, after every `check` job and build                | Attests the files, uploads them to a draft GitHub release, and then publishes it                         |
 
-Run each build job on its matrix entry's runner, for example with
-`strategy: { matrix: ${{ fromJson(needs.plan.outputs.plan).matrix }} }` and
-`runs-on: ${{ matrix.runner }}`. Publish packages only after the GitHub release exists,
-because their installers download its archives, and skip them when the plan's
-`prerelease` is `true` if prereleases should not reach package registries. Running
-`plan` on pull requests catches configuration errors before a release.
+Release tooling is the workflow file, the `[workspace.metadata.release` tables, the
+`ag-release` package when the workspace builds it, and `smoke-paths`. A
+`workflow_dispatch` run is a dry run: it builds every target with the configured profile
+and keeps the files as workflow artifacts, but publishes nothing. Each job gets only the
+token permissions it needs and checks out without persisted credentials. Jobs install
+the toolchain that a `rust-toolchain.toml` pins, or use the runner's.
 
-To test a workflow without publishing, build the host target with `--profile dev`, pass
-the same `--target` to `plan` and `assemble`, and install from the artifacts directory
-with `<APP>_DOWNLOAD_URL=file://<dir>`. This repository's
-[`release.yml`](https://github.com/agentty-xyz/agentty/blob/main/.github/workflows/release.yml)
-is a complete example with release checks, attestations, draft-first publishing, and
-these tests.
+Configured `jobs` call reusable workflows at one of two stages:
+
+- `check` jobs run on tag pushes, and `host` needs them, so a failing check stops the
+  release.
+- `publish` jobs run after `host` on tag pushes, for example to publish packages, whose
+  installers download the release's archives. They skip prereleases unless
+  `prerelease = true`.
+
+To test a workflow without publishing, as `smoke` does, build the host target with
+`--profile dev`, pass the same `--target` to `plan` and `assemble`, and install from the
+artifacts directory with `<APP>_DOWNLOAD_URL=file://<dir>`.
 
 ## Artifacts
 
@@ -334,7 +392,9 @@ installer updates itself in three steps:
 
 - GitHub-hosted repositories only.
 - macOS and glibc Linux targets only: no Windows or musl.
-- No Homebrew, MSI, or PowerShell installers, updater binaries, or workflow generation.
+- No Homebrew, MSI, or PowerShell installers or updater binaries.
+- The generated workflow is for GitHub Actions only and supports custom jobs only as
+  reusable workflows at the `check` and `publish` stages.
 - The shell installer needs `curl` (not a snap) or `wget`, `tar` with gzip support, and
   `sha256sum` or `shasum`.
 - The npm package needs Node 18 or newer, `tar` with gzip support, and `curl` when a

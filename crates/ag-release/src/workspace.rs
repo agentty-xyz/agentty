@@ -2,7 +2,7 @@
 //! the package data of every configured app.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::Deserialize;
@@ -11,6 +11,9 @@ use serde_json::Value;
 use crate::config::ReleaseConfig;
 use crate::process::{ProcessCommand, ProcessRunner};
 use crate::repository::GitHubRepository;
+
+/// Package name of this tool, which a workspace may contain.
+pub(crate) const TOOL_PACKAGE: &str = env!("CARGO_PKG_NAME");
 
 /// A workspace's validated release configuration and app packages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +27,9 @@ pub(crate) struct Workspace {
     pub(crate) root: PathBuf,
     /// Cargo build output directory, such as `<root>/target`.
     pub(crate) target_directory: PathBuf,
+    /// Absolute directory of the `ag-release` package when it is a member
+    /// of the workspace.
+    pub(crate) tool_directory: Option<PathBuf>,
     /// Version every app shares; apps release in lockstep.
     pub(crate) version: Version,
 }
@@ -78,6 +84,11 @@ impl Workspace {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let (repository, version) = Self::shared_identity(&apps)?;
+        let tool_directory = packages
+            .iter()
+            .find(|package| package.name == TOOL_PACKAGE)
+            .and_then(|package| package.manifest_path.parent())
+            .map(Path::to_path_buf);
 
         Ok(Self {
             apps,
@@ -85,6 +96,7 @@ impl Workspace {
             repository,
             root: workspace_root,
             target_directory,
+            tool_directory,
             version,
         })
     }
@@ -177,6 +189,7 @@ struct MetadataPackage {
     authors: Vec<String>,
     description: Option<String>,
     license: Option<String>,
+    manifest_path: PathBuf,
     name: String,
     repository: Option<String>,
     targets: Vec<MetadataTarget>,

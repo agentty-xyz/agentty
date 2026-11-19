@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use serde_json::Value;
 
-use crate::cli::{AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions};
+use crate::cli::{
+    AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions, WorkflowOptions,
+};
 use crate::file_system::MockFileSystem;
 use crate::process::MockProcessRunner;
 use crate::workspace::test_support::{BrokenPipe, demo_metadata, metadata_process};
@@ -93,6 +95,8 @@ fn cli_parses_every_command() {
         ],
         vec!["ag-release", "notes", "--tag", "v1.2.3"],
         vec!["ag-release", "notes", "--tag", "v1.2.3", "--title"],
+        vec!["ag-release", "workflow"],
+        vec!["ag-release", "workflow", "--check"],
     ];
 
     // Act
@@ -109,6 +113,7 @@ fn cli_parses_every_command() {
             targets,
         }) => format!("assemble {tag} {} {targets:?}", artifacts_dir.display()),
         Command::Notes(NotesOptions { tag, title }) => format!("notes {tag} {title}"),
+        Command::Workflow(WorkflowOptions { check }) => format!("workflow {check}"),
     });
 
     // Assert
@@ -124,6 +129,8 @@ fn cli_parses_every_command() {
             "assemble v1.2.3 artifacts [\"a\"]",
             "notes v1.2.3 false",
             "notes v1.2.3 true",
+            "workflow false",
+            "workflow true",
         ]
     );
 }

@@ -1,0 +1,29 @@
+
+      # Installs the toolchain that a `rust-toolchain.toml` pins; without one,
+      # the runner's default toolchain builds.
+      - name: Install the Rust toolchain
+        run: |
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            rustup toolchain install --profile minimal --no-self-update
+          fi
+
+      # Release jobs restore no build cache, so a release cannot read state that
+      # another workflow wrote. The binary goes next to `cargo`, a directory that
+      # is on `PATH` on every runner image; `~/.cargo/bin` does not exist on macOS
+      # runners.
+[%- if let Some(tool) = tool %]
+      - name: Install `ag-release`
+        env:
+          AG_RELEASE_GIT: [= tool.git =]
+          AG_RELEASE_REV: [= tool.rev =]
+        run: |
+          cargo install --locked --quiet --git "$AG_RELEASE_GIT" --rev "$AG_RELEASE_REV" \
+            --root "$RUNNER_TEMP/ag-release" ag-release
+          cp "$RUNNER_TEMP/ag-release/bin/ag-release" "$(dirname "$(command -v cargo)")/"
+[%- else %]
+      - name: Build `ag-release`
+        run: |
+          cargo build --locked --quiet --package ag-release
+          target_dir="$(cargo metadata --format-version 1 --no-deps | jq --raw-output .target_directory)"
+          cp "$target_dir/debug/ag-release" "$(dirname "$(command -v cargo)")/"
+[%- endif %]
