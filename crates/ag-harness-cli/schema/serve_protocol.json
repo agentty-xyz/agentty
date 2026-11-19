@@ -1639,7 +1639,7 @@
           "required": [
             "type"
           ],
-          "description": "The run finished; always the last event."
+          "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn."
         }
       ],
       "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added."

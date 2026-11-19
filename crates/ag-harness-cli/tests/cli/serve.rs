@@ -65,26 +65,6 @@ async fn provider() -> MockServer {
     server
 }
 
-/// Waits until `provider` received a prompt containing `text`, so a run
-/// waiting on it has already recorded its turn.
-async fn requested(provider: &MockServer, text: &str) -> TestResult<()> {
-    tokio::time::timeout(READ_TIMEOUT, async {
-        loop {
-            let received = provider.received_requests().await.unwrap_or_default();
-            if received
-                .iter()
-                .any(|request| String::from_utf8_lossy(&request.body).contains(text))
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-
-    Ok(())
-}
-
 fn request(id: i64, method: &str, params: Value) -> Value {
     let mut request = json!({"jsonrpc": "2.0", "id": id, "method": method});
     request["params"] = params;
@@ -92,8 +72,8 @@ fn request(id: i64, method: &str, params: Value) -> Value {
     request
 }
 
-fn is_completed(message: &Value) -> bool {
-    message["method"] == "run/event" && message["params"]["event"]["kind"]["type"] == "completed"
+fn is_event(message: &Value, kind: &str) -> bool {
+    message["method"] == "run/event" && message["params"]["event"]["kind"]["type"] == kind
 }
 
 /// Compiles the committed schema, and one validator per method that accepts
@@ -232,8 +212,9 @@ impl Server {
         Ok(response)
     }
 
-    async fn completed(&mut self, run: &Value) -> TestResult<Value> {
-        self.wait(|message| is_completed(message) && message["params"]["event"]["run"] == *run)
+    /// Returns the first `run/event` of `run` whose kind is `kind`.
+    async fn event(&mut self, run: &Value, kind: &str) -> TestResult<Value> {
+        self.wait(|message| is_event(message, kind) && message["params"]["event"]["run"] == *run)
             .await
     }
 
@@ -290,12 +271,14 @@ async fn serve_runs_sessions_and_stops_runs_over_stdio() -> TestResult<()> {
         .await?;
     let answered_run = answered["result"]["run"].clone();
     let waiting_run = waiting["result"]["run"].clone();
-    let answered_completed = server.completed(&answered_run).await?;
-    requested(&provider, "Wait").await?;
+    // A run cancelled before `started` may record no turn, so cancel only
+    // once the durable turn is admitted.
+    server.event(&waiting_run, "started").await?;
     let cancel = server
         .call(5, "run/cancel", json!({"run": waiting_run}))
         .await?;
-    let cancelled = server.completed(&waiting_run).await?;
+    let answered_completed = server.event(&answered_run, "completed").await?;
+    let cancelled = server.event(&waiting_run, "completed").await?;
     let transcript = server
         .call(
             6,
@@ -334,13 +317,14 @@ async fn serve_runs_sessions_and_stops_runs_over_stdio() -> TestResult<()> {
         transcript["result"]["turns"][0]["status"],
         json!("completed")
     );
-    assert_eq!(
-        durable_transcript["result"]["turns"][0]["status"],
-        json!("interrupted")
-    );
+    let durable_turns = durable_transcript["result"]["turns"]
+        .as_array()
+        .ok_or("the durable transcript should list turns")?;
+    assert_eq!(durable_turns.len(), 1);
+    assert_eq!(durable_turns[0]["status"], json!("interrupted"));
     let stopped: Vec<&Value> = rest
         .iter()
-        .filter(|message| is_completed(message))
+        .filter(|message| is_event(message, "completed"))
         .collect();
     assert_eq!(stopped.len(), 1);
     assert_eq!(stopped[0]["params"]["event"]["run"], open["result"]["run"]);

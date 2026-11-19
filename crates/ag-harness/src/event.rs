@@ -234,7 +234,12 @@ pub enum RunEventKind {
     /// turn's [`crate::turn::HistoryActivity`] counts what its first request
     /// still evicted.
     Compacted(CompactionReport),
-    /// The run finished; always the last event.
+    /// The run finished; always the last event. It follows the run's
+    /// settlement, so once it arrives the session transcript holds the
+    /// turn of a run that emitted [`Self::Started`] with its terminal
+    /// status, unless persistence cleanup failed (see
+    /// [`crate::RunOutcome::settlement`]). A run that stopped before
+    /// [`Self::Started`] may have recorded no turn.
     Completed(RunSummary),
 }
 
