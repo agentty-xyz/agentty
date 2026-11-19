@@ -275,7 +275,11 @@ pub enum RunEventKind {
 impl RunEventKind {
     /// Returns a [`Self::Retrying`] event whose delay is truncated to the
     /// millisecond, so the event reads the same in process and on the wire.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) fn retrying(after: Duration, attempt: u32, kind: ErrorKind) -> Self {
         Self::Retrying {
             after: Duration::from_millis(Self::whole_millis(after)),
@@ -609,7 +613,11 @@ pub(crate) async fn with_retry_events<F: Future>(
 
 /// Returns the sink [`with_retry_events`] scoped the current model request
 /// to, if any.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 pub(crate) fn retry_events() -> Option<Arc<EventSink>> {
     RETRY_EVENTS.try_with(Arc::clone).ok()
 }

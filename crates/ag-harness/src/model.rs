@@ -10,7 +10,11 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,9 +34,17 @@ pub use crate::context::{
     ContextBudget, ContextBudgetError, ContextEstimator, ContextPolicy, ContextSummaryPolicy,
     HeuristicContextEstimator,
 };
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::error::ErrorKind;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::event::{self, EventSink, RunEventKind};
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
@@ -717,10 +729,18 @@ impl Model for ModelClient {
 
 /// Reports a routed request's retries to the streamed run it belongs to as
 /// [`RunEventKind::Retrying`] events.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 struct RetryEvents(Arc<EventSink>);
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 impl RetryEvents {
     /// Returns the failure kind a retry of `kind` reports: `5xx` statuses
     /// read as [`ErrorKind::Overloaded`], as their final failure would.
@@ -735,7 +755,11 @@ impl RetryEvents {
     }
 }
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[async_trait]
 impl ag_router::RetryObserver for RetryEvents {
     async fn retrying(&self, notice: ag_router::RetryNotice) {
