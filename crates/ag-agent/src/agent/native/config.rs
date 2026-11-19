@@ -10,7 +10,7 @@ use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
-use ag_harness::catalog::{Capabilities, ModelId, ModelSpec};
+use ag_harness::catalog::Capabilities;
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
     ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
@@ -22,8 +22,8 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
-    Harness, Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, Repository,
-    RepositoryError, ToolSet, TurnInput, TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, ToolSet, TurnInput,
+    TurnOptions,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -37,6 +37,11 @@ use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
 /// it and require the same value on resume.
+///
+/// Image input joined the declared capabilities without a new revision: the
+/// harness weighs that capability only for image-bearing input, which
+/// Agentty rejects before a harness turn, so recorded sessions and text
+/// retries are unaffected while older sessions keep resuming.
 const REGISTRATION_REVISION: &str = "agentty-native-2";
 /// Conservative profile for a harness model without a declared profile. Its
 /// default estimator runs up to 46% under dense content and further under
@@ -255,9 +260,9 @@ fn hosted_model(
 
     Some(HarnessModelOption {
         context_window: selection
-            .spec(environment, None)
+            .profile(environment, None)
             .ok()
-            .and_then(|spec| spec.context_window()),
+            .map(ModelProfile::context_window_tokens),
         cost,
         loaded_context_window: None,
         model,
@@ -508,14 +513,9 @@ impl ModelSelection {
             .ok_or_else(unknown)
     }
 
-    /// Returns the stable registry key, the model's catalog identifier.
+    /// Returns the stable registry key.
     pub(crate) fn key(&self) -> String {
-        self.id().to_string()
-    }
-
-    /// Returns the catalog identifier, such as `kimi/kimi-k3`.
-    fn id(&self) -> ModelId {
-        ModelId::cataloged(self.provider, &self.model)
+        format!("{}/{}", self.provider, self.model)
     }
 
     /// Registers this model's provider client under its key.
@@ -568,7 +568,7 @@ impl ModelSelection {
             None => Arc::new(client),
         };
 
-        self.register(model, self.spec(environment, running_context_window)?)
+        self.register(model, self.profile(environment, running_context_window)?)
     }
 
     /// Builds a harness for this model with Agentty's defaults.
@@ -616,63 +616,36 @@ impl ModelSelection {
                 .map_err(failure("Invalid resume-only harness model"))?
         };
         let metadata = client.metadata().clone();
-        let spec = self.spec(context.environment, None)?;
-        let registry = self.register(Arc::new(ResumeOnlyModel { metadata }), spec)?;
+        let profile = self.profile(context.environment, None)?;
+        let registry = self.register(Arc::new(ResumeOnlyModel { metadata }), profile)?;
 
         self.harness_from(&registry, context, observer)
     }
 
-    /// Returns this model's catalog specification: the harness provider
-    /// catalog's built-in one, with its capabilities and prices, or the
-    /// capabilities the catalog assumes for a served model, under the
-    /// context profile [`Self::profile`] picks.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid environment-declared profile.
-    fn spec(
+    /// Registers `model` under this selection's key with `profile` and the
+    /// tool calls and image input the harness provider catalog declares for
+    /// the model. A selection only holds a cataloged model or one an
+    /// OpenAI-compatible server serves, both of which the catalog describes.
+    fn register(
         &self,
-        environment: &BTreeMap<String, String>,
-        running_context_window: Option<u64>,
-    ) -> Result<ModelSpec, String> {
-        let spec = self.provider.model_spec(&self.model).unwrap_or_else(|| {
-            ModelSpec::new(self.id())
-                .with_provider(self.provider)
-                .with_capabilities(
-                    self.provider
-                        .capabilities(&self.model)
-                        .unwrap_or(Capabilities::NONE),
-                )
-        });
-
-        Ok(spec.with_profile(self.profile(environment, running_context_window)?))
-    }
-
-    /// Catalogs `model` under `spec` and registers the resolved entry under
-    /// this selection's key, declaring the profile, tool calls, and image
-    /// input its specification declares.
-    ///
-    /// Durable sessions record the registration identity and require it on
-    /// resume, so the catalog entry is registered rather than handed to the
-    /// harness directly.
-    fn register(&self, model: Arc<dyn Model>, spec: ModelSpec) -> Result<ModelRegistry, String> {
-        let invalid = "Invalid harness model registration";
-        let handle = ModelCatalog::builder()
-            .model(spec, model)
-            .build()
-            .and_then(|catalog| catalog.resolve(&ModelSelector::Id(self.id())))
-            .map_err(failure(invalid))?;
-        let identity =
-            ExecutionIdentity::new(self.key(), REGISTRATION_REVISION).map_err(failure(invalid))?;
-        let declared = handle.spec().capabilities();
+        model: Arc<dyn Model>,
+        profile: ModelProfile,
+    ) -> Result<ModelRegistry, String> {
+        let identity = ExecutionIdentity::new(self.key(), REGISTRATION_REVISION)
+            .map_err(failure("Invalid harness model registration"))?;
+        let declared = self
+            .provider
+            .capabilities(&self.model)
+            .unwrap_or(Capabilities::NONE);
         let capabilities = ModelCapabilities {
             image_input: declared.image_input(),
             tool_calls: declared.tool_calls(),
-            ..ModelCapabilities::new(handle.profile().unwrap_or(FALLBACK_MODEL_PROFILE))
+            ..ModelCapabilities::new(profile)
         };
         let mut registry = ModelRegistry::new();
         registry
-            .register_shared(identity, handle.model(), capabilities)
-            .map_err(failure(invalid))?;
+            .register_shared(identity, model, capabilities)
+            .map_err(failure("Invalid harness model registration"))?;
 
         Ok(registry)
     }

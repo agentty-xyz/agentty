@@ -10,7 +10,7 @@ use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{ModelMetadata, ModelProfile, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
-use ag_harness::{Model, TurnInput};
+use ag_harness::{ImageContent, ImageMediaType, InputBlock, Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::json;
@@ -227,8 +227,11 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     );
     // The harness catalog declares the ChatGPT-plan windows.
     assert_eq!(options[9].context_window, Some(500_000));
-    // The harness catalog declares the Qwen flash window.
+    // The harness catalog declares the Qwen flash window, and Agentty its
+    // fitted Qwen3.8-Max and Qwen-Plus profiles.
     assert_eq!(options[7].context_window, Some(1_000_000));
+    assert_eq!(options[5].context_window, Some(1_000_000));
+    assert_eq!(options[6].context_window, Some(1_000_000));
     // The harness catalog declares the Muse and Kimi windows.
     assert_eq!(options[1].context_window, Some(1_048_576));
     assert_eq!(options[4].context_window, Some(262_144));
@@ -455,7 +458,8 @@ fn openai_compatible_selection_names_the_served_model() {
 
 #[test]
 /// Registers the OpenAI-compatible model with the profile the environment
-/// declares, without an API key, and reports invalid declarations.
+/// declares and tool calls but no image input, without an API key, and
+/// reports invalid declarations.
 fn openai_compatible_registration_uses_the_declared_profile() {
     // Arrange
     let configured = environment(&[
@@ -670,15 +674,20 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
     let harness = selection.resume_only_harness(&context, |_: LifecycleEvent| {});
 
     // Assert
-    assert!(harness.is_ok(), "{:?}", harness.err());
+    let harness = harness.expect("resume-only harness");
+    let registration = harness.model_registration().expect("registration");
+    assert_eq!(registration.identity().key(), "chatgpt/gpt-6.1-sol");
+    assert_eq!(registration.identity().revision(), "agentty-native-2");
+    assert!(registration.capabilities().tool_calls);
 }
 
 #[test]
 /// Registers each served model under the current revision with its declared
 /// context profile: the provider catalog's where it declares one, Agentty's
 /// for the others, and the conservative fallback for uncataloged models.
-/// Tool calls and image input follow the catalog specification.
-fn registrations_declare_revision_and_per_model_context_profiles() {
+/// Every model declares tool calls, and all but the text-only Qwen3.7-Flash
+/// declare image input.
+fn registrations_declare_revision_profiles_and_capabilities() {
     // Arrange
     let (_directory, auth_file) = signed_in_auth_file();
     let environment = environment(&[
@@ -696,8 +705,6 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
             .iter()
             .map(move |model| (*provider, *model))
     });
-
-    let mut image_registrations = 0;
 
     // Act / Assert
     for (provider, model) in models {
@@ -721,24 +728,15 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
                     .and_then(model_profile::declared)
             })
             .unwrap_or(FALLBACK_MODEL_PROFILE);
-        let declared = provider
-            .model_spec(model)
-            .expect("cataloged model")
-            .capabilities();
         assert_eq!(registration.identity().revision(), "agentty-native-2");
         assert_eq!(registration.capabilities().profile, expected, "{model}");
         assert!(registration.capabilities().tool_calls, "{model}");
         assert_eq!(
             registration.capabilities().image_input,
-            declared.image_input(),
+            model != "qwen3.7-flash",
             "{model}"
         );
-        image_registrations += usize::from(declared.image_input());
     }
-    assert!(
-        image_registrations > 0,
-        "the catalog's image-reading models must register image input"
-    );
     let sol = ModelSelection::resolve("gpt-6.1-sol", &environment).expect("served model");
     let sol_registry = sol.registry(&environment, None, None).expect("registry");
     let sol_profile = sol_registry
@@ -941,6 +939,13 @@ async fn budgeted_model_charges_before_each_request() {
         inner: client,
     };
     let schema = output_schema(ProtocolRequestProfile::UtilityPrompt).expect("schema");
+    let png_signature = vec![0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
+    let image = ImageContent::new(ImageMediaType::Png, png_signature).expect("image");
+    let image_input = TurnInput::from_blocks(vec![
+        InputBlock::Text("Describe this.".to_string()),
+        InputBlock::Image(image),
+    ])
+    .expect("image input");
 
     // Act
     let completion = model
@@ -956,6 +961,8 @@ async fn budgeted_model_charges_before_each_request() {
     );
     assert!(model.validate_schema(&schema).is_ok());
     assert!(model.validate_input(&TurnInput::from("Hi")).is_ok());
+    // Muse reads images, so the registered image input reaches its client.
+    assert!(model.validate_input(&image_input).is_ok());
     assert!(!model.keeps_prefix_across_schemas());
     assert!(!model.replays_reasoning_text());
     let error = completion.expect_err("an exhausted budget should refuse the request");
@@ -963,4 +970,27 @@ async fn budgeted_model_charges_before_each_request() {
         error.to_string().contains("provider call limit reached"),
         "{error}"
     );
+}
+
+#[test]
+/// Declares the same key, revision, and capabilities with a provider-call
+/// budget as without one.
+fn budgeted_registration_keeps_the_identity_and_capabilities() {
+    // Arrange
+    let environment = environment(&[("MODEL_API_KEY", "key")]);
+    let selection = ModelSelection::resolve("muse-spark-1.3", &environment).expect("served model");
+    let budget = ProviderCallBudget::new(1);
+
+    // Act
+    let registry = selection
+        .registry(&environment, Some(&budget), None)
+        .expect("registry");
+
+    // Assert
+    let registration = registry
+        .resolve("muse/muse-spark-1.3")
+        .expect("registration");
+    assert_eq!(registration.identity().revision(), "agentty-native-2");
+    assert!(registration.capabilities().tool_calls);
+    assert!(registration.capabilities().image_input);
 }
