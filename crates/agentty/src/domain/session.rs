@@ -1,5 +1,5 @@
-//! In-memory session model used by the UI and app layers, with status- and
-//! stack-based action gates.
+//! In-memory session model used by the UI and app layers, with status-based
+//! action gates.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -23,9 +23,6 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
 };
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
-
-/// Maximum number of stacked descendants in one root-to-child chain.
-pub const MAX_STACK_DEPTH: usize = 5;
 
 /// Full in-progress loader label shown while post-turn commit-message
 /// generation and git commit orchestration are running.
@@ -274,9 +271,6 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
-    /// Parent session this stacked session is based on while its parent branch
-    /// remains active.
-    pub parent_session_id: Option<SessionId>,
     /// Provider permission mode selected through the prompt shortcut.
     pub permission_mode: crate::domain::permission::PermissionMode,
     /// Workspace agent selected for future turns, when present.
@@ -372,54 +366,16 @@ impl Session {
         self.is_draft_session() && self.status == Status::Draft && !self.prompt.is_empty()
     }
 
-    /// Returns whether this session can parent a stacked draft.
-    ///
-    /// Unstarted standalone drafts are excluded because their worktree branch
-    /// is deferred until start. Unstarted stacked drafts can stage descendants
-    /// against their deterministic future branch, though each descendant must
-    /// still wait for its immediate parent to reach review before starting.
-    /// Terminal sessions no longer provide an active branch to stack on. The
-    /// stack-wide depth policy is evaluated separately because it requires the
-    /// loaded session graph.
-    pub fn allows_stacked_child_creation(&self) -> bool {
-        if self.is_draft_session()
-            && self.status == Status::Draft
-            && self.parent_session_id.is_none()
-        {
-            return false;
-        }
-
-        !matches!(
-            self.status,
-            Status::Merged | Status::Done | Status::Canceled
-        )
-    }
-
-    /// Returns whether this session can be moved beneath another session.
-    ///
-    /// Appending changes the branch base and immediately starts a sync, so the
-    /// source must be an independent, review-ready user-owned branch without
-    /// a forge review request whose target would become stale.
-    pub fn allows_stack_append(&self) -> bool {
-        self.parent_session_id.is_none()
-            && self.review_request.is_none()
-            && self.status.allows_review_actions()
-    }
-
     /// Returns whether this session can be forked into a new independent
     /// session branch.
     ///
     /// Forks start from the current session branch and snapshot durable
-    /// transcript history, so the source must be a root session with a
-    /// materialized branch in a review-ready state. Drafts are excluded
-    /// because their worktree may not exist yet, stacked children are excluded
-    /// because they remain coupled to parent stack workflow, and non-review
-    /// statuses are excluded because active branch work or terminal cleanup
-    /// could race with the snapshot.
+    /// transcript history, so the source must have a materialized branch in a
+    /// review-ready state. Drafts are excluded because their worktree may not
+    /// exist yet, and non-review statuses are excluded because active branch
+    /// work or terminal cleanup could race with the snapshot.
     pub fn allows_fork_action(&self) -> bool {
-        self.parent_session_id.is_none()
-            && !self.is_draft_session()
-            && self.status.allows_review_actions()
+        !self.is_draft_session() && self.status.allows_review_actions()
     }
 
     /// Returns whether the session can submit an agent reply for actionable
@@ -477,11 +433,6 @@ impl Session {
     /// Returns whether the session lifecycle permits opening its worktree.
     pub fn allows_worktree_open_action(&self) -> bool {
         self.status.allows_session_actions()
-    }
-
-    /// Returns whether this session is stacked beneath another session branch.
-    pub fn is_stacked_child(&self) -> bool {
-        self.parent_session_id.is_some()
     }
 
     /// Returns whether the staged draft bundle can start its first live turn.
@@ -664,293 +615,6 @@ impl Session {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     }
-}
-
-/// Returns whether `parent_session_id` can parent another stacked draft
-/// without exceeding [`MAX_STACK_DEPTH`].
-pub(crate) fn can_create_stacked_child(sessions: &[Session], parent_session_id: &str) -> bool {
-    let Some(parent_session) = find_session(sessions, parent_session_id) else {
-        return false;
-    };
-
-    parent_session.allows_stacked_child_creation()
-        && session_stack_depth(sessions, parent_session_id)
-            .is_some_and(|depth| depth < MAX_STACK_DEPTH)
-}
-
-/// Returns whether one review-ready root session can be moved beneath
-/// `parent_session_id` and synchronized as a stacked child.
-pub(crate) fn can_append_session_to_stack(
-    sessions: &[Session],
-    session_id: &str,
-    parent_session_id: &str,
-) -> bool {
-    if session_id == parent_session_id {
-        return false;
-    }
-    let Some(session) = find_session(sessions, session_id) else {
-        return false;
-    };
-    let Some(parent_session) = find_session(sessions, parent_session_id) else {
-        return false;
-    };
-
-    session.allows_stack_append()
-        && !sessions.iter().any(|candidate| {
-            candidate
-                .parent_session_id
-                .as_deref()
-                .is_some_and(|parent_id| parent_id == session_id)
-        })
-        && parent_session.status.allows_review_actions()
-        && can_create_stacked_child(sessions, parent_session_id)
-        && can_rebase_session_branch_in_stack(sessions, parent_session_id)
-}
-
-/// Returns whether the staged draft identified by `session_id` can start
-/// under the currently loaded stack.
-///
-/// Root drafts only need their own staged prompt state. Stacked drafts also
-/// require a review-ready immediate parent and no other branch work already
-/// running or queued in the same stack.
-pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
-        return false;
-    };
-    let session = stack.requested_session();
-    if !session.can_start_staged_session() {
-        return false;
-    }
-
-    if session.parent_session_id.is_none() {
-        return true;
-    }
-    if !stack.parent_allows_stacked_child_start() {
-        return false;
-    }
-
-    !stack.has_branch_mutating_member_except(session_id)
-}
-
-/// Returns whether the session identified by `session_id` can start slash
-/// command branch mutation while preserving one active branch worker per
-/// stack.
-///
-/// This blocks parent branch edits once a child branch has materialized, and
-/// blocks any stack member from starting branch work while a different member
-/// is already running, queued, rebasing, merging, or waiting on a question.
-pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
-        return false;
-    };
-
-    if stack.has_branch_mutating_member_except(session_id) {
-        return false;
-    }
-
-    if stack.has_materialized_descendant() {
-        return false;
-    }
-
-    true
-}
-
-/// Returns whether a session can enter the merge queue while preserving stack
-/// consistency.
-///
-/// A linked forge review request disables local merge queueing so the remote
-/// review remains the only merge path. Otherwise, merging a parent with idle
-/// materialized children is allowed because the successful parent merge
-/// retargets and syncs the children afterward. Active stack members still
-/// block the request so the stack does not run competing branch work.
-pub(crate) fn can_merge_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
-        return false;
-    };
-
-    stack.requested_session.review_request.is_none()
-        && !stack.has_branch_mutating_member_except(session_id)
-}
-
-/// Returns whether a session can start session sync while preserving stack
-/// consistency.
-///
-/// Like merge, syncing a parent with idle materialized children is allowed
-/// because the successful parent sync fans out child syncs afterward. Active
-/// stack members still block the request so the stack does not run competing
-/// branch work.
-pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
-        return false;
-    };
-
-    !stack.has_branch_mutating_member_except(session_id)
-}
-
-/// Returns whether a session can accept a chat reply under stack
-/// constraints.
-///
-/// Replies are allowed when the stack has no other member actively running or
-/// reserving branch work. Unlike merge or sync gates, an idle review-ready
-/// materialized child does not block parent replies; the child can be synced
-/// again after the parent produces its next review state.
-pub(crate) fn can_reply_to_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
-        return false;
-    };
-
-    !stack.has_branch_mutating_member_except(session_id)
-}
-
-/// Returns whether a caller-owned branch reservation belongs to this stack.
-/// Missing or invalid stacks fail closed, matching the branch-work gates.
-pub(crate) fn has_reserved_branch_work_in_stack(
-    sessions: &[Session],
-    session_id: &str,
-    mut is_reserved: impl FnMut(&str) -> bool,
-) -> bool {
-    SessionStack::for_session(sessions, session_id)
-        .is_none_or(|stack| stack.members.iter().any(|member| is_reserved(&member.id)))
-}
-
-/// Snapshot of one loaded stack tree for branch-work policy checks.
-struct SessionStack<'a> {
-    members: Vec<&'a Session>,
-    requested_session: &'a Session,
-}
-
-impl<'a> SessionStack<'a> {
-    /// Builds the stack containing `session_id` from the loaded session list.
-    fn for_session(sessions: &'a [Session], session_id: &str) -> Option<Self> {
-        let requested_session = find_session(sessions, session_id)?;
-        let root_session = stack_root_session(sessions, requested_session)?;
-        let members = sessions
-            .iter()
-            .filter(|session| session_stack_root_id(sessions, session) == Some(&root_session.id))
-            .collect();
-
-        Some(Self {
-            members,
-            requested_session,
-        })
-    }
-
-    /// Returns the session whose action is being evaluated.
-    fn requested_session(&self) -> &'a Session {
-        self.requested_session
-    }
-
-    /// Returns whether another stack member is currently reserving or
-    /// performing branch-mutating work.
-    fn has_branch_mutating_member_except(&self, ignored_session_id: &str) -> bool {
-        self.members
-            .iter()
-            .filter(|session| session.id.as_str() != ignored_session_id)
-            .any(|session| session.status.is_stack_branch_mutating())
-    }
-
-    /// Returns whether the requested session has a non-terminal descendant
-    /// branch that has started at least one live turn.
-    fn has_materialized_descendant(&self) -> bool {
-        self.members.iter().any(|session| {
-            session.id != self.requested_session.id
-                && session_is_descendant_of(
-                    &self.members,
-                    session,
-                    self.requested_session.id.as_str(),
-                )
-                && !matches!(
-                    session.status,
-                    Status::Draft | Status::Merged | Status::Done | Status::Canceled
-                )
-        })
-    }
-
-    /// Returns whether the immediate parent is in a state that lets the
-    /// requested stacked draft materialize.
-    ///
-    /// The caller handles root drafts before invoking this stacked-only gate.
-    fn parent_allows_stacked_child_start(&self) -> bool {
-        self.requested_session
-            .parent_session_id
-            .as_ref()
-            .is_some_and(|parent_session_id| {
-                self.members.iter().any(|session| {
-                    session.id == *parent_session_id && session.status.allows_stacked_child_start()
-                })
-            })
-    }
-}
-
-/// Returns the zero-based stack depth of a session, rejecting missing or
-/// cyclic parent chains. Root sessions have depth zero.
-fn session_stack_depth(sessions: &[Session], session_id: &str) -> Option<usize> {
-    let mut current_session = find_session(sessions, session_id)?;
-    let mut visited_session_ids = Vec::new();
-    let mut depth = 0;
-
-    while let Some(parent_session_id) = current_session.parent_session_id.as_ref() {
-        if visited_session_ids.contains(&current_session.id) {
-            return None;
-        }
-        visited_session_ids.push(current_session.id.clone());
-        current_session = find_session(sessions, parent_session_id.as_str())?;
-        depth += 1;
-    }
-
-    (!visited_session_ids.contains(&current_session.id)).then_some(depth)
-}
-
-/// Returns the root session for a valid loaded parent chain.
-fn stack_root_session<'a>(sessions: &'a [Session], session: &'a Session) -> Option<&'a Session> {
-    let depth = session_stack_depth(sessions, session.id.as_str())?;
-    let mut root_session = session;
-
-    for _ in 0..depth {
-        root_session = find_session(sessions, root_session.parent_session_id.as_deref()?)?;
-    }
-
-    Some(root_session)
-}
-
-/// Returns the root id for a session with a valid loaded parent chain.
-fn session_stack_root_id<'a>(
-    sessions: &'a [Session],
-    session: &'a Session,
-) -> Option<&'a SessionId> {
-    stack_root_session(sessions, session).map(|root_session| &root_session.id)
-}
-
-/// Returns whether `session` descends from `ancestor_session_id` within the
-/// already-connected stack member set.
-fn session_is_descendant_of(
-    members: &[&Session],
-    session: &Session,
-    ancestor_session_id: &str,
-) -> bool {
-    let mut current_session = session;
-
-    while let Some(parent_session_id) = current_session.parent_session_id.as_ref() {
-        if parent_session_id.as_str() == ancestor_session_id {
-            return true;
-        }
-        let Some(parent_session) = members
-            .iter()
-            .find(|candidate| candidate.id == *parent_session_id)
-        else {
-            return false;
-        };
-        current_session = parent_session;
-    }
-
-    false
-}
-
-/// Finds one loaded session by id.
-fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Session> {
-    sessions
-        .iter()
-        .find(|session| session.id.as_str() == session_id)
 }
 
 /// One chat prompt waiting behind active session work.

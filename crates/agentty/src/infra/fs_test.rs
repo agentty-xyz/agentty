@@ -65,6 +65,27 @@ async fn startup_cleanup_scans_worktrees_without_following_links() {
     assert!(invalid.is_err());
 }
 
+/// Verifies `RealFsClient::create_dir_all()` creates missing parents and
+/// surfaces failures when a path component is a file.
+#[tokio::test]
+async fn test_real_fs_client_create_dir_all_creates_nested_directories() {
+    // Arrange
+    let temp_dir = tempdir().expect("create temp dir");
+    let nested_path = temp_dir.path().join("parent").join("child");
+    let file_path = temp_dir.path().join("file");
+    std::fs::write(&file_path, "content").expect("write file");
+    let fs_client = RealFsClient;
+
+    // Act
+    let created = fs_client.create_dir_all(nested_path.clone()).await;
+    let blocked = fs_client.create_dir_all(file_path.join("child")).await;
+
+    // Assert
+    assert!(created.is_ok());
+    assert!(nested_path.is_dir());
+    assert!(blocked.is_err());
+}
+
 /// Verifies `RealFsClient::read_file()` reads bytes through the async
 /// filesystem adapter.
 #[tokio::test]

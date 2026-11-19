@@ -119,10 +119,10 @@ queue behind it, and it settles only after every child finishes cleanup, keeping
 lease until then.
 
 Explicitly launched graphs admit fresh nodes only as shared readers, routing writers
-through task conversations and session stack policy. Each task node starts an isolated
-conversation; its responses, provider continuation, and usage persist before effects,
-and failed effects cannot publish a validated output. Ordinary chat history and pending
-questions remain separate.
+through task conversations. Each task node starts an isolated conversation; its
+responses, provider continuation, and usage persist before effects, and failed effects
+cannot publish a validated output. Ordinary chat history and pending questions remain
+separate.
 
 `SessionService::start_execution_graph` saves and starts a static graph in a prepared
 session. Named provider-call limits are fixed at first launch and every charge and

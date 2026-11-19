@@ -78,11 +78,9 @@ struct ForkResetRow {
     in_progress_total_seconds: i64,
     is_draft: bool,
     merged_commit_hash: Option<String>,
-    parent_session_id: Option<String>,
     provider_conversation_id: Option<String>,
     published_upstream_ref: Option<String>,
     questions: Option<String>,
-    stack_base_commit_hash: Option<String>,
 }
 
 /// Loads reset-sensitive fork columns that are not exposed by public
@@ -98,11 +96,9 @@ SELECT app_server_instruction_provider_conversation_id,
        in_progress_total_seconds,
        is_draft AS "is_draft: bool",
        merged_commit_hash,
-       parent_session_id,
        provider_conversation_id,
        published_upstream_ref,
-       questions,
-       stack_base_commit_hash
+       questions
 FROM session
 WHERE id = ?
 "#,
@@ -126,23 +122,11 @@ async fn seed_fork_snapshot_source(
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session(
-            "parent-session",
+        .insert_draft_session(
+            "source-session",
             "gpt-5.6-sol",
             "main",
             "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert parent session");
-    database
-        .sessions()
-        .insert_stacked_draft_session(
-            "source-session",
-            "gpt-5.6-sol",
-            "wt/parent",
-            "Review",
-            "parent-session",
             project_id,
         )
         .await
@@ -226,11 +210,6 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
         .expect("failed to update focused review");
     database
         .sessions()
-        .update_session_stack_base_commit_hash("source-session", Some("stackbase123".to_string()))
-        .await
-        .expect("failed to update stack base commit hash");
-    database
-        .sessions()
         .update_session_stats(
             "source-session",
             &SessionStats {
@@ -303,10 +282,6 @@ fn assert_source_reset_state(
     );
     assert!(source_reset_row.is_draft);
     assert_eq!(
-        source_reset_row.parent_session_id.as_deref(),
-        Some("parent-session")
-    );
-    assert_eq!(
         source_reset_row.provider_conversation_id.as_deref(),
         Some("provider-thread")
     );
@@ -336,10 +311,6 @@ fn assert_source_reset_state(
         source_reset_row.focused_review_text.as_deref(),
         Some("Focused review text")
     );
-    assert_eq!(
-        source_reset_row.stack_base_commit_hash.as_deref(),
-        Some("stackbase123")
-    );
     assert_eq!(source_reset_row.in_progress_started_at, Some(100));
     assert_eq!(source_reset_row.in_progress_total_seconds, 75);
     assert_eq!(
@@ -357,7 +328,6 @@ fn assert_fork_reset_state(
 ) {
     assert_eq!(fork_row.status, "Review");
     assert!(!fork_row.is_draft);
-    assert_eq!(fork_row.parent_session_id, None);
     assert_eq!(fork_row.input_tokens, 0);
     assert_eq!(fork_row.output_tokens, 0);
     assert_eq!(fork_row.added_lines, 0);
@@ -377,7 +347,6 @@ fn assert_fork_reset_state(
     assert_eq!(fork_reset_row.focused_review_diff_hash, None);
     assert_eq!(fork_reset_row.focused_review_text, None);
     assert_eq!(fork_reset_row.questions, None);
-    assert_eq!(fork_reset_row.stack_base_commit_hash, None);
     assert_eq!(fork_reset_row.in_progress_started_at, None);
     assert_eq!(fork_reset_row.in_progress_total_seconds, 0);
     assert_eq!(fork_review_request, None);

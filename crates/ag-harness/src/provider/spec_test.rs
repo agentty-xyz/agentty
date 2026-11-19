@@ -4,6 +4,7 @@
 
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -11,8 +12,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    Auth, CredentialSource, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec,
-    ProviderSpecError, ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
+    Auth, CredentialSource, EffortNames, InstructionPlacement, Jitter, MaxTokensField,
+    ProviderSpec, ProviderSpecError, ReasoningMapping, RetryKind, RetryPolicy,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 use crate::model::{
     Model, ModelClient, ModelMetadata, ModelMetadataError, ModelRequest, ReasoningEffort,
@@ -142,6 +144,72 @@ fn maps_every_option_onto_the_routed_specification() {
     // Act / Assert
     assert_eq!(routed(chat), format!("{expected_chat:?}"));
     for (spec, expected) in variants {
+        assert_eq!(routed(spec), format!("{expected:?}"));
+    }
+}
+
+#[test]
+fn maps_every_retry_option_onto_the_routed_policy() {
+    // Arrange
+    let retried = [
+        (
+            Jitter::None,
+            RetryKind::RateLimited,
+            ag_router::Jitter::None,
+            ag_router::RetryKind::RateLimited,
+        ),
+        (
+            Jitter::Full,
+            RetryKind::ServerError,
+            ag_router::Jitter::Full,
+            ag_router::RetryKind::ServerError,
+        ),
+        (
+            Jitter::Equal,
+            RetryKind::Overloaded,
+            ag_router::Jitter::Equal,
+            ag_router::RetryKind::Overloaded,
+        ),
+        (
+            Jitter::None,
+            RetryKind::Connection,
+            ag_router::Jitter::None,
+            ag_router::RetryKind::Connection,
+        ),
+    ];
+    let retry_variants = retried.map(|(jitter, kind, router_jitter, router_kind)| {
+        let retry = RetryPolicy::none()
+            .with_base_delay(Duration::from_millis(250))
+            .with_jitter(jitter)
+            .with_max_attempts(3)
+            .with_max_backoff(Duration::from_secs(2))
+            .with_max_connection_retries(2)
+            .with_max_retry_after(Duration::from_secs(9))
+            .with_retried(kind, true);
+        let router_retry = ag_router::RetryPolicy::none()
+            .with_base_delay(Duration::from_millis(250))
+            .with_jitter(router_jitter)
+            .with_max_attempts(3)
+            .with_max_backoff(Duration::from_secs(2))
+            .with_max_connection_retries(2)
+            .with_max_retry_after(Duration::from_secs(9))
+            .with_retried(router_kind, true);
+
+        (
+            ProviderSpec::new("gateway", WireProtocol::ChatCompletions, BASE_URL).with_retry(retry),
+            router_spec(ag_router::WireProtocol::ChatCompletions).with_retry(router_retry),
+        )
+    });
+
+    // Act / Assert
+    assert_eq!(
+        routed(
+            ProviderSpec::new("gateway", WireProtocol::Responses, BASE_URL)
+                .with_retry(RetryPolicy::default())
+        ),
+        format!("{:?}", router_spec(ag_router::WireProtocol::Responses))
+    );
+    for (spec, expected) in retry_variants {
         assert_eq!(routed(spec), format!("{expected:?}"));
     }
 }

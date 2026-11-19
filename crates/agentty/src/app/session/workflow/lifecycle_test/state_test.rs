@@ -108,15 +108,12 @@ async fn test_persist_initial_reply_metadata_keeps_terminal_status() {
 }
 
 #[tokio::test]
-async fn cancel_session_reports_a_descendant_without_runtime_handles() {
+async fn cancel_session_requires_runtime_handles() {
     // Arrange
-    let parent = session_with_id("parent", Status::Review);
-    let mut child = session_with_id("child", Status::Draft);
-    child.is_draft = true;
-    child.parent_session_id = Some("parent".into());
-    let database = database_with_session(&parent).await;
-    let mut session_manager = session_manager_with_sessions(vec![parent, child]);
-    session_manager.state.handles_mut().remove("child");
+    let session = session_with_id("review", Status::Review);
+    let database = database_with_session(&session).await;
+    let mut session_manager = session_manager_with_sessions(vec![session]);
+    session_manager.state.handles_mut().remove("review");
     let services = test_services(
         &database,
         Arc::new(git::MockGitClient::new()),
@@ -125,11 +122,10 @@ async fn cancel_session_reports_a_descendant_without_runtime_handles() {
     enable_tracing_log_fallback();
 
     // Act
-    let result = session_manager.cancel_session(&services, "parent").await;
+    let result = session_manager.cancel_session(&services, "review").await;
 
     // Assert
-    let error = result.expect_err("descendant cancellation failure should be reported");
-    assert!(error.to_string().contains("child"), "{error}");
+    assert!(matches!(result, Err(SessionError::HandlesNotFound)));
 }
 
 #[tokio::test]

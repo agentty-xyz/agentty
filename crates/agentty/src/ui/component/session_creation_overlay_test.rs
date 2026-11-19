@@ -5,10 +5,8 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
 
 use super::{
-    AGENT_CLI_REQUIRED_DETAIL, APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL,
-    APPEND_TO_STACK_PREVIEW_DETAIL, HARNESS_OPTION_INDEX, HARNESS_SESSION_MISSING_KEY_DETAIL,
-    HARNESS_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS, STACKED_SESSION_DETAIL,
-    SessionCreationOverlay,
+    AGENT_CLI_REQUIRED_DETAIL, HARNESS_OPTION_INDEX, HARNESS_SESSION_MISSING_KEY_DETAIL,
+    HARNESS_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS, SessionCreationOverlay,
 };
 use crate::domain::agent::AgentModel;
 use crate::domain::harness::HarnessAvailability;
@@ -22,7 +20,11 @@ fn test_default_theme_disabled_options_remain_readable_and_unselected() {
     let _theme_scope = scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(2, false, false, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(
+        HARNESS_OPTION_INDEX,
+        HarnessAvailability::MissingCredentials,
+        false,
+    );
 
     // Act
     terminal
@@ -32,10 +34,10 @@ fn test_default_theme_disabled_options_remain_readable_and_unselected() {
     // Assert
     let buffer = terminal.backend().buffer();
     for text in [
-        "Stacked",
-        "Select parent first",
-        "Append to stack",
-        APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL,
+        "Regular",
+        AGENT_CLI_REQUIRED_DETAIL,
+        "Harness",
+        HARNESS_SESSION_MISSING_KEY_DETAIL,
     ] {
         let (column, row) = text_position(buffer, text).expect("disabled option should render");
         for offset in 0..u16::try_from(text.len()).expect("option text fits terminal width") {
@@ -53,18 +55,12 @@ fn test_session_creation_overlay_new_stores_selected_option() {
     let selected_option_index = 1;
 
     // Act
-    let overlay = SessionCreationOverlay::new(
-        selected_option_index,
-        true,
-        true,
-        HarnessAvailability::Hidden,
-        true,
-    );
+    let overlay =
+        SessionCreationOverlay::new(selected_option_index, HarnessAvailability::Hidden, true);
 
     // Assert
     assert_eq!(overlay.selected_option_index, selected_option_index);
-    assert!(overlay.can_create_stacked_session);
-    assert!(overlay.can_append_to_stack);
+    assert!(overlay.has_agent_cli);
 }
 
 #[test]
@@ -76,10 +72,10 @@ fn test_session_creation_overlay_popup_area_uses_compact_minimum() {
     let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
     // Assert
-    assert_eq!(popup_area.width, 53);
-    assert_eq!(popup_area.height, 12);
-    assert_eq!(popup_area.x, 13);
-    assert_eq!(popup_area.y, 4);
+    assert_eq!(popup_area.width, 45);
+    assert_eq!(popup_area.height, 10);
+    assert_eq!(popup_area.x, 17);
+    assert_eq!(popup_area.y, 5);
 }
 
 #[test]
@@ -102,7 +98,7 @@ fn test_session_creation_overlay_render_shows_session_options() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(0, true, true, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(0, HarnessAvailability::Hidden, true);
 
     // Act
     terminal
@@ -122,11 +118,8 @@ fn test_session_creation_overlay_render_shows_session_options() {
     assert!(text.contains("Regular"));
     assert!(text.contains("Draft"));
     assert!(!text.contains("Orchestrator"));
-    assert!(text.contains("Stacked"));
-    assert!(text.contains(STACKED_SESSION_DETAIL));
-    assert!(text.contains("Append to stack"));
-    assert!(text.contains(APPEND_TO_STACK_PREVIEW_DETAIL));
-    assert!(!text.contains("[Preview] Stack on selected"));
+    assert!(!text.contains("Stacked"));
+    assert!(!text.contains("Append to stack"));
     assert!(text.contains("j/k: move | Enter: select | q: close"));
 }
 
@@ -135,7 +128,7 @@ fn test_session_creation_overlay_aligns_option_text_left() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(1, false, false, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(1, HarnessAvailability::Hidden, true);
 
     // Act
     terminal
@@ -154,7 +147,7 @@ fn test_session_creation_overlay_aligns_option_text_left() {
 #[test]
 fn test_session_creation_overlay_lines_center_header_and_help_text() {
     // Arrange
-    let overlay = SessionCreationOverlay::new(0, false, false, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(0, HarnessAvailability::Hidden, true);
 
     // Act
     let lines = overlay.lines();
@@ -164,80 +157,6 @@ fn test_session_creation_overlay_lines_center_header_and_help_text() {
     // Assert
     assert_eq!(header_line.alignment, Some(Alignment::Center));
     assert_eq!(help_line.alignment, Some(Alignment::Center));
-}
-
-#[test]
-fn test_session_creation_overlay_lines_disable_stacked_option() {
-    // Arrange
-    let overlay = SessionCreationOverlay::new(2, false, false, HarnessAvailability::Hidden, true);
-
-    // Act
-    let lines = overlay.lines();
-    let stacked_line = &lines[4];
-
-    // Assert
-    assert!(
-        stacked_line
-            .spans
-            .iter()
-            .all(|span| span.style.bg != Some(palette::surface_selection()))
-    );
-    assert!(
-        stacked_line
-            .spans
-            .iter()
-            .any(|span| span.content.contains("Select parent first"))
-    );
-}
-
-#[test]
-fn test_session_creation_overlay_lines_enable_stacked_option() {
-    // Arrange
-    let overlay = SessionCreationOverlay::new(2, true, false, HarnessAvailability::Hidden, true);
-
-    // Act
-    let lines = overlay.lines();
-    let stacked_line = &lines[4];
-
-    // Assert
-    assert!(
-        stacked_line
-            .spans
-            .iter()
-            .any(|span| span.style.bg == Some(palette::surface_selection()))
-    );
-    assert!(
-        stacked_line
-            .spans
-            .iter()
-            .any(|span| span.content.contains(STACKED_SESSION_DETAIL))
-    );
-}
-
-#[test]
-fn test_session_creation_overlay_lines_gate_append_to_stack_option() {
-    // Arrange
-    let disabled_overlay =
-        SessionCreationOverlay::new(2, true, false, HarnessAvailability::Hidden, true);
-    let enabled_overlay =
-        SessionCreationOverlay::new(3, true, true, HarnessAvailability::Hidden, true);
-
-    // Act
-    let disabled_lines = disabled_overlay.lines();
-    let enabled_lines = enabled_overlay.lines();
-    let disabled_line = &disabled_lines[5];
-    let enabled_line = &enabled_lines[5];
-
-    // Assert
-    assert!(disabled_line.spans.iter().any(|span| {
-        span.content
-            .contains(APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL)
-            && span.style.bg != Some(palette::surface_selection())
-    }));
-    assert!(enabled_line.spans.iter().any(|span| {
-        span.content.contains(APPEND_TO_STACK_PREVIEW_DETAIL)
-            && span.style.bg == Some(palette::surface_selection())
-    }));
 }
 
 /// Finds the first row and column where `needle` starts in the test buffer.
@@ -289,18 +208,10 @@ fn rendered_text(overlay: &SessionCreationOverlay) -> String {
 #[test]
 fn test_session_creation_overlay_harness_row_follows_availability() {
     // Arrange
-    let hidden = SessionCreationOverlay::new(0, false, false, HarnessAvailability::Hidden, true);
-    let missing_key = SessionCreationOverlay::new(
-        0,
-        false,
-        false,
-        HarnessAvailability::MissingCredentials,
-        true,
-    );
+    let hidden = SessionCreationOverlay::new(0, HarnessAvailability::Hidden, true);
+    let missing_key = SessionCreationOverlay::new(0, HarnessAvailability::MissingCredentials, true);
     let available = SessionCreationOverlay::new(
         HARNESS_OPTION_INDEX,
-        false,
-        false,
         HarnessAvailability::Available(AgentModel::MuseSpark13),
         true,
     );
@@ -343,8 +254,6 @@ fn test_session_creation_overlay_disables_cli_rows_without_agent_cli() {
     // Arrange
     let overlay = SessionCreationOverlay::new(
         0,
-        true,
-        true,
         HarnessAvailability::Available(AgentModel::MuseSpark13),
         false,
     );

@@ -24,7 +24,7 @@ for AI-assisted software development in your terminal.
 A session takes your prompt through agent edits to a reviewable diff; you decide whether
 to merge or discard it. Follow
 [Installation](@/docs/getting-started/installation.md#start-a-session) for your first
-session. Sessions can also be staged as drafts or stacked on another session; see
+session. Sessions can also be staged as drafts; see
 [Workflow](@/docs/usage/workflow.md).
 
 ## Worktree Isolation

@@ -118,7 +118,6 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
     let session_types = [
         (SessionType::Regular, "regular"),
         (SessionType::Draft, "draft"),
-        (SessionType::Stacked, "stacked"),
         (SessionType::Fork, "fork"),
     ];
     let agents = [AgentKind::Codex, AgentKind::Claude, AgentKind::Antigravity]

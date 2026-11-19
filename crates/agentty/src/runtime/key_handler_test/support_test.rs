@@ -9,7 +9,6 @@ use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 
-use crate::app::App;
 use crate::domain::session_message::SessionTranscript;
 
 /// Test backend whose size queries fail once a test requests it.
@@ -102,24 +101,6 @@ pub(super) fn session_replay_text(session: &crate::domain::session::Session) -> 
         .as_ref()
         .and_then(SessionTranscript::replay_text)
         .unwrap_or_default()
-}
-
-pub(super) async fn appendable_stack_test_app() -> (App, tempfile::TempDir, String, String) {
-    let (mut app, base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let source_session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        crate::domain::session::Status::Review,
-    );
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &source_session_id,
-        crate::domain::session::Status::Review,
-    );
-
-    (app, base_dir, parent_session_id, source_session_id)
 }
 
 /// Builds one in-memory project row for project switcher handler tests.

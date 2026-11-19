@@ -115,50 +115,37 @@ async fn test_session_agent_model_updates_respect_active_status() {
 }
 
 #[tokio::test]
-async fn test_session_parent_diff_and_project_backfill_updates() {
+async fn test_session_diff_and_project_backfill_updates() {
     // Arrange
     let (database, pool, _) =
-        database_with_sessions(&[("session-parent", "Review"), ("session-child", "Draft")]).await;
+        database_with_sessions(&[("session-review", "Review"), ("session-draft", "Draft")]).await;
     let other_project_id = database
         .projects()
         .upsert_project("/tmp/other-project", None)
         .await
         .expect("failed to upsert other project");
-    sqlx::query(
-        "UPDATE session SET parent_session_id = 'session-parent', has_diff = 1, project_id = NULL \
-         WHERE id = 'session-child'",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to seed child session");
+    sqlx::query("UPDATE session SET has_diff = 1, project_id = NULL WHERE id = 'session-draft'")
+        .execute(&pool)
+        .await
+        .expect("failed to seed draft session");
     let sessions = database.sessions();
 
     // Act
-    let parent_session_id = sessions
-        .get_session_parent_session_id("session-child")
-        .await
-        .expect("parent should load");
-    let missing_parent_session_id = sessions
-        .get_session_parent_session_id("session-missing")
-        .await
-        .expect("missing session parent should load");
     sessions
-        .mark_session_diff_unknown("session-child")
+        .mark_session_diff_unknown("session-draft")
         .await
         .expect("diff state should reset");
     sessions
         .backfill_session_project(other_project_id)
         .await
         .expect("project backfill should persist");
-    let child_session = sessions
-        .load_session("session-child")
+    let draft_session = sessions
+        .load_session("session-draft")
         .await
-        .expect("child session should load")
-        .expect("child session should exist");
+        .expect("draft session should load")
+        .expect("draft session should exist");
 
     // Assert
-    assert_eq!(parent_session_id.as_deref(), Some("session-parent"));
-    assert_eq!(missing_parent_session_id, None);
-    assert_eq!(child_session.has_diff, None);
-    assert_eq!(child_session.project_id, Some(other_project_id));
+    assert_eq!(draft_session.has_diff, None);
+    assert_eq!(draft_session.project_id, Some(other_project_id));
 }

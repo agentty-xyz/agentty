@@ -37,7 +37,6 @@ fn build_api_session_returns_complete_settings_and_messages() {
     assert_eq!(session.questions[0].text, "Which target?");
     assert_eq!(session.queued_messages, ["queued message"]);
     assert_eq!(session.settings.project_id, 7);
-    assert_eq!(session.settings.parent_session_id, Some("parent-1".into()));
     assert_eq!(session.settings.permission_mode, PermissionMode::ReadOnly);
 
     assert_eq!(session.settings.agent, model_fixture::codex_selection());

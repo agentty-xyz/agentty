@@ -1,5 +1,4 @@
-//! Session timer, forge indicator, stack branch gate, identifier, and diff
-//! statistics tests.
+//! Session timer, forge indicator, identifier, and diff statistics tests.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,16 +10,10 @@ use ag_session::{
 };
 
 use super::super::super::agent::AgentSelection;
-use super::super::{
-    Session, SessionDiffStats, SessionSize, can_append_session_to_stack,
-    can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
-    can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
-    can_start_staged_session_in_stack, has_reserved_branch_work_in_stack, session_is_descendant_of,
-};
+use super::super::{Session, SessionDiffStats, SessionSize};
 use super::support::test_session;
 use crate::domain::agent::AgentModel;
 use crate::domain::transient_message::TransientMessageStore;
-use crate::test_support::SessionFixtureBuilder;
 
 #[test]
 fn test_in_progress_duration_seconds_accumulates_closed_and_open_intervals() {
@@ -40,7 +33,6 @@ fn test_in_progress_duration_seconds_accumulates_closed_and_open_intervals() {
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: "project".to_string(),
         prompt: String::new(),
@@ -132,119 +124,6 @@ fn test_forge_indicator_returns_empty_when_no_forge_context() {
 }
 
 #[test]
-fn test_session_is_descendant_of_walks_nested_chain_and_rejects_missing_parent() {
-    // Arrange
-    let root_session = SessionFixtureBuilder::new().id("root-session").build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .parent_session_id(Some(SessionId::from("root-session")))
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let orphan_session = SessionFixtureBuilder::new()
-        .id("orphan-session")
-        .parent_session_id(Some(SessionId::from("missing-session")))
-        .build();
-    let members = vec![
-        &root_session,
-        &parent_session,
-        &child_session,
-        &orphan_session,
-    ];
-
-    // Act
-    let child_is_descendant = session_is_descendant_of(&members, &child_session, "root-session");
-    let orphan_is_descendant = session_is_descendant_of(&members, &orphan_session, "root-session");
-
-    // Assert
-    assert!(child_is_descendant);
-    assert!(!orphan_is_descendant);
-}
-
-#[test]
-fn test_can_mutate_session_branch_in_stack_blocks_parent_with_materialized_child() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_mutate_parent = can_mutate_session_branch_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(!can_mutate_parent);
-}
-
-#[test]
-fn test_can_mutate_session_branch_in_stack_blocks_parent_with_nested_descendant() {
-    // Arrange
-    let root_session = SessionFixtureBuilder::new()
-        .id("root-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("root-session")))
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![root_session, parent_session, child_session];
-
-    // Act
-    let can_mutate_parent = can_mutate_session_branch_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(!can_mutate_parent);
-}
-
-#[test]
-fn test_can_mutate_session_branch_in_stack_blocks_concurrent_stack_member() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let running_child_session = SessionFixtureBuilder::new()
-        .id("running-child")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let review_child_session = SessionFixtureBuilder::new()
-        .id("review-child")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, running_child_session, review_child_session];
-
-    // Act
-    let can_mutate_review_child = can_mutate_session_branch_in_stack(&sessions, "review-child");
-
-    // Assert
-    assert!(!can_mutate_review_child);
-}
-
-#[test]
 fn test_has_in_progress_timer_returns_true_for_open_interval() {
     // Arrange
     let session = Session {
@@ -262,7 +141,6 @@ fn test_has_in_progress_timer_returns_true_for_open_interval() {
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: "project".to_string(),
         prompt: String::new(),
@@ -334,36 +212,6 @@ fn test_activity_day_key_with_offset_applies_offsets_at_day_boundaries() {
 }
 
 #[test]
-fn test_can_start_staged_session_in_stack_blocks_active_stack_member() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let running_child_session = SessionFixtureBuilder::new()
-        .id("running-child")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let staged_child_session = SessionFixtureBuilder::new()
-        .id("staged-child")
-        .draft(true)
-        .status(Status::Draft)
-        .prompt("Ready child draft")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, running_child_session, staged_child_session];
-
-    // Act
-    let can_start_child = can_start_staged_session_in_stack(&sessions, "staged-child");
-
-    // Assert
-    assert!(!can_start_child);
-}
-
-#[test]
 fn test_session_stats_line_change_counts_ignore_diff_headers() {
     // Arrange
     let diff = "\
@@ -389,38 +237,6 @@ fn test_session_allows_cancel_action_for_running_session() {
 
     // Assert
     assert!(allows_cancel_action);
-}
-
-#[test]
-fn test_branch_reservations_follow_stack_membership() {
-    // Arrange
-    let sessions = vec![
-        SessionFixtureBuilder::new().id("root").build(),
-        SessionFixtureBuilder::new()
-            .id("child")
-            .parent_session_id(Some(SessionId::from("root")))
-            .build(),
-        SessionFixtureBuilder::new()
-            .id("grandchild")
-            .parent_session_id(Some(SessionId::from("child")))
-            .build(),
-        SessionFixtureBuilder::new().id("unrelated").build(),
-    ];
-
-    // Act
-    let root_is_reserved =
-        has_reserved_branch_work_in_stack(&sessions, "root", |id| id == "grandchild");
-    let child_is_reserved =
-        has_reserved_branch_work_in_stack(&sessions, "child", |id| id == "root");
-    let unrelated_is_reserved =
-        has_reserved_branch_work_in_stack(&sessions, "unrelated", |id| id == "child");
-    let missing_is_reserved = has_reserved_branch_work_in_stack(&sessions, "missing", |_| false);
-
-    // Assert
-    assert!(root_is_reserved);
-    assert!(child_is_reserved);
-    assert!(!unrelated_is_reserved);
-    assert!(missing_is_reserved);
 }
 
 #[test]
@@ -464,133 +280,4 @@ fn test_forge_kind_from_str_gitlab() {
 
     // Assert
     assert_eq!(forge_kind, ForgeKind::GitLab);
-}
-
-#[test]
-fn test_can_append_session_to_stack_rejects_invalid_ids_and_source_with_child() {
-    // Arrange
-    let source_session = SessionFixtureBuilder::new()
-        .id("source-session")
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .parent_session_id(Some(SessionId::from("source-session")))
-        .status(Status::Review)
-        .build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .status(Status::Review)
-        .build();
-    let sessions = vec![source_session, child_session, parent_session];
-
-    // Act
-    let same_session = can_append_session_to_stack(&sessions, "source-session", "source-session");
-    let missing_source =
-        can_append_session_to_stack(&sessions, "missing-session", "parent-session");
-    let missing_parent =
-        can_append_session_to_stack(&sessions, "source-session", "missing-session");
-    let source_with_child =
-        can_append_session_to_stack(&sessions, "source-session", "parent-session");
-
-    // Assert
-    assert!(!same_session);
-    assert!(!missing_source);
-    assert!(!missing_parent);
-    assert!(!source_with_child);
-}
-
-#[test]
-fn test_can_append_session_to_stack_rejects_active_parent_stack() {
-    // Arrange
-    let source_session = SessionFixtureBuilder::new()
-        .id("source-session")
-        .status(Status::Review)
-        .build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .status(Status::Review)
-        .build();
-    let running_child = SessionFixtureBuilder::new()
-        .id("running-child")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .status(Status::InProgress)
-        .build();
-    let sessions = vec![source_session, parent_session, running_child];
-
-    // Act
-    let can_append = can_append_session_to_stack(&sessions, "source-session", "parent-session");
-
-    // Assert
-    assert!(!can_append);
-}
-
-#[test]
-fn test_stack_branch_gates_fail_closed_for_unknown_session() {
-    // Arrange
-    let sessions = vec![SessionFixtureBuilder::new().id("known-session").build()];
-
-    // Act
-    let gate_results = [
-        can_start_staged_session_in_stack(&sessions, "missing-session"),
-        can_mutate_session_branch_in_stack(&sessions, "missing-session"),
-        can_merge_session_branch_in_stack(&sessions, "missing-session"),
-        can_rebase_session_branch_in_stack(&sessions, "missing-session"),
-        can_reply_to_session_in_stack(&sessions, "missing-session"),
-    ];
-
-    // Assert
-    assert_eq!(gate_results, [false; 5]);
-}
-
-#[test]
-fn test_can_reply_to_session_in_stack_blocks_active_stack_member() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let running_child_session = SessionFixtureBuilder::new()
-        .id("running-child")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, running_child_session];
-
-    // Act
-    let can_reply_to_parent = can_reply_to_session_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(!can_reply_to_parent);
-}
-
-#[test]
-fn test_can_reply_to_session_in_stack_blocks_active_nested_descendant() {
-    // Arrange
-    let root_session = SessionFixtureBuilder::new()
-        .id("root-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("root-session")))
-        .build();
-    let running_grandchild_session = SessionFixtureBuilder::new()
-        .id("grandchild-session")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("child-session")))
-        .build();
-    let sessions = vec![root_session, child_session, running_grandchild_session];
-
-    // Act
-    let can_reply_to_root = can_reply_to_session_in_stack(&sessions, "root-session");
-
-    // Assert
-    assert!(!can_reply_to_root);
 }

@@ -697,7 +697,7 @@ impl App {
                 if let Some(sync_branch) = self
                     .sessions
                     .session_for_id(session_id)
-                    .map(|session| self.review_target_branch_for_session(session))
+                    .map(|session| session.base_branch.clone())
                     .filter(|sync_branch| sync_branch != target_branch)
                 {
                     return Err(format!(

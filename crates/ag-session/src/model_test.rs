@@ -76,7 +76,7 @@ type StatusCapability = fn(SessionStatus) -> bool;
 #[test]
 fn session_status_capabilities_follow_lifecycle_state() {
     // Arrange
-    let capabilities: [(StatusCapability, Vec<SessionStatus>); 8] = [
+    let capabilities: [(StatusCapability, Vec<SessionStatus>); 6] = [
         (
             SessionStatus::allows_chat_composer,
             vec![
@@ -129,25 +129,6 @@ fn session_status_capabilities_follow_lifecycle_state() {
             ],
         ),
         (SessionStatus::is_read_only, vec![SessionStatus::Merged]),
-        (
-            SessionStatus::allows_stacked_child_start,
-            vec![
-                SessionStatus::Review,
-                SessionStatus::AgentReview,
-                SessionStatus::Watching,
-            ],
-        ),
-        (
-            SessionStatus::is_stack_branch_mutating,
-            vec![
-                SessionStatus::InProgress,
-                SessionStatus::Question,
-                SessionStatus::Queued,
-                SessionStatus::Rebasing,
-                SessionStatus::Merging,
-                SessionStatus::Merged,
-            ],
-        ),
     ];
 
     for (capability, expected_statuses) in capabilities {

@@ -18,10 +18,6 @@ fn test_session_join_row_ignores_partial_review_request_columns() {
     // Assert
     assert_eq!(session_row.id, "session-a");
     assert_eq!(session_row.project_id, Some(7));
-    assert_eq!(
-        session_row.parent_session_id.as_deref(),
-        Some("parent-session")
-    );
     assert_eq!(session_row.status, "Review");
     assert_eq!(session_row.added_lines, 14);
     assert_eq!(session_row.deleted_lines, 6);
@@ -43,10 +39,6 @@ fn test_session_join_row_maps_review_request_columns() {
     assert_eq!(session_row.added_lines, 14);
     assert_eq!(session_row.deleted_lines, 6);
     assert_eq!(session_row.project_id, Some(7));
-    assert_eq!(
-        session_row.parent_session_id.as_deref(),
-        Some("parent-session")
-    );
     assert_eq!(
         session_row.published_upstream_ref.as_deref(),
         Some("origin/session-a")
@@ -84,7 +76,6 @@ fn list_and_detail_mappings_preserve_all_shared_columns() {
         assert!(!row.is_draft);
         assert_eq!(row.model, "gpt-5.6-sol");
         assert_eq!(row.output_tokens, 29);
-        assert_eq!(row.parent_session_id.as_deref(), Some("parent-session"));
         assert_eq!(row.permission_mode, "read_only");
 
         assert_eq!(row.project_id, Some(7));
@@ -137,7 +128,6 @@ impl SessionJoinRow {
             is_draft: false,
             model: "gpt-5.6-sol".to_string(),
             output_tokens: 29,
-            parent_session_id: Some("parent-session".to_string()),
             permission_mode: "read_only".to_string(),
             project_id: Some(7),
             prompt: "Implement feature".to_string(),

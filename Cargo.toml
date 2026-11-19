@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.19.4"
+version = "0.19.5"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -14,25 +14,22 @@ description = "Agentty is an ADE (Agentic Development Environment) for structure
 repository = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
-# Until the SQLx security pin below has a registry release, omit registry versions
-# along its dependent chain so those crates cannot publish against vulnerable
-# workspace crates already on crates.io.
-ag-agent = { path = "crates/ag-agent" }
-ag-contracts = { path = "crates/ag-contracts", version = "0.19.4" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.4" }
-ag-forge = { path = "crates/ag-forge", version = "0.19.4" }
-ag-git = { path = "crates/ag-git", version = "0.19.4" }
-ag-harness = { path = "crates/ag-harness", default-features = false }
-ag-protocol = { path = "crates/ag-protocol", version = "0.19.4" }
-ag-runtime = { path = "crates/ag-runtime" }
-ag-router = { path = "crates/ag-router", version = "0.19.4" }
-ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.4" }
-ag-session = { path = "crates/ag-session", version = "0.19.4" }
-ag-store = { path = "crates/ag-store", version = "0.19.4" }
-ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.4", default-features = false }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.4" }
-ag-worker = { path = "crates/ag-worker", version = "0.19.4" }
-testty = { path = "crates/testty", version = "0.19.4" }
+ag-agent = { path = "crates/ag-agent", version = "0.19.5" }
+ag-contracts = { path = "crates/ag-contracts", version = "0.19.5" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.5" }
+ag-forge = { path = "crates/ag-forge", version = "0.19.5" }
+ag-git = { path = "crates/ag-git", version = "0.19.5" }
+ag-harness = { path = "crates/ag-harness", version = "0.19.5", default-features = false }
+ag-protocol = { path = "crates/ag-protocol", version = "0.19.5" }
+ag-runtime = { path = "crates/ag-runtime", version = "0.19.5" }
+ag-router = { path = "crates/ag-router", version = "0.19.5" }
+ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.5" }
+ag-session = { path = "crates/ag-session", version = "0.19.5" }
+ag-store = { path = "crates/ag-store", version = "0.19.5" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.5", default-features = false }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.5" }
+ag-worker = { path = "crates/ag-worker", version = "0.19.5" }
+testty = { path = "crates/testty", version = "0.19.5" }
 async-trait = "0.1"
 anyhow = "1"
 assert_cmd = "2"
@@ -41,8 +38,10 @@ base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 close_fds = "0.3.2"
 crossterm = { version = "0.29.0", default-features = false, features = ["bracketed-paste", "events"] }
+fastrand = "2.3"
 futures-core = "0.3"
 hex = "0.4.3"
+httpdate = "1.0.3"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 jsonschema = { version = "0.61.0", default-features = false }
