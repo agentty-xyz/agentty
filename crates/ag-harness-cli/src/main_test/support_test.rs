@@ -4,14 +4,44 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_harness::catalog::{ModelCatalog, ModelId, ModelSpec, Pricing, Role};
+use ag_harness::provider::ModelProvider;
 use async_trait::async_trait;
 use clap::Parser;
 use serde_json::{Value, json};
 use wiremock::ResponseTemplate;
 
-use crate::{Cli, Command, ResumeArgs, RunArgs};
+use crate::{Cli, Command, MODEL_PROFILE, ResumeArgs, RunArgs};
+
+/// Catalog of three models answering `from <model>`, listed in this order:
+/// `host/model`, which no built-in provider serves; `kimi/kimi-listed`,
+/// priced with a declared profile and the first `cheap` candidate; and
+/// `qwen/qwen-listed`, unpriced without a profile.
+pub(super) fn test_catalog() -> ModelCatalog {
+    let answering = |model: &str| Arc::new(FixedModel(json!({"message": format!("from {model}")})));
+    let built_in = |provider, model| {
+        ModelSpec::new(ModelId::cataloged(provider, model)).with_provider(provider)
+    };
+
+    ModelCatalog::builder()
+        .model(ModelSpec::new("host/model"), answering("host-model"))
+        .model(
+            built_in(ModelProvider::Kimi, "kimi-listed")
+                .with_pricing(Pricing::new(600_000, 2_500_000))
+                .with_profile(MODEL_PROFILE),
+            answering("kimi-listed"),
+        )
+        .model(
+            built_in(ModelProvider::Qwen, "qwen-listed"),
+            answering("qwen-listed"),
+        )
+        .assign(Role::CHEAP, ["kimi/kimi-listed"])
+        .build()
+        .expect("test catalog should build")
+}
 
 pub(super) struct FixedModel(pub(super) Value);
 

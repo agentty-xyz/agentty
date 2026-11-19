@@ -211,7 +211,11 @@ impl ImageContent {
     }
 
     /// Shares validated bytes with another in-process model boundary.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub(crate) fn shared_bytes(&self) -> Arc<[u8]> {
         Arc::clone(&self.bytes)
     }

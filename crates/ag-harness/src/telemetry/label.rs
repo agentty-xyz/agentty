@@ -36,6 +36,8 @@ pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
 /// Provider names that telemetry and persisted model metadata use.
 #[cfg(any(test, feature = "providers-compat"))]
 pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
+#[cfg(feature = "providers-anthropic")]
+pub(crate) const PROVIDER_ANTHROPIC: &str = "anthropic";
 #[cfg(any(test, feature = "providers-compat"))]
 pub(crate) const PROVIDER_META: &str = "meta";
 #[cfg(any(test, feature = "providers-compat"))]

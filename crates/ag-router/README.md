@@ -1,37 +1,39 @@
 # `ag-router`
 
 One Rust API for structured chat requests to Muse, Kimi, Qwen, `OpenAI` (`openai`,
-through the Responses API, or `chatgpt`, billed to a ChatGPT plan), and any
-OpenAI-compatible Chat Completions server (`openai-compatible`), such as Ollama,
-llama.cpp, LM Studio, or vLLM. The host supplies provider credentials and chooses the
-model explicitly as `provider/model`. The model component may itself contain `/`. Every
-request requires a named JSON Schema response format. The router returns locally
-validated JSON or generic function calls for the caller to execute.
+through the Responses API, or `chatgpt`, billed to a ChatGPT plan), Anthropic Claude
+(`anthropic`, through the Messages API), and any OpenAI-compatible Chat Completions
+server (`openai-compatible`), such as Ollama, llama.cpp, LM Studio, or vLLM. The host
+supplies provider credentials and chooses the model explicitly as `provider/model`. The
+model component may itself contain `/`. Every request requires a named JSON Schema
+response format. The router returns locally validated JSON or generic function calls for
+the caller to execute.
 
-Each provider is a `ProviderSpec`: its `WireProtocol` (`ChatCompletions` or
-`Responses`), base URL, `Auth` (none, a bearer key, a named header, or a refreshing
-`CredentialSource`), extra headers and query parameters, and request policy:
+Each provider is a `ProviderSpec`: its `WireProtocol` (`ChatCompletions`, `Responses`,
+or `AnthropicMessages`), base URL, `Auth` (none, a bearer key, a named header, or a
+refreshing `CredentialSource`), extra headers and query parameters, and request policy:
 structured-output mode, reasoning mapping, reasoning-text replay, output-bound field,
 image input, prompt cache key, and context-overflow markers. `ProviderSpec::new` starts
 from the standard request for the protocol with no optional capabilities, so a host adds
-an OpenAI-compatible or Responses provider without code changes. Provider quirks are
-opt-ins: the legacy `max_tokens` field (`with_max_tokens_field`; the default is the
-current `OpenAI` field `max_completion_tokens`, which some compatible servers ignore,
-leaving output unbounded), turn instructions joined to the preceding user message
-(`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`), reasoning-text
-replay, and tool-result names. Each Chat Completions preset states its output-bound
-field and enables the quirks its provider needs. The built-in providers are `preset`s
-routed as `chatgpt`, `kimi`, `muse`, `openai`, `openai-compatible`, and `qwen`; every
-preset except `openai_compatible` is tailored to one model and serves only that model
-(`ProviderSpec::for_model`). A router routes `provider/model` to the specification for
-that model, else to the provider's model-independent one, so it can hold one preset per
-model; a model no specification serves fails with `ModelError::NoProviderSpec`. Of
-duplicate specifications the router keeps the first in every build;
-`Router::with_override` replaces one. `ProviderSpec::validate` rejects a specification
-no request can be sent with, and every request runs it before any network access,
-failing with `ModelError::InvalidProviderConfig` naming the field. Header and query
-values, and credentials or a query in the base URL, are never printed by debug output or
-errors, and requests follow no redirect, so keys never reach another host.
+an OpenAI-compatible, Responses, or Anthropic Messages provider without code changes.
+Provider quirks are opt-ins: the legacy `max_tokens` field (`with_max_tokens_field`; the
+default is the current `OpenAI` field `max_completion_tokens`, which some compatible
+servers ignore, leaving output unbounded), turn instructions joined to the preceding
+user message (`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`),
+reasoning-text replay, and tool-result names. Each Chat Completions preset states its
+output-bound field and enables the quirks its provider needs. The built-in providers are
+`preset`s routed as `anthropic`, `chatgpt`, `kimi`, `muse`, `openai`,
+`openai-compatible`, and `qwen`; every preset except `openai_compatible` is tailored to
+one model and serves only that model (`ProviderSpec::for_model`). A router routes
+`provider/model` to the specification for that model, else to the provider's
+model-independent one, so it can hold one preset per model; a model no specification
+serves fails with `ModelError::NoProviderSpec`. Of duplicate specifications the router
+keeps the first in every build; `Router::with_override` replaces one.
+`ProviderSpec::validate` rejects a specification no request can be sent with, and every
+request runs it before any network access, failing with
+`ModelError::InvalidProviderConfig` naming the field. Header and query values, and
+credentials or a query in the base URL, are never printed by debug output or errors, and
+requests follow no redirect, so keys never reach another host.
 
 ```rust
 use ag_router::{
@@ -128,6 +130,26 @@ tokens. An overflow is recognized from an HTTP rejection or from a streamed
 stream that closes before its terminal event is a transport failure. The current `Task`
 surface supports chat only. Streaming to callers and other model modes are not yet
 implemented.
+
+`anthropic` sends unstreamed requests to `{base_url}/messages` with the key in
+`x-api-key` and the protocol's `anthropic-version: 2023-06-01` header, which
+`with_header` replaces. System messages become top-level `system` blocks, consecutive
+messages of one role merge, tool results return as `tool_result` blocks, and images as
+base64 `image` blocks. A request without an output bound sends `max_tokens` 16,000
+(`ProviderSpec::with_fallback_max_tokens`), since the API requires one. The schema is
+the native `output_config.format`, or with `StructuredOutputMode::ForcedTool` a
+`structured_output` tool whose input is the answer, forced only for a specification
+without a reasoning mapping, since thinking forbids a forced tool. A reasoning effort is
+sent as `output_config.effort` with summarized adaptive thinking. A response's signed
+`thinking` and `redacted_thinking` blocks are returned as one JSON array in the
+reasoning content of its first call or output, with markers where its text and calls
+went, and replayed verbatim in that order; other reasoning content is omitted. Signed
+thinking survives only history that grows, so `Router::replays_turn_instructions` tells
+callers to replay earlier turns' instructions as first sent. Usage counts cache reads
+and writes as input and reports the writes. A `max_tokens`, `pause_turn`, or `refusal`
+stop is an incomplete response, a `model_context_window_exceeded` stop or a "prompt is
+too long" `400` is a context overflow, and an HTTP `529` keeps its status for the
+caller's overload handling.
 
 `chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
 OpenAI's "Sign in with ChatGPT" instead of API credits. Its preset authenticates with

@@ -1,0 +1,30 @@
+{
+  "id": "msg_conformance_1",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "The file names Ada.",
+      "signature": "sig-conformance-1"
+    },
+    {
+      "type": "redacted_thinking",
+      "data": "redacted-conformance-1"
+    },
+    {
+      "type": "text",
+      "text": "{\"name\":\"Ada\"}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 100,
+    "cache_creation_input_tokens": 20,
+    "cache_read_input_tokens": 1000,
+    "output_tokens": 50
+  }
+}

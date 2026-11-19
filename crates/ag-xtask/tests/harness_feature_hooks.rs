@@ -172,6 +172,7 @@ fn feature_lint_builds_no_features_and_each_gating_feature_alone_unified_selecti
             "",
             "native-sandbox",
             "otel",
+            "providers-anthropic",
             "providers-compat",
             "providers-openai",
             "sqlite"
@@ -239,9 +240,10 @@ fn feature_coverage_merges_every_reduced_build_and_checks_without_build_settings
         runs.iter().map(Invocation::features).collect::<Vec<_>>(),
         [
             "",
+            "providers-anthropic",
             "providers-openai",
             "providers-compat",
-            "providers-compat,providers-openai"
+            "providers-anthropic,providers-compat,providers-openai"
         ]
     );
     let report = &coverage[coverage.len() - 1];

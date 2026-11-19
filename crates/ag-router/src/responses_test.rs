@@ -2,8 +2,9 @@
 
 use serde_json::json;
 
-use super::{EventStream, ReasoningView, reasoning_view, replayed_reasoning};
+use super::{EventStream, replayed_reasoning};
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
+use crate::reasoning::{ReasoningView, reasoning_view};
 
 #[test]
 fn reads_events_split_across_chunks_and_lines() {

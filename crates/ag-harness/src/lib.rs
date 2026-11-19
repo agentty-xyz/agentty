@@ -85,7 +85,8 @@
 //! # Features
 //!
 //! The default features keep every built-in backend: `sqlite`,
-//! `native-sandbox`, `otel`, `providers-openai`, and `providers-compat`.
+//! `native-sandbox`, `otel`, `providers-openai`, `providers-compat`, and
+//! `providers-anthropic`.
 //! Disable them to build only the core with [`store::MemoryStore`],
 //! host-implemented [`Model`]s, and host-selected Bash executors. The crate
 //! README's feature table lists what each feature enables, and each gated
@@ -150,7 +151,11 @@ pub mod model;
 mod model_profile;
 mod model_registry;
 mod policy;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 pub mod provider;
 mod read;
 pub mod recovery;

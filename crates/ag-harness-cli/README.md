@@ -54,16 +54,29 @@ back to an API key. When the plan limit is reached, requests fail until it reset
 
 Type `/` in the chat to list commands:
 
-- `/model` lists the known models, numbered, with the current model.
-- `/model <MODEL>` switches later turns of the session to a list number, a
-  `provider/model` pair, a known model ID, or another model ID from the current
-  provider. Completed history is kept, and resuming the session uses the new model.
+- `/model` lists the cataloged models of every provider with credentials, numbered in ID
+  order, with their list prices and the roles (`smart`, `cheap`, `fast`, `vision`) whose
+  first choice they are.
+- `/model <MODEL>` switches later turns of the session to a list number, a role's first
+  choice, a `provider/model` pair, a known model ID (of the current provider when it has
+  one), or another model ID from the current provider. Role names win over model IDs;
+  use `provider/model` for a model named like a role. Completed history is kept, and
+  resuming the session uses the new model.
+- `/usage` shows the session's summed tokens and cost.
+- `/history` shows the session's turns: each prompt and answer.
 - `/help` shows the commands.
 
 Switching needs the target provider's credentials. `--base-url` applies only to the
 provider it was given for; other providers read their base URL environment variable.
-Sessions whose history contains provider reasoning cannot switch models. A model whose
+Reasoning from another provider's model is replayed as short notes. A model whose
 `provider/model` exceeds 256 bytes can start a session but cannot be a switch target.
+
+After each answer, `usage:` shows the turn's tokens and its cost from the model's list
+prices. These report `cost unavailable`: turns after a `/model` switch, sessions created
+before costs were reported, and models without prices, such as ChatGPT-plan, local, and
+uncataloged models. If a provider's credentials are set but unusable, such as an
+unreadable ChatGPT sign-in, the chat warns and continues without the catalog: `/model`
+lists no models and no turn reports a cost.
 
 ## Serve a protocol (unstable)
 

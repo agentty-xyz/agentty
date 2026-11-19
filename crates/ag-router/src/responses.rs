@@ -9,7 +9,7 @@
 //! another provider's reasoning, is omitted.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use reqwest::header::HeaderMap;
@@ -22,6 +22,7 @@ use crate::http::{
 };
 use crate::model::{GeneratedResponse, ModelErrorType};
 use crate::provider_spec::{ProviderSpec, ReasoningMapping};
+use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
 use crate::{input, model, schema as schema_contract, tool};
 
@@ -392,34 +393,31 @@ impl<'spec> ResponsesBackend<'spec> {
     }
 }
 
-/// Creates the production streaming transport for Responses requests.
+/// Production streaming transport for Responses requests, built on first
+/// use and shared by every router, so hosts that build a router per model
+/// do not build an HTTP client per router.
+static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> = LazyLock::new(new_default_transport);
+
+/// Returns the shared production streaming transport for Responses
+/// requests.
 pub(crate) fn default_transport() -> Arc<HttpTransport> {
+    Arc::clone(&DEFAULT_TRANSPORT)
+}
+
+/// Creates the production streaming transport for Responses requests.
+fn new_default_transport() -> Arc<HttpTransport> {
     Arc::new(HttpTransport::streaming(
         STREAM_IDLE_TIMEOUT,
         REQUEST_TIMEOUT,
     ))
 }
 
-/// Readable view of the provider-neutral reasoning content a model
-/// returned, as [`reasoning_view`] reads it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReasoningView<'a> {
-    /// Content that is not Responses reasoning items, such as the plain-text
-    /// reasoning Chat Completions providers return, as written.
-    Text(&'a str),
-    /// The summary text of Responses reasoning items, whose reasoning itself
-    /// is encrypted, with summary parts separated by blank lines.
-    Summary(String),
-    /// Responses reasoning items without any summary text: encrypted only.
-    Opaque,
-}
-
-/// Returns the readable view of `reasoning_content`, recognizing Responses
-/// reasoning items exactly as requests replay them.
-pub fn reasoning_view(reasoning_content: &str) -> ReasoningView<'_> {
-    let Some(items) = reasoning_items(reasoning_content) else {
-        return ReasoningView::Text(reasoning_content);
-    };
+/// Returns the readable view of reasoning content holding Responses
+/// reasoning items, exactly as requests replay them, or `None` for other
+/// content: their summary text, with parts separated by blank lines, or
+/// [`ReasoningView::Opaque`] when no item has any.
+pub(crate) fn reasoning_view(reasoning_content: &str) -> Option<ReasoningView<'static>> {
+    let items = reasoning_items(reasoning_content)?;
     let summaries: Vec<&str> = items
         .iter()
         .filter_map(|item| item.get("summary").and_then(Value::as_array))
@@ -428,10 +426,10 @@ pub fn reasoning_view(reasoning_content: &str) -> ReasoningView<'_> {
         .filter(|text| !text.trim().is_empty())
         .collect();
     if summaries.is_empty() {
-        return ReasoningView::Opaque;
+        return Some(ReasoningView::Opaque);
     }
 
-    ReasoningView::Summary(summaries.join("\n\n"))
+    Some(ReasoningView::Summary(summaries.join("\n\n")))
 }
 
 /// Returns the reasoning items a prior response stored in its reasoning

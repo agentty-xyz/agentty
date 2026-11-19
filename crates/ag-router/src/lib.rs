@@ -1,5 +1,5 @@
 //! Provider-neutral routing for structured LLM chat requests over the Chat
-//! Completions and `OpenAI` Responses wire APIs.
+//! Completions, `OpenAI` Responses, and Anthropic Messages wire APIs.
 //!
 //! A request names a `provider/model`, supplies a JSON Schema response format,
 //! and receives either locally validated JSON or function calls for the caller
@@ -7,6 +7,7 @@
 //! protocol, endpoint, credentials, and request policy, with the built-in
 //! providers available as [`preset`]s.
 
+mod anthropic;
 mod chat_completion;
 pub mod chatgpt;
 mod credential;
@@ -17,6 +18,7 @@ mod model;
 pub mod preset;
 mod provider;
 mod provider_spec;
+mod reasoning;
 mod response_error;
 mod responses;
 mod retry;
@@ -37,7 +39,7 @@ pub use provider_spec::{
     Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
-pub use responses::{ReasoningView, reasoning_view};
+pub use reasoning::{ReasoningView, reasoning_view};
 pub use retry::{Jitter, RetryKind, RetryNotice, RetryObserver, RetryPolicy};
 pub use schema::{
     OutputSchema, OutputSchemaError, OutputValidationError, RESPONSE_CONTENT_LIMIT_BYTES,

@@ -2,7 +2,7 @@
 //! Completions APIs.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -188,9 +188,9 @@ impl<'spec> ChatCompletionBackend<'spec> {
         {
             let instruction = match self.policy.structured_output {
                 StructuredOutputMode::SchemaPrompt => TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION,
-                StructuredOutputMode::JsonObject | StructuredOutputMode::JsonSchema => {
-                    STRUCTURED_OUTPUT_INSTRUCTION
-                }
+                StructuredOutputMode::JsonObject
+                | StructuredOutputMode::JsonSchema
+                | StructuredOutputMode::ForcedTool => STRUCTURED_OUTPUT_INSTRUCTION,
             };
             messages.push(ChatCompletionMessagePayload::Text {
                 content: format!("{instruction}{}", schema.value()),
@@ -370,15 +370,16 @@ impl<'spec> ChatCompletionBackend<'spec> {
                 json_schema: None,
                 kind: "json_object",
             },
-            StructuredOutputMode::JsonSchema | StructuredOutputMode::SchemaPrompt => {
-                ResponseFormat {
-                    json_schema: Some(JsonSchemaResponseFormat {
-                        name: format.name(),
-                        schema: format.schema().value(),
-                    }),
-                    kind: "json_schema",
-                }
-            }
+            // The router rejects a forced tool for this protocol.
+            StructuredOutputMode::JsonSchema
+            | StructuredOutputMode::SchemaPrompt
+            | StructuredOutputMode::ForcedTool => ResponseFormat {
+                json_schema: Some(JsonSchemaResponseFormat {
+                    name: format.name(),
+                    schema: format.schema().value(),
+                }),
+                kind: "json_schema",
+            },
         }
     }
 
@@ -542,11 +543,18 @@ pub(crate) trait ChatCompletionClient: Send + Sync {
     ) -> Result<Option<ChatCompletion>, TransportError>;
 }
 
-/// Creates the production Chat Completions client implementation.
-pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
+/// Production Chat Completions client, built on first use and shared by
+/// every router, so hosts that build a router per model do not build an
+/// HTTP client per router.
+static DEFAULT_CLIENT: LazyLock<Arc<ReqwestChatCompletionClient>> = LazyLock::new(|| {
     Arc::new(ReqwestChatCompletionClient {
         http: HttpTransport::new(REQUEST_TIMEOUT),
     })
+});
+
+/// Returns the shared production Chat Completions client implementation.
+pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
+    Arc::clone(&DEFAULT_CLIENT) as Arc<dyn ChatCompletionClient>
 }
 
 struct ReqwestChatCompletionClient {

@@ -1,8 +1,8 @@
 //! [`ProviderSpec`] presets of the built-in providers.
 //!
-//! Each preset routes under a fixed identifier: `chatgpt`, `kimi`, `muse`,
-//! `openai`, `openai-compatible`, and `qwen`. Every preset except
-//! [`openai_compatible`] is tailored to the model it is built for and
+//! Each preset routes under a fixed identifier: `anthropic`, `chatgpt`,
+//! `kimi`, `muse`, `openai`, `openai-compatible`, and `qwen`. Every preset
+//! except [`openai_compatible`] is tailored to the model it is built for and
 //! serves only that model ([`ProviderSpec::for_model`]), so a router serving
 //! several models of one provider holds one preset per model. A preset is
 //! an ordinary specification, so a host can adjust it with the `with_*`
@@ -17,7 +17,8 @@
 //! A preset given a model it does not know serves it under the provider's
 //! shared policy alone, without the model-specific options: [`kimi`] and
 //! [`qwen`] then send no reasoning control and accept no image input or
-//! reasoning-text replay, and [`muse`] accepts no image input. Presets
+//! reasoning-text replay, [`muse`] accepts no image input, and
+//! [`anthropic`] sends no reasoning control. Presets
 //! taking both a base URL and a key take them in that order; a key passed
 //! as the base URL fails validation without the key appearing in the error.
 
@@ -29,6 +30,28 @@ use crate::provider_spec::{
     Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
+
+/// The Anthropic API's `400` message for input over the window, as in
+/// "prompt is too long: 208000 tokens > 200000 maximum".
+const ANTHROPIC_CONTEXT_OVERFLOW: &str = "prompt is too long";
+
+/// Prefixes of the Claude models that take an `output_config.effort` with
+/// adaptive thinking; earlier ones, such as Claude Haiku 4.5, take neither.
+const ANTHROPIC_EFFORT_PREFIXES: [&str; 9] = [
+    "claude-fable-",
+    "claude-haiku-5",
+    "claude-mythos-",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+];
+
+/// Prefixes of the Claude models whose efforts stop at `max` without
+/// `xhigh`, which arrived with Claude Opus 4.7.
+const ANTHROPIC_NO_XHIGH_PREFIXES: [&str; 2] = ["claude-opus-4-6", "claude-sonnet-4-6"];
 
 /// Kimi's `400` message for input over the window, as in "Your request
 /// exceeded model token limit: 262144 (requested: 422274)".
@@ -59,6 +82,35 @@ const OPENAI_CONTEXT_OVERFLOW: &str = "exceeds the context window";
 /// Prefixes of the `OpenAI` model families that accept the `max` reasoning
 /// effort; earlier models, such as `gpt-5.3-codex`, top out at `xhigh`.
 const OPENAI_MAX_EFFORT_PREFIXES: [&str; 2] = ["gpt-5.6-", "gpt-6"];
+
+/// Claude models through the Anthropic Messages API, authenticated by an
+/// `x-api-key` header beside the protocol's `anthropic-version`: native
+/// structured output, image input, and, for the models that take them, efforts
+/// with adaptive thinking, `xhigh` sent as `high` before Claude Opus 4.7.
+pub fn anthropic(
+    base_url: impl Into<String>,
+    api_key: impl Into<String>,
+    model: &str,
+) -> ProviderSpec {
+    let has_prefix = |prefixes: &[&str]| prefixes.iter().any(|prefix| model.starts_with(prefix));
+    let reasoning = if !has_prefix(&ANTHROPIC_EFFORT_PREFIXES) {
+        ReasoningMapping::None
+    } else if has_prefix(&ANTHROPIC_NO_XHIGH_PREFIXES) {
+        ReasoningMapping::Effort(EffortNames::default().with(ReasoningEffort::XHigh, "high"))
+    } else {
+        ReasoningMapping::Effort(EffortNames::default())
+    };
+
+    ProviderSpec::new("anthropic", WireProtocol::AnthropicMessages, base_url)
+        .for_model(model)
+        .with_auth(Auth::Header {
+            name: "x-api-key".to_string(),
+            value: api_key.into(),
+        })
+        .with_display_name("Anthropic")
+        .with_overflow_marker(ANTHROPIC_CONTEXT_OVERFLOW)
+        .with_reasoning(reasoning)
+}
 
 /// `OpenAI` models billed to the user's `ChatGPT` plan through "Sign in with
 /// `ChatGPT`": the Responses API authenticated by a refreshing `credential`,

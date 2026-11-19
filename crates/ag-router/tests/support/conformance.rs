@@ -9,7 +9,11 @@
 //! recorder below as `crates/ag-router/tests/record_golden.rs` (with the
 //! `PlanToken` credential the responses suite defines, implementing
 //! `BearerCredential`), run it with `GOLDEN_OUT` naming an output directory,
-//! and compare the output with the `requests/` files byte for byte:
+//! and compare the output with the `requests/` files byte for byte. The
+//! `anthropic-*` fixtures postdate that enum: they record the first Anthropic
+//! Messages requests, written by hand from the Messages API reference and
+//! then matched to the serialized key order, and the `anthropic_messages/`
+//! responses follow the same reference:
 //!
 //! ```text
 //! #[allow(dead_code)]

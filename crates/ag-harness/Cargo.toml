@@ -14,14 +14,21 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"]
+default = [
+  "native-sandbox",
+  "otel",
+  "providers-anthropic",
+  "providers-compat",
+  "providers-openai",
+  "sqlite",
+]
 # Native macOS Seatbelt and Linux Landlock/seccomp Bash executor, its
 # `ag-harness-sandbox` launcher binary, and the default executor selection.
 native-sandbox = ["dep:close_fds", "dep:libc", "dep:libproc"]
 # OpenTelemetry request metrics, lifecycle metric and trace observers, and
 # trace-context propagation into spawned turn work.
 otel = ["dep:opentelemetry"]
-# Reserved for the Anthropic Messages client; enables nothing yet.
+# Anthropic Messages clients: Claude models through the Anthropic API.
 providers-anthropic = []
 # OpenAI-compatible Chat Completions clients: Kimi, Qwen, Muse, and local or
 # self-hosted servers.
