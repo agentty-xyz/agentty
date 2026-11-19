@@ -426,7 +426,9 @@ async fn serve_asks_the_client_to_approve_writes() -> TestResult<()> {
     server
         .send(&json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"decision": "allow"}}))
         .await?;
-    let approved_completed = server.completed(&approved["result"]["run"]).await?;
+    let approved_completed = server
+        .event(&approved["result"]["run"], "completed")
+        .await?;
     let (_, exited) = server.finish().await?;
 
     // Assert
