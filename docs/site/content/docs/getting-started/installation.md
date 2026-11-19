@@ -23,7 +23,7 @@ and launch your first session.
 - Cargo installs on macOS need Xcode Command Line Tools for native process bindings.
 
 Global `npm`, Bun, and `pnpm` installs and shell installs update automatically; see
-[Auto-Update](@/docs/usage/workflow.md#auto-update). Shell installs of `v0.19.4` or
+[Auto-Update](@/docs/usage/workflow.md#auto-update). Shell installs of `v0.19.5` or
 earlier need one manual update first. To update manually, use your original method:
 
 | Method | Update command                        |
