@@ -22,7 +22,7 @@ use crate::catalog::{ModelId, Pricing};
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{
-    EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
+    self, EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
 };
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -1113,7 +1113,8 @@ impl Engine<'_> {
         let model_lifecycle =
             self.lifecycle
                 .start_model_request(model.metadata(), model_request_index, turn_id);
-        let operation = model.complete(request.clone());
+        let operation =
+            event::with_retry_events(self.events.clone(), model.complete(request.clone()));
         let completion = match model_lifecycle.as_ref() {
             Some(model_lifecycle) => model_lifecycle.scope(operation).await,
             None => operation.await,

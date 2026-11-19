@@ -1,13 +1,10 @@
-//! Session review-request sync, merge, and rebase gate tests.
+//! Session review-request sync and rebase gate tests.
 
 use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
-    SessionStatus as Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionStatus as Status,
 };
 
-use super::super::{can_merge_session_branch_in_stack, can_rebase_session_branch_in_stack};
 use super::support::test_session;
-use crate::test_support::SessionFixtureBuilder;
 
 #[test]
 fn test_forge_indicator_returns_merged_symbol_with_display_id() {
@@ -109,140 +106,6 @@ fn test_can_sync_review_request_false_without_forge_context() {
 
     // Act / Assert
     assert!(!session.can_sync_review_request());
-}
-
-#[test]
-fn test_can_merge_session_branch_in_stack_allows_parent_with_materialized_child() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_merge_parent = can_merge_session_branch_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(can_merge_parent);
-}
-
-#[test]
-fn test_can_merge_session_branch_in_stack_blocks_concurrent_stack_member() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let running_child_session = SessionFixtureBuilder::new()
-        .id("running-child")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let review_child_session = SessionFixtureBuilder::new()
-        .id("review-child")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, running_child_session, review_child_session];
-
-    // Act
-    let can_merge_review_child = can_merge_session_branch_in_stack(&sessions, "review-child");
-
-    // Assert
-    assert!(!can_merge_review_child);
-}
-
-#[test]
-fn test_can_merge_session_branch_in_stack_blocks_linked_review_request() {
-    // Arrange
-    let review_request = ReviewRequest {
-        last_refreshed_at: 0,
-        summary: ReviewRequestSummary {
-            display_id: "#42".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            source_branch: "wt/session-id".to_string(),
-            state: ReviewRequestState::Open,
-            status_summary: None,
-            target_branch: "main".to_string(),
-            title: "Review request".to_string(),
-            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-        },
-    };
-    let session = SessionFixtureBuilder::new()
-        .id("linked-session")
-        .review_request(Some(review_request))
-        .status(Status::Review)
-        .build();
-    let sessions = vec![session];
-
-    // Act
-    let can_merge_session = can_merge_session_branch_in_stack(&sessions, "linked-session");
-
-    // Assert
-    assert!(!can_merge_session);
-}
-
-#[test]
-fn test_can_rebase_session_branch_in_stack_allows_parent_with_review_child() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_rebase_parent = can_rebase_session_branch_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(can_rebase_parent);
-}
-
-#[test]
-fn test_can_rebase_session_branch_in_stack_blocks_concurrent_stack_member() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let running_child_session = SessionFixtureBuilder::new()
-        .id("running-child")
-        .draft(true)
-        .status(Status::InProgress)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let review_child_session = SessionFixtureBuilder::new()
-        .id("review-child")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, running_child_session, review_child_session];
-
-    // Act
-    let can_rebase_review_child = can_rebase_session_branch_in_stack(&sessions, "review-child");
-
-    // Assert
-    assert!(!can_rebase_review_child);
 }
 
 #[test]

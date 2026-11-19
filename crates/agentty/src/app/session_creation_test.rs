@@ -516,15 +516,10 @@ async fn failed_fork_handoff_retains_prompt_for_retry() {
 }
 
 #[tokio::test]
-async fn prepared_stacked_prompt_rechecks_parent_readiness() {
+async fn prepared_draft_prompt_rechecks_staged_draft_readiness() {
     // Arrange
     let (mut app, _directory) = crate::test_support::new_git_test_app().await;
-    let parent = app.create_session().await.expect("parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent, Status::Review);
-    let id = app
-        .create_stacked_draft_session(&parent)
-        .await
-        .expect("child");
+    let id = app.create_draft_session().await.expect("draft");
     app.stage_draft_message(&id, "child prompt")
         .await
         .expect("stage");
@@ -543,7 +538,12 @@ async fn prepared_stacked_prompt_rechecks_parent_readiness() {
         .update_session_preparation(&id, SessionPreparationState::Ready, None)
         .await
         .expect("ready");
-    crate::test_support::set_session_status_for_test(&mut app, &parent, Status::InProgress);
+    app.sessions
+        .state_mut()
+        .session_mut_for_id(&id)
+        .expect("draft session")
+        .prompt
+        .clear();
 
     // Act
     let result = app.run_prepared_prompt(&id).await;
@@ -551,9 +551,9 @@ async fn prepared_stacked_prompt_rechecks_parent_readiness() {
     // Assert
     assert!(
         result
-            .expect_err("parent became busy")
+            .expect_err("draft is no longer staged")
             .to_string()
-            .contains("parent stack")
+            .contains("no longer ready to start")
     );
     assert!(
         app.services
@@ -1154,10 +1154,7 @@ async fn background_creation_traces_workspace_preparation_under_a_session_create
     assert_span_attributes(
         &root,
         "completed",
-        &[
-            KeyValue::new("agentty.session.id", session_id.to_string()),
-            KeyValue::new("agentty.session.stacked", false),
-        ],
+        &[KeyValue::new("agentty.session.id", session_id.to_string())],
     );
     let preparation = finished_span(&exporter, "workspace.prepare", root.span_context.span_id());
     assert_span_attributes(&preparation, "completed", &[]);
@@ -1184,10 +1181,7 @@ async fn canceled_checkout_ends_its_session_create_root_as_canceled() {
     assert_span_attributes(
         &root,
         "canceled",
-        &[
-            KeyValue::new("agentty.session.id", session_id.to_string()),
-            KeyValue::new("agentty.session.stacked", false),
-        ],
+        &[KeyValue::new("agentty.session.id", session_id.to_string())],
     );
 }
 
@@ -1208,10 +1202,7 @@ async fn fork_checkout_runs_under_a_session_fork_root() {
     assert_span_attributes(
         &root,
         "completed",
-        &[
-            KeyValue::new("agentty.session.id", fork_id),
-            KeyValue::new("agentty.session.stacked", false),
-        ],
+        &[KeyValue::new("agentty.session.id", fork_id)],
     );
     finished_span(&exporter, "workspace.prepare", root.span_context.span_id());
 }
@@ -1299,9 +1290,7 @@ async fn creation_rejection_preserves_typed_api_error_even_when_caller_disconnec
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     let (response_tx, response_rx) = oneshot::channel();
     let request = CreateSessionRequest {
-        mode: CreateSessionMode::Stacked {
-            parent_session_id: "missing".into(),
-        },
+        inherit_from_session_id: Some("missing".into()),
         ..regular_request(&app)
     };
 

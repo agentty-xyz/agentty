@@ -189,7 +189,6 @@ pub(super) fn session_fixture() -> Session {
             agent: model_fixture::codex_selection(),
             base_branch: "main".to_string(),
             is_draft: false,
-            parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
             project_id: 7,
             reasoning_level: ReasoningLevel::High,

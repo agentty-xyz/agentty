@@ -50,7 +50,6 @@ fn session() -> Session {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             base_branch: "main".to_string(),
             is_draft: true,
-            parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
             project_id: 1,
             reasoning_level: ReasoningLevel::default(),

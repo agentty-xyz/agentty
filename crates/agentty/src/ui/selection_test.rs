@@ -27,7 +27,6 @@ use crate::ui::component::launch_configuration_list_editor::LaunchConfigurationL
 use crate::ui::component::launch_configuration_overlay::LaunchConfigurationOverlay;
 use crate::ui::component::project_switcher_overlay::ProjectSwitcherOverlay;
 use crate::ui::component::session_creation_overlay::SessionCreationOverlay;
-use crate::ui::component::stack_append_parent_overlay::StackAppendParentOverlay;
 use crate::ui::component::tab::Tabs;
 use crate::ui::page::project_list::ProjectListPage;
 use crate::ui::page::session_list::SessionListPage;
@@ -42,11 +41,6 @@ fn option_highlights_follow_selection_across_themes_and_widths() {
                 let _theme_scope = style::scoped_active_theme(theme);
                 let projects = [project(1, "Alpha"), project(2, "Beta")];
                 let project_refs = projects.iter().collect::<Vec<_>>();
-                let sessions = [
-                    titled_session_fixture("Alpha", Status::Review),
-                    titled_session_fixture("Beta", Status::Review),
-                ];
-                let session_refs = sessions.iter().collect::<Vec<_>>();
                 let commands = vec!["Alpha".to_string(), "Beta".to_string()];
                 let editor = LaunchConfigurationListEditorSnapshot {
                     commands: commands.clone(),
@@ -56,20 +50,14 @@ fn option_highlights_follow_selection_across_themes_and_widths() {
                 };
                 let project_switcher =
                     ProjectSwitcherOverlay::new(&project_refs, 1, selected_index);
-                let parent_picker = StackAppendParentOverlay::new(&session_refs, selected_index);
                 let launch_picker = LaunchConfigurationOverlay::new(&commands)
                     .selected_command_index(selected_index);
                 let launch_editor = LaunchConfigurationListEditor::new(&editor);
                 let confirmation = ConfirmationOverlay::new("Choose", "Select an option")
                     .option_labels("Alpha", "Beta")
                     .selected_first(selected_index == 0);
-                let creation = SessionCreationOverlay::new(
-                    selected_index,
-                    false,
-                    false,
-                    HarnessAvailability::Hidden,
-                    true,
-                );
+                let creation =
+                    SessionCreationOverlay::new(selected_index, HarnessAvailability::Hidden, true);
                 let info = InfoOverlay::new("Notice", "Ready");
                 let suggestions = SuggestionList {
                     items: commands
@@ -86,9 +74,8 @@ fn option_highlights_follow_selection_across_themes_and_widths() {
                 };
                 let chat_input = ChatInput::new("Prompt", "", 0).suggestion_list(&suggestions);
                 let selected_label = ["Alpha", "Beta"][selected_index];
-                let controls: [(&dyn Component, &str); 8] = [
+                let controls: [(&dyn Component, &str); 7] = [
                     (&project_switcher, selected_label),
-                    (&parent_picker, selected_label),
                     (&launch_picker, selected_label),
                     (&launch_editor, selected_label),
                     (&confirmation, selected_label),

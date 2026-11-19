@@ -12,19 +12,14 @@ use crate::{AcceptTaskPlanRequest, CreateTaskRequest, SubmitTaskRequest, Task};
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum CreateSessionMode {
-    /// Creates a regular root session with an eagerly materialized worktree.
+    /// Creates a regular session with an eagerly materialized worktree.
     #[default]
     Regular,
-    /// Creates a root draft whose worktree is materialized on first send.
+    /// Creates a draft whose worktree is materialized on first send.
     Draft,
-    /// Creates a regular root session that runs on the in-process
+    /// Creates a regular session that runs on the in-process
     /// [`crate::AgentKind::Harness`] with its default model.
     Harness,
-    /// Creates a draft stacked on an existing parent session.
-    Stacked {
-        /// Review-ready parent session whose branch becomes the stack base.
-        parent_session_id: SessionId,
-    },
 }
 
 /// Explicit input for creating one session.
@@ -34,7 +29,7 @@ pub struct CreateSessionRequest {
     ///
     /// When absent, the host resolves the owning project's current defaults.
     pub inherit_from_session_id: Option<SessionId>,
-    /// Determines whether the session is regular, deferred, or stacked.
+    /// Determines whether the session is regular, deferred, or harness-backed.
     pub mode: CreateSessionMode,
     /// Project that owns the new session.
     pub project_id: i64,

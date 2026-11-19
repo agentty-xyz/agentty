@@ -1,5 +1,4 @@
-//! Merge state tests covering session titles from commit messages and
-//! stacked parent merge notifications.
+//! Merge state tests covering session titles from commit messages.
 
 use tokio::sync::mpsc;
 
@@ -105,26 +104,4 @@ async fn test_update_session_title_from_commit_message_tolerates_failed_persiste
 
     // Assert
     assert_eq!(sessions[0].title, None);
-}
-
-#[test]
-fn test_emit_stacked_parent_merge_completed_sends_restacks_and_tolerates_closed_reducer() {
-    // Arrange
-    enable_tracing_log_fallback();
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let closed_app_event_tx = mpsc::unbounded_channel().0;
-
-    // Act
-    SessionManager::emit_stacked_parent_merge_completed(&app_event_tx, Vec::new());
-    SessionManager::emit_stacked_parent_merge_completed(&app_event_tx, vec!["child".into()]);
-    SessionManager::emit_stacked_parent_merge_completed(&closed_app_event_tx, vec!["child".into()]);
-
-    // Assert
-    assert_eq!(
-        app_event_rx.try_recv().ok(),
-        Some(AppEvent::StackedParentMergeCompleted {
-            child_session_ids: vec!["child".into()],
-        })
-    );
-    assert!(app_event_rx.try_recv().is_err());
 }

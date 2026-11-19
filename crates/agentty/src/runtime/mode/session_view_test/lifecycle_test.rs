@@ -26,84 +26,10 @@ use crate::runtime::EventResult;
 use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
 
 #[tokio::test]
-async fn start_key_rechecks_parent_readiness_and_preserves_staged_draft() {
+async fn start_key_admits_a_staged_draft() {
     // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    let session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("draft");
-    app.stage_draft_message(&session_id, "saved draft")
-        .await
-        .expect("stage prompt");
-    app.mode = AppMode::View {
-        session_id: session_id.clone().into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("view context");
-    let snapshot = view_session_snapshot(&app, &context).expect("view snapshot");
-    assert!(snapshot.can_start_staged_session());
-    let mut pending_update = ViewPendingUpdate::from_context(&context);
-    // The view's eligibility snapshot must not bypass admission when the
-    // parent has since started another turn.
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        Status::InProgress,
-    );
-
-    // Act
-    let should_apply = handle_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
-        ViewKeyContext {
-            context: &context,
-            session_snapshot: &snapshot,
-        },
-        &mut pending_update,
-    )
-    .await;
-
-    // Assert
-    let messages = app
-        .services
-        .db()
-        .sessions()
-        .load_session_messages(&session_id)
-        .await
-        .expect("transcript");
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.content.contains("[Start Error]")
-                && message.content.contains("parent is in review"))
-    );
-    let session = app.sessions.session_for_id(&session_id).expect("draft");
-    assert_eq!(session.status, Status::Draft);
-    assert_eq!(session.prompt, "saved draft");
-    assert!(!should_apply);
-    assert!(matches!(app.mode, AppMode::View { .. }));
-    assert!(
-        app.services
-            .db()
-            .sessions()
-            .load_session_preparation(&session_id)
-            .await
-            .expect("preparation")
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn start_key_admits_a_staged_draft_under_a_review_ready_parent() {
-    // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    let session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("draft");
+    let (mut app, _base_dir, _session_id) = new_test_app_with_session().await;
+    let session_id = app.create_draft_session().await.expect("draft");
     app.stage_draft_message(&session_id, "saved draft")
         .await
         .expect("stage prompt");
@@ -179,23 +105,17 @@ fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() 
 }
 
 #[test]
-fn test_view_session_snapshot_allows_start_for_stacked_draft() {
+fn test_view_session_snapshot_allows_start_for_staged_draft() {
     // Arrange
-    let parent = SessionFixtureBuilder::new()
-        .id("parent")
-        .status(Status::Review)
-        .draft(false)
-        .build();
-    let mut child = SessionFixtureBuilder::new()
-        .id("child")
+    let mut draft = SessionFixtureBuilder::new()
+        .id("draft")
         .status(Status::Draft)
         .draft(true)
-        .parent_session_id(Some("parent".into()))
         .build();
-    child.prompt = "staged child draft".to_string();
-    let sessions = session_manager_with_sessions(vec![parent, child]);
+    draft.prompt = "staged draft".to_string();
+    let sessions = session_manager_with_sessions(vec![draft]);
     let mut mode = AppMode::View {
-        session_id: "child".into(),
+        session_id: "draft".into(),
         scroll_offset: Some(1),
     };
     let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
@@ -205,20 +125,18 @@ fn test_view_session_snapshot_allows_start_for_stacked_draft() {
         .expect("expected view snapshot");
 
     // Assert
-    assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
+    assert_eq!(snapshot.session_state, ViewSessionState::NewSession);
     assert!(snapshot.can_start_staged_session());
     assert!(snapshot.can_paste_image_into_draft_composer());
-    assert!(!snapshot.can_merge_session());
     assert!(!snapshot.can_rebase_session());
 }
 
 #[test]
-fn test_view_session_state_maps_stacked_draft_status() {
+fn test_view_session_state_maps_draft_session_status() {
     // Arrange
     let session = crate::test_support::SessionFixtureBuilder::new()
         .status(Status::Draft)
         .draft(true)
-        .parent_session_id(Some("parent-session".into()))
         .folder(std::env::temp_dir())
         .project_name("")
         .build();
@@ -227,7 +145,7 @@ fn test_view_session_state_maps_stacked_draft_status() {
     let state = help_action::session_view_state(&session);
 
     // Assert
-    assert_eq!(state, ViewSessionState::StackedDraft);
+    assert_eq!(state, ViewSessionState::NewSession);
 }
 
 #[tokio::test]

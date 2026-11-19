@@ -1,17 +1,15 @@
 //! Session manager lifecycle tests covering creation, deletion, default model
-//! settings, stacked drafts, and staged session starts.
+//! settings, drafts, and staged session starts.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_contracts::MockAgentChannel;
 use ag_git as git;
 use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use ag_session::{AgentSelectionMetadata, session_branch, test_support as model_fixture};
+use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 use tempfile::tempdir;
-use tokio::sync::Notify;
 
 use super::super::{SessionDefaults, SessionManager, session_folder};
 use super::support::{
@@ -22,7 +20,6 @@ use super::support::{
 use crate::app::SessionState;
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
-use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
@@ -697,77 +694,6 @@ async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
 }
 
 #[tokio::test]
-async fn test_create_stacked_draft_session_persists_parent_and_base_branch() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let expected_base_branch = session_branch(&parent_session_id);
-
-    // Act
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked draft session");
-
-    // Assert
-    let child_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("missing child session");
-    assert!(child_session.is_draft_session());
-    assert_eq!(child_session.status, Status::Draft);
-    assert_eq!(
-        child_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
-    assert_eq!(child_session.base_branch, expected_base_branch);
-    assert!(!child_session.folder.exists());
-
-    let db_sessions = app
-        .services
-        .db()
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("failed to load");
-    let db_child_session = db_sessions
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("missing persisted child session");
-    assert_eq!(
-        db_child_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
-    assert_eq!(db_child_session.base_branch, expected_base_branch);
-}
-
-#[tokio::test]
-async fn test_create_stacked_draft_session_chains_five_drafts_and_rejects_sixth() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let root_session_id = app.create_session().await.expect("failed to create root");
-    let mut parent_session_id = root_session_id;
-    for _ in 1..=5 {
-        parent_session_id = app
-            .create_stacked_draft_session(&parent_session_id)
-            .await
-            .expect("failed to create nested stack level");
-    }
-
-    // Act
-    let result = app.create_stacked_draft_session(&parent_session_id).await;
-
-    // Assert
-    let error = result.expect_err("sixth stack level should fail");
-    assert!(error.to_string().contains("five-level stack limit"));
-    assert_eq!(app.sessions.sessions().len(), 6);
-}
-
-#[tokio::test]
 async fn test_esc_deletes_blank_session() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
@@ -1064,63 +990,6 @@ END
         .await
         .expect("failed to load sessions");
     assert!(db_sessions[0].is_draft);
-}
-
-#[tokio::test]
-async fn test_start_staged_session_launches_stacked_draft_child() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked draft session");
-    app.stage_draft_message(&child_session_id, "Stacked draft")
-        .await
-        .expect("failed to stage stacked draft message");
-
-    let started = Arc::new(Notify::new());
-    let started_for_agent = Arc::clone(&started);
-    let mut channel = MockAgentChannel::new();
-    channel
-        .expect_run_turn()
-        .once()
-        .returning(move |_, request, _| {
-            assert_eq!(request.prompt.text, "Stacked draft");
-            started_for_agent.notify_one();
-
-            Box::pin(std::future::pending())
-        });
-    let channels = TestSessionRunFactory::install(&mut app.services);
-    channels.register(&child_session_id, Arc::new(channel));
-
-    // Act
-    app.start_staged_session(&child_session_id)
-        .await
-        .expect("failed to start stacked draft");
-    app.sessions.sync_from_handles();
-
-    crate::test_support::finish_session_creation_tasks(&mut app).await;
-    tokio::time::timeout(Duration::from_secs(5), started.notified())
-        .await
-        .expect("stacked first turn must reach the worker");
-    app.sessions.sync_from_handles();
-
-    // Assert
-    let child_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("missing child session");
-    assert_eq!(child_session.status, Status::InProgress);
-    assert!(child_session.folder.exists());
-    assert_eq!(
-        child_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
 }
 
 #[tokio::test]

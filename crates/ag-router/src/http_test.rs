@@ -1,5 +1,5 @@
 //! HTTP transport tests for body limits, error classification, timeouts, and
-//! rate-limit retries.
+//! the default policy's connection and rate-limit retries.
 
 use std::io;
 use std::io::{Read as _, Write as _};
@@ -10,20 +10,22 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 
 use super::{
-    ERROR_BODY_LIMIT_BYTES, HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES,
-    MAX_RETRY_DELAY, ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError,
-    append_success_chunk, has_context_overflow_marker, is_quota_exceeded, rate_limit_retry_delay,
-    retry_after,
+    ERROR_BODY_LIMIT_BYTES, HttpTransport, ProviderRequest, RetryClock, SUCCESS_BODY_LIMIT_BYTES,
+    TransportError, append_success_chunk, has_context_overflow_marker, is_quota_exceeded,
 };
 use crate::model;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
+/// Rate-limit retries of the default policy.
+const DEFAULT_RATE_LIMIT_RETRIES: usize = 5;
 
-/// Returns a production transport with millisecond retry delays.
+/// Returns a production transport whose retries do not wait.
 fn transport(request_timeout: Duration) -> HttpTransport {
     HttpTransport {
-        max_retry_delay: Duration::from_millis(5),
-        retry_delay: Duration::from_millis(1),
+        clock: RetryClock {
+            sleep: |_| tokio::time::sleep(Duration::ZERO),
+            ..RetryClock::system()
+        },
         ..HttpTransport::new(request_timeout)
     }
 }
@@ -387,108 +389,6 @@ fn streaming_transport_keeps_the_whole_request_bound() {
 
     // Assert
     assert_eq!(transport.request_timeout, Duration::from_secs(70));
-    assert_eq!(transport.retry_delay, RETRY_DELAY);
-    assert_eq!(transport.max_retry_delay, MAX_RETRY_DELAY);
-}
-
-#[test]
-fn retry_after_reads_bounded_delta_seconds() {
-    // Arrange
-    let cases: [(&[u8], Option<Duration>); 6] = [
-        (b"7", Some(Duration::from_secs(7))),
-        (b"0", Some(Duration::ZERO)),
-        (b"18446744073709551615", Some(MAX_PROVIDER_RETRY_DELAY)),
-        (b"Wed, 21 Oct 2015 07:28:00 GMT", None),
-        (b"soon", None),
-        (b"\xff", None),
-    ];
-
-    for (value, expected) in cases {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::RETRY_AFTER,
-            reqwest::header::HeaderValue::from_bytes(value).expect("valid header bytes"),
-        );
-
-        // Act
-        let delay = retry_after(&headers);
-
-        // Assert
-        assert_eq!(delay, expected, "{value:?}");
-    }
-    assert_eq!(retry_after(&reqwest::header::HeaderMap::new()), None);
-}
-
-#[test]
-fn rate_limit_retry_delay_uses_provider_delay_and_backoff() {
-    // Arrange
-    let cases = [
-        (None, 0, Duration::from_secs(1)),
-        (None, 1, Duration::from_secs(2)),
-        (Some(Duration::from_secs(1)), 2, Duration::from_secs(4)),
-        (Some(Duration::from_secs(30)), 0, Duration::from_secs(30)),
-        (None, 9, MAX_RETRY_DELAY),
-    ];
-
-    for (provider_delay, retry, expected) in cases {
-        // Act
-        let delay = rate_limit_retry_delay(provider_delay, retry, RETRY_DELAY, MAX_RETRY_DELAY);
-
-        // Assert
-        assert_eq!(delay, expected, "{provider_delay:?} {retry}");
-    }
-}
-
-#[tokio::test]
-async fn retries_rate_limit_response_before_decoding_success() {
-    // Arrange
-    let listener = TcpListener::bind("127.0.0.1:0").expect("retry listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("retry listener should have an address");
-    let success_body =
-        r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"message\":\"ok\"}"}}]}"#;
-    let server = tokio::task::spawn_blocking(move || {
-        for attempt in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .expect("retry listener should accept a request");
-            let mut request = [0; 2_048];
-            assert!(
-                stream.read(&mut request).expect("request should be read") > 0,
-                "retry request should not be empty"
-            );
-            if attempt == 0 {
-                stream
-                    .write_all(
-                        b"HTTP/1.1 429 Too Many Requests\r\n\
-                          Content-Length: 0\r\n\
-                          Retry-After: 0\r\n\
-                          Connection: close\r\n\r\n",
-                    )
-                    .expect("rate-limit response should be written");
-            } else {
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    success_body.len(),
-                    success_body
-                )
-                .expect("success response should be written");
-            }
-        }
-    });
-    let client = transport(REQUEST_TIMEOUT);
-
-    // Act
-    let body = client
-        .post_json::<Value>(&request(address))
-        .await
-        .expect("retry should recover");
-    server.await.expect("retry server should finish");
-
-    // Assert
-    assert_eq!(body["choices"][0]["finish_reason"], "stop");
 }
 
 #[tokio::test]
@@ -608,9 +508,9 @@ async fn retains_http_status_when_error_body_read_fails() {
         .local_addr()
         .expect("truncated-response listener should have an address");
     let server = tokio::task::spawn_blocking(move || {
-        for attempt in 0..=MAX_RATE_LIMIT_RETRIES {
+        for attempt in 0..=DEFAULT_RATE_LIMIT_RETRIES {
             // Only the final response's `Retry-After` should be surfaced.
-            let retry_after = u8::from(attempt == MAX_RATE_LIMIT_RETRIES);
+            let retry_after = u8::from(attempt == DEFAULT_RATE_LIMIT_RETRIES);
             let (mut stream, _) = listener
                 .accept()
                 .expect("truncated-response listener should accept a request");

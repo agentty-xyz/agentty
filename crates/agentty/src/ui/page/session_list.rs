@@ -1,5 +1,5 @@
-//! Sessions tab page rendering grouped sessions as a table with stack-tree,
-//! model, status, and timer columns.
+//! Sessions tab page rendering grouped sessions as a table with title, model,
+//! status, and timer columns.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -16,9 +16,7 @@ use ratatui::widgets::{Cell, Row, Table, TableState};
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{ReviewRequestSummary, Session, SessionId, Status};
-use crate::domain::session_order::{
-    self, ArchiveAction, GroupedSessionRow, SessionGroup, SessionTreePosition,
-};
+use crate::domain::session_order::{self, ArchiveAction, GroupedSessionRow, SessionGroup};
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::{Page, layout, markdown, style};
 
@@ -40,12 +38,6 @@ const PR_BYPASS_READY_LABEL: &str = " [ready (bypass)]";
 /// Display width of the widest size badge, `[XXL]`, so titles share one
 /// left edge regardless of size.
 const SIZE_BADGE_WIDTH: usize = 5;
-
-/// Tree branch prefix for child rows that have siblings after them.
-const TREE_BRANCH_MIDDLE: &str = "├ ";
-
-/// Tree branch prefix for the final child row in a stack.
-const TREE_BRANCH_LAST: &str = "└ ";
 
 /// Session list page renderer.
 pub struct SessionListPage<'a> {
@@ -224,7 +216,6 @@ enum PreparedSessionRow<'a> {
         cells: PreparedSessionCells,
         has_merge_conflict: bool,
         session: &'a Session,
-        tree_position: SessionTreePosition,
     },
 }
 
@@ -251,11 +242,7 @@ impl<'a> PreparedSessionRow<'a> {
                     session_count,
                 }
             }
-            GroupedSessionRow::Session {
-                session,
-                tree_position,
-                ..
-            } => Self::Session {
+            GroupedSessionRow::Session { session, .. } => Self::Session {
                 adds_group_spacing: matches!(
                     following_rows.first(),
                     Some(GroupedSessionRow::GroupLabel(_))
@@ -267,7 +254,6 @@ impl<'a> PreparedSessionRow<'a> {
                 ),
                 has_merge_conflict,
                 session,
-                tree_position: *tree_position,
             },
         }
     }
@@ -413,27 +399,6 @@ fn session_group_label(group: SessionGroup) -> &'static str {
     }
 }
 
-/// Returns the indented tree marker for one grouped session row.
-fn tree_position_label(tree_position: SessionTreePosition) -> String {
-    match tree_position {
-        SessionTreePosition::Root => String::new(),
-        SessionTreePosition::Child { depth, is_last } => {
-            let branch = if is_last {
-                TREE_BRANCH_LAST
-            } else {
-                TREE_BRANCH_MIDDLE
-            };
-
-            format!("{}{branch}", "  ".repeat(depth.saturating_sub(1)))
-        }
-    }
-}
-
-/// Returns the display width consumed by a grouped session tree marker.
-fn tree_position_width(tree_position: SessionTreePosition) -> usize {
-    tree_position_label(tree_position).chars().count()
-}
-
 /// Resolves the selected session id from the original session ordering.
 fn selected_session_id(sessions: &[Session], selected_index: Option<usize>) -> Option<&str> {
     selected_index
@@ -556,10 +521,8 @@ fn render_table_row(
             cells,
             has_merge_conflict,
             session,
-            tree_position,
         } => render_session_row(
             session,
-            tree_position,
             cells,
             title_column_width,
             adds_group_spacing,
@@ -624,27 +587,16 @@ fn render_empty_sessions_hint_row() -> Row<'static> {
 /// Renders one session row.
 fn render_session_row(
     session: &Session,
-    tree_position: SessionTreePosition,
     cells: PreparedSessionCells,
     title_column_width: usize,
     adds_group_spacing: bool,
     has_merge_conflict: bool,
     is_selected: bool,
 ) -> Row<'static> {
-    let title_spans = render_session_title(
-        session,
-        title_column_width.saturating_sub(tree_position_width(tree_position)),
-        has_merge_conflict,
-        is_selected,
-    );
-    let mut title_line_spans = Vec::new();
-    let tree_label = tree_position_label(tree_position);
-    if !tree_label.is_empty() {
-        title_line_spans.push(Span::styled(tree_label, tree_prefix_style()));
-    }
-    title_line_spans.extend(title_spans);
+    let title_spans =
+        render_session_title(session, title_column_width, has_merge_conflict, is_selected);
     let cells = vec![
-        Cell::from(Line::from(title_line_spans)),
+        Cell::from(Line::from(title_spans)),
         Cell::from(cells.model_cell),
         cells.status_cell,
         Cell::from(Line::from(cells.timer_label).alignment(Alignment::Right)),
@@ -684,11 +636,6 @@ fn session_detail_color(session: &Session, active_color: Color) -> Color {
 /// Returns the one-line status shown in the Sessions table.
 fn session_list_status_label(session: &Session) -> Cow<'_, str> {
     Cow::Owned(session.status.to_string())
-}
-
-/// Returns the tree connector style with contrast on highlighted rows.
-fn tree_prefix_style() -> Style {
-    Style::default().fg(style::palette::text_muted())
 }
 
 /// Calculates the model width from the same prepared cells used for paint.

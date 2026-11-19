@@ -33,7 +33,7 @@
   ],
   "$defs": {
     "RunEventKind": {
-      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added.",
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas and approval requests, may be added.",
       "oneOf": [
         {
           "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
@@ -181,6 +181,38 @@
           "$ref": "#/$defs/CompactionReport",
           "required": [
             "type"
+          ]
+        },
+        {
+          "description": "A model request of the run, a turn request or a compaction or round\nsummary request, failed transiently and is retried after `after`, as\nits provider's [`crate::provider::RetryPolicy`] allows. It is\nemitted before the wait, so cancelling the run then stops it. A turn\nrequest that still fails after its last retry fails the run; a\nsummary request's failure is handled as that summary's failure.\n\nOnly the built-in [`crate::model::ModelClient`] reports retries, and\nonly from the task that sends the request; a custom\n[`crate::Model`] that retries on its own emits none. Later fields\nmay be added, so match it with `..`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "retrying"
+            },
+            "after": {
+              "description": "Delay before the retry is sent, to the millisecond; on the wire,\nwhole milliseconds.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "attempt": {
+              "description": "One-based number of this retry within its model request.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 1
+            },
+            "kind": {
+              "description": "The failure being retried: [`ErrorKind::RateLimited`] for a\n`429`, [`ErrorKind::Overloaded`] for a `5xx`, or\n[`ErrorKind::Transport`] for a connection failure.",
+              "$ref": "#/$defs/ErrorKind"
+            }
+          },
+          "required": [
+            "type",
+            "after",
+            "attempt",
+            "kind"
           ]
         },
         {

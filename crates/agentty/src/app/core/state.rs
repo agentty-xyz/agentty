@@ -609,42 +609,7 @@ impl App {
         .await
     }
 
-    /// Creates a draft session stacked on the selected parent session.
-    ///
-    /// # Errors
-    /// Returns an error if the parent is not eligible for stacking or the
-    /// stacked draft row cannot be persisted.
-    pub async fn create_stacked_draft_session(
-        &mut self,
-        parent_session_id: &str,
-    ) -> Result<String, AppError> {
-        let session_id = self
-            .sessions
-            .create_stacked_draft_session(&self.services, parent_session_id)
-            .await?;
-        self.finish_session_creation(&session_id).await;
-
-        Ok(session_id)
-    }
-
-    /// Moves one review-ready root session beneath an eligible parent and
-    /// starts the required branch sync.
-    ///
-    /// # Errors
-    /// Returns an error when stack policy, persistence, or sync startup fails.
-    pub async fn append_session_to_stack(
-        &mut self,
-        session_id: &str,
-        parent_session_id: &str,
-    ) -> Result<(), AppError> {
-        self.sessions
-            .append_session_to_stack(&self.services, session_id, parent_session_id)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Forks one root review-ready session and opens the forked session
+    /// Forks one review-ready session and opens the forked session
     /// view.
     ///
     /// The new session starts on a fresh worktree branch that points at the
@@ -883,13 +848,9 @@ impl App {
 
     /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
-    /// Stacked drafts only launch when their parent branch is review-ready and
-    /// the stack has no other active branch work.
-    ///
     /// # Errors
     /// Returns an error if the project checkout is unavailable, the session is
-    /// missing, has no staged drafts, or stack consistency or launch enqueueing
-    /// fails.
+    /// missing, has no staged drafts, or launch enqueueing fails.
     pub async fn start_staged_session(&mut self, session_id: &str) -> Result<(), AppError> {
         if self
             .sessions
@@ -912,9 +873,7 @@ impl App {
             .ok_or(session::SessionError::NotFound)?;
         if !self.sessions.can_start_staged_session(session_id) || session.prompt.is_empty() {
             return Err(AppError::Workflow(
-                "Stage at least one draft; stacked sessions can only start when their parent is \
-                 in review and the stack has no other active branch work"
-                    .to_string(),
+                "Stage at least one draft before starting the session".to_string(),
             ));
         }
         let prompt = TurnPrompt {
@@ -2362,10 +2321,6 @@ impl App {
             return false;
         }
 
-        if status != Status::Draft && !self.sessions.can_reply_to_session_in_stack(session_id) {
-            return false;
-        }
-
         let Some(snapshot) = self.prompt_progress.remove(session_id) else {
             return false;
         };
@@ -2378,14 +2333,12 @@ impl App {
     /// Validates whether a session is currently eligible for merge queueing.
     ///
     /// Sessions are eligible while actively under review or already marked as
-    /// `Queued` (for example, after app restart). A parent with idle
-    /// materialized children can enter merge queueing because merge completion
-    /// retargets those children; linked forge review requests and active stack
-    /// work still block the request.
+    /// `Queued` (for example, after app restart). Linked forge review requests
+    /// block the request so the remote review remains the only merge path.
     ///
     /// # Errors
-    /// Returns an error when the session does not exist or has an ineligible
-    /// status, or when stack consistency blocks branch mutation.
+    /// Returns an error when the session does not exist, has an ineligible
+    /// status, or has a linked review request.
     fn validate_merge_request(&self, session_id: &str) -> Result<(), AppError> {
         let session = self.sessions.session_or_err(session_id)?;
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
@@ -2393,11 +2346,9 @@ impl App {
                 "Session must be in review or queued status".to_string(),
             ));
         }
-        if !self.sessions.can_merge_session_branch_in_stack(session_id) {
+        if session.has_review_request() {
             return Err(AppError::Workflow(
-                "Merge cannot run for linked review requests or while another stack session is \
-                 active"
-                    .to_string(),
+                "Merge cannot run for linked review requests".to_string(),
             ));
         }
 
@@ -2536,8 +2487,7 @@ impl App {
         session_id: &str,
     ) -> Option<BranchPublishTaskContext> {
         let (session, handles) = self.sessions.session_and_handles_or_err(session_id).ok()?;
-        let mut branch_publish_session = BranchPublishTaskSession::from_session(session);
-        branch_publish_session.base_branch = self.review_target_branch_for_session(session);
+        let branch_publish_session = BranchPublishTaskSession::from_session(session);
 
         Some(BranchPublishTaskContext {
             app_event_tx: self.services.event_sender(),
@@ -2548,38 +2498,6 @@ impl App {
             session_update_versions: self.services.session_update_versions(),
             transcript: Arc::clone(&handles.transcript),
         })
-    }
-
-    /// Resolves the forge review-request target branch for one session.
-    ///
-    /// Root sessions target their stored base branch. Stacked children target
-    /// their parent session branch while the parent link exists, preferring
-    /// the parent's linked review-request source branch, then the parent's
-    /// pushed upstream branch, then the child row's stored local parent branch.
-    pub(crate) fn review_target_branch_for_session(&self, session: &Session) -> String {
-        self.stacked_parent_review_target_branch(session)
-            .unwrap_or_else(|| session.base_branch.clone())
-    }
-
-    /// Returns the best review target branch for one stacked child's parent.
-    fn stacked_parent_review_target_branch(&self, session: &Session) -> Option<String> {
-        let parent_session_id = session.parent_session_id.as_ref()?;
-        let parent_session = self
-            .sessions
-            .sessions()
-            .iter()
-            .find(|candidate| candidate.id.as_str() == parent_session_id.as_str())?;
-
-        parent_session
-            .review_request
-            .as_ref()
-            .map(|review_request| review_request.summary.source_branch.clone())
-            .or_else(|| {
-                parent_session
-                    .published_upstream_ref
-                    .as_deref()
-                    .map(session::remote_branch_name_from_upstream_ref)
-            })
     }
 }
 

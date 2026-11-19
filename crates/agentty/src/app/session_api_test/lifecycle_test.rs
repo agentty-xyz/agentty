@@ -48,38 +48,6 @@ async fn runtime_backend_creates_and_loads_complete_sessions() {
     let missing_session = request_session(&mut app, SessionId::from("missing"))
         .await
         .expect("missing lookup should succeed");
-    let stacked_session_id = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Stacked {
-                parent_session_id: session_id.clone(),
-            },
-            project_id,
-        },
-    )
-    .await
-    .expect("stacked session should be created");
-    let stacked_session = request_session(&mut app, stacked_session_id)
-        .await
-        .expect("stacked session should load")
-        .expect("stacked session should exist");
-    let inherited_stacked_session_id = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: Some(session_id.clone()),
-            mode: CreateSessionMode::Stacked {
-                parent_session_id: session_id.clone(),
-            },
-            project_id,
-        },
-    )
-    .await
-    .expect("inherited stacked session should be created");
-    let inherited_stacked_session = request_session(&mut app, inherited_stacked_session_id)
-        .await
-        .expect("inherited stacked session should load")
-        .expect("inherited stacked session should exist");
 
     // Assert
     assert_eq!(loaded_session.id, session_id);
@@ -91,11 +59,6 @@ async fn runtime_backend_creates_and_loads_complete_sessions() {
         app.projects.active_project_id()
     );
     assert_eq!(missing_session, None);
-    assert_eq!(stacked_session.settings.parent_session_id, Some(session_id));
-    assert_eq!(
-        inherited_stacked_session.settings.parent_session_id,
-        Some(loaded_session.id)
-    );
 }
 
 #[tokio::test]
@@ -562,7 +525,7 @@ async fn runtime_backend_loads_inherited_creation_before_acknowledging_event_bac
 }
 
 #[tokio::test]
-async fn api_creation_reports_parent_and_source_session_read_failures() {
+async fn api_creation_reports_source_session_read_failures() {
     // Arrange
     let (app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
     let project_id = app.active_project_id();
@@ -573,16 +536,6 @@ async fn api_creation_reports_parent_and_source_session_read_failures() {
         .expect("session reads should fail");
 
     // Act
-    let stacked_error = app
-        .validate_api_session_request(&CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Stacked {
-                parent_session_id: SessionId::from("parent-session"),
-            },
-            project_id,
-        })
-        .await
-        .expect_err("parent lookup should fail");
     let inherited_error = app
         .inherited_creation_settings(Some(&source_session_id), project_id)
         .await
@@ -590,12 +543,10 @@ async fn api_creation_reports_parent_and_source_session_read_failures() {
         .expect("source lookup should fail");
 
     // Assert
-    for error in [stacked_error, inherited_error] {
-        assert!(
-            matches!(&error, ApiSessionError::Operation(message) if message.contains("session")),
-            "{error:?}"
-        );
-    }
+    assert!(
+        matches!(&inherited_error, ApiSessionError::Operation(message) if message.contains("session")),
+        "{inherited_error:?}"
+    );
 }
 
 #[tokio::test]

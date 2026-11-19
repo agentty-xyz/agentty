@@ -1334,6 +1334,105 @@ async fn test_clear_blank_archived_diff_keeps_only_real_diffs() {
     }
 }
 
+/// Verifies stack removal retargets unfinished former children to their root
+/// ancestor's base branch, so they survive their parent branch's deletion, and
+/// retargets merged former children's review requests so main sync finalizes
+/// them.
+#[tokio::test]
+async fn stack_removal_retargets_unfinished_children_to_root_base_branch() {
+    // Arrange
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("legacy pool");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .expect("foreign keys");
+    let migrations = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version < 119)
+        .cloned()
+        .collect::<Vec<_>>();
+    Migrator::with_migrations(migrations)
+        .run(&pool)
+        .await
+        .expect("legacy schema");
+    sqlx::raw_sql(
+        r"
+INSERT INTO project (id, path) VALUES (1, 'project');
+INSERT INTO session (id, model, base_branch, status, project_id, parent_session_id)
+VALUES ('root', 'gpt-5.6-sol', 'main', 'Review', 1, NULL),
+       ('child', 'gpt-5.6-sol', 'agentty/root', 'Review', 1, 'root'),
+       ('grandchild', 'gpt-5.6-sol', 'agentty/child', 'InProgress', 1, 'child'),
+       ('merged-child', 'gpt-5.6-sol', 'agentty/root', 'Done', 1, 'root'),
+       ('merged-grandchild', 'gpt-5.6-sol', 'agentty/child', 'Merged', 1, 'child'),
+       ('merged-standalone', 'gpt-5.6-sol', 'develop', 'Merged', 1, NULL),
+       ('standalone', 'gpt-5.6-sol', 'develop', 'Review', 1, NULL);
+INSERT INTO session_review_request (
+    session_id, display_id, forge_kind, last_refreshed_at, source_branch,
+    state, target_branch, title, web_url
+)
+VALUES ('merged-child', '#1', 'GitHub', 0, 'agentty/merged-child',
+        'Merged', 'agentty/root', 'Done child', 'https://example.com/1'),
+       ('merged-grandchild', '#2', 'GitHub', 0, 'agentty/merged-grandchild',
+        'Merged', 'agentty/child', 'Merged grandchild', 'https://example.com/2'),
+       ('merged-standalone', '#3', 'GitHub', 0, 'agentty/merged-standalone',
+        'Merged', 'develop', 'Merged standalone', 'https://example.com/3');
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy stack");
+
+    // Act
+    MIGRATOR.run(&pool).await.expect("stack removal");
+    let base_branches =
+        sqlx::query_as::<_, (String, String)>("SELECT id, base_branch FROM session ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("base branches should load");
+    let review_targets = sqlx::query_as::<_, (String, String)>(
+        "SELECT session_id, target_branch FROM session_review_request ORDER BY session_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("review request targets should load");
+    let column_names =
+        sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('session')")
+            .fetch_all(&pool)
+            .await
+            .expect("session columns should load");
+
+    // Assert
+    assert_eq!(
+        base_branches,
+        vec![
+            ("child".to_string(), "main".to_string()),
+            ("grandchild".to_string(), "main".to_string()),
+            ("merged-child".to_string(), "agentty/root".to_string()),
+            ("merged-grandchild".to_string(), "agentty/child".to_string()),
+            ("merged-standalone".to_string(), "develop".to_string()),
+            ("root".to_string(), "main".to_string()),
+            ("standalone".to_string(), "develop".to_string()),
+        ]
+    );
+    assert_eq!(
+        review_targets,
+        vec![
+            ("merged-child".to_string(), "agentty/root".to_string()),
+            ("merged-grandchild".to_string(), "main".to_string()),
+            ("merged-standalone".to_string(), "develop".to_string()),
+        ]
+    );
+    assert!(
+        !column_names
+            .iter()
+            .any(|name| name == "parent_session_id" || name == "stack_base_commit_hash")
+    );
+}
+
 /// Seeds Codex and Gemini sessions and task contexts with saved provider
 /// conversations for the Gemini retirement migration.
 async fn seed_gemini_retirement_conversations(database: &Database, project_id: i64) {
