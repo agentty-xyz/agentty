@@ -93,13 +93,14 @@ fn a_host_tool_failure_is_a_tool_error() {
 }
 
 #[test]
-fn a_refused_sandbox_is_a_tool_error_naming_its_fix() {
+fn a_refused_sandbox_names_its_own_error_type_and_fix() {
     // Arrange
     let reason = SandboxUnavailableReason::BubblewrapMissing;
     let error = TurnError::SandboxUnavailable(reason);
 
     // Act / Assert
-    assert_eq!(error.error_type(), TurnErrorType::Tool);
+    assert_eq!(error.error_type(), TurnErrorType::SandboxUnavailable);
+    assert_eq!(error.error_type().as_str(), "sandbox_unavailable");
     assert_eq!(
         error.to_string(),
         format!(

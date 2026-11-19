@@ -71,6 +71,7 @@ impl BashExecutor for Native {
 }
 
 /// Host facts the native availability check depends on.
+#[derive(Clone)]
 pub(crate) struct Host {
     /// Whether the kernel enforces Landlock write grants (Linux only).
     pub(crate) landlock: bool,
@@ -105,10 +106,13 @@ pub(crate) struct NativeLaunch {
     pub(crate) launcher: PathBuf,
 }
 
-/// Checks once, before any command, that the native sandbox can run
+/// Checks, before any command, that the native sandbox can run
 /// `configuration`'s commands in `workspace` on `host` through `helper`.
-/// On Linux it also runs the configured Bash inside fresh Bubblewrap
-/// namespaces, which fails where unprivileged user namespaces are disabled.
+/// It runs the configured Bash once inside an empty Seatbelt profile on
+/// macOS, which fails inside another sandbox, and inside fresh Bubblewrap
+/// namespaces on Linux, which fails where unprivileged user namespaces are
+/// disabled. It checks whether the sandbox can start, not the policy: a
+/// Bash or grant the launch rejects still fails each command closed.
 ///
 /// # Errors
 /// Returns what is missing for the native sandbox to run.
@@ -126,10 +130,23 @@ pub(crate) async fn probe(
         .await
         .map_err(|_| SandboxUnavailableReason::HelperUntrusted)?;
     let launcher = launcher.to_path_buf();
+    let bash = &configuration.snapshot.bash;
+    // A Bash the launch rejects cannot tell whether the sandbox starts; its
+    // commands fail closed at launch instead of running unsandboxed.
+    let trial = validate_executable(&LocalInspection, bash, workspace)
+        .await
+        .is_ok();
     if host.platform == "macos" {
         validate_executable(&LocalInspection, &host.seatbelt, workspace)
             .await
             .map_err(|_| SandboxUnavailableReason::SeatbeltMissing)?;
+        let mut seatbelt = tokio::process::Command::new(&host.seatbelt);
+        seatbelt
+            .args(["-p", "(version 1)(allow default)"])
+            .arg(bash);
+        if trial && !runs(seatbelt).await {
+            return Err(SandboxUnavailableReason::SeatbeltUnavailable);
+        }
 
         return Ok(NativeLaunch {
             bubblewrap: None,
@@ -147,9 +164,8 @@ pub(crate) async fn probe(
     validate_executable(&LocalInspection, &bubblewrap, workspace)
         .await
         .map_err(|_| SandboxUnavailableReason::BubblewrapMissing)?;
-    let namespaces = tokio::process::Command::new(&bubblewrap)
-        .env_clear()
-        .current_dir("/")
+    let mut namespaces = tokio::process::Command::new(&bubblewrap);
+    namespaces
         .args([
             "--unshare-all",
             "--uid",
@@ -162,15 +178,8 @@ pub(crate) async fn probe(
             "/",
             "--",
         ])
-        .arg(&configuration.snapshot.bash)
-        .args(["--noprofile", "--norc", "-c", ":"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status()
-        .await;
-    if !namespaces.is_ok_and(|status| status.success()) {
+        .arg(bash);
+    if trial && !runs(namespaces).await {
         return Err(SandboxUnavailableReason::UserNamespacesUnavailable);
     }
 
@@ -180,8 +189,30 @@ pub(crate) async fn probe(
     })
 }
 
+/// Returns whether `command`, which wraps Bash, runs Bash's no-op command
+/// successfully within [`PROBE_TIMEOUT`].
+async fn runs(mut command: tokio::process::Command) -> bool {
+    command
+        .args(["--noprofile", "--norc", "-c", ":"])
+        .env_clear()
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, command.status()).await,
+        Ok(Ok(status)) if status.success()
+    )
+}
+
 /// Bubblewrap the Linux sandbox uses when the configuration names none.
 const DEFAULT_BUBBLEWRAP: &str = "/usr/bin/bwrap";
+
+/// Longest wait for the sandbox's trial run; a stalled sandbox counts as
+/// unavailable.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The macOS Seatbelt front end, which the operating system ships.
 const SEATBELT: &str = "/usr/bin/sandbox-exec";

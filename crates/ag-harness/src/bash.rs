@@ -343,8 +343,9 @@ impl BashConfig {
     }
 
     /// Returns this native configuration launched through the checked
-    /// `launch` executables. Recorded fingerprints come from the original
-    /// configuration, so they do not change.
+    /// `launch` executables. Host-request and turn-option fingerprints come
+    /// from the configuration the host gave; each command intent records
+    /// this effective one, naming the executables that ran it.
     #[cfg(feature = "native-sandbox")]
     pub(crate) fn launched_through(&self, launch: crate::execution::NativeLaunch) -> Self {
         let mut configuration = self.clone();
@@ -355,14 +356,19 @@ impl BashConfig {
     }
 
     /// Returns this native configuration with its commands run without
-    /// isolation, which the model-facing `bash` description then states.
+    /// isolation, which the model-facing `bash` description states and each
+    /// command intent records through the unsandboxed executor's identity.
     #[cfg(feature = "native-sandbox")]
     pub(crate) fn unsandboxed(&self) -> Self {
-        Self {
-            enforcement: Enforcement::None,
-            executor: Some(Arc::new(UnsandboxedExecutor::without_isolation())),
-            ..self.clone()
-        }
+        let executor = UnsandboxedExecutor::without_isolation();
+        let mut configuration = self.clone();
+        configuration.snapshot.executor = executor.identity().to_string();
+        configuration.snapshot.launcher = None;
+        configuration.snapshot.linux_bubblewrap = None;
+        configuration.enforcement = executor.enforcement();
+        configuration.executor = Some(Arc::new(executor));
+
+        configuration
     }
 }
 

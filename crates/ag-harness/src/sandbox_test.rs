@@ -17,10 +17,12 @@ use super::{SandboxUnavailableReason, SandboxWarning};
 #[cfg(feature = "native-sandbox")]
 use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
 #[cfg(feature = "native-sandbox")]
+use crate::execution::Host;
+#[cfg(feature = "native-sandbox")]
 use crate::turn::TurnError;
 
 /// Every reason, in declaration order.
-const REASONS: [SandboxUnavailableReason; 7] = [
+const REASONS: [SandboxUnavailableReason; 8] = [
     SandboxUnavailableReason::UnsupportedPlatform,
     SandboxUnavailableReason::HelperMissing,
     SandboxUnavailableReason::HelperUntrusted,
@@ -28,6 +30,7 @@ const REASONS: [SandboxUnavailableReason; 7] = [
     SandboxUnavailableReason::UserNamespacesUnavailable,
     SandboxUnavailableReason::LandlockUnavailable,
     SandboxUnavailableReason::SeatbeltMissing,
+    SandboxUnavailableReason::SeatbeltUnavailable,
 ];
 
 #[test]
@@ -118,7 +121,9 @@ async fn host_executors_and_chosen_unsandboxed_execution_skip_the_check() {
     // Assert
     assert_eq!(chosen.enforcement(), Enforcement::None);
     assert!(chosen.executor.is_some());
-    assert_eq!(chosen.fingerprint(), native.fingerprint());
+    assert_eq!(chosen.fingerprint()["executor"], "unsandboxed");
+    assert_eq!(chosen.fingerprint()["launcher"], serde_json::Value::Null);
+    assert_eq!(native.fingerprint().get("executor"), None);
     assert_eq!(chosen_warning, None);
     assert_eq!(kept, host);
     assert_eq!(kept_warning, None);
@@ -164,7 +169,7 @@ async fn available_sandbox_launches_through_the_helper_it_checked_once() {
     // Arrange
     let fixture = GateFixture::new();
     let native = fixture.native(&fixture.helper);
-    let gate = SandboxGate::default();
+    let gate = fixture.linux_gate();
 
     // Act
     let (first, first_warning) = gate
@@ -179,11 +184,48 @@ async fn available_sandbox_launches_through_the_helper_it_checked_once() {
 
     // Assert
     assert_eq!(first.snapshot.launcher.as_ref(), Some(&fixture.helper));
+    assert_eq!(
+        first.snapshot.linux_bubblewrap,
+        Some(fixture.tools.join("bwrap"))
+    );
     assert_eq!(first.enforcement(), Enforcement::FileSystemAndNetwork);
     assert!(first.executor.is_none());
     assert_eq!(first_warning, None);
     assert_eq!(second, first);
     assert_eq!(second_warning, None);
+}
+
+#[cfg(feature = "native-sandbox")]
+#[tokio::test]
+async fn unavailable_sandbox_is_checked_again_until_a_remedy_applies() {
+    // Arrange
+    let fixture = GateFixture::new();
+    let native = fixture.native(&fixture.helper);
+    let gate = fixture.linux_gate();
+    fixture.script("bwrap", 1);
+
+    // Act
+    let (first, first_warning) = gate
+        .resolve(&native, &fixture.workspace)
+        .await
+        .expect("unsandboxed fallback");
+    let (_, repeated_warning) = gate
+        .resolve(&native, &fixture.workspace)
+        .await
+        .expect("unsandboxed fallback");
+    fixture.script("bwrap", 0);
+    let (remedied, remedied_warning) = gate
+        .resolve(&native, &fixture.workspace)
+        .await
+        .expect("available sandbox");
+
+    // Assert
+    let warning = SandboxWarning::new(SandboxUnavailableReason::UserNamespacesUnavailable);
+    assert_eq!(first.enforcement(), Enforcement::None);
+    assert_eq!(first_warning, Some(warning.clone()));
+    assert_eq!(repeated_warning, Some(warning));
+    assert_eq!(remedied.enforcement(), Enforcement::FileSystemAndNetwork);
+    assert_eq!(remedied_warning, None);
 }
 
 #[cfg(feature = "native-sandbox")]
@@ -245,6 +287,19 @@ impl GateFixture {
         fixture.script("bwrap", 0);
 
         fixture
+    }
+
+    /// Returns a default gate for a Linux host with Landlock, so the
+    /// Bubblewrap stand-in decides availability on every platform.
+    fn linux_gate(&self) -> SandboxGate {
+        SandboxGate {
+            host: Host {
+                landlock: true,
+                platform: "linux",
+                seatbelt: self.tools.join("sandbox-exec"),
+            },
+            ..SandboxGate::default()
+        }
     }
 
     /// Writes an executable script exiting with `code` among the tools.

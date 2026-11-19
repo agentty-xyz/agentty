@@ -355,6 +355,9 @@ pub enum TurnErrorType {
     ComparisonRepositoryMismatch,
     /// Durable session coordination or persistence failed.
     Session,
+    /// The native sandbox was unavailable and the harness refused to run
+    /// `bash` without it.
+    SandboxUnavailable,
 }
 
 impl TurnErrorType {
@@ -392,6 +395,7 @@ impl TurnErrorType {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH
             }
             Self::Session => crate::telemetry::ERROR_SESSION,
+            Self::SandboxUnavailable => crate::telemetry::ERROR_SANDBOX_UNAVAILABLE,
         }
     }
 }

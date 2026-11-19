@@ -72,14 +72,18 @@ The native Bash sandbox runs each command through a helper executable of the sam
   }
   ```
 
-- **The standalone helper.** Install it with
-  `cargo install ag-harness --features native-sandbox --bin ag-harness-sandbox`, outside
-  every workspace the harness runs commands in, and pass its absolute path to
-  `BashConfig::new`.
+- **The standalone helper.** Install the version matching your `ag-harness` dependency
+  with
+  `cargo install ag-harness --version <version> --features native-sandbox --bin ag-harness-sandbox`,
+  outside every workspace the harness runs commands in, and pass its absolute path to
+  `BashConfig::new`. A helper of another version fails its commands.
 
-On Linux the sandbox also needs the system Bubblewrap (`apt install bubblewrap` or
-`dnf install bubblewrap`) and unprivileged user namespaces; macOS ships Seatbelt. Where
-the sandbox cannot run, commands run unsandboxed with a warning unless you choose
+On Linux the helper runs inside the sandbox, so grant `with_read` access to the shared
+libraries it links (`ldd` lists them) as well as Bash's; a host executable usually links
+more than the standalone helper. Without them the sandbox starts but each command fails
+closed. On Linux the sandbox also needs the system Bubblewrap (`apt install bubblewrap`
+or `dnf install bubblewrap`) and unprivileged user namespaces; macOS ships Seatbelt.
+Where the sandbox cannot run, commands run unsandboxed with a warning unless you choose
 otherwise; see [Bash](#bash).
 
 ## Sessions
@@ -540,17 +544,22 @@ and the `bash` tool description tells the model exactly that.
 
 `HarnessBuilder::sandbox` decides what a native configuration does where the sandbox
 cannot run: no helper, no `bwrap` (default `/usr/bin/bwrap`), unprivileged user
-namespaces disabled, no `/usr/bin/sandbox-exec`, or another platform. The harness checks
-once per configuration, at the first run that offers `bash`, and never fails silently:
+namespaces disabled, no usable `/usr/bin/sandbox-exec`, or another platform. Before a
+turn offering `bash` is admitted, the harness checks the sandbox until one check
+succeeds for the configuration, so a remedy applied while the host runs takes effect at
+the next turn:
 
-| `Sandbox`                                          | Where the sandbox cannot run                                                      |
-| -------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `Native { if_unavailable: Unsandboxed }` (default) | Commands run without isolation; each run emits `RunEventKind::SandboxUnavailable` |
-| `Native { if_unavailable: Refuse }`                | Each run offering `bash` fails with `ErrorKind::SandboxUnavailable`               |
-| `Unsandboxed`                                      | Commands always run without isolation, without a warning                          |
+| `Sandbox`                                          | Where the sandbox cannot run                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| `Native { if_unavailable: Unsandboxed }` (default) | Commands run without isolation, and every such turn reports a warning      |
+| `Native { if_unavailable: Refuse }`                | Each turn offering `bash` fails with `ErrorKind::SandboxUnavailable` first |
+| `Unsandboxed`                                      | Commands always run without isolation, without a warning                   |
 
-The warning's `SandboxWarning` names the `SandboxUnavailableReason`, a message, and a
-remedy, such as installing bubblewrap; show it to the user.
+The warning is a `SandboxWarning` naming the `SandboxUnavailableReason`, a message, and
+a remedy. A streamed run emits it as `RunEventKind::SandboxUnavailable`, and every
+turn's `TurnReport::sandbox_warning` carries it, including `run_once`, `Harness::turn`,
+and `Session::send`. Log it, and show the remedies a user can apply, such as installing
+bubblewrap; the others name the host's own configuration.
 
 The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
 environment values (`with_environment`), and host details (`with_host_information`) are

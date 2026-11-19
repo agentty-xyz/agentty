@@ -262,7 +262,7 @@
           ]
         },
         {
-          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it; the\nmodel-facing `bash` description states that commands run without\nisolation.",
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it, as the\nturn's [`crate::TurnReport::sandbox_warning`] does; the model-facing\n`bash` description states that commands run without isolation.",
           "type": "object",
           "properties": {
             "type": {
@@ -1085,6 +1085,11 @@
           "description": "`/usr/bin/sandbox-exec`, the macOS Seatbelt front end, is missing.",
           "type": "string",
           "const": "seatbelt_missing"
+        },
+        {
+          "description": "Seatbelt cannot start a sandbox, for example because this process\nalready runs inside one.",
+          "type": "string",
+          "const": "seatbelt_unavailable"
         }
       ]
     },

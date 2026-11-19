@@ -7,7 +7,7 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{ApproveTickets, main, run};
+use super::{ApproveTickets, ENDPOINT, main, run};
 
 #[tokio::test]
 async fn files_a_ticket_through_the_approved_tool_and_reports_events() {
@@ -74,6 +74,12 @@ async fn approval_denies_every_other_tool() {
 
 #[test]
 fn main_requires_an_endpoint() {
+    // Arrange
+    assert!(
+        std::env::var_os(ENDPOINT).is_none(),
+        "unset {ENDPOINT} to test the example, so it sends no request"
+    );
+
     // Act
     let error = main().expect_err("no endpoint is configured in tests");
 

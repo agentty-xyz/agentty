@@ -43,8 +43,7 @@ use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
-#[cfg(feature = "native-sandbox")]
-use crate::sandbox::SandboxGate;
+use crate::sandbox::SandboxWarning;
 use crate::summary_model::SummaryModel;
 use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
@@ -98,6 +97,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) approval: Option<&'a Approval>,
     /// Ledger that reserves every model request before it is sent.
     pub(crate) budget: &'a dyn BudgetLedger,
+    /// Configuration the turn's `bash` commands run with, resolved through
+    /// the harness's sandbox choice before the turn was admitted.
+    pub(crate) bash: TurnBash,
     /// Permits of the model's concurrency cap, shared by every harness
     /// built from its catalog; one is held for each request in flight.
     pub(crate) concurrency: Option<&'a Semaphore>,
@@ -128,15 +130,19 @@ pub(crate) struct Engine<'a> {
     /// such as automatic compaction, which lead the turn's report.
     pub(crate) prior_requests: Option<&'a PriorRequests>,
     pub(crate) repository: Option<&'a Repository>,
-    /// The harness's sandbox choice, which decides how native `bash`
-    /// configurations run.
-    #[cfg(feature = "native-sandbox")]
-    pub(crate) sandbox: &'a SandboxGate,
     /// Session whose turn this is, given to tool handlers.
     pub(crate) session: Option<SessionId>,
     /// Model that answers the turn's round summary requests in place of
     /// [`Self::model`], when the harness resolved one.
     pub(crate) summary_model: Option<&'a SummaryModel>,
+}
+
+/// The `bash` configuration a turn's commands run with, and the warning to
+/// report when it runs a native configuration without the sandbox.
+#[derive(Default)]
+pub(crate) struct TurnBash {
+    pub(crate) configuration: Option<BashConfig>,
+    pub(crate) warning: Option<SandboxWarning>,
 }
 
 impl Engine<'_> {
@@ -149,13 +155,12 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<FinishedTurn, EngineFailure> {
         let started_at = Instant::now();
-        #[cfg(feature = "native-sandbox")]
-        let bash = self.bash().await.map_err(EngineFailure::unreported)?;
-        // Without the native sandbox every configuration names its executor.
-        #[cfg(not(feature = "native-sandbox"))]
-        let bash = self.options.bash().cloned();
+        if let Some(warning) = &self.bash.warning {
+            self.publish(RunEventKind::SandboxUnavailable(warning.clone()))
+                .await;
+        }
         let (request, tools) = self
-            .prepare_request(request, journal.as_ref(), bash.as_ref())
+            .prepare_request(request, journal.as_ref(), self.bash.configuration.as_ref())
             .map_err(EngineFailure::unreported)?;
         // Host instructions are journaled after the input, so the turn
         // replays with them.
@@ -183,6 +188,10 @@ impl Engine<'_> {
         if let Some(prior) = self.prior_requests {
             progress.state.prepend(prior);
         }
+        progress
+            .state
+            .sandbox_warning
+            .clone_from(&self.bash.warning);
         // A turn's wall-clock limit also covers the compaction before it.
         let deadline = self.options.limits().deadline(
             self.prior_requests
@@ -237,32 +246,6 @@ impl Engine<'_> {
         if let Some(events) = &self.events {
             events.emit(kind).await;
         }
-    }
-
-    /// Returns the `bash` configuration the turn's commands run with: a
-    /// native one offered with a repository goes through the harness's
-    /// sandbox choice, which may run it unsandboxed and report why.
-    #[cfg(feature = "native-sandbox")]
-    async fn bash(&self) -> Result<Option<BashConfig>, TurnError> {
-        let Some(configuration) = self.options.bash() else {
-            return Ok(None);
-        };
-        let Some(repository) = self
-            .repository
-            .filter(|_| self.options.tools().permissions().allows(Builtin::Bash))
-        else {
-            return Ok(Some(configuration.clone()));
-        };
-        let (configuration, warning) = self
-            .sandbox
-            .resolve(configuration, repository.root())
-            .await?;
-        if let Some(warning) = warning {
-            self.publish(RunEventKind::SandboxUnavailable(warning))
-                .await;
-        }
-
-        Ok(Some(configuration))
     }
 
     /// Sends requests and executes tool calls until the model answers with
@@ -1594,6 +1577,8 @@ struct TurnState {
     overflow: OverflowRecovery,
     /// Whether a response's tool calls are running.
     running_tools: bool,
+    /// Why the turn's `bash` runs without the native sandbox it selected.
+    sandbox_warning: Option<SandboxWarning>,
 }
 
 impl TurnState {
@@ -1612,6 +1597,7 @@ impl TurnState {
             repetition_nudges: 0,
             overflow: OverflowRecovery::default(),
             running_tools: false,
+            sandbox_warning: None,
         }
     }
 
@@ -1644,6 +1630,7 @@ impl TurnState {
         .with_repetition_nudges(self.repetition_nudges)
         .with_context_overflow_recoveries(self.overflow.recoveries)
         .with_context_summary_failures(self.context_fit.summary_failures())
+        .with_sandbox_warning(self.sandbox_warning.clone())
     }
 
     /// Records the already published `prior` requests ahead of the turn's

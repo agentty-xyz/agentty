@@ -14,7 +14,7 @@ use crate::context::{
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
 use crate::engine::{
-    Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare, with_approved_arguments,
+    Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare, TurnBash, with_approved_arguments,
 };
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
@@ -23,8 +23,7 @@ use crate::model::{
     ReasoningEffort,
 };
 use crate::request_option::OutputMode;
-#[cfg(feature = "native-sandbox")]
-use crate::sandbox::SandboxGate;
+use crate::sandbox::{SandboxUnavailableReason, SandboxWarning};
 use crate::tool::{ReadArguments, ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
 use crate::{OutputSchema, TurnOptions};
@@ -66,6 +65,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let context_estimator = heuristic_estimator();
     let engine = Engine {
         approval: None,
+        bash: TurnBash::default(),
         budget: &Unlimited,
         concurrency: None,
         context_budget: unbounded_context_budget(),
@@ -85,8 +85,6 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         pricing: None,
         prior_requests: None,
         repository: None,
-        #[cfg(feature = "native-sandbox")]
-        sandbox: &SandboxGate::default(),
         session: None,
         summary_model: None,
     };
@@ -111,11 +109,42 @@ fn heuristic_estimator() -> Arc<dyn ContextEstimator> {
     Arc::new(HeuristicContextEstimator::DEFAULT)
 }
 
+#[tokio::test]
+async fn a_sandbox_fallback_warning_reaches_the_turn_report() {
+    // Arrange
+    let warning = SandboxWarning::new(SandboxUnavailableReason::BubblewrapMissing);
+    let bash = TurnBash {
+        configuration: None,
+        warning: Some(warning.clone()),
+    };
+
+    // Act
+    let (outcome, _) = run_scripted_with(
+        unbounded_context_budget(),
+        vec![Ok(ModelResponse::Output(json!({})))],
+        bash,
+    )
+    .await;
+
+    // Assert
+    let outcome = outcome.expect("scripted turn");
+    assert_eq!(outcome.report().sandbox_warning(), Some(&warning));
+}
+
 /// Runs one tool-free turn within `context_budget` against `responses`, in
 /// order, and returns the outcome with every request the model received.
 async fn run_scripted(
     context_budget: ContextBudget,
     responses: Vec<Result<ModelResponse, ModelError>>,
+) -> (Result<crate::TurnOutcome, TurnError>, Vec<ModelRequest>) {
+    run_scripted_with(context_budget, responses, TurnBash::default()).await
+}
+
+/// Runs [`run_scripted`] with `bash` as the turn's resolved configuration.
+async fn run_scripted_with(
+    context_budget: ContextBudget,
+    responses: Vec<Result<ModelResponse, ModelError>>,
+    bash: TurnBash,
 ) -> (Result<crate::TurnOutcome, TurnError>, Vec<ModelRequest>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&requests);
@@ -139,6 +168,7 @@ async fn run_scripted(
     let context_estimator = heuristic_estimator();
     let engine = Engine {
         approval: None,
+        bash,
         budget: &Unlimited,
         concurrency: None,
         context_budget,
@@ -158,8 +188,6 @@ async fn run_scripted(
         pricing: None,
         prior_requests: None,
         repository: None,
-        #[cfg(feature = "native-sandbox")]
-        sandbox: &SandboxGate::default(),
         session: None,
         summary_model: None,
     };

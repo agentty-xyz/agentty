@@ -1,10 +1,12 @@
 //! Public sandbox choice contract: a run whose native sandbox cannot run
 //! warns and runs `bash` unsandboxed by default, refuses under
 //! `IfUnavailable::Refuse`, and runs unsandboxed silently when the host
-//! chose `Sandbox::Unsandboxed`.
+//! chose `Sandbox::Unsandboxed`. Turns without an event stream carry the
+//! warning on their report.
 
 use std::error::Error;
 use std::future::poll_fn;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -15,7 +17,7 @@ use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, Sand
 use ag_harness::tool::ToolDefinition;
 use ag_harness::{
     ErrorKind, EventStream, Harness, OutputSchema, RunEvent, RunEventKind, RunOutcome, RunRequest,
-    ToolSet,
+    ToolSet, TurnOptions,
 };
 use futures_core::Stream;
 use serde_json::json;
@@ -58,6 +60,8 @@ async fn unavailable_native_sandbox_runs_bash_unsandboxed_with_a_warning()
     ));
     let output = outcome.result?.parse::<serde_json::Value>()?;
     assert_eq!(output["stdout"], "unsandboxed");
+    assert_eq!(outcome.report.sandbox_warning(), warnings.first());
+    assert_eq!(outcome.commands[0].intent.policy["executor"], "unsandboxed");
     assert_eq!(
         advertised.lock().map_err(|_| "advertised tools")?[0],
         [ToolDefinition::bash(Enforcement::None)]
@@ -93,11 +97,14 @@ async fn refusing_sandbox_fails_the_run_before_any_model_request() -> Result<(),
             .map_err(|_| "advertised tools")?
             .is_empty()
     );
-    assert!(
-        !events
+    assert!(matches!(
+        events
             .iter()
-            .any(|event| matches!(event.kind, RunEventKind::SandboxUnavailable(_)))
-    );
+            .map(|event| &event.kind)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [RunEventKind::Completed(_)]
+    ));
 
     Ok(())
 }
@@ -127,17 +134,60 @@ async fn chosen_unsandboxed_execution_runs_bash_without_a_warning() -> Result<()
     Ok(())
 }
 
-/// Runs `printf unsandboxed` through native `bash` whose helper lies inside
-/// the workspace at `root`, so the sandbox is unavailable on every
-/// platform, under `sandbox`.
+#[tokio::test]
+async fn turns_without_an_event_stream_report_the_warning() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let advertised = Arc::new(Mutex::new(Vec::new()));
+    let (harness, configuration) =
+        native_harness(directory.path(), Sandbox::default(), &advertised)?;
+    let options = TurnOptions::from_output(OutputSchema::new(json!({"type": "object"}))?)
+        .with_tools(ToolSet::empty().with_bash())
+        .with_bash(configuration);
+
+    // Act
+    let first = harness.turn("printf unsandboxed", options.clone()).await?;
+    let second = harness.turn("printf unsandboxed", options).await?;
+
+    // Assert
+    let warning = SandboxWarning::new(SandboxUnavailableReason::HelperUntrusted);
+    assert_eq!(first.output()["stdout"], "unsandboxed");
+    assert_eq!(first.report().sandbox_warning(), Some(&warning));
+    assert_eq!(second.report().sandbox_warning(), Some(&warning));
+
+    Ok(())
+}
+
+/// Runs `printf unsandboxed` through [`native_harness`] under `sandbox`.
 async fn run_native(
     root: &Path,
     sandbox: Sandbox,
     advertised: &Arc<Mutex<Vec<Vec<ToolDefinition>>>>,
 ) -> Result<(Vec<RunEvent>, RunOutcome), Box<dyn Error>> {
+    let (harness, configuration) = native_harness(root, sandbox, advertised)?;
+    let request = RunRequest::new("printf unsandboxed")
+        .output(OutputSchema::new(json!({"type": "object"}))?)
+        .tools(ToolSet::empty().with_bash())
+        .bash(configuration);
+    let (stream, handle) = harness.run(request).into_parts();
+
+    Ok(tokio::join!(drain(stream), handle.outcome()))
+}
+
+/// Returns a harness under `sandbox` and a native `bash` configuration
+/// whose helper is an executable inside the workspace at `root`, so the
+/// sandbox is unavailable on every platform.
+fn native_harness(
+    root: &Path,
+    sandbox: Sandbox,
+    advertised: &Arc<Mutex<Vec<Vec<ToolDefinition>>>>,
+) -> Result<(Harness, BashConfig), Box<dyn Error>> {
     let root = root.canonicalize()?;
+    let helper = root.join("ag-harness-sandbox");
+    std::fs::write(&helper, "#!/bin/sh\nexit 0\n")?;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
     let configuration = BashConfig::new(
-        root.join("ag-harness-sandbox"),
+        helper,
         "/bin/bash".into(),
         "native-unavailable-1".into(),
         Duration::from_secs(5),
@@ -152,13 +202,8 @@ async fn run_native(
         .repository(repository_with_host_git(&root))
         .sandbox(sandbox)
         .build()?;
-    let request = RunRequest::new("printf unsandboxed")
-        .output(OutputSchema::new(json!({"type": "object"}))?)
-        .tools(ToolSet::empty().with_bash())
-        .bash(configuration);
-    let (stream, handle) = harness.run(request).into_parts();
 
-    Ok(tokio::join!(drain(stream), handle.outcome()))
+    Ok((harness, configuration))
 }
 
 async fn drain(mut stream: EventStream) -> Vec<RunEvent> {

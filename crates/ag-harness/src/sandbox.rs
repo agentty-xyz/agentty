@@ -8,18 +8,21 @@
 //!
 //! - call [`dispatch`] first in `main`, so the host's own executable acts as
 //!   the helper and `BashConfig::native` needs no path; or
-//! - install the standalone helper with `cargo install ag-harness --features
-//!   native-sandbox --bin ag-harness-sandbox` and pass its path to
-//!   `BashConfig::new`.
+//! - install the standalone helper of the same version with `cargo install
+//!   ag-harness --version <version> --features native-sandbox --bin
+//!   ag-harness-sandbox` and pass its path to `BashConfig::new`.
 //!
 //! [`Sandbox`], set with `HarnessBuilder::sandbox`, decides what happens on
 //! a host where the sandbox cannot run, for example without `bwrap` or with
-//! unprivileged user namespaces disabled. The harness checks once per
-//! configuration, at the first run that offers `bash`. By default, commands
-//! then run without isolation and every such run reports a
-//! [`crate::RunEventKind::SandboxUnavailable`] warning naming what is missing
-//! and how to fix it. [`IfUnavailable::Refuse`] fails those runs with
-//! [`crate::ErrorKind::SandboxUnavailable`] instead.
+//! unprivileged user namespaces disabled. Before a turn offering `bash` is
+//! admitted, the harness checks the sandbox, until one check succeeds for
+//! the configuration. By default, commands then run without isolation and
+//! every such turn reports a [`SandboxWarning`] naming what is missing and
+//! how to fix it, on its `TurnReport::sandbox_warning` and, for a streamed
+//! run, as [`crate::RunEventKind::SandboxUnavailable`].
+//! [`IfUnavailable::Refuse`] fails those turns with
+//! [`crate::ErrorKind::SandboxUnavailable`] before they are admitted
+//! instead.
 
 #[cfg(feature = "native-sandbox")]
 use std::collections::HashMap;
@@ -78,14 +81,12 @@ impl Default for Sandbox {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum IfUnavailable {
-    /// Run commands without isolation and report a
-    /// [`crate::RunEventKind::SandboxUnavailable`] warning in every run
-    /// that offers `bash`.
+    /// Run commands without isolation and report a [`SandboxWarning`] in
+    /// every turn that offers `bash`.
     #[default]
     Unsandboxed,
-    /// Fail every run that offers `bash` with
-    /// [`crate::ErrorKind::SandboxUnavailable`] before its first model
-    /// request.
+    /// Fail every turn that offers `bash` with
+    /// [`crate::ErrorKind::SandboxUnavailable`] before it is admitted.
     Refuse,
 }
 
@@ -112,6 +113,9 @@ pub enum SandboxUnavailableReason {
     LandlockUnavailable,
     /// `/usr/bin/sandbox-exec`, the macOS Seatbelt front end, is missing.
     SeatbeltMissing,
+    /// Seatbelt cannot start a sandbox, for example because this process
+    /// already runs inside one.
+    SeatbeltUnavailable,
 }
 
 impl SandboxUnavailableReason {
@@ -132,6 +136,9 @@ impl SandboxUnavailableReason {
                 "The kernel cannot confine write grants with Landlock (Linux 6.2 or later)."
             }
             Self::SeatbeltMissing => "`/usr/bin/sandbox-exec` is missing.",
+            Self::SeatbeltUnavailable => {
+                "Seatbelt cannot start a sandbox here, for example inside another sandbox."
+            }
         }
     }
 
@@ -162,6 +169,10 @@ impl SandboxUnavailableReason {
                 "Upgrade to Linux 6.2 or later with Landlock enabled, or drop the write grants."
             }
             Self::SeatbeltMissing => "Restore `/usr/bin/sandbox-exec`, which macOS ships.",
+            Self::SeatbeltUnavailable => {
+                "Run the host outside other macOS sandboxes, or rely on the isolation it already \
+                 has with `Sandbox::Unsandboxed`."
+            }
         }
     }
 }
@@ -234,22 +245,27 @@ pub fn dispatch() -> Option<std::process::ExitCode> {
 #[cfg(feature = "native-sandbox")]
 static DISPATCHED_HELPER: OnceLock<PathBuf> = OnceLock::new();
 
-/// A harness's [`Sandbox`] choice with the availability it checked, shared
-/// by its clones.
+/// A harness's [`Sandbox`] choice with the availability it confirmed,
+/// shared by its clones.
 #[cfg(feature = "native-sandbox")]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct SandboxGate {
-    /// Checked outcomes by configuration fingerprint, workspace, and helper.
-    checked: Arc<Mutex<HashMap<ProbeKey, Result<NativeLaunch, SandboxUnavailableReason>>>>,
+    /// Confirmed launches by configuration fingerprint, workspace, and
+    /// helper. Only successes are kept, so a remedy applied while the host
+    /// runs takes effect at the next run.
+    available: Arc<Mutex<HashMap<ProbeKey, NativeLaunch>>>,
+    /// The host the sandbox runs on, read when the harness was built.
+    host: Host,
     sandbox: Sandbox,
 }
 
 #[cfg(feature = "native-sandbox")]
 impl SandboxGate {
-    /// Returns a gate applying `sandbox`.
+    /// Returns a gate applying `sandbox` on this host.
     pub(crate) fn new(sandbox: Sandbox) -> Self {
         Self {
-            checked: Arc::default(),
+            available: Arc::default(),
+            host: Host::current(),
             sandbox,
         }
     }
@@ -291,8 +307,8 @@ impl SandboxGate {
     }
 
     /// Returns the availability of the native sandbox for `configuration`
-    /// in `workspace` through `helper` on this host, checking it only the
-    /// first time.
+    /// in `workspace` through `helper`, checking it until it is confirmed
+    /// once.
     async fn check(
         &self,
         configuration: &BashConfig,
@@ -304,28 +320,32 @@ impl SandboxGate {
             helper,
             workspace: workspace.to_path_buf(),
         };
-        if let Some(checked) = self.lock().get(&key) {
-            return checked.clone();
+        if let Some(launch) = self.lock().get(&key) {
+            return Ok(launch.clone());
         }
-        let checked = execution::probe(
+        let launch = execution::probe(
             configuration,
             key.helper.as_deref(),
             workspace,
-            Host::current(),
+            self.host.clone(),
         )
-        .await;
-        self.lock().insert(key, checked.clone());
+        .await?;
+        self.lock().insert(key, launch.clone());
 
-        checked
+        Ok(launch)
     }
 
-    fn lock(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<ProbeKey, Result<NativeLaunch, SandboxUnavailableReason>>>
-    {
-        self.checked
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ProbeKey, NativeLaunch>> {
+        self.available
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(feature = "native-sandbox")]
+impl Default for SandboxGate {
+    fn default() -> Self {
+        Self::new(Sandbox::default())
     }
 }
 

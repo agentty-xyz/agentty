@@ -510,6 +510,7 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
     let inside = fixture.workspace.join("helper");
     std::fs::copy(&fixture.helper, &inside).expect("helper inside workspace");
     let missing_seatbelt = fixture.tools.join("missing-sandbox-exec");
+    let failing_seatbelt = fixture.script("failing-sandbox-exec", 1);
 
     // Act
     let reasons = [
@@ -562,6 +563,13 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
             host("macos", true, &missing_seatbelt),
         )
         .await,
+        probe(
+            &missing,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("macos", true, &failing_seatbelt),
+        )
+        .await,
     ];
 
     // Assert
@@ -575,7 +583,57 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
             Err(SandboxUnavailableReason::BubblewrapMissing),
             Err(SandboxUnavailableReason::UserNamespacesUnavailable),
             Err(SandboxUnavailableReason::SeatbeltMissing),
+            Err(SandboxUnavailableReason::SeatbeltUnavailable),
         ]
+    );
+}
+
+#[tokio::test]
+async fn probe_leaves_a_bash_the_launch_rejects_to_fail_closed_there() {
+    // Arrange
+    let fixture = ProbeFixture::new();
+    let failing = fixture.script("failing-sandbox", 1);
+    let configuration = BashConfig::native(
+        fixture.workspace.join("bash"),
+        "revision".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .expect("config")
+    .with_host_information()
+    .with_linux_bubblewrap(failing.clone())
+    .expect("bubblewrap");
+
+    // Act
+    let linux = probe(
+        &configuration,
+        Some(&fixture.helper),
+        &fixture.workspace,
+        host("linux", true, &failing),
+    )
+    .await;
+    let macos = probe(
+        &configuration,
+        Some(&fixture.helper),
+        &fixture.workspace,
+        host("macos", true, &failing),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        linux,
+        Ok(NativeLaunch {
+            bubblewrap: Some(failing),
+            launcher: fixture.helper.clone(),
+        })
+    );
+    assert_eq!(
+        macos,
+        Ok(NativeLaunch {
+            bubblewrap: None,
+            launcher: fixture.helper.clone(),
+        })
     );
 }
 
@@ -645,14 +703,14 @@ async fn probe_defaults_to_the_system_bubblewrap() {
     .await;
 
     // Assert
-    match checked {
-        Ok(launch) => assert_eq!(launch.bubblewrap, Some(PathBuf::from("/usr/bin/bwrap"))),
-        Err(reason) => assert!(matches!(
-            reason,
-            SandboxUnavailableReason::BubblewrapMissing
-                | SandboxUnavailableReason::UserNamespacesUnavailable
-        )),
-    }
+    // Linux test hosts install a working system Bubblewrap; macOS has none.
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        checked.map(|launch| launch.bubblewrap),
+        Ok(Some(PathBuf::from("/usr/bin/bwrap")))
+    );
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(checked, Err(SandboxUnavailableReason::BubblewrapMissing));
 }
 
 #[test]

@@ -29,7 +29,7 @@ use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, read, write};
 #[cfg(target_os = "linux")]
 use rustix::io::{FdFlags, fcntl_setfd};
-use rustix::process::{Pid, WaitOptions, WaitStatus, wait};
+use rustix::process::{Pid, WaitOptions, WaitStatus, getegid, geteuid, getgid, getuid, wait};
 use rustix::stdio::stdin;
 
 use super::wire::{Launch, Notice};
@@ -64,6 +64,11 @@ pub(crate) fn run() -> ExitCode {
 }
 
 fn launch() -> io::Result<()> {
+    // The configuration and the programs it names come from the caller, so
+    // a set-ID helper would run them with privileges the caller lacks.
+    (getuid() == geteuid() && getgid() == getegid())
+        .then_some(())
+        .ok_or(io::ErrorKind::PermissionDenied)?;
     // The phase follows the helper argument.
     #[cfg(target_os = "macos")]
     if std::env::args_os().nth(2).as_deref() == Some(std::ffi::OsStr::new("--seatbelt-child")) {

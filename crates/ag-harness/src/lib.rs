@@ -69,8 +69,8 @@
 //! the run's event stream. The native Bash sandbox runs commands through a
 //! helper executable: call `sandbox::dispatch` first in `main` so the
 //! host's own executable is the helper, or install the standalone one with
-//! `cargo install ag-harness --features native-sandbox --bin
-//! ag-harness-sandbox` and pass its path to `BashConfig::new`. Where the
+//! `cargo install ag-harness --version <version> --features native-sandbox
+//! --bin ag-harness-sandbox` and pass its path to `BashConfig::new`. Where the
 //! sandbox cannot run, commands run unsandboxed with a warning unless the host
 //! chooses otherwise with `sandbox::Sandbox`; the [`sandbox`] module describes
 //! both.

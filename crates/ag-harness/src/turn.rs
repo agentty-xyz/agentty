@@ -26,6 +26,7 @@ use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::request_option::{GenerationParams, OutputMode};
+use crate::sandbox::SandboxWarning;
 use crate::schema_contract::OutputSchema;
 #[expect(
     deprecated,
@@ -252,6 +253,10 @@ pub struct TurnReport {
     context_overflow_recoveries: usize,
     #[serde(default)]
     context_summary_failures: usize,
+    /// Absent from reports recorded before this field existed and from
+    /// turns that ran sandboxed, so their records stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox_warning: Option<Box<SandboxWarning>>,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -318,6 +323,14 @@ impl TurnReport {
         self.context_summary_failures
     }
 
+    /// Returns why the turn's `bash` commands ran without the native
+    /// sandbox its configuration selected, when the harness fell back to
+    /// running them unsandboxed; the same warning a streamed run emits as
+    /// [`crate::RunEventKind::SandboxUnavailable`].
+    pub fn sandbox_warning(&self) -> Option<&SandboxWarning> {
+        self.sandbox_warning.as_deref()
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -337,6 +350,7 @@ impl TurnReport {
             repetition_nudges: 0,
             context_overflow_recoveries: 0,
             context_summary_failures: 0,
+            sandbox_warning: None,
             tool_calls,
         }
     }
@@ -366,6 +380,12 @@ impl TurnReport {
 
     pub(crate) fn with_context_summary_failures(mut self, context_summary_failures: usize) -> Self {
         self.context_summary_failures = context_summary_failures;
+
+        self
+    }
+
+    pub(crate) fn with_sandbox_warning(mut self, sandbox_warning: Option<SandboxWarning>) -> Self {
+        self.sandbox_warning = sandbox_warning.map(Box::new);
 
         self
     }
@@ -1209,8 +1229,8 @@ pub enum TurnError {
     },
     /// The turn offers native-sandboxed `bash`, the sandbox cannot run on
     /// this host, and the harness refuses to run commands without it
-    /// ([`crate::sandbox::IfUnavailable::Refuse`]). No model request was
-    /// sent.
+    /// ([`crate::sandbox::IfUnavailable::Refuse`]). The turn was not
+    /// admitted: nothing was recorded and no model request was sent.
     #[error("native sandbox unavailable: {} {}", .0.message(), .0.remedy())]
     SandboxUnavailable(crate::sandbox::SandboxUnavailableReason),
 }
@@ -1226,8 +1246,8 @@ impl TurnError {
             | Self::Bash(_)
             | Self::CommandJournal { .. }
             | Self::CommandFailed { .. }
-            | Self::ToolFailed { .. }
-            | Self::SandboxUnavailable(_) => TurnErrorType::Tool,
+            | Self::ToolFailed { .. } => TurnErrorType::Tool,
+            Self::SandboxUnavailable(_) => TurnErrorType::SandboxUnavailable,
             Self::ApprovalTimeout { .. } => TurnErrorType::ApprovalTimeout,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
