@@ -1,15 +1,18 @@
 //! Version discovery and auto-update helpers.
 
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use rustix::process::{self, Pid, Signal};
 use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
 use tempfile::TempPath;
-use tokio::process::Command;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+use tokio::process::{Child, Command};
 use tokio::time;
 use tracing::{debug, warn};
 
@@ -129,10 +132,25 @@ trait VersionCommandRunner: Send + Sync {
 
     /// Runs one command with extra environment variables over the inherited
     /// environment and returns normalized output for parsing.
+    ///
+    /// A run that times out or is dropped kills the command.
     async fn run_command(
         &self,
         program: &str,
         args: Vec<String>,
+        envs: Vec<(String, String)>,
+        timeout: Duration,
+    ) -> Result<VersionCommandOutput, VersionError>;
+
+    /// Runs the script at `script` with `sh` like [`Self::run_command`], in
+    /// its own process group.
+    ///
+    /// A run that times out or is dropped sends `SIGTERM` to that group
+    /// instead of killing `sh` alone, so the script's traps can remove its
+    /// temporary files and its children stop with it.
+    async fn run_shell_script(
+        &self,
+        script: &str,
         envs: Vec<(String, String)>,
         timeout: Duration,
     ) -> Result<VersionCommandOutput, VersionError>;
@@ -162,7 +180,24 @@ impl VersionCommandRunner for RealVersionCommandRunner {
         envs: Vec<(String, String)>,
         timeout: Duration,
     ) -> Result<VersionCommandOutput, VersionError> {
-        run_version_command_with_timeout(program, args, envs, timeout).await
+        run_version_command_with_timeout(program, args, envs, timeout, Interruption::KillProcess)
+            .await
+    }
+
+    async fn run_shell_script(
+        &self,
+        script: &str,
+        envs: Vec<(String, String)>,
+        timeout: Duration,
+    ) -> Result<VersionCommandOutput, VersionError> {
+        run_version_command_with_timeout(
+            "sh",
+            vec![script.to_string()],
+            envs,
+            timeout,
+            Interruption::TerminateGroup,
+        )
+        .await
     }
 }
 
@@ -178,21 +213,34 @@ fn create_temp_file_in(directory: &Path) -> Result<TempPath, VersionError> {
         })
 }
 
-/// Runs one cancellable version subprocess with an explicit deadline.
+/// How an unfinished version subprocess stops when its run times out or is
+/// dropped.
+enum Interruption {
+    /// `SIGKILL` to the direct child only.
+    KillProcess,
+    /// `SIGTERM` to the child's own process group; see [`TerminatingChild`].
+    TerminateGroup,
+}
+
+/// Runs one cancellable version subprocess with an explicit deadline,
+/// stopping it as `interruption` says when it does not finish.
 async fn run_version_command_with_timeout(
     program: &str,
     args: Vec<String>,
     envs: Vec<(String, String)>,
     timeout: Duration,
+    interruption: Interruption,
 ) -> Result<VersionCommandOutput, VersionError> {
     let mut process = Command::new(program);
-    process
-        .args(&args)
-        .envs(envs)
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
+    process.args(&args).envs(envs).stdin(Stdio::null());
+    let run = async {
+        match interruption {
+            Interruption::KillProcess => process.kill_on_drop(true).output().await,
+            Interruption::TerminateGroup => TerminatingChild::output(&mut process).await,
+        }
+    };
 
-    let output = time::timeout(timeout, process.output())
+    let output = time::timeout(timeout, run)
         .await
         .map_err(|_| VersionError::CommandTimedOut {
             command: program.to_string(),
@@ -209,6 +257,64 @@ async fn run_version_command_with_timeout(
         success: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
     })
+}
+
+/// Child leading its own process group, which receives `SIGTERM` when the
+/// child is dropped before it is seen to exit.
+///
+/// `kill_on_drop` would send `SIGKILL` to the direct child alone: a shell
+/// script could not run its `EXIT` and `TERM` traps, and its own children
+/// would keep running. The child stays unreaped until the drop checks it, so
+/// its process group ID cannot name an unrelated group, and Tokio reaps it
+/// once it exits.
+///
+/// Output goes to unnamed temporary files rather than pipes: after the drop,
+/// nothing reads a pipe, and a shell reporting its terminated child on a
+/// closed pipe would die of `SIGPIPE` before its traps run.
+struct TerminatingChild(Child);
+
+impl TerminatingChild {
+    /// Spawns `process` in a new process group and collects its output.
+    async fn output(process: &mut Command) -> io::Result<Output> {
+        let stdout = tempfile::tempfile()?;
+        let stderr = tempfile::tempfile()?;
+        process
+            .stdout(stdout.try_clone()?)
+            .stderr(stderr.try_clone()?)
+            .process_group(0);
+        let mut child = Self(process.spawn()?);
+        let status = child.0.wait().await?;
+
+        Ok(Output {
+            status,
+            stderr: Self::read_capture(stderr).await?,
+            stdout: Self::read_capture(stdout).await?,
+        })
+    }
+
+    /// Reads one captured output file from its start.
+    async fn read_capture(capture: std::fs::File) -> io::Result<Vec<u8>> {
+        let mut capture = tokio::fs::File::from_std(capture);
+        let mut bytes = Vec::new();
+        capture.rewind().await?;
+        capture.read_to_end(&mut bytes).await?;
+
+        Ok(bytes)
+    }
+}
+
+impl Drop for TerminatingChild {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait()
+            && let Some(group) = self
+                .0
+                .id()
+                .and_then(|pid| i32::try_from(pid).ok())
+                .and_then(Pid::from_raw)
+        {
+            let _ = process::kill_process_group(group, Signal::TERM);
+        }
+    }
 }
 
 /// Updates the running binary through its original installer: the matching
@@ -396,7 +502,9 @@ async fn run_package_update_with_runner(
 /// shell installer to a temporary file and then running it with `sh`.
 ///
 /// The script is never piped into a shell, and dropping the staging path
-/// deletes it on every return path, including cancellation.
+/// deletes it on every return path, including cancellation. A timeout or
+/// cancellation sends `SIGTERM` to the installer's process group, so its
+/// traps remove its work directory and staged binary.
 async fn run_shell_update_with_runner(
     receipt: &ShellInstallReceipt,
     command_runner: &dyn VersionCommandRunner,
@@ -440,9 +548,8 @@ async fn run_shell_update_with_runner(
         ("AGENTTY_UNMANAGED_INSTALL".to_string(), String::new()),
     ];
     let output = command_runner
-        .run_command(
-            "sh",
-            vec![installer_path],
+        .run_shell_script(
+            &installer_path,
             installer_envs,
             VERSION_UPDATE_COMMAND_TIMEOUT,
         )

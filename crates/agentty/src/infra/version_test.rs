@@ -466,6 +466,58 @@ async fn test_real_version_command_runner_cancels_timed_out_process() {
     ));
 }
 
+/// A timed-out shell script receives `SIGTERM` with its children, so its
+/// trap runs promptly instead of after its foreground `sleep`.
+#[tokio::test]
+async fn test_real_version_command_runner_terminates_timed_out_script_group() {
+    // Arrange
+    let directory = tempdir().expect("fixture directory");
+    let script = directory.path().join("script.sh");
+    let marker = directory.path().join("terminated");
+    std::fs::write(
+        &script,
+        "trap 'printf terminated > \"$AGENTTY_TEST_MARKER.tmp\"; mv \"$AGENTTY_TEST_MARKER.tmp\" \
+         \"$AGENTTY_TEST_MARKER\"; exit 1' TERM\nsleep 30\n",
+    )
+    .expect("fixture script");
+    let command_runner = RealVersionCommandRunner;
+    // Long enough for `sh` to install its trap before the deadline.
+    let timeout = Duration::from_millis(300);
+
+    // Act
+    let error = command_runner
+        .run_shell_script(
+            script.to_str().expect("UTF-8 path"),
+            vec![(
+                "AGENTTY_TEST_MARKER".to_string(),
+                marker.to_string_lossy().into_owned(),
+            )],
+            timeout,
+        )
+        .await
+        .expect_err("long-running script should time out");
+    let trap_ran = tokio::time::timeout(Duration::from_secs(5), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(
+        error,
+        VersionError::CommandTimedOut {
+            command,
+            timeout: actual_timeout,
+        } if command == "sh" && actual_timeout == timeout
+    ));
+    assert!(trap_ran.is_ok(), "TERM trap did not run");
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("marker"),
+        "terminated"
+    );
+}
+
 #[tokio::test]
 async fn test_latest_version_result_preserves_optional_public_contract() {
     // Arrange
@@ -967,33 +1019,34 @@ async fn shell_install_reruns_downloaded_installer_and_removes_it() {
                         message: "not installed".to_string(),
                     });
                 }
-                if program == "curl" {
-                    assert_eq!(
-                        args,
-                        [
-                            "--proto",
-                            "=https",
-                            "--tlsv1.2",
-                            "--fail",
-                            "--location",
-                            "--silent",
-                            "--show-error",
-                            "--output",
-                            expected_path.as_str(),
-                            SHELL_INSTALLER_URL,
-                        ]
-                    );
-                    assert_eq!(envs, Vec::<(String, String)>::new());
-                    assert_eq!(timeout, SHELL_INSTALLER_DOWNLOAD_TIMEOUT);
-
-                    return download.output(program, timeout);
-                }
-                assert_eq!(program, "sh");
-                assert!(
-                    matches!(download, Step::Succeed),
-                    "installer ran after failed download"
+                assert_eq!(program, "curl");
+                assert_eq!(
+                    args,
+                    [
+                        "--proto",
+                        "=https",
+                        "--tlsv1.2",
+                        "--fail",
+                        "--location",
+                        "--silent",
+                        "--show-error",
+                        "--output",
+                        expected_path.as_str(),
+                        SHELL_INSTALLER_URL,
+                    ]
                 );
-                assert_eq!(args, std::slice::from_ref(&expected_path));
+                assert_eq!(envs, Vec::<(String, String)>::new());
+                assert_eq!(timeout, SHELL_INSTALLER_DOWNLOAD_TIMEOUT);
+
+                download.output(program, timeout)
+            });
+        let expected_path = installer_path.clone();
+        // The installer runs only after a successful download.
+        runner
+            .expect_run_shell_script()
+            .times(usize::from(matches!(download, Step::Succeed)))
+            .returning(move |script, envs, timeout| {
+                assert_eq!(script, expected_path);
                 assert_eq!(
                     envs,
                     [
@@ -1004,7 +1057,7 @@ async fn shell_install_reruns_downloaded_installer_and_removes_it() {
                 );
                 assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
 
-                install.output(program, timeout)
+                install.output("sh", timeout)
             });
 
         // Act
@@ -1108,7 +1161,7 @@ async fn shell_update_runs_for_a_receipt_newer_than_the_running_build() {
         .return_once(move || Ok(installer));
     runner
         .expect_run_command()
-        .times(5)
+        .times(4)
         .returning(|program, _, _, timeout| {
             if is_unavailable_package_manager(program) {
                 return Err(VersionError::CommandSpawn {
@@ -1119,6 +1172,10 @@ async fn shell_update_runs_for_a_receipt_newer_than_the_running_build() {
 
             Step::Succeed.output(program, timeout)
         });
+    runner
+        .expect_run_shell_script()
+        .times(1)
+        .returning(|_, _, timeout| Step::Succeed.output("sh", timeout));
 
     // Act
     let result = run_update_with_runner(
