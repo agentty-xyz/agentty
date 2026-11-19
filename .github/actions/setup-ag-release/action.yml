@@ -9,10 +9,11 @@ runs:
       run: rustup toolchain install --profile minimal --no-self-update
 
     # Release jobs restore no build cache, so a release cannot read state that
-    # another workflow wrote. GitHub-hosted runners already put Cargo's `bin`
-    # directory on `PATH`.
+    # another workflow wrote. The binary goes next to `cargo`, a directory that
+    # is on `PATH` on every runner image; `~/.cargo/bin` does not exist on macOS
+    # runners.
     - name: Build `ag-release`
       shell: bash
       run: |
         cargo build --locked --quiet --package ag-release
-        cp target/debug/ag-release "${CARGO_HOME:-$HOME/.cargo}/bin/"
+        cp target/debug/ag-release "$(dirname "$(command -v cargo)")/"
