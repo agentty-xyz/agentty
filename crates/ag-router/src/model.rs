@@ -471,8 +471,9 @@ impl ModelError {
     }
 
     /// Returns the provider-declared `Retry-After` delay of an unsuccessful
-    /// HTTP response, when one was sent as whole delta-seconds. The delay is
-    /// capped at sixty seconds; an HTTP-date value reads as absent.
+    /// HTTP response, sent as whole delta-seconds or an HTTP date, capped
+    /// at the provider's [`crate::RetryPolicy::with_max_retry_after`], by
+    /// default sixty seconds.
     pub fn retry_after(&self) -> Option<Duration> {
         self.provider_rejection()
             .and_then(|rejection| rejection.retry_after)

@@ -341,25 +341,18 @@ impl BuilderEnv {
 
 /// Session row shape inserted by [`seed_session`].
 #[derive(Clone, Copy)]
-enum SessionSeedKind<'a> {
+enum SessionSeedKind {
     /// Insert a normal persisted session row.
     Regular,
     /// Insert a draft session row that has not started running.
     Draft,
-    /// Insert a stacked draft session linked to an existing parent.
-    StackedDraft {
-        /// Parent session id used by the stack relationship.
-        parent_session_id: &'a str,
-        /// Worktree path stored on the stacked draft session.
-        worktree_path: &'a str,
-    },
 }
 
 /// Declarative seed data for inserting one E2E session row.
 #[derive(Clone, Copy)]
 pub(crate) struct SessionSeed<'a> {
     base_branch: &'a str,
-    kind: SessionSeedKind<'a>,
+    kind: SessionSeedKind,
     model: &'a str,
     project_git_branch: Option<&'a str>,
     session_id: &'a str,
@@ -398,28 +391,6 @@ impl<'a> SessionSeed<'a> {
             kind: SessionSeedKind::Draft,
             model,
             project_git_branch: Some(base_branch),
-            session_id,
-            status,
-            title: None,
-        }
-    }
-
-    /// Build seed data for a stacked draft session.
-    pub(crate) fn stacked_draft(
-        session_id: &'a str,
-        model: &'a str,
-        worktree_path: &'a str,
-        status: &'a str,
-        parent_session_id: &'a str,
-    ) -> Self {
-        Self {
-            base_branch: worktree_path,
-            kind: SessionSeedKind::StackedDraft {
-                parent_session_id,
-                worktree_path,
-            },
-            model,
-            project_git_branch: Some("main"),
             session_id,
             status,
             title: None,
@@ -669,22 +640,6 @@ async fn insert_session_seed(
                     seed.model,
                     seed.base_branch,
                     seed.status,
-                    project_id,
-                )
-                .await?;
-        }
-        SessionSeedKind::StackedDraft {
-            parent_session_id,
-            worktree_path,
-        } => {
-            database
-                .sessions()
-                .insert_stacked_draft_session(
-                    seed.session_id,
-                    seed.model,
-                    worktree_path,
-                    seed.status,
-                    parent_session_id,
                     project_id,
                 )
                 .await?;

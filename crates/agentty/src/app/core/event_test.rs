@@ -1,6 +1,6 @@
 //! `AppEvent` batching, reduction planning, and event application unit tests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -19,10 +19,7 @@ use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::session::TurnAppliedState;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::sync::ProjectSyncContext;
-use crate::domain::session::{
-    ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SessionId,
-};
+use crate::domain::session::{PublishBranchAction, SessionId};
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
@@ -118,6 +115,40 @@ async fn exhausted_focused_review_persistence_logs_without_tracing() {
     assert!(warnings[0].contains("error=attempted to acquire a connection on a closed pool"));
 }
 
+/// Verifies a session finishing a rebase re-enters review for auto-review
+/// unless a ready review result is already cached.
+#[tokio::test]
+async fn rebased_session_enters_review_only_without_ready_review_cache() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let id = SessionId::from("rebased-session");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(id.as_str())
+            .status(crate::domain::session::Status::Review)
+            .build(),
+    );
+    let session_ids = HashSet::from([id.clone()]);
+    let previous_session_states =
+        HashMap::from([(id.clone(), crate::domain::session::Status::Rebasing)]);
+
+    // Act
+    let without_cache = app.sessions_entering_review(&session_ids, &previous_session_states);
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
+            diff_hash: 7,
+            text: "cached review".into(),
+        },
+    );
+    let with_ready_cache = app.sessions_entering_review(&session_ids, &previous_session_states);
+
+    // Assert
+    assert_eq!(without_cache, HashSet::from([id]));
+    assert!(with_ready_cache.is_empty());
+}
+
 #[tokio::test]
 async fn review_progress_updates_only_the_loading_generation_and_never_replaces_results() {
     // Arrange
@@ -190,73 +221,6 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
         app.review_view_state(id.as_str()),
         (None, Some("completed"))
     );
-}
-
-#[tokio::test]
-async fn merged_branch_eligibility_rejects_incomplete_session_context() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    let review_request = ReviewRequest {
-        last_refreshed_at: 0,
-        summary: ReviewRequestSummary {
-            display_id: "#23".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            source_branch: "wt/child".to_string(),
-            state: ReviewRequestState::Merged,
-            status_summary: None,
-            target_branch: "wt/parent".to_string(),
-            title: "Merged child".to_string(),
-            web_url: "https://example.test/pull/23".to_string(),
-        },
-    };
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("session-without-review")
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("child-with-missing-parent")
-            .parent_session_id(Some("missing-parent".into()))
-            .review_request(Some(review_request.clone()))
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("parent-without-review")
-            .build(),
-    );
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("child-with-unlinked-parent")
-            .parent_session_id(Some("parent-without-review".into()))
-            .review_request(Some(review_request))
-            .build(),
-    );
-
-    // Act
-    let missing_session = app
-        .merged_session_reached_synced_branch(&"missing-session".into(), "main")
-        .await
-        .expect("missing session eligibility should not fail");
-    let session_without_review = app
-        .merged_session_reached_synced_branch(&"session-without-review".into(), "main")
-        .await
-        .expect("unlinked session eligibility should not fail");
-    let child_with_missing_parent = app
-        .merged_session_reached_synced_branch(&"child-with-missing-parent".into(), "main")
-        .await
-        .expect("missing parent eligibility should not fail");
-    let child_with_unlinked_parent = app
-        .merged_session_reached_synced_branch(&"child-with-unlinked-parent".into(), "main")
-        .await
-        .expect("unlinked parent eligibility should not fail");
-
-    // Assert
-    assert!(!missing_session);
-    assert!(!session_without_review);
-    assert!(!child_with_missing_parent);
-    assert!(!child_with_unlinked_parent);
 }
 
 #[tokio::test]

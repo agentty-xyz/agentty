@@ -1,19 +1,15 @@
-//! Session review tests for review requests, stack gates, pull-request
+//! Session review tests for review requests, pull-request
 //! publishing, review-comment replies, and review watch.
 
 use std::path::PathBuf;
 
 use ag_contracts::{SessionStats, SpeedMode};
 use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
-    SessionStatus as Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionStatus as Status,
 };
 
 use super::super::super::agent::AgentSelection;
-use super::super::{
-    PublishBranchAction, ReviewWatchToggle, Session, SessionSize, can_append_session_to_stack,
-    can_reply_to_session_in_stack, can_start_staged_session_in_stack,
-};
+use super::super::{PublishBranchAction, ReviewWatchToggle, Session, SessionSize};
 use super::support::test_session;
 use crate::domain::agent::AgentModel;
 use crate::domain::transient_message::{
@@ -50,34 +46,6 @@ fn test_has_review_request_reports_link_presence() {
     // Assert
     assert!(!has_no_link);
     assert!(has_link);
-}
-
-#[test]
-fn test_allows_stack_append_accepts_review_states_and_rejects_non_review_or_child() {
-    // Arrange
-    let review_session = SessionFixtureBuilder::new().status(Status::Review).build();
-    let agent_review_session = SessionFixtureBuilder::new()
-        .status(Status::AgentReview)
-        .build();
-    let running_session = SessionFixtureBuilder::new()
-        .status(Status::InProgress)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .status(Status::Review)
-        .build();
-
-    // Act
-    let allows_review = review_session.allows_stack_append();
-    let allows_agent_review = agent_review_session.allows_stack_append();
-    let allows_running = running_session.allows_stack_append();
-    let allows_child = child_session.allows_stack_append();
-
-    // Assert
-    assert!(allows_review);
-    assert!(allows_agent_review);
-    assert!(!allows_running);
-    assert!(!allows_child);
 }
 
 #[test]
@@ -199,7 +167,6 @@ fn test_publish_pull_request_action_returns_publish_for_agent_review_session() {
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: "project".to_string(),
         prompt: String::new(),
@@ -287,7 +254,6 @@ fn test_publish_pull_request_action_returns_none_for_done_session() {
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
         ),
-        parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: "project".to_string(),
         prompt: String::new(),
@@ -336,84 +302,6 @@ fn test_allows_fork_action_accepts_review_ready_materialized_sessions() {
 }
 
 #[test]
-fn test_can_start_staged_session_in_stack_requires_parent_review() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::InProgress)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Draft)
-        .prompt("Ready child draft")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
-
-    // Assert
-    assert!(!can_start_child);
-}
-
-#[test]
-fn test_can_start_staged_session_in_stack_allows_review_ready_parent() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Draft)
-        .prompt("Ready child draft")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
-
-    // Assert
-    assert!(can_start_child);
-}
-
-#[test]
-fn test_can_start_nested_staged_session_uses_immediate_parent_review_state() {
-    // Arrange
-    let root_session = SessionFixtureBuilder::new()
-        .id("root-session")
-        .draft(false)
-        .status(Status::Draft)
-        .build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("root-session")))
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Draft)
-        .prompt("Ready nested draft")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![root_session, parent_session, child_session];
-
-    // Act
-    let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
-
-    // Assert
-    assert!(can_start_child);
-}
-
-#[test]
 fn test_status_allows_review_actions_for_agent_review() {
     // Arrange
     let status = Status::AgentReview;
@@ -446,49 +334,6 @@ fn test_status_allows_diff_view_for_working_review_ready_and_read_only_states() 
 
     // Assert
     assert_eq!(allowed_statuses, expected_statuses);
-}
-
-#[test]
-fn test_can_append_session_to_stack_accepts_idle_review_ready_root_and_parent() {
-    // Arrange
-    let source_session = SessionFixtureBuilder::new()
-        .id("source-session")
-        .status(Status::AgentReview)
-        .build();
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .status(Status::Review)
-        .build();
-    let sessions = vec![source_session, parent_session];
-
-    // Act
-    let can_append = can_append_session_to_stack(&sessions, "source-session", "parent-session");
-
-    // Assert
-    assert!(can_append);
-}
-
-#[test]
-fn test_can_reply_to_session_in_stack_allows_parent_with_review_child() {
-    // Arrange
-    let parent_session = SessionFixtureBuilder::new()
-        .id("parent-session")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .id("child-session")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .build();
-    let sessions = vec![parent_session, child_session];
-
-    // Act
-    let can_reply_to_parent = can_reply_to_session_in_stack(&sessions, "parent-session");
-
-    // Assert
-    assert!(can_reply_to_parent);
 }
 
 #[test]

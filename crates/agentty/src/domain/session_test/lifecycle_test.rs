@@ -1,11 +1,10 @@
-//! Session lifecycle tests for drafts, stacked children, cancel and fork
-//! actions, size buckets, and continuation prompts.
+//! Session lifecycle tests for drafts, cancel and fork actions, size
+//! buckets, and continuation prompts.
 
 use ag_session::{SessionId, SessionStatus as Status};
 
 use super::super::{
     FollowUpTaskAction, SessionFollowUpTask, SessionSize, TERMINAL_CONTINUATION_PROMPT_INTRO,
-    can_create_stacked_child,
 };
 use super::support::test_session;
 use crate::test_support::SessionFixtureBuilder;
@@ -46,15 +45,10 @@ fn test_awaits_first_message_only_for_draft_without_prompt() {
 }
 
 #[test]
-fn test_allows_fork_action_rejects_drafts_children_active_and_terminal_sessions() {
+fn test_allows_fork_action_rejects_drafts_active_and_terminal_sessions() {
     // Arrange
     let draft_review_session = SessionFixtureBuilder::new()
         .draft(true)
-        .status(Status::Review)
-        .build();
-    let child_review_session = SessionFixtureBuilder::new()
-        .draft(false)
-        .parent_session_id(Some(SessionId::from("parent-session")))
         .status(Status::Review)
         .build();
     let in_progress_session = SessionFixtureBuilder::new()
@@ -68,98 +62,13 @@ fn test_allows_fork_action_rejects_drafts_children_active_and_terminal_sessions(
 
     // Act
     let allows_draft_fork = draft_review_session.allows_fork_action();
-    let allows_child_fork = child_review_session.allows_fork_action();
     let allows_active_fork = in_progress_session.allows_fork_action();
     let allows_done_fork = done_session.allows_fork_action();
 
     // Assert
     assert!(!allows_draft_fork);
-    assert!(!allows_child_fork);
     assert!(!allows_active_fork);
     assert!(!allows_done_fork);
-}
-
-#[test]
-fn test_can_create_stacked_child_allows_depth_five_and_rejects_depth_six() {
-    // Arrange
-    let root_session = SessionFixtureBuilder::new()
-        .id("root")
-        .draft(false)
-        .status(Status::Review)
-        .build();
-    let level_1 = SessionFixtureBuilder::new()
-        .id("level-1")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("root")))
-        .build();
-    let level_2 = SessionFixtureBuilder::new()
-        .id("level-2")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("level-1")))
-        .build();
-    let level_3 = SessionFixtureBuilder::new()
-        .id("level-3")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("level-2")))
-        .build();
-    let level_4 = SessionFixtureBuilder::new()
-        .id("level-4")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("level-3")))
-        .build();
-    let level_5 = SessionFixtureBuilder::new()
-        .id("level-5")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("level-4")))
-        .build();
-    let sessions = vec![root_session, level_1, level_2, level_3, level_4, level_5];
-
-    // Act
-    let can_create_level_5 = can_create_stacked_child(&sessions, "level-4");
-    let can_create_level_6 = can_create_stacked_child(&sessions, "level-5");
-
-    // Assert
-    assert!(can_create_level_5);
-    assert!(!can_create_level_6);
-}
-
-#[test]
-fn test_can_create_stacked_child_rejects_missing_sessions_and_invalid_parent_chains() {
-    // Arrange
-    let missing_parent = SessionFixtureBuilder::new()
-        .id("missing-parent-child")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("missing")))
-        .build();
-    let first_cycle_member = SessionFixtureBuilder::new()
-        .id("cycle-a")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("cycle-b")))
-        .build();
-    let second_cycle_member = SessionFixtureBuilder::new()
-        .id("cycle-b")
-        .draft(true)
-        .status(Status::Review)
-        .parent_session_id(Some(SessionId::from("cycle-a")))
-        .build();
-    let sessions = vec![missing_parent, first_cycle_member, second_cycle_member];
-
-    // Act
-    let missing_session_allowed = can_create_stacked_child(&sessions, "missing-session");
-    let missing_parent_allowed = can_create_stacked_child(&sessions, "missing-parent-child");
-    let cycle_allowed = can_create_stacked_child(&sessions, "cycle-a");
-
-    // Assert
-    assert!(!missing_session_allowed);
-    assert!(!missing_parent_allowed);
-    assert!(!cycle_allowed);
 }
 
 #[test]
@@ -179,25 +88,23 @@ fn test_status_from_str_draft() {
 #[test]
 fn test_can_start_staged_session_checks_only_draft_readiness() {
     // Arrange
-    let root_draft_session = SessionFixtureBuilder::new()
+    let staged_draft_session = SessionFixtureBuilder::new()
         .draft(true)
         .status(Status::Draft)
         .prompt("Ready to start")
         .build();
-    let stacked_draft_session = SessionFixtureBuilder::new()
+    let empty_draft_session = SessionFixtureBuilder::new()
         .draft(true)
         .status(Status::Draft)
-        .prompt("Waiting on parent")
-        .parent_session_id(Some(SessionId::from("parent-session")))
         .build();
 
     // Act
-    let can_start_root_draft = root_draft_session.can_start_staged_session();
-    let can_start_stacked_draft = stacked_draft_session.can_start_staged_session();
+    let can_start_staged_draft = staged_draft_session.can_start_staged_session();
+    let can_start_empty_draft = empty_draft_session.can_start_staged_session();
 
     // Assert
-    assert!(can_start_root_draft);
-    assert!(can_start_stacked_draft);
+    assert!(can_start_staged_draft);
+    assert!(!can_start_empty_draft);
 }
 
 #[test]
@@ -255,61 +162,6 @@ fn test_session_allows_cancel_action_rejects_regular_draft_session() {
 
     // Assert
     assert!(!allows_cancel_action);
-}
-
-#[test]
-fn test_allows_stacked_child_creation_returns_true_for_materialized_active_session() {
-    // Arrange
-    let session = SessionFixtureBuilder::new()
-        .draft(false)
-        .status(Status::Review)
-        .build();
-
-    // Act
-    let allows_stacked_child = session.allows_stacked_child_creation();
-
-    // Assert
-    assert!(allows_stacked_child);
-}
-
-#[test]
-fn test_stacked_child_creation_accepts_stacked_drafts_and_rejects_root_drafts_or_terminal() {
-    // Arrange
-    let draft_session = SessionFixtureBuilder::new()
-        .draft(true)
-        .status(Status::Draft)
-        .build();
-    let stacked_draft_session = SessionFixtureBuilder::new()
-        .draft(true)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .status(Status::Draft)
-        .build();
-    let child_session = SessionFixtureBuilder::new()
-        .draft(true)
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .status(Status::Review)
-        .build();
-    let done_session = SessionFixtureBuilder::new().status(Status::Done).build();
-    let merged_session = SessionFixtureBuilder::new().status(Status::Merged).build();
-    let canceled_session = SessionFixtureBuilder::new()
-        .status(Status::Canceled)
-        .build();
-
-    // Act
-    let allows_draft_child = draft_session.allows_stacked_child_creation();
-    let allows_stacked_draft_child = stacked_draft_session.allows_stacked_child_creation();
-    let allows_nested_child = child_session.allows_stacked_child_creation();
-    let allows_merged_child = merged_session.allows_stacked_child_creation();
-    let allows_done_child = done_session.allows_stacked_child_creation();
-    let allows_canceled_child = canceled_session.allows_stacked_child_creation();
-
-    // Assert
-    assert!(!allows_draft_child);
-    assert!(allows_stacked_draft_child);
-    assert!(allows_nested_child);
-    assert!(!allows_merged_child);
-    assert!(!allows_done_child);
-    assert!(!allows_canceled_child);
 }
 
 #[test]

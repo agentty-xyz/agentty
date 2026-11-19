@@ -11,6 +11,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::credential::CredentialSource;
 use crate::input::TurnInput;
 use crate::model::{GenerationOptions, ModelError, ReasoningEffort};
+use crate::retry::RetryPolicy;
 use crate::schema::OutputSchema;
 
 /// Smallest `max_output_tokens` the Responses API accepts.
@@ -233,6 +234,7 @@ pub struct ProviderSpec {
     pub(crate) reasoning: ReasoningMapping,
     pub(crate) replay: HistoryReplay,
     pub(crate) response_format_with_tools: bool,
+    pub(crate) retry: RetryPolicy,
     pub(crate) structured_output: StructuredOutputMode,
 }
 
@@ -279,6 +281,7 @@ impl fmt::Debug for ProviderSpec {
             )
             .field("replay", &self.replay)
             .field("overflow_markers", &self.overflow_markers)
+            .field("retry", &self.retry)
             .finish()
     }
 }
@@ -329,6 +332,7 @@ impl ProviderSpec {
             },
             replay: HistoryReplay::default(),
             response_format_with_tools: false,
+            retry: RetryPolicy::default(),
             structured_output: if responses {
                 StructuredOutputMode::JsonSchema
             } else {
@@ -467,6 +471,15 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_response_format_with_tools(mut self, response_format_with_tools: bool) -> Self {
         self.response_format_with_tools = response_format_with_tools;
+
+        self
+    }
+
+    /// Sets how failed requests are retried; every specification starts
+    /// from [`RetryPolicy::default`].
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
 
         self
     }

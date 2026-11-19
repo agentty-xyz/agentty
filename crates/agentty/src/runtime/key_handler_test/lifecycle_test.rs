@@ -11,7 +11,6 @@ use super::super::{
     handle_pre_commit_hook_warning_key, handle_session_creation_key, session_creation_mode,
     session_creation_option_is_enabled, update_session_creation_selection,
 };
-use super::support::appendable_stack_test_app;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -62,35 +61,22 @@ async fn test_session_creation_navigation_moves_up_and_clamps_disabled_options()
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 3,
+        selected_option_index: 1,
     };
 
     // Act
-    update_session_creation_selection(&mut app, 3);
+    update_session_creation_selection(&mut app, usize::MAX);
     let clamped_selection = current_session_creation_selection(&app);
     let result =
         handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).await;
     let moved_selection = current_session_creation_selection(&app);
     let unknown_option_enabled = session_creation_option_is_enabled(&app, usize::MAX);
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 3,
-    };
-    let disabled_append_result =
-        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
 
     // Assert
     assert_eq!(clamped_selection, 1);
     assert!(matches!(result, Ok(EventResult::Continue)));
     assert_eq!(moved_selection, 0);
     assert!(!unknown_option_enabled);
-    assert!(matches!(disabled_append_result, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::SessionCreation {
-            selected_option_index: 3,
-        }
-    ));
 }
 
 #[tokio::test]
@@ -168,37 +154,6 @@ async fn test_pre_commit_warning_enter_opens_session_creation_options() {
 }
 
 #[tokio::test]
-async fn test_handle_key_event_routes_stack_parent_escape_to_creation_selector() {
-    // Arrange
-    let (mut app, _base_dir, _parent_session_id, source_session_id) =
-        appendable_stack_test_app().await;
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: source_session_id.into(),
-    };
-    let backend = ratatui::backend::TestBackend::new(120, 30);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-    // Act
-    let result = handle_key_event(
-        &mut app,
-        &PresentationState::default(),
-        &mut terminal,
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    )
-    .await;
-
-    // Assert
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::SessionCreation {
-            selected_option_index: 3,
-        }
-    ));
-}
-
-#[tokio::test]
 async fn test_handle_session_creation_key_creates_each_root_session_type() {
     for (selected_option_index, is_draft) in [(0, false), (1, true)] {
         // Arrange
@@ -238,52 +193,6 @@ async fn test_handle_session_creation_key_creates_each_root_session_type() {
             } if !session_id.is_empty()
         ));
     }
-}
-
-#[tokio::test]
-async fn test_handle_session_creation_key_creates_stacked_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let parent_session_id = app
-        .create_session()
-        .await
-        .expect("parent session should be created");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        crate::domain::session::Status::Review,
-    );
-    app.sessions.select_session_index(Some(0));
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 1,
-    };
-
-    // Act
-    handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await
-        .expect("failed to select stacked session");
-    let result =
-        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
-
-    // Assert
-    let child_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.parent_session_id.as_deref() == Some(parent_session_id.as_str()))
-        .expect("stacked child should be created");
-    let child_session_id = child_session.id.clone();
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(child_session.is_draft_session());
-    assert!(matches!(
-        app.mode,
-        AppMode::Prompt {
-            ref session_id,
-            scroll_offset: None,
-            ..
-        } if session_id == &child_session_id
-    ));
 }
 
 #[tokio::test]

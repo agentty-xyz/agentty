@@ -63,8 +63,6 @@ pub struct PersistedSessionCreation<'a> {
     pub is_draft: bool,
     /// Persisted model identifier for the session.
     pub model: &'a str,
-    /// Optional parent session id for one-level stacked drafts.
-    pub parent_session_id: Option<&'a str>,
     /// Provider permission mode captured for the session.
     pub permission_mode: PermissionMode,
     /// Owning project identifier.
@@ -202,8 +200,6 @@ session_rows! {
         pub model: String,
         /// Total output tokens accumulated for the session.
         pub output_tokens: i64,
-        /// Parent session id when this is a one-level stacked draft.
-        pub parent_session_id: Option<String>,
         /// Persisted provider permission mode for future turns.
         pub permission_mode: String,
         /// Owning project identifier, when present.
@@ -303,14 +299,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     /// Returns the persisted base branch for a session, when present.
     async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, DbError>;
 
-    /// Returns the parent session id for a stacked session, when present.
-    async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError>;
-
-    /// Returns the parent/base commit hash that a stacked child branch was
-    /// last known to contain.
-    async fn get_session_stack_base_commit_hash(&self, id: &str)
-    -> Result<Option<String>, DbError>;
-
     /// Returns the persisted app-server instruction bootstrap marker for a
     /// session, when present.
     async fn get_session_instruction_conversation_id(
@@ -332,17 +320,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         model: &str,
         base_branch: &str,
         status: &str,
-        project_id: i64,
-    ) -> Result<(), DbError>;
-
-    /// Inserts a newly created stacked draft-session row.
-    async fn insert_stacked_draft_session(
-        &self,
-        id: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        parent_session_id: &str,
         project_id: i64,
     ) -> Result<(), DbError>;
 
@@ -435,13 +412,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     /// Loads the project identifier associated with one session.
     async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError>;
 
-    /// Loads parentless review-ready sessions that still need their recorded
-    /// stack-base commit replayed onto their current base branch.
-    async fn load_pending_stack_restack_session_ids(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<String>, DbError>;
-
     /// Loads eligible worker sessions with a durable automatic focused-review
     /// trigger for one project.
     async fn load_pending_focused_review_session_ids(
@@ -465,16 +435,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     /// Loads the immutable diff archived before session cleanup.
     async fn load_session_archived_diff(&self, session_id: &str)
     -> Result<Option<String>, DbError>;
-
-    /// Clears parent links for children after their parent session merges
-    /// into its base branch, returning materialized children that may need a
-    /// follow-up branch restack.
-    async fn restack_child_sessions_after_parent_merge(
-        &self,
-        parent_session_id: &str,
-        base_branch: &str,
-        parent_commit_hash: Option<String>,
-    ) -> Result<Vec<String>, DbError>;
 
     /// Loads the persisted session reasoning level.
     async fn load_session_reasoning_level(
@@ -581,24 +541,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         &self,
         id: &str,
         archived_diff: Option<String>,
-    ) -> Result<(), DbError>;
-
-    /// Persists or clears the parent/base commit hash used for deterministic
-    /// stacked-child rebases.
-    async fn update_session_stack_base_commit_hash(
-        &self,
-        id: &str,
-        stack_base_commit_hash: Option<String>,
-    ) -> Result<(), DbError>;
-
-    /// Updates the parent link, rebase target, and deterministic old-base
-    /// marker for one session as one atomic row mutation.
-    async fn update_session_stack_membership(
-        &self,
-        id: &str,
-        parent_session_id: Option<&str>,
-        base_branch: &str,
-        stack_base_commit_hash: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Updates the saved prompt and serialized staged draft attachments for a
@@ -839,7 +781,6 @@ impl SqliteSessionRepository {
             id,
             is_draft,
             model,
-            parent_session_id,
             permission_mode,
             project_id,
             reasoning_level,
@@ -859,7 +800,6 @@ impl SqliteSessionRepository {
         status,
         has_diff,
         is_draft,
-        parent_session_id,
         permission_mode,
         project_id,
         reasoning_level,
@@ -869,7 +809,7 @@ impl SqliteSessionRepository {
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ",
         )
         .bind(id)
@@ -880,7 +820,6 @@ impl SqliteSessionRepository {
         // Diff availability remains unknown until the worktree is refreshed.
         .bind(Option::<bool>::None)
         .bind(is_draft)
-        .bind(parent_session_id)
         .bind(permission_mode.label())
         .bind(project_id)
         .bind(reasoning_level.as_str())
@@ -999,31 +938,6 @@ WHERE id = ?
     }
 
     async fn delete_session(&self, id: &str) -> Result<(), DbError> {
-        let now = self.now();
-        let mut transaction = self.0.begin().await?;
-
-        // Retarget any stacked children onto this session's base branch before
-        // the row is removed. The `ON DELETE SET NULL` foreign key clears the
-        // child parent link automatically, but it leaves children pointing at
-        // the deleted parent's worktree branch, which no longer exists. Mirror
-        // the post-merge restack so a surviving child rebases against the
-        // parent's base branch instead of an orphaned `wt/<parent>` ref.
-        sqlx::query!(
-            r"
-UPDATE session
-SET parent_session_id = NULL,
-    base_branch = COALESCE((SELECT base_branch FROM session WHERE id = ?), base_branch),
-    updated_at = ?
-WHERE parent_session_id = ?
-  AND status <> 'Canceled'
-",
-            id,
-            now,
-            id
-        )
-        .execute(&mut *transaction)
-        .await?;
-
         sqlx::query!(
             r"
 DELETE FROM session
@@ -1031,10 +945,8 @@ WHERE id = ?
 ",
             id
         )
-        .execute(&mut *transaction)
+        .execute(&self.0)
         .await?;
-
-        transaction.commit().await?;
 
         Ok(())
     }
@@ -1053,41 +965,6 @@ WHERE id = ?
         .await?;
 
         Ok(row.map(|row| row.value))
-    }
-
-    async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError> {
-        let value = sqlx::query_scalar!(
-            r"
-SELECT parent_session_id
-FROM session
-WHERE id = ?
-",
-            id
-        )
-        .fetch_optional(&self.0)
-        .await?
-        .flatten();
-
-        Ok(value)
-    }
-
-    async fn get_session_stack_base_commit_hash(
-        &self,
-        id: &str,
-    ) -> Result<Option<String>, DbError> {
-        let value = sqlx::query_scalar!(
-            r"
-SELECT stack_base_commit_hash
-FROM session
-WHERE id = ?
-",
-            id
-        )
-        .fetch_optional(&self.0)
-        .await?
-        .flatten();
-
-        Ok(value)
     }
 
     async fn get_session_instruction_conversation_id(
@@ -1143,39 +1020,6 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
-                parent_session_id: None,
-                permission_mode: PermissionMode::AutoEdit,
-                project_id,
-                reasoning_level: ReasoningLevel::default(),
-                response_style: ResponseStyle::default(),
-                speed_mode: SpeedMode::Normal,
-                status,
-            },
-        )
-        .await
-    }
-
-    async fn insert_stacked_draft_session(
-        &self,
-        id: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        parent_session_id: &str,
-        project_id: i64,
-    ) -> Result<(), DbError> {
-        let agent = Self::persisted_agent_for_model(model);
-
-        Self::insert_with_draft_mode(
-            &self.0,
-            self.now(),
-            PersistedSessionCreation {
-                agent: &agent,
-                base_branch,
-                id,
-                is_draft: true,
-                model,
-                parent_session_id: Some(parent_session_id),
                 permission_mode: PermissionMode::AutoEdit,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1206,7 +1050,6 @@ WHERE id = ?
                 id,
                 is_draft: false,
                 model,
-                parent_session_id: None,
                 permission_mode: PermissionMode::AutoEdit,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1228,7 +1071,6 @@ WHERE id = ?
             id,
             is_draft,
             model,
-            parent_session_id,
             permission_mode,
             project_id,
             reasoning_level,
@@ -1246,7 +1088,6 @@ WHERE id = ?
                 id,
                 is_draft,
                 model,
-                parent_session_id,
                 permission_mode,
                 project_id,
                 reasoning_level,
@@ -1291,7 +1132,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS is_draft,
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.parent_session_id,
        session.permission_mode AS permission_mode,
        session.project_id,
        session.prompt AS prompt,
@@ -1368,7 +1208,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.parent_session_id,
        session.permission_mode AS permission_mode,
        session.project_id,
        session.prompt AS prompt,
@@ -1430,7 +1269,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.parent_session_id,
        session.permission_mode AS permission_mode,
        session.project_id,
        '' AS "prompt!: String",
@@ -1504,7 +1342,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS is_draft,
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.parent_session_id,
        session.permission_mode AS permission_mode,
        session.project_id,
        '' AS prompt,
@@ -1686,28 +1523,6 @@ WHERE id = ?
         Ok(row.and_then(|row| row.value))
     }
 
-    async fn load_pending_stack_restack_session_ids(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<String>, DbError> {
-        let session_ids = sqlx::query_scalar!(
-            r"
-SELECT id
-FROM session
-WHERE project_id = ?
-  AND parent_session_id IS NULL
-  AND stack_base_commit_hash IS NOT NULL
-  AND status IN ('Review', 'AgentReview', 'Watching')
-ORDER BY updated_at ASC, id ASC
-",
-            project_id
-        )
-        .fetch_all(&self.0)
-        .await?;
-
-        Ok(session_ids)
-    }
-
     async fn load_pending_focused_review_session_ids(
         &self,
         project_id: i64,
@@ -1837,53 +1652,6 @@ WHERE id = ?
         Ok(value
             .and_then(|value| value.parse::<SpeedMode>().ok())
             .unwrap_or_default())
-    }
-
-    async fn restack_child_sessions_after_parent_merge(
-        &self,
-        parent_session_id: &str,
-        base_branch: &str,
-        parent_commit_hash: Option<String>,
-    ) -> Result<Vec<String>, DbError> {
-        let now = self.now();
-        let mut transaction = self.0.begin().await?;
-        let materialized_child_ids = sqlx::query_scalar!(
-            r"
-SELECT id
-FROM session
-WHERE parent_session_id = ?
-  AND status NOT IN ('Canceled', 'Draft')
-ORDER BY created_at ASC, id ASC
-",
-            parent_session_id
-        )
-        .fetch_all(&mut *transaction)
-        .await?;
-
-        sqlx::query!(
-            r"
-UPDATE session
-SET parent_session_id = NULL,
-    base_branch = ?,
-    stack_base_commit_hash = CASE
-        WHEN status = 'Draft' THEN NULL
-        ELSE COALESCE(stack_base_commit_hash, ?)
-    END,
-    updated_at = ?
-WHERE parent_session_id = ?
-  AND status <> 'Canceled'
-",
-            base_branch,
-            parent_commit_hash,
-            now,
-            parent_session_id
-        )
-        .execute(&mut *transaction)
-        .await?;
-
-        transaction.commit().await?;
-
-        Ok(materialized_child_ids)
     }
 
     async fn load_session_timestamps(
@@ -2264,60 +2032,6 @@ WHERE id = ?
             now,
             id
         )
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update_session_stack_base_commit_hash(
-        &self,
-        id: &str,
-        stack_base_commit_hash: Option<String>,
-    ) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query(
-            r"
-UPDATE session
-SET stack_base_commit_hash = ?,
-    updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(stack_base_commit_hash)
-        .bind(now)
-        .bind(id)
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update_session_stack_membership(
-        &self,
-        id: &str,
-        parent_session_id: Option<&str>,
-        base_branch: &str,
-        stack_base_commit_hash: Option<String>,
-    ) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query(
-            r"
-UPDATE session
-SET parent_session_id = ?,
-    base_branch = ?,
-    stack_base_commit_hash = ?,
-    updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(parent_session_id)
-        .bind(base_branch)
-        .bind(stack_base_commit_hash)
-        .bind(now)
-        .bind(id)
         .execute(&self.0)
         .await?;
 
@@ -3070,7 +2784,6 @@ struct SessionJoinRow {
     is_draft: bool,
     model: String,
     output_tokens: i64,
-    parent_session_id: Option<String>,
     permission_mode: String,
     project_id: Option<i64>,
     prompt: String,
@@ -3147,7 +2860,6 @@ impl SessionJoinRow {
             is_draft,
             model,
             output_tokens,
-            parent_session_id,
             permission_mode,
             project_id,
             prompt,
@@ -3199,7 +2911,6 @@ impl SessionJoinRow {
             is_draft,
             model,
             output_tokens,
-            parent_session_id,
             permission_mode,
             project_id,
             published_upstream_ref,

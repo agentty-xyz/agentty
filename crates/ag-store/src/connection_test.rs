@@ -19,9 +19,6 @@ mod message;
 #[path = "connection_test/title_test.rs"]
 mod title;
 
-#[path = "connection_test/stack_test.rs"]
-mod stack;
-
 #[path = "connection_test/metadata_test.rs"]
 mod metadata;
 

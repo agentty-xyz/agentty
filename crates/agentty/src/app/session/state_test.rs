@@ -68,12 +68,15 @@ fn state_session_fixture(session_id: impl Into<SessionId>, status: Status) -> Se
 }
 
 #[test]
-/// Verifies handle transcript replaces the session transcript snapshot.
+/// Verifies handle transcript replaces the session transcript snapshot and
+/// sessions without runtime handles keep their snapshot unchanged.
 fn sync_from_handles_updates_transcript_snapshot() {
     // Arrange
     let session_id = "sess-1".to_string();
     let mut session = state_session_fixture(session_id.clone(), Status::Review);
     session.transcript = Some(crate::test_support::assistant_transcript("old"));
+    let mut unhandled_session = state_session_fixture("sess-unhandled", Status::Draft);
+    unhandled_session.transcript = Some(crate::test_support::assistant_transcript("kept"));
     let handles: HashMap<SessionId, SessionHandles> = HashMap::from([(
         session_id.into(),
         SessionHandles::new_with_transcript(
@@ -83,7 +86,7 @@ fn sync_from_handles_updates_transcript_snapshot() {
     )]);
     let mut state = SessionState::new(
         handles,
-        vec![session],
+        vec![session, unhandled_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
         0,
@@ -94,8 +97,16 @@ fn sync_from_handles_updates_transcript_snapshot() {
     state.sync_from_handles();
 
     // Assert
-    assert_eq!(session_replay_text(&state.sessions[0]), "new\n\n");
-    assert_eq!(state.sessions[0].status, Status::Review);
+    let synced_session = state
+        .session_for_id("sess-1")
+        .expect("handled session should remain");
+    let unhandled_session = state
+        .session_for_id("sess-unhandled")
+        .expect("unhandled session should remain");
+    assert_eq!(session_replay_text(synced_session), "new\n\n");
+    assert_eq!(synced_session.status, Status::Review);
+    assert_eq!(session_replay_text(unhandled_session), "kept\n\n");
+    assert_eq!(unhandled_session.status, Status::Draft);
 }
 
 #[test]

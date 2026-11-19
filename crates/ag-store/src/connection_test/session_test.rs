@@ -32,7 +32,6 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_eq!(session_row.has_diff, Some(true));
     assert_eq!(session_row.input_tokens, 11);
     assert_eq!(session_row.output_tokens, 29);
-    assert_eq!(session_row.parent_session_id, None);
     assert_eq!(session_row.size, "L");
     assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
     assert_eq!(session_row.title.as_deref(), Some("Feature work"));

@@ -42,10 +42,7 @@ async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavai
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Disabled,
         merge_session_branch: ViewActionState::Enabled,
-        mutate_session_branch: ViewActionState::Enabled,
-        rebase_session_branch: ViewActionState::Enabled,
         open_worktree: ViewActionState::Enabled,
-        reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
@@ -94,10 +91,7 @@ async fn test_handle_view_key_p_opens_review_request_publish_input() {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
-        mutate_session_branch: ViewActionState::Enabled,
-        rebase_session_branch: ViewActionState::Enabled,
         open_worktree: ViewActionState::Enabled,
-        reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
@@ -146,10 +140,7 @@ async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
-        mutate_session_branch: ViewActionState::Enabled,
-        rebase_session_branch: ViewActionState::Enabled,
         open_worktree: ViewActionState::Enabled,
-        reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
@@ -300,68 +291,45 @@ fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
 }
 
 #[test]
-fn test_view_session_snapshot_blocks_stacked_draft_start_until_parent_review() {
+fn test_view_session_snapshot_blocks_merge_only_for_linked_review_request() {
     // Arrange
-    let parent = SessionFixtureBuilder::new()
-        .id("parent")
-        .status(Status::InProgress)
-        .draft(false)
-        .build();
-    let mut child = SessionFixtureBuilder::new()
-        .id("child")
-        .status(Status::Draft)
-        .draft(true)
-        .parent_session_id(Some("parent".into()))
-        .build();
-    child.prompt = "staged child draft".to_string();
-    let sessions = session_manager_with_sessions(vec![parent, child]);
-    let mut mode = AppMode::View {
-        session_id: "child".into(),
-        scroll_offset: Some(1),
-    };
-    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
-
-    // Act
-    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
-        .expect("expected view snapshot");
-
-    // Assert
-    assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
-    assert!(!snapshot.can_start_staged_session());
-    assert!(snapshot.can_open_prompt_composer());
-}
-
-#[test]
-fn test_view_session_snapshot_keeps_parent_reply_with_review_child() {
-    // Arrange
-    let parent = SessionFixtureBuilder::new()
-        .id("parent")
+    let unlinked = SessionFixtureBuilder::new()
+        .id("unlinked")
         .status(Status::Review)
         .draft(false)
         .build();
-    let mut child = SessionFixtureBuilder::new()
-        .id("child")
+    let mut linked = SessionFixtureBuilder::new()
+        .id("linked")
         .status(Status::Review)
-        .draft(true)
-        .parent_session_id(Some("parent".into()))
+        .draft(false)
         .build();
-    child.prompt = "staged child draft".to_string();
-    let sessions = session_manager_with_sessions(vec![parent, child]);
-    let mut mode = AppMode::View {
-        session_id: "parent".into(),
+    attach_open_review_request(&mut linked);
+    let sessions = session_manager_with_sessions(vec![unlinked, linked]);
+    let mut unlinked_mode = AppMode::View {
+        session_id: "unlinked".into(),
         scroll_offset: Some(1),
     };
-    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
+    let mut linked_mode = AppMode::View {
+        session_id: "linked".into(),
+        scroll_offset: Some(1),
+    };
+    let unlinked_context =
+        ViewContext::from_mode(&mut unlinked_mode, &sessions).expect("unlinked view context");
+    let linked_context =
+        ViewContext::from_mode(&mut linked_mode, &sessions).expect("linked view context");
 
     // Act
-    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
-        .expect("expected view snapshot");
+    let unlinked_snapshot = ViewSessionSnapshot::from_sessions(&sessions, &unlinked_context, true)
+        .expect("expected unlinked view snapshot");
+    let linked_snapshot = ViewSessionSnapshot::from_sessions(&sessions, &linked_context, true)
+        .expect("expected linked view snapshot");
 
     // Assert
-    assert_eq!(snapshot.session_state, ViewSessionState::Review);
-    assert!(snapshot.can_open_prompt_composer());
-    assert!(snapshot.can_merge_session());
-    assert!(snapshot.can_rebase_session());
+    assert_eq!(linked_snapshot.session_state, ViewSessionState::Review);
+    assert!(unlinked_snapshot.can_merge_session());
+    assert!(!linked_snapshot.can_merge_session());
+    assert!(linked_snapshot.can_rebase_session());
+    assert!(linked_snapshot.can_open_prompt_composer());
 }
 
 #[tokio::test]

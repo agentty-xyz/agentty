@@ -168,7 +168,7 @@ impl RunEvent {
 /// [`Self::Completed`] is always the last event, including for a run that
 /// failed or was cancelled, unless the run itself was dropped before it
 /// finished; then the stream ends without it. New kinds, such as
-/// streamed deltas, retries, and approval requests, may be added.
+/// streamed deltas and approval requests, may be added.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -234,6 +234,35 @@ pub enum RunEventKind {
     /// turn's [`crate::turn::HistoryActivity`] counts what its first request
     /// still evicted.
     Compacted(CompactionReport),
+    /// A model request of the run, a turn request or a compaction or round
+    /// summary request, failed transiently and is retried after `after`, as
+    /// its provider's [`crate::provider::RetryPolicy`] allows. It is
+    /// emitted before the wait, so cancelling the run then stops it. A turn
+    /// request that still fails after its last retry fails the run; a
+    /// summary request's failure is handled as that summary's failure.
+    ///
+    /// Only the built-in [`crate::model::ModelClient`] reports retries, and
+    /// only from the task that sends the request; a custom
+    /// [`crate::Model`] that retries on its own emits none. Later fields
+    /// may be added, so match it with `..`.
+    #[non_exhaustive]
+    Retrying {
+        /// Delay before the retry is sent, to the millisecond; on the wire,
+        /// whole milliseconds.
+        #[schemars(with = "u64")]
+        #[serde(
+            deserialize_with = "RunEventKind::deserialize_after",
+            serialize_with = "RunEventKind::serialize_after"
+        )]
+        after: Duration,
+        /// One-based number of this retry within its model request.
+        #[schemars(range(min = 1))]
+        attempt: u32,
+        /// The failure being retried: [`ErrorKind::RateLimited`] for a
+        /// `429`, [`ErrorKind::Overloaded`] for a `5xx`, or
+        /// [`ErrorKind::Transport`] for a connection failure.
+        kind: ErrorKind,
+    },
     /// The run finished; always the last event. It follows the run's
     /// settlement, so once it arrives the session transcript holds the
     /// turn of a run that emitted [`Self::Started`] with its terminal
@@ -241,6 +270,35 @@ pub enum RunEventKind {
     /// [`crate::RunOutcome::settlement`]). A run that stopped before
     /// [`Self::Started`] may have recorded no turn.
     Completed(RunSummary),
+}
+
+impl RunEventKind {
+    /// Returns a [`Self::Retrying`] event whose delay is truncated to the
+    /// millisecond, so the event reads the same in process and on the wire.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    pub(crate) fn retrying(after: Duration, attempt: u32, kind: ErrorKind) -> Self {
+        Self::Retrying {
+            after: Duration::from_millis(Self::whole_millis(after)),
+            attempt,
+            kind,
+        }
+    }
+
+    /// Encodes a [`Self::Retrying`] delay as whole milliseconds, saturating
+    /// at `u64::MAX`.
+    fn serialize_after<S: Serializer>(after: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(Self::whole_millis(*after))
+    }
+
+    /// Returns `duration` in whole milliseconds, saturating at `u64::MAX`.
+    fn whole_millis(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// Decodes a [`Self::Retrying`] delay from milliseconds.
+    fn deserialize_after<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
+        Ok(Duration::from_millis(u64::deserialize(deserializer)?))
+    }
 }
 
 /// What a compaction attempt did.
@@ -529,6 +587,31 @@ impl Stream for EventStream {
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<RunEvent>> {
         self.receiver.poll_recv(context)
     }
+}
+
+tokio::task_local! {
+    /// Sink of the streamed run whose model request is in flight, which a
+    /// built-in client reports that request's retries to.
+    static RETRY_EVENTS: Arc<EventSink>;
+}
+
+/// Runs `request`, a model request of the run streaming to `events`, so a
+/// built-in client reports its retries there as [`RunEventKind::Retrying`].
+pub(crate) async fn with_retry_events<F: Future>(
+    events: Option<Arc<EventSink>>,
+    request: F,
+) -> F::Output {
+    match events {
+        Some(events) => RETRY_EVENTS.scope(events, request).await,
+        None => request.await,
+    }
+}
+
+/// Returns the sink [`with_retry_events`] scoped the current model request
+/// to, if any.
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+pub(crate) fn retry_events() -> Option<Arc<EventSink>> {
+    RETRY_EVENTS.try_with(Arc::clone).ok()
 }
 
 /// Producing side of one run's [`EventStream`].

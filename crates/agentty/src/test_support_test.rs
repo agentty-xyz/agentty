@@ -184,7 +184,6 @@ impl SessionFixtureBuilder {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                parent_session_id: None,
                 permission_mode: crate::domain::permission::PermissionMode::default(),
                 project_name: "project".to_string(),
                 prompt: String::new(),
@@ -244,13 +243,6 @@ impl SessionFixtureBuilder {
     /// Overrides the captured transcript using already formatted text.
     pub(crate) fn transcript(mut self, transcript: impl Into<String>) -> Self {
         self.session.transcript = Some(assistant_transcript(transcript.into()));
-
-        self
-    }
-
-    /// Overrides the optional stacked-session parent identifier.
-    pub(crate) fn parent_session_id(mut self, parent_session_id: Option<SessionId>) -> Self {
-        self.session.parent_session_id = parent_session_id;
 
         self
     }

@@ -1590,7 +1590,6 @@ fn parse_review_request_returns_none_for_invalid_row() {
         is_draft: false,
         model: model_fixture::CODEX_MODEL_ID.to_string(),
         output_tokens: 0,
-        parent_session_id: None,
         permission_mode: "auto_edit".to_string(),
         project_id: Some(1),
         reasoning_level_override: None,

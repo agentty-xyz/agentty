@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use testty::assertion;
+use testty::frame::CellColor;
 use testty::journey::Journey;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
@@ -383,13 +384,13 @@ async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Stacked", 5000)
+                    .wait_for_text("Stage locally first", 5000)
                     .capture_labeled("session_types", "Session types without Harness")
             },
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Stacked", &full);
+                    assertion::assert_text_in_region(frame, "Draft", &full);
                     assertion::assert_not_visible(frame, "Harness");
                 })
             },
@@ -467,6 +468,45 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "harness/muse-spark-1.3", &full);
                     assertion::assert_not_visible(frame, "Review assist unavailable");
+                })
+            },
+        )
+        .await
+}
+
+/// Verify that creation options disabled without an agent CLI use readable
+/// gray in the default theme.
+#[tokio::test]
+async fn session_creation_default_theme_disabled_options() -> E2eResult {
+    // Arrange
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("session_creation_default_theme_disabled_options")
+        .env("NO_COLOR", "")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let disabled_color = CellColor::new(192, 192, 192);
+                    for text in ["Regular", "Install an agent CLI"] {
+                        assertion::assert_text_has_fg_color(frame, text, &disabled_color);
+                        assertion::assert_text_has_bg_color(frame, text, &CellColor::black());
+                    }
+                    assertion::assert_span_is_highlighted(frame, "Harness");
                 })
             },
         )

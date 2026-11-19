@@ -863,80 +863,6 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
 }
 
 #[tokio::test]
-async fn test_apply_review_request_status_update_closed_cancels_stacked_child() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let project_id = app.active_project_id();
-    let session_id = "session-closed";
-    let child_session_id = "session-child";
-    app.services
-        .db()
-        .sessions()
-        .insert_session(
-            session_id,
-            "gemini-3.8-flash",
-            "main",
-            &Status::Review.to_string(),
-            project_id,
-        )
-        .await
-        .expect("failed to insert parent session");
-    app.services
-        .db()
-        .sessions()
-        .insert_stacked_draft_session(
-            child_session_id,
-            "gemini-3.8-flash",
-            "wt/session",
-            &Status::Draft.to_string(),
-            session_id,
-            project_id,
-        )
-        .await
-        .expect("failed to insert child session");
-    let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app.services.base_path().join(session_folder_name);
-    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
-    app.refresh_sessions_now().await;
-
-    let task_result = SyncReviewRequestTaskResult {
-        attention: None,
-        outcome: session::SyncReviewRequestOutcome::Closed {
-            display_id: "#7".to_string(),
-        },
-        summary: Some(test_review_request_summary(
-            "#7",
-            ReviewRequestState::Closed,
-        )),
-    };
-
-    let update = ReviewRequestStatusUpdate {
-        generation: 0,
-        result: Ok(task_result),
-        session_id: session_id.into(),
-    };
-
-    // Act
-    app.apply_review_request_status_update(update).await;
-    app.process_pending_app_events().await;
-
-    // Assert
-    let parent_session = app
-        .sessions
-        .session_or_err(session_id)
-        .expect("expected parent session to remain loaded");
-    let child_session = app
-        .sessions
-        .session_or_err(child_session_id)
-        .expect("expected child session to remain loaded");
-    assert_eq!(parent_session.status, Status::Canceled);
-    assert_eq!(child_session.status, Status::Canceled);
-}
-
-#[tokio::test]
 async fn session_git_status_targets_include_active_unpublished_sessions() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -1410,92 +1336,38 @@ async fn branch_publish_task_helpers_reject_unsupported_session_states() {
 }
 
 #[tokio::test]
-async fn branch_publish_task_context_targets_stacked_parent_review_source_branch() {
+async fn branch_publish_task_context_targets_session_base_branch() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    let mut parent_session =
-        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/parent-session"));
-    parent_session.id = "parent-session".into();
-    parent_session.review_request = Some(ReviewRequest {
-        last_refreshed_at: 0,
-        summary: ReviewRequestSummary {
-            display_id: "#12".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            source_branch: "review/parent-session".to_string(),
-            state: ReviewRequestState::Open,
-            status_summary: Some("Draft".to_string()),
-            target_branch: "main".to_string(),
-            title: "Parent review".to_string(),
-            web_url: "https://github.com/org/repo/pull/12".to_string(),
-        },
-    });
-    let mut child_session =
-        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/child-session"));
-    child_session.id = "child-session".into();
-    child_session.base_branch = session::session_branch("parent-session");
-    child_session.parent_session_id = Some("parent-session".into());
-    app.sessions.push_session(parent_session);
-    app.sessions.push_session(child_session);
-    app.sessions
-        .session_handles_mut()
-        .insert("child-session".into(), SessionHandles::new(Status::Review));
+    let mut session =
+        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/release-session"));
+    session.id = "release-session".into();
+    session.base_branch = "release".to_string();
+    app.sessions.push_session(session);
+    app.sessions.session_handles_mut().insert(
+        "release-session".into(),
+        SessionHandles::new(Status::Review),
+    );
 
     // Act
     let branch_publish_context = app
-        .branch_publish_task_context("child-session")
+        .branch_publish_task_context("release-session")
         .expect("expected branch-publish context");
 
     // Assert
-    assert_eq!(
-        branch_publish_context.session.base_branch,
-        "review/parent-session"
-    );
+    assert_eq!(branch_publish_context.session.base_branch, "release");
     let session_lock = &app
         .sessions
-        .session_handles_or_err("child-session")
-        .expect("expected child session handles")
+        .session_handles_or_err("release-session")
+        .expect("expected session handles")
         .branch_operation_lock;
     assert!(Arc::ptr_eq(
         &branch_publish_context.branch_operation_lock,
         session_lock
     ));
-}
-
-#[tokio::test]
-async fn branch_publish_task_context_targets_stacked_parent_upstream_branch() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let mut parent_session =
-        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/parent-session"));
-    parent_session.id = "parent-session".into();
-    parent_session.published_upstream_ref = Some("origin/review/parent-custom".to_string());
-    let mut child_session =
-        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/child-session"));
-    child_session.id = "child-session".into();
-    child_session.base_branch = session::session_branch("parent-session");
-    child_session.parent_session_id = Some("parent-session".into());
-    app.sessions.push_session(parent_session);
-    app.sessions.push_session(child_session);
-    app.sessions
-        .session_handles_mut()
-        .insert("child-session".into(), SessionHandles::new(Status::Review));
-
-    // Act
-    let branch_publish_context = app
-        .branch_publish_task_context("child-session")
-        .expect("expected branch-publish context");
-
-    // Assert
-    assert_eq!(
-        branch_publish_context.session.base_branch,
-        "review/parent-custom"
-    );
 }
 
 #[tokio::test]

@@ -126,14 +126,6 @@ impl SessionManager {
         setup(&folder).map_err(|error| {
             SessionError::Workflow(format!("Failed to setup session backend: {error}"))
         })?;
-        if row.parent_session_id.is_some() {
-            let hash = git_client.head_hash(folder.clone()).await?;
-            services
-                .db()
-                .sessions()
-                .update_session_stack_base_commit_hash(session_id, Some(hash))
-                .await?;
-        }
         // Forks start review-ready with inherited commits; ordinary drafts
         // refresh their diff during execution instead.
         if row.status == Status::Review.to_string()

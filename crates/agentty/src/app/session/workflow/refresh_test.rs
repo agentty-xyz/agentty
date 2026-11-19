@@ -674,10 +674,7 @@ fn mode_session_id_uses_view_help_context() {
         context: HelpContext::View {
             can_fork_session: false,
             can_merge_session_branch: false,
-            can_mutate_session_branch: false,
             can_open_worktree: false,
-            can_rebase_session_branch: false,
-            can_reply_to_session: false,
             can_start_staged_session: false,
             can_view_review_comments: false,
             publish_pull_request_action: None,

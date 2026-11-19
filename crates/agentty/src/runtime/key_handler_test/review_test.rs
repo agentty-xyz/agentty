@@ -4,8 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{
-    current_session_creation_selection, handle_confirmation_decision, handle_key_event,
-    handle_publish_branch_input_key, handle_session_creation_key,
+    handle_confirmation_decision, handle_key_event, handle_publish_branch_input_key,
 };
 use crate::app::ReviewCacheEntry;
 use crate::domain::session::{
@@ -17,42 +16,6 @@ use crate::presentation::app_mode::{
 };
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, PresentationState};
-
-#[tokio::test]
-async fn test_session_creation_skips_append_option_for_non_review_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let source_session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        crate::domain::session::Status::Review,
-    );
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &source_session_id,
-        crate::domain::session::Status::InProgress,
-    );
-    let source_index = app
-        .sessions
-        .sessions()
-        .iter()
-        .position(|session| session.id == source_session_id)
-        .expect("source session should exist");
-    app.sessions.select_session_index(Some(source_index));
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 2,
-    };
-
-    // Act
-    handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await
-        .expect("failed to navigate creation options");
-
-    // Assert
-    assert_eq!(current_session_creation_selection(&app), 2);
-}
 
 #[tokio::test]
 async fn test_handle_publish_branch_input_key_escape_restores_view_mode() {
@@ -562,52 +525,6 @@ async fn test_handle_key_event_routes_publish_branch_input() {
             ref session_id,
             scroll_offset: Some(7),
         } if session_id == "session-id"
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_session_creation_key_opens_parent_selector_for_review_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let source_session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        crate::domain::session::Status::Review,
-    );
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &source_session_id,
-        crate::domain::session::Status::AgentReview,
-    );
-    let source_index = app
-        .sessions
-        .sessions()
-        .iter()
-        .position(|session| session.id == source_session_id)
-        .expect("source session should exist");
-    app.sessions.select_session_index(Some(source_index));
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 2,
-    };
-
-    // Act
-    handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-        .await
-        .expect("failed to select append option");
-    let result =
-        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
-
-    // Assert
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::StackAppendParentSelection {
-            selected_parent_index: 0,
-            ref session_id,
-        } if session_id.as_str() == source_session_id
     ));
 }
 
