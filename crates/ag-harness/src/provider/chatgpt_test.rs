@@ -1,11 +1,11 @@
 //! `ChatGPT` provider unit tests for auth file location and sign-in status.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use ag_router::chatgpt::ChatGptCredentials;
 
-use super::{auth_file, is_signed_in};
+use super::{auth_file, auth_file_in, is_signed_in};
 
 fn environment(
     values: &'static [(&'static str, &'static str)],
@@ -20,45 +20,64 @@ fn environment(
 }
 
 #[test]
-fn auth_file_prefers_the_explicit_file_then_agentty_root_then_home() {
+fn auth_file_reads_only_the_named_file() {
     // Arrange
     let explicit = environment(&[
         ("CHATGPT_AUTH_FILE", "/tmp/sign-in.json"),
         ("AGENTTY_ROOT", "/data/agentty"),
         ("HOME", "/home/user"),
     ]);
-    let root = environment(&[
-        ("CHATGPT_AUTH_FILE", ""),
-        ("AGENTTY_ROOT", "/data/agentty"),
-        ("HOME", "/home/user"),
-    ]);
-    let home = environment(&[("HOME", "/home/user")]);
 
     // Act
     let explicit = auth_file(explicit).expect("explicit file");
-    let root = auth_file(root).expect("root file");
-    let home = auth_file(home).expect("home file");
 
     // Assert
     assert_eq!(explicit, PathBuf::from("/tmp/sign-in.json"));
-    assert_eq!(root, PathBuf::from("/data/agentty/auth/chatgpt.json"));
-    assert_eq!(home, PathBuf::from("/home/user/.agentty/auth/chatgpt.json"));
 }
 
 #[test]
-fn auth_file_is_unavailable_without_any_location() {
+fn auth_file_has_no_host_default_location() {
     // Arrange
-    let empty = environment(&[]);
+    let host_locations = environment(&[
+        ("CHATGPT_AUTH_FILE", " "),
+        ("AGENTTY_ROOT", "/data/agentty"),
+        ("HOME", "/home/user"),
+    ]);
 
     // Act
-    let result = auth_file(empty);
+    let result = auth_file(host_locations);
 
     // Assert
-    assert!(result.is_err());
     assert!(
         result
             .err()
             .is_some_and(|error| error.to_string().contains("CHATGPT_AUTH_FILE"))
+    );
+}
+
+#[test]
+fn auth_file_in_prefers_the_named_file_then_the_host_data_directory() {
+    // Arrange
+    let data_dir = Path::new("/data/agentty");
+
+    // Act
+    let locations = [
+        auth_file_in(
+            environment(&[("CHATGPT_AUTH_FILE", "/tmp/sign-in.json")]),
+            Some(data_dir),
+        ),
+        auth_file_in(environment(&[("CHATGPT_AUTH_FILE", " ")]), Some(data_dir)),
+        auth_file_in(environment(&[]), None),
+    ];
+
+    // Assert
+    assert_eq!(
+        locations,
+        [
+            Some(PathBuf::from("/tmp/sign-in.json")),
+            Some(PathBuf::from("/data/agentty/auth/chatgpt.json")),
+            None,
+        ]
     );
 }
 

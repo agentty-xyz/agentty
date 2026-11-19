@@ -61,26 +61,60 @@ pub struct ChatGptSignIn {
 }
 
 impl ChatGptSignIn {
-    /// Signs in to the credential file the `chatgpt` provider reads, with
-    /// the authorization server optionally replaced by `CHATGPT_AUTH_URL`.
+    /// Signs in to the host-chosen `auth_file` against `OpenAI`'s
+    /// authorization server.
+    pub fn new(auth_file: impl Into<PathBuf>) -> Self {
+        Self {
+            auth_file: auth_file.into(),
+            issuer: None,
+            port: CALLBACK_PORT,
+            timeout: SIGN_IN_TIMEOUT,
+        }
+    }
+
+    /// Signs in to the credential file `CHATGPT_AUTH_FILE` names, with the
+    /// authorization server optionally replaced by `CHATGPT_AUTH_URL`.
     ///
     /// # Errors
     ///
-    /// Returns [`AuthFileUnavailable`] when the credential file cannot be
-    /// located.
+    /// Returns [`AuthFileUnavailable`] when `CHATGPT_AUTH_FILE` is unset or
+    /// blank; a host with its own location uses
+    /// [`Self::from_environment_with_auth_file`].
     pub fn from_environment(
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Self, AuthFileUnavailable> {
+        let auth_file = auth_file(&mut environment)?;
+
+        Ok(Self::from_environment_with_auth_file(
+            environment,
+            auth_file,
+        ))
+    }
+
+    /// Signs in to the host-chosen `auth_file`, such as one located with
+    /// [`super::chatgpt_auth_file_in`], with the authorization server
+    /// optionally replaced by `CHATGPT_AUTH_URL`; a blank variable counts as
+    /// unset and keeps `OpenAI`'s server.
+    pub fn from_environment_with_auth_file(
+        mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+        auth_file: impl Into<PathBuf>,
+    ) -> Self {
         let issuer = environment(CHATGPT_AUTH_URL_ENV)
             .ok()
             .filter(|issuer| !issuer.trim().is_empty());
 
-        Ok(Self {
-            auth_file: auth_file(environment)?,
-            issuer,
-            port: CALLBACK_PORT,
-            timeout: SIGN_IN_TIMEOUT,
-        })
+        Self::new(auth_file).with_issuer(issuer)
+    }
+
+    /// Replaces the authorization server with `issuer`, such as the one
+    /// `CHATGPT_AUTH_URL` names in tests, or keeps `OpenAI`'s for `None`.
+    /// A value is used as given; the environment constructors map a blank
+    /// variable to `None`.
+    #[must_use]
+    pub fn with_issuer(mut self, issuer: Option<String>) -> Self {
+        self.issuer = issuer;
+
+        self
     }
 
     /// Replaces the preferred callback port; a busy port falls back to any

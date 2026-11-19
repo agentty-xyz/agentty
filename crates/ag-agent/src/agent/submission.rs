@@ -107,7 +107,7 @@ impl OneShotClient for RealOneShotClient {
             return tokio::select! {
                 biased;
                 () = self.force_shutdown.cancelled() => Err(OneShotError::new("[Stopped] Agent runtime forced to shut down")),
-                result = super::native::run_one_shot(config, request, cancellation) => result.map_err(OneShotError::new),
+                result = super::native::run_one_shot(config, request, cancellation) => result.map_err(OneShotError::from),
             };
         }
         let lease = self

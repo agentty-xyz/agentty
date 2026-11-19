@@ -111,6 +111,9 @@ pub(super) enum SessionDiffTaskSource {
     Archived {
         repositories: crate::infra::db::AppRepositories,
     },
+    /// Report no changes for an unstarted session whose worktree does not
+    /// exist yet.
+    Empty,
     /// Compute a live worktree diff against the session base branch.
     Worktree {
         /// Archived diff used when managed merge cleanup wins the live-load
@@ -201,6 +204,7 @@ impl TaskService {
                     .await
                     .map(Option::unwrap_or_default)
                     .map_err(|error| format!("Failed to load archived diff: {error}")),
+                SessionDiffTaskSource::Empty => Ok(String::new()),
                 SessionDiffTaskSource::Worktree {
                     archived_fallback,
                     base_branch,

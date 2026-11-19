@@ -28,60 +28,6 @@ use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 
 #[tokio::test]
-async fn test_handle_view_key_ignores_diff_for_non_review_status() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.mode = AppMode::View {
-        session_id: session_id.clone().into(),
-        scroll_offset: Some(2),
-    };
-    let view_context = view_context(&mut app).expect("expected view context");
-    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
-    let view_session_snapshot = ViewSessionSnapshot {
-        continue_terminal_session: ViewActionState::Disabled,
-        fork_session: ViewActionState::Disabled,
-        inspect_diff: ViewActionState::Disabled,
-        merge_session_branch: ViewActionState::Enabled,
-        mutate_session_branch: ViewActionState::Enabled,
-        rebase_session_branch: ViewActionState::Enabled,
-        open_worktree: ViewActionState::Disabled,
-        reply_to_session: ViewActionState::Enabled,
-        review_comments: ViewActionState::Disabled,
-        review_watch_toggle: None,
-        start_staged_session: ViewActionState::Disabled,
-        follow_up_task_action: None,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Done,
-        session_status: Status::Done,
-    };
-    let view_key_context = ViewKeyContext {
-        context: &view_context,
-        session_snapshot: &view_session_snapshot,
-    };
-
-    // Act
-    let should_apply = handle_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        view_key_context,
-        &mut pending_update,
-    )
-    .await;
-
-    // Assert
-    assert!(should_apply);
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            ref session_id,
-        scroll_offset: Some(2),
-            ..
-        } if session_id == &view_context.session_id
-    ));
-    assert_eq!(pending_update.scroll_offset, Some(2));
-}
-
-#[tokio::test]
 async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavailable() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -95,7 +41,6 @@ async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavai
     let view_session_snapshot = ViewSessionSnapshot {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Disabled,
-        inspect_diff: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -148,7 +93,6 @@ async fn test_handle_view_key_p_opens_review_request_publish_input() {
     let view_session_snapshot = ViewSessionSnapshot {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
-        inspect_diff: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -201,7 +145,6 @@ async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
     let view_session_snapshot = ViewSessionSnapshot {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
-        inspect_diff: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,

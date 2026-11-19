@@ -84,6 +84,7 @@ repairs alike. Per-turn settings are resolved separately during
   alone does not restrict MCP tools.
 
 By default, Codex and Claude request two concurrent children, and Claude preapproves its
-edit, Bash, web, and plan-mode tools and disables inherited MCP servers. Subagent limits
-are supported for Codex and Claude, and tool and MCP overrides only for Claude. Explicit
-unsupported controls fail before model execution; the native harness accepts none.
+edit, Bash, web, and plan-mode tools and inherits configured MCP servers. Subagent
+limits are supported for Codex and Claude, and tool and MCP overrides only for Claude.
+Explicit unsupported controls fail before model execution; the native harness accepts
+none.

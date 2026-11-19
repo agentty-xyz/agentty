@@ -338,6 +338,8 @@ fn request_record(request: &ModelRequestActivity, turn: usize, sent: Option<&Vec
         "purpose": match request.purpose() {
             ModelRequestPurpose::Turn => "turn",
             ModelRequestPurpose::ContextSummary => "context_summary",
+            ModelRequestPurpose::Compaction => "compaction",
+            _ => "other",
         },
         "ms": request.duration().as_millis(),
         "input_tokens": usage.and_then(|usage| usage.input_tokens()),

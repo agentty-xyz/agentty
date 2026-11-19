@@ -110,6 +110,17 @@ use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
     ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ModelResponse,
 };
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use ag_harness::model::{ModelClient, ReasoningFamily};
+#[cfg(feature = "providers-compat")]
+use ag_harness::provider::OpenAiCompatibleConfig;
+#[cfg(feature = "providers-openai")]
+use ag_harness::provider::OpenAiConfig;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use ag_harness::provider::{
+    Auth, EffortNames, ProviderSpec, ProviderSpecError, ReasoningMapping, ThinkingOptions,
+    WireProtocol,
+};
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{
     ChatGptCredentials, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH,
@@ -2277,4 +2288,99 @@ async fn session_and_turn_failures_classify_through_the_crate_root() -> Result<(
     ));
 
     Ok(())
+}
+
+/// Compiles only while open provider specifications stay cloneable and
+/// shareable across tasks.
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+const _: fn() = || {
+    fn assert_shareable<T: Clone + Send + Sync + 'static>() {}
+    assert_shareable::<ProviderSpec>();
+    assert_shareable::<Auth>();
+};
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn external_consumer_serves_a_model_from_an_open_provider_specification() {
+    // Arrange
+    let gateway = ProviderSpec::new(
+        "gateway",
+        WireProtocol::ChatCompletions,
+        "https://gateway.example/v1",
+    )
+    .with_auth(Auth::Header {
+        name: "api-key".to_string(),
+        value: "key".to_string(),
+    })
+    .with_reasoning(ReasoningMapping::Thinking(
+        ThinkingOptions::default().with_preserve_reasoning(true),
+    ))
+    .with_reasoning_text_replay(true)
+    .with_reasoning_family(ReasoningFamily::Providers(vec!["gateway-eu".into()]))
+    .for_model("served-model");
+    let responses = ProviderSpec::new("responses", WireProtocol::Responses, "https://r.example/v1")
+        .with_reasoning(ReasoningMapping::Effort(EffortNames::default()))
+        .for_model("m");
+
+    // Act
+    let client = ModelClient::from_spec(gateway);
+    let invalid = ModelClient::from_spec(responses.clone().with_header("Content-Type", "x"));
+    let modelless = ModelClient::from_spec(ProviderSpec::new(
+        "responses",
+        WireProtocol::Responses,
+        "https://r.example/v1",
+    ));
+
+    // Assert
+    assert!(matches!(modelless, Err(ProviderSpecError::MissingModel)));
+    assert_eq!(responses.model(), Some("m"));
+    let client = client.expect("valid specification");
+    assert_eq!(client.metadata().provider(), "gateway");
+    assert_eq!(
+        client.metadata().reasoning_family(),
+        &ReasoningFamily::Providers(vec!["gateway-eu".into()])
+    );
+    assert!(Model::replays_reasoning_text(&client));
+    assert!(matches!(invalid, Err(ProviderSpecError::Invalid { .. })));
+}
+
+#[cfg(feature = "providers-openai")]
+#[test]
+fn external_consumer_builds_openai_presets() {
+    // Arrange
+    let spec = ProviderSpec::openai(OpenAiConfig {
+        api_key: "key".to_string(),
+        base_url: "https://api.example/v1".to_string(),
+        model: "gpt-6-luna".to_string(),
+    });
+
+    // Act
+    let client = ModelClient::from_spec(spec.clone());
+
+    // Assert
+    assert_eq!(spec.model(), Some("gpt-6-luna"));
+    assert_eq!(
+        client.expect("valid preset").metadata().model(),
+        "gpt-6-luna"
+    );
+}
+
+#[cfg(feature = "providers-compat")]
+#[test]
+fn external_consumer_builds_compatible_presets() {
+    // Arrange
+    let spec = ProviderSpec::openai_compatible(OpenAiCompatibleConfig {
+        api_key: None,
+        base_url: "http://127.0.0.1:11434/v1".to_string(),
+        model: "llama3.3".to_string(),
+    });
+
+    // Act
+    let client = ModelClient::from_spec(spec);
+
+    // Assert
+    assert_eq!(
+        client.expect("valid preset").metadata().provider(),
+        "openai_compatible"
+    );
 }

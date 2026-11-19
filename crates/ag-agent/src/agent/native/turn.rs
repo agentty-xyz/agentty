@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::activity::ActivityBridge;
 use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig};
 use super::failure;
+use super::turn_error::NativeTurnError;
 use crate::agent::{
     InstructionDeliveryMode, PromptPreparationRequest, execution_policy, parse_turn_response,
     prepare_prompt_text,
@@ -130,13 +131,14 @@ pub(crate) fn token_usage(report: &TurnReport) -> (u64, u64) {
 /// provider-call budget.
 ///
 /// # Errors
-/// Returns a diagnostic for unsupported controls, configuration, provider,
-/// cancellation, settlement, or protocol failures.
+/// Returns [`NativeTurnError::Stopped`] when cancelled, or a diagnostic for
+/// unsupported controls, configuration, provider, settlement, or protocol
+/// failures.
 pub(crate) async fn run_one_shot(
     config: &NativeHarnessConfig,
     request: OneShotRequest,
     cancellation: CancellationToken,
-) -> Result<OneShotSubmission, String> {
+) -> Result<OneShotSubmission, NativeTurnError> {
     reject_attachments(&request.attachments)?;
     execution_policy::validate(AgentKind::Harness, &request.execution_policy)
         .map_err(|error| error.to_string())?;
@@ -175,8 +177,8 @@ pub(crate) async fn run_one_shot(
     let control = turn.control();
     let outcome = tokio::select! {
         biased;
-        () = cancellation.cancelled() => Err("[Stopped] Agent run canceled".to_string()),
-        outcome = turn => outcome.map_err(|error| format!("Harness turn failed: {error}")),
+        () = cancellation.cancelled() => Err(NativeTurnError::Stopped),
+        outcome = turn => outcome.map_err(NativeTurnError::from_run),
     };
     settle(&control).await?;
     let outcome = outcome?;

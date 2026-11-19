@@ -6,8 +6,6 @@ use ag_session::SessionStatus as Status;
 
 use super::super::super::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use super::super::SessionHandles;
-use crate::domain::session::SessionDiffState;
-use crate::test_support::SessionFixtureBuilder;
 
 #[test]
 fn test_status_transition_in_progress_to_canceled() {
@@ -115,38 +113,4 @@ fn test_status_all_lists_every_supported_status_in_display_order() {
 
     // Assert
     assert_eq!(all_statuses, expected_statuses);
-}
-
-#[test]
-fn diff_action_requires_an_archive_for_terminal_sessions() {
-    // Arrange
-    for status in Status::ALL {
-        for has_archived_diff in [false, true] {
-            for diff_state in [
-                SessionDiffState::Unknown,
-                SessionDiffState::Empty,
-                SessionDiffState::Present,
-            ] {
-                let mut session = SessionFixtureBuilder::new().status(status).build();
-                session.has_archived_diff = has_archived_diff;
-                session.stats.diff_state = diff_state;
-
-                // Act
-                let allowed = session.allows_diff_view();
-
-                // Assert
-                let expected = if matches!(status, Status::Done | Status::Canceled) {
-                    has_archived_diff
-                } else if status == Status::InProgress {
-                    diff_state == SessionDiffState::Present
-                } else {
-                    status.allows_diff_view() && diff_state != SessionDiffState::Empty
-                };
-                assert_eq!(
-                    allowed, expected,
-                    "{status:?} {diff_state:?} archive={has_archived_diff}"
-                );
-            }
-        }
-    }
 }

@@ -161,7 +161,7 @@ async fn rejects_schemas_without_explicit_object_root() {
     assert!(errors.into_iter().all(|error| matches!(
         error,
         model::ModelError::UnsupportedOutputSchema { reason }
-            if reason == "Qwen JSON Object mode requires an explicit object root schema"
+            if reason == "Qwen structured output requires an explicit object root schema"
     )));
     assert!(
         server

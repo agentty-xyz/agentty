@@ -1,0 +1,22 @@
+{
+  "id": "chatcmpl-conformance-1",
+  "object": "chat.completion",
+  "created": 1767225600,
+  "model": "llama3.3",
+  "system_fingerprint": "fp_conformance",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"name\":\"Ada\"}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 8,
+    "total_tokens": 128
+  }
+}

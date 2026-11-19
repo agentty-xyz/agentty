@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::context::{CLEARED_REASONING, HistoryTurn, TurnStop};
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
-use crate::model::Model;
+use crate::model::{Model, ReasoningFamily};
 use crate::model::{ModelMessage, ModelMetadata};
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::provider::{ModelConfiguration, ModelProvider};
@@ -353,8 +353,18 @@ fn reasoning_replays_natively_only_within_one_reasoning_family() {
         messages.clone(),
     );
     let other_kimi = turn_from(telemetry::PROVIDER_MOONSHOT_AI, "kimi-k3", messages.clone());
+    let chatgpt_model = ModelMetadata::new(telemetry::PROVIDER_OPENAI_CHATGPT, "gpt-6-sol")
+        .expect("valid metadata");
+    // A host family lists only the providers whose turns it replays
+    // natively: `gateway` lists `gateway-eu`, but not the reverse.
+    let gateway = ModelMetadata::new("gateway", "model")
+        .expect("valid metadata")
+        .with_reasoning_family(ReasoningFamily::Providers(vec!["gateway-eu".into()]));
+    let gateway_eu = ModelMetadata::new("gateway-eu", "model").expect("valid metadata");
     let native = [
         (chatgpt.clone(), at(&openai, 1)),
+        (snapshot(&openai), at(&chatgpt_model, 1)),
+        (snapshot(&gateway_eu), at(&gateway, 1)),
         (other_kimi.clone(), at(&kimi, 1)),
         (snapshot(&local), at(&local, 1)),
         (legacy.clone(), at(&kimi, 0)),
@@ -362,6 +372,7 @@ fn reasoning_replays_natively_only_within_one_reasoning_family() {
     ];
     let projected = [
         (chatgpt, at(&kimi, 1)),
+        (snapshot(&gateway), at(&gateway_eu, 1)),
         (other_kimi, at(&qwen, 1)),
         (other_local, at(&local, 1)),
         (legacy, at(&kimi, 1)),
