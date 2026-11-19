@@ -10,7 +10,7 @@ use crate::file_system::FileSystem;
 use crate::plan::ReleasePlan;
 use crate::process::ProcessRunner;
 use crate::tag::ReleaseTag;
-use crate::workspace::Workspace;
+use crate::workspace::{App, Workspace};
 use crate::{assemble, build, release_note};
 
 /// Plans and packages GitHub releases of Cargo workspace binaries.
@@ -118,21 +118,55 @@ impl Host<'_> {
         }
     }
 
-    /// Checks that every `include` entry is a file in the workspace root.
+    /// Returns each `include` entry of `workspace` with the file that
+    /// supplies it for `app`, as [`Self::app_file`] resolves it.
     ///
     /// # Errors
-    /// Returns an error naming the first entry that is not a file.
-    pub(crate) fn check_include(&self, workspace: &Workspace) -> Result<(), String> {
-        for include in &workspace.config.include {
-            if !self.is_file(&workspace.root.join(include))? {
-                return Err(format!(
-                    "`workspace.metadata.release.include` entry `{include}` is not a file in the \
-                     workspace root"
-                ));
+    /// Returns an error naming the first entry and `app` when neither
+    /// directory holds the file, or naming a path that cannot be inspected.
+    pub(crate) fn include_files<'workspace>(
+        &self,
+        workspace: &'workspace Workspace,
+        app: &App,
+    ) -> Result<Vec<(&'workspace str, PathBuf)>, String> {
+        workspace
+            .config
+            .include
+            .iter()
+            .map(|include| {
+                let source = self.app_file(workspace, app, include)?.ok_or_else(|| {
+                    format!(
+                        "`workspace.metadata.release.include` entry `{include}` is not a file in \
+                         the package directory of app `{}` or in the workspace root",
+                        app.name
+                    )
+                })?;
+
+                Ok((include.as_str(), source))
+            })
+            .collect()
+    }
+
+    /// Returns the file that supplies the relative `path` for `app`:
+    /// `<package directory>/<path>` when it is a file, else
+    /// `<workspace root>/<path>` when it is one, else `None`.
+    ///
+    /// # Errors
+    /// Returns an error naming a path whose metadata is unreadable.
+    pub(crate) fn app_file(
+        &self,
+        workspace: &Workspace,
+        app: &App,
+        path: &str,
+    ) -> Result<Option<PathBuf>, String> {
+        for directory in [&app.package_directory, &workspace.root] {
+            let source = directory.join(path);
+            if self.is_file(&source)? {
+                return Ok(Some(source));
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// Returns whether `path` is a regular file.
@@ -182,7 +216,9 @@ impl Host<'_> {
         let tag = options.tag.as_deref().map(ReleaseTag::parse).transpose()?;
         let mut workspace = Workspace::load(self.process, self.cargo.clone())?;
         workspace.config.select_targets(&options.targets)?;
-        self.check_include(&workspace)?;
+        for app in &workspace.apps {
+            self.include_files(&workspace, app)?;
+        }
         let plan = ReleasePlan::new(&workspace, tag.as_ref())?;
 
         serde_json::to_writer_pretty(&mut *stdout, &plan)

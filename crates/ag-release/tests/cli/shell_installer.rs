@@ -11,14 +11,15 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{env, fs, io};
 
 use tempfile::{TempDir, tempdir};
 
-use crate::support::{HOST_TARGET, Release, SUPPORTED, link_tools, result, sha256};
+use crate::support::{
+    HOST_TARGET, Release, SUPPORTED, link_tools, result, sha256, write_executable,
+};
 
 /// Root manifest of a demo workspace released with the shell installer for
 /// every supported target.
@@ -184,13 +185,6 @@ impl Sandbox {
             .envs(variables.iter().cloned())
             .output()
     }
-}
-
-/// Writes an executable `sh` script running `command` to `path`.
-fn write_executable(path: &Path, command: &str) -> io::Result<()> {
-    fs::write(path, format!("#!/bin/sh\n{command}\n"))?;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
 /// Returns what the installed binary at `path` prints.

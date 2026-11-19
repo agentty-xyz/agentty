@@ -60,6 +60,7 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
         license: Some("Apache-2.0".to_string()),
         name: name.to_string(),
         npm_scope: npm_scope.map(ToString::to_string),
+        package_directory: PathBuf::from(DEMO_ROOT).join("crates").join(name),
         repository: demo_repository(),
         version: version.clone(),
     };
@@ -121,6 +122,10 @@ fn from_metadata_rejects_invalid_apps() {
             demo_metadata_with("/packages/2/version", json!("1.2")),
             "app `demo-tool` has an invalid version: unexpected end of input while parsing \
              minor version number",
+        ),
+        (
+            demo_metadata_with("/packages/2/manifest_path", json!("/")),
+            "app `demo-tool` has manifest path `/` without a parent directory",
         ),
         (
             demo_metadata_with("/packages/2/version", json!("1.3.0")),

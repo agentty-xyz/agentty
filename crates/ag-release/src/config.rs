@@ -36,7 +36,9 @@ const APP_KEYS: [&str; 1] = ["npm-scope"];
 pub(crate) struct ReleaseConfig {
     /// Released workspace packages by package name.
     pub(crate) apps: BTreeMap<String, AppConfig>,
-    /// Workspace-root files added to every archive, in configured order.
+    /// Relative paths of the files added to every archive, in configured
+    /// order. Each app's package directory takes precedence over the
+    /// workspace root as the source of each file.
     pub(crate) include: Vec<String>,
     pub(crate) installers: BTreeSet<Installer>,
     /// Minimum glibc version installers require on `*-linux-gnu` targets.

@@ -122,6 +122,8 @@ pub(crate) struct App {
     pub(crate) license: Option<String>,
     pub(crate) name: String,
     pub(crate) npm_scope: Option<String>,
+    /// Absolute directory of the package's `Cargo.toml`.
+    pub(crate) package_directory: PathBuf,
     pub(crate) repository: GitHubRepository,
     pub(crate) version: Version,
 }
@@ -146,6 +148,12 @@ impl App {
             .map_err(|error| format!("app `{name}`: {error}"))?;
         let version = Version::parse(&package.version)
             .map_err(|error| format!("app `{name}` has an invalid version: {error}"))?;
+        let package_directory = package.manifest_path.parent().ok_or_else(|| {
+            format!(
+                "app `{name}` has manifest path `{}` without a parent directory",
+                package.manifest_path.display()
+            )
+        })?;
 
         Ok(Self {
             authors: package.authors.clone(),
@@ -154,6 +162,7 @@ impl App {
             license: package.license.clone(),
             name: name.clone(),
             npm_scope,
+            package_directory: package_directory.to_path_buf(),
             repository,
             version,
         })
@@ -177,6 +186,8 @@ struct MetadataPackage {
     authors: Vec<String>,
     description: Option<String>,
     license: Option<String>,
+    /// Absolute path of the package's `Cargo.toml`.
+    manifest_path: PathBuf,
     name: String,
     repository: Option<String>,
     targets: Vec<MetadataTarget>,

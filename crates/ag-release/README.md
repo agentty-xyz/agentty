@@ -27,7 +27,7 @@ setup.
 profile = "dist"                     # Cargo profile for release builds
 min-glibc = "2.35"                   # minimum glibc on *-linux-gnu targets
 installers = ["shell", "npm"]        # installers to publish
-include = ["README.md", "LICENSE"]   # workspace-root files added to every archive
+include = ["README.md", "LICENSE"]   # files added to every archive
 
 [workspace.metadata.release.targets] # target triple -> GitHub Actions runner label
 aarch64-apple-darwin = "macos-latest"
@@ -43,13 +43,18 @@ npm-scope = "@my-org"                      # optional npm scope
 | `profile`    | no       | `"release"` | Cargo profile name                                      |
 | `min-glibc`  | no       | none        | `"MAJOR.MINOR"`                                         |
 | `installers` | no       | `[]`        | Unique entries from `"shell"` and `"npm"`               |
-| `include`    | no       | `[]`        | Unique relative paths to files in the workspace root    |
+| `include`    | no       | `[]`        | Unique relative paths to files                          |
 | `targets`    | yes      |             | At least one supported target, each with a runner label |
 | `apps`       | yes      |             | At least one workspace package with a `bin` target      |
 | `npm-scope`  | no       | none        | Per app: `@` and a lowercase npm scope name             |
 
 Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`.
+
+Each app takes an `include` path from its package directory, the one holding its
+`Cargo.toml`, when the file exists there, else from the workspace root; either way the
+archive entry keeps the configured path. A path found in neither is an error that names
+the path and the app.
 
 An app's binaries are its package's `bin` targets. Its description, license, and authors
 come from the package's resolved Cargo metadata. All apps release in lockstep: they must
@@ -61,10 +66,11 @@ Unknown keys, wrong types, and invalid values are errors that name the key.
 
 ### `plan [--tag <tag>] [--target <triple>]...`
 
-Validates the configuration, checks that every `include` file exists, and prints the
-release plan as JSON on stdout. With `--tag`, the tag must be `v<semver>` or `<semver>`
-and name the apps' version. With `--target`, the plan covers only the named configured
-targets instead of all of them. Errors go to stderr with a nonzero exit status.
+Validates the configuration, checks that every `include` file exists for every app, and
+prints the release plan as JSON on stdout. With `--tag`, the tag must be `v<semver>` or
+`<semver>` and name the apps' version. With `--target`, the plan covers only the named
+configured targets instead of all of them. Errors go to stderr with a nonzero exit
+status.
 
 | Field                   | Value                                                                                 |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -283,8 +289,8 @@ Its `package.json` takes `version`, `description`, `license`, `repository`, and
 requires Node 18 or newer, and has no dependencies. Its `os` and `cpu` fields list the
 configured targets' platforms, so npm rejects other platforms before installing. The
 package holds `package.json`, `binary.js`, `install.js`, one `run-<binary>.js` per
-binary, and the workspace root's `README.md`, `LICENSE`, and `CHANGELOG.md` when they
-exist.
+binary, and `README.md`, `LICENSE`, and `CHANGELOG.md` when they exist, each taken from
+the app's package directory before the workspace root as `include` paths are.
 
 `install.js`, the `postinstall` script, picks the target and checks glibc as the
 [shell installer](#shell-installer) does, downloads `<app>-<target>.tar.gz`, fails
