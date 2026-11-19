@@ -86,13 +86,32 @@ impl ArchivedWorktreeSweep {
 
     /// Removes leftover directories one session at a time, logging failures
     /// and continuing with the next session.
+    ///
+    /// A candidate with neither folder on disk is skipped before the lane is
+    /// taken or any row is reloaded, so a healthy startup costs only one
+    /// filesystem check per archived session.
     async fn run(self, services: &AppServices) {
         for candidate in &self.candidates {
+            if !Self::has_leftover_folder(services, candidate) {
+                continue;
+            }
             let cleanup_errors = self.sweep_session(services, candidate).await;
             for cleanup_error in cleanup_errors {
                 warn!(session_id = %candidate.id, "archived worktree sweep: {cleanup_error}");
             }
         }
+    }
+
+    /// Returns whether the worktree folder or the legacy draft folder of one
+    /// captured session is still a removable directory.
+    ///
+    /// This is only a pre-filter; [`Self::sweep_session`] checks each folder
+    /// again under the lane because it can disappear in between.
+    fn has_leftover_folder(services: &AppServices, candidate: &ArchivedSession) -> bool {
+        let base_path = services.base_path();
+
+        is_removable_directory(services, &session_folder(base_path, &candidate.id))
+            || is_removable_directory(services, &base_path.join(&candidate.id))
     }
 
     /// Removes the worktree and legacy draft folder of one captured session

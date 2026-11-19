@@ -4,6 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_git::{GitError, MockGitClient};
 use sqlx::SqlitePool;
@@ -342,11 +343,21 @@ async fn sweep_does_nothing_when_nothing_is_left_behind() {
         .await;
     let capture_without_archived = ArchivedWorktreeSweep::capture(&fixture.db).await;
     fixture.insert_session("done0001-bbbb", Status::Done).await;
+    let services = fixture.services(MockGitClient::new());
+    let sweep = ArchivedWorktreeSweep::capture(&fixture.db).await;
+    // Every reload happens under the lane, so holding it proves that a
+    // candidate without folders is skipped before any session reload.
+    let lane = services.worktree_cleanup_lane();
+    let _held_lane = lane.lock().await;
 
     // Act
-    fixture.sweep(MockGitClient::new()).await;
+    let finished = tokio::time::timeout(Duration::from_secs(5), sweep.run(&services)).await;
 
     // Assert
     assert!(capture_without_archived.candidates.is_empty());
+    assert!(
+        finished.is_ok(),
+        "the sweep must not take the lane or reload rows"
+    );
     assert_eq!(fs::read_dir(&fixture.base).expect("base").count(), 0);
 }
