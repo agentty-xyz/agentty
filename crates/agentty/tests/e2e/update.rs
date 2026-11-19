@@ -14,6 +14,10 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 /// Mirrors the private app-task E2E interval override.
 const VERSION_CHECK_INTERVAL_MS_ENV_VAR: &str = "AGENTTY_TEST_VERSION_CHECK_INTERVAL_MS";
 
+/// Mirrors the private shell-installer URL the updater downloads.
+const SHELL_INSTALLER_URL: &str =
+    "https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh";
+
 /// Installs an npm stub whose first Agentty lookup per app process returns the
 /// running version and whose second lookup exposes a newer release.
 fn install_periodic_agentty_update_stub(env: &BuilderEnv) -> E2eResult {
@@ -119,6 +123,87 @@ async fn test_periodic_auto_update() -> E2eResult {
                         "Updating to v999.0.0...",
                         &updating_region,
                     );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Installs the receipt and binary link of a shell install below the isolated
+/// home, plus a `curl` stub that serves an installer which succeeds only for
+/// the receipt's prefix with `PATH` changes disabled.
+///
+/// The npm stub from [`install_periodic_agentty_update_stub`] still reports
+/// versions, but no package manager installed the running binary.
+async fn setup_shell_installation_update(env: &BuilderEnv) -> E2eResult {
+    common::seed_active_project_setting(env).await?;
+    install_periodic_agentty_update_stub(env)?;
+    let prefix = env.home_dir.join(".local");
+    std::fs::create_dir_all(prefix.join("bin"))?;
+    symlink(cargo_bin("agentty"), prefix.join("bin/agentty"))?;
+    let receipt_dir = env.config_dir().join("agentty");
+    std::fs::create_dir_all(&receipt_dir)?;
+    let receipt = serde_json::json!({
+        "binaries": ["agentty"],
+        "install_layout": "cargo-home",
+        "install_prefix": prefix,
+        "modify_path": true,
+        "provider": { "source": "ag-release", "version": "0.1.0" },
+        "source": { "app_name": "agentty", "name": "agentty", "owner": "agentty-xyz" },
+        "version": env!("CARGO_PKG_VERSION"),
+    });
+    std::fs::write(
+        receipt_dir.join("agentty-receipt.json"),
+        receipt.to_string(),
+    )?;
+
+    let installer_path = env.stub_bin.join("agentty-installer.sh");
+    let installer = format!(
+        "[ \"$AGENTTY_INSTALL_DIR\" = '{}' ] && [ \"$AGENTTY_NO_MODIFY_PATH\" = 1 ]\n",
+        prefix.display()
+    );
+    std::fs::write(&installer_path, installer)?;
+    let curl_path = env.stub_bin.join("curl");
+    let curl_script = format!(
+        r#"#!/bin/sh
+for argument in "$@"; do
+  if [ "$previous" = --output ]; then output=$argument; fi
+  previous=$argument
+done
+[ "$previous" = {SHELL_INSTALLER_URL} ] || exit 1
+cp '{}' "$output"
+"#,
+        installer_path.display()
+    );
+    std::fs::write(&curl_path, curl_script)?;
+    std::fs::set_permissions(&curl_path, std::fs::Permissions::from_mode(0o700))?;
+
+    Ok(())
+}
+
+/// Verify that a shell install updates in the background by rerunning the
+/// downloaded installer for the receipt's prefix.
+#[tokio::test]
+async fn test_shell_installation_auto_update() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("shell_installation_auto_update")
+        .with_git()
+        .setup(|env| Box::pin(async move { setup_shell_installation_update(env).await }))
+        .env(VERSION_CHECK_INTERVAL_MS_ENV_VAR, "1000")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Updated to v999.0.0", 15000)
+                    .capture_labeled("updated", "Shell installer update complete")
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Updated to v999.0.0", &full);
+                    assertion::assert_text_in_region(frame, "restart to use new version", &full);
                 })
             },
         )

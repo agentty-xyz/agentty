@@ -214,6 +214,7 @@ impl BuilderEnv {
             .size(terminal_cols, terminal_rows)
             .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
             .env("HOME", self.home_dir.to_string_lossy())
+            .env("XDG_CONFIG_HOME", self.config_dir().to_string_lossy())
             .env(NO_COLOR_ENV_VAR, NO_COLOR_ENV_VALUE)
             .env("PATH", path_env)
             .env("TMUX", "")
@@ -314,10 +315,21 @@ impl BuilderEnv {
                 "HOME".to_string(),
                 self.home_dir.to_string_lossy().into_owned(),
             ),
+            (
+                "XDG_CONFIG_HOME".to_string(),
+                self.config_dir().to_string_lossy().into_owned(),
+            ),
             (NO_COLOR_ENV_VAR.to_string(), NO_COLOR_ENV_VALUE.to_string()),
             ("PATH".to_string(), path_env),
             ("TMUX".to_string(), String::new()),
         ]
+    }
+
+    /// Returns the `XDG_CONFIG_HOME` the app sees: the default below the
+    /// isolated home, so host configuration such as installer receipts stays
+    /// out of scenarios.
+    pub(crate) fn config_dir(&self) -> PathBuf {
+        self.home_dir.join(".config")
     }
 
     /// Build a `PATH` value with the stub bin directory prepended to the

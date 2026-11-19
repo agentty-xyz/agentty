@@ -255,6 +255,13 @@ fn builder_env_pins_vhs_terminal_environment() {
             .any(|(key, value)| key == "TMUX" && value.is_empty()),
         "feature recording must not inherit host tmux shortcuts"
     );
+    let config_dir = env.home_dir.join(".config");
+    assert!(
+        environment
+            .iter()
+            .any(|(key, value)| key == "XDG_CONFIG_HOME" && Path::new(value) == config_dir),
+        "feature recording must not read host configuration"
+    );
 }
 
 #[test]

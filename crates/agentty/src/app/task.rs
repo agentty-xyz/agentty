@@ -66,7 +66,7 @@ static NEXT_REVIEW_COMMENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// Monotonic counter used to distinguish stale session-diff loads.
 static NEXT_SESSION_DIFF_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-/// External version lookup and package-install boundary used by the periodic
+/// External version lookup and self-update boundary used by the periodic
 /// update task.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -74,7 +74,8 @@ pub(crate) trait VersionTaskRunner: Send + Sync {
     /// Returns the latest published Agentty version tag.
     async fn latest_version_tag(&self) -> Option<String>;
 
-    /// Installs the latest Agentty package and reports whether it succeeded.
+    /// Installs the latest Agentty release through the running binary's
+    /// original installer and reports whether it succeeded.
     async fn run_update(&self) -> bool;
 }
 
@@ -478,7 +479,7 @@ impl TaskService {
 
     /// Spawns an immediate and then hourly background check for newer
     /// `agentty` versions on npmjs, optionally followed by an automatic
-    /// global package-manager update.
+    /// update through the original global package manager or shell installer.
     ///
     /// The task emits [`AppEvent::VersionAvailabilityUpdated`] with
     /// `Some("vX.Y.Z")` only when a newer version is detected. When
@@ -565,8 +566,8 @@ impl TaskService {
         })
     }
 
-    /// Runs the original global package manager in a bounded background task
-    /// and emits update progress events.
+    /// Runs the original installer in a bounded background task and emits
+    /// update progress events.
     async fn run_background_update(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         newer_version: &str,

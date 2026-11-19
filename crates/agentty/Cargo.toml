@@ -59,10 +59,12 @@ reqwest.workspace = true
 rustls.workspace = true
 pulldown-cmark.workspace = true
 rustc-hash.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 tachyonfx.workspace = true
+tempfile.workspace = true
 time.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -88,6 +90,5 @@ opentelemetry-proto = { workspace = true, features = ["logs"] }
 prost.workspace = true
 wiremock.workspace = true
 sqlx = { workspace = true, features = ["sqlx-toml"] }
-tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true
