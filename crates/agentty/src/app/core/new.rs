@@ -13,7 +13,9 @@ use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::graph_question::GraphQuestionState;
 use crate::app::review_watch::ReviewWatchState;
 use crate::app::service::{AppServiceDeps, AppServices};
-use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
+use crate::app::session::{
+    ArchivedWorktreeSweep, SessionManager, migrate_active_sessions_off_retired_models,
+};
 use crate::app::setting::{SettingsManager, load_max_concurrent_subagents_setting};
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
@@ -34,7 +36,8 @@ const E2E_DISPLAY_VERSION: &str = "v<test>";
 
 impl App {
     /// Builds the app state from persisted data and starts background
-    /// housekeeping tasks.
+    /// housekeeping tasks, including a sweep that removes worktree
+    /// directories left behind by `Done` and `Canceled` sessions.
     ///
     /// When `auto_update` is `true`, a background global package-manager update
     /// runs automatically after detecting a newer version at startup or in an
@@ -109,7 +112,7 @@ impl App {
         repositories: AppRepositories,
         clients: AppClients,
     ) -> Result<Self, AppError> {
-        let startup = Self::load_startup_project_state(
+        let (startup, sweep) = Self::load_startup_project_state(
             &base_path,
             working_dir.as_path(),
             git_branch,
@@ -145,7 +148,7 @@ impl App {
         );
         let settings =
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
-        let (sessions, review_cache, recoverable_reviews, review_watch) =
+        let (sessions, review_cache, recoverable, review_watch) =
             Self::load_startup_sessions_and_reviews(
                 &services,
                 Arc::clone(&clients.resource_client),
@@ -209,16 +212,19 @@ impl App {
             graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,
         };
-        Ok(app.complete_startup(recoverable_reviews, sync_task).await)
+        Ok(app.complete_startup(recoverable, sync_task, sweep).await)
     }
 
     /// Starts recovered reviews, resumes review-request watches, spawns
-    /// `sync_task`, and suggests project discovery once all state exists.
+    /// `sync_task` and the archived worktree sweep, and suggests project
+    /// discovery once all state exists.
     async fn complete_startup(
         mut self,
         recoverable_review_sessions: Vec<String>,
         sync_task: sync::SyncOrchestrator,
+        archived_worktree_sweep: ArchivedWorktreeSweep,
     ) -> Self {
+        archived_worktree_sweep.spawn(&self.services);
         self.recover_startup_focused_reviews(recoverable_review_sessions);
         Span::child("review_watch.resume")
             .scope(self.reconcile_review_watch_statuses())
@@ -399,8 +405,13 @@ impl App {
         );
     }
 
-    /// Reclaims stale agent artifacts and migrates project-independent session
-    /// state before loading the startup project context.
+    /// Captures archived sessions for the worktree sweep, reclaims stale agent
+    /// artifacts, and migrates project-independent session state before
+    /// loading the startup project context.
+    ///
+    /// The capture comes first, before any startup phase or event can archive
+    /// a session, so the sweep never targets a session whose archive-time
+    /// cleanup this process starts.
     ///
     /// # Errors
     /// Returns an error if artifact recovery fails or startup project metadata
@@ -411,7 +422,8 @@ impl App {
         git_branch: Option<String>,
         repositories: &AppRepositories,
         clients: &AppClients,
-    ) -> Result<StartupProjectContext, AppError> {
+    ) -> Result<(StartupProjectContext, ArchivedWorktreeSweep), AppError> {
+        let archived_worktree_sweep = ArchivedWorktreeSweep::capture(repositories).await;
         let load = async {
             clients
                 .fs_client
@@ -440,6 +452,7 @@ impl App {
         Span::child("project.load")
             .run(load, Self::failed_startup_phase)
             .await
+            .map(|startup| (startup, archived_worktree_sweep))
     }
 
     /// Builds the shared app services after validating startup agent
