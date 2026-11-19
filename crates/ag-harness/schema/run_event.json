@@ -70,7 +70,7 @@
           ]
         },
         {
-          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes. So was an item a streamed model response\nstarted when that response was discarded, such as a response that\nfailed or an invalid final answer that was requested again.",
+          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes. So was a tool-call item a streamed model\nresponse opened when that response was discarded, such as a response\nthat failed or an invalid final answer that was requested again; the\ndiscarded response's reasoning and message items complete with the\ntext it streamed.",
           "type": "object",
           "properties": {
             "type": {

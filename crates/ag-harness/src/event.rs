@@ -192,9 +192,11 @@ pub enum RunEventKind {
     /// An item started. Its content arrives with [`Self::ItemCompleted`]
     /// for the same `id`, unless the run fails or is cancelled first: an
     /// item still open when [`Self::Completed`] arrives was interrupted
-    /// and never completes. So was an item a streamed model response
-    /// started when that response was discarded, such as a response that
-    /// failed or an invalid final answer that was requested again.
+    /// and never completes. So was a tool-call item a streamed model
+    /// response opened when that response was discarded, such as a response
+    /// that failed or an invalid final answer that was requested again; the
+    /// discarded response's reasoning and message items complete with the
+    /// text it streamed.
     ItemStarted {
         /// Identifier of the item.
         id: ItemId,

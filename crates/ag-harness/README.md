@@ -330,13 +330,14 @@ let outcome = session
   events (`Delta::Text`, `Delta::Reasoning`, or `Delta::ToolArguments`). Each goes to
   the response's reasoning, message, or tool-call item, which starts at its first
   fragment and completes after the response. A streamed final answer's text completes a
-  `Message` item before the validated `Output`. Items of a discarded response, such as
-  an invalid answer that is re-requested, stay open. `Completed` is always the last
-  event, also after a failure or cancellation; items still open then were interrupted.
-  It follows settlement, so the transcript then holds the terminal status of a run that
-  emitted `Started`, unless persistence cleanup failed. Delivery is lossless: the run
-  waits while the stream is full, so read it while awaiting the outcome. Cancelling
-  still resolves a run whose stream is full. Dropping the stream discards events without
+  `Message` item before the validated `Output`. A discarded response, such as an invalid
+  answer that is re-requested, completes its reasoning and message items with the text
+  it streamed; its tool-call items stay open. `Completed` is always the last event, also
+  after a failure or cancellation; items still open then were interrupted. It follows
+  settlement, so the transcript then holds the terminal status of a run that emitted
+  `Started`, unless persistence cleanup failed. Delivery is lossless: the run waits
+  while the stream is full, so read it while awaiting the outcome. Cancelling still
+  resolves a run whose stream is full. Dropping the stream discards events without
   stalling the run. Events carry session content, so never export them as telemetry.
   Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
   `crates/ag-harness/schema/run_event.json`.
@@ -559,8 +560,10 @@ Its requests carry only portable fields plus the quirks local servers need: the 
 is stated in the prompt (with the `json_schema` response format when no tools are
 offered), the output bound is sent as the legacy `max_tokens`, turn instructions join
 the preceding user message for chat templates that require alternating roles, reasoning
-is neither requested nor replayed, and no prompt cache key or image input is sent. The
-server must support tool calls. A server that supports more opts in through
+is neither requested nor replayed, and no prompt cache key or image input is sent.
+Requests stream and ask for streamed usage with `stream_options.include_usage`;
+`with_stream_usage(false)` turns that off for a server that rejects it. The server must
+support tool calls. A server that supports more opts in through
 `ProviderSpec::openai_compatible(config)` and `ModelClient::from_spec`, such as
 `with_image_input(true)` for a vision model or `JsonSchema` structured output for vLLM.
 

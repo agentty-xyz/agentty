@@ -541,6 +541,14 @@ impl EventStream {
                     self.call_index(event.output_index);
                 }
             }
+            // Later summary parts are separated as the readable reasoning
+            // view joins them.
+            ("response.reasoning_summary_part.added", _)
+                if event.summary_index.is_some_and(|index| index > 0) =>
+            {
+                self.deltas
+                    .push(ResponseDelta::Reasoning("\n\n".to_string()));
+            }
             ("response.output_text.delta", Some(text)) => {
                 self.deltas.push(ResponseDelta::Text(text));
             }
@@ -705,6 +713,8 @@ struct StreamEvent {
     output_index: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     response: Option<ResponsesResponse>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    summary_index: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]

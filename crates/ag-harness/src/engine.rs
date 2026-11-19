@@ -307,9 +307,11 @@ impl Engine<'_> {
                 .overflow
                 .retried(self.lifecycle, turn_id, sent.estimated_weight);
             state.model_request_index = state.model_request_index.saturating_add(1);
+            let open = OpenItems::take(streamed.as_deref()).await;
             let (response, activity, reasoning_content) = match completed {
                 Ok(completed) => completed,
                 Err(failure) => {
+                    self.publish_discarded(open).await;
                     self.recover(failure, &mut request, state, &sent)?;
 
                     continue;
@@ -317,7 +319,6 @@ impl Engine<'_> {
             };
             self.record_turn_request(state, activity, &sent);
             self.publish_requests(state).await?;
-            let open = OpenItems::take(streamed.as_deref()).await;
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
@@ -900,6 +901,14 @@ impl Engine<'_> {
             (first.and_then(ToolCall::assistant_text), message),
         )
         .await;
+    }
+
+    /// Completes the reasoning and message items a discarded streamed
+    /// response opened with the text it streamed; its tool-call items stay
+    /// open, since their calls never ran.
+    async fn publish_discarded(&self, open: OpenItems) {
+        self.publish_message((None, open.reasoning), (None, open.message))
+            .await;
     }
 
     /// Emits a response's reasoning, then its assistant text, as completed

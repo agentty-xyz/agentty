@@ -111,22 +111,25 @@ requests are unstreamed and report no deltas.
 
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
-carry only `model`, `messages`, `tools`, `response_format`, and the legacy `max_tokens`,
-with no `prompt_cache_key`, reasoning controls, or image input, and turn instructions
-join the preceding user message for chat templates that require alternating roles. A
-server that supports more opts in with the preset's `with_*` methods, such as
-`with_image_input(true)` or `JsonSchema` structured output. The schema is stated in a
-leading system message like Kimi and Qwen, worded to invite tool calls before the final
-JSON answer because small local models read an unconditional "return only JSON" as
-forbidding them; requests without tools also send the `json_schema` response format,
-which Ollama, llama.cpp, LM Studio, and vLLM all accept. Reasoning a server returns is
-not replayed, so the history stays portable. Context overflow is recognized from the
-shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`. `LocalServer` reads
-such a server's model inventory (`LocalServer::inventory`: Ollama's `/api/tags` and
-`/api/show` with context windows, tool support, and loaded windows from `/api/ps`, else
-`GET {base}/models`) under two-second request timeouts, and the window the server runs a
-model with (`LocalServer::running_context_window`), loading an unloaded Ollama model
-first because Ollama reports the window only for loaded models.
+carry only `model`, `messages`, `tools`, `response_format`, the legacy `max_tokens`, and
+the `stream` and `stream_options` fields every streamed Chat Completions request sends
+(Ollama, llama.cpp, LM Studio, and vLLM report streamed usage only when asked;
+`with_stream_usage(false)` drops `stream_options`), with no `prompt_cache_key`,
+reasoning controls, or image input, and turn instructions join the preceding user
+message for chat templates that require alternating roles. A server that supports more
+opts in with the preset's `with_*` methods, such as `with_image_input(true)` or
+`JsonSchema` structured output. The schema is stated in a leading system message like
+Kimi and Qwen, worded to invite tool calls before the final JSON answer because small
+local models read an unconditional "return only JSON" as forbidding them; requests
+without tools also send the `json_schema` response format, which Ollama, llama.cpp, LM
+Studio, and vLLM all accept. Reasoning a server returns is not replayed, so the history
+stays portable. Context overflow is recognized from the shared `OpenAI` markers and
+llama.cpp's `exceed_context_size_error`. `LocalServer` reads such a server's model
+inventory (`LocalServer::inventory`: Ollama's `/api/tags` and `/api/show` with context
+windows, tool support, and loaded windows from `/api/ps`, else `GET {base}/models`)
+under two-second request timeouts, and the window the server runs a model with
+(`LocalServer::running_context_window`), loading an unloaded Ollama model first because
+Ollama reports the window only for loaded models.
 
 `openai` sends requests to `{base_url}/responses`, the only `OpenAI` API that offers
 function tools to the current GPT models. Requests are stateless (`store: false`) and

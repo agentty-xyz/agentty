@@ -566,26 +566,37 @@ async fn stream_usage_can_be_turned_off_and_read_from_the_choice() -> Result<(),
 async fn reads_a_stream_that_closes_without_done_and_keeps_top_level_usage()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let server = event_stream_server(events(&[
-        json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}}),
-        json!({"choices": [{"index": 0, "delta": {"content": "{\"name\":\"Ada\"}"},
-                            "finish_reason": "stop", "usage": {"prompt_tokens": 1}}]}),
-    ]))
-    .await;
+    let mut body = events(&[json!({
+        "choices": [],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 4}
+    })]);
+    // The last chunk closes the stream without its blank line.
+    let last = json!({"choices": [{"index": 0, "delta": {"content": "{\"name\":\"Ada\"}"},
+                                   "finish_reason": "stop", "usage": {"prompt_tokens": 1}}]});
+    let _ = write!(body, "data: {last}");
+    let server = event_stream_server(body).await;
     let request = conformance::golden_request(
         "custom/llama3.3",
         false,
         conformance::options(None, false, None),
     )?;
+    let observer = Arc::new(RecordedDeltas::default());
 
     // Act
-    let completion = Router::new([custom(&server)]).execute(request).await?;
+    let completion = Router::new([custom(&server)])
+        .execute_streamed(request, observer.clone(), None)
+        .await?;
 
     // Assert
     let Completion::Output { metadata, .. } = completion else {
         return Err("expected structured output".into());
     };
     assert_eq!(metadata.usage().ok_or("usage")?.input_tokens(), Some(9));
+    let deltas = observer.0.lock().map_err(|_| "poisoned")?.clone();
+    assert_eq!(
+        deltas,
+        [ResponseDelta::Text("{\"name\":\"Ada\"}".to_string())]
+    );
 
     Ok(())
 }

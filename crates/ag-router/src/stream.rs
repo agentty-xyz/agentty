@@ -53,6 +53,10 @@ pub enum ResponseDelta {
 pub trait DeltaObserver: Send + Sync {
     /// Reports `delta`; the stream is not read further until this call
     /// returns, and cancelling the request while it runs stops the call.
+    ///
+    /// The request's whole-response bound keeps running meanwhile, and the
+    /// connection may fail as idle once reading resumes after a pause longer
+    /// than the stream's idle timeout, so return promptly.
     async fn delta(&self, delta: ResponseDelta);
 }
 

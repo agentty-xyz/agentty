@@ -198,7 +198,10 @@ pub fn openai(
 /// Ollama, llama.cpp, LM Studio, or vLLM, under the portable capabilities of
 /// [`ProviderSpec::new`] with the quirks local servers need: the legacy
 /// `max_tokens` field and turn instructions joined to the preceding user
-/// message. A server that supports more opts in with the `with_*` methods,
+/// message. Like every Chat Completions specification, it streams and asks
+/// for streamed usage, which [`ProviderSpec::with_stream_usage`] turns off
+/// for a server that rejects `stream_options`. A server that supports more
+/// opts in with the `with_*` methods,
 /// such as [`ProviderSpec::with_image_input`] for a vision model or
 /// [`ProviderSpec::with_structured_output`] for native JSON Schema; `None`
 /// sends no `Authorization` header.

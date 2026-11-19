@@ -5,7 +5,7 @@ use jsonschema::Validator;
 use serde_json::json;
 
 use super::{
-    CompactionOutcome, CompactionReport, EVENT_BUFFER, EventSink, EventStream, Item, ItemId,
+    CompactionOutcome, CompactionReport, Delta, EVENT_BUFFER, EventSink, EventStream, Item, ItemId,
     ItemKind, RunEvent, RunEventKind, RunFailure, RunId, RunSummary, SessionId, ToolCallItem,
     ToolCallStatus, TurnIndex,
 };
@@ -396,6 +396,56 @@ fn compacted_encodes_its_report_matching_the_schema() -> Result<(), Box<dyn Erro
     assert_eq!(encoded[2]["kind"]["outcome"]["status"], "failed");
     assert_eq!(encoded[2]["kind"]["outcome"]["kind"], "invalid_output");
     assert_eq!(encoded[2]["kind"]["outcome"]["message"], "summary rejected");
+
+    Ok(())
+}
+
+#[test]
+fn item_deltas_encode_their_tagged_fragment_matching_the_schema() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let delta = |delta: Delta| RunEvent {
+        at: UNIX_EPOCH,
+        kind: RunEventKind::ItemDelta {
+            delta,
+            id: ItemId(4),
+        },
+        run: RunId::generate(),
+        seq: 7,
+    };
+    let events = [
+        delta(Delta::Text {
+            text: "Ada".to_string(),
+        }),
+        delta(Delta::Reasoning {
+            text: "Look it up.".to_string(),
+        }),
+        delta(Delta::ToolArguments {
+            arguments: "{\"q\":".to_string(),
+        }),
+    ];
+    let validator = Validator::new(&serde_json::to_value(schemars::schema_for!(RunEvent))?)?;
+
+    // Act
+    let encoded = serde_json::to_value(&events)?;
+    let decoded: Vec<RunEvent> = serde_json::from_value(encoded.clone())?;
+
+    // Assert
+    assert_eq!(decoded, events);
+    for event in encoded.as_array().into_iter().flatten() {
+        assert!(validator.is_valid(event), "{event} matches the schema");
+    }
+    assert_eq!(
+        encoded[0]["kind"],
+        json!({"type": "item_delta", "delta": {"type": "text", "text": "Ada"}, "id": 4})
+    );
+    assert_eq!(
+        encoded[1]["kind"]["delta"],
+        json!({"type": "reasoning", "text": "Look it up."})
+    );
+    assert_eq!(
+        encoded[2]["kind"]["delta"],
+        json!({"type": "tool_arguments", "arguments": "{\"q\":"})
+    );
 
     Ok(())
 }

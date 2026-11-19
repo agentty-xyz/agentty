@@ -463,17 +463,24 @@ impl<'spec> ChatCompletionBackend<'spec> {
         let mut chunks = ChunkStream::new(self.deltas.is_some());
         while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
             let done = chunks.push(&chunk)?;
-            if let Some(observer) = &self.deltas {
-                for delta in std::mem::take(&mut chunks.deltas) {
-                    observer.delta(delta).await;
-                }
-            }
+            self.report(&mut chunks).await;
             if done {
-                break;
+                return chunks.finish().map(Some);
             }
         }
+        chunks.close()?;
+        self.report(&mut chunks).await;
 
         chunks.finish().map(Some)
+    }
+
+    /// Reports the deltas `chunks` read so far to the delta observer.
+    async fn report(&self, chunks: &mut ChunkStream) {
+        if let Some(observer) = &self.deltas {
+            for delta in std::mem::take(&mut chunks.deltas) {
+                observer.delta(delta).await;
+            }
+        }
     }
 
     fn map_completion_error(&self, error: TransportError) -> model::ModelError {
@@ -615,12 +622,17 @@ impl ChunkStream {
         Ok(false)
     }
 
-    /// Reads the event left when the stream closed and returns the
-    /// completion, failing when no choice finished.
-    fn finish(mut self) -> Result<ChatCompletion, TransportError> {
+    /// Reads the event left when the stream closed without `[DONE]`.
+    fn close(&mut self) -> Result<(), TransportError> {
         if let Some(data) = std::mem::take(&mut self.events).finish()? {
             self.dispatch(&data)?;
         }
+
+        Ok(())
+    }
+
+    /// Returns the completion, failing when no choice finished.
+    fn finish(self) -> Result<ChatCompletion, TransportError> {
         let finish_reason = self
             .finish_reason
             .ok_or_else(|| TransportError::transport(StreamClosed))?;
@@ -702,10 +714,22 @@ impl ChunkStream {
     }
 
     /// Accumulates one tool-call fragment into the call at its wire index,
-    /// numbering calls by the order they start.
+    /// numbering calls by the order they start. A fragment naming another
+    /// call than the one at its index starts a new call, as from servers
+    /// that number every call `0` or omit the index.
     fn read_call(&mut self, fragment: ChunkToolCall) -> Result<(), TransportError> {
-        let next = self.call_indexes.len();
-        let index = *self.call_indexes.entry(fragment.index).or_insert(next);
+        let next = self.calls.len();
+        let mut index = *self.call_indexes.entry(fragment.index).or_insert(next);
+        let other_call = fragment.id.as_ref().is_some_and(|id| {
+            self.calls[index..]
+                .first()
+                .and_then(|call| call.id.as_ref())
+                .is_some_and(|known| known != id)
+        });
+        if other_call {
+            index = next;
+            self.call_indexes.insert(fragment.index, next);
+        }
         if index == self.calls.len() {
             self.calls.push(StreamedToolCall::default());
         }

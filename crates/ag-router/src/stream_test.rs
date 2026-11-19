@@ -1,7 +1,7 @@
-//! Server-sent event reading tests.
+//! Server-sent event reading tests; the Responses event stream tests cover
+//! the decoder's size bounds.
 
 use super::SseDecoder;
-use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
 
 #[test]
 fn returns_the_data_of_each_event_split_across_chunks() {
@@ -34,19 +34,4 @@ fn finishes_without_a_pending_event() {
 
     // Assert
     assert_eq!(last, None);
-}
-
-#[test]
-fn bounds_one_line_and_one_event() {
-    // Arrange
-    let line = vec![b'x'; SUCCESS_BODY_LIMIT_BYTES + 1];
-    let event = format!("data: {}\n", "x".repeat(SUCCESS_BODY_LIMIT_BYTES + 1));
-
-    // Act
-    let line = SseDecoder::default().push(&line);
-    let event = SseDecoder::default().push(event.as_bytes());
-
-    // Assert
-    assert!(matches!(line, Err(TransportError::ResponseBodyTooLarge)));
-    assert!(matches!(event, Err(TransportError::ResponseBodyTooLarge)));
 }

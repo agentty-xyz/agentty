@@ -12,7 +12,9 @@ use std::time::Duration;
 use ag_harness::event::{Delta, Item, ItemKind};
 use ag_harness::model::ModelClient;
 use ag_harness::provider::{ProviderSpec, WireProtocol};
-use ag_harness::{EventStream, Harness, OutputMode, RunEvent, RunEventKind, RunOutput, RunRequest};
+use ag_harness::{
+    EventStream, Harness, OutputMode, OutputSchema, RunEvent, RunEventKind, RunOutput, RunRequest,
+};
 use futures_core::Stream;
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -204,6 +206,59 @@ async fn streams_deltas_into_the_items_each_response_completes() -> Result<(), B
             Seen::message(4, "Ada Lovelace"),
             Seen::Started(5, ItemKind::Output),
             Seen::Completed(5, Item::Output { output }),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn completes_the_streamed_text_of_a_discarded_answer() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        &[chunk(&json!({"content": "not json"}))],
+        "stop",
+        Some(1),
+    )
+    .await;
+    let answer = [chunk(&json!({"content": "{\"name\":\"Ada\"}"}))];
+    mount(&server, &answer, "stop", None).await;
+    let harness = harness(format!("{}/v1", server.uri()))?;
+    let schema = OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    }))?;
+
+    // Act
+    let (stream, handle) = harness
+        .run(RunRequest::new("Who?").output(schema))
+        .into_parts();
+    let (seen, outcome) = timeout(HANG, async {
+        tokio::join!(drain(stream), handle.outcome())
+    })
+    .await?;
+
+    // Assert
+    let output = RunOutput::Json(json!({"name": "Ada"}));
+    assert_eq!(outcome.result.as_ref().ok(), Some(&output));
+    let items: Vec<_> = seen
+        .into_iter()
+        .filter(|seen| *seen != Seen::Request)
+        .collect();
+    assert_eq!(
+        items,
+        [
+            Seen::Started(0, ItemKind::Message),
+            Seen::text(0, "not json"),
+            Seen::message(0, "not json"),
+            Seen::Started(1, ItemKind::Message),
+            Seen::text(1, "{\"name\":\"Ada\"}"),
+            Seen::message(1, "{\"name\":\"Ada\"}"),
+            Seen::Started(2, ItemKind::Output),
+            Seen::Completed(2, Item::Output { output }),
         ]
     );
 
