@@ -47,7 +47,8 @@ main() {
     say "downloading $APP_NAME $APP_VERSION for $_target"
     download "${_download_base%/}/$_archive" "$_work_dir/$_archive"
     verify_sha256 "$_work_dir/$_archive"
-    tar -xzf "$_work_dir/$_archive" -C "$_work_dir" || fail "cannot extract $_archive"
+    tar -xzf "$_work_dir/$_archive" -C "$_work_dir" ||
+        fail "cannot extract $_archive"
 
     if [ -n "$_unmanaged_dir" ]; then
         absolute_directory "$_unmanaged_dir"
@@ -175,7 +176,8 @@ download() {
         curl --fail --location --silent --show-error --output "$_output" "$_url" ||
             fail "cannot download $_url"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$_output" "$_url" || fail "cannot download $_url"
+        wget -q -O "$_output" "$_url" ||
+            fail "cannot download $_url"
     else
         fail "installing $APP_NAME needs curl or wget"
     fi
@@ -203,7 +205,8 @@ verify_sha256() {
 # absolute path.
 absolute_directory() {
     local _wanted="$1"
-    mkdir -p "$_wanted" || fail "cannot create $_wanted"
+    mkdir -p "$_wanted" ||
+        fail "cannot create $_wanted"
     _absolute=$(CDPATH='' cd -- "$_wanted" && pwd) || fail "cannot enter $_wanted"
 }
 
@@ -226,7 +229,8 @@ install_binaries() {
 
 write_receipt() {
     _receipt_dir=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_NAME
-    mkdir -p "$_receipt_dir" || fail "cannot create $_receipt_dir"
+    mkdir -p "$_receipt_dir" ||
+        fail "cannot create $_receipt_dir"
     _json_prefix=$(printf '%s' "$_prefix" | sed 's/\\/\\\\/g; s/"/\\"/g')
     printf \
         '{"binaries":%s,"install_layout":"cargo-home","install_prefix":"%s","modify_path":%s,"provider":%s,"source":%s,"version":%s}\n' \
@@ -265,12 +269,14 @@ update_path() {
     fi
     add_line "$_zsh_rc" "$_sh_line" "$_sh_alternative"
     _fish_dir=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d
-    mkdir -p "$_fish_dir" || fail "cannot create $_fish_dir"
+    mkdir -p "$_fish_dir" ||
+        fail "cannot create $_fish_dir"
     _fish_line="source \"$_env_expression.fish\""
     _fish_alternative=". \"$_env_expression.fish\""
     add_line "$_fish_dir/$APP_NAME.env.fish" "$_fish_line" "$_fish_alternative"
     if [ -n "${GITHUB_PATH:-}" ]; then
-        printf '%s\n' "$_bin_dir" >> "$GITHUB_PATH" || fail "cannot update $GITHUB_PATH"
+        printf '%s\n' "$_bin_dir" >> "$GITHUB_PATH" ||
+            fail "cannot update $GITHUB_PATH"
         say "  added $_bin_dir to $GITHUB_PATH"
     fi
     say ""
@@ -330,7 +336,8 @@ add_line() {
         grep -qF -- "$_equivalent" "$_startup_file" 2>/dev/null; then
         return 0
     fi
-    printf '\n%s\n' "$_line" >> "$_startup_file" || fail "cannot update $_startup_file"
+    printf '\n%s\n' "$_line" >> "$_startup_file" ||
+        fail "cannot update $_startup_file"
     say "  updated $_startup_file"
 }
 
