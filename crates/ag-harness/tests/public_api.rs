@@ -58,6 +58,11 @@ mod run_test;
 mod run_events_test;
 
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
+#[path = "support/run_retries.rs"]
+mod run_retries_test;
+
+#[cfg(test)]
 #[path = "support/run_options.rs"]
 mod run_options_test;
 

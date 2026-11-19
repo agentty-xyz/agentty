@@ -11,6 +11,7 @@ use crate::model::{
 };
 use crate::provider_spec::{Auth, ProviderSpec, WireProtocol};
 use crate::responses::{self, ResponsesBackend};
+use crate::retry::RetryObserver;
 use crate::{OutputSchema, TurnInput, ensure_content_size};
 
 /// Routing key of a specification: its identifier and the one model it
@@ -126,6 +127,29 @@ impl Router {
     /// Returns a routing, transport, decoding, or output validation error;
     /// a blank text answer fails as [`ModelError::InvalidResponse`].
     pub async fn execute(&self, request: ModelRequest) -> Result<Completion, ModelError> {
+        self.execute_routed(request, None).await
+    }
+
+    /// Executes one request as [`Self::execute`] does, reporting each retry
+    /// its provider's [`crate::RetryPolicy`] sends to `observer` before
+    /// waiting for it.
+    ///
+    /// # Errors
+    /// Returns the errors of [`Self::execute`].
+    pub async fn execute_observed(
+        &self,
+        request: ModelRequest,
+        observer: Arc<dyn RetryObserver>,
+    ) -> Result<Completion, ModelError> {
+        self.execute_routed(request, Some(observer)).await
+    }
+
+    /// Executes one request, reporting retries to `observer`.
+    async fn execute_routed(
+        &self,
+        request: ModelRequest,
+        observer: Option<Arc<dyn RetryObserver>>,
+    ) -> Result<Completion, ModelError> {
         let (spec, model) = self.route(&request.model)?;
         if let Some(schema) = request.schema() {
             spec.validate_schema(schema)?;
@@ -147,6 +171,7 @@ impl Router {
                     model.to_string(),
                     headers,
                     Arc::clone(&self.client),
+                    observer,
                 )
                 .generate(&request)
                 .await?
@@ -157,6 +182,7 @@ impl Router {
                     model.to_string(),
                     headers,
                     Arc::clone(&self.responses),
+                    observer,
                 )
                 .generate(&request)
                 .await?

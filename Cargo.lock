@@ -171,6 +171,8 @@ version = "0.19.5"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "fastrand",
+ "httpdate",
  "jsonschema",
  "reqwest",
  "rustls",

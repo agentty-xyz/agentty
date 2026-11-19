@@ -2,10 +2,12 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ag_router::{
-    Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
-    ModelMessage, ModelRequest, OutputSchema, Router, ToolCall, ToolDefinition, TurnInput, preset,
+    Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, Jitter, JsonSchemaFormat,
+    ModelError, ModelMessage, ModelRequest, OutputSchema, RetryKind, RetryNotice, RetryObserver,
+    RetryPolicy, Router, ToolCall, ToolDefinition, TurnInput, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_partial_json, method, path};
@@ -1275,6 +1277,65 @@ async fn keeps_the_cached_prefix_and_key_across_turn_instructions()
     // A text request states no schema, so on a provider that states it in
     // a leading message, switching output mode changes the prefix.
     assert_eq!(text_body["messages"][0]["content"], "Who wrote it?");
+
+    Ok(())
+}
+
+/// Records the retries a router reports.
+#[derive(Default)]
+struct RecordedRetries(std::sync::Mutex<Vec<RetryNotice>>);
+
+#[async_trait::async_trait]
+impl RetryObserver for RecordedRetries {
+    async fn retrying(&self, notice: RetryNotice) {
+        if let Ok(mut notices) = self.0.lock() {
+            notices.push(notice);
+        }
+    }
+}
+
+#[tokio::test]
+async fn retries_an_opted_in_overload_under_the_spec_policy_and_reports_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(529))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+        .mount(&server)
+        .await;
+    let policy = RetryPolicy::default()
+        .with_retried(RetryKind::Overloaded, true)
+        .with_base_delay(Duration::from_millis(1))
+        .with_jitter(Jitter::Full)
+        .with_max_backoff(Duration::from_millis(2))
+        .with_max_connection_retries(0)
+        .with_max_retry_after(Duration::from_millis(5));
+    let spec = preset::muse(format!("{}/v1", server.uri()), "test-key", "muse-spark-1.3")
+        .with_retry(policy);
+    let observer = Arc::new(RecordedRetries::default());
+
+    // Act
+    let response = Router::new([spec])
+        .execute_observed(request("muse/muse-spark-1.3")?, observer.clone())
+        .await?;
+
+    // Assert
+    assert!(matches!(response, Completion::Output { .. }));
+    let retries = observer
+        .0
+        .lock()
+        .map_err(|_| "the retries lock is poisoned")?
+        .clone();
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0].attempt, 1);
+    assert_eq!(retries[0].kind, RetryKind::Overloaded);
+    assert_eq!(retries[0].status, Some(529));
+    assert!(retries[0].after <= Duration::from_millis(1));
 
     Ok(())
 }

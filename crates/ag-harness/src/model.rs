@@ -10,6 +10,8 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -24,6 +26,10 @@ pub use crate::context::{
     ContextBudget, ContextBudgetError, ContextEstimator, ContextPolicy, ContextSummaryPolicy,
     HeuristicContextEstimator,
 };
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::error::ErrorKind;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::event::{self, EventSink, RunEventKind};
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -315,7 +321,15 @@ impl ModelClient {
             let routed = self
                 .to_router_request(&request)
                 .map_err(|error| (error, None))?;
-            self.router.execute(routed).await.map_err(|error| {
+            let executed = match event::retry_events() {
+                Some(events) => {
+                    self.router
+                        .execute_observed(routed, Arc::new(RetryEvents(events)))
+                        .await
+                }
+                None => self.router.execute(routed).await,
+            };
+            executed.map_err(|error| {
                 let metadata = error.metadata().cloned();
                 (Self::from_router_error(error), metadata)
             })
@@ -656,6 +670,40 @@ impl Model for ModelClient {
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         ModelClient::complete(self, request).await
+    }
+}
+
+/// Reports a routed request's retries to the streamed run it belongs to as
+/// [`RunEventKind::Retrying`] events.
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+struct RetryEvents(Arc<EventSink>);
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+impl RetryEvents {
+    /// Returns the failure kind a retry of `kind` reports: `5xx` statuses
+    /// read as [`ErrorKind::Overloaded`], as their final failure would.
+    /// The router's retry kinds are non-exhaustive; a kind added there is
+    /// mapped here in the same change, and until then reads as overloaded.
+    fn error_kind(kind: ag_router::RetryKind) -> ErrorKind {
+        match kind {
+            ag_router::RetryKind::RateLimited => ErrorKind::RateLimited,
+            ag_router::RetryKind::Connection => ErrorKind::Transport,
+            _ => ErrorKind::Overloaded,
+        }
+    }
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[async_trait]
+impl ag_router::RetryObserver for RetryEvents {
+    async fn retrying(&self, notice: ag_router::RetryNotice) {
+        self.0
+            .emit(RunEventKind::retrying(
+                notice.after,
+                notice.attempt,
+                Self::error_kind(notice.kind),
+            ))
+            .await;
     }
 }
 

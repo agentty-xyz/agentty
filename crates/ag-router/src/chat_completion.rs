@@ -16,6 +16,7 @@ use crate::provider_spec::{
     InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
     ThinkingOptions,
 };
+use crate::retry::RetryObserver;
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Chat Completions endpoint under a provider base URL.
@@ -55,22 +56,25 @@ pub(crate) struct ChatCompletionBackend<'spec> {
     client: Arc<dyn ChatCompletionClient>,
     headers: HeaderMap,
     model: String,
+    observer: Option<Arc<dyn RetryObserver>>,
     policy: &'spec ProviderSpec,
 }
 
 impl<'spec> ChatCompletionBackend<'spec> {
     /// Creates a backend sending `headers` through an injected transport
-    /// client.
+    /// client, reporting retries to `observer`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
         client: Arc<dyn ChatCompletionClient>,
+        observer: Option<Arc<dyn RetryObserver>>,
     ) -> Self {
         Self {
             client,
             headers,
             model,
+            observer,
             policy,
         }
     }
@@ -118,11 +122,14 @@ impl<'spec> ChatCompletionBackend<'spec> {
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let completion = self
             .client
-            .complete(ProviderRequest::new(
-                self.headers.clone(),
-                self.policy.endpoint(ENDPOINT_PATH),
-                payload,
-            ))
+            .complete(
+                ProviderRequest::new(
+                    self.headers.clone(),
+                    self.policy.endpoint(ENDPOINT_PATH),
+                    payload,
+                )
+                .with_retry(self.policy.retry, self.observer.clone()),
+            )
             .await
             .map_err(|error| self.map_completion_error(error))?
             .ok_or(model::ModelError::InvalidResponse)?;

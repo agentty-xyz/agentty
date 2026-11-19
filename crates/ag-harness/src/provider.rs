@@ -113,8 +113,9 @@ pub use qwen::QwenConfig;
 pub(crate) use qwen::profile as qwen_profile;
 pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX};
 pub use spec::{
-    Auth, CredentialSource, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec,
-    ProviderSpecError, ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
+    Auth, CredentialSource, EffortNames, InstructionPlacement, Jitter, MaxTokensField,
+    ProviderSpec, ProviderSpecError, ReasoningMapping, RetryKind, RetryPolicy,
+    StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 
 #[doc(no_inline)]
