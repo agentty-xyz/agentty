@@ -209,11 +209,15 @@ A file that already sources the script is left unchanged.
 ## npm Package
 
 `<app>-npm-package.tar.gz` is a ready-to-publish npm package named `<npm-scope>/<app>`,
-or `<app>` without a scope. Publish it as is:
+or `<app>` without a scope. Publish it with public access, which a scoped package needs
+because npm publishes scoped packages as restricted by default:
 
 ```sh
-npm publish <app>-npm-package.tar.gz
+npm publish --access public <app>-npm-package.tar.gz
 ```
+
+npm 11 and newer refuse to publish a prerelease version without a dist-tag, so add
+`--tag <dist-tag>` (for example `--tag next`) for one.
 
 Its `package.json` takes `version`, `description`, `license`, `repository`, and
 `contributors` (the authors) from Cargo metadata, declares one `bin` command per binary,
@@ -238,10 +242,16 @@ and ends by the binary's signal when the binary is killed. It ignores `SIGINT` a
 `SIGQUIT`, which the terminal also sends to the binary, and passes `SIGHUP` and
 `SIGTERM` on to it.
 
-| Variable                                               | Effect                                                                                                   |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `<APP>_DOWNLOAD_URL`                                   | Archive base URL instead of `https://github.com/<owner>/<name>/releases/download/<tag>`; `file://` works |
-| `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` | Any of them set: download with `curl`, which honors them, instead of Node's built-in `fetch`             |
+| Variable                                                                 | Effect                                                                                                   |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `<APP>_DOWNLOAD_URL`                                                     | Archive base URL instead of `https://github.com/<owner>/<name>/releases/download/<tag>`; `file://` works |
+| `npm_config_https_proxy`, `https_proxy`, `npm_config_proxy`, `all_proxy` | Proxy: download with `curl --proxy <proxy>` instead of Node's built-in `fetch`, which ignores proxies    |
+| `npm_config_no_proxy`, `npm_config_noproxy`, `no_proxy`                  | With a proxy, hosts to reach directly, passed as `curl --noproxy <hosts>`                                |
+
+The first variable of each row that is set, in the order listed and each name in lower,
+then upper case, wins, as in `proxy-from-env` 1.x. npm passes its `https-proxy`,
+`proxy`, and `noproxy` settings (from `npm config set` or `.npmrc`) to install scripts
+as these `npm_config_*` variables.
 
 npm, Bun, and pnpm installs update through their package manager, for example
 `npm install --global <package>@latest`.

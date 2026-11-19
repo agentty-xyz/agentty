@@ -20,9 +20,14 @@ const RELEASE = {{ release }};
 // recognize npm installs by their executable's path rely on this location.
 const INSTALL_DIR = path.join(__dirname, "node_modules", ".bin_real");
 
-// Node's built-in `fetch` ignores these, so a set one routes downloads
-// through `curl`, which honors them.
-const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"];
+// Node's built-in `fetch` ignores proxies, so a configured one routes
+// downloads through `curl`. The variables and their order are those that
+// `proxy-from-env` 1.x reads for an `https:` URL, each in lower, then upper
+// case. npm passes its `https-proxy`, `proxy`, and `noproxy` settings to
+// install scripts only as `npm_config_*` variables, which `curl` does not
+// read, so the resolved values reach `curl` as options.
+const PROXY_VARIABLES = ["npm_config_https_proxy", "https_proxy", "npm_config_proxy", "all_proxy"];
+const NO_PROXY_VARIABLES = ["npm_config_no_proxy", "npm_config_noproxy", "no_proxy"];
 
 // The terminal also sends these to the binary, which decides how to react.
 const IGNORED_SIGNALS = ["SIGINT", "SIGQUIT"];
@@ -131,10 +136,23 @@ function checkGlibc(platform, arch) {
 /** Downloads `source` into the file `destination`. */
 async function download(source, destination) {
   try {
-    if (PROXY_VARIABLES.some((name) => process.env[name])) {
+    const proxy = firstVariable(PROXY_VARIABLES);
+    if (proxy) {
+      const noProxy = firstVariable(NO_PROXY_VARIABLES);
       runTool(
         "curl",
-        ["--fail", "--location", "--silent", "--show-error", "--output", destination, source],
+        [
+          "--proxy",
+          proxy,
+          ...(noProxy ? ["--noproxy", noProxy] : []),
+          "--fail",
+          "--location",
+          "--silent",
+          "--show-error",
+          "--output",
+          destination,
+          source,
+        ],
         "curl failed",
       );
     } else if (source.startsWith("file:")) {
@@ -150,6 +168,19 @@ async function download(source, destination) {
     const cause = error.cause ? ` (${error.cause.message})` : "";
     throw new Error(`cannot download ${source}: ${error.message}${cause}`);
   }
+}
+
+/** Returns the value of the first of `names` that is set, trying each in
+ * lower, then upper case, or an empty string. */
+function firstVariable(names) {
+  for (const name of names) {
+    const value = process.env[name.toLowerCase()] || process.env[name.toUpperCase()];
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 /** Throws unless the file `archive` has the SHA-256 the release recorded. */
