@@ -27,8 +27,13 @@ fn file_system(result: fn(&Path) -> io::Result<bool>) -> MockFileSystem {
 }
 
 fn plan(tag: Option<&str>) -> Command {
+    plan_targets(tag, &[])
+}
+
+fn plan_targets(tag: Option<&str>, targets: &[&str]) -> Command {
     Command::Plan(PlanOptions {
         tag: tag.map(ToString::to_string),
+        targets: targets.iter().map(ToString::to_string).collect(),
     })
 }
 
@@ -56,6 +61,7 @@ fn cli_parses_every_command() {
     let arguments = [
         vec!["ag-release", "plan"],
         vec!["ag-release", "plan", "--tag", "v1.2.3"],
+        vec!["ag-release", "plan", "--target", "a", "--target", "b"],
         vec!["ag-release", "build", "--target", "aarch64-apple-darwin"],
         vec![
             "ag-release",
@@ -64,6 +70,8 @@ fn cli_parses_every_command() {
             "aarch64-apple-darwin",
             "--out-dir",
             "dist",
+            "--profile",
+            "dev",
         ],
         vec![
             "ag-release",
@@ -73,17 +81,33 @@ fn cli_parses_every_command() {
             "--artifacts-dir",
             "artifacts",
         ],
+        vec![
+            "ag-release",
+            "assemble",
+            "--tag",
+            "v1.2.3",
+            "--artifacts-dir",
+            "artifacts",
+            "--target",
+            "a",
+        ],
         vec!["ag-release", "notes", "--tag", "v1.2.3"],
         vec!["ag-release", "notes", "--tag", "v1.2.3", "--title"],
     ];
 
     // Act
     let commands = arguments.map(|arguments| match Cli::parse_from(arguments).command {
-        Command::Plan(PlanOptions { tag }) => format!("plan {tag:?}"),
-        Command::Build(BuildOptions { out_dir, target }) => format!("build {target} {out_dir:?}"),
-        Command::Assemble(AssembleOptions { artifacts_dir, tag }) => {
-            format!("assemble {tag} {}", artifacts_dir.display())
-        }
+        Command::Plan(PlanOptions { tag, targets }) => format!("plan {tag:?} {targets:?}"),
+        Command::Build(BuildOptions {
+            out_dir,
+            profile,
+            target,
+        }) => format!("build {target} {out_dir:?} {profile:?}"),
+        Command::Assemble(AssembleOptions {
+            artifacts_dir,
+            tag,
+            targets,
+        }) => format!("assemble {tag} {} {targets:?}", artifacts_dir.display()),
         Command::Notes(NotesOptions { tag, title }) => format!("notes {tag} {title}"),
     });
 
@@ -91,11 +115,13 @@ fn cli_parses_every_command() {
     assert_eq!(
         commands,
         [
-            "plan None",
-            "plan Some(\"v1.2.3\")",
-            "build aarch64-apple-darwin None",
-            "build aarch64-apple-darwin Some(\"dist\")",
-            "assemble v1.2.3 artifacts",
+            "plan None []",
+            "plan Some(\"v1.2.3\") []",
+            "plan None [\"a\", \"b\"]",
+            "build aarch64-apple-darwin None None",
+            "build aarch64-apple-darwin Some(\"dist\") Some(\"dev\")",
+            "assemble v1.2.3 artifacts []",
+            "assemble v1.2.3 artifacts [\"a\"]",
             "notes v1.2.3 false",
             "notes v1.2.3 true",
         ]
@@ -149,6 +175,40 @@ fn plan_prints_the_plan_json_after_checking_include_files() {
     let plan: Value = serde_json::from_str(&stdout).expect("plan JSON");
     assert_eq!(plan["tag"], "v1.2.3");
     assert_eq!(plan["apps"][0]["name"], "demo-app");
+}
+
+#[test]
+fn plan_narrows_to_the_requested_configured_targets() {
+    // Arrange
+    let process = [demo_process(), demo_process()];
+    let file_system = file_system(|_| Ok(true));
+    let narrowed = plan_targets(None, &["x86_64-unknown-linux-gnu"]);
+    let unconfigured = plan_targets(None, &["x86_64-apple-darwin"]);
+
+    // Act
+    let (narrowed_result, stdout) = run(&narrowed, &process[0], &file_system);
+    let (unconfigured_result, _) = run(&unconfigured, &process[1], &file_system);
+
+    // Assert
+    assert_eq!(narrowed_result, Ok(()));
+    let plan: Value = serde_json::from_str(&stdout).expect("plan JSON");
+    assert_eq!(
+        plan["matrix"]["include"],
+        serde_json::json!([{"runner": "ubuntu-22.04", "target": "x86_64-unknown-linux-gnu"}])
+    );
+    assert_eq!(
+        plan["apps"][0]["archives"][0]["target"],
+        "x86_64-unknown-linux-gnu"
+    );
+    assert_eq!(
+        plan["apps"][0]["archives"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert!(
+        unconfigured_result
+            .expect_err("unconfigured target")
+            .starts_with("target `x86_64-apple-darwin` is not configured")
+    );
 }
 
 #[test]

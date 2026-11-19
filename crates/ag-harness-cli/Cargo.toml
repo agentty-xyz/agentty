@@ -9,10 +9,6 @@ repository.workspace = true
 # Keep this companion CLI out of crates.io releases.
 publish = false
 
-[package.metadata.dist]
-# Keep this companion CLI out of `cargo-dist` archives and installers.
-dist = false
-
 [[bin]]
 name = "ag-harness"
 path = "src/main.rs"

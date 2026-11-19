@@ -419,7 +419,7 @@ fn npm_install_is_detected_from_generated_package_layout() {
 }
 
 #[test]
-fn shell_install_is_detected_from_matching_dist_receipt() {
+fn shell_install_is_detected_from_matching_ag_release_receipt() {
     // Arrange
     let root = Builder::new()
         .tempdir_in(env!("CARGO_MANIFEST_DIR"))
@@ -429,7 +429,7 @@ fn shell_install_is_detected_from_matching_dist_receipt() {
     fs::create_dir(root.path().join("bin")).expect("bin directory");
     fs::write(&executable, b"binary").expect("installed binary");
     let data = serde_json::json!({
-        "provider": { "source": "cargo-dist" },
+        "provider": { "source": "ag-release" },
         "source": { "app_name": "agentty" },
         "version": env!("CARGO_PKG_VERSION"),
         "install_prefix": root.path(),
@@ -460,7 +460,7 @@ fn shell_install_is_detected_through_symlinked_prefix() {
     symlink(&install_root, &linked_root).expect("linked install prefix");
     let receipt = root.path().join("agentty-receipt.json");
     let data = serde_json::json!({
-        "provider": { "source": "cargo-dist" },
+        "provider": { "source": "ag-release" },
         "source": { "app_name": "agentty" },
         "version": env!("CARGO_PKG_VERSION"),
         "install_prefix": linked_root,
@@ -530,48 +530,44 @@ fn shell_receipt_must_identify_this_binary_and_version() {
     let executable = root.path().join("bin/agentty");
     fs::create_dir(root.path().join("bin")).expect("bin directory");
     fs::write(&executable, b"binary").expect("installed binary");
-    fs::write(root.path().join("agentty"), b"binary").expect("flat binary");
-    let mut data = serde_json::json!({
-        "provider": { "source": "cargo-dist" },
+    fs::write(root.path().join("agentty"), b"binary").expect("other binary");
+    let data = serde_json::json!({
+        "provider": { "source": "ag-release" },
         "source": { "app_name": "agentty" },
         "version": env!("CARGO_PKG_VERSION"),
         "install_prefix": root.path(),
         "install_layout": "cargo-home",
     });
+    let mismatches = [
+        ("/provider/source", serde_json::json!("cargo-dist")),
+        ("/source/app_name", serde_json::json!("other")),
+        ("/version", serde_json::json!("old-version")),
+        ("/install_prefix", serde_json::Value::Null),
+        ("/install_layout", serde_json::json!("flat")),
+    ];
 
     // Act / Assert
     assert_eq!(
         InstallMethod::from_paths(&executable, Some(&receipt)),
         InstallMethod::Unknown
     );
-    data["version"] = serde_json::json!("old-version");
-    fs::write(&receipt, data.to_string()).expect("outdated receipt");
+    for (pointer, value) in mismatches {
+        let mut other_receipt = data.clone();
+        *other_receipt.pointer_mut(pointer).expect("receipt field") = value;
+        fs::write(&receipt, other_receipt.to_string()).expect("mismatched receipt");
+        assert_eq!(
+            InstallMethod::from_paths(&executable, Some(&receipt)),
+            InstallMethod::Unknown,
+            "{pointer}"
+        );
+    }
+    fs::write(&receipt, data.to_string()).expect("matching receipt");
     assert_eq!(
         InstallMethod::from_paths(&executable, Some(&receipt)),
-        InstallMethod::Unknown
-    );
-    data["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
-    data["install_prefix"] = serde_json::Value::Null;
-    fs::write(&receipt, data.to_string()).expect("receipt without prefix");
-    assert_eq!(
-        InstallMethod::from_paths(&executable, Some(&receipt)),
-        InstallMethod::Unknown
-    );
-    data["install_prefix"] = serde_json::json!(root.path());
-    data["install_layout"] = serde_json::json!("other");
-    fs::write(&receipt, data.to_string()).expect("receipt with unsupported layout");
-    assert_eq!(
-        InstallMethod::from_paths(&executable, Some(&receipt)),
-        InstallMethod::Unknown
-    );
-    data["install_layout"] = serde_json::json!("flat");
-    fs::write(&receipt, data.to_string()).expect("flat install receipt");
-    assert_eq!(
-        InstallMethod::from_paths(&root.path().join("agentty"), Some(&receipt)),
         InstallMethod::Sh
     );
     assert_eq!(
-        InstallMethod::from_paths(&executable, Some(&receipt)),
+        InstallMethod::from_paths(&root.path().join("agentty"), Some(&receipt)),
         InstallMethod::Unknown
     );
 }

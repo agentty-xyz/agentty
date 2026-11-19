@@ -282,6 +282,38 @@ fn parse_requires_the_release_table() {
 }
 
 #[test]
+fn select_targets_keeps_the_named_configured_targets() {
+    // Arrange
+    let metadata = full_metadata();
+    let config = ReleaseConfig::parse(Some(&metadata)).expect("full configuration");
+    let mut every = config.clone();
+    let mut selected = config.clone();
+    let mut unconfigured = config.clone();
+    let linux = "x86_64-unknown-linux-gnu".to_string();
+
+    // Act
+    let every_result = every.select_targets(&[]);
+    let selected_result = selected.select_targets(&[linux.clone(), linux]);
+    let unconfigured_result = unconfigured.select_targets(&["x86_64-apple-darwin".to_string()]);
+
+    // Assert
+    assert_eq!((every_result, every), (Ok(()), config.clone()));
+    assert_eq!(selected_result, Ok(()));
+    assert_eq!(
+        selected.targets,
+        BTreeMap::from([(Target::X8664UnknownLinuxGnu, "ubuntu-22.04".to_string())])
+    );
+    assert_eq!(
+        unconfigured_result,
+        Err("target `x86_64-apple-darwin` is not configured in \
+             `workspace.metadata.release.targets`; configured targets: aarch64-apple-darwin, \
+             x86_64-unknown-linux-gnu"
+            .to_string())
+    );
+    assert_eq!(unconfigured, config);
+}
+
+#[test]
 fn release_values_serialize_as_configuration_spellings() {
     // Arrange
     let values = (

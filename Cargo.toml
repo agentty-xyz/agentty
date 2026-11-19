@@ -132,8 +132,10 @@ unused_async = "warn"
 unused_peekable = "warn"
 debug_assert_with_mut_call = "warn"
 
-# Release configuration read by `crates/ag-release`. `dist-workspace.toml` still
-# drives published releases until the release workflow switches to `ag-release`.
+# Release configuration read by `crates/ag-release`, which
+# `.github/workflows/release.yml` runs; see `crates/ag-release/README.md`.
+# Linux builds run on Ubuntu 22.04, so their binaries need its glibc 2.35, and
+# both macOS targets build on the Apple Silicon `macos-latest` runner.
 [workspace.metadata.release]
 profile = "dist"
 min-glibc = "2.35"
@@ -167,7 +169,7 @@ lto = true # Enables Link-time Optimization.
 opt-level = "s" # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true # Ensures debug symbols are removed.
 
-# The profile that 'dist' will build with
+# The profile `ag-release build` uses for published release binaries.
 [profile.dist]
 inherits = "release"
 lto = "thin"

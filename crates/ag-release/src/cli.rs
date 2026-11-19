@@ -45,6 +45,10 @@ pub(crate) struct PlanOptions {
     /// match.
     #[arg(long)]
     pub(crate) tag: Option<String>,
+    /// Configured target triple to plan for, instead of every configured
+    /// target; repeat for several.
+    #[arg(long = "target", value_name = "TRIPLE")]
+    pub(crate) targets: Vec<String>,
 }
 
 /// Options for `build`.
@@ -54,6 +58,9 @@ pub(crate) struct BuildOptions {
     /// `ag-release.out` in Cargo's target directory.
     #[arg(long)]
     pub(crate) out_dir: Option<PathBuf>,
+    /// Cargo profile to build with instead of the configured one.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
     /// Configured target triple to build. Its Rust target must be installed.
     #[arg(long)]
     pub(crate) target: String,
@@ -69,6 +76,10 @@ pub(crate) struct AssembleOptions {
     /// Release tag, `v<semver>` or `<semver>`, naming the apps' version.
     #[arg(long)]
     pub(crate) tag: String,
+    /// Configured target triple to assemble, instead of every configured
+    /// target; repeat for several.
+    #[arg(long = "target", value_name = "TRIPLE")]
+    pub(crate) targets: Vec<String>,
 }
 
 /// Options for `notes`.
@@ -169,7 +180,8 @@ impl Host<'_> {
     /// Writes the pretty-printed plan JSON with a trailing newline.
     fn plan(&self, options: &PlanOptions, stdout: &mut dyn Write) -> Result<(), String> {
         let tag = options.tag.as_deref().map(ReleaseTag::parse).transpose()?;
-        let workspace = Workspace::load(self.process, self.cargo.clone())?;
+        let mut workspace = Workspace::load(self.process, self.cargo.clone())?;
+        workspace.config.select_targets(&options.targets)?;
         self.check_include(&workspace)?;
         let plan = ReleasePlan::new(&workspace, tag.as_ref())?;
 

@@ -74,6 +74,47 @@ impl ReleaseConfig {
         })
     }
 
+    /// Returns the configured target spelled `triple`.
+    ///
+    /// # Errors
+    /// Returns an error listing the configured targets when `triple` is not
+    /// one of them.
+    pub(crate) fn target(&self, triple: &str) -> Result<Target, String> {
+        self.targets
+            .keys()
+            .copied()
+            .find(|target| target.triple() == triple)
+            .ok_or_else(|| {
+                format!(
+                    "target `{triple}` is not configured in `{TABLE}.targets`; configured \
+                     targets: {}",
+                    self.targets
+                        .keys()
+                        .map(|target| target.triple())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+    }
+
+    /// Keeps only the configured targets spelled in `triples`, or every
+    /// target when `triples` is empty.
+    ///
+    /// # Errors
+    /// Returns an error when an entry of `triples` is not configured.
+    pub(crate) fn select_targets(&mut self, triples: &[String]) -> Result<(), String> {
+        if triples.is_empty() {
+            return Ok(());
+        }
+        let selected = triples
+            .iter()
+            .map(|triple| self.target(triple))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        self.targets.retain(|target, _| selected.contains(target));
+
+        Ok(())
+    }
+
     fn parse_apps(table: &ConfigTable<'_>) -> Result<BTreeMap<String, AppConfig>, String> {
         let apps = table.nonempty_table("apps", "app")?;
 

@@ -126,8 +126,10 @@ Follow the nearest documentation guide for exact routing and integrity rules.
   ordinary version-bump change; create and publish no release tags locally.
 - After that change lands, create its `v`-prefixed tag for the exact commit in the
   GitHub UI; the release workflows publish from that tag.
-- Treat `.github/workflows/release.yml` as generated. Upgrade `cargo-dist` through
-  `dist-workspace.toml` and regenerate with `dist init`; review both files together.
+- `.github/workflows/release.yml` drives releases through `crates/ag-release`. Change
+  release contents through `[workspace.metadata.release]` and that crate, not workflow
+  scripts. Its `plan` job is a required check on `main`, so it must keep running on
+  every pull request and merge-queue check.
 
 ## Instruction Files
 

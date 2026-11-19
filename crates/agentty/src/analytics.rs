@@ -157,20 +157,19 @@ impl InstallMethod {
         let Ok(data) = serde_json::from_slice::<Value>(&contents) else {
             return false;
         };
-        if data["provider"]["source"] != "cargo-dist"
+        // The `ag-release` shell installer writes receipts only for
+        // `<prefix>/bin` installs.
+        if data["provider"]["source"] != "ag-release"
             || data["source"]["app_name"] != "agentty"
             || data["version"] != env!("CARGO_PKG_VERSION")
+            || data["install_layout"] != "cargo-home"
         {
             return false;
         }
         let Some(prefix) = data["install_prefix"].as_str() else {
             return false;
         };
-        let expected = match data["install_layout"].as_str() {
-            Some("cargo-home") => Path::new(prefix).join("bin/agentty"),
-            Some("flat") => Path::new(prefix).join("agentty"),
-            _ => return false,
-        };
+        let expected = Path::new(prefix).join("bin/agentty");
 
         fs::canonicalize(executable)
             .ok()

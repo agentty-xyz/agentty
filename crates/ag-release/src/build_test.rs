@@ -34,18 +34,24 @@ fn demo_inputs() -> MemoryFiles {
 fn options(target: &str, out_dir: Option<&str>) -> BuildOptions {
     BuildOptions {
         out_dir: out_dir.map(PathBuf::from),
+        profile: None,
         target: target.to_string(),
     }
 }
 
 /// Returns the `cargo build` call the demo workspace expects.
 fn demo_cargo_build() -> ProcessCommand {
+    cargo_build_with_profile("dist")
+}
+
+/// Returns the demo workspace's `cargo build` call with `profile`.
+fn cargo_build_with_profile(profile: &str) -> ProcessCommand {
     ProcessCommand {
         args: [
             "build",
             "--locked",
             "--profile",
-            "dist",
+            profile,
             "--target",
             "x86_64-unknown-linux-gnu",
             "--package",
@@ -182,6 +188,37 @@ fn build_writes_into_the_requested_out_dir() {
         "{stdout}"
     );
     assert!(lock(&files).contains_key(Path::new("dist/demo-tool-x86_64-unknown-linux-gnu.tar.gz")));
+}
+
+#[test]
+fn build_uses_the_requested_profile_and_its_output_directory() {
+    // Arrange
+    let mut process = metadata_process(&demo_metadata());
+    process
+        .expect_stream()
+        .withf(|command| *command == cargo_build_with_profile("dev"))
+        .once()
+        .return_once(|_| Ok(()));
+    let debug_dir = "/workspace/demo/target/x86_64-unknown-linux-gnu/debug";
+    let files = memory_files(&[
+        ("/workspace/demo/README.md", b"# demo\n"),
+        ("/workspace/demo/LICENSE", b"license\n"),
+        (&format!("{debug_dir}/demo-app"), b"demo-app binary"),
+        (&format!("{debug_dir}/demo-helper"), b"demo-helper binary"),
+        (&format!("{debug_dir}/demo-tool"), b"demo-tool binary"),
+    ]);
+    let file_system = memory_file_system(&files);
+    let options = BuildOptions {
+        profile: Some("dev".to_string()),
+        ..options("x86_64-unknown-linux-gnu", Some("dist"))
+    };
+
+    // Act
+    let (result, _) = run(&options, &process, &file_system, None);
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert!(lock(&files).contains_key(Path::new("dist/demo-app-x86_64-unknown-linux-gnu.tar.gz")));
 }
 
 #[test]

@@ -31,9 +31,9 @@ ______________________________________________________________________
 
 ### npm (recommended)
 
-The `npm`, Bun, and `pnpm` packages require Node.js on your `PATH`. Global installs
-support automatic updates through the original package manager when Agentty can identify
-it.
+The `npm`, Bun, and `pnpm` packages require Node.js 18 or newer on your `PATH`. Global
+installs support automatic updates through the original package manager when Agentty can
+identify it.
 
 ```sh
 npm install -g agentty
