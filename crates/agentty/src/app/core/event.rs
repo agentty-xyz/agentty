@@ -2704,15 +2704,20 @@ impl App {
         self.services.track_cleanup_task(cleanup_task);
     }
 
-    /// Transitions one externally closed review session to `Canceled`.
+    /// Cancels one externally closed review session like an in-app cancel,
+    /// including its worktree cleanup.
     async fn cancel_externally_closed_session(&self, session_id: &str) {
-        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
-            return;
-        };
-
-        let status_transition =
-            StatusTransition::from_services(&self.services, handles, session_id);
-        let _ = status_transition.apply(Status::Canceled).await;
+        if let Err(error) = self
+            .sessions
+            .cancel_externally_closed_session(&self.services, session_id)
+            .await
+        {
+            warn!(
+                session_id,
+                error = %error,
+                "failed to cancel a session whose review request was closed"
+            );
+        }
     }
 
     /// Builds a session-view info popup mode with explicit loading metadata.

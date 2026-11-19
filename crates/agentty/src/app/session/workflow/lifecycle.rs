@@ -3446,6 +3446,46 @@ impl SessionManager {
             ));
         }
 
+        self.cancel_and_clean_up_session(services, session).await
+    }
+
+    /// Cancels a session whose review request was closed on the forge without
+    /// merging.
+    ///
+    /// The session gets the same terminal cancellation as an in-app cancel:
+    /// its agent work stops and its worktree, Git record, and branch are
+    /// removed in the background. A session that is already `Canceled` or
+    /// cannot become `Canceled` is left unchanged and starts no cleanup.
+    ///
+    /// # Errors
+    /// Returns an error when the session is not loaded or its cancellation
+    /// cannot be persisted.
+    pub(crate) async fn cancel_externally_closed_session(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let session = self.session_or_err(session_id)?;
+        if session.status == Status::Canceled || !session.status.can_transition_to(Status::Canceled)
+        {
+            return Ok(());
+        }
+
+        self.cancel_and_clean_up_session(services, session).await
+    }
+
+    /// Stops one session's work, persists `Canceled`, and starts its
+    /// background cleanup unless workspace preparation owns that cleanup.
+    ///
+    /// # Errors
+    /// Returns an error when the session has no runtime handles or its
+    /// preparation cancellation cannot be persisted.
+    async fn cancel_and_clean_up_session(
+        &self,
+        services: &AppServices,
+        session: &Session,
+    ) -> Result<(), SessionError> {
+        let session_id = session.id.as_str();
         let branch_name = session_branch(&session.id);
         let folder = session.folder.clone();
         let handles = self.session_handles_or_err(session_id)?;
