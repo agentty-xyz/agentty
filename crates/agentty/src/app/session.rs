@@ -29,3 +29,4 @@ pub(crate) use workflow::published_branch::{
     ReviewCommentSyncInput, resolve_review_comments_after_push,
 };
 pub(crate) use workflow::refresh::SyncReviewRequestOutcome;
+pub(crate) use workflow::worktree_sweep::ArchivedWorktreeSweep;

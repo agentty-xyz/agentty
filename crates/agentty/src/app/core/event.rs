@@ -2651,6 +2651,12 @@ impl App {
     /// Removes an externally merged session worktree without delaying terminal
     /// input or redraws, persisting any cleanup warning after the task
     /// finishes.
+    ///
+    /// The cleanup waits for the worktree cleanup lane, so the sessions one
+    /// manual sync archives are removed one at a time. It deletes the
+    /// directory without a Git time bound, then drops the worktree record and
+    /// the branch, attempting every step and reporting all failures in one
+    /// notice.
     fn spawn_externally_merged_session_cleanup(
         &self,
         session_id: &str,
@@ -2665,19 +2671,25 @@ impl App {
         let session_id = SessionId::from(session_id);
         let session_update_versions = self.services.session_update_versions();
         let transcript = Arc::clone(&handles.transcript);
+        let worktree_cleanup_lane = self.services.worktree_cleanup_lane();
         let cleanup_task = app::spawn::spawn_detached(async move {
-            if let Err(error) =
-                crate::app::session::SessionManager::cleanup_merged_session_worktree(
-                    folder,
+            let worktree_cleanup_turn = worktree_cleanup_lane.lock().await;
+            let cleanup_errors =
+                crate::app::session::SessionManager::cleanup_session_worktree_resources(
                     fs_client,
                     git_client,
+                    folder,
                     source_branch,
                     None,
+                    true,
                 )
-                .await
-            {
-                let warning = TranscriptNotice::ReviewRequestSyncWarning
-                    .format(format!("Worktree cleanup failed: {error}"));
+                .await;
+            drop(worktree_cleanup_turn);
+            if !cleanup_errors.is_empty() {
+                let warning = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
+                    "Worktree cleanup failed: {}",
+                    cleanup_errors.join("; ")
+                ));
                 SessionTaskService::append_workflow_notice(
                     &transcript,
                     &db,
@@ -2692,15 +2704,20 @@ impl App {
         self.services.track_cleanup_task(cleanup_task);
     }
 
-    /// Transitions one externally closed review session to `Canceled`.
+    /// Cancels one externally closed review session like an in-app cancel,
+    /// including its worktree cleanup.
     async fn cancel_externally_closed_session(&self, session_id: &str) {
-        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
-            return;
-        };
-
-        let status_transition =
-            StatusTransition::from_services(&self.services, handles, session_id);
-        let _ = status_transition.apply(Status::Canceled).await;
+        if let Err(error) = self
+            .sessions
+            .cancel_externally_closed_session(&self.services, session_id)
+            .await
+        {
+            warn!(
+                session_id,
+                error = %error,
+                "failed to cancel a session whose review request was closed"
+            );
+        }
     }
 
     /// Builds a session-view info popup mode with explicit loading metadata.

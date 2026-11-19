@@ -110,10 +110,10 @@ fn draft_workspace_boundaries(
         git.expect_create_worktree()
             .once()
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-        git.expect_remove_worktree().once().returning(move |_| {
+        git.expect_prune_worktrees().once().returning(move |_| {
             Box::pin(async move {
                 if cleanup_fails {
-                    Err(GitError::OutputParse("worktree removal failed".to_string()))
+                    Err(GitError::OutputParse("worktree prune failed".to_string()))
                 } else {
                     Ok(())
                 }

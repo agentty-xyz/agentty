@@ -27,3 +27,4 @@ pub(super) mod task;
 mod task_turn;
 pub(super) mod turn;
 pub(super) mod worker;
+pub(super) mod worktree_sweep;

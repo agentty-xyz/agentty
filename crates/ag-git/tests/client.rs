@@ -448,6 +448,26 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
         expected: "Ok(()) exists=false",
     },
     ContractCase {
+        operation: "prune_worktrees",
+        prepare: delete_linked_worktree_directory,
+        observe: |repository| {
+            Box::pin(async move {
+                let result = RealGitClient
+                    .prune_worktrees(repository.local.clone())
+                    .await;
+                let worktrees = repository.observe_git(&["worktree", "list", "--porcelain"]);
+                let registered = worktrees.matches("worktree ").count();
+                let branch_deleted = repository.observe_git(&["branch", "-D", "session"]);
+
+                format!(
+                    "{result:?} registered={registered} branch_deleted={}",
+                    branch_deleted.starts_with("Deleted branch session")
+                )
+            })
+        },
+        expected: "Ok(()) registered=1 branch_deleted=true",
+    },
+    ContractCase {
         operation: "main_repo_root",
         prepare: add_linked_worktree,
         observe: |repository| {
@@ -941,6 +961,15 @@ fn add_linked_worktree(repository: &ContractRepository) -> TestResult<()> {
         worktree_path,
         "main",
     ])?;
+
+    Ok(())
+}
+
+/// Adds a linked `session` worktree and deletes its directory without Git,
+/// leaving a stale worktree record that still claims the `session` branch.
+fn delete_linked_worktree_directory(repository: &ContractRepository) -> TestResult<()> {
+    add_linked_worktree(repository)?;
+    fs::remove_dir_all(repository.path("session"))?;
 
     Ok(())
 }

@@ -342,9 +342,17 @@ fn test_generated_session_title_copy_detection_checks_each_request_line() {
 async fn test_cleanup_session_worktree_resources_collects_cleanup_errors() {
     // Arrange
     let mut mock_fs_client = fs::MockFsClient::new();
+    let mut mock_git_client = git::MockGitClient::new();
+    let mut sequence = mockall::Sequence::new();
+    mock_git_client
+        .expect_main_repo_root()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/repo")) }));
     mock_fs_client
         .expect_remove_dir_all()
         .once()
+        .in_sequence(&mut sequence)
         .returning(|_| {
             Box::pin(async {
                 Err(fs::FsError::Io(std::io::Error::other(
@@ -352,21 +360,24 @@ async fn test_cleanup_session_worktree_resources_collects_cleanup_errors() {
                 )))
             })
         });
-    let mut mock_git_client = git::MockGitClient::new();
     mock_git_client
-        .expect_remove_worktree()
+        .expect_prune_worktrees()
         .once()
+        .in_sequence(&mut sequence)
+        .withf(|repo_root| repo_root == Path::new("/tmp/repo"))
         .returning(|_| {
             Box::pin(async {
-                Err(git::GitError::CommandFailed {
-                    command: "git worktree remove".to_string(),
-                    stderr: "simulated worktree removal failure".to_string(),
+                Err(git::GitError::CommandTimedOut {
+                    command: "git worktree prune".to_string(),
+                    timeout: std::time::Duration::from_secs(30),
                 })
             })
         });
     mock_git_client
         .expect_delete_branch()
         .once()
+        .in_sequence(&mut sequence)
+        .withf(|repo_root, branch| repo_root == Path::new("/tmp/repo") && branch == "wt/session-id")
         .returning(|_, _| {
             Box::pin(async {
                 Err(git::GitError::CommandFailed {
@@ -382,28 +393,117 @@ async fn test_cleanup_session_worktree_resources_collects_cleanup_errors() {
         Arc::new(mock_git_client),
         PathBuf::from("/tmp/session"),
         "wt/session-id".to_string(),
-        Some(PathBuf::from("/tmp/repo")),
+        None,
         true,
     )
     .await;
 
     // Assert
     assert_eq!(cleanup_errors.len(), 3);
-    assert!(
-        cleanup_errors
-            .iter()
-            .any(|message| message.contains("failed to remove worktree"))
-    );
-    assert!(
-        cleanup_errors
-            .iter()
-            .any(|message| message.contains("failed to delete branch"))
-    );
-    assert!(
-        cleanup_errors
-            .iter()
-            .any(|message| message.contains("failed to remove worktree directory"))
-    );
+    assert!(cleanup_errors[0].starts_with("failed to remove worktree directory"));
+    assert!(cleanup_errors[1].starts_with("failed to prune worktree record"));
+    assert!(cleanup_errors[1].contains("timed out"));
+    assert!(cleanup_errors[2].starts_with("failed to delete branch"));
+}
+
+/// Verifies cleanup still removes the directory and skips Git cleanup when
+/// the repository root cannot be resolved.
+#[tokio::test]
+async fn test_cleanup_session_worktree_resources_skips_git_without_repo_root() {
+    // Arrange
+    let mut mock_fs_client = fs::MockFsClient::new();
+    mock_fs_client
+        .expect_remove_dir_all()
+        .once()
+        .withf(|path| path == Path::new("/tmp/session"))
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_main_repo_root()
+        .once()
+        .returning(|_| {
+            Box::pin(async {
+                Err(git::GitError::OutputParse(
+                    "repo root unavailable".to_string(),
+                ))
+            })
+        });
+    mock_git_client.expect_prune_worktrees().never();
+    mock_git_client.expect_delete_branch().never();
+
+    // Act
+    let cleanup_errors = SessionManager::cleanup_session_worktree_resources(
+        Arc::new(mock_fs_client),
+        Arc::new(mock_git_client),
+        PathBuf::from("/tmp/session"),
+        "wt/session-id".to_string(),
+        None,
+        true,
+    )
+    .await;
+
+    // Assert
+    assert!(cleanup_errors.is_empty(), "{cleanup_errors:?}");
+}
+
+/// Proves against real Git that a worktree holding a large ignored build tree
+/// is removed from disk and from Git's records, and its branch is deleted.
+#[tokio::test]
+async fn test_cleanup_session_worktree_resources_removes_worktree_with_ignored_build_tree() {
+    // Arrange
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let repo_root = temp_dir.path().join("repo");
+    std::fs::create_dir(&repo_root).expect("repository directory");
+    crate::test_support::setup_test_git_repo(&repo_root);
+    let repo_root = std::fs::canonicalize(&repo_root).expect("canonical repository");
+    let folder = temp_dir.path().join("wt").join("abcd1234");
+    let git_client: Arc<dyn git::GitClient> = Arc::new(git::RealGitClient);
+    git_client
+        .create_worktree(
+            repo_root.clone(),
+            folder.clone(),
+            "wt/abcd1234".to_string(),
+            "HEAD".to_string(),
+        )
+        .await
+        .expect("create worktree");
+    std::fs::write(folder.join(".gitignore"), "target/\n").expect("ignore build tree");
+    for index in 0..4 {
+        let directory = folder.join("target").join(format!("debug-{index}"));
+        std::fs::create_dir_all(&directory).expect("build directory");
+        std::fs::write(directory.join("artifact"), "binary").expect("build artifact");
+    }
+
+    // Act
+    let cleanup_errors = SessionManager::cleanup_session_worktree_resources(
+        Arc::new(fs::RealFsClient),
+        Arc::clone(&git_client),
+        folder.clone(),
+        "wt/abcd1234".to_string(),
+        None,
+        true,
+    )
+    .await;
+
+    // Assert
+    assert!(cleanup_errors.is_empty(), "{cleanup_errors:?}");
+    assert!(!folder.exists());
+    let worktrees = git_stdout(&repo_root, &["worktree", "list", "--porcelain"]);
+    assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
+    let branches = git_stdout(&repo_root, &["branch", "--list", "wt/abcd1234"]);
+    assert!(branches.is_empty(), "{branches}");
+}
+
+/// Runs `git` in `directory` and returns its standard output.
+fn git_stdout(directory: &Path, arguments: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(directory)
+        .output()
+        .expect("git should run");
+    assert!(output.status.success(), "git {arguments:?} failed");
+
+    String::from_utf8(output.stdout).expect("git output should be UTF-8")
 }
 
 #[test]
