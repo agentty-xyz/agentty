@@ -13,15 +13,10 @@ use thiserror::Error;
 use crate::model::{HeuristicContextEstimator, ModelProfile};
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
-/// Environment variable overriding the `ChatGPT` credential file.
+/// Environment variable naming the `ChatGPT` credential file when the host
+/// does not pass one.
 pub const CHATGPT_AUTH_FILE_ENV: &str = "CHATGPT_AUTH_FILE";
 pub(crate) const CHATGPT_BASE_URL_ENV: &str = "CHATGPT_BASE_URL";
-/// Environment variable naming Agentty's data directory, `~/.agentty` by
-/// default; the credential file is `auth/chatgpt.json` inside it.
-#[cfg(feature = "providers-openai")]
-const AGENTTY_ROOT_ENV: &str = "AGENTTY_ROOT";
-#[cfg(feature = "providers-openai")]
-const CREDENTIAL_FILE: &str = "auth/chatgpt.json";
 
 /// GPT-6.1 Sol on a `ChatGPT` plan.
 pub const CHATGPT_GPT_6_1_SOL: &str = "gpt-6.1-sol";
@@ -59,7 +54,8 @@ const PLAN_PROFILE: ModelProfile = ModelProfile::new(272_000)
 /// Configuration for an `OpenAI` model billed to a `ChatGPT` plan.
 #[cfg(feature = "providers-openai")]
 pub struct ChatGptConfig {
-    /// Credential file written by `ag-harness login chatgpt`.
+    /// Credential file of the sign-in, such as the one
+    /// [`super::ChatGptSignIn`] writes.
     pub auth_file: PathBuf,
     /// API base URL ending in the version path, such as
     /// `https://api.openai.com/v1`.
@@ -70,30 +66,48 @@ pub struct ChatGptConfig {
 
 /// Credential file location could not be determined.
 #[derive(Debug, Error)]
-#[error("set CHATGPT_AUTH_FILE, AGENTTY_ROOT, or HOME to locate the ChatGPT sign-in")]
+#[error("set CHATGPT_AUTH_FILE or pass the ChatGPT credential file to locate the sign-in")]
 pub struct AuthFileUnavailable;
 
-/// Returns the `ChatGPT` credential file: `CHATGPT_AUTH_FILE`, else
-/// `auth/chatgpt.json` under `AGENTTY_ROOT` or `~/.agentty`.
+/// `ChatGPT` credential file relative to a host's data directory.
+pub const CHATGPT_CREDENTIAL_FILE: &str = "auth/chatgpt.json";
+
+/// Returns the `ChatGPT` credential file `CHATGPT_AUTH_FILE` names, the
+/// fallback when the host passes no file.
 ///
 /// # Errors
 ///
-/// Returns [`AuthFileUnavailable`] when none of the variables is set.
+/// Returns [`AuthFileUnavailable`] when the variable is unset, blank, or
+/// not valid Unicode.
 #[cfg(feature = "providers-openai")]
-pub fn auth_file(
+pub(crate) fn auth_file(
     mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
 ) -> Result<PathBuf, AuthFileUnavailable> {
-    let non_empty =
-        |value: Result<String, env::VarError>| value.ok().filter(|value| !value.is_empty());
-    if let Some(path) = non_empty(environment(CHATGPT_AUTH_FILE_ENV)) {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(root) = non_empty(environment(AGENTTY_ROOT_ENV)) {
-        return Ok(PathBuf::from(root).join(CREDENTIAL_FILE));
-    }
-    let home = non_empty(environment("HOME")).ok_or(AuthFileUnavailable)?;
+    environment(CHATGPT_AUTH_FILE_ENV)
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or(AuthFileUnavailable)
+}
 
-    Ok(PathBuf::from(home).join(".agentty").join(CREDENTIAL_FILE))
+/// Returns the `ChatGPT` credential file of a host whose data directory is
+/// `data_dir`: the file `CHATGPT_AUTH_FILE` names when it is set and not
+/// blank, else [`CHATGPT_CREDENTIAL_FILE`] under `data_dir`, or `None` when
+/// neither is available.
+///
+/// The harness keeps no default data directory; each host resolves its
+/// own, such as Agentty's `~/.agentty`, and passes the result to
+/// [`super::ModelConfiguration::auth_file`] and
+/// [`super::ChatGptSignIn::new`]. Hosts that share a data directory, such as
+/// Agentty and `ag-harness login chatgpt`, thereby find the same sign-in.
+#[cfg(feature = "providers-openai")]
+pub fn auth_file_in(
+    mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    data_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    auth_file(&mut environment)
+        .ok()
+        .or_else(|| data_dir.map(|data_dir| data_dir.join(CHATGPT_CREDENTIAL_FILE)))
 }
 
 /// Returns whether `auth_file` holds a sign-in that can still serve

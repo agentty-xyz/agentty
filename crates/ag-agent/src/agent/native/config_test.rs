@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::lifecycle::LifecycleEvent;
-use ag_harness::model::{ModelProfile, ModelRequest, ReasoningEffort};
+use ag_harness::model::{ModelMetadata, ModelProfile, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
@@ -19,11 +19,93 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     BudgetedModel, FALLBACK_MODEL_PROFILE, HarnessContext, ModelSelection, NativeHarnessConfig,
-    ResumeOnlyModel, bash_environment, harness_models, model_cost, output_schema,
-    provider_display_name, reasoning_effort, repository, running_context_window, turn_options,
-    unicode_environment,
+    ResumeOnlyModel, bash_environment, chatgpt_auth_file, configuration_status, harness_models,
+    model_cost, output_schema, provider_display_name, reasoning_effort, repository,
+    running_context_window, turn_options, unicode_environment,
 };
 use crate::agent::model_profile;
+
+#[test]
+/// Asks for the base URL of a keyed provider without a default endpoint,
+/// such as Qwen, while Kimi's default endpoint needs none.
+fn configuration_status_requires_a_base_url_only_without_a_default() {
+    // Arrange
+    let environment = environment(&[("DASHSCOPE_API_KEY", "key"), ("KIMI_API_KEY", "key")]);
+
+    // Act
+    let qwen = configuration_status(ModelProvider::Qwen, &environment, |_| false);
+    let kimi = configuration_status(ModelProvider::Kimi, &environment, |_| false);
+
+    // Assert
+    assert_eq!(
+        qwen,
+        HarnessModelStatus::MissingConfiguration("DASHSCOPE_BASE_URL")
+    );
+    assert_eq!(kimi, HarnessModelStatus::Ready);
+}
+
+#[test]
+/// Locates Agentty's `ChatGPT` sign-in from the named file, then its data
+/// directory, then the home directory.
+fn chatgpt_auth_file_prefers_the_named_file_then_agentty_root_then_home() {
+    // Arrange
+    let named = environment(&[
+        ("CHATGPT_AUTH_FILE", "/tmp/sign-in.json"),
+        ("AGENTTY_ROOT", "/data/agentty"),
+    ]);
+    let root = environment(&[
+        ("CHATGPT_AUTH_FILE", " "),
+        ("AGENTTY_ROOT", "/data/agentty"),
+    ]);
+    // A data directory is used as given, as `agentty`'s `home.rs` reads it.
+    let spaced_root = environment(&[("AGENTTY_ROOT", "/data ")]);
+    let home = environment(&[("AGENTTY_ROOT", ""), ("HOME", "/home/user")]);
+
+    // Act
+    let locations = [
+        chatgpt_auth_file(&named),
+        chatgpt_auth_file(&root),
+        chatgpt_auth_file(&spaced_root),
+        chatgpt_auth_file(&home),
+        chatgpt_auth_file(&BTreeMap::new()),
+    ];
+
+    // Assert
+    assert_eq!(
+        locations,
+        [
+            Some(PathBuf::from("/tmp/sign-in.json")),
+            Some(PathBuf::from("/data/agentty/auth/chatgpt.json")),
+            Some(PathBuf::from("/data /auth/chatgpt.json")),
+            Some(PathBuf::from("/home/user/.agentty/auth/chatgpt.json")),
+            None,
+        ]
+    );
+}
+
+#[test]
+/// Registers a `ChatGPT` model from the sign-in under `AGENTTY_ROOT` alone,
+/// since the harness keeps no default credential location.
+fn chatgpt_registry_reads_the_sign_in_under_agentty_root() {
+    // Arrange
+    let (directory, auth_file) = signed_in_auth_file();
+    let root = tempfile::tempdir().expect("data root");
+    std::fs::create_dir_all(root.path().join("auth")).expect("auth directory");
+    std::fs::copy(&auth_file, root.path().join("auth/chatgpt.json")).expect("sign-in");
+    drop(directory);
+    let root_value = root.path().to_str().expect("UTF-8 path");
+    let environment = environment(&[("AGENTTY_ROOT", root_value)]);
+    let selection =
+        ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("served model");
+
+    // Act
+    let registry = selection.registry(&environment, None, None);
+
+    // Assert
+    let registry = registry.expect("registry");
+    let registration = registry.resolve(&selection.key()).expect("registration");
+    assert_eq!(registration.identity().revision(), "agentty-native-2");
+}
 
 /// Builds an environment snapshot from string pairs.
 fn environment(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -98,7 +180,6 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
         .map(|option| (option.model, option.cost, option.status))
         .collect::<Vec<_>>();
     let dashscope = HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY");
-    let kimi = HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL");
     let openai = HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY");
     let ready = HarnessModelStatus::Ready;
     let sign_in = HarnessModelStatus::SignInRequired("ag-harness login chatgpt");
@@ -108,8 +189,9 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (served("qwen3:latest"), ModelCost::Local, ready),
             (AgentModel::MuseSpark13, ModelCost::Standard, ready),
             (AgentModel::MuseSpark13Contributor, ModelCost::Cheap, ready),
-            (AgentModel::KimiK3, ModelCost::Premium, kimi),
-            (AgentModel::KimiK26, ModelCost::Standard, kimi),
+            // Kimi defaults to Moonshot AI's international endpoint.
+            (AgentModel::KimiK3, ModelCost::Premium, ready),
+            (AgentModel::KimiK26, ModelCost::Standard, ready),
             (AgentModel::Qwen38Max, ModelCost::Standard, dashscope),
             (AgentModel::QwenPlus, ModelCost::Cheap, dashscope),
             (AgentModel::Qwen38Flash, ModelCost::Cheap, dashscope),
@@ -147,10 +229,9 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     assert_eq!(options[9].context_window, Some(500_000));
     // The harness catalog declares the Qwen flash window.
     assert_eq!(options[7].context_window, Some(1_000_000));
-    assert_eq!(
-        options[1].context_window,
-        model_profile::declared(AgentModel::MuseSpark13).map(ModelProfile::context_window_tokens)
-    );
+    // The harness catalog declares the Muse and Kimi windows.
+    assert_eq!(options[1].context_window, Some(1_048_576));
+    assert_eq!(options[4].context_window, Some(262_144));
     // Shared Codex models show the window the harness runs them with.
     assert_eq!(
         options[17].context_window,
@@ -404,7 +485,10 @@ fn openai_compatible_registration_uses_the_declared_profile() {
         40_960
     );
     assert_eq!(
-        registration.metadata().map(|metadata| metadata.provider()),
+        registration
+            .metadata()
+            .as_ref()
+            .map(ModelMetadata::provider),
         Some("openai_compatible")
     );
     assert!(
@@ -589,8 +673,8 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
 
 #[test]
 /// Registers each served model under the current revision with its declared
-/// context profile: the provider catalog's for `OpenAI` models, Agentty's for
-/// the others, and the conservative fallback for uncataloged models.
+/// context profile: the provider catalog's where it declares one, Agentty's
+/// for the others, and the conservative fallback for uncataloged models.
 fn registrations_declare_revision_and_per_model_context_profiles() {
     // Arrange
     let (_directory, auth_file) = signed_in_auth_file();

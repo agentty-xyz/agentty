@@ -6,6 +6,7 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 use std::time::Duration;
 
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 
 use super::{
@@ -18,25 +19,122 @@ use crate::model;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
 
-/// Returns a transport with millisecond retry delays.
+/// Returns a production transport with millisecond retry delays.
 fn transport(request_timeout: Duration) -> HttpTransport {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     HttpTransport {
-        client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),
-        request_timeout,
         retry_delay: Duration::from_millis(1),
+        ..HttpTransport::new(request_timeout)
     }
 }
 
 /// Returns an authenticated request with an empty body to `address`.
-fn request(address: std::net::SocketAddr) -> ProviderRequest<'static> {
+fn request(address: std::net::SocketAddr) -> ProviderRequest {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer test-key"));
+
+    ProviderRequest::new(headers, format!("http://{address}"), serde_json::json!({}))
+}
+
+/// Returns a request to `address` whose query and `api-key` header carry
+/// secrets, as a gateway's may.
+fn gateway_request(address: std::net::SocketAddr) -> ProviderRequest {
+    let mut headers = HeaderMap::new();
+    headers.insert("api-key", HeaderValue::from_static("header-secret"));
+
     ProviderRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
+        headers,
+        format!("http://{address}/v1?key=query-secret"),
         serde_json::json!({}),
     )
+}
+
+/// Returns the display of `error` and every source, joined by `: `.
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut chain = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        chain.push_str(": ");
+        chain.push_str(&error.to_string());
+        source = error.source();
+    }
+
+    chain
+}
+
+#[tokio::test]
+async fn refuses_a_redirect_so_secrets_never_reach_its_target() {
+    // Arrange
+    let target = TcpListener::bind("127.0.0.1:0").expect("target listener should bind");
+    let target_address = target
+        .local_addr()
+        .expect("target listener should have an address");
+    let response = format!(
+        "HTTP/1.1 308 Permanent Redirect\r\nLocation: http://{target_address}/v1\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let (address, server) = serve_once(response.into_bytes());
+    let client = transport(Duration::from_secs(5));
+
+    // Act
+    let result = client.post_json::<Value>(&gateway_request(address)).await;
+    server.await.expect("server should finish");
+
+    // Assert
+    let error = result.expect_err("a redirect must fail");
+    assert!(
+        matches!(error, TransportError::Redirected(status) if status.as_u16() == 308),
+        "{error:?}"
+    );
+    target
+        .set_nonblocking(true)
+        .expect("target listener should poll without blocking");
+    assert_eq!(
+        target.accept().map(drop).map_err(|error| error.kind()),
+        Err(io::ErrorKind::WouldBlock),
+        "the redirect target must receive no request"
+    );
+    let model_error = error.into_model_error("Gateway", &[]);
+    assert_eq!(model_error.http_status(), Some(308));
+    assert_eq!(model_error.error_class(), model::ErrorClass::Provider);
+    assert!(!error_chain(&model_error).contains(&target_address.to_string()));
+}
+
+#[tokio::test]
+async fn transport_failures_never_name_the_url() {
+    // Arrange
+    let refused = TcpListener::bind("127.0.0.1:0")
+        .expect("listener should bind")
+        .local_addr()
+        .expect("listener should have an address");
+    let body = "{\"partial\":";
+    let truncated = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len() + 10
+    );
+    let (address, server) = serve_once(truncated.into_bytes());
+    let client = transport(REQUEST_TIMEOUT);
+
+    // Act
+    let refused_error = client
+        .post_json::<Value>(&gateway_request(refused))
+        .await
+        .map(drop)
+        .expect_err("a refused connection must fail");
+    let chunk_error = client
+        .post_json::<Value>(&gateway_request(address))
+        .await
+        .map(drop)
+        .expect_err("a body cut short must fail");
+    server.await.expect("server should finish");
+
+    // Assert
+    for error in [refused_error, chunk_error] {
+        assert!(matches!(error, TransportError::Transport(_)), "{error:?}");
+        let chain = error_chain(&error);
+        assert!(!chain.contains("query-secret"), "{chain}");
+        assert!(!chain.contains("header-secret"), "{chain}");
+    }
 }
 
 #[test]
@@ -277,7 +375,7 @@ fn context_overflow_markers_match_case_insensitively() {
     assert!(has_context_overflow_marker(shared, &[]));
     assert!(has_context_overflow_marker(
         provider,
-        &["exceeds the context window"]
+        &["exceeds the context window".to_string()]
     ));
     assert!(!has_context_overflow_marker(provider, &[]));
 }
@@ -476,7 +574,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
 
     // Act
     let error = client
-        .post_json::<Value>(&request(address))
+        .post_json::<Value>(&gateway_request(address))
         .await
         .map(|_| ())
         .expect_err("a stalled server must time out");
@@ -497,6 +595,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
         ),
         "expected a timeout, got {error}"
     );
+    assert!(!error_chain(&error).contains("query-secret"));
     assert_eq!(connections, 1, "a timeout must not be retried");
 }
 

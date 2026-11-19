@@ -8,7 +8,9 @@ use ag_harness::provider::{ModelConfigurationError, ModelProvider};
 use serde_json::json;
 
 use super::support::{parse_cli, resume_arguments, run_arguments};
-use crate::{ChatMode, CliError, chat_schema, database_path, stored_model_identity_parts};
+use crate::{
+    ChatMode, CliError, chat_schema, database_path, model_client, stored_model_identity_parts,
+};
 
 #[test]
 fn cli_accepts_chat_with_or_without_an_initial_prompt() {
@@ -267,4 +269,42 @@ fn chat_schema_requires_one_message_string() {
     // Assert
     assert_eq!(schema.value()["required"], json!(["message"]));
     assert_eq!(schema.value()["additionalProperties"], json!(false));
+}
+
+#[test]
+fn chatgpt_client_reads_the_sign_in_under_agentty_root_without_chatgpt_auth_file() {
+    // Arrange
+    let root = tempfile::tempdir().expect("data root");
+    let auth_file = root.path().join("auth/chatgpt.json");
+    std::fs::create_dir_all(auth_file.parent().expect("auth directory")).expect("auth directory");
+    let credentials = json!({
+        "access_token": "access",
+        "client_id": "client",
+        "email": null,
+        "expires_at": u64::MAX,
+        "ext_agent_host_id": "host",
+        "id_token": "id",
+        "refresh_token": "refresh",
+        "scopes": []
+    });
+    std::fs::write(&auth_file, credentials.to_string()).expect("credential file");
+    let root_value = root.path().to_string_lossy().into_owned();
+    let mut agentty_root = move |name: &str| match name {
+        "AGENTTY_ROOT" => Ok(root_value.clone()),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let mut nothing = |_: &str| Err(env::VarError::NotPresent);
+
+    // Act
+    let signed_in = model_client(
+        ModelProvider::ChatGpt,
+        "gpt-6.1-sol",
+        None,
+        &mut agentty_root,
+    );
+    let unlocated = model_client(ModelProvider::ChatGpt, "gpt-6.1-sol", None, &mut nothing);
+
+    // Assert
+    assert!(signed_in.is_ok(), "{:?}", signed_in.err());
+    assert!(matches!(unlocated, Err(CliError::ChatGptAuthFileLocation)));
 }

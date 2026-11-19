@@ -187,6 +187,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
     );
     let mut first = Session {
         checkpoint: None,
+        compaction_backoff: Arc::default(),
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.clone(),
@@ -197,6 +198,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
     };
     let mut second = Session {
         checkpoint: None,
+        compaction_backoff: Arc::default(),
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
@@ -290,6 +292,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
     );
     let mut first = Session {
         checkpoint: None,
+        compaction_backoff: Arc::default(),
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.clone(),
@@ -300,6 +303,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
     };
     let mut second = Session {
         checkpoint: None,
+        compaction_backoff: Arc::default(),
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
@@ -381,6 +385,7 @@ END
     );
     let mut session = Session {
         checkpoint: None,
+        compaction_backoff: Arc::default(),
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,

@@ -13,12 +13,12 @@ use tokio::sync::Mutex;
 use super::credentials::{self, ChatGptCredentials};
 use super::error::ChatGptAuthError;
 use super::token::{self, DEFAULT_ISSUER, RESOURCE};
-use crate::credential::BearerCredential;
+use crate::credential::CredentialSource;
 
 /// `OAuth`-style code reported when the stored sign-in was already rejected.
 const SIGNED_OUT_CODE: &str = "signed_out";
 
-/// [`BearerCredential`] that reads a `ChatGPT` sign-in from a credential file
+/// [`CredentialSource`] that reads a `ChatGPT` sign-in from a credential file
 /// and refreshes its access token shortly before it expires.
 ///
 /// Refresh tokens rotate, so refreshes are serialized within the process
@@ -172,7 +172,7 @@ impl ChatGptAuth {
 }
 
 #[async_trait]
-impl BearerCredential for ChatGptAuth {
+impl CredentialSource for ChatGptAuth {
     async fn bearer_token(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(self.access_token().await?)
     }

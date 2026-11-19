@@ -3,7 +3,8 @@
 use std::io::{self, Write as _};
 use std::path::PathBuf;
 
-use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{MUSE_SPARK_1_3, ModelConfiguration, ModelProvider};
 use ag_harness::{Harness, OutputSchema, Repository, ToolSet};
 use serde_json::json;
 
@@ -20,7 +21,8 @@ const PROMPT: &str = concat!(
 #[ignore = "requires live Muse credentials"]
 async fn test_muse_read() -> Result<(), DynError> {
     // Arrange
-    let model = Muse::from_env(MUSE_SPARK_1_3)?;
+    let model = ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
+        .client_from_environment(|name| std::env::var(name))?;
     let git_executable = std::env::var_os(GIT_EXECUTABLE_ENV)
         .map(PathBuf::from)
         .ok_or_else(|| {
@@ -34,7 +36,7 @@ async fn test_muse_read() -> Result<(), DynError> {
     inspect_manifest(model, git_executable).await
 }
 
-async fn inspect_manifest(model: Muse, git_executable: PathBuf) -> Result<(), DynError> {
+async fn inspect_manifest(model: ModelClient, git_executable: PathBuf) -> Result<(), DynError> {
     let schema = OutputSchema::new(json!({
         "type": "object",
         "properties": {

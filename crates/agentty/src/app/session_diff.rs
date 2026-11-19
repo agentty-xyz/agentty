@@ -82,9 +82,7 @@ enum SessionDiffPurpose {
         cached_diff_hash: u64,
         suggestions: String,
     },
-    Open {
-        allow_empty: bool,
-    },
+    Open,
     Review {
         cached_diff_hash: Option<u64>,
         is_manual: bool,
@@ -112,7 +110,6 @@ impl App {
         session_id: &SessionId,
         restore: Option<DiffRestoreTarget>,
         sidebar_focus: DiffSidebarFocus,
-        allow_empty: bool,
     ) -> bool {
         let fallback_view_scroll_offset = match &self.mode {
             AppMode::View {
@@ -122,7 +119,7 @@ impl App {
             _ => None,
         };
         let Some(request_id) =
-            self.spawn_session_diff_request(session_id, SessionDiffPurpose::Open { allow_empty })
+            self.spawn_session_diff_request(session_id, SessionDiffPurpose::Open)
         else {
             if let Some(restore) = restore {
                 self.mode = restore.into_mode();
@@ -529,9 +526,7 @@ impl App {
                 )
                 .await;
             }
-            SessionDiffPurpose::Open { allow_empty } => {
-                self.apply_open_diff_update(update, allow_empty);
-            }
+            SessionDiffPurpose::Open => self.apply_open_diff_update(update),
             SessionDiffPurpose::Review {
                 cached_diff_hash,
                 is_manual,
@@ -678,13 +673,22 @@ impl App {
         Some(self.spawn_session_diff_request_for_target(session_id, purpose, folder, source))
     }
 
-    /// Captures one loaded session's folder and archive-or-worktree diff
-    /// source.
+    /// Captures one loaded session's folder and diff source: the archive for
+    /// finished sessions, no changes for an unstarted session without a
+    /// worktree, and the live worktree otherwise.
     fn session_diff_task_target(&self, session: &Session) -> (PathBuf, SessionDiffTaskSource) {
+        let has_worktree = self
+            .sessions
+            .session_worktree_availability()
+            .get(&session.id)
+            .copied()
+            .unwrap_or(false);
         let source = if matches!(session.status, Status::Done | Status::Canceled) {
             SessionDiffTaskSource::Archived {
                 repositories: self.services.db().clone(),
             }
+        } else if session.status == Status::Draft && !has_worktree {
+            SessionDiffTaskSource::Empty
         } else {
             SessionDiffTaskSource::Worktree {
                 archived_fallback: (session.status == Status::Merging)
@@ -808,9 +812,10 @@ impl App {
         true
     }
 
-    /// Replaces a matching diff-loading page with the loaded workspace or its
-    /// preserved source page when unchanged sessions do not expose `d`.
-    fn apply_open_diff_update(&mut self, update: SessionDiffUpdate, allow_empty: bool) {
+    /// Replaces a matching diff-loading page with the loaded workspace,
+    /// including an empty one, or restores its source page after a load
+    /// failure.
+    fn apply_open_diff_update(&mut self, update: SessionDiffUpdate) {
         let mode = std::mem::replace(&mut self.mode, AppMode::List);
         let AppMode::DiffLoading {
             fallback_view_scroll_offset,
@@ -855,18 +860,6 @@ impl App {
                 return;
             }
         };
-        if diff.trim().is_empty() && !allow_empty {
-            self.mode = restore.map_or(
-                AppMode::View {
-                    scroll_offset: fallback_view_scroll_offset,
-                    session_id,
-                },
-                |restore| restore.into_mode(),
-            );
-
-            return;
-        }
-
         let mut review_comments = self.start_session_review_comment_load(&session_id);
         if let Some(review_comments) = &mut review_comments {
             review_comments.sidebar_focus = sidebar_focus;

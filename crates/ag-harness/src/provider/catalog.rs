@@ -95,20 +95,54 @@ impl ModelProvider {
         }
     }
 
-    /// Returns the price class of `model`, or `None` for a model this
-    /// catalog does not list. Every [`Self::OpenAiCompatible`] model is
-    /// [`CostTier::Local`], every cataloged [`Self::ChatGpt`] model is
-    /// [`CostTier::Plan`], and other cataloged models take the class of
-    /// their [`Self::pricing`] through [`Pricing::cost_tier`].
+    /// Returns the endpoint-independent price class of `model`: every
+    /// cataloged [`Self::ChatGpt`] model is [`CostTier::Plan`], and other
+    /// cataloged models take the class of their [`Self::pricing`] through
+    /// [`Pricing::cost_tier`].
+    ///
+    /// `None` means either a model this catalog does not list or a
+    /// [`Self::OpenAiCompatible`] model, whose price depends on where the
+    /// server runs. A caller that classifies OpenAI-compatible models uses
+    /// [`Self::cost_tier_at`], the only method that can; `None` here does
+    /// not mean no provider serves the model.
     pub fn cost_tier(self, model: &str) -> Option<CostTier> {
         match self {
-            Self::OpenAiCompatible => Some(CostTier::Local),
+            Self::OpenAiCompatible => None,
             Self::ChatGpt => self
                 .known_models()
                 .contains(&model)
                 .then_some(CostTier::Plan),
             Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
                 self.pricing(model).map(Pricing::cost_tier)
+            }
+        }
+    }
+
+    /// Returns the price class of `model` served from `base_url`.
+    ///
+    /// An [`Self::OpenAiCompatible`] server is [`CostTier::Local`] only when
+    /// `base_url`, the endpoint its requests use, parses as a URL whose host
+    /// is one of:
+    ///
+    /// - `localhost` or a name under `.localhost`, `.local` (mDNS), or
+    ///   `.internal` (such as `host.docker.internal`), with or without a
+    ///   trailing dot, or a single-label name such as a Compose service
+    ///   (`ollama`), which public DNS does not serve;
+    /// - an IPv4 loopback, unspecified, RFC 1918 private, link-local, or shared
+    ///   (`100.64.0.0/10`, as Tailscale uses) address;
+    /// - an IPv6 loopback, unspecified, unique-local, or link-local address, or
+    ///   an IPv4-mapped address (`::ffff:a.b.c.d`) of a local IPv4 one.
+    ///
+    /// Any other host, such as a hosted gateway, and an unparsable URL are
+    /// `None`, so the host declares the price instead of the catalog calling
+    /// a server free; this is a heuristic, and a host that knows better
+    /// classifies the server itself. Other providers bill the same at any
+    /// endpoint and return [`Self::cost_tier`].
+    pub fn cost_tier_at(self, model: &str, base_url: &str) -> Option<CostTier> {
+        match self {
+            Self::OpenAiCompatible => is_local_endpoint(base_url).then_some(CostTier::Local),
+            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
+                self.cost_tier(model)
             }
         }
     }
@@ -147,12 +181,7 @@ impl ModelProvider {
     pub fn model_spec(self, model: &str) -> Option<ModelSpec> {
         let capabilities = self.capabilities(model)?;
         let cataloged = self.cataloged(model)?;
-        let (profile, max_output) = match self {
-            Self::ChatGpt => (chatgpt::profile(model), chatgpt::max_output_tokens(model)),
-            Self::OpenAi => (openai::profile(model), openai::max_output_tokens(model)),
-            Self::Qwen => (qwen::profile(model), qwen::max_output_tokens(model)),
-            Self::Kimi | Self::Muse | Self::OpenAiCompatible => (None, None),
-        };
+        let (profile, max_output) = self.declared_limits(model);
         let mut spec = ModelSpec::new(ModelId::cataloged(self, model))
             .with_provider(self)
             .with_capabilities(capabilities);
@@ -235,24 +264,31 @@ impl ModelProvider {
     }
 
     /// Returns the built-in base URL used when the environment has no
-    /// override: Ollama's local endpoint for [`Self::OpenAiCompatible`].
+    /// override: Moonshot AI's international `https://api.moonshot.ai/v1`
+    /// for [`Self::Kimi`], and Ollama's local endpoint for
+    /// [`Self::OpenAiCompatible`]. [`Self::Qwen`] has none, since Model
+    /// Studio serves each region from its own endpoint.
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
             Self::ChatGpt => Some(chatgpt::DEFAULT_BASE_URL),
+            Self::Kimi => Some(kimi::DEFAULT_BASE_URL),
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
             Self::OpenAi => Some(openai::DEFAULT_BASE_URL),
             Self::OpenAiCompatible => Some(openai_compatible::DEFAULT_BASE_URL),
-            Self::Kimi | Self::Qwen => None,
+            Self::Qwen => None,
         }
     }
 
     /// Returns the context profile this catalog declares for `model`, or
     /// `None` when the host profiles the provider's models itself.
     ///
-    /// [`Self::OpenAi`] declares the documented window and output limit of
-    /// each cataloged model, and [`Self::Qwen`] of its flash models, weighed
-    /// by the default estimator under a 50% margin, and `None` for other
-    /// models. [`Self::OpenAiCompatible`] serves
+    /// [`Self::Kimi`] and [`Self::Muse`] declare the documented window and
+    /// output reservation of each cataloged model, weighed by an estimator
+    /// fitted to the provider's reported input tokens under a 17% (Kimi) or
+    /// 18% (Muse) margin. [`Self::OpenAi`] declares the documented window
+    /// and output limit of each cataloged model, and [`Self::Qwen`] of its
+    /// flash models, weighed by the default estimator under a 50% margin,
+    /// and `None` for other models. [`Self::OpenAiCompatible`] serves
     /// models the harness cannot know, so its profile comes from
     /// `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768 tokens) and
     /// `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192), weighed the
@@ -270,12 +306,13 @@ impl ModelProvider {
     ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
         match self {
             Self::ChatGpt => Ok(chatgpt::profile(model)),
+            Self::Kimi => Ok(kimi::profile(model)),
+            Self::Muse => Ok(muse::profile(model)),
             Self::OpenAi => Ok(openai::profile(model)),
             Self::OpenAiCompatible => {
                 openai_compatible::profile_from_environment(environment).map(Some)
             }
             Self::Qwen => Ok(qwen::profile(model)),
-            Self::Kimi | Self::Muse => Ok(None),
         }
     }
 
@@ -391,6 +428,20 @@ impl ModelProvider {
         client.map_err(ModelConfigurationError::from)
     }
 
+    /// Returns the context profile and output limit this catalog declares
+    /// for `model`, independent of the environment; an OpenAI-compatible
+    /// server declares neither, since its limits come from the server.
+    fn declared_limits(self, model: &str) -> (Option<ModelProfile>, Option<u64>) {
+        match self {
+            Self::ChatGpt => (chatgpt::profile(model), chatgpt::max_output_tokens(model)),
+            Self::Kimi => (kimi::profile(model), kimi::max_output_tokens(model)),
+            Self::Muse => (muse::profile(model), muse::max_output_tokens(model)),
+            Self::OpenAi => (openai::profile(model), openai::max_output_tokens(model)),
+            Self::OpenAiCompatible => (None, None),
+            Self::Qwen => (qwen::profile(model), qwen::max_output_tokens(model)),
+        }
+    }
+
     /// Returns the catalog record of `model`, if this provider lists it.
     fn cataloged(self, model: &str) -> Option<&'static CatalogedModel> {
         CATALOGED_MODELS
@@ -428,6 +479,8 @@ pub struct ModelProviderParseError {
 
 /// Provider-neutral configuration used to construct a built-in model client.
 pub struct ModelConfiguration {
+    #[cfg(feature = "providers-openai")]
+    auth_file: Option<PathBuf>,
     base_url: Option<String>,
     model: String,
     provider: ModelProvider,
@@ -437,6 +490,8 @@ impl ModelConfiguration {
     /// Creates configuration for `model` served by `provider`.
     pub fn new(provider: ModelProvider, model: impl Into<String>) -> Self {
         Self {
+            #[cfg(feature = "providers-openai")]
+            auth_file: None,
             base_url: None,
             model: model.into(),
             provider,
@@ -451,6 +506,19 @@ impl ModelConfiguration {
         self
     }
 
+    /// Sets the credential file of a [`ModelProvider::ChatGpt`] sign-in,
+    /// in place of `CHATGPT_AUTH_FILE`, so the host decides where its
+    /// sign-in lives. Other providers ignore it, so a host sets it only when
+    /// [`ModelProvider::requires_sign_in`] holds. Available only with the
+    /// `providers-openai` feature, like the `ChatGPT` provider itself.
+    #[cfg(feature = "providers-openai")]
+    #[must_use]
+    pub fn auth_file(mut self, auth_file: impl Into<PathBuf>) -> Self {
+        self.auth_file = Some(auth_file.into());
+
+        self
+    }
+
     /// Constructs the configured client through an injected environment lookup.
     /// A provider whose key is optional sends no key when its variable is
     /// unset or blank.
@@ -460,11 +528,11 @@ impl ModelConfiguration {
     /// Returns [`ModelConfigurationError`] when credentials, an endpoint, or
     /// the model identifier are unavailable or invalid.
     ///
-    /// [`ModelProvider::ChatGpt`] locates its credential file through
-    /// `chatgpt_auth_file` and requires the user to have signed in. A
-    /// provider this build omits fails with
-    /// [`ModelConfigurationError::ProviderDisabled`] before any variable or
-    /// credential file is read.
+    /// [`ModelProvider::ChatGpt`] reads the credential file set by
+    /// [`Self::auth_file`], else the one `CHATGPT_AUTH_FILE` names, and
+    /// requires the user to have signed in. A provider this build omits
+    /// fails with [`ModelConfigurationError::ProviderDisabled`] before any
+    /// variable or credential file is read.
     pub fn client_from_environment(
         mut self,
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
@@ -472,7 +540,10 @@ impl ModelConfiguration {
         self.provider.ensure_enabled()?;
         #[cfg(feature = "providers-openai")]
         let credential = if self.provider.requires_sign_in() {
-            let auth_file = chatgpt::auth_file(&mut environment)?;
+            let auth_file = match self.auth_file.take() {
+                Some(auth_file) => auth_file,
+                None => chatgpt::auth_file(&mut environment)?,
+            };
             ChatGptCredentials::load(&auth_file)?;
             Credential::SignIn(auth_file)
         } else {
@@ -518,8 +589,10 @@ impl ModelConfiguration {
         let base_url_environment = self.provider.base_url_environment();
 
         match environment(base_url_environment) {
-            Ok(base_url) => Ok(base_url),
-            Err(env::VarError::NotPresent) => {
+            Ok(base_url) if !base_url.trim().is_empty() => Ok(base_url),
+            // A blank variable counts as unset, so it falls back to the
+            // default like a missing one instead of failing validation.
+            Ok(_) | Err(env::VarError::NotPresent) => {
                 self.provider.default_base_url().map(str::to_string).ok_or(
                     ModelConfigurationError::BaseUrl {
                         name: base_url_environment,
@@ -603,6 +676,55 @@ pub enum ModelConfigurationError {
         /// Provider whose client family is disabled.
         provider: ModelProvider,
     },
+}
+
+/// Returns whether `base_url` reaches a server on this machine or a private
+/// network, by the host rules [`ModelProvider::cost_tier_at`] documents. An
+/// unparsable URL is not local.
+fn is_local_endpoint(base_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+
+    match url.host() {
+        Some(url::Host::Domain(name)) => is_local_name(name),
+        Some(url::Host::Ipv4(address)) => is_local_ipv4(address),
+        Some(url::Host::Ipv6(address)) => match address.to_ipv4_mapped() {
+            Some(mapped) => is_local_ipv4(mapped),
+            None => {
+                address.is_loopback()
+                    || address.is_unspecified()
+                    || address.is_unique_local()
+                    || address.is_unicast_link_local()
+            }
+        },
+        None => false,
+    }
+}
+
+/// Returns whether host `name` resolves only on this machine or a private
+/// network: `localhost`, a name under `.localhost`, `.local`, or
+/// `.internal`, or a single-label name, ignoring a trailing dot.
+fn is_local_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix('.').unwrap_or(&name);
+
+    !name.contains('.')
+        || [".localhost", ".local", ".internal"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
+/// Returns whether `address` is loopback, unspecified, RFC 1918 private,
+/// link-local, or in the shared `100.64.0.0/10` range.
+fn is_local_ipv4(address: std::net::Ipv4Addr) -> bool {
+    let [first, second, ..] = address.octets();
+
+    address.is_loopback()
+        || address.is_unspecified()
+        || address.is_private()
+        || address.is_link_local()
+        || (first == 100 && (64..128).contains(&second))
 }
 
 /// Catalog record of one known model: its image and reasoning support, as

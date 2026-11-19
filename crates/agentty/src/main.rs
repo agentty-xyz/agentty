@@ -46,8 +46,8 @@ struct Cli {
 struct ExperimentalFeatures {
     /// Offers preview Harness sessions run by the built-in agent loop on a
     /// local Ollama or OpenAI-compatible model, or a hosted model when
-    /// `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or
-    /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
+    /// `MODEL_API_KEY`, `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` with
+    /// `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
     /// Enables preview execution graphs: `/graph` generates a graph for

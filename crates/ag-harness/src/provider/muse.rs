@@ -1,18 +1,7 @@
-//! Muse model identifiers and the `Muse` model served through Meta's Model
-//! API.
+//! Muse model identifiers, context profile, and configuration for Meta's
+//! Model API.
 
-#[cfg(feature = "providers-compat")]
-use std::env;
-
-#[cfg(feature = "providers-compat")]
-use async_trait::async_trait;
-
-#[cfg(feature = "providers-compat")]
-use super::catalog::{ModelConfiguration, ModelConfigurationError, ModelProvider};
-#[cfg(feature = "providers-compat")]
-use crate::lifecycle::LifecycleObserver;
-#[cfg(feature = "providers-compat")]
-use crate::model::{Model, ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelRequest};
+use crate::model::{HeuristicContextEstimator, ModelProfile};
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 pub(crate) const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
@@ -26,66 +15,40 @@ pub const MUSE_SPARK_1_3: &str = "muse-spark-1.3";
 /// completions to train future models.
 pub const MUSE_SPARK_1_3_CONTRIBUTOR: &str = "muse-spark-1.3-contributor";
 
-/// Muse model configured from the standard Model API environment variables.
-#[cfg(feature = "providers-compat")]
-pub struct Muse {
-    client: ModelClient,
-}
+/// Output limit the Model API accepts; Meta documents none.
+const MAX_OUTPUT_TOKENS: u64 = 131_072;
+/// Percent by which the fitted Muse estimator may under-count: the largest
+/// under-count it showed on recorded requests and on a live request near
+/// the input budget, rounded up, plus five points.
+const ESTIMATE_UNDER_COUNT_PERCENT: u64 = 18;
+/// Muse Spark 1.3 and its contributor tier, which serves the same model:
+/// documented 1,048,576-token window.
+const MUSE_SPARK_1_3_PROFILE: ModelProfile = ModelProfile::new(1_048_576)
+    .with_estimate_margin(MAX_OUTPUT_TOKENS, ESTIMATE_UNDER_COUNT_PERCENT)
+    .with_estimator(MUSE_SPARK_1_3_ESTIMATOR);
+/// Muse Spark 1.3, fitted to provider-reported input tokens: content at 4.4
+/// bytes per token, tool definitions at 2.9, and a 420-token tool-calling
+/// preamble. Muse counts the `json_schema` response format only beside
+/// tools.
+const MUSE_SPARK_1_3_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
+    .with_messages(225, 44)
+    .with_tool_definitions(339, 0)
+    .with_request_tokens(420)
+    .with_output_schema_in_prompt();
 
-#[cfg(feature = "providers-compat")]
-impl Muse {
-    /// Creates a Muse model using `MODEL_API_KEY` and the optional
-    /// `MODEL_API_BASE_URL` override.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModelConfigurationError`] when the provider environment or
-    /// model identifier is invalid.
-    pub fn from_env(model: impl Into<String>) -> Result<Self, ModelConfigurationError> {
-        Self::from_environment(model, |name| env::var(name))
-    }
-
-    /// Sends metadata-only request lifecycle events to `observer`.
-    #[must_use]
-    pub fn with_lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
-        self.client = self.client.with_lifecycle_observer(observer);
-
-        self
-    }
-
-    fn from_environment(
-        model: impl Into<String>,
-        environment: impl FnMut(&str) -> Result<String, env::VarError>,
-    ) -> Result<Self, ModelConfigurationError> {
-        let client = ModelConfiguration::new(ModelProvider::Muse, model)
-            .client_from_environment(environment)?;
-
-        Ok(Self { client })
+/// Returns the context profile of a cataloged Muse model, or `None` for a
+/// model this catalog does not list.
+pub(crate) fn profile(model: &str) -> Option<ModelProfile> {
+    match model {
+        MUSE_SPARK_1_3 | MUSE_SPARK_1_3_CONTRIBUTOR => Some(MUSE_SPARK_1_3_PROFILE),
+        _ => None,
     }
 }
 
-#[cfg(feature = "providers-compat")]
-#[async_trait]
-impl Model for Muse {
-    fn metadata(&self) -> Option<ModelMetadata> {
-        Some(self.client.metadata().clone())
-    }
-
-    fn validate_schema(&self, schema: &crate::OutputSchema) -> Result<(), ModelError> {
-        self.client.validate_schema(schema)
-    }
-
-    fn validate_input(&self, input: &crate::TurnInput) -> Result<(), ModelError> {
-        self.client.validate_input(input)
-    }
-
-    fn keeps_prefix_across_schemas(&self) -> bool {
-        Model::keeps_prefix_across_schemas(&self.client)
-    }
-
-    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        self.client.complete(request).await
-    }
+/// Returns the output reservation of a cataloged Muse model, or `None` for
+/// a model this catalog does not list.
+pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
+    profile(model).map(|_| MAX_OUTPUT_TOKENS)
 }
 
 /// Configuration for a Muse model served through Meta's Model API.
@@ -93,7 +56,8 @@ impl Model for Muse {
 pub struct MuseConfig {
     /// API key sent as a bearer token.
     pub api_key: String,
-    /// API base URL ending in the OpenAI-compatible version path.
+    /// API base URL ending in the OpenAI-compatible version path, such as
+    /// `https://api.meta.ai/v1`.
     pub base_url: String,
     /// Muse model identifier sent with each request.
     pub model: String,

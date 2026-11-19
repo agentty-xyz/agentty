@@ -399,10 +399,9 @@ fn assert_question_refresh_result(frame: &TerminalFrame, report: &ProofReport) {
     let chat_focused_full = Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
     assertion::assert_text_in_region(
         &chat_focused_frame,
-        "Tab: focus | j/k: scroll | q: sessions",
+        "Tab: focus | j/k: scroll | d: diff | q: sessions",
         &chat_focused_full,
     );
-    assertion::assert_not_visible(&chat_focused_frame, "d: diff");
     assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
     assertion::assert_text_in_region(&chat_focused_frame, "Question 1/2", &chat_focused_full);
     assertion::assert_text_in_region(&chat_focused_frame, FIRST_QUESTION_TEXT, &chat_focused_full);

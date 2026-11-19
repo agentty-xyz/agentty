@@ -7,11 +7,11 @@ use ag_router::ReasoningView;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::SessionError;
 use crate::context::{CLEARED_REASONING, HistoryTurn};
 use crate::model::{ModelCapabilities, ModelMessage, ModelMetadata};
 use crate::recovery::ExecutionIdentity;
 use crate::tool::ToolCall;
-use crate::{SessionError, telemetry};
 
 /// Leads plain-text reasoning that a model of another reasoning family
 /// wrote, carried as one JSON string so the text cannot pass for harness
@@ -85,48 +85,14 @@ impl RecordedModel {
             provider: snapshot.provider,
         })
     }
-
-    /// Returns the reasoning family of the recorded model, or `None` for a
-    /// model without metadata.
-    fn family(&self) -> Option<ReasoningFamily> {
-        Some(ReasoningFamily::of(
-            self.provider.as_deref()?,
-            self.model.as_deref()?,
-        ))
-    }
-}
-
-/// How a provider encodes the reasoning its models return. A turn's
-/// reasoning replays natively only to a model of the same family.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ReasoningFamily {
-    /// Encrypted `Responses` reasoning items, shared by `OpenAI` models
-    /// reached with an API key or billed to a `ChatGPT` plan.
-    Responses,
-    /// One model of an OpenAI-compatible server. Unrelated servers share
-    /// one provider name, so each model is its own family.
-    CompatibleModel(String),
-    /// Every model of one other provider, by provider name.
-    Provider(String),
-}
-
-impl ReasoningFamily {
-    /// Returns the family of `model` from the provider named `provider`, as
-    /// [`ModelMetadata`] and recorded snapshots name them.
-    fn of(provider: &str, model: &str) -> Self {
-        match provider {
-            telemetry::PROVIDER_OPENAI | telemetry::PROVIDER_OPENAI_CHATGPT => Self::Responses,
-            telemetry::PROVIDER_OPENAI_COMPATIBLE => Self::CompatibleModel(model.to_string()),
-            provider => Self::Provider(provider.to_string()),
-        }
-    }
 }
 
 /// The model a request replays history to, as [`project_turn`] needs it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ReplayTarget {
-    /// Reasoning family of the request's model; `None` without metadata.
-    family: Option<ReasoningFamily>,
+    /// Identity and reasoning family of the request's model (see
+    /// [`ModelMetadata::reasoning_family`]); `None` without metadata.
+    metadata: Option<ModelMetadata>,
     /// Whether the model replays plain-text reasoning natively, so projected
     /// reasoning stays reasoning instead of becoming assistant text.
     reasoning_text: bool,
@@ -141,8 +107,7 @@ impl ReplayTarget {
     /// [`Self::with_reasoning_text`]).
     pub(crate) fn new(metadata: Option<&ModelMetadata>, generation: i64) -> Self {
         Self {
-            family: metadata
-                .map(|metadata| ReasoningFamily::of(metadata.provider(), metadata.model())),
+            metadata: metadata.cloned(),
             reasoning_text: false,
             switched: generation != 0,
         }
@@ -159,11 +124,18 @@ impl ReplayTarget {
     /// Returns whether `turn` replays its reasoning natively: a turn of the
     /// same reasoning family, or a turn without a snapshot before any switch.
     /// After a switch, a turn without a snapshot may hold any provider's
-    /// reasoning, so it is projected.
+    /// reasoning, so it is projected. A turn recorded without metadata
+    /// replays natively only to a model without metadata.
     pub(crate) fn replays_natively(&self, turn: &HistoryTurn) -> bool {
-        match &turn.model {
-            Some(model) => model.family() == self.family,
-            None => !self.switched,
+        let Some(recorded) = &turn.model else {
+            return !self.switched;
+        };
+        match (&self.metadata, &recorded.provider, &recorded.model) {
+            (Some(metadata), Some(provider), Some(model)) => {
+                metadata.shares_reasoning_with(provider, model)
+            }
+            (None, None, None) => true,
+            _ => false,
         }
     }
 }

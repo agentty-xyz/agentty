@@ -1,0 +1,17 @@
+[
+  {
+    "type": "response.created",
+    "response": {"id": "resp_conformance_2", "status": "in_progress"}
+  },
+  {
+    "type": "response.failed",
+    "response": {
+      "id": "resp_conformance_2",
+      "status": "failed",
+      "error": {
+        "code": "gateway_limit",
+        "message": "Prompt is TOO LONG for this deployment"
+      }
+    }
+  }
+]

@@ -90,6 +90,9 @@ cargo run --locked -p ag-harness-cli -- serve
 - `run/start` answers with a run ID at once. The run's events follow as `run/event`
   notifications and end with a `completed` event that carries its usage, cost, and any
   failure. `run/cancel` succeeds for any run the server started, even a finished one.
+- After `completed`, `session/transcript` shows the terminal status of a run that
+  emitted `started`, unless the turn's cleanup failed; the schema's `completed`
+  description has the details.
 - Errors are JSON-RPC errors; harness failures carry `data.kind` and `data.retryable`.
   Malformed lines are answered with an error and the server keeps running. A message
   without `id` is executed but never answered.
@@ -111,9 +114,10 @@ each method's result.
   for Kimi, Qwen, OpenAI, OpenAI-compatible, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
-- Muse, Kimi, and Qwen models are assumed to have a 128k-token context window; cataloged
-  OpenAI and Qwen flash models use their documented windows; OpenAI-compatible models
-  use `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
+- Uncataloged models and Qwen models other than the flash ones are assumed to have a
+  128k-token context window; cataloged OpenAI, Muse, Kimi, and Qwen flash models use
+  their documented windows; OpenAI-compatible models use
+  `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
   `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default a quarter of the window, at most
   8,192). Each request replays the most recent turns that fit, and a turn fails once its
   own tool traffic no longer fits.

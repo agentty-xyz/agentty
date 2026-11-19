@@ -1,19 +1,18 @@
-//! Muse provider tests: environment configuration, metadata, structured
-//! output, `read` tool calls, and preflight validation.
+//! Muse provider tests: environment configuration, context profile,
+//! metadata, structured output, `read` tool calls, and preflight validation.
 
 use std::env;
-use std::process::Command;
 
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    MODEL_API_BASE_URL_ENV, MODEL_API_KEY_ENV, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse,
-    MuseConfig,
+    MODEL_API_BASE_URL_ENV, MODEL_API_KEY_ENV, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR,
+    MUSE_SPARK_1_3_ESTIMATOR, MuseConfig, max_output_tokens, profile,
 };
-use crate::model::{CompletionMetadata, Model};
-use crate::provider::catalog::ModelConfigurationError;
+use crate::model::{CompletionMetadata, Model, ModelClient};
+use crate::provider::catalog::{ModelConfiguration, ModelConfigurationError, ModelProvider};
 use crate::schema_contract::OutputSchema;
 use crate::store_fixture::image_input;
 use crate::{model, tool};
@@ -62,8 +61,16 @@ fn default_environment(name: &str) -> Result<String, env::VarError> {
     }
 }
 
-fn muse(server: &MockServer) -> Muse {
-    Muse::from_environment(MUSE_SPARK_1_3, |name| {
+/// Builds a Muse client from `environment` through the provider catalog.
+fn from_environment(
+    model: &str,
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
+) -> Result<ModelClient, ModelConfigurationError> {
+    ModelConfiguration::new(ModelProvider::Muse, model).client_from_environment(environment)
+}
+
+fn muse(server: &MockServer) -> ModelClient {
+    from_environment(MUSE_SPARK_1_3, |name| {
         if name == MODEL_API_KEY_ENV {
             Ok("test-key".to_string())
         } else {
@@ -95,7 +102,7 @@ fn exposes_standard_and_contributor_model_identifiers() {
 #[test]
 fn environment_configuration_uses_official_base_url_default() {
     // Arrange and Act
-    let muse = Muse::from_environment(MUSE_SPARK_1_3, default_environment)
+    let muse = from_environment(MUSE_SPARK_1_3, default_environment)
         .expect("fixture environment should be valid");
     let metadata =
         Model::metadata(&muse).expect("Muse should expose its configured model identity");
@@ -106,48 +113,39 @@ fn environment_configuration_uses_official_base_url_default() {
 }
 
 #[test]
-fn environment_configuration_from_env_runs_in_isolated_process() {
-    // Arrange
-    let test_executable = env::current_exe().expect("test executable should be available");
-
-    // Act
-    let output = Command::new(test_executable)
-        .args([
-            "--ignored",
-            "--exact",
-            "provider::muse::tests::environment_configuration_from_env_subprocess",
-        ])
-        .env(MODEL_API_KEY_ENV, "test-key")
-        .env(MODEL_API_BASE_URL_ENV, "https://models.example/v1")
-        .output()
-        .expect("isolated environment test should run");
-    let standard_error = String::from_utf8_lossy(&output.stderr);
+fn declares_the_fitted_profile_for_both_tiers() {
+    // Arrange / Act
+    let standard = profile(MUSE_SPARK_1_3).expect("standard profile");
+    let contributor = profile(MUSE_SPARK_1_3_CONTRIBUTOR).expect("contributor profile");
 
     // Assert
-    assert!(
-        output.status.success(),
-        "isolated environment test failed: {standard_error}"
+    assert_eq!(standard, contributor);
+    // Window, reserved tokens, and input budget match the proactive
+    // compaction budget Agentty declared before the profile moved here.
+    assert_eq!(
+        (
+            standard.context_window_tokens(),
+            standard.reserved_tokens(),
+            standard.input_token_budget()
+        ),
+        (1_048_576, 230_107, 818_469)
     );
-}
-
-#[test]
-#[ignore = "run by environment_configuration_from_env_runs_in_isolated_process"]
-fn environment_configuration_from_env_subprocess() {
-    // Arrange and Act
-    let muse =
-        Muse::from_env(MUSE_SPARK_1_3).expect("isolated process environment should configure Muse");
-    let metadata =
-        Model::metadata(&muse).expect("Muse should expose its configured model identity");
-
-    // Assert
-    assert_eq!(metadata.provider(), "meta");
-    assert_eq!(metadata.model(), MUSE_SPARK_1_3);
+    assert_eq!(standard.estimator(), MUSE_SPARK_1_3_ESTIMATOR);
+    assert_ne!(
+        MUSE_SPARK_1_3_ESTIMATOR,
+        crate::provider::kimi::profile(crate::provider::KIMI_K3)
+            .expect("Kimi K3 profile")
+            .estimator()
+    );
+    assert_eq!(max_output_tokens(MUSE_SPARK_1_3), Some(131_072));
+    assert_eq!(profile("muse-unknown"), None);
+    assert_eq!(max_output_tokens("muse-unknown"), None);
 }
 
 #[test]
 fn environment_configuration_requires_api_key() {
     // Arrange and Act
-    let error = Muse::from_environment(MUSE_SPARK_1_3, |_| Err(env::VarError::NotPresent))
+    let error = from_environment(MUSE_SPARK_1_3, |_| Err(env::VarError::NotPresent))
         .err()
         .expect("missing API key should fail");
 
@@ -163,7 +161,7 @@ fn environment_configuration_requires_api_key() {
 #[test]
 fn environment_configuration_rejects_non_unicode_base_url() {
     // Arrange and Act
-    let error = Muse::from_environment(MUSE_SPARK_1_3, |name| {
+    let error = from_environment(MUSE_SPARK_1_3, |name| {
         if name == MODEL_API_KEY_ENV {
             Ok("test-key".to_string())
         } else {
@@ -186,7 +184,7 @@ fn environment_configuration_rejects_non_unicode_base_url() {
 #[test]
 fn environment_configuration_rejects_empty_model() {
     // Arrange and Act
-    let error = Muse::from_environment("  ", default_environment)
+    let error = from_environment("  ", default_environment)
         .err()
         .expect("empty model should fail");
 
@@ -231,21 +229,6 @@ fn rejects_empty_model_during_construction() {
 
     // Assert
     assert_eq!(error, model::ModelMetadataError::EmptyModel);
-}
-
-#[test]
-fn configures_lifecycle_observer() {
-    // Arrange
-    let muse = Muse::from_environment(MUSE_SPARK_1_3, default_environment)
-        .expect("fixture environment should be valid");
-
-    // Act
-    let muse = muse.with_lifecycle_observer(|_| {});
-    let metadata = muse.client.metadata();
-
-    // Assert
-    assert_eq!(metadata.provider(), "meta");
-    assert_eq!(metadata.model(), MUSE_SPARK_1_3);
 }
 
 #[tokio::test]
@@ -509,7 +492,7 @@ async fn rejects_schemas_without_explicit_object_root() {
     assert!(matches!(
         error,
         model::ModelError::UnsupportedOutputSchema { reason }
-            if reason == "Muse structured output requires an explicit object root schema"
+            if reason == "Meta Model API structured output requires an explicit object root schema"
     ));
     assert!(
         server
@@ -547,9 +530,9 @@ async fn reports_meta_http_failure_without_exposing_the_key() {
 }
 
 #[test]
-fn wrapper_preserves_adapter_schema_preflight() {
+fn client_preserves_adapter_schema_preflight() {
     // Arrange
-    let model = Muse::from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
+    let model = from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
     let scalar = OutputSchema::new(json!({"type":"string"})).expect("scalar");
 
     // Act / Assert
@@ -563,9 +546,9 @@ fn wrapper_preserves_adapter_schema_preflight() {
 }
 
 #[test]
-fn wrapper_preserves_adapter_input_preflight() {
+fn client_preserves_adapter_input_preflight() {
     // Arrange
-    let model = Muse::from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
+    let model = from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
 
     // Act
     let result = model.validate_input(&image_input("look", b"payload", "closely"));

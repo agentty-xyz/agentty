@@ -93,6 +93,7 @@ sqlx = { workspace = true, optional = true }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
+url.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

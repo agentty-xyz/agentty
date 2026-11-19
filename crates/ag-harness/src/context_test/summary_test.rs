@@ -8,8 +8,8 @@ use super::support::{
 };
 use crate::compaction::summary_schema;
 use crate::context::{
-    ContextBudget, ContextFit, FitStep, MAX_SUMMARY_FAILURES_PER_TURN, SUMMARY_KEEP_TAIL_PERCENT,
-    repeated_read_result,
+    ContextBudget, ContextFit, FitStep, HeuristicContextEstimator, MAX_SUMMARY_FAILURES_PER_TURN,
+    SUMMARY_KEEP_TAIL_PERCENT, SUMMARY_MAX_PERCENT, repeated_read_result,
 };
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
@@ -93,6 +93,43 @@ fn an_outgrown_request_asks_to_summarize_rounds_before_the_kept_tail() {
     assert!(job.request().prompt().contains("list the public functions"));
     assert!(job.request().prompt().contains("r0.txt"));
     assert!(!job.request().prompt().contains("r19.txt"));
+}
+
+#[test]
+fn summary_byte_limits_follow_the_estimator_payload_rate() {
+    // Arrange
+    let request = read_rounds(20, 1000);
+    let default = HeuristicContextEstimator::DEFAULT;
+    let dense = HeuristicContextEstimator::DEFAULT.with_messages(500, 9);
+    let job = |estimator: &HeuristicContextEstimator| match ContextFit::default().fit(
+        estimator,
+        budget(4_000),
+        &request,
+        PROACTIVE,
+    ) {
+        Ok(FitStep::Summarize(job)) => *job,
+        other => {
+            std::panic::resume_unwind(Box::new(format!("summary step expected, got {other:?}")))
+        }
+    };
+
+    // Act
+    let (default_job, dense_job) = (job(&default), job(&dense));
+
+    // Assert
+    let capacity_share = (budget(4_000).max_request_weight().get()
+        - budget(4_000).reserved_output_weight())
+        * SUMMARY_MAX_PERCENT
+        / 100;
+    let default_bytes = usize::try_from(capacity_share * 4).expect("bytes fit");
+    assert_eq!(default_job.max_summary_bytes(), default_bytes);
+    assert_eq!(dense_job.max_summary_bytes(), default_bytes / 2);
+    assert!(
+        dense_job
+            .request()
+            .prompt()
+            .contains(&format!("at most {} bytes", default_bytes / 2))
+    );
 }
 
 #[test]
