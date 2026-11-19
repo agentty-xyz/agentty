@@ -4,7 +4,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use ag_telemetry::otlp::EventLog;
@@ -17,6 +17,7 @@ use crate::domain::agent::{AgentModel, AgentSelection, AgentSelectionMetadata, S
 use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
+use crate::infra::install_receipt::ShellInstallReceipt;
 
 /// Public, write-only ingestion token shared with the documentation site.
 const POSTHOG_PROJECT_TOKEN: &str = "phc_DoaheXXuZ8t7jnkvb9SYuhhpvYFmYr8AMaAHJraKRtGW";
@@ -115,20 +116,11 @@ enum InstallMethod {
 impl InstallMethod {
     fn detect() -> Self {
         let executable = std::env::current_exe().ok();
-        let receipt = Self::receipt_path(
-            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-        );
+        let receipt = ShellInstallReceipt::host_path();
 
         executable.as_deref().map_or(Self::Unknown, |path| {
             Self::from_paths(path, receipt.as_deref())
         })
-    }
-
-    fn receipt_path(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-        xdg_config_home
-            .or_else(|| home.map(|home| home.join(".config")))
-            .map(|home| home.join("agentty/agentty-receipt.json"))
     }
 
     fn from_paths(executable: &Path, receipt: Option<&Path>) -> Self {
@@ -151,30 +143,12 @@ impl InstallMethod {
     }
 
     fn matches_shell_receipt(executable: &Path, receipt: &Path) -> bool {
-        let Ok(contents) = fs::read(receipt) else {
-            return false;
-        };
-        let Ok(data) = serde_json::from_slice::<Value>(&contents) else {
-            return false;
-        };
-        // The `ag-release` shell installer writes receipts only for
-        // `<prefix>/bin` installs.
-        if data["provider"]["source"] != "ag-release"
-            || data["source"]["app_name"] != "agentty"
-            || data["version"] != env!("CARGO_PKG_VERSION")
-            || data["install_layout"] != "cargo-home"
-        {
-            return false;
-        }
-        let Some(prefix) = data["install_prefix"].as_str() else {
-            return false;
-        };
-        let expected = Path::new(prefix).join("bin/agentty");
-
-        fs::canonicalize(executable)
-            .ok()
-            .zip(fs::canonicalize(expected).ok())
-            .is_some_and(|(actual, expected)| actual == expected)
+        fs::read(receipt).is_ok_and(|contents| {
+            ShellInstallReceipt::for_executable(&contents, executable, |path| {
+                fs::canonicalize(path).ok()
+            })
+            .is_some()
+        })
     }
 
     fn matches_cargo_install(executable: &Path) -> bool {

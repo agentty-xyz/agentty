@@ -8,7 +8,6 @@ use std::fs;
 use std::io::{self, IsTerminal as _};
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
 
 use ag_contracts::OneShotError;
 use ag_git::GitError;
@@ -382,29 +381,6 @@ fn client_builder_failure_disables_analytics() {
 }
 
 #[test]
-fn receipt_path_prefers_xdg_config_home_and_falls_back_to_home() {
-    // Arrange
-    let xdg_config_home = PathBuf::from("xdg-config");
-    let home = PathBuf::from("home");
-
-    // Act
-    let xdg_receipt = InstallMethod::receipt_path(Some(xdg_config_home), Some(home.clone()));
-    let home_receipt = InstallMethod::receipt_path(None, Some(home));
-    let missing_receipt = InstallMethod::receipt_path(None, None);
-
-    // Assert
-    assert_eq!(
-        xdg_receipt,
-        Some(PathBuf::from("xdg-config/agentty/agentty-receipt.json"))
-    );
-    assert_eq!(
-        home_receipt,
-        Some(PathBuf::from("home/.config/agentty/agentty-receipt.json"))
-    );
-    assert_eq!(missing_receipt, None);
-}
-
-#[test]
 fn npm_install_is_detected_from_generated_package_layout() {
     // Arrange
     let executable =
@@ -512,64 +488,16 @@ fn unverified_install_method_is_unknown() {
         InstallMethod::from_paths(&executable, None),
         InstallMethod::Unknown
     );
+    assert_eq!(
+        InstallMethod::from_paths(&executable, Some(&receipt)),
+        InstallMethod::Unknown
+    );
     fs::write(&receipt, b"not json").expect("invalid receipt");
     assert_eq!(
         InstallMethod::from_paths(&executable, Some(&receipt)),
         InstallMethod::Unknown
     );
     assert_eq!(InstallMethod::Unknown.as_str(), "unknown");
-}
-
-#[test]
-fn shell_receipt_must_identify_this_binary_and_version() {
-    // Arrange
-    let root = Builder::new()
-        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-        .expect("temporary root");
-    let receipt = root.path().join("receipt.json");
-    let executable = root.path().join("bin/agentty");
-    fs::create_dir(root.path().join("bin")).expect("bin directory");
-    fs::write(&executable, b"binary").expect("installed binary");
-    fs::write(root.path().join("agentty"), b"binary").expect("other binary");
-    let data = serde_json::json!({
-        "provider": { "source": "ag-release" },
-        "source": { "app_name": "agentty" },
-        "version": env!("CARGO_PKG_VERSION"),
-        "install_prefix": root.path(),
-        "install_layout": "cargo-home",
-    });
-    let mismatches = [
-        ("/provider/source", serde_json::json!("cargo-dist")),
-        ("/source/app_name", serde_json::json!("other")),
-        ("/version", serde_json::json!("old-version")),
-        ("/install_prefix", serde_json::Value::Null),
-        ("/install_layout", serde_json::json!("flat")),
-    ];
-
-    // Act / Assert
-    assert_eq!(
-        InstallMethod::from_paths(&executable, Some(&receipt)),
-        InstallMethod::Unknown
-    );
-    for (pointer, value) in mismatches {
-        let mut other_receipt = data.clone();
-        *other_receipt.pointer_mut(pointer).expect("receipt field") = value;
-        fs::write(&receipt, other_receipt.to_string()).expect("mismatched receipt");
-        assert_eq!(
-            InstallMethod::from_paths(&executable, Some(&receipt)),
-            InstallMethod::Unknown,
-            "{pointer}"
-        );
-    }
-    fs::write(&receipt, data.to_string()).expect("matching receipt");
-    assert_eq!(
-        InstallMethod::from_paths(&executable, Some(&receipt)),
-        InstallMethod::Sh
-    );
-    assert_eq!(
-        InstallMethod::from_paths(&root.path().join("agentty"), Some(&receipt)),
-        InstallMethod::Unknown
-    );
 }
 
 #[test]

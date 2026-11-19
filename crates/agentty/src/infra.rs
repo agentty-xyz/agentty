@@ -15,6 +15,8 @@ pub mod file_index;
 pub mod fs;
 /// Agentty data-directory path resolution.
 pub mod home;
+/// Shell-installer receipt interpretation for analytics and updates.
+pub(crate) mod install_receipt;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
 /// Host process-accounting boundary.

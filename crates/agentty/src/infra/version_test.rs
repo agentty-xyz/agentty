@@ -1,24 +1,28 @@
 //! Version parsing, latest `npm` version lookup, and auto-update command
 //! tests.
 
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use semver::Version;
-use tempfile::tempdir;
+use tempfile::{NamedTempFile, TempPath, tempdir};
 
 use super::{
     AGENTTY_NPM_PACKAGE, MockVersionCommandRunner, NPM_REGISTRY_LATEST_URL, PackageManager,
-    RealVersionCommandRunner, VERSION_LOOKUP_COMMAND_TIMEOUT, VERSION_UPDATE_COMMAND_TIMEOUT,
-    VersionCommandOutput, VersionError, fetch_latest_npm_version_tag,
-    is_newer_than_current_version, latest_npm_version_tag, latest_npm_version_tag_with_runner,
-    latest_version_from_result, parse_npm_cli_version_response, parse_registry_latest_response,
-    parse_version, run_package_update_with_runner, run_update_with_runner, version_tag,
+    RealVersionCommandRunner, SHELL_INSTALLER_DOWNLOAD_TIMEOUT, SHELL_INSTALLER_URL,
+    VERSION_LOOKUP_COMMAND_TIMEOUT, VERSION_UPDATE_COMMAND_TIMEOUT, VersionCommandOutput,
+    VersionError, create_temp_file_in, fetch_latest_npm_version_tag, is_newer_than_current_version,
+    latest_npm_version_tag, latest_npm_version_tag_with_runner, latest_version_from_result,
+    parse_npm_cli_version_response, parse_registry_latest_response, parse_version,
+    run_package_update_with_runner, run_update, run_update_with_runner, version_tag,
 };
 use crate::infra::version::VersionCommandRunner;
 
 const LATEST_VERSION_CHILD_ENV: &str = "AGENTTY_TEST_LATEST_VERSION_CHILD";
+const SHELL_UPDATE_CHILD_ENV: &str = "AGENTTY_TEST_SHELL_UPDATE_CHILD";
 
 #[test]
 fn test_parse_version_accepts_prefixed_version() {
@@ -87,7 +91,7 @@ async fn test_fetch_latest_npm_version_tag_prefers_npm_cli_result() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|program, args, timeout| {
+        .returning(|program, args, _, timeout| {
             assert_eq!(program, "npm");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
             assert_eq!(
@@ -122,7 +126,7 @@ async fn test_fetch_latest_npm_version_tag_falls_back_to_registry_curl() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|program, args, timeout| {
+        .returning(|program, args, _, timeout| {
             assert_eq!(program, "npm");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
             assert_eq!(
@@ -145,7 +149,7 @@ async fn test_fetch_latest_npm_version_tag_falls_back_to_registry_curl() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|program, args, timeout| {
+        .returning(|program, args, _, timeout| {
             assert_eq!(program, "curl");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
             assert_eq!(
@@ -180,7 +184,7 @@ async fn test_fetch_latest_npm_version_tag_falls_back_after_npm_timeout() {
         .expect_run_command()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|program, _, timeout| {
+        .returning(|program, _, _, timeout| {
             assert_eq!(program, "npm");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
@@ -193,7 +197,7 @@ async fn test_fetch_latest_npm_version_tag_falls_back_after_npm_timeout() {
         .expect_run_command()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|program, _, timeout| {
+        .returning(|program, _, _, timeout| {
             assert_eq!(program, "curl");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
@@ -222,7 +226,7 @@ async fn test_fetch_latest_npm_version_tag_preserves_fallback_failure() {
     command_runner
         .expect_run_command()
         .times(2)
-        .returning(|program, _, timeout| {
+        .returning(|program, _, _, timeout| {
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
             Ok(VersionCommandOutput {
@@ -258,7 +262,7 @@ async fn test_fetch_latest_npm_version_tag_reports_invalid_fallback_response() {
     command_runner
         .expect_run_command()
         .times(2)
-        .returning(|_, _, timeout| {
+        .returning(|_, _, _, timeout| {
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
             Ok(VersionCommandOutput {
@@ -290,7 +294,7 @@ async fn test_latest_npm_version_tag_uses_injected_runner() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|program, _, timeout| {
+        .returning(|program, _, _, timeout| {
             assert_eq!(program, "npm");
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
@@ -363,7 +367,7 @@ async fn test_fetch_latest_npm_version_tag_preserves_command_errors() {
     command_runner
         .expect_run_command()
         .times(2)
-        .returning(|program, _, timeout| {
+        .returning(|program, _, _, timeout| {
             assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
             Err(VersionError::CommandSpawn {
@@ -396,8 +400,9 @@ async fn test_real_version_command_runner_captures_process_output() {
             "sh",
             vec![
                 "-c".to_string(),
-                "printf '0.4.0'; printf 'notice' >&2".to_string(),
+                "printf '0.4.0 %s' \"$AGENTTY_TEST_EXTRA\"; printf 'notice' >&2".to_string(),
             ],
+            vec![("AGENTTY_TEST_EXTRA".to_string(), "env".to_string())],
             Duration::from_secs(1),
         )
         .await
@@ -405,7 +410,7 @@ async fn test_real_version_command_runner_captures_process_output() {
 
     // Assert
     assert!(output.success);
-    assert_eq!(output.stdout, "0.4.0");
+    assert_eq!(output.stdout, "0.4.0 env");
     assert_eq!(output.stderr, "notice");
     assert!(output.status.contains('0'));
 }
@@ -419,6 +424,7 @@ async fn test_real_version_command_runner_reports_spawn_failure() {
     let error = command_runner
         .run_command(
             "agentty-command-that-does-not-exist",
+            Vec::new(),
             Vec::new(),
             Duration::from_secs(1),
         )
@@ -444,6 +450,7 @@ async fn test_real_version_command_runner_cancels_timed_out_process() {
         .run_command(
             "sh",
             vec!["-c".to_string(), "exec sleep 5".to_string()],
+            Vec::new(),
             timeout,
         )
         .await
@@ -518,7 +525,8 @@ async fn test_run_npm_update_calls_npm_install_global() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|command, args, timeout| {
+        .returning(|command, args, envs, timeout| {
+            assert_eq!(envs, Vec::<(String, String)>::new());
             assert_eq!(command, "npm");
             assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
             assert_eq!(
@@ -554,7 +562,7 @@ async fn test_run_npm_update_preserves_runner_error_without_displaying_stderr() 
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|_, _, timeout| {
+        .returning(|_, _, _, timeout| {
             assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
 
             Ok(VersionCommandOutput {
@@ -585,7 +593,7 @@ async fn test_run_npm_update_preserves_timeout() {
     command_runner
         .expect_run_command()
         .times(1)
-        .returning(|command, _, timeout| {
+        .returning(|command, _, _, timeout| {
             Err(VersionError::CommandTimedOut {
                 command: command.to_string(),
                 timeout,
@@ -635,7 +643,7 @@ async fn updates_only_the_matching_global_manager() {
         runner
             .expect_run_command()
             .times(4)
-            .returning(move |program, args, timeout| {
+            .returning(move |program, args, _, timeout| {
                 let manager = [
                     PackageManager::Npm,
                     PackageManager::Bun,
@@ -677,8 +685,16 @@ async fn updates_only_the_matching_global_manager() {
                 })
             });
 
+        // A package-manager match wins without consulting a shell receipt.
+        runner.expect_read_file().times(0);
+
         // Act
-        let result = run_update_with_runner(Some(Path::new("/running/agentty")), &runner).await;
+        let result = run_update_with_runner(
+            Some(Path::new("/running/agentty")),
+            Some(Path::new(RECEIPT_PATH)),
+            &runner,
+        )
+        .await;
 
         // Assert
         assert_eq!(result.expect("selected installer should update"), "updated");
@@ -690,20 +706,24 @@ async fn missing_executable_requires_manual_update_without_commands() {
     // Arrange
     let mut runner = MockVersionCommandRunner::new();
     runner.expect_canonicalize_path().return_const(None);
+    runner.expect_read_file().times(0);
     runner.expect_run_command().times(0);
 
     // Act
-    let missing = run_update_with_runner(None, &runner).await;
-    let unresolved = run_update_with_runner(Some(Path::new("/missing")), &runner).await;
+    let missing = run_update_with_runner(None, Some(Path::new(RECEIPT_PATH)), &runner).await;
+    let unresolved = run_update_with_runner(
+        Some(Path::new("/missing")),
+        Some(Path::new(RECEIPT_PATH)),
+        &runner,
+    )
+    .await;
 
     // Assert
     assert!(matches!(&missing, Err(VersionError::UnknownInstallation)));
-    assert!(
-        missing
-            .expect_err("manual update required")
-            .to_string()
-            .contains("pnpm add -g agentty@latest")
-    );
+    let hint = missing.expect_err("manual update required").to_string();
+    assert!(hint.contains("shell installer"), "{hint}");
+    assert!(hint.contains("cargo install agentty --locked"), "{hint}");
+    assert!(hint.contains("npx agentty@latest"), "{hint}");
     assert!(matches!(unresolved, Err(VersionError::UnknownInstallation)));
 }
 
@@ -735,7 +755,7 @@ async fn uncertain_installations_never_run_an_install_command() {
         runner
             .expect_run_command()
             .times(3)
-            .returning(move |program, args, timeout| {
+            .returning(move |program, args, _, timeout| {
                 assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
                 assert!(args.contains(&"--global".to_string()));
                 assert!(!args.contains(&"agentty@latest".to_string()));
@@ -766,7 +786,8 @@ async fn uncertain_installations_never_run_an_install_command() {
             });
 
         // Act
-        let result = run_update_with_runner(Some(Path::new("/running/agentty")), &runner).await;
+        let result =
+            run_update_with_runner(Some(Path::new("/running/agentty")), None, &runner).await;
 
         // Assert
         assert!(
@@ -792,4 +813,415 @@ fn real_runner_resolves_existing_paths_and_rejects_missing_paths() {
         Some(directory.path().canonicalize().expect("canonical path"))
     );
     assert_eq!(missing, None);
+}
+
+#[test]
+fn real_runner_reads_existing_files_and_rejects_missing_files() {
+    // Arrange
+    let directory = tempdir().expect("fixture directory");
+    let file = directory.path().join("receipt.json");
+    std::fs::write(&file, b"receipt").expect("fixture file");
+    let runner = RealVersionCommandRunner;
+
+    // Act
+    let existing = runner.read_file(&file);
+    let missing = runner.read_file(&directory.path().join("missing"));
+
+    // Assert
+    assert_eq!(existing.as_deref(), Some(b"receipt".as_slice()));
+    assert_eq!(missing, None);
+}
+
+#[test]
+fn real_runner_stages_private_temp_files_removed_on_drop() {
+    // Arrange
+    let directory = tempdir().expect("fixture directory");
+    let runner = RealVersionCommandRunner;
+
+    // Act
+    let staged = runner.create_temp_file().expect("temporary file");
+    let staged_path = staged.to_path_buf();
+    let metadata = std::fs::metadata(&staged_path).expect("staged file metadata");
+    drop(staged);
+    let error = create_temp_file_in(&directory.path().join("missing"))
+        .expect_err("missing directory should fail");
+
+    // Assert
+    assert_eq!(metadata.len(), 0);
+    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    assert!(!staged_path.exists());
+    assert!(matches!(error, VersionError::InstallerStaging { message } if !message.is_empty()));
+}
+
+/// Receipt location the shell-update tests pass to the updater.
+const RECEIPT_PATH: &str = "/config/agentty/agentty-receipt.json";
+
+/// Scripted result of one shell-update command.
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    Succeed,
+    Fail,
+    TimeOut,
+}
+
+impl Step {
+    /// Returns the scripted command result for `program`.
+    fn output(
+        self,
+        program: &str,
+        timeout: Duration,
+    ) -> Result<VersionCommandOutput, VersionError> {
+        match self {
+            Self::Succeed => Ok(VersionCommandOutput {
+                status: "exit status: 0".to_string(),
+                stderr: String::new(),
+                stdout: format!("{program} done"),
+                success: true,
+            }),
+            Self::Fail => Ok(VersionCommandOutput {
+                status: "exit status: 1".to_string(),
+                stderr: format!("{program} failed"),
+                stdout: String::new(),
+                success: false,
+            }),
+            Self::TimeOut => Err(VersionError::CommandTimedOut {
+                command: program.to_string(),
+                timeout,
+            }),
+        }
+    }
+}
+
+/// Returns a receipt the shell installer writes for `version` at `/prefix`.
+fn shell_receipt(version: &str) -> Vec<u8> {
+    serde_json::json!({
+        "binaries": ["agentty"],
+        "install_layout": "cargo-home",
+        "install_prefix": "/prefix",
+        "modify_path": false,
+        "provider": { "source": "ag-release", "version": "0.1.0" },
+        "source": { "app_name": "agentty", "name": "agentty", "owner": "agentty-xyz" },
+        "version": version,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// Returns a runner for a running binary at `/running/agentty` that no
+/// package manager installed, `/prefix/bin/agentty` resolving to it, and
+/// `receipt` at [`RECEIPT_PATH`].
+fn shell_install_runner(receipt: Option<Vec<u8>>) -> MockVersionCommandRunner {
+    let mut runner = MockVersionCommandRunner::new();
+    runner.expect_canonicalize_path().returning(|path| {
+        [
+            Path::new("/running/agentty"),
+            Path::new("/prefix/bin/agentty"),
+        ]
+        .contains(&path)
+        .then(|| PathBuf::from("/running/agentty"))
+    });
+    runner.expect_read_file().times(1).returning(move |path| {
+        assert_eq!(path, Path::new(RECEIPT_PATH));
+
+        receipt.clone()
+    });
+
+    runner
+}
+
+/// Returns whether `program` is a package manager whose discovery fails.
+fn is_unavailable_package_manager(program: &str) -> bool {
+    ["npm", "bun", "pnpm"].contains(&program)
+}
+
+/// Downloads the installer to a temporary file, runs it with `sh` and the
+/// receipt's prefix, reports each failure, and always removes the file.
+#[tokio::test]
+async fn shell_install_reruns_downloaded_installer_and_removes_it() {
+    for (download, install) in [
+        (Step::Succeed, Step::Succeed),
+        (Step::Fail, Step::Succeed),
+        (Step::TimeOut, Step::Succeed),
+        (Step::Succeed, Step::Fail),
+        (Step::Succeed, Step::TimeOut),
+    ] {
+        // Arrange
+        let case = format!("{download:?}, {install:?}");
+        let directory = tempdir().expect("fixture directory");
+        let installer = NamedTempFile::new_in(directory.path())
+            .expect("installer file")
+            .into_temp_path();
+        let installer_path = installer.to_str().expect("UTF-8 path").to_string();
+        let mut runner = shell_install_runner(Some(shell_receipt(env!("CARGO_PKG_VERSION"))));
+        runner
+            .expect_create_temp_file()
+            .times(1)
+            .return_once(move || Ok(installer));
+        let expected_path = installer_path.clone();
+        runner
+            .expect_run_command()
+            .returning(move |program, args, envs, timeout| {
+                if is_unavailable_package_manager(program) {
+                    return Err(VersionError::CommandSpawn {
+                        command: program.to_string(),
+                        message: "not installed".to_string(),
+                    });
+                }
+                if program == "curl" {
+                    assert_eq!(
+                        args,
+                        [
+                            "--proto",
+                            "=https",
+                            "--tlsv1.2",
+                            "--fail",
+                            "--location",
+                            "--silent",
+                            "--show-error",
+                            "--output",
+                            expected_path.as_str(),
+                            SHELL_INSTALLER_URL,
+                        ]
+                    );
+                    assert_eq!(envs, Vec::<(String, String)>::new());
+                    assert_eq!(timeout, SHELL_INSTALLER_DOWNLOAD_TIMEOUT);
+
+                    return download.output(program, timeout);
+                }
+                assert_eq!(program, "sh");
+                assert!(
+                    matches!(download, Step::Succeed),
+                    "installer ran after failed download"
+                );
+                assert_eq!(args, std::slice::from_ref(&expected_path));
+                assert_eq!(
+                    envs,
+                    [
+                        ("AGENTTY_INSTALL_DIR".to_string(), "/prefix".to_string()),
+                        ("AGENTTY_NO_MODIFY_PATH".to_string(), "1".to_string()),
+                        ("AGENTTY_UNMANAGED_INSTALL".to_string(), String::new()),
+                    ]
+                );
+                assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
+
+                install.output(program, timeout)
+            });
+
+        // Act
+        let result = run_update_with_runner(
+            Some(Path::new("/running/agentty")),
+            Some(Path::new(RECEIPT_PATH)),
+            &runner,
+        )
+        .await;
+
+        // Assert
+        assert!(!Path::new(&installer_path).exists(), "{case}");
+        match (download, install) {
+            (Step::Succeed, Step::Succeed) => {
+                assert_eq!(result.expect("shell update").as_str(), "sh done");
+            }
+            (Step::Fail, _) => assert!(
+                matches!(result, Err(VersionError::NonZeroExit { command, stderr, .. })
+                    if command == "curl" && stderr == "curl failed"),
+                "{case}"
+            ),
+            (Step::TimeOut, _) => assert!(
+                matches!(result, Err(VersionError::CommandTimedOut { command, timeout })
+                    if command == "curl" && timeout == SHELL_INSTALLER_DOWNLOAD_TIMEOUT),
+                "{case}"
+            ),
+            (Step::Succeed, Step::Fail) => assert!(
+                matches!(result, Err(VersionError::NonZeroExit { command, stderr, .. })
+                    if command == "sh" && stderr == "sh failed"),
+                "{case}"
+            ),
+            (Step::Succeed, Step::TimeOut) => assert!(
+                matches!(result, Err(VersionError::CommandTimedOut { command, timeout })
+                    if command == "sh" && timeout == VERSION_UPDATE_COMMAND_TIMEOUT),
+                "{case}"
+            ),
+        }
+    }
+}
+
+/// Requires a manual update, downloading nothing, unless the receipt proves
+/// this build at the running path.
+#[tokio::test]
+async fn shell_update_requires_a_receipt_for_the_running_binary() {
+    let other_prefix = String::from_utf8(shell_receipt(env!("CARGO_PKG_VERSION")))
+        .expect("UTF-8 receipt")
+        .replace("\"/prefix\"", "\"/other\"")
+        .into_bytes();
+    for (case, receipt) in [
+        ("missing", None),
+        ("unreadable", Some(b"not json".to_vec())),
+        ("old version", Some(shell_receipt("0.0.0-old"))),
+        ("other prefix", Some(other_prefix)),
+    ] {
+        // Arrange
+        let mut runner = shell_install_runner(receipt);
+        runner.expect_create_temp_file().times(0);
+        runner
+            .expect_run_command()
+            .times(3)
+            .returning(|program, _, _, _| {
+                assert!(is_unavailable_package_manager(program), "{program} ran");
+
+                Err(VersionError::CommandSpawn {
+                    command: program.to_string(),
+                    message: "not installed".to_string(),
+                })
+            });
+
+        // Act
+        let result = run_update_with_runner(
+            Some(Path::new("/running/agentty")),
+            Some(Path::new(RECEIPT_PATH)),
+            &runner,
+        )
+        .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(VersionError::UnknownInstallation)),
+            "{case}"
+        );
+    }
+}
+
+/// Stops before downloading when the installer cannot be staged.
+#[tokio::test]
+async fn shell_update_requires_a_usable_staging_file() {
+    for case in ["create", "non-UTF-8"] {
+        // Arrange
+        let mut runner = shell_install_runner(Some(shell_receipt(env!("CARGO_PKG_VERSION"))));
+        runner
+            .expect_create_temp_file()
+            .times(1)
+            .returning(move || {
+                if case == "create" {
+                    return Err(VersionError::InstallerStaging {
+                        message: "disk full".to_string(),
+                    });
+                }
+
+                Ok(TempPath::try_from_path(PathBuf::from(OsString::from_vec(
+                    b"/nonexistent/agentty-\xff.sh".to_vec(),
+                )))
+                .expect("absolute temporary path"))
+            });
+        runner
+            .expect_run_command()
+            .times(3)
+            .returning(|program, _, _, _| {
+                assert!(is_unavailable_package_manager(program), "{program} ran");
+
+                Err(VersionError::CommandSpawn {
+                    command: program.to_string(),
+                    message: "not installed".to_string(),
+                })
+            });
+
+        // Act
+        let result = run_update_with_runner(
+            Some(Path::new("/running/agentty")),
+            Some(Path::new(RECEIPT_PATH)),
+            &runner,
+        )
+        .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(VersionError::InstallerStaging { .. })),
+            "{case}"
+        );
+    }
+}
+
+/// Runs the shell update with real processes: a `curl` stub serves a fake
+/// installer, real `sh` runs it, and the staged script is removed afterwards.
+#[tokio::test]
+async fn shell_update_runs_downloaded_installer_with_real_commands() {
+    if std::env::var_os(SHELL_UPDATE_CHILD_ENV).is_some() {
+        // Act
+        let output = run_update().await;
+
+        // Assert
+        assert_eq!(output.expect("shell update").as_str(), "installed");
+
+        return;
+    }
+
+    // Arrange
+    let root = tempdir().expect("fixture root");
+    let root_path = root.path().canonicalize().expect("canonical fixture root");
+    let command_dir = root_path.join("commands");
+    let prefix = root_path.join("prefix");
+    let receipt_dir = root_path.join("config/agentty");
+    for directory in [&command_dir, &prefix.join("bin"), &receipt_dir] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let current_test_binary =
+        std::env::current_exe().expect("failed to resolve current test binary");
+    std::os::unix::fs::symlink(&current_test_binary, prefix.join("bin/agentty"))
+        .expect("installed binary link");
+    std::os::unix::fs::symlink("/bin/sh", command_dir.join("sh")).expect("sh link");
+    let receipt = String::from_utf8(shell_receipt(env!("CARGO_PKG_VERSION")))
+        .expect("UTF-8 receipt")
+        .replace(
+            "\"/prefix\"",
+            &serde_json::to_string(&prefix).expect("prefix JSON"),
+        );
+    std::fs::write(receipt_dir.join("agentty-receipt.json"), receipt).expect("receipt");
+    std::fs::write(
+        root_path.join("installer.sh"),
+        "printf '%s\\n' \"$AGENTTY_INSTALL_DIR\" \"$AGENTTY_NO_MODIFY_PATH\" \
+         \"${AGENTTY_UNMANAGED_INSTALL-unset}\" \"$0\" > \
+         \"$AGENTTY_TEST_ROOT/installer-run\"\nprintf installed\n",
+    )
+    .expect("fake installer");
+    let curl_path = command_dir.join("curl");
+    std::fs::write(
+        &curl_path,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$AGENTTY_TEST_ROOT/curl-args\"\nwhile [ \"$#\" -gt \
+         0 ]; do\n  if [ \"$1\" = --output ]; then output=$2; fi\n  shift\ndone\n/bin/cat \
+         \"$AGENTTY_TEST_ROOT/installer.sh\" > \"$output\"\n",
+    )
+    .expect("fake curl");
+    std::fs::set_permissions(&curl_path, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fake curl");
+
+    // Act
+    let output = tokio::process::Command::new(current_test_binary)
+        .arg("--exact")
+        .arg("infra::version::tests::shell_update_runs_downloaded_installer_with_real_commands")
+        .arg("--nocapture")
+        .env("PATH", &command_dir)
+        .env("HOME", root_path.join("home"))
+        .env("XDG_CONFIG_HOME", root_path.join("config"))
+        .env("AGENTTY_TEST_ROOT", &root_path)
+        .env(SHELL_UPDATE_CHILD_ENV, "1")
+        .output()
+        .await
+        .expect("failed to run isolated shell-update test");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "isolated shell-update test failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let installer_run =
+        std::fs::read_to_string(root_path.join("installer-run")).expect("installer ran");
+    let installer_run = installer_run.lines().collect::<Vec<_>>();
+    let prefix = prefix.to_string_lossy();
+    assert_eq!(installer_run[..3], [prefix.as_ref(), "1", ""]);
+    assert!(
+        !Path::new(installer_run[3]).exists(),
+        "staged installer kept"
+    );
+    let curl_args = std::fs::read_to_string(root_path.join("curl-args")).expect("curl ran");
+    assert_eq!(curl_args.lines().last(), Some(SHELL_INSTALLER_URL));
+    assert!(curl_args.lines().any(|arg| arg == installer_run[3]));
 }

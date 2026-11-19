@@ -81,7 +81,7 @@ pub const AGENTTY_HARNESS_DIR: &str = "harness";
 /// Background auto-update progress state for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UpdateStatus {
-    /// A background update through the original package manager is running.
+    /// A background update through the original installer is running.
     InProgress {
         /// Version currently being installed.
         version: String,
