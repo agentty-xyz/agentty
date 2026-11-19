@@ -7,6 +7,16 @@ use std::{fs, io};
 
 use tempfile::{TempDir, tempdir};
 
+/// The supported release target of the machine running the tests.
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+pub(crate) const HOST_TARGET: &str = "aarch64-apple-darwin";
+#[cfg(all(target_arch = "x86_64", target_os = "macos"))]
+pub(crate) const HOST_TARGET: &str = "x86_64-apple-darwin";
+#[cfg(all(target_arch = "aarch64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const HOST_TARGET: &str = "aarch64-unknown-linux-gnu";
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const HOST_TARGET: &str = "x86_64-unknown-linux-gnu";
+
 /// Manifest of the demo workspace's only member.
 const DEMO_APP_MANIFEST: &str = r#"[package]
 name = "demo-app"
@@ -38,6 +48,39 @@ pub(crate) fn demo_workspace(manifest: &str) -> io::Result<TempDir> {
     fs::write(root.join("demo-app/src/main.rs"), "fn main() {}\n")?;
 
     Ok(directory)
+}
+
+/// Creates the demo workspace with the root `manifest` as a Git repository
+/// with one commit, as `assemble` needs for the source archive.
+pub(crate) fn committed_demo_workspace(manifest: &str) -> io::Result<TempDir> {
+    let workspace = demo_workspace(manifest)?;
+    for args in [
+        &["init", "--quiet"][..],
+        &["add", "--all"],
+        &["commit", "--quiet", "--message", "Release demo"],
+    ] {
+        let status =
+            isolate_git(Command::new("git").args(args).current_dir(workspace.path())).status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "`git {}` failed: {status}",
+                args.join(" ")
+            )));
+        }
+    }
+
+    Ok(workspace)
+}
+
+/// Applies Git settings that keep host configuration out of a command.
+pub(crate) fn isolate_git(command: &mut Command) -> &mut Command {
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Demo Author")
+        .env("GIT_AUTHOR_EMAIL", "demo@example.com")
+        .env("GIT_COMMITTER_NAME", "Demo Author")
+        .env("GIT_COMMITTER_EMAIL", "demo@example.com")
 }
 
 /// Returns an `ag-release` command in `current_dir` without `CARGO`, as when

@@ -5,23 +5,13 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use flate2::read::GzDecoder;
 use serde_json::Value;
-use tempfile::{TempDir, tempdir};
+use tempfile::tempdir;
 
-use crate::support::{ag_release, demo_workspace};
-
-/// The supported release target of the machine running the tests.
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-const HOST_TARGET: &str = "aarch64-apple-darwin";
-#[cfg(all(target_arch = "x86_64", target_os = "macos"))]
-const HOST_TARGET: &str = "x86_64-apple-darwin";
-#[cfg(all(target_arch = "aarch64", target_os = "linux", target_env = "gnu"))]
-const HOST_TARGET: &str = "aarch64-unknown-linux-gnu";
-#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
-const HOST_TARGET: &str = "x86_64-unknown-linux-gnu";
+use crate::support::{HOST_TARGET, ag_release, committed_demo_workspace, isolate_git};
 
 /// Returns the root manifest of a demo workspace released for the host
 /// target only.
@@ -40,38 +30,6 @@ include = ["README.md"]
 [workspace.metadata.release.apps.demo-app]
 "#
     )
-}
-
-/// Applies Git settings that keep host configuration out of a command.
-fn isolate_git(command: &mut Command) -> &mut Command {
-    command
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "Demo Author")
-        .env("GIT_AUTHOR_EMAIL", "demo@example.com")
-        .env("GIT_COMMITTER_NAME", "Demo Author")
-        .env("GIT_COMMITTER_EMAIL", "demo@example.com")
-}
-
-/// Creates the demo workspace as a Git repository with one commit.
-fn committed_demo_workspace() -> io::Result<TempDir> {
-    let workspace = demo_workspace(&demo_manifest())?;
-    for args in [
-        &["init", "--quiet"][..],
-        &["add", "--all"],
-        &["commit", "--quiet", "--message", "Release demo"],
-    ] {
-        let status =
-            isolate_git(Command::new("git").args(args).current_dir(workspace.path())).status()?;
-        if !status.success() {
-            return Err(io::Error::other(format!(
-                "`git {}` failed: {status}",
-                args.join(" ")
-            )));
-        }
-    }
-
-    Ok(workspace)
 }
 
 /// Runs `ag-release` with `args` in `workspace`, building into `target_dir`.
@@ -110,7 +68,7 @@ fn archive_entries(path: &Path) -> io::Result<Vec<(String, u32)>> {
 #[test]
 fn build_then_assemble_publishes_a_verified_release() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let workspace = committed_demo_workspace()?;
+    let workspace = committed_demo_workspace(&demo_manifest())?;
     let output = tempdir()?;
     let target_dir = output.path().join("target");
     let artifacts = output.path().join("artifacts");

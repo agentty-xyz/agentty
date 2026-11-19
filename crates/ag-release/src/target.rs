@@ -42,6 +42,28 @@ impl Target {
             Self::X8664UnknownLinuxGnu => "x86_64-unknown-linux-gnu",
         }
     }
+
+    /// Returns the operating system name `uname -s` prints on this target.
+    pub(crate) fn uname_system(self) -> &'static str {
+        match self {
+            Self::Aarch64AppleDarwin | Self::X8664AppleDarwin => "Darwin",
+            Self::Aarch64UnknownLinuxGnu | Self::X8664UnknownLinuxGnu => "Linux",
+        }
+    }
+
+    /// Returns every machine name `uname -m` may print on this target.
+    pub(crate) fn uname_machines(self) -> &'static [&'static str] {
+        match self {
+            Self::Aarch64AppleDarwin | Self::Aarch64UnknownLinuxGnu => &["arm64", "aarch64"],
+            Self::X8664AppleDarwin | Self::X8664UnknownLinuxGnu => &["x86_64", "amd64"],
+        }
+    }
+
+    /// Returns whether the target links against glibc, whose minimum version
+    /// installers enforce.
+    pub(crate) fn is_glibc(self) -> bool {
+        self.uname_system() == "Linux"
+    }
 }
 
 impl fmt::Display for Target {
