@@ -8,12 +8,15 @@
 mod conformance;
 
 use std::error::Error;
+use std::sync::Arc;
+use std::time::Duration;
 
 use ag_router::ReasoningEffort::{High, Max, XHigh};
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, ModelError, ModelMessage,
-    ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, Router, StructuredOutputMode,
-    ThinkingOptions, ToolDefinition, TurnInput, WireProtocol, preset, reasoning_view,
+    ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, RetryKind, RetryNotice,
+    RetryObserver, RetryPolicy, Router, StructuredOutputMode, ThinkingOptions, ToolDefinition,
+    TurnInput, WireProtocol, preset, reasoning_view,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -556,4 +559,64 @@ async fn rejects_an_option_the_protocol_cannot_express_before_any_request()
             if reason.starts_with("the AnthropicMessages protocol cannot express")
     ));
     conformance::assert_no_request(&server).await
+}
+
+/// Records the retries a router reports.
+#[derive(Default)]
+struct RecordedRetries(std::sync::Mutex<Vec<RetryNotice>>);
+
+#[async_trait::async_trait]
+impl RetryObserver for RecordedRetries {
+    async fn retrying(&self, notice: RetryNotice) {
+        if let Ok(mut notices) = self.0.lock() {
+            notices.push(notice);
+        }
+    }
+}
+
+#[tokio::test]
+async fn retries_an_overloaded_response_under_the_spec_policy_and_reports_it()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(529).set_body_raw(OVERLOADED, "application/json"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MESSAGE, "application/json"))
+        .mount(&server)
+        .await;
+    let policy = RetryPolicy::default()
+        .with_retried(RetryKind::Overloaded, true)
+        .with_base_delay(Duration::from_millis(1));
+    let spec = anthropic(&server, "claude-opus-5-5").with_retry(policy);
+    let request = conformance::golden_request(
+        "anthropic/claude-opus-5-5",
+        true,
+        conformance::options(None, false, None),
+    )?;
+    let observer = Arc::new(RecordedRetries::default());
+
+    // Act
+    let completion = Router::new([spec])
+        .execute_observed(request, observer.clone())
+        .await?;
+
+    // Assert
+    assert!(matches!(completion, Completion::Output { .. }));
+    let notices = observer
+        .0
+        .lock()
+        .map_err(|_| "the notices lock is poisoned")?
+        .clone();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].attempt, 1);
+    assert_eq!(notices[0].kind, RetryKind::Overloaded);
+    assert_eq!(notices[0].status, Some(529));
+
+    Ok(())
 }

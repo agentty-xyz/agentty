@@ -21,6 +21,7 @@ fn decode(response: &Value, output_tool: bool) -> GeneratedResponse {
         "claude".to_string(),
         reqwest::header::HeaderMap::new(),
         default_transport(),
+        None,
     );
     let response = serde_json::from_value::<MessagesResponse>(response.clone())
         .expect("the response should decode");

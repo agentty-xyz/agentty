@@ -186,6 +186,7 @@ impl Router {
                     model.to_string(),
                     headers,
                     Arc::clone(&self.anthropic),
+                    observer,
                 )
                 .generate(&request)
                 .await?

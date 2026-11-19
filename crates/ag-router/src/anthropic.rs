@@ -30,6 +30,7 @@ use crate::provider_spec::{
     DEFAULT_FALLBACK_MAX_TOKENS, ProviderSpec, ReasoningMapping, StructuredOutputMode,
 };
 use crate::reasoning::ReasoningView;
+use crate::retry::RetryObserver;
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Messages endpoint under a provider base URL.
@@ -54,21 +55,26 @@ pub(crate) struct AnthropicBackend<'spec> {
     headers: HeaderMap,
     http: Arc<HttpTransport>,
     model: String,
+    observer: Option<Arc<dyn RetryObserver>>,
     policy: &'spec ProviderSpec,
 }
 
 impl<'spec> AnthropicBackend<'spec> {
-    /// Creates a backend sending `headers` through `http`.
+    /// Creates a backend sending `headers` through `http`, retrying under
+    /// the spec's [`crate::RetryPolicy`] and reporting retries to
+    /// `observer`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
         http: Arc<HttpTransport>,
+        observer: Option<Arc<dyn RetryObserver>>,
     ) -> Self {
         Self {
             headers,
             http,
             model,
+            observer,
             policy,
         }
     }
@@ -164,7 +170,8 @@ impl<'spec> AnthropicBackend<'spec> {
             self.headers.clone(),
             self.policy.endpoint(ENDPOINT_PATH),
             payload,
-        );
+        )
+        .with_retry(self.policy.retry, self.observer.clone());
         let response = self
             .http
             .post_json::<MessagesResponse>(&request_body)
