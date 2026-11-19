@@ -1,3 +1,15 @@
 [general]
 dirs = ["src/template"]
 whitespace = "preserve"
+
+# Delimiters for templates whose output is full of `${{ … }}` GitHub Actions
+# expressions and `${#…}`-style shell, which the default `{{`, `{%`, and `{#`
+# would swallow.
+[[syntax]]
+name = "workflow"
+block_start = "[%"
+block_end = "%]"
+comment_start = "[#"
+comment_end = "#]"
+expr_start = "[="
+expr_end = "=]"

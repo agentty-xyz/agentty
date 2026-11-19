@@ -6,3 +6,4 @@ mod plan;
 mod release_note;
 mod shell_installer;
 mod support;
+mod workflow;

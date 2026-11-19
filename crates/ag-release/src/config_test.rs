@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::config::{AppConfig, GlibcVersion, Installer, ReleaseConfig};
 use crate::target::Target;
+use crate::workflow_config::WorkflowConfig;
 
 /// Placeholder for `workspace.metadata.release` in expected error messages.
 const RELEASE: &str = "$";
@@ -30,6 +31,7 @@ fn full_metadata() -> Value {
                 "x86_64-unknown-linux-gnu": "ubuntu-22.04",
                 "aarch64-apple-darwin": "macos-latest",
             },
+            "workflow": {"node-version": "24.x"},
         },
         "other-tool": {"ignored": true},
     })
@@ -98,6 +100,10 @@ fn parse_reads_every_release_key() {
                 (Target::Aarch64AppleDarwin, "macos-latest".to_string()),
                 (Target::X8664UnknownLinuxGnu, "ubuntu-22.04".to_string()),
             ]),
+            workflow: WorkflowConfig {
+                node_version: Some("24.x".to_string()),
+                ..WorkflowConfig::default()
+            },
         })
     );
 }
@@ -120,6 +126,7 @@ fn parse_applies_defaults_for_optional_keys() {
     assert_eq!(config.installers, BTreeSet::new());
     assert_eq!(config.min_glibc, None);
     assert_eq!(config.profile, "release");
+    assert_eq!(config.workflow, WorkflowConfig::default());
 }
 
 #[test]
@@ -131,7 +138,18 @@ fn parse_rejects_unknown_keys_and_invalid_tables() {
             "/unknown",
             Some(json!(1)),
             "unknown key `$.unknown`; expected one of: apps, include, installers, min-glibc, \
-             profile, targets",
+             profile, targets, workflow",
+        ),
+        (
+            "/workflow",
+            Some(json!("generated")),
+            "`$.workflow` must be a table",
+        ),
+        (
+            "/workflow/unknown",
+            Some(json!(true)),
+            "unknown key `$.workflow.unknown`; expected one of: distributions, jobs, \
+             node-version, smoke-paths, tool",
         ),
         (
             "/apps/demo-app/npm_scope",

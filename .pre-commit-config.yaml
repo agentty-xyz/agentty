@@ -476,6 +476,13 @@ repos:
         language: system
         files: (^|/)Cargo\.toml$
         pass_filenames: false
+      - id: check-release-workflow
+        name: check release workflow
+        description: Verify `.github/workflows/release.yml` is what `ag-release workflow` generates from `[workspace.metadata.release]`; run `cargo run -p ag-release -- workflow` to regenerate it.
+        entry: cargo run -q --locked -p ag-release -- workflow --check
+        language: system
+        files: ^(Cargo\.toml|\.github/workflows/release\.yml|crates/ag-release/.*)$
+        pass_filenames: false
       - id: check-module-routers
         name: check module routers
         description: Verify each `module.rs` paired with a `module/` directory only declares child modules and re-exports.
