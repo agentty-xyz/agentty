@@ -301,10 +301,14 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
             .store(reopened.clone())
             .resume("session")
             .await;
-        assert!(matches!(
-            result,
-            Err(SessionError::RegistrationMismatch { .. })
-        ));
+        let stored = Some(ExecutionIdentity::new("primary", "1").expect("identity"));
+        assert!(
+            matches!(
+                &result,
+                Err(SessionError::RegistrationMismatch { stored: named, .. }) if *named == stored
+            ),
+            "the error names the registration to resume with"
+        );
     }
     let registry = self::registry("primary", "1", &calls);
     let mut session = Harness::from_registry(&registry, "primary")

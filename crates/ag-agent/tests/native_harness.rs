@@ -1606,9 +1606,60 @@ async fn unreadable_history_fails_the_turn() {
     assert!(
         result
             .expect_err("unreadable history should fail")
-            .contains("Failed to load the harness session")
+            .contains("Failed to resume the harness session")
     );
     assert_eq!(request_bodies(&server).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn unreadable_transcript_fails_the_turn() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Second question", answer("Second answer"), 1).await;
+    respond(&server, "First question", answer("First answer"), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    for prompt in ["First question", "Second question"] {
+        let (result, _) = run_turn(
+            &channel,
+            "session-transcript",
+            turn_request(worktree.path(), MUSE_MODEL, prompt),
+        )
+        .await;
+        result.expect("turn should succeed");
+    }
+    // Resuming decodes only the newest turn's options; the transcript of the
+    // replayed turns decodes every one.
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(data_root.path().join("session-transcript/harness.db")),
+    )
+    .await
+    .expect("session database");
+    sqlx::query("UPDATE session_turn SET turn_options = '{}' WHERE turn_position = 0")
+        .execute(&pool)
+        .await
+        .expect("corrupt the oldest turn");
+    pool.close().await;
+    let requests_before = request_bodies(&server).await.len();
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-transcript",
+        turn_request(worktree.path(), MUSE_MODEL, "Third question"),
+    )
+    .await;
+
+    // Assert
+    let error = result.expect_err("unreadable transcript should fail");
+    assert!(
+        error.contains("Failed to read the harness transcript"),
+        "{error}"
+    );
+    assert_eq!(request_bodies(&server).await.len(), requests_before);
 }
 
 #[tokio::test]

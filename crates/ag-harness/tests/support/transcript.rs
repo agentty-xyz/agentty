@@ -6,7 +6,7 @@
 
 use std::error::Error;
 use std::future::{IntoFuture, poll_fn};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 #[cfg(feature = "sqlite")]
 use std::path::Path;
 use std::pin::Pin;
@@ -504,6 +504,51 @@ async fn transcript_survives_sqlite_resume_with_answered_calls_and_usage()
         "both calls keep their results"
     );
     assert_eq!(after[0].items.last(), Some(&json_output("batch")));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replayed_range_selects_the_turns_the_next_request_replays() -> Result<(), Box<dyn Error>> {
+    for store in journaled_stores().await? {
+        // Arrange
+        let model = ScriptedModel::default();
+        let harness =
+            harness(&model, store)?.max_history_bytes(NonZeroUsize::new(600).ok_or("budget")?);
+        let session = harness
+            .session("replayed", answer_schema()?)
+            .create()
+            .await?;
+        let created = session.replayed_range();
+        for turn in 0..6 {
+            let prompt = format!("turn {turn} {}", "x".repeat(100));
+            assert!(session.run(RunRequest::new(prompt)).await.result.is_ok());
+        }
+        let mut resumed = harness.resume("replayed").await?;
+
+        // Act
+        let range = resumed.replayed_range();
+        let replayed = resumed.transcript(range.clone()).await?;
+        resumed.send("next").await?;
+
+        // Assert
+        assert_eq!(
+            created,
+            TurnRange::Span(TurnIndex::new(0)..TurnIndex::new(0))
+        );
+        assert_eq!(resumed.transcript(created).await?, Vec::new());
+        let TurnRange::Span(span) = range else {
+            return Err("the replayed range is a span".into());
+        };
+        assert!(span.start.get() > 0, "the budget leaves the oldest out");
+        assert_eq!(span.end, TurnIndex::new(6));
+        let request = model.requests().pop().ok_or("the next request")?;
+        let mut sent = sent_inputs(&request);
+        assert_eq!(sent.pop().as_deref(), Some("next"));
+        let replayed_inputs: Vec<_> = replayed.into_iter().map(|record| record.input).collect();
+        let replayed_prompts: Vec<_> = sent.iter().map(|prompt| text(prompt)).collect();
+        assert_eq!(replayed_inputs, replayed_prompts);
+    }
 
     Ok(())
 }

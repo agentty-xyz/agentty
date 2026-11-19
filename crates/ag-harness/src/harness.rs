@@ -545,6 +545,24 @@ impl Session {
         self.database.load_writes(&self.id).await
     }
 
+    /// Returns the range of the settled turns this handle replays ahead of
+    /// its next turn's input: those after its compaction checkpoint that
+    /// fit its history budget, empty when it replays none. Opening the
+    /// handle and each of its turns refresh the replayed turns; a request
+    /// whose context budget is tighter may still leave the oldest out.
+    ///
+    /// Pass it to [`Self::transcript`] to read those turns in full.
+    pub fn replayed_range(&self) -> TurnRange {
+        let turns = self.history.turns();
+        let index = |(position, _): &(i64, _)| TurnIndex::from_position(*position);
+        let start = turns.first().map_or(TurnIndex::new(0), index);
+        let end = turns
+            .last()
+            .map_or(start, |turn| TurnIndex::new(index(turn).get() + 1));
+
+        TurnRange::Span(start..end)
+    }
+
     /// Returns the settled turns `range` selects, oldest first, with their
     /// input, instructions, items, and final output.
     ///
@@ -2149,7 +2167,10 @@ impl Harness {
                 .as_ref()
                 .map(ModelRegistration::identity)
         {
-            return Err(SessionError::RegistrationMismatch { id: id.to_string() });
+            return Err(SessionError::RegistrationMismatch {
+                id: id.to_string(),
+                stored: loaded.registration_identity.clone(),
+            });
         }
         let (Some(stored_provider), Some(stored_model)) = (&loaded.provider, &loaded.model) else {
             if loaded.provider.is_none() && loaded.model.is_none() {

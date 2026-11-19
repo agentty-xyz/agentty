@@ -277,7 +277,10 @@ fn classifies_session_state_and_configuration_failures() {
             ErrorKind::Config,
         ),
         (
-            SessionError::RegistrationMismatch { id: "s".into() },
+            SessionError::RegistrationMismatch {
+                id: "s".into(),
+                stored: None,
+            },
             ErrorKind::Config,
         ),
         (SessionError::ExecutionIdentityRequired, ErrorKind::Config),

@@ -1,24 +1,45 @@
-//! Native channel unit tests for loaded-history input aging and bootstrap
+//! Native channel unit tests for replayed-history input aging and bootstrap
 //! marker encoding.
 
-use ag_harness::model::ModelMessage;
-use ag_harness::store::HistoryTurn;
+use ag_harness::TurnRecord;
+use serde_json::{Value, json};
 
 use super::{BootstrapMarker, LoadedHistory, input_digest};
 use crate::agent::instruction_bootstrap_key;
 
-/// Builds a completed history turn at `position` from `messages`.
-fn history_turn(position: i64, messages: Vec<ModelMessage>) -> (i64, HistoryTurn) {
-    (position, HistoryTurn::from(messages))
+/// Builds a completed transcript turn at `turn` with `input` blocks.
+fn transcript_turn(turn: u64, input: &Value) -> TurnRecord {
+    serde_json::from_value(json!({
+        "cost": null,
+        "error": null,
+        "finished_at": 0,
+        "input": input,
+        "instructions": null,
+        "items": [],
+        "started_at": 0,
+        "status": "completed",
+        "turn": turn,
+        "usage": null,
+    }))
+    .expect("transcript turn")
+}
+
+/// Returns one text input block of `text`.
+fn text(text: &str) -> Value {
+    json!([{"type": "text", "text": text}])
 }
 
 #[test]
-fn loaded_history_ages_the_newest_turn_with_a_matching_input() {
+fn loaded_history_ages_the_newest_turn_with_a_single_text_input() {
     // Arrange
     let turns = [
-        history_turn(0, vec![ModelMessage::User("bootstrap".to_string())]),
-        history_turn(1, vec![ModelMessage::Assistant("no input".to_string())]),
-        history_turn(2, vec![ModelMessage::User("follow-up".to_string())]),
+        transcript_turn(0, &text("bootstrap")),
+        transcript_turn(1, &json!([])),
+        transcript_turn(
+            2,
+            &json!([{"type": "text", "text": "two"}, {"type": "text", "text": "blocks"}]),
+        ),
+        transcript_turn(3, &text("follow-up")),
     ];
 
     // Act
@@ -26,9 +47,10 @@ fn loaded_history_ages_the_newest_turn_with_a_matching_input() {
 
     // Assert
     assert!(history.has_finished_turn);
-    assert_eq!(history.age_of(input_digest("bootstrap")), Some(3));
+    assert_eq!(history.age_of(input_digest("bootstrap")), Some(4));
     assert_eq!(history.age_of(input_digest("follow-up")), Some(1));
-    assert_eq!(history.age_of(input_digest("no input")), None);
+    assert_eq!(history.age_of(input_digest("two")), None);
+    assert_eq!(history.age_of(input_digest("")), None);
 }
 
 #[test]
