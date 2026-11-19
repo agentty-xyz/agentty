@@ -130,6 +130,25 @@ unused_async = "warn"
 unused_peekable = "warn"
 debug_assert_with_mut_call = "warn"
 
+# Release configuration read by `crates/ag-release`. `dist-workspace.toml` still
+# drives published releases until the release workflow switches to `ag-release`.
+[workspace.metadata.release]
+profile = "dist"
+min-glibc = "2.35"
+installers = ["shell", "npm"]
+include = ["README.md", "LICENSE", "CHANGELOG.md"]
+
+[workspace.metadata.release.targets]
+aarch64-apple-darwin = "macos-latest"
+x86_64-apple-darwin = "macos-latest"
+aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+
+[workspace.metadata.release.apps.agentty]
+
+[workspace.metadata.release.apps.testty]
+npm-scope = "@agentty-xyz"
+
 [profile.dev]
 debug = "line-tables-only"
 

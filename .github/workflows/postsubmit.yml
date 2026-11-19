@@ -36,6 +36,7 @@ jobs:
         test-ag-harness-src
         test-ag-harness-cli-src
         test-ag-protocol-src
+        test-ag-release-src
         test-ag-session-src
         test-ag-store-src
         test-ag-tui-text-src

@@ -166,6 +166,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-release"
+version = "0.19.5"
+dependencies = [
+ "clap",
+ "mockall",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ag-router"
 version = "0.19.5"
 dependencies = [

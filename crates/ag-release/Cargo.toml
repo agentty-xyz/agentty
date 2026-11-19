@@ -1,0 +1,27 @@
+[package]
+name = "ag-release"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Release planning, archives, and installers for Cargo workspaces published on GitHub"
+repository.workspace = true
+readme = "README.md"
+keywords = ["release", "cargo", "installer", "github"]
+categories = ["development-tools::build-utils", "command-line-utilities"]
+# Crates.io trusted publishing needs a manual first publish; until then other
+# projects install the binary from Git.
+publish = false
+
+[dependencies]
+clap.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
