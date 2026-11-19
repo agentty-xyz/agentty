@@ -7,6 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.5] - 2026-11-18
+
+### Added
+
+- `ag-router`, `ag-harness`: route open, host-supplied `ProviderSpec`s with configurable
+  wire protocol, auth, extra headers, and query parameters; the built-in providers
+  become `ag_router::preset` functions.
+- `ag-harness`: declare context profiles for Kimi and Muse models, default Kimi to
+  `https://api.moonshot.ai/v1`, and add `cost_tier_at` for endpoint-aware cost tiers.
+
+### Changed
+
+- `ag-router`, `ag-harness`: make the legacy `max_tokens` field and joined turn
+  instructions opt-in for custom Chat Completions providers; presets keep their
+  behavior.
+- `agentty`: make `KIMI_BASE_URL` optional for harness sessions.
+- `agentty`: report cancelled harness turns as stopped instead of failed, and add a
+  retry hint to transient harness provider failures.
+- release: restore registry versions for `ag-harness`, `ag-agent`, and `ag-runtime` so
+  `ag-agent` and its dependents publish to crates.io again.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.5`.
+
+### Removed
+
+- `ag-router`: remove the closed `Provider` enum, `ProviderConfig`, and
+  `Router::single`.
+- `ag-harness`: remove `provider::Muse` and `chatgpt_auth_file` in favor of
+  `ModelClient::muse` and `chatgpt_auth_file_in`.
+
+### Fixed
+
+- `ag-harness`: document and test that `Completed` arrives only after a cancelled turn's
+  interrupted status is stored, fixing a flaky `serve` cancel test.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.4] - 2026-11-17
 
 ### Added
