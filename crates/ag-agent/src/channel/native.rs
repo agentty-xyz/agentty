@@ -18,10 +18,10 @@ use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, ReasoningLevel, SessionRef, StartSessionRequest,
     TurnEvent, TurnRequest, TurnResult,
 };
-use ag_harness::model::ModelMessage;
-use ag_harness::store::{HistoryTurn, LoadedSession, SessionStore, SqliteStore};
+use ag_harness::transcript::TranscriptInput;
 use ag_harness::{
-    ErrorKind, Harness, HarnessError, Repository, Session, SessionError, TurnControl,
+    ErrorKind, Harness, HarnessError, Repository, Session, SessionError, TurnControl, TurnRange,
+    TurnRecord,
 };
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentKind;
@@ -282,11 +282,25 @@ impl SessionOpener<'_> {
         &self,
         selection: &ModelSelection,
     ) -> Result<(Session, LoadedHistory), NativeTurnError> {
-        let loaded = match self.load().await.map_err(HarnessError::from) {
-            Ok(loaded) => loaded,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                let session = self
-                    .harness(selection)?
+        let harness = self.harness(selection)?;
+        let session = match harness.resume(self.session_id).await {
+            Ok(session) => session,
+            Err(SessionError::RegistrationMismatch {
+                stored: Some(identity),
+                ..
+            }) if let Some(stored_selection) = ModelSelection::from_key(identity.key())
+                && stored_selection != *selection =>
+            {
+                self.switch(&stored_selection, selection).await?
+            }
+            Err(error) => {
+                let error = HarnessError::from(error);
+                if error.kind() != ErrorKind::NotFound {
+                    return Err(NativeTurnError::session_operation(
+                        "Failed to resume the harness session",
+                    )(error));
+                }
+                let session = harness
                     .session(self.session_id, output_schema(self.profile)?)
                     .system_prompt(system_prompt())
                     .create()
@@ -297,33 +311,10 @@ impl SessionOpener<'_> {
 
                 return Ok((session, LoadedHistory::default()));
             }
-            Err(error) => {
-                return Err(NativeTurnError::session_operation(
-                    "Failed to load the harness session",
-                )(error));
-            }
         };
-        let history = LoadedHistory::new(loaded.latest_finished_turn.is_some(), &loaded.turns);
-        let stored_selection = loaded
-            .registration_identity
-            .as_ref()
-            .and_then(|identity| ModelSelection::from_key(identity.key()));
-        let session = match stored_selection {
-            Some(stored_selection) if stored_selection != *selection => {
-                self.switch(&stored_selection, selection).await?
-            }
-            _ => self.resume(self.harness(selection)?).await?,
-        };
+        let history = LoadedHistory::read(&session).await;
 
         Ok((session, history))
-    }
-
-    /// Loads the stored session's model identity and finished-turn state.
-    async fn load(&self) -> Result<LoadedSession, SessionError> {
-        SqliteStore::open(self.database)
-            .await?
-            .load_session(self.session_id)
-            .await
     }
 
     /// Resumes the session recorded on `stored_selection` and switches it to
@@ -402,13 +393,29 @@ struct LoadedHistory {
 }
 
 impl LoadedHistory {
-    /// Summarizes the turns the store loads within the session's byte
-    /// budget, oldest first with their positions.
-    fn new(has_finished_turn: bool, turns: &[(i64, HistoryTurn)]) -> Self {
+    /// Reads the turns `session` replays from its transcript, and whether
+    /// it holds any finished turn when it replays none.
+    ///
+    /// The transcript decodes every stored field of those turns, which
+    /// replay does not need. When it cannot, the resumed session is assumed
+    /// to hold history whose bootstrap turn is not replayed, so the turn
+    /// re-sends the full contract rather than failing on every later turn.
+    async fn read(session: &Session) -> Self {
+        let newest = match session.transcript(session.replayed_range()).await {
+            Ok(turns) if !turns.is_empty() => return Self::new(true, &turns),
+            Ok(_) => session.transcript(TurnRange::Last(1)).await,
+            Err(error) => Err(error),
+        };
+
+        Self::new(!newest.is_ok_and(|newest| newest.is_empty()), &[])
+    }
+
+    /// Summarizes the replayed `turns`, oldest first.
+    fn new(has_finished_turn: bool, turns: &[TurnRecord]) -> Self {
         let input_digests = turns
             .iter()
-            .map(|(_, turn)| match turn.messages.first() {
-                Some(ModelMessage::User(text)) => Some(input_digest(text)),
+            .map(|turn| match turn.input.as_slice() {
+                [TranscriptInput::Text { text }] => Some(input_digest(text)),
                 _ => None,
             })
             .collect();

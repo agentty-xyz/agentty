@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::catalog::{Capabilities, CatalogError, ModelSpec};
+use ag_harness::event::TurnIndex;
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use ag_harness::model::{
     ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry,
@@ -14,7 +15,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{CheckpointError, SessionCheckpoint, SessionStore};
 use ag_harness::{
     ErrorKind, Harness, HarnessError, Model, ModelCatalog, ModelError, ModelSelectionError,
-    ModelSelector, OutputSchema, Role, SessionError, TurnError,
+    ModelSelector, OutputSchema, Role, SessionError, TurnError, TurnRange,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -225,6 +226,11 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
         );
         assert!(
             matches!(&loaded.turns[0].1.messages[0], ModelMessage::User(text) if text == "third")
+        );
+        assert_eq!(
+            reopened.replayed_range(),
+            TurnRange::Span(TurnIndex::new(2)..TurnIndex::new(3)),
+            "the replayed range starts after the checkpoint"
         );
         let requests = requests.lock().expect("requests");
         let third = requests.last().expect("third request");

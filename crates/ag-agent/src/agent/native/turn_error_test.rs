@@ -85,15 +85,16 @@ fn session_operation_failures_note_only_transient_kinds() {
     };
 
     // Act
-    let busy = NativeTurnError::session_operation("Failed to load the harness session")(busy);
-    let missing = NativeTurnError::session_operation("Failed to load the harness session")(missing);
+    let busy = NativeTurnError::session_operation("Failed to resume the harness session")(busy);
+    let missing =
+        NativeTurnError::session_operation("Failed to resume the harness session")(missing);
 
     // Assert
     assert!(
         matches!(
             &busy,
             NativeTurnError::Failed(diagnostic)
-                if diagnostic.starts_with("Failed to load the harness session: ")
+                if diagnostic.starts_with("Failed to resume the harness session: ")
                     && diagnostic.ends_with("(busy); retrying later may succeed.")
         ),
         "{busy:?}"
@@ -102,7 +103,7 @@ fn session_operation_failures_note_only_transient_kinds() {
         matches!(
             &missing,
             NativeTurnError::Failed(diagnostic)
-                if diagnostic.starts_with("Failed to load the harness session: ")
+                if diagnostic.starts_with("Failed to resume the harness session: ")
                     && !diagnostic.contains(RETRY_HINT)
         ),
         "{missing:?}"

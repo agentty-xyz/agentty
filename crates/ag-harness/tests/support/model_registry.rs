@@ -301,10 +301,14 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
             .store(reopened.clone())
             .resume("session")
             .await;
-        assert!(matches!(
-            result,
-            Err(SessionError::RegistrationMismatch { .. })
-        ));
+        let stored = Some(ExecutionIdentity::new("primary", "1").expect("identity"));
+        assert!(
+            matches!(
+                &result,
+                Err(SessionError::RegistrationMismatch { stored: named, .. }) if *named == stored
+            ),
+            "the error names the registration to resume with"
+        );
     }
     let registry = self::registry("primary", "1", &calls);
     let mut session = Harness::from_registry(&registry, "primary")
@@ -649,10 +653,13 @@ async fn direct_sessions_cannot_be_silently_adopted_by_a_registration() {
         let output = resumed.send("hello").await.expect("direct execution");
 
         // Assert
-        assert!(matches!(
-            result,
-            Err(SessionError::RegistrationMismatch { .. })
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(SessionError::RegistrationMismatch { stored: None, .. })
+            ),
+            "a direct session stores no registration"
+        );
         assert_eq!(output.output(), &json!({"answer":"first"}));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }

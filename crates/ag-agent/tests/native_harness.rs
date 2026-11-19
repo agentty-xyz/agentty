@@ -1606,9 +1606,163 @@ async fn unreadable_history_fails_the_turn() {
     assert!(
         result
             .expect_err("unreadable history should fail")
-            .contains("Failed to load the harness session")
+            .contains("Failed to resume the harness session")
     );
     assert_eq!(request_bodies(&server).await, Vec::<String>::new());
+}
+
+/// Runs `prompts` as consecutive turns of `session_id`, each resuming with the
+/// previous turn's provider conversation id, and returns the last one's or
+/// the first turn failure.
+async fn run_session_turns(
+    channel: &Arc<dyn AgentChannel>,
+    worktree: &Path,
+    session_id: &str,
+    prompts: &[&str],
+) -> Result<Option<String>, String> {
+    let mut provider_conversation_id = None;
+    for prompt in prompts {
+        let mut request = turn_request(worktree, MUSE_MODEL, prompt);
+        if provider_conversation_id.is_some() {
+            request.request_kind = AgentRequestKind::SessionResume;
+            request.continuation = continuing(provider_conversation_id);
+        }
+        let (result, _) = run_turn(channel, session_id, request).await;
+        provider_conversation_id = result?.provider_conversation_id;
+    }
+
+    Ok(provider_conversation_id)
+}
+
+/// Runs `statement` against the harness database of `session_id`.
+async fn execute_in_session_database(
+    data_root: &Path,
+    session_id: &str,
+    statement: &'static str,
+) -> Result<(), sqlx::Error> {
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(data_root.join(session_id).join("harness.db")),
+    )
+    .await?;
+    sqlx::query(statement).execute(&pool).await?;
+    pool.close().await;
+
+    Ok(())
+}
+
+/// Returns a session resume of `prompt` continuing `provider_conversation_id`
+/// with an Agentty replay transcript.
+fn resume_with_replay(
+    worktree: &Path,
+    prompt: &str,
+    provider_conversation_id: Option<String>,
+) -> TurnRequest {
+    let mut request = turn_request(worktree, MUSE_MODEL, prompt);
+    request.request_kind = AgentRequestKind::SessionResume;
+    request.continuation = TurnContinuation::provider(
+        None,
+        None,
+        provider_conversation_id,
+        Some("Agentty replay transcript".to_string()),
+    );
+
+    request
+}
+
+#[tokio::test]
+async fn history_outside_the_replay_window_resends_the_contract_without_the_replay_transcript() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Next question", answer("Next answer"), 1).await;
+    respond(&server, "First question", answer("First answer"), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let provider_conversation_id = run_session_turns(
+        &channel,
+        worktree.path(),
+        "session-window",
+        &["First question"],
+    )
+    .await
+    .expect("first turn should succeed");
+    // The finished turn stays stored but leaves the replay window.
+    execute_in_session_database(
+        data_root.path(),
+        "session-window",
+        "UPDATE session SET history_start = 1",
+    )
+    .await
+    .expect("move the replay window past the turn");
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-window",
+        resume_with_replay(worktree.path(), "Next question", provider_conversation_id),
+    )
+    .await;
+
+    // Assert
+    result.expect("resumed turn should succeed");
+    let bodies = request_bodies(&server).await;
+    let resumed = bodies.last().expect("resumed request");
+    assert!(!resumed.contains("First answer"), "{resumed}");
+    assert!(!resumed.contains("Agentty replay transcript"), "{resumed}");
+    assert_eq!(resumed.matches(FULL_CONTRACT).count(), 1);
+}
+
+#[tokio::test]
+async fn unreadable_transcript_resends_the_contract_without_the_replay_transcript() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Third question", answer("Third answer"), 1).await;
+    respond(&server, "Second question", answer("Second answer"), 2).await;
+    respond(&server, "First question", answer("First answer"), 3).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let provider_conversation_id = run_session_turns(
+        &channel,
+        worktree.path(),
+        "session-transcript",
+        &["First question", "Second question"],
+    )
+    .await
+    .expect("earlier turns should succeed");
+    // Resuming decodes only the newest turn's options; the transcript of the
+    // replayed turns decodes every one.
+    execute_in_session_database(
+        data_root.path(),
+        "session-transcript",
+        "UPDATE session_turn SET turn_options = '{}' WHERE turn_position = 0",
+    )
+    .await
+    .expect("corrupt the oldest turn's options");
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-transcript",
+        resume_with_replay(worktree.path(), "Third question", provider_conversation_id),
+    )
+    .await;
+
+    // Assert
+    result.expect("an unreadable transcript should not fail the turn");
+    let bodies = request_bodies(&server).await;
+    let resumed = bodies.last().expect("resumed request");
+    assert!(
+        resumed.contains("Second answer"),
+        "the history still replays"
+    );
+    assert!(!resumed.contains("Agentty replay transcript"), "{resumed}");
+    // The replayed first turn carries one contract; the resumed input
+    // re-sends it instead of a refresh reminder.
+    assert_eq!(resumed.matches(FULL_CONTRACT).count(), 2);
 }
 
 #[tokio::test]

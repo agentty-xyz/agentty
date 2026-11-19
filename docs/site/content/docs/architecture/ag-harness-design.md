@@ -71,7 +71,8 @@ transport either way.
   `Harness::builder` checks the model, the budget, and the repository required by the
   default set's built-in tools at `build`; storage still opens on first session use.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
-  `Session::transcript` reads settled turns in full (all, the newest N, or a span).
+  `Session::transcript` reads settled turns in full (all, the newest N, or a span);
+  `Session::replayed_range` is the span the handle replays ahead of its next input.
   `Harness::fork` copies a session's configuration and settled turns through one index
   into a new session atomically, with their write, command, and host request records,
   and gives it its own prompt-cache key; the source is never changed. Transcripts reuse
