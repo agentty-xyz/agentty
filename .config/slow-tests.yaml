@@ -19,3 +19,15 @@
 - binary: agentty
   test: app::graph_output_reply::tests::start_implementing_in_chat_accepts_the_awaited_output_and_continues_the_graph
   reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.
+- binary: ag-release::cli
+  test: npm_package::failed_downloads_and_checksum_mismatches_install_nothing
+  reason: Runs real npm installs in a sandbox; about 1 s warm, about 10 s in the CI coverage run, probably npm starting cold.
+- binary: ag-release::cli
+  test: npm_package::first_run_downloads_the_binary_when_install_scripts_are_skipped
+  reason: Runs a real npm install in a sandbox; about 1 s warm, about 10 s in the CI coverage run, probably npm starting cold.
+- binary: ag-release::cli
+  test: npm_package::installed_command_runs_the_binary_from_the_bin_real_directory
+  reason: Runs a real npm install in a sandbox; about 1 s warm, about 10 s in the CI coverage run, probably npm starting cold.
+- binary: ag-release::cli
+  test: npm_package::npm_rejects_platforms_without_a_target
+  reason: Runs a real npm install in a sandbox; about 1 s warm, about 10 s in the CI coverage run, probably npm starting cold.
