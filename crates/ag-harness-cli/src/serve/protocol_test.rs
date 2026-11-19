@@ -5,16 +5,19 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use ag_harness::event::RunEvent;
-use ag_harness::{ErrorKind, GenerationParams, LimitKind, OutputMode, RunLimits, TurnRange};
+use ag_harness::{
+    ApprovalRequest, Decision, ErrorKind, GenerationParams, LimitKind, OutputMode, RunLimits,
+    TurnRange,
+};
 use jsonschema::Validator;
 use schemars::generate::SchemaSettings;
 use serde_json::{Value, json};
 
 use super::{
-    Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse, GenerationChoice, INVALID_PARAMS,
-    INVALID_REQUEST, JsonRpcVersion, LimitsChoice, METHOD_NOT_FOUND, MethodResult, ModelChoice,
-    Notification, OutputChoice, PROTOCOL_SCHEMA, RequestId, Response, SERVER_ERROR, SessionOpened,
-    StoreChoice, line,
+    Answer, ApprovalDecision, Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse,
+    GenerationChoice, INVALID_PARAMS, INVALID_REQUEST, JsonRpcVersion, LimitsChoice,
+    METHOD_NOT_FOUND, MethodResult, ModelChoice, Notification, OutputChoice, PROTOCOL_SCHEMA,
+    RequestId, Response, SERVER_ERROR, ServerRequest, SessionOpened, StoreChoice, line,
 };
 
 /// Result definition of each method, in [`Call::METHODS`] order.
@@ -28,9 +31,10 @@ const METHOD_RESULTS: [(&str, &str); 7] = [
     ("shutdown", "Empty"),
 ];
 
-/// Assembles the protocol schema: every message is a request, a response,
-/// an error response, or a notification, and `x-method-results` names each
-/// method's result.
+/// Assembles the protocol schema: every message is a client request, a
+/// response, an error response, a notification, a server request, or the
+/// client's answer to one; `x-method-results` names each method's result
+/// and `x-server-request-results` each server request's answer.
 fn protocol_schema() -> Value {
     let mut generator = SchemaSettings::draft2020_12().into_generator();
     let call = generator.subschema_for::<Call>();
@@ -39,8 +43,22 @@ fn protocol_schema() -> Value {
     let response = generator.subschema_for::<Response>();
     let error = generator.subschema_for::<ErrorResponse>();
     let notification = generator.subschema_for::<Notification>();
+    let server_request = generator.subschema_for::<ServerRequest>();
+    let decision = generator.subschema_for::<ApprovalDecision>();
     let mut definitions = generator.take_definitions(true);
     make_default_params_optional(&mut definitions);
+    definitions.insert(
+        "ApprovalAnswer".to_string(),
+        json!({
+            "description": "Client answer to an `approval/decide` server request: the request's \
+                            `id` and the decision as `result`. An error response with the \
+                            request's `id` denies the call with the error's message.",
+            "type": "object",
+            "properties": {"id": id, "jsonrpc": version, "result": decision},
+            "required": ["id", "jsonrpc", "result"],
+            "additionalProperties": false
+        }),
+    );
     definitions.insert(
         "Request".to_string(),
         json!({
@@ -68,10 +86,19 @@ fn protocol_schema() -> Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ServeMessage",
         "description": "One line of the UNSTABLE `ag-harness serve` JSON-RPC 2.0 protocol: a \
-                        client request, or a server response, error response, or `run/event` \
-                        notification. The protocol may change in any release.",
-        "anyOf": [{"$ref": "#/$defs/Request"}, response, error, notification],
+                        client request or answer, or a server response, error response, \
+                        `run/event` notification, or `approval/decide` request. The protocol \
+                        may change in any release.",
+        "anyOf": [
+            {"$ref": "#/$defs/Request"},
+            response,
+            error,
+            notification,
+            server_request,
+            {"$ref": "#/$defs/ApprovalAnswer"}
+        ],
         "x-method-results": results,
+        "x-server-request-results": {"approval/decide": decision},
         "$defs": definitions
     })
 }
@@ -449,6 +476,96 @@ fn schema_rejects_result_shapes_no_method_returns() {
 
     // Assert
     assert_eq!(valid, [false, false, false, true]);
+}
+
+#[test]
+fn answers_decode_into_decisions_and_other_messages_stay_requests() {
+    // Arrange
+    let answer = |result: Value| json!({"jsonrpc": "2.0", "id": "approval-0", "result": result});
+    let messages = [
+        answer(json!({"decision": "allow"})),
+        answer(json!({"decision": "allow_with", "arguments": {"path": "b.txt"}})),
+        answer(json!({"decision": "deny", "feedback": "no"})),
+        json!({"jsonrpc": "2.0", "id": "approval-1", "error": {"code": 1, "message": "busy"}}),
+        json!({"jsonrpc": "2.0", "id": "approval-2", "error": {"code": 1}}),
+    ];
+    let not_answers = [
+        json!("text"),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "shutdown", "result": {}}),
+        json!({"jsonrpc": "2.0", "result": {}}),
+        json!({"jsonrpc": "2.0", "id": 1}),
+        json!({"jsonrpc": "2.0", "id": 1, "result": {}, "error": {}}),
+        json!({"id": "approval-0", "result": {"decision": "allow"}}),
+        json!({"jsonrpc": "1.0", "id": "approval-0", "result": {"decision": "allow"}}),
+    ];
+
+    // Act
+    let decisions: Vec<_> = messages
+        .iter()
+        .map(|message| Answer::parse(message).map(|answer| answer.decision))
+        .collect();
+    let invalid = Answer::parse(&answer(json!({"decision": "allow", "extra": 1})));
+    let requests: Vec<_> = not_answers.iter().map(Answer::parse).collect();
+
+    // Assert
+    assert_eq!(
+        decisions,
+        [
+            Some(Ok(Decision::Allow)),
+            Some(Ok(Decision::AllowWith(json!({"path": "b.txt"})))),
+            Some(Ok(Decision::Deny {
+                feedback: "no".to_string()
+            })),
+            Some(Ok(Decision::Deny {
+                feedback: "busy".to_string()
+            })),
+            Some(Ok(Decision::Deny {
+                feedback: "the client did not decide".to_string()
+            })),
+        ]
+    );
+    let invalid = invalid.expect("an answer");
+    assert_eq!(invalid.id, json!("approval-0"));
+    assert!(invalid.decision.is_err());
+    assert!(requests.iter().all(Option::is_none));
+}
+
+#[test]
+fn server_requests_and_answers_are_schema_valid() -> Result<(), serde_json::Error> {
+    // Arrange
+    let validator = validator();
+    let request: ApprovalRequest = serde_json::from_value(json!({
+        "arguments": {"path": "a.txt"},
+        "call_id": "call-1",
+        "effects": "writes",
+        "run": "run-1",
+        "session": "s",
+        "tool": "write"
+    }))?;
+    let asked: Value = serde_json::from_str(&line(&ServerRequest::approval(
+        "approval-0".to_string(),
+        "s".to_string(),
+        request,
+    ))?)?;
+    let answer = |result: Value| json!({"jsonrpc": "2.0", "id": "approval-0", "result": result});
+
+    // Act
+    let valid = [
+        validator.is_valid(&asked),
+        validator.is_valid(&answer(json!({"decision": "allow"}))),
+        validator.is_valid(&answer(json!({"decision": "deny", "feedback": "no"}))),
+    ];
+    let invalid = validator.is_valid(&answer(json!({"decision": "maybe"})));
+
+    // Assert
+    assert_eq!(valid, [true, true, true]);
+    assert!(!invalid);
+    assert_eq!(asked["method"], json!("approval/decide"));
+    assert_eq!(asked["params"]["request"]["effects"], json!("writes"));
+    let decision: ApprovalDecision = serde_json::from_value(json!({"decision": "allow"}))?;
+    assert_eq!(decision, ApprovalDecision::Allow {});
+
+    Ok(())
 }
 
 #[test]

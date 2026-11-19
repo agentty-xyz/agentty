@@ -22,12 +22,13 @@ use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::approval::ApprovalRequest;
 use crate::catalog::ModelId;
 use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, RunError};
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::ToolCall;
-use crate::turn::{ContextActivity, ToolActivity};
+use crate::turn::{ContextActivity, HostToolOutcome, ToolActivity};
 use crate::usage::Cost;
 
 /// Events a run may emit before a consumer reads them; a run whose stream
@@ -168,7 +169,7 @@ impl RunEvent {
 /// [`Self::Completed`] is always the last event, including for a run that
 /// failed or was cancelled, unless the run itself was dropped before it
 /// finished; then the stream ends without it. New kinds, such as
-/// streamed deltas and approval requests, may be added.
+/// streamed deltas, may be added.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -204,6 +205,17 @@ pub enum RunEventKind {
         id: ItemId,
         /// The finished item.
         item: Item,
+    },
+    /// A tool call that changes state waits for the harness's
+    /// [`crate::approval::ApprovalHandler`], which the harness asks right
+    /// after this event. It falls between the call's [`Self::ItemStarted`]
+    /// and [`Self::ItemCompleted`]; a call the handler did not decide on in
+    /// time fails the run with [`ErrorKind::ApprovalTimeout`].
+    ApprovalRequested {
+        /// Identifier of the call's [`ItemKind::ToolCall`] item.
+        id: ItemId,
+        /// The call waiting for a decision.
+        request: ApprovalRequest,
     },
     /// A model request completed, with the tokens its provider reported.
     /// The usage and cost of these events sum to the run outcome's
@@ -443,6 +455,9 @@ pub enum ToolCallStatus {
     Skipped,
     /// The tool is denied by policy or does not exist.
     Unavailable,
+    /// The [`crate::approval::ApprovalHandler`] denied the call, which did
+    /// not run; the model received the denial's feedback.
+    Denied,
     /// The call was answered, as a [`crate::TurnRecord`] reports every
     /// answered call: sessions store the result text but not which of the
     /// statuses above the live run reported.
@@ -459,6 +474,10 @@ impl From<&ToolActivity> for ToolCallStatus {
             | ToolActivity::Read { .. }
             | ToolActivity::ReadInspection { .. }
             | ToolActivity::Write { .. } => Self::Completed,
+            ToolActivity::Host {
+                outcome: HostToolOutcome::Denied,
+                ..
+            } => Self::Denied,
             ToolActivity::Host { outcome, .. } if !outcome.is_rejected() => Self::Completed,
             ToolActivity::MalformedArguments { .. }
             | ToolActivity::Host { .. }

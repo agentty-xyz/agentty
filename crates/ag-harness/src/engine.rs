@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::{self, timeout_at};
 
+use crate::approval::{Approval, ApprovalRequest, Approved};
 use crate::bash::BashError;
 use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
@@ -46,7 +47,9 @@ use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
     ToolDefinition, UnknownToolCall,
 };
-use crate::tool_handler::{SharedResultFits, ToolContext, ToolEntry, ToolErrorKind, ToolHandler};
+use crate::tool_handler::{
+    SharedResultFits, ToolContext, ToolEntry, ToolError, ToolErrorKind, ToolHandler, ToolOutput,
+};
 use crate::turn::{
     ContextActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
     TurnError, TurnOptions, TurnOutcome, TurnReport, sanitize_report_text,
@@ -88,6 +91,8 @@ const SUMMARY_TOOL_CALL_FEEDBACK: &str = "[harness] Those tool calls were not ru
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
+    /// Handler that decides every call to a tool that changes state.
+    pub(crate) approval: Option<&'a Approval>,
     /// Ledger that reserves every model request before it is sent.
     pub(crate) budget: &'a dyn BudgetLedger,
     /// Permits of the model's concurrency cap, shared by every harness
@@ -565,7 +570,7 @@ impl Engine<'_> {
                 .execute_tool_call(
                     call,
                     &rounds.tools,
-                    turn_id,
+                    (turn_id, item),
                     shortcut,
                     share.result_fits(call),
                 )
@@ -950,9 +955,7 @@ impl Engine<'_> {
                     (handler.definition(), handler)
                 }
             };
-            tools
-                .handlers
-                .push((definition.name().to_string(), handler));
+            tools.handlers.push((definition.clone(), handler));
             request = request.with_tool(definition);
         }
 
@@ -1165,14 +1168,16 @@ impl Engine<'_> {
         }
     }
 
-    /// Runs `call` with the turn's handler of its name, bounding a `read`
-    /// result to what `fits` accepts, or answers an allowed `read` with
-    /// `shortcut` without running it.
+    /// Runs `call`, streamed as `item` when the turn streams events, with
+    /// the turn's handler of its name, bounding a `read` result to what
+    /// `fits` accepts, or answers an allowed `read` with `shortcut` without
+    /// running it. A call that changes state first waits for the turn's
+    /// approval handler, when it has one.
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
         tools: &Tools,
-        turn_id: Option<LifecycleId>,
+        (turn_id, item): (Option<LifecycleId>, Option<ItemId>),
         shortcut: Option<ReadShortcut<'_>>,
         fits: SharedResultFits,
     ) -> Result<(String, ToolActivity), TurnError> {
@@ -1217,7 +1222,11 @@ impl Engine<'_> {
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
-        let operation = execute_tool(execution, call);
+        let gate = self.approval.map(|approval| ApprovalGate {
+            approval,
+            events: self.events.as_deref().zip(item),
+        });
+        let operation = execute_tool(execution, call, gate);
         let result = match tool_lifecycle.as_ref() {
             Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
             None => operation.await,
@@ -1247,10 +1256,14 @@ impl Engine<'_> {
         match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    if ToolCallStatus::from(&result.1) == ToolCallStatus::Rejected {
-                        tool_lifecycle.failed(ToolErrorType::Execution);
-                    } else {
-                        tool_lifecycle.completed();
+                    match ToolCallStatus::from(&result.1) {
+                        ToolCallStatus::Rejected => {
+                            tool_lifecycle.failed(ToolErrorType::Execution);
+                        }
+                        ToolCallStatus::Denied => {
+                            tool_lifecycle.failed(ToolErrorType::ApprovalDenied);
+                        }
+                        _ => tool_lifecycle.completed(),
                     }
                 }
 
@@ -1258,7 +1271,10 @@ impl Engine<'_> {
             }
             Err(error) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    tool_lifecycle.failed(ToolErrorType::Execution);
+                    tool_lifecycle.failed(match error {
+                        TurnError::ApprovalTimeout { .. } => ToolErrorType::ApprovalTimeout,
+                        _ => ToolErrorType::Execution,
+                    });
                 }
 
                 Err(error)
@@ -1725,23 +1741,24 @@ struct ExecutedRead {
     result_index: usize,
 }
 
-/// The handlers one turn offers, by name, in advertised order.
+/// The handlers one turn offers, with their advertised definitions, in
+/// advertised order.
 #[derive(Default)]
 struct Tools {
-    handlers: Vec<(String, Arc<dyn ToolHandler>)>,
+    handlers: Vec<(ToolDefinition, Arc<dyn ToolHandler>)>,
 }
 
 impl Tools {
-    /// Returns the handler of the tool named `name`, if the turn offers it.
-    fn handler(&self, name: &str) -> Option<&Arc<dyn ToolHandler>> {
+    /// Returns the tool named `name`, if the turn offers it.
+    fn handler(&self, name: &str) -> Option<&(ToolDefinition, Arc<dyn ToolHandler>)> {
         self.handlers
             .iter()
-            .find_map(|(handler_name, handler)| (handler_name == name).then_some(handler))
+            .find(|(definition, _)| definition.name() == name)
     }
 
-    /// Returns the handler of the tool `call` names exactly; a name
-    /// rewritten for replay never runs one.
-    fn handler_for(&self, call: &ToolCall) -> Option<&Arc<dyn ToolHandler>> {
+    /// Returns the tool `call` names exactly; a name rewritten for replay
+    /// never runs one.
+    fn handler_for(&self, call: &ToolCall) -> Option<&(ToolDefinition, Arc<dyn ToolHandler>)> {
         if call.unknown_tool().is_some_and(UnknownToolCall::renamed) {
             return None;
         }
@@ -1843,8 +1860,9 @@ enum ToolExecution<'a> {
     /// A `read` whose round had no room for its result, answered with the
     /// exact call that fetches it, without running.
     DeferredRead(&'a ReadArguments),
-    /// A call the turn's handler of its name runs.
-    Handler(&'a Arc<dyn ToolHandler>, ToolContext),
+    /// A call the turn's handler of its name, advertised with its
+    /// definition, runs.
+    Handler(&'a (ToolDefinition, Arc<dyn ToolHandler>), ToolContext),
     /// A call whose arguments its tool could not decode, answered with an
     /// error result that lists the tool's argument fields.
     Malformed(&'a MalformedArguments, &'a TurnOptions),
@@ -1852,15 +1870,56 @@ enum ToolExecution<'a> {
     RepeatedRead(&'a ReadArguments, &'a str),
 }
 
+/// Asks a turn's approval handler before a call that changes state runs.
+#[derive(Clone, Copy)]
+struct ApprovalGate<'a> {
+    approval: &'a Approval,
+    /// Sink of a run that streams its events, and the call's item.
+    events: Option<(&'a EventSink, ItemId)>,
+}
+
+impl ApprovalGate<'_> {
+    /// Emits [`RunEventKind::ApprovalRequested`] for `call` with decoded
+    /// `arguments`, when the run streams events, then waits for the
+    /// decision on it.
+    async fn approve(
+        self,
+        (definition, handler): &(ToolDefinition, Arc<dyn ToolHandler>),
+        call: &ToolCall,
+        arguments: Value,
+        tool_context: &ToolContext,
+    ) -> Result<Approved, TurnError> {
+        let request = ApprovalRequest {
+            arguments,
+            call_id: call.id().to_string(),
+            effects: handler.effects(),
+            run: tool_context.run.clone(),
+            session: tool_context.session.clone(),
+            tool: call.name().to_string(),
+        };
+        if let Some((events, id)) = self.events {
+            events
+                .emit(RunEventKind::ApprovalRequested {
+                    id,
+                    request: request.clone(),
+                })
+                .await;
+        }
+
+        self.approval.decide(definition, request).await
+    }
+}
+
 async fn execute_tool(
     execution: ToolExecution<'_>,
     call: &ToolCall,
+    gate: Option<ApprovalGate<'_>>,
 ) -> Result<(String, ToolActivity), TurnError> {
     let started_at = Instant::now();
 
     match execution {
-        ToolExecution::Handler(handler, context) => {
-            run_handler(handler.as_ref(), call, context, started_at).await
+        ToolExecution::Handler(tool, context) => {
+            run_handler(tool, call, context, gate, started_at).await
         }
         ToolExecution::DeferredRead(arguments) => Ok((
             context::deferred_read_result(arguments),
@@ -1889,17 +1948,21 @@ async fn execute_tool(
     }
 }
 
-/// Runs `call` with `handler`. A built-in handler reports its own result
-/// and activity. A host handler's result is bounded: arguments that are not
-/// a JSON object and a rejection are answered with an error result, and an
-/// oversized result is dropped. A panic fails the turn as a tool failure.
+/// Runs `call` with the handler of `tool`. A built-in handler reports its
+/// own result and activity. A host handler's result is bounded: arguments
+/// that are not a JSON object and a rejection are answered with an error
+/// result, and an oversized result is dropped. A panic fails the turn as a
+/// tool failure. With a `gate`, a call that changes state runs only once
+/// approved, and a denied one is answered with the handler's feedback.
 async fn run_handler(
-    handler: &dyn ToolHandler,
+    tool: &(ToolDefinition, Arc<dyn ToolHandler>),
     call: &ToolCall,
     tool_context: ToolContext,
+    gate: Option<ApprovalGate<'_>>,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
     let name = call.name();
+    let handler = tool.1.as_ref();
     let arguments = match call.arguments_value() {
         Ok(arguments) => arguments,
         Err(reason) => {
@@ -1911,12 +1974,49 @@ async fn run_handler(
             ));
         }
     };
+    // A host call's duration starts once it is approved, not while a
+    // decision is pending.
+    let (arguments, replaced, started_at) = match gate {
+        Some(gate) if Approval::requires(handler.effects()) => {
+            match gate.approve(tool, call, arguments, &tool_context).await? {
+                Approved::Run(arguments) => (arguments, None, Instant::now()),
+                Approved::Replaced(arguments) => {
+                    (arguments.clone(), Some(arguments), Instant::now())
+                }
+                Approved::Denied(feedback) => {
+                    return Ok(rejected_call(
+                        name,
+                        HostToolOutcome::Denied,
+                        &feedback,
+                        started_at,
+                    ));
+                }
+            }
+        }
+        _ => (arguments, None, started_at),
+    };
     let result = CatchUnwind(handler.call(arguments, tool_context))
         .await
         .map_err(|_| TurnError::ToolFailed {
             source: "the handler panicked".into(),
             tool: name.to_string(),
         })?;
+    let answered = answer_call(name, result, started_at)?;
+
+    Ok(match replaced {
+        Some(arguments) => (with_approved_arguments(&answered.0, arguments), answered.1),
+        None => answered,
+    })
+}
+
+/// Answers a call to `name` with its handler's `result`: a built-in reports
+/// its own result and activity, a host result over the size limit is
+/// dropped, and a rejection is answered with an error result.
+fn answer_call(
+    name: &str,
+    result: Result<ToolOutput, ToolError>,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
     match result {
         Ok(output) => Ok(match output.into_parts() {
             (content, Some(activity)) => (content, activity),
@@ -1945,9 +2045,24 @@ async fn run_handler(
     }
 }
 
-/// Polls a tool call, resolving to the panic that interrupted it instead
-/// of unwinding through the turn.
-struct CatchUnwind<'a, T>(Pin<Box<dyn Future<Output = T> + Send + 'a>>);
+/// Tells the model that its call ran with the approved `arguments` instead
+/// of its own: a JSON object result gains an `approved_arguments` field,
+/// keeping its other fields where context reduction reads them, and any
+/// other result is wrapped as `result` beside it.
+fn with_approved_arguments(content: &str, arguments: Value) -> String {
+    match serde_json::from_str::<Value>(content) {
+        Ok(Value::Object(mut result)) => {
+            result.insert("approved_arguments".to_string(), arguments);
+
+            Value::Object(result).to_string()
+        }
+        _ => json!({"approved_arguments": arguments, "result": content}).to_string(),
+    }
+}
+
+/// Polls a tool call or approval decision, resolving to the panic that
+/// interrupted it instead of unwinding through the turn.
+pub(crate) struct CatchUnwind<'a, T>(pub(crate) Pin<Box<dyn Future<Output = T> + Send + 'a>>);
 
 impl<T> Future for CatchUnwind<'_, T> {
     type Output = std::thread::Result<T>;
@@ -1971,17 +2086,21 @@ fn host_activity(name: &str, outcome: HostToolOutcome, started_at: Instant) -> T
     }
 }
 
-/// Answers a host tool call to `name` that did not run, or that its handler
-/// rejected, with an error result naming `reason`.
+/// Answers a call to `name` that did not run, that its handler rejected, or
+/// that an approval handler denied, with an error result naming `reason`.
 fn rejected_call(
     name: &str,
     outcome: HostToolOutcome,
     reason: &str,
     started_at: Instant,
 ) -> (String, ToolActivity) {
+    let status = match outcome {
+        HostToolOutcome::Denied => "denied",
+        _ => "rejected",
+    };
     let result = json!({
         "error": schema_contract::bounded_diagnostic(reason),
-        "status": "rejected",
+        "status": status,
     })
     .to_string();
 

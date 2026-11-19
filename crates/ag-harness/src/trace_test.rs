@@ -906,6 +906,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Cancelled,
         TurnErrorType::Model(ModelErrorType::InvalidOutput),
         TurnErrorType::Tool,
+        TurnErrorType::ApprovalTimeout,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepeatedToolCalls,
         TurnErrorType::RunLimit(LimitKind::ModelRequests),
@@ -921,7 +922,12 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
-    let tool_errors = [ToolErrorType::Cancelled, ToolErrorType::Execution];
+    let tool_errors = [
+        ToolErrorType::Cancelled,
+        ToolErrorType::Execution,
+        ToolErrorType::ApprovalDenied,
+        ToolErrorType::ApprovalTimeout,
+    ];
 
     // Act
     let turn_values = turn_errors.map(TurnErrorType::as_str);
@@ -934,6 +940,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "cancelled",
             "invalid_output",
             "tool_execution_error",
+            "approval_timeout",
             "context_budget_exceeded",
             "repeated_tool_calls",
             "run_limit_model_requests",
@@ -950,7 +957,15 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "session_error",
         ]
     );
-    assert_eq!(tool_values, ["cancelled", "tool_execution_error"]);
+    assert_eq!(
+        tool_values,
+        [
+            "cancelled",
+            "tool_execution_error",
+            "approval_denied",
+            "approval_timeout"
+        ]
+    );
 }
 
 #[tokio::test]

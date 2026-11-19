@@ -193,6 +193,13 @@ fn classifies_every_turn_failure() {
             ErrorKind::Repetition,
         ),
         (
+            TurnError::ApprovalTimeout {
+                timeout: Duration::from_secs(1),
+                tool: "deploy".to_string(),
+            },
+            ErrorKind::ApprovalTimeout,
+        ),
+        (
             TurnError::limit_reached(LimitKind::ToolCalls),
             ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
         ),
@@ -668,6 +675,7 @@ fn kinds_have_stable_names() {
         (ErrorKind::Other, "other"),
         (ErrorKind::ToolFailed, "tool_failed"),
         (ErrorKind::Repetition, "repetition"),
+        (ErrorKind::ApprovalTimeout, "approval_timeout"),
         (ErrorKind::Busy, "busy"),
         (ErrorKind::Conflict, "conflict"),
         (ErrorKind::NotFound, "not_found"),
