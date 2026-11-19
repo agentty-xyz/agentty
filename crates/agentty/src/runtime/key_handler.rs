@@ -11,7 +11,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
 use crate::app::App;
-use crate::domain::session::{PublishBranchAction, SessionId, can_append_session_to_stack};
+use crate::domain::session::{PublishBranchAction, SessionId};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
@@ -59,9 +59,6 @@ where
         AppMode::ExecutionGraph(_) => Ok(mode::execution_graph::handle(app, key).await),
         AppMode::List => mode::list::handle(app, key).await,
         AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
-        AppMode::StackAppendParentSelection { .. } => {
-            handle_stack_append_parent_key(app, key).await
-        }
         AppMode::PreCommitHookWarning { .. } => Ok(handle_pre_commit_hook_warning_key(app, key)),
         AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
         AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
@@ -257,31 +254,18 @@ fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
     session_creation_choice(app, option_index).is_some()
 }
 
-/// Action taken when one enabled creation-selector row is confirmed.
-enum SessionCreationChoice {
-    /// Opens the parent selector that appends this review-ready session to a
-    /// stack.
-    AppendToStack(SessionId),
-    /// Creates one session in the given mode.
-    Create(CreateSessionMode),
-}
-
-/// Resolves the action behind one creation-selector row, or `None` when the
-/// row cannot currently be chosen.
-fn session_creation_choice(app: &App, option_index: usize) -> Option<SessionCreationChoice> {
+/// Resolves the session mode behind one creation-selector row, or `None` when
+/// the row cannot currently be chosen.
+fn session_creation_choice(app: &App, option_index: usize) -> Option<CreateSessionMode> {
     match option_index {
-        0..=3 if !app.services.has_agent_cli() => None,
-        0 => Some(SessionCreationChoice::Create(CreateSessionMode::Regular)),
-        1 => Some(SessionCreationChoice::Create(CreateSessionMode::Draft)),
-        2 => selected_stacked_parent_session_id(app).map(|parent_session_id| {
-            SessionCreationChoice::Create(CreateSessionMode::Stacked { parent_session_id })
-        }),
-        3 => selected_stack_append_session_id(app).map(SessionCreationChoice::AppendToStack),
+        0 | 1 if !app.services.has_agent_cli() => None,
+        0 => Some(CreateSessionMode::Regular),
+        1 => Some(CreateSessionMode::Draft),
         HARNESS_OPTION_INDEX => app
             .services
             .harness_availability()
             .is_available()
-            .then_some(SessionCreationChoice::Create(CreateSessionMode::Harness)),
+            .then_some(CreateSessionMode::Harness),
         _ => None,
     }
 }
@@ -289,17 +273,8 @@ fn session_creation_choice(app: &App, option_index: usize) -> Option<SessionCrea
 /// Creates the selected session type and opens its prompt composer.
 async fn create_selected_session(app: &mut App) {
     let selected_option_index = current_session_creation_selection(app);
-    let mode = match session_creation_choice(app, selected_option_index) {
-        Some(SessionCreationChoice::Create(mode)) => mode,
-        Some(SessionCreationChoice::AppendToStack(session_id)) => {
-            app.mode = AppMode::StackAppendParentSelection {
-                selected_parent_index: 0,
-                session_id,
-            };
-
-            return;
-        }
-        None => return,
+    let Some(mode) = session_creation_choice(app, selected_option_index) else {
+        return;
     };
     let project_id = app.active_project_id();
     app.start_session_creation(
@@ -336,127 +311,6 @@ fn current_session_creation_selection(app: &App) -> usize {
             selected_option_index,
         } => selected_option_index,
         _ => 0,
-    }
-}
-
-/// Returns the selected session id when it can parent a stacked draft.
-fn selected_stacked_parent_session_id(app: &App) -> Option<SessionId> {
-    app.selected_session()
-        .filter(|session| app.sessions.can_create_stacked_child(&session.id))
-        .map(|session| session.id.clone())
-}
-
-/// Returns the selected review-ready session when it has an eligible parent.
-fn selected_stack_append_session_id(app: &App) -> Option<SessionId> {
-    let selected_session = app.selected_session()?;
-    app.sessions
-        .sessions()
-        .iter()
-        .any(|candidate| {
-            can_append_session_to_stack(
-                app.sessions.sessions(),
-                selected_session.id.as_str(),
-                candidate.id.as_str(),
-            )
-        })
-        .then(|| selected_session.id.clone())
-}
-
-/// Handles navigation and confirmation in the stack-parent selector.
-async fn handle_stack_append_parent_key(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
-    match key.code {
-        KeyCode::Esc => {
-            app.mode = AppMode::SessionCreation {
-                selected_option_index: 3,
-            };
-        }
-        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
-            app.mode = AppMode::List;
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            update_stack_append_parent_selection(app, true);
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            update_stack_append_parent_selection(app, false);
-        }
-        KeyCode::Enter => append_session_to_selected_stack(app).await,
-        _ => {}
-    }
-
-    Ok(EventResult::Continue)
-}
-
-/// Moves the highlighted eligible parent up or down by one row.
-fn update_stack_append_parent_selection(app: &mut App, move_up: bool) {
-    let AppMode::StackAppendParentSelection {
-        selected_parent_index,
-        session_id,
-    } = &app.mode
-    else {
-        return;
-    };
-    let session_id = session_id.clone();
-    let parent_count = stack_append_parent_session_ids(app, &session_id).len();
-    let selected_parent_index = if move_up {
-        selected_parent_index.saturating_sub(1)
-    } else {
-        selected_parent_index
-            .saturating_add(1)
-            .min(parent_count.saturating_sub(1))
-    };
-
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index,
-        session_id,
-    };
-}
-
-/// Returns eligible parent identifiers in visible session order.
-fn stack_append_parent_session_ids(app: &App, session_id: &SessionId) -> Vec<SessionId> {
-    app.sessions
-        .sessions()
-        .iter()
-        .filter(|candidate| {
-            can_append_session_to_stack(
-                app.sessions.sessions(),
-                session_id.as_str(),
-                candidate.id.as_str(),
-            )
-        })
-        .map(|session| session.id.clone())
-        .collect()
-}
-
-/// Moves the source session beneath the highlighted parent and starts its
-/// synchronization.
-async fn append_session_to_selected_stack(app: &mut App) {
-    let AppMode::StackAppendParentSelection {
-        selected_parent_index,
-        session_id,
-    } = &app.mode
-    else {
-        return;
-    };
-    let session_id = session_id.clone();
-    let parent_session_id = stack_append_parent_session_ids(app, &session_id)
-        .get(*selected_parent_index)
-        .cloned();
-    app.mode = AppMode::List;
-
-    let Some(parent_session_id) = parent_session_id else {
-        return;
-    };
-    if let Err(error) = app
-        .append_session_to_stack(session_id.as_str(), parent_session_id.as_str())
-        .await
-    {
-        app.mode = AppMode::SyncBlockedPopup {
-            default_branch: None,
-            is_loading: false,
-            message: error.to_string(),
-            project_name: None,
-            title: "Append to stack failed".to_string(),
-        };
     }
 }
 

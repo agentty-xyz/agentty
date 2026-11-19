@@ -255,7 +255,6 @@ fn test_session_manager(session_id: &str) -> SessionManager {
             in_progress_total_seconds: 0,
             is_draft: false,
             agent: model_fixture::codex_selection(),
-            parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
             project_name: "project".to_string(),
             prompt: String::new(),

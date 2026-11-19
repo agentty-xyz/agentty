@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+fastrand.workspace = true
+httpdate.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

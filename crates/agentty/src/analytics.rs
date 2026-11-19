@@ -51,10 +51,8 @@ pub struct Analytics {
 pub enum SessionType {
     /// Independent session with an eagerly prepared worktree.
     Regular,
-    /// Root session whose worktree is prepared on first send.
+    /// Session whose worktree is prepared on first send.
     Draft,
-    /// Draft based on another session's branch.
-    Stacked,
     /// Independent session copied from an existing conversation.
     Fork,
 }
@@ -64,7 +62,6 @@ impl SessionType {
         match self {
             Self::Regular => "regular",
             Self::Draft => "draft",
-            Self::Stacked => "stacked",
             Self::Fork => "fork",
         }
     }

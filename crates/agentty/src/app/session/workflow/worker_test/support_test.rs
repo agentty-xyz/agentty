@@ -116,7 +116,6 @@ pub(super) async fn insert_in_progress_read_only_session(db: &AppRepositories) {
             id: "sess1",
             is_draft: false,
             model: "gemini-3.8-flash",
-            parent_session_id: None,
             permission_mode: ag_contracts::PermissionMode::ReadOnly,
             project_id,
             reasoning_level: ReasoningLevel::default(),
@@ -343,17 +342,11 @@ pub(super) fn preparation_test_worker_context(
     }
 }
 
-/// Exercises publication transaction failures and a retry after the
-/// stacked parent becomes active, without allowing provider work.
+/// Exercises publication transaction failures without allowing provider work.
 pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger: &'static str) {
     // Arrange
     let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let parent_id = app.create_session().await.expect("parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_id, Status::Review);
-    let session_id = app
-        .create_stacked_draft_session(&parent_id)
-        .await
-        .expect("child");
+    let session_id = app.create_draft_session().await.expect("draft");
     let (_images, prompt) = managed_first_prompt();
     app.stage_draft_message(&session_id, prompt.text.as_str())
         .await
@@ -402,6 +395,7 @@ pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger:
     let session = app.sessions.session_for_id(&session_id).expect("session");
     assert_eq!(session.status, Status::Draft);
     assert!(session.is_draft_session());
+    assert!(app.sessions.can_start_staged_session(&session_id));
     assert!(
         app.services
             .db()
@@ -423,95 +417,44 @@ pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger:
             .len(),
         0
     );
-
-    assert_preparation_retry_rejects_active_parent(&mut app, &session_id, &parent_id).await;
 }
 
-/// Retries saved work after its parent resumes, checking the gate before
-/// the worker can attempt the failed transaction again.
-pub(super) async fn assert_preparation_retry_rejects_active_parent(
+/// Captures a saved draft's first turn before the worker accepts it.
+pub(super) async fn queue_saved_draft_prompt(
     app: &mut crate::app::App,
-    session_id: &str,
-    parent_id: &str,
-) {
-    // Act: retry must still enforce the stack gate after a failed marker.
-    crate::test_support::set_session_status_for_test(app, parent_id, Status::InProgress);
-    app.retry_workspace_preparation(session_id, "session.create")
-        .await
-        .expect("retry");
-    crate::test_support::finish_session_creation_tasks(app).await;
-    let preparation = app
-        .services
-        .db()
-        .sessions()
-        .load_session_preparation(session_id)
-        .await
-        .expect("load")
-        .expect("preparation");
-
-    // Assert
-    assert_eq!(
-        preparation.state,
-        crate::infra::db::SessionPreparationState::Failed
-    );
-    assert!(
-        preparation
-            .error
-            .expect("parent gate")
-            .contains("parent stack")
-    );
-    assert!(preparation.prompt.is_some());
-    assert!(
-        app.services
-            .db()
-            .sessions()
-            .preparation_prompt_operation_status(session_id)
-            .await
-            .expect("operation")
-            .is_none()
-    );
-}
-
-/// Captures a saved child's first turn before the worker accepts it.
-pub(super) async fn queue_saved_stacked_prompt(
-    app: &mut crate::app::App,
-    parent_id: &str,
 ) -> (String, mpsc::UnboundedReceiver<ScheduledSessionCommand>) {
-    let child_id = app
-        .create_stacked_draft_session(parent_id)
-        .await
-        .expect("child");
-    app.stage_draft_message(&child_id, "saved child prompt")
+    let draft_id = app.create_draft_session().await.expect("draft");
+    app.stage_draft_message(&draft_id, "saved draft prompt")
         .await
         .expect("stage");
     app.services
         .db()
         .sessions()
-        .insert_session_preparation(&child_id, "main")
+        .insert_session_preparation(&draft_id, "main")
         .await
         .expect("prepare");
     app.services
         .db()
         .sessions()
         .save_preparation_prompt(
-            &child_id,
-            &serde_json::to_string(&TurnPrompt::from_text("saved child prompt".to_string()))
+            &draft_id,
+            &serde_json::to_string(&TurnPrompt::from_text("saved draft prompt".to_string()))
                 .expect("JSON"),
         )
         .await
         .expect("save");
     let (sender, receiver) = mpsc::unbounded_channel();
     app.sessions.worker_service_mut().workers.insert(
-        child_id.clone().into(),
+        draft_id.clone().into(),
         ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
 
-    app.retry_workspace_preparation(&child_id, "session.create")
+    app.retry_workspace_preparation(&draft_id, "session.create")
         .await
         .expect("submit");
     crate::test_support::finish_session_creation_tasks(app).await;
 
-    (child_id, receiver)
+    (draft_id, receiver)
 }
 
 /// Creates a retained prompt image under the production cleanup boundary.
@@ -1257,49 +1200,22 @@ pub(super) fn write_rebase_conflict_file(base_dir: &std::path::Path) {
 }
 
 /// Seeds one rebasing session with existing provider conversation ids.
-pub(super) async fn seed_existing_session_rebase_metadata(
-    db: &AppRepositories,
-    parent_session_id: Option<&str>,
-) {
+pub(super) async fn seed_existing_session_rebase_metadata(db: &AppRepositories) {
     let project_id = db
         .projects()
         .upsert_project("/tmp/project", Some("main".to_string()))
         .await
         .expect("failed to upsert project");
-    if let Some(parent_session_id) = parent_session_id {
-        db.sessions()
-            .insert_session(
-                parent_session_id,
-                model_fixture::CODEX_MODEL_ID,
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert parent session");
-        db.sessions()
-            .insert_stacked_draft_session(
-                "sess1",
-                model_fixture::CODEX_MODEL_ID,
-                "main",
-                "Rebasing",
-                parent_session_id,
-                project_id,
-            )
-            .await
-            .expect("failed to insert stacked session");
-    } else {
-        db.sessions()
-            .insert_session(
-                "sess1",
-                model_fixture::CODEX_MODEL_ID,
-                "main",
-                "Rebasing",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-    }
+    db.sessions()
+        .insert_session(
+            "sess1",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Rebasing",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
     db.sessions()
         .update_session_provider_conversation_id("sess1", Some("thread-before".to_string()))
         .await
@@ -1436,37 +1352,6 @@ pub(super) fn mock_successful_conflict_rebase_git_client(
         .returning(|_| Box::pin(async { Ok(RebaseStepResult::Completed) }));
 
     mock_git_client
-}
-
-/// Extends the successful rebase mock with a controllable stack-metadata
-/// boundary and a terminal review-request push failure.
-pub(super) fn blocking_stack_metadata_git_client(
-    main_checkout_root: PathBuf,
-    metadata_persistence_started: Arc<tokio::sync::Notify>,
-    release_metadata_persistence: Arc<tokio::sync::Notify>,
-) -> MockGitClient {
-    let mut git_client = mock_successful_conflict_rebase_git_client(main_checkout_root);
-    git_client
-        .expect_ref_hash()
-        .once()
-        .withf(|_, reference| reference == "main")
-        .returning(move |_, _| {
-            let metadata_persistence_started = Arc::clone(&metadata_persistence_started);
-            let release_metadata_persistence = Arc::clone(&release_metadata_persistence);
-
-            Box::pin(async move {
-                metadata_persistence_started.notify_one();
-                release_metadata_persistence.notified().await;
-
-                Ok("parent-tip".to_string())
-            })
-        });
-    git_client
-        .expect_in_progress_operation()
-        .once()
-        .returning(|_| Box::pin(async { Ok(Some(ag_git::InProgressGitOperation::Rebase)) }));
-
-    git_client
 }
 
 /// Builds the review-request command queued behind the controlled rebase.

@@ -115,12 +115,11 @@ async fn graph_handoffs_reject_stale_or_conflicting_claims_before_worker_deliver
         "missing-graph",
         "missing-session",
         "status",
-        "stack",
     ] {
         // Arrange
         let (mut app, _directory) = crate::test_support::new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        let mut request = claimed_handoff_request(&mut app, scenario == "stack").await;
+        let mut request = claimed_handoff_request(&mut app).await;
         match scenario {
             "utility" => {
                 request.dispatch.record.execution = ag_session::GraphExecutionRef::UtilityRun {
@@ -168,43 +167,6 @@ async fn graph_handoffs_reject_stale_or_conflicting_claims_before_worker_deliver
             response_rx.await.expect("completion").is_err(),
             "{scenario}"
         );
-    }
-}
-
-#[tokio::test]
-async fn graph_writers_refresh_active_siblings_before_stack_admission() {
-    for live_status in [Status::InProgress, Status::Rebasing] {
-        // Arrange
-        let (mut app, _directory) = crate::test_support::new_test_app().await;
-        seed_session(&mut app.sessions, app.services.db()).await;
-        let request = claimed_handoff_request(&mut app, true).await;
-        app.sessions.sessions_mut()[1].status = Status::Review;
-        *app.sessions.session_handles()["child"]
-            .status
-            .lock()
-            .expect("status") = live_status;
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-        // Act
-        app.sessions
-            .enqueue_claimed_graph_task(
-                &app.services,
-                request,
-                tokio_util::sync::CancellationToken::new(),
-                response_tx,
-            )
-            .await;
-
-        // Assert
-        assert!(
-            response_rx
-                .await
-                .expect("completion")
-                .expect_err("active sibling")
-                .to_string()
-                .contains("Graph writer requires an idle session stack")
-        );
-        assert_eq!(app.sessions.sessions()[1].status, live_status);
     }
 }
 
@@ -608,33 +570,9 @@ async fn assert_reader_result(
     );
 }
 
-async fn claimed_handoff_request(app: &mut App, writer: bool) -> ag_worker::GraphRunRequest {
+async fn claimed_handoff_request(app: &mut App) -> ag_worker::GraphRunRequest {
     let mut graph = graph();
     graph.nodes.truncate(1);
-    if writer {
-        graph.nodes[0].definition.read_only = false;
-        graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
-        let mut sessions = vec![
-            SessionFixtureBuilder::new()
-                .id("sess")
-                .folder(PathBuf::from("workspace"))
-                .build(),
-        ];
-        sessions.push(
-            SessionFixtureBuilder::new()
-                .id("child")
-                .parent_session_id(Some("sess".into()))
-                .status(Status::InProgress)
-                .build(),
-        );
-        *app.sessions = session_manager_with_handles(
-            sessions,
-            HashMap::from([
-                ("sess".into(), SessionHandles::new(Status::Review)),
-                ("child".into(), SessionHandles::new(Status::InProgress)),
-            ]),
-        );
-    }
     app.services
         .db()
         .graphs()

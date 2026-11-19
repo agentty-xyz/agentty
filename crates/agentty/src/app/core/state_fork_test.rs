@@ -1,14 +1,11 @@
 //! Session fork snapshot preparation and source validation unit tests.
 
-use std::sync::Arc;
-
 use ag_session::PermissionMode;
 
 use super::App;
 use crate::app::AppError;
-use crate::domain::session::{SessionDiffState, SessionId, SessionStats, Status};
+use crate::domain::session::{SessionDiffState, SessionStats, Status};
 use crate::domain::session_message::SessionMessageKind;
-use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 
 /// Prompt text copied through fork snapshot tests.
@@ -135,7 +132,6 @@ async fn assert_forked_session_snapshot(app: &App, forked_session_id: &str) {
         app.selected_session(),
         Some(session) if session.id == forked_session_id
             && session.status == Status::Review
-            && session.parent_session_id.is_none()
             && session.published_upstream_ref.is_none()
             && session.stats.added_lines == 0
             && session.stats.deleted_lines == 0
@@ -283,31 +279,6 @@ async fn test_fork_session_rejects_non_review_source_session() {
     assert!(matches!(
         result,
         Err(AppError::Session(crate::app::SessionError::Workflow(message)))
-            if message == "Only root review-ready sessions can be forked"
-    ));
-}
-
-#[tokio::test]
-async fn test_fork_session_rejects_stacked_child_source_session() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let child_session = crate::test_support::SessionFixtureBuilder::new()
-        .id("child-source")
-        .parent_session_id(Some(SessionId::from("parent-session")))
-        .status(Status::Review)
-        .build();
-    app.sessions.push_session(child_session);
-
-    // Act
-    let result = app.fork_session("child-source").await;
-
-    // Assert
-    assert!(matches!(
-        result,
-        Err(AppError::Session(crate::app::SessionError::Workflow(message)))
-            if message == "Only root review-ready sessions can be forked"
+            if message == "Only review-ready sessions can be forked"
     ));
 }

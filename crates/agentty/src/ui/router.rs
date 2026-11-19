@@ -14,10 +14,7 @@ use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::resource::SessionResources;
-use crate::domain::session::{
-    DailyActivity, Session, SessionId, activity_day_key_with_offset, can_append_session_to_stack,
-    can_create_stacked_child,
-};
+use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
     DiffReviewComments, DiffSidebarFocus, HelpContext, allows_diff_line_comment_reply,
@@ -63,45 +60,6 @@ struct RouteSharedContext<'a> {
     settings_screen: Option<&'a SettingsScreenSnapshot>,
     stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
-}
-
-impl RouteSharedContext<'_> {
-    /// Returns whether the selected session can be used as a stacked parent.
-    fn can_create_stacked_session(&self) -> bool {
-        self.current_tab == Tab::Sessions
-            && self
-                .table_state
-                .selected()
-                .and_then(|selected_index| self.sessions.get(selected_index))
-                .is_some_and(|session| can_create_stacked_child(self.sessions, session.id.as_str()))
-    }
-
-    /// Returns whether the selected session has at least one eligible stack
-    /// parent.
-    fn can_append_selected_session(&self) -> bool {
-        let Some(session_id) = self
-            .table_state
-            .selected()
-            .and_then(|selected_index| self.sessions.get(selected_index))
-            .map(|session| session.id.as_str())
-        else {
-            return false;
-        };
-
-        self.sessions.iter().any(|candidate| {
-            can_append_session_to_stack(self.sessions, session_id, candidate.id.as_str())
-        })
-    }
-
-    /// Returns eligible parent rows for one source session.
-    fn stack_append_parent_sessions(&self, session_id: &str) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|candidate| {
-                can_append_session_to_stack(self.sessions, session_id, candidate.id.as_str())
-            })
-            .collect()
-    }
 }
 
 /// UI-private base page selected for the active mode.
@@ -367,7 +325,6 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         },
         AppMode::List
         | AppMode::SessionCreation { .. }
-        | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }
         | AppMode::ProjectCatalog { .. }
         | AppMode::ProjectSwitcher { .. }
@@ -588,18 +545,10 @@ fn render_mode_overlay(
             selected_option_index,
         } => component::session_creation_overlay::SessionCreationOverlay::new(
             *selected_option_index,
-            shared.can_create_stacked_session(),
-            shared.can_append_selected_session(),
             shared.harness_availability,
             !shared.available_agent_kinds.is_empty(),
         )
         .render(frame, area),
-        AppMode::StackAppendParentSelection {
-            selected_parent_index: parent_index,
-            session_id,
-        } => {
-            render_stack_append_parent_overlay(frame, area, shared, session_id, *parent_index);
-        }
         AppMode::PreCommitHookWarning { message } => {
             InfoOverlay::new("Pre-commit hook warning", message).render(frame, area);
         }
@@ -716,22 +665,6 @@ fn render_chatgpt_sign_in_overlay(
     render_information_overlay(frame, area, popup, frame_time);
 }
 
-/// Renders the eligible parent choices for the session being appended.
-fn render_stack_append_parent_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    shared: &RouteSharedContext<'_>,
-    session_id: &SessionId,
-    selected_parent_index: usize,
-) {
-    let parent_sessions = shared.stack_append_parent_sessions(session_id);
-    component::stack_append_parent_overlay::StackAppendParentOverlay::new(
-        &parent_sessions,
-        selected_parent_index,
-    )
-    .render(frame, area);
-}
-
 /// Renders the project switcher with projects in most-recently-used order.
 fn render_project_switcher_overlay(
     frame: &mut Frame,
@@ -811,7 +744,7 @@ fn render_diff_surface(
     };
 
     let mut page = page::diff::DiffPage::new(page::diff::DiffPageInput {
-        can_comment: allows_diff_line_comment_reply(session, sessions, input.restore),
+        can_comment: allows_diff_line_comment_reply(session, input.restore),
         diff: input.diff,
         diff_layout_cache: resources.diff_layout_cache,
         file_explorer_selected_index: input.file_explorer_selected_index,

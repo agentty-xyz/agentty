@@ -149,7 +149,6 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         AppMode::ExecutionGraph(_)
         | AppMode::List
         | AppMode::SessionCreation { .. }
-        | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }
         | AppMode::ProjectCatalog { .. }
         | AppMode::ProjectSwitcher { .. }

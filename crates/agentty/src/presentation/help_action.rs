@@ -87,10 +87,6 @@ pub enum ViewSessionState {
     /// Session is still collecting staged draft messages before its first
     /// live turn starts.
     NewSession,
-    /// Stacked draft is staged beneath a parent branch; draft editing remains
-    /// available, start appears only when the parent stack is ready, and merge
-    /// and sync are hidden until launch.
-    StackedDraft,
     /// Session is ready for review; reply, worktree-open, merge, sync,
     /// review, and diff shortcuts are available.
     Review,
@@ -131,26 +127,16 @@ impl ViewActionAvailability {
 pub(crate) struct ViewHelpState {
     /// Whether this session can fork into a new independent session.
     pub(crate) can_fork_session: ViewActionAvailability,
-    /// Whether this session can enter the merge queue under the current
-    /// stack consistency rules.
+    /// Whether this session can enter the local merge queue.
     pub(crate) can_merge_session_branch: ViewActionAvailability,
-    /// Whether this session can start branch-mutating work under the current
-    /// stack consistency rules.
-    pub(crate) can_mutate_session_branch: ViewActionAvailability,
     /// Whether the current session currently has a local worktree directory
     /// available to open.
     pub(crate) can_open_worktree: ViewActionAvailability,
-    /// Whether this session can start sync work under the current stack
-    /// consistency rules.
-    pub(crate) can_rebase_session_branch: ViewActionAvailability,
     /// Whether the current draft session has staged prompts and can launch.
     pub(crate) can_start_staged_session: ViewActionAvailability,
     /// Pull-request publish action available for the current session, when
     /// any.
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
-    /// Whether the current session can open the reply composer under stack
-    /// rules.
-    pub(crate) reply_to_session: ViewActionAvailability,
     /// High-level view-mode state that gates the rest of the shortcut set.
     pub(crate) session_state: ViewSessionState,
 }
@@ -177,20 +163,14 @@ impl ViewActionSet {
                 state.session_state,
                 ViewSessionState::Interactive
                     | ViewSessionState::NewSession
-                    | ViewSessionState::StackedDraft
                     | ViewSessionState::Review
                     | ViewSessionState::AgentReview
             );
-        let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
-        let can_launch_configuration = can_open_view_command(
-            state.session_state,
-            state.can_mutate_session_branch,
-            state.reply_to_session,
-        );
+        let can_open_prompt = can_open_view_prompt(state.session_state);
+        let can_launch_configuration = can_open_view_command(state.session_state);
         let can_merge_session =
             can_merge_view_session(state.session_state, state.can_merge_session_branch);
-        let can_rebase_session =
-            can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
+        let can_rebase_session = can_rebase_view_session(state.session_state);
         let can_show_review = matches!(
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
@@ -224,9 +204,6 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Done => ViewSessionState::Done,
         Status::Canceled => ViewSessionState::Canceled,
         Status::InProgress => ViewSessionState::InProgress,
-        Status::Draft if session.is_draft_session() && session.is_stacked_child() => {
-            ViewSessionState::StackedDraft
-        }
         Status::Draft if session.is_draft_session() => ViewSessionState::NewSession,
         Status::Draft | Status::Question => ViewSessionState::Interactive,
         Status::Rebasing => ViewSessionState::Rebasing,
@@ -348,10 +325,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     append_view_stop_action(&mut actions, action_set);
 
     if state.can_start_staged_session.is_enabled()
-        && matches!(
-            state.session_state,
-            ViewSessionState::NewSession | ViewSessionState::StackedDraft
-        )
+        && state.session_state == ViewSessionState::NewSession
     {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
     }
@@ -495,68 +469,41 @@ fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewAc
 }
 
 /// Returns whether a session state can open the reply composer in view mode.
-fn can_open_view_prompt(
-    session_state: ViewSessionState,
-    reply_to_session: ViewActionAvailability,
-) -> bool {
-    if matches!(
+fn can_open_view_prompt(session_state: ViewSessionState) -> bool {
+    matches!(
         session_state,
-        ViewSessionState::NewSession | ViewSessionState::StackedDraft
-    ) {
-        return true;
-    }
-
-    reply_to_session.is_enabled()
-        && matches!(
-            session_state,
-            ViewSessionState::InProgress
-                | ViewSessionState::Rebasing
-                | ViewSessionState::Interactive
-                | ViewSessionState::Review
-                | ViewSessionState::AgentReview
-        )
+        ViewSessionState::NewSession
+            | ViewSessionState::InProgress
+            | ViewSessionState::Rebasing
+            | ViewSessionState::Interactive
+            | ViewSessionState::Review
+            | ViewSessionState::AgentReview
+    )
 }
 
-/// Returns whether a session state can open slash commands in view mode under
-/// stack branch-mutation and reply constraints.
-fn can_open_view_command(
-    session_state: ViewSessionState,
-    can_mutate_session_branch: ViewActionAvailability,
-    reply_to_session: ViewActionAvailability,
-) -> bool {
-    if matches!(
+/// Returns whether a session state can open slash commands in view mode.
+fn can_open_view_command(session_state: ViewSessionState) -> bool {
+    matches!(
         session_state,
-        ViewSessionState::NewSession | ViewSessionState::StackedDraft
-    ) {
-        return true;
-    }
-
-    (can_mutate_session_branch.is_enabled() || reply_to_session.is_enabled())
-        && matches!(
-            session_state,
-            ViewSessionState::Interactive
-                | ViewSessionState::Review
-                | ViewSessionState::AgentReview
-        )
+        ViewSessionState::NewSession
+            | ViewSessionState::Interactive
+            | ViewSessionState::Review
+            | ViewSessionState::AgentReview
+    )
 }
 
-/// Returns whether a session state can start sync in view mode under stack
-/// sync constraints.
+/// Returns whether a session state can start sync in view mode.
 ///
-/// Running and review-ready sessions expose sync when the stack is idle.
-fn can_rebase_view_session(
-    session_state: ViewSessionState,
-    can_rebase_session_branch: ViewActionAvailability,
-) -> bool {
-    can_rebase_session_branch.is_enabled()
-        && matches!(
-            session_state,
-            ViewSessionState::InProgress | ViewSessionState::Review | ViewSessionState::AgentReview
-        )
+/// Running and review-ready sessions expose sync.
+fn can_rebase_view_session(session_state: ViewSessionState) -> bool {
+    matches!(
+        session_state,
+        ViewSessionState::InProgress | ViewSessionState::Review | ViewSessionState::AgentReview
+    )
 }
 
 /// Returns whether a session state can enter the merge queue in view mode
-/// under stack merge constraints.
+/// while no linked review request owns merging.
 fn can_merge_view_session(
     session_state: ViewSessionState,
     can_merge_session_branch: ViewActionAvailability,
@@ -603,19 +550,13 @@ fn append_prompt_image_paste_action(
 
 /// Returns whether view-mode prompt entry can paste images before launch.
 fn prompt_image_paste_allowed(session_state: ViewSessionState) -> bool {
-    matches!(
-        session_state,
-        ViewSessionState::NewSession | ViewSessionState::StackedDraft
-    )
+    session_state == ViewSessionState::NewSession
 }
 
 /// Returns the `Enter` prompt-entry action label appropriate for the current
 /// session state.
 fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
-    if matches!(
-        session_state,
-        ViewSessionState::NewSession | ViewSessionState::StackedDraft
-    ) {
+    if session_state == ViewSessionState::NewSession {
         return HelpAction::new("add draft", "Enter", "Add draft");
     }
     if matches!(

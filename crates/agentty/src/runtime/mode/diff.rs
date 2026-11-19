@@ -635,7 +635,7 @@ fn open_line_comment_prompt(app: &mut App) {
     let Some(session) = app.sessions.session_for_id(session_id.as_str()) else {
         return;
     };
-    if !allows_diff_line_comment_reply(session, app.sessions.sessions(), None) {
+    if !allows_diff_line_comment_reply(session, None) {
         return;
     }
     let history_entries = super::session_view::session_prompt_history_entries(session);
@@ -669,7 +669,7 @@ fn can_reply_with_line_comments(app: &App) -> bool {
         return false;
     };
 
-    allows_diff_line_comment_reply(session, app.sessions.sessions(), restore.as_deref())
+    allows_diff_line_comment_reply(session, restore.as_deref())
 }
 
 /// Appends every structured line-comment block without losing image positions.

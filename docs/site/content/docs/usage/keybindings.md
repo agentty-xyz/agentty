@@ -117,7 +117,6 @@ State-specific differences:
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer.
 - **Question**: Answer through the question panel; `r` is hidden.
-- **Stacked child**: No `F`.
 - **Linked review request**: `c` opens comments; local `m` is unavailable.
 - **Merged**: Read-only chat, comments, and diff until manual target sync completes.
 - **Done / Canceled**: `c` confirms a continuation draft and linked comments are hidden;

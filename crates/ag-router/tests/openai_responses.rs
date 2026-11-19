@@ -4,11 +4,13 @@
 
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
-    ModelMessage, ModelRequest, OutputSchema, ReasoningEffort, Router, ToolCall, ToolDefinition,
-    TurnInput, preset,
+    ModelMessage, ModelRequest, OutputSchema, ReasoningEffort, RetryKind, RetryNotice,
+    RetryObserver, RetryPolicy, Router, ToolCall, ToolDefinition, TurnInput, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, method, path};
@@ -820,6 +822,66 @@ async fn reports_a_stream_closed_before_completion_as_a_transport_failure()
             .to_string()
             .contains("the response stream closed before the response completed")
     );
+
+    Ok(())
+}
+
+/// Records the retries a router reports.
+#[derive(Default)]
+struct RecordedRetries(Mutex<Vec<RetryNotice>>);
+
+#[async_trait::async_trait]
+impl RetryObserver for RecordedRetries {
+    async fn retrying(&self, notice: RetryNotice) {
+        if let Ok(mut notices) = self.0.lock() {
+            notices.push(notice);
+        }
+    }
+}
+
+#[tokio::test]
+async fn retries_a_server_error_under_the_spec_policy_and_reports_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_stream(
+        &server,
+        &[
+            item_done(message_item(r#"{"name":"Ada"}"#)),
+            completed(json!(null)),
+        ],
+    )
+    .await;
+    let policy = RetryPolicy::default()
+        .with_retried(RetryKind::ServerError, true)
+        .with_base_delay(Duration::from_millis(1));
+    let spec = preset::openai(format!("{}/v1/", server.uri()), "sk-test", "gpt-6.1-sol")
+        .with_retry(policy);
+    let observer = Arc::new(RecordedRetries::default());
+
+    // Act
+    let completion = Router::new([spec])
+        .execute_observed(user_request("openai/gpt-6.1-sol")?, observer.clone())
+        .await?;
+
+    // Assert
+    assert!(matches!(completion, Completion::Output { .. }));
+    let notices = observer
+        .0
+        .lock()
+        .map_err(|_| "the notices lock is poisoned")?
+        .clone();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].attempt, 1);
+    assert_eq!(notices[0].after, Duration::from_millis(1));
+    assert_eq!(notices[0].kind, RetryKind::ServerError);
+    assert_eq!(notices[0].status, Some(503));
 
     Ok(())
 }

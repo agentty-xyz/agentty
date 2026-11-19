@@ -367,7 +367,7 @@ impl App {
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<PreparedSessionCreation, ApiSessionError> {
-        self.validate_api_session_request(&request).await?;
+        self.validate_api_session_request(&request)?;
         self.ensure_project_checkout_available(request.project_id)
             .map_err(api_error_from_app)?;
 
@@ -395,24 +395,6 @@ impl App {
                     )
                     .await
                     .map_err(api_error_from_session)?;
-
-                return Ok(PreparedSessionCreation::Persisted(session_id));
-            }
-            CreateSessionMode::Stacked { parent_session_id } => {
-                let session_id = if let Some(settings) = creation_settings {
-                    self.sessions
-                        .create_stacked_draft_session_with_settings(
-                            &self.services,
-                            &parent_session_id,
-                            settings,
-                        )
-                        .await
-                } else {
-                    self.sessions
-                        .create_stacked_draft_session(&self.services, &parent_session_id)
-                        .await
-                }
-                .map_err(api_error_from_session)?;
 
                 return Ok(PreparedSessionCreation::Persisted(session_id));
             }
@@ -448,7 +430,7 @@ impl App {
         })
     }
 
-    async fn validate_api_session_request(
+    fn validate_api_session_request(
         &self,
         request: &CreateSessionRequest,
     ) -> Result<(), ApiSessionError> {
@@ -474,23 +456,6 @@ impl App {
                     .to_string(),
             ));
         }
-        if let CreateSessionMode::Stacked { parent_session_id } = &request.mode {
-            let parent_project_id = self
-                .services
-                .db()
-                .sessions()
-                .load_session_project_id(parent_session_id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-                .ok_or(ApiSessionError::NotFound)?;
-            if parent_project_id != request.project_id {
-                return Err(ApiSessionError::Operation(format!(
-                    "Parent session `{parent_session_id}` belongs to project `{}`, not `{}`",
-                    parent_project_id, request.project_id
-                )));
-            }
-        }
-
         Ok(())
     }
 
@@ -1073,7 +1038,6 @@ fn build_api_session(
             agent: parse_persisted_session_agent_model(Some(&row.agent), &row.model),
             base_branch: row.base_branch,
             is_draft: row.is_draft,
-            parent_session_id: row.parent_session_id.map(SessionId::from),
             permission_mode,
             project_id,
             reasoning_level,

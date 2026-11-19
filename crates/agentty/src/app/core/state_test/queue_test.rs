@@ -130,10 +130,7 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
                 context: HelpContext::View {
                     can_fork_session: false,
                     can_merge_session_branch: false,
-                    can_mutate_session_branch: false,
                     can_open_worktree: false,
-                    can_rebase_session_branch: false,
-                    can_reply_to_session: false,
                     can_start_staged_session: false,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,
