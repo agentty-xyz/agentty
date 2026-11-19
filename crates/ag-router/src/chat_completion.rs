@@ -1,30 +1,34 @@
 //! Shared structured-output backend for `OpenAI`-compatible Chat
 //! Completions APIs.
+//!
+//! Requests are streamed: text, `reasoning_content`, and tool-argument
+//! deltas reach an observer as they arrive, and the chunks accumulate into
+//! the same completion an unstreamed response decodes to. A server that
+//! ignores `stream` and answers with one JSON body is read as before.
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::sync::Arc;
 
-use async_trait::async_trait;
-use reqwest::header::HeaderMap;
+use reqwest::header::{CONTENT_TYPE, HeaderMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::http::{HttpTransport, ProviderRequest, TransportError, deserialize_optional};
+use crate::http::{
+    self, HttpTransport, ProviderRequest, SUCCESS_BODY_LIMIT_BYTES, TransportError,
+    deserialize_optional,
+};
 use crate::model::GeneratedResponse;
 use crate::provider_spec::{
-    InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode,
-    ThinkingOptions,
+    InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping, StreamUsage,
+    StructuredOutputMode, ThinkingOptions,
 };
 use crate::retry::RetryObserver;
+use crate::stream::{DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Chat Completions endpoint under a provider base URL.
 pub(crate) const ENDPOINT_PATH: &str = "chat/completions";
-/// Bound for one Chat Completions request. Reasoning models can spend more
-/// than a minute on a single completion, so a timed-out request is reported
-/// without a retry instead of doubling the wait.
-const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
 pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
@@ -53,26 +57,29 @@ pub(crate) const TURN_INSTRUCTIONS_SEPARATOR: &str = "\n\n";
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
 /// APIs, applying the request policy of one [`ProviderSpec`].
 pub(crate) struct ChatCompletionBackend<'spec> {
-    client: Arc<dyn ChatCompletionClient>,
+    deltas: Option<Arc<dyn DeltaObserver>>,
     headers: HeaderMap,
+    http: Arc<HttpTransport>,
     model: String,
     observer: Option<Arc<dyn RetryObserver>>,
     policy: &'spec ProviderSpec,
 }
 
 impl<'spec> ChatCompletionBackend<'spec> {
-    /// Creates a backend sending `headers` through an injected transport
-    /// client, reporting retries to `observer`.
+    /// Creates a backend sending `headers` through `http`, reporting
+    /// retries to `observer` and streamed content to `deltas`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
-        client: Arc<dyn ChatCompletionClient>,
+        http: Arc<HttpTransport>,
         observer: Option<Arc<dyn RetryObserver>>,
+        deltas: Option<Arc<dyn DeltaObserver>>,
     ) -> Self {
         Self {
-            client,
+            deltas,
             headers,
+            http,
             model,
             observer,
             policy,
@@ -116,20 +123,24 @@ impl<'spec> ChatCompletionBackend<'spec> {
                 .flatten(),
             reasoning_effort: self.reasoning_effort(request),
             response_format,
+            stream: true,
+            stream_options: (self.policy.stream_usage == StreamUsage::Requested).then_some(
+                StreamOptions {
+                    include_usage: true,
+                },
+            ),
             thinking: self.thinking(request),
             tools,
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
+        let request_body = ProviderRequest::new(
+            self.headers.clone(),
+            self.policy.endpoint(ENDPOINT_PATH),
+            payload,
+        )
+        .with_retry(self.policy.retry, self.observer.clone());
         let completion = self
-            .client
-            .complete(
-                ProviderRequest::new(
-                    self.headers.clone(),
-                    self.policy.endpoint(ENDPOINT_PATH),
-                    payload,
-                )
-                .with_retry(self.policy.retry, self.observer.clone()),
-            )
+            .create(&request_body)
             .await
             .map_err(|error| self.map_completion_error(error))?
             .ok_or(model::ModelError::InvalidResponse)?;
@@ -430,6 +441,41 @@ impl<'spec> ChatCompletionBackend<'spec> {
         }
     }
 
+    /// Sends `request` and reads its streamed completion, reporting deltas
+    /// as they arrive, or the one JSON completion of a server that does not
+    /// stream; `None` for a response without choices.
+    async fn create(
+        &self,
+        request: &ProviderRequest,
+    ) -> Result<Option<ChatCompletion>, TransportError> {
+        let mut response = self.http.send(request).await?;
+        let streamed = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.trim_start().starts_with("text/event-stream"));
+        if !streamed {
+            let response =
+                http::decode_success_body::<ChatCompletionResponse>(&mut response).await?;
+
+            return Ok(response.into_completion());
+        }
+        let mut chunks = ChunkStream::new(self.deltas.is_some());
+        while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
+            let done = chunks.push(&chunk)?;
+            if let Some(observer) = &self.deltas {
+                for delta in std::mem::take(&mut chunks.deltas) {
+                    observer.delta(delta).await;
+                }
+            }
+            if done {
+                break;
+            }
+        }
+
+        chunks.finish().map(Some)
+    }
+
     fn map_completion_error(&self, error: TransportError) -> model::ModelError {
         error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
     }
@@ -497,7 +543,7 @@ fn reasoning_enabled(reasoning_effort: model::ReasoningEffort) -> bool {
 }
 
 /// Provider-independent fields extracted from the first completion choice.
-pub(crate) struct ChatCompletion {
+struct ChatCompletion {
     content: Option<String>,
     metadata: model::CompletionMetadata,
     reasoning_content: Option<String>,
@@ -505,16 +551,6 @@ pub(crate) struct ChatCompletion {
 }
 
 impl ChatCompletion {
-    /// Creates one normalized completion choice.
-    pub(crate) fn new(finish_reason: String, content: Option<String>) -> Self {
-        Self {
-            content,
-            metadata: model::CompletionMetadata::new(finish_reason, None, None, None, None),
-            reasoning_content: None,
-            tool_calls: Vec::new(),
-        }
-    }
-
     /// Consumes the choice into provider-interpreted completion fields.
     fn into_parts(
         self,
@@ -533,53 +569,213 @@ impl ChatCompletion {
     }
 }
 
-/// Decoded client boundary between provider adapters and the Chat Completions
-/// API.
-#[async_trait]
-pub(crate) trait ChatCompletionClient: Send + Sync {
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-    ) -> Result<Option<ChatCompletion>, TransportError>;
+/// Incremental reader of a Chat Completions chunk stream that accumulates
+/// the first choice into the completion an unstreamed response carries,
+/// and, when `observed`, keeps the content deltas not yet reported. The
+/// accumulated text stays within the success body limit, so memory is
+/// bounded however long the stream runs.
+#[derive(Default)]
+struct ChunkStream {
+    /// Position among the response's calls of each call, by its wire index.
+    call_indexes: HashMap<u64, usize>,
+    calls: Vec<StreamedToolCall>,
+    content: Option<String>,
+    /// Bytes of accumulated text: content, reasoning, and calls.
+    content_bytes: usize,
+    /// Deltas read but not yet reported.
+    deltas: Vec<ResponseDelta>,
+    events: SseDecoder,
+    finish_reason: Option<String>,
+    id: Option<String>,
+    model: Option<String>,
+    observed: bool,
+    reasoning_content: Option<String>,
+    system_fingerprint: Option<String>,
+    usage: Option<ChatCompletionUsage>,
 }
 
-/// Production Chat Completions client, built on first use and shared by
-/// every router, so hosts that build a router per model do not build an
-/// HTTP client per router.
-static DEFAULT_CLIENT: LazyLock<Arc<ReqwestChatCompletionClient>> = LazyLock::new(|| {
-    Arc::new(ReqwestChatCompletionClient {
-        http: HttpTransport::new(REQUEST_TIMEOUT),
-    })
-});
+impl ChunkStream {
+    /// Creates a reader that keeps content deltas when `observed`.
+    fn new(observed: bool) -> Self {
+        Self {
+            observed,
+            ..Self::default()
+        }
+    }
 
-/// Returns the shared production Chat Completions client implementation.
-pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
-    Arc::clone(&DEFAULT_CLIENT) as Arc<dyn ChatCompletionClient>
+    /// Reads `chunk`, returning whether the stream's `[DONE]` event
+    /// arrived; later events are not read.
+    fn push(&mut self, chunk: &[u8]) -> Result<bool, TransportError> {
+        for data in self.events.push(chunk)? {
+            if self.dispatch(&data)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Reads the event left when the stream closed and returns the
+    /// completion, failing when no choice finished.
+    fn finish(mut self) -> Result<ChatCompletion, TransportError> {
+        if let Some(data) = std::mem::take(&mut self.events).finish()? {
+            self.dispatch(&data)?;
+        }
+        let finish_reason = self
+            .finish_reason
+            .ok_or_else(|| TransportError::transport(StreamClosed))?;
+        let metadata = model::CompletionMetadata::new(
+            finish_reason,
+            self.id,
+            self.model,
+            self.system_fingerprint,
+            self.usage.map(model::CompletionUsage::from),
+        );
+
+        Ok(ChatCompletion {
+            content: self.content,
+            metadata,
+            reasoning_content: self.reasoning_content,
+            tool_calls: self
+                .calls
+                .into_iter()
+                .map(StreamedToolCall::into_tool_call)
+                .collect(),
+        })
+    }
+
+    /// Reads one event, returning whether it is `[DONE]`.
+    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
+        if data == "[DONE]" {
+            return Ok(true);
+        }
+        let chunk = serde_json::from_str::<ChatCompletionChunk>(data)
+            .map_err(TransportError::InvalidResponse)?;
+        if let Some(error) = chunk.error {
+            return Err(TransportError::StreamFailed {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        self.id = self.id.take().or(chunk.id);
+        self.model = self.model.take().or(chunk.model);
+        self.system_fingerprint = self.system_fingerprint.take().or(chunk.system_fingerprint);
+        if chunk.usage.is_some() {
+            self.usage = chunk.usage;
+        }
+        let first = chunk
+            .choices
+            .into_iter()
+            .flatten()
+            .find(|choice| choice.index == 0);
+        let Some(choice) = first else {
+            return Ok(false);
+        };
+        // Some providers, such as Moonshot, report streamed usage on the
+        // choice instead.
+        if self.usage.is_none() {
+            self.usage = choice.usage;
+        }
+        if choice.finish_reason.is_some() {
+            self.finish_reason = choice.finish_reason;
+        }
+        let Some(delta) = choice.delta else {
+            return Ok(false);
+        };
+        if let Some(text) = delta.content.filter(|text| !text.is_empty()) {
+            self.grow(text.len())?;
+            self.content.get_or_insert_default().push_str(&text);
+            self.report(ResponseDelta::Text(text));
+        }
+        if let Some(text) = delta.reasoning_content.filter(|text| !text.is_empty()) {
+            self.grow(text.len())?;
+            self.reasoning_content
+                .get_or_insert_default()
+                .push_str(&text);
+            self.report(ResponseDelta::Reasoning(text));
+        }
+        for call in delta.tool_calls.into_iter().flatten() {
+            self.read_call(call)?;
+        }
+
+        Ok(false)
+    }
+
+    /// Accumulates one tool-call fragment into the call at its wire index,
+    /// numbering calls by the order they start.
+    fn read_call(&mut self, fragment: ChunkToolCall) -> Result<(), TransportError> {
+        let next = self.call_indexes.len();
+        let index = *self.call_indexes.entry(fragment.index).or_insert(next);
+        if index == self.calls.len() {
+            self.calls.push(StreamedToolCall::default());
+        }
+        let function = fragment.function.unwrap_or_default();
+        let grown = [
+            &fragment.id,
+            &fragment.kind,
+            &function.name,
+            &function.arguments,
+        ]
+        .into_iter()
+        .flatten()
+        .map(String::len)
+        .sum();
+        self.grow(grown)?;
+        let call = &mut self.calls[index];
+        call.id = call.id.take().or(fragment.id);
+        call.kind = call.kind.take().or(fragment.kind);
+        call.name = call.name.take().or(function.name);
+        if let Some(arguments) = function.arguments.filter(|arguments| !arguments.is_empty()) {
+            call.arguments.push_str(&arguments);
+            self.report(ResponseDelta::ToolArguments { arguments, index });
+        }
+
+        Ok(())
+    }
+
+    /// Counts `bytes` more accumulated text, failing past the success body
+    /// limit.
+    fn grow(&mut self, bytes: usize) -> Result<(), TransportError> {
+        self.content_bytes = self.content_bytes.saturating_add(bytes);
+        if self.content_bytes > SUCCESS_BODY_LIMIT_BYTES {
+            return Err(TransportError::ResponseBodyTooLarge);
+        }
+
+        Ok(())
+    }
+
+    /// Keeps `delta` for the observer, when there is one.
+    fn report(&mut self, delta: ResponseDelta) {
+        if self.observed {
+            self.deltas.push(delta);
+        }
+    }
 }
 
-struct ReqwestChatCompletionClient {
-    http: HttpTransport,
+/// One tool call accumulated from its streamed fragments.
+#[derive(Default)]
+struct StreamedToolCall {
+    arguments: String,
+    id: Option<String>,
+    kind: Option<String>,
+    name: Option<String>,
 }
 
-#[async_trait]
-impl ChatCompletionClient for ReqwestChatCompletionClient {
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-    ) -> Result<Option<ChatCompletion>, TransportError> {
-        let response = self
-            .http
-            .post_json::<ChatCompletionResponse>(&request)
-            .await?;
+impl StreamedToolCall {
+    /// Returns the call as an unstreamed response carries it; a call that
+    /// never named its type reads as a function call.
+    fn into_tool_call(self) -> ChatCompletionToolCall {
+        let mut function = serde_json::Map::new();
+        function.insert("arguments".to_string(), Value::String(self.arguments));
+        if let Some(name) = self.name {
+            function.insert("name".to_string(), Value::String(name));
+        }
 
-        Ok(response.into_completion().map(|(choice, metadata)| {
-            let mut completion = ChatCompletion::new(choice.finish_reason, choice.message.content);
-            completion.metadata = metadata;
-            completion.reasoning_content = choice.message.reasoning_content;
-            completion.tool_calls = choice.message.tool_calls.unwrap_or_default();
-
-            completion
-        }))
+        ChatCompletionToolCall {
+            function: Value::Object(function),
+            id: self.id.unwrap_or_default(),
+            kind: self.kind.unwrap_or_else(|| "function".to_string()),
+        }
     }
 }
 
@@ -599,10 +795,18 @@ struct ChatCompletionPayload<'a> {
     reasoning_effort: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat<'a>>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<Thinking>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ChatCompletionTool<'a>>,
+}
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize)]
@@ -734,7 +938,7 @@ struct ChatCompletionResponse {
 }
 
 impl ChatCompletionResponse {
-    fn into_completion(self) -> Option<(ChatCompletionChoice, model::CompletionMetadata)> {
+    fn into_completion(self) -> Option<ChatCompletion> {
         let Self {
             choices,
             id,
@@ -744,15 +948,88 @@ impl ChatCompletionResponse {
         } = self;
         let choice = choices.into_iter().next()?;
         let metadata = model::CompletionMetadata::new(
-            choice.finish_reason.clone(),
+            choice.finish_reason,
             id,
             response_model,
             system_fingerprint,
             usage.map(model::CompletionUsage::from),
         );
 
-        Some((choice, metadata))
+        Some(ChatCompletion {
+            content: choice.message.content,
+            metadata,
+            reasoning_content: choice.message.reasoning_content,
+            tool_calls: choice.message.tool_calls.unwrap_or_default(),
+        })
     }
+}
+
+/// One chunk of a streamed completion.
+#[derive(Deserialize)]
+struct ChatCompletionChunk {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    choices: Option<Vec<ChunkChoice>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    error: Option<ChunkError>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    system_fingerprint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    usage: Option<ChatCompletionUsage>,
+}
+
+/// A failure a provider reported inside its stream.
+#[derive(Deserialize)]
+struct ChunkError {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    code: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChunkChoice {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    delta: Option<ChunkDelta>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    finish_reason: Option<String>,
+    #[serde(default)]
+    index: u64,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    usage: Option<ChatCompletionUsage>,
+}
+
+#[derive(Deserialize)]
+struct ChunkDelta {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    reasoning_content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    tool_calls: Option<Vec<ChunkToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ChunkToolCall {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    function: Option<ChunkFunction>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    id: Option<String>,
+    #[serde(default)]
+    index: u64,
+    #[serde(default, deserialize_with = "deserialize_optional", rename = "type")]
+    kind: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct ChunkFunction {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    arguments: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]

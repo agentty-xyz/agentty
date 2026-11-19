@@ -35,6 +35,8 @@ async fn sends_tool_result_history_with_assistant_text_for_continuation() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(

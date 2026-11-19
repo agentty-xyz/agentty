@@ -239,6 +239,8 @@ async fn completes_native_json_schema_request() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": "extract the name", "role": "user"}
             ],
@@ -295,6 +297,8 @@ async fn advertises_and_decodes_read_tool_call() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": "inspect the manifest", "role": "user"}
             ],
@@ -356,6 +360,8 @@ async fn continues_after_read_tool_result_with_assistant_text() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": "inspect the manifest", "role": "user"}
             ],
@@ -401,6 +407,8 @@ async fn continues_after_read_tool_result_with_assistant_text() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": "inspect the manifest", "role": "user"},
                 {

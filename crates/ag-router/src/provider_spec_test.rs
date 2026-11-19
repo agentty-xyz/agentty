@@ -14,7 +14,7 @@ use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::{GenerationOptions, ModelError, ReasoningEffort};
 use crate::provider_spec::{
     Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
-    StructuredOutputMode, ThinkingOptions, WireProtocol,
+    StreamUsage, StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 use crate::schema::OutputSchema;
 
@@ -70,6 +70,8 @@ fn starts_from_a_conservative_policy_per_protocol() {
     assert!(!chat.image_input && !chat.prompt_cache_key);
     assert_eq!(chat.instruction_placement, InstructionPlacement::Separate);
     assert!(!chat.replay.reasoning_text && !chat.replay.tool_result_name);
+    assert_eq!(chat.stream_usage, StreamUsage::Requested);
+    assert_eq!(responses.stream_usage, StreamUsage::Unrequested);
     assert!(chat.keeps_prefix_across_schemas());
     assert_eq!(
         responses.structured_output,
@@ -283,6 +285,10 @@ fn rejects_specifications_no_request_can_be_sent_with() {
             "the Responses protocol cannot express reasoning-content replay",
         ),
         (
+            responses().with_stream_usage(true),
+            "the Responses protocol cannot express `stream_options.include_usage`",
+        ),
+        (
             chat().with_structured_output(StructuredOutputMode::ForcedTool),
             "the ChatCompletions protocol cannot express forced-tool structured output",
         ),
@@ -342,6 +348,10 @@ fn rejects_anthropic_messages_options_it_cannot_express() {
         (
             anthropic().with_prompt_cache_key(true),
             "the AnthropicMessages protocol cannot express a prompt cache key",
+        ),
+        (
+            anthropic().with_stream_usage(true),
+            "the AnthropicMessages protocol cannot express `stream_options.include_usage`",
         ),
     ];
     let forced_tool = anthropic()

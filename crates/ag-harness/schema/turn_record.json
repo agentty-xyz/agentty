@@ -327,7 +327,7 @@
       "description": "Content of a finished item.",
       "oneOf": [
         {
-          "description": "Assistant text the model wrote beside its tool calls; never the\nrun's final output.",
+          "description": "Assistant text the model wrote beside its tool calls, or the text a\nstreamed response wrote as it went (see [`RunEventKind::ItemDelta`]):\nfor a final answer, its raw text, which [`Self::Output`] then carries\nvalidated. A final answer that did not stream emits only\n[`Self::Output`].",
           "type": "object",
           "properties": {
             "type": {

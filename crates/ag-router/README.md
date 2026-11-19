@@ -97,6 +97,18 @@ and `Jitter`. A spent quota (`402`, or a `429` reporting one) and a timed-out re
 are never retried. `Router::execute_observed` reports each retry to a `RetryObserver`
 before its wait, and dropping the request future stops a pending wait.
 
+Responses and Chat Completions requests stream (`stream: true`). Chat Completions also
+asks for usage with `stream_options.include_usage`, which every preset keeps;
+`ProviderSpec::with_stream_usage(false)` turns it off for a server that rejects it. A
+stream may run for 30 minutes in total but fails after 5 minutes of silence. A Chat
+Completions server that ignores `stream` and answers with one JSON body is read as
+before. `Router::execute_streamed` reports each `ResponseDelta` (text, reasoning, or a
+call's arguments by its position) to a `DeltaObserver` as it arrives. The returned
+completion is decoded exactly as an unstreamed response would be, so deltas only preview
+it. A failure reported inside a stream is classified like an HTTP rejection, and a
+stream that ends before its response finishes is a transport failure. Anthropic Messages
+requests are unstreamed and report no deltas.
+
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
 carry only `model`, `messages`, `tools`, `response_format`, and the legacy `max_tokens`,
@@ -127,9 +139,9 @@ content of its first call or output, and replayed verbatim before that assistant
 reasoning content that is not such an array is omitted. Usage reports cached input
 tokens. An overflow is recognized from an HTTP rejection or from a streamed
 `response.failed`, a response cut short reports its `incomplete_details` reason, and a
-stream that closes before its terminal event is a transport failure. The current `Task`
-surface supports chat only. Streaming to callers and other model modes are not yet
-implemented.
+stream that closes before its terminal event is a transport failure. Output text,
+reasoning summary, and function-argument deltas reach a `DeltaObserver`. The current
+`Task` surface supports chat only; other model modes are not yet implemented.
 
 `anthropic` sends unstreamed requests to `{base_url}/messages` with the key in
 `x-api-key` and the protocol's `anthropic-version: 2023-06-01` header, which

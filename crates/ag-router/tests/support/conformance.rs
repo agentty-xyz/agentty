@@ -9,7 +9,11 @@
 //! recorder below as `crates/ag-router/tests/record_golden.rs` (with the
 //! `PlanToken` credential the responses suite defines, implementing
 //! `BearerCredential`), run it with `GOLDEN_OUT` naming an output directory,
-//! and compare the output with the `requests/` files byte for byte. The
+//! and compare the output with the `requests/` files byte for byte, except
+//! that the Chat Completions fixtures (every one but `chatgpt-*`, `openai-*`,
+//! and `anthropic-*`) have since gained `"stream":true` and
+//! `"stream_options":{"include_usage":true}` in their bodies, with their
+//! `content-length` 54 bytes longer, since those requests stream. The
 //! `anthropic-*` fixtures postdate that enum: they record the first Anthropic
 //! Messages requests, written by hand from the Messages API reference and
 //! then matched to the serialized key order, and the `anthropic_messages/`

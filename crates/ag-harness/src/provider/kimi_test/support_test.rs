@@ -13,7 +13,8 @@ use crate::schema_contract::OutputSchema;
 use crate::{model, tool};
 
 /// Matches a durable-session request whose body equals the wrapped value
-/// plus the session's `prompt_cache_key`.
+/// plus the session's `prompt_cache_key` and the streaming fields of every
+/// Chat Completions request.
 #[cfg(feature = "sqlite")]
 pub(super) struct SessionBody(pub(super) Value);
 
@@ -23,13 +24,18 @@ impl Match for SessionBody {
         let Ok(mut body) = request.body_json::<Value>() else {
             return false;
         };
-        let key = body
-            .as_object_mut()
-            .and_then(|body| body.remove("prompt_cache_key"));
+        let Some(fields) = body.as_object_mut() else {
+            return false;
+        };
+        let key = fields.remove("prompt_cache_key");
+        let streamed = fields.remove("stream") == Some(json!(true))
+            && fields.remove("stream_options") == Some(json!({"include_usage": true}));
 
-        key.as_ref()
-            .and_then(Value::as_str)
-            .is_some_and(|key| key.starts_with("ag-session-"))
+        streamed
+            && key
+                .as_ref()
+                .and_then(Value::as_str)
+                .is_some_and(|key| key.starts_with("ag-session-"))
             && body == self.0
     }
 }
@@ -105,6 +111,8 @@ pub(super) async fn mount_structured_response(
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!("{STRUCTURED_OUTPUT_INSTRUCTION}{schema}"),
@@ -132,6 +140,8 @@ pub(super) async fn mount_tool_response(server: &MockServer, prompt: &str, messa
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(

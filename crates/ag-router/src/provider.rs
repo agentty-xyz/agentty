@@ -5,14 +5,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::anthropic::{self, AnthropicBackend};
-use crate::chat_completion::{self, ChatCompletionBackend};
+use crate::chat_completion::ChatCompletionBackend;
 use crate::http::HttpTransport;
 use crate::model::{
     Completion, GeneratedResponse, GenerationOptions, ModelError, ModelErrorType, ModelRequest,
 };
 use crate::provider_spec::{Auth, ProviderSpec, WireProtocol};
-use crate::responses::{self, ResponsesBackend};
+use crate::responses::ResponsesBackend;
 use crate::retry::RetryObserver;
+use crate::stream::{self, DeltaObserver};
 use crate::{OutputSchema, TurnInput, ensure_content_size};
 
 /// Routing key of a specification: its identifier and the one model it
@@ -22,9 +23,15 @@ type SpecKey = (String, Option<String>);
 /// Single entry point for configured model providers.
 pub struct Router {
     anthropic: Arc<HttpTransport>,
-    client: Arc<dyn chat_completion::ChatCompletionClient>,
-    responses: Arc<HttpTransport>,
     specs: HashMap<SpecKey, ProviderSpec>,
+    /// Transport of the streamed protocols, Responses and Chat Completions.
+    streaming: Arc<HttpTransport>,
+}
+
+/// Observers of one request's retries and streamed deltas.
+struct Observers {
+    deltas: Option<Arc<dyn DeltaObserver>>,
+    retries: Option<Arc<dyn RetryObserver>>,
 }
 
 impl Router {
@@ -41,9 +48,8 @@ impl Router {
     pub fn new(specs: impl IntoIterator<Item = ProviderSpec>) -> Self {
         let mut router = Self {
             anthropic: anthropic::default_transport(),
-            client: chat_completion::default_client(),
-            responses: responses::default_transport(),
             specs: HashMap::new(),
+            streaming: stream::default_transport(),
         };
         for spec in specs {
             router
@@ -142,7 +148,14 @@ impl Router {
     /// Returns a routing, transport, decoding, or output validation error;
     /// a blank text answer fails as [`ModelError::InvalidResponse`].
     pub async fn execute(&self, request: ModelRequest) -> Result<Completion, ModelError> {
-        self.execute_routed(request, None).await
+        self.execute_routed(
+            request,
+            Observers {
+                deltas: None,
+                retries: None,
+            },
+        )
+        .await
     }
 
     /// Executes one request as [`Self::execute`] does, reporting each retry
@@ -156,14 +169,50 @@ impl Router {
         request: ModelRequest,
         observer: Arc<dyn RetryObserver>,
     ) -> Result<Completion, ModelError> {
-        self.execute_routed(request, Some(observer)).await
+        self.execute_routed(
+            request,
+            Observers {
+                deltas: None,
+                retries: Some(observer),
+            },
+        )
+        .await
     }
 
-    /// Executes one request, reporting retries to `observer`.
+    /// Executes one request as [`Self::execute`] does, reporting each
+    /// [`crate::ResponseDelta`] of a streamed response to `deltas` as it
+    /// arrives, and each retry to `retries` as [`Self::execute_observed`]
+    /// does.
+    ///
+    /// Responses and Chat Completions requests stream; an Anthropic
+    /// Messages request reports no deltas. The returned completion is the
+    /// one [`Self::execute`] returns for the same response, so deltas only
+    /// preview it: a response that fails after streaming began, or whose
+    /// output fails validation, returns its error after its deltas.
+    ///
+    /// # Errors
+    /// Returns the errors of [`Self::execute`].
+    pub async fn execute_streamed(
+        &self,
+        request: ModelRequest,
+        deltas: Arc<dyn DeltaObserver>,
+        retries: Option<Arc<dyn RetryObserver>>,
+    ) -> Result<Completion, ModelError> {
+        self.execute_routed(
+            request,
+            Observers {
+                deltas: Some(deltas),
+                retries,
+            },
+        )
+        .await
+    }
+
+    /// Executes one request, reporting to `observers`.
     async fn execute_routed(
         &self,
         request: ModelRequest,
-        observer: Option<Arc<dyn RetryObserver>>,
+        observers: Observers,
     ) -> Result<Completion, ModelError> {
         let (spec, model) = self.route(&request.model)?;
         if let Some(schema) = request.schema() {
@@ -186,7 +235,7 @@ impl Router {
                     model.to_string(),
                     headers,
                     Arc::clone(&self.anthropic),
-                    observer,
+                    observers.retries,
                 )
                 .generate(&request)
                 .await?
@@ -196,8 +245,9 @@ impl Router {
                     spec,
                     model.to_string(),
                     headers,
-                    Arc::clone(&self.client),
-                    observer,
+                    Arc::clone(&self.streaming),
+                    observers.retries,
+                    observers.deltas,
                 )
                 .generate(&request)
                 .await?
@@ -207,8 +257,9 @@ impl Router {
                     spec,
                     model.to_string(),
                     headers,
-                    Arc::clone(&self.responses),
-                    observer,
+                    Arc::clone(&self.streaming),
+                    observers.retries,
+                    observers.deltas,
                 )
                 .generate(&request)
                 .await?

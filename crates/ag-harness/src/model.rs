@@ -45,7 +45,7 @@ use crate::error::ErrorKind;
     feature = "providers-compat",
     feature = "providers-openai"
 ))]
-use crate::event::{self, EventSink, RunEventKind};
+use crate::event::{self, EventSink, RunEventKind, StreamedItems};
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
 #[cfg(any(
@@ -365,10 +365,18 @@ impl ModelClient {
             let routed = self
                 .to_router_request(&request)
                 .map_err(|error| (error, None))?;
-            let executed = match event::retry_events() {
-                Some(events) => {
+            let executed = match event::request_events() {
+                Some(event::RequestEvents { sink, streamed }) => {
+                    let deltas = DeltaEvents {
+                        sink: Arc::clone(&sink),
+                        streamed,
+                    };
                     self.router
-                        .execute_observed(routed, Arc::new(RetryEvents(events)))
+                        .execute_streamed(
+                            routed,
+                            Arc::new(deltas),
+                            Some(Arc::new(RetryEvents(sink))),
+                        )
                         .await
                 }
                 None => self.router.execute(routed).await,
@@ -770,6 +778,48 @@ impl ag_router::RetryObserver for RetryEvents {
                 Self::error_kind(notice.kind),
             ))
             .await;
+    }
+}
+
+/// Streams a routed turn request's deltas into the items of the run it
+/// belongs to as [`RunEventKind::ItemDelta`] events. A request whose
+/// response is no item of the run, such as a round summary request, has no
+/// `streamed` items, and its deltas are dropped.
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+struct DeltaEvents {
+    sink: Arc<EventSink>,
+    streamed: Option<Arc<StreamedItems>>,
+}
+
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+#[async_trait]
+impl ag_router::DeltaObserver for DeltaEvents {
+    /// Streams `delta` into its item. The router's delta kinds are
+    /// non-exhaustive; a kind added there is mapped here in the same
+    /// change, and until then is not streamed.
+    async fn delta(&self, delta: ag_router::ResponseDelta) {
+        if let Some(streamed) = &self.streamed {
+            let sink = &self.sink;
+            match delta {
+                ag_router::ResponseDelta::Text(text) => streamed.text(sink, text).await,
+                ag_router::ResponseDelta::ToolArguments { arguments, index } => {
+                    streamed.arguments(sink, index, arguments).await;
+                }
+                other => {
+                    if let ag_router::ResponseDelta::Reasoning(text) = other {
+                        streamed.reasoning(sink, text).await;
+                    }
+                }
+            }
+        }
     }
 }
 

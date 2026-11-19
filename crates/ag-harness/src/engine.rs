@@ -23,7 +23,8 @@ use crate::catalog::{ModelId, Pricing};
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{
-    self, EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
+    self, EventSink, Item, ItemId, ItemKind, OpenItems, RunEventKind, SessionId, StreamedItems,
+    StreamedText, ToolCallItem, ToolCallStatus,
 };
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -290,6 +291,7 @@ impl Engine<'_> {
                 estimated_weight: state.context_fit.sent_weight(),
                 unreduced_weight: state.context_fit.unreduced_weight(),
             };
+            let streamed = StreamedItems::for_run(self.events.as_ref());
             let completed = self
                 .metered_request(
                     self.turn_answerer(),
@@ -297,6 +299,7 @@ impl Engine<'_> {
                     (sent.estimated_weight, calibration),
                     state.model_request_index,
                     turn_id,
+                    streamed.as_ref(),
                 )
                 .await
                 .map_err(TurnError::budget_refused)?;
@@ -314,19 +317,22 @@ impl Engine<'_> {
             };
             self.record_turn_request(state, activity, &sent);
             self.publish_requests(state).await?;
+            let open = OpenItems::take(streamed.as_deref()).await;
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
                     let content = output.to_string();
 
                     return Ok(self
-                        .finish(request, output, content, reasoning_content)
+                        .finish(request, output, content, reasoning_content, open)
                         .await);
                 }
                 ModelResponse::Text(text) => {
                     let output = Value::String(text.clone());
 
-                    return Ok(self.finish(request, output, text, reasoning_content).await);
+                    return Ok(self
+                        .finish(request, output, text, reasoning_content, open)
+                        .await);
                 }
                 ModelResponse::ToolCall(call) => (vec![call], false),
                 ModelResponse::ToolCalls(calls) => {
@@ -338,7 +344,7 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
-            self.run_tool_round(&calls, batched, turn_id, &mut request, state)
+            self.run_tool_round(&calls, batched, turn_id, &mut request, state, open)
                 .await?;
         }
     }
@@ -355,8 +361,14 @@ impl Engine<'_> {
         turn_id: Option<LifecycleId>,
         request: &mut ModelRequest,
         state: &mut TurnState,
+        open: OpenItems,
     ) -> Result<(), TurnError> {
-        self.publish_calls_message(calls).await;
+        let OpenItems {
+            calls: mut call_items,
+            message,
+            reasoning,
+        } = open;
+        self.publish_calls_message(calls, reasoning, message).await;
         if let Err(limit) = self
             .options
             .limits()
@@ -380,6 +392,7 @@ impl Engine<'_> {
                 request,
                 &state.context_fit,
                 &mut state.rounds,
+                &mut call_items,
             )
             .await?;
         state.running_tools = false;
@@ -411,9 +424,13 @@ impl Engine<'_> {
         output: Value,
         content: String,
         reasoning_content: Option<String>,
+        open: OpenItems,
     ) -> (Value, ModelRequest) {
-        self.publish_message(reasoning_content.as_deref(), None)
-            .await;
+        self.publish_message(
+            (reasoning_content.as_deref(), open.reasoning),
+            (None, open.message),
+        )
+        .await;
         request.record_output_with_reasoning(content, reasoning_content);
 
         (output, request)
@@ -549,13 +566,14 @@ impl Engine<'_> {
         request: &mut ModelRequest,
         context_fit: &context::ContextFit,
         rounds: &mut ToolRounds,
+        call_items: &mut HashMap<usize, ItemId>,
     ) -> Result<Repetition<'a>, TurnError> {
         let (budget, _) = self
             .context_calibration
             .effective_budget(self.context_budget);
         let mut share = RoundShare::new(Arc::clone(self.context_estimator), budget);
         let mut repetition = Repetition::None;
-        for call in calls {
+        for (index, call) in calls.iter().enumerate() {
             let repeated = rounds.reads.repeat_of(call, context_fit);
             let shortcut = match &repeated {
                 Some((call_id, _)) => Some(ReadShortcut::Repeat(call_id)),
@@ -565,7 +583,11 @@ impl Engine<'_> {
             let is_read = call.read_arguments().is_some();
             let ran_read = is_read && shortcut.is_none();
             let mut deferred = is_read && matches!(shortcut, Some(ReadShortcut::Defer));
-            let item = self.start_item(ItemKind::ToolCall).await;
+            // A call whose arguments streamed already has its item.
+            let item = match call_items.remove(&index) {
+                Some(id) => Some(id),
+                None => self.start_item(ItemKind::ToolCall).await,
+            };
             let (mut result, mut activity) = self
                 .execute_tool_call(
                     call,
@@ -751,6 +773,7 @@ impl Engine<'_> {
                     (estimated_weight, calibration),
                     *model_request_index,
                     turn_id,
+                    None,
                 )
                 .await
                 .map_err(SummaryFailure::Refused)?;
@@ -865,33 +888,58 @@ impl Engine<'_> {
 
     /// Emits the reasoning and assistant text of a tool-call response, which
     /// travel with its first call.
-    async fn publish_calls_message(&self, calls: &[ToolCall]) {
+    async fn publish_calls_message(
+        &self,
+        calls: &[ToolCall],
+        reasoning: Option<StreamedText>,
+        message: Option<StreamedText>,
+    ) {
         let first = calls.first();
         self.publish_message(
-            first.and_then(ToolCall::reasoning_content),
-            first.and_then(ToolCall::assistant_text),
+            (first.and_then(ToolCall::reasoning_content), reasoning),
+            (first.and_then(ToolCall::assistant_text), message),
         )
         .await;
     }
 
-    /// Emits a response's `reasoning`, then its assistant `text`, as
-    /// completed items. The run's final output is emitted only after its
-    /// turn commits, by [`EventSink::complete`].
-    async fn publish_message(&self, reasoning: Option<&str>, text: Option<&str>) {
+    /// Emits a response's reasoning, then its assistant text, as completed
+    /// items: each the response's own content, or else the text streamed
+    /// into the item the response opened for it. The run's final output is
+    /// emitted only after its turn commits, by [`EventSink::complete`].
+    async fn publish_message(
+        &self,
+        reasoning: (Option<&str>, Option<StreamedText>),
+        text: (Option<&str>, Option<StreamedText>),
+    ) {
         let Some(events) = &self.events else {
             return;
         };
-        if let Some(text) = reasoning {
-            let item = Item::Reasoning {
-                text: text.to_string(),
-            };
-            events.publish_item(ItemKind::Reasoning, item).await;
+        if let Some((id, text)) = Self::message_part(events, ItemKind::Reasoning, reasoning).await {
+            let item = Item::Reasoning { text };
+            events.emit(RunEventKind::ItemCompleted { id, item }).await;
         }
-        if let Some(text) = text {
-            let item = Item::Message {
-                text: text.to_string(),
-            };
-            events.publish_item(ItemKind::Message, item).await;
+        if let Some((id, text)) = Self::message_part(events, ItemKind::Message, text).await {
+            let item = Item::Message { text };
+            events.emit(RunEventKind::ItemCompleted { id, item }).await;
+        }
+    }
+
+    /// Returns the item and text of one part of a response's message: the
+    /// item streaming opened, or else a new item of `item_kind` for content
+    /// that did not stream, or `None` without either.
+    async fn message_part(
+        events: &EventSink,
+        item_kind: ItemKind,
+        (content, streamed): (Option<&str>, Option<StreamedText>),
+    ) -> Option<(ItemId, String)> {
+        match (content, streamed) {
+            (content, Some(streamed)) => {
+                Some((streamed.id, content.map_or(streamed.text, str::to_string)))
+            }
+            (Some(content), None) => {
+                Some((events.start_item(item_kind).await, content.to_string()))
+            }
+            (None, None) => None,
         }
     }
 
@@ -1025,6 +1073,7 @@ impl Engine<'_> {
         (estimated_weight, calibration): (u64, Calibration),
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
+        streamed: Option<&Arc<StreamedItems>>,
     ) -> Result<Result<CompletedRequest, RequestFailure>, LimitKind> {
         // The semaphore is never closed, so acquiring it fails only in
         // theory; a request then runs without a permit.
@@ -1041,7 +1090,13 @@ impl Engine<'_> {
             reservation: Some(reservation),
         };
         let completed = self
-            .complete_model_request(answerer.model, request, model_request_index, turn_id)
+            .complete_model_request(
+                answerer.model,
+                request,
+                model_request_index,
+                turn_id,
+                streamed,
+            )
             .await;
         drop(permit);
         let activity = match &completed {
@@ -1104,20 +1159,25 @@ impl Engine<'_> {
     }
 
     /// Sends `request` to `model`, reporting it to the lifecycle under that
-    /// model's metadata, and validates an output against the request.
+    /// model's metadata and its streamed deltas into `streamed`, and
+    /// validates an output against the request.
     async fn complete_model_request(
         &self,
         model: &Arc<dyn Model>,
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
+        streamed: Option<&Arc<StreamedItems>>,
     ) -> Result<CompletedRequest, RequestFailure> {
         let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
                 .start_model_request(model.metadata(), model_request_index, turn_id);
-        let operation =
-            event::with_retry_events(self.events.clone(), model.complete(request.clone()));
+        let operation = event::with_request_events(
+            self.events.clone(),
+            streamed.cloned(),
+            model.complete(request.clone()),
+        );
         let completion = match model_lifecycle.as_ref() {
             Some(model_lifecycle) => model_lifecycle.scope(operation).await,
             None => operation.await,

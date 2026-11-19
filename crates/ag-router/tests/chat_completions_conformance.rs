@@ -7,12 +7,15 @@
 mod conformance;
 
 use std::error::Error;
+use std::fmt::Write as _;
+use std::sync::{Arc, Mutex};
 
 use ag_router::ReasoningEffort::{High, Low, Max, Medium};
 use ag_router::{
-    Auth, Completion, ErrorClass, InstructionPlacement, MaxTokensField, ModelError, ProviderSpec,
-    Router, StructuredOutputMode, WireProtocol, preset,
+    Auth, Completion, DeltaObserver, ErrorClass, InstructionPlacement, MaxTokensField, ModelError,
+    ProviderSpec, ResponseDelta, Router, StructuredOutputMode, WireProtocol, preset,
 };
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -311,7 +314,9 @@ async fn compat_quirks_apply_only_when_opted_in() -> Result<(), Box<dyn Error>> 
         let body: Value = serde_json::from_slice(&received.body)?;
         assert_eq!(&body["messages"], messages, "opted in: {opted_in:?}");
         assert_eq!(body[bound_field], 64, "opted in: {opted_in:?}");
-        assert_eq!(body.as_object().ok_or("object")?.len(), 3);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"], json!({"include_usage": true}));
+        assert_eq!(body.as_object().ok_or("object")?.len(), 5);
     }
 
     Ok(())
@@ -369,6 +374,259 @@ async fn maps_provider_errors_with_custom_overflow_markers() -> Result<(), Box<d
             .contains("Custom Gateway returned HTTP 401")
     );
     assert!(!conformance::error_chain(&unauthorized_error).contains("query-secret"));
+
+    Ok(())
+}
+
+/// Starts a server answering every Chat Completions request with `chunks`
+/// as a server-sent event stream ended by `[DONE]`.
+async fn stream_server(chunks: &[Value]) -> MockServer {
+    let mut body = events(chunks);
+    body.push_str("data: [DONE]\n\n");
+
+    event_stream_server(body).await
+}
+
+/// Serializes `chunks` as server-sent events.
+fn events(chunks: &[Value]) -> String {
+    let mut body = String::new();
+    for chunk in chunks {
+        let _ = write!(body, "data: {chunk}\n\n");
+    }
+
+    body
+}
+
+/// Starts a server answering every Chat Completions request with the
+/// event stream `body`.
+async fn event_stream_server(body: String) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Records every streamed delta in order.
+#[derive(Default)]
+struct RecordedDeltas(Mutex<Vec<ResponseDelta>>);
+
+#[async_trait]
+impl DeltaObserver for RecordedDeltas {
+    async fn delta(&self, delta: ResponseDelta) {
+        if let Ok(mut deltas) = self.0.lock() {
+            deltas.push(delta);
+        }
+    }
+}
+
+#[tokio::test]
+async fn streams_deltas_into_the_completion_an_unstreamed_response_returns()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let unstreamed = server(
+        200,
+        &json!({
+            "id": "chatcmpl-7",
+            "model": "llama3.3",
+            "system_fingerprint": "fp_7",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "Reading both.",
+                    "reasoning_content": "Need a and b.",
+                    "tool_calls": [
+                        {"id": "call_a", "type": "function",
+                         "function": {"name": "read", "arguments": "{\"path\":\"a.txt\"}"}},
+                        {"id": "call_b", "type": "function",
+                         "function": {"name": "read", "arguments": "{\"path\":\"b.txt\"}"}}
+                    ]
+                }
+            }],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+        })
+        .to_string(),
+    )
+    .await;
+    let call = |index: u64, id: Option<&str>, name: Option<&str>, arguments: &str| {
+        let mut call = json!({"index": index, "function": {"arguments": arguments}});
+        if let Some(id) = id {
+            call["id"] = json!(id);
+            call["type"] = json!("function");
+        }
+        if let Some(name) = name {
+            call["function"]["name"] = json!(name);
+        }
+        json!({"id": "chatcmpl-7", "model": "llama3.3", "system_fingerprint": "fp_7",
+               "choices": [{"index": 0, "delta": {"tool_calls": [call]}, "finish_reason": null}]})
+    };
+    let delta = |delta: Value| json!({"id": "chatcmpl-7", "choices": [{"index": 0, "delta": delta, "finish_reason": null}]});
+    let streamed = stream_server(&[
+        delta(json!({"role": "assistant", "content": ""})),
+        delta(json!({"reasoning_content": "Need a "})),
+        delta(json!({"reasoning_content": "and b."})),
+        delta(json!({"content": "Reading "})),
+        delta(json!({"content": "both."})),
+        call(0, Some("call_a"), Some("read"), ""),
+        call(0, None, None, "{\"path\":"),
+        call(0, None, None, "\"a.txt\"}"),
+        call(1, Some("call_b"), Some("read"), "{\"path\":\"b.txt\"}"),
+        json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+        json!({"choices": [],
+               "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}}),
+    ])
+    .await;
+    let spec = |server: &MockServer| custom(server).with_reasoning_text_replay(true);
+    let request = || {
+        conformance::golden_request(
+            "custom/llama3.3",
+            true,
+            conformance::options(None, false, None),
+        )
+    };
+    let observer = Arc::new(RecordedDeltas::default());
+
+    // Act
+    let expected = Router::new([spec(&unstreamed)]).execute(request()?).await?;
+    let completion = Router::new([spec(&streamed)])
+        .execute_streamed(request()?, observer.clone(), None)
+        .await?;
+    let unobserved = Router::new([spec(&streamed)]).execute(request()?).await?;
+
+    // Assert
+    assert_eq!(completion, expected);
+    assert_eq!(unobserved, expected);
+    let deltas = observer.0.lock().map_err(|_| "poisoned")?.clone();
+    let arguments = |index: usize, arguments: &str| ResponseDelta::ToolArguments {
+        arguments: arguments.to_string(),
+        index,
+    };
+    assert_eq!(
+        deltas,
+        [
+            ResponseDelta::Reasoning("Need a ".to_string()),
+            ResponseDelta::Reasoning("and b.".to_string()),
+            ResponseDelta::Text("Reading ".to_string()),
+            ResponseDelta::Text("both.".to_string()),
+            arguments(0, "{\"path\":"),
+            arguments(0, "\"a.txt\"}"),
+            arguments(1, "{\"path\":\"b.txt\"}"),
+        ]
+    );
+    let received = conformance::only_request(&unstreamed).await?;
+    let body: Value = serde_json::from_slice(&received.body)?;
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["stream_options"], json!({"include_usage": true}));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_usage_can_be_turned_off_and_read_from_the_choice() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = stream_server(&[
+        json!({"choices": [{"index": 0, "delta": {"content": "{\"name\":\"Ada\"}"}}]}),
+        json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop",
+                            "usage": {"prompt_tokens": 9, "completion_tokens": 4}}]}),
+    ])
+    .await;
+    let request = conformance::golden_request(
+        "custom/llama3.3",
+        false,
+        conformance::options(None, false, None),
+    )?;
+
+    // Act
+    let completion = Router::new([custom(&server).with_stream_usage(false)])
+        .execute(request)
+        .await?;
+
+    // Assert
+    let Completion::Output {
+        value, metadata, ..
+    } = completion
+    else {
+        return Err("expected structured output".into());
+    };
+    assert_eq!(value, json!({"name": "Ada"}));
+    assert_eq!(metadata.usage().ok_or("usage")?.input_tokens(), Some(9));
+    let body: Value = serde_json::from_slice(&conformance::only_request(&server).await?.body)?;
+    assert_eq!(body["stream"], true);
+    assert!(body.get("stream_options").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reads_a_stream_that_closes_without_done_and_keeps_top_level_usage()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = event_stream_server(events(&[
+        json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}}),
+        json!({"choices": [{"index": 0, "delta": {"content": "{\"name\":\"Ada\"}"},
+                            "finish_reason": "stop", "usage": {"prompt_tokens": 1}}]}),
+    ]))
+    .await;
+    let request = conformance::golden_request(
+        "custom/llama3.3",
+        false,
+        conformance::options(None, false, None),
+    )?;
+
+    // Act
+    let completion = Router::new([custom(&server)]).execute(request).await?;
+
+    // Assert
+    let Completion::Output { metadata, .. } = completion else {
+        return Err("expected structured output".into());
+    };
+    assert_eq!(metadata.usage().ok_or("usage")?.input_tokens(), Some(9));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn classifies_failures_reported_inside_the_stream() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let overflow = stream_server(&[
+        json!({"choices": [{"index": 0, "delta": {"content": "partial"}}]}),
+        json!({"error": {"code": "context_length_exceeded", "message": "too long"}}),
+    ])
+    .await;
+    let unfinished =
+        stream_server(&[json!({"choices": [{"index": 0, "delta": {"content": "par"}}]})]).await;
+    let request = || {
+        conformance::golden_request(
+            "custom/llama3.3",
+            false,
+            conformance::options(None, false, None),
+        )
+    };
+
+    // Act
+    let overflow_error = Router::new([custom(&overflow)])
+        .execute(request()?)
+        .await
+        .err()
+        .ok_or("the error chunk should fail the request")?;
+    let unfinished_error = Router::new([custom(&unfinished)])
+        .execute(request()?)
+        .await
+        .err()
+        .ok_or("a stream without a finished choice should fail")?;
+
+    // Assert
+    assert_eq!(overflow_error.error_class(), ErrorClass::ContextOverflow);
+    assert!(
+        conformance::error_chain(&overflow_error)
+            .contains("custom response failed with `context_length_exceeded`: too long")
+    );
+    assert_eq!(unfinished_error.error_class(), ErrorClass::Transport);
 
     Ok(())
 }

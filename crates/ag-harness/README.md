@@ -325,15 +325,21 @@ let outcome = session
   index, and catalog model ID, assistant text, reasoning, tool calls with their
   arguments and results, per-request usage and cost, context reductions, each retry a
   built-in client sends (`Retrying`, with its attempt, delay, and `ErrorKind`, before
-  the wait), and a successful run's committed `Output` item. `Completed` is always the
-  last event, also after a failure or cancellation; items still open then were
-  interrupted. It follows settlement, so the transcript then holds the terminal status
-  of a run that emitted `Started`, unless persistence cleanup failed. Delivery is
-  lossless: the run waits while the stream is full, so read it while awaiting the
-  outcome. Cancelling still resolves a run whose stream is full. Dropping the stream
-  discards events without stalling the run. Events carry session content, so never
-  export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`; the
-  schema is committed in `crates/ag-harness/schema/run_event.json`.
+  the wait), and a successful run's committed `Output` item. A built-in client on the
+  Responses or Chat Completions protocol streams each turn response as `ItemDelta`
+  events (`Delta::Text`, `Delta::Reasoning`, or `Delta::ToolArguments`). Each goes to
+  the response's reasoning, message, or tool-call item, which starts at its first
+  fragment and completes after the response. A streamed final answer's text completes a
+  `Message` item before the validated `Output`. Items of a discarded response, such as
+  an invalid answer that is re-requested, stay open. `Completed` is always the last
+  event, also after a failure or cancellation; items still open then were interrupted.
+  It follows settlement, so the transcript then holds the terminal status of a run that
+  emitted `Started`, unless persistence cleanup failed. Delivery is lossless: the run
+  waits while the stream is full, so read it while awaiting the outcome. Cancelling
+  still resolves a run whose stream is full. Dropping the stream discards events without
+  stalling the run. Events carry session content, so never export them as telemetry.
+  Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
+  `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy

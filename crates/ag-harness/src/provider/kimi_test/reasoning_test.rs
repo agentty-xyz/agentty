@@ -48,6 +48,8 @@ async fn preserves_reasoning_text_and_named_tool_result_for_continuation() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(

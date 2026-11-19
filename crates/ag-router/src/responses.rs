@@ -2,15 +2,17 @@
 //!
 //! Requests are stateless and streamed: `store: false` keeps no response on
 //! the provider, so every request carries its whole history, and reasoning
-//! items return encrypted for verbatim replay. A response's reasoning items
+//! items return encrypted for verbatim replay. Text, reasoning summary, and
+//! function argument deltas reach an observer as they arrive, while the
+//! completion is decoded from the completed items. A response's reasoning items
 //! travel as one JSON array in the provider-neutral reasoning content of its
 //! first call or output, and are replayed before that assistant turn; other
 //! reasoning content, such as text the caller cleared to save context or
 //! another provider's reasoning, is omitted.
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::sync::Arc;
 
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -20,18 +22,13 @@ use crate::http::{
     self, HttpTransport, ProviderRequest, SUCCESS_BODY_LIMIT_BYTES, TransportError,
     deserialize_optional,
 };
-use crate::model::{GeneratedResponse, ModelErrorType};
+use crate::model::GeneratedResponse;
 use crate::provider_spec::{ProviderSpec, ReasoningMapping};
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
+use crate::stream::{DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
-/// Bound for one whole streamed response. Long reasoning at the highest
-/// efforts can run for many minutes, so silence is bounded separately.
-const REQUEST_TIMEOUT: Duration = Duration::from_mins(30);
-/// Longest silence tolerated on an open stream, matching Codex CLI's default
-/// stream idle timeout.
-const STREAM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 /// Stream events whose `response` ends the stream.
 const TERMINAL_EVENTS: [&str; 3] = [
     "response.completed",
@@ -44,6 +41,7 @@ pub(crate) const ENDPOINT_PATH: &str = "responses";
 /// Structured-output backend for the `OpenAI` Responses API, applying the
 /// request policy of one [`ProviderSpec`].
 pub(crate) struct ResponsesBackend<'spec> {
+    deltas: Option<Arc<dyn DeltaObserver>>,
     headers: HeaderMap,
     http: Arc<HttpTransport>,
     model: String,
@@ -53,15 +51,17 @@ pub(crate) struct ResponsesBackend<'spec> {
 
 impl<'spec> ResponsesBackend<'spec> {
     /// Creates a backend sending `headers` through `http`, reporting
-    /// retries to `observer`.
+    /// retries to `observer` and streamed content to `deltas`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
         http: Arc<HttpTransport>,
         observer: Option<Arc<dyn RetryObserver>>,
+        deltas: Option<Arc<dyn DeltaObserver>>,
     ) -> Self {
         Self {
+            deltas,
             headers,
             http,
             model,
@@ -133,14 +133,25 @@ impl<'spec> ResponsesBackend<'spec> {
 
     async fn create(&self, request: &ProviderRequest) -> Result<ResponsesResponse, TransportError> {
         let mut response = self.http.send(request).await?;
-        let mut events = EventStream::default();
+        let mut events = EventStream::new(self.deltas.is_some());
         while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
-            if let Some(response) = events.push(&chunk)? {
+            let terminal = events.push(&chunk)?;
+            self.report(&mut events).await;
+            if let Some(response) = terminal {
                 return Ok(response);
             }
         }
 
         events.finish()
+    }
+
+    /// Reports the deltas `events` read so far to the delta observer.
+    async fn report(&self, events: &mut EventStream) {
+        if let Some(observer) = &self.deltas {
+            for delta in std::mem::take(&mut events.deltas) {
+                observer.delta(delta).await;
+            }
+        }
     }
 
     fn input(request: &model::ModelRequest) -> Vec<InputItem> {
@@ -263,26 +274,11 @@ impl<'spec> ResponsesBackend<'spec> {
     /// Classifies a response that failed after streaming began, such as an
     /// input over the context window.
     fn failure_error(&self, failure: ResponseFailure) -> model::ModelError {
-        let description = format!(
-            "{} {}",
-            failure.code.as_deref().unwrap_or_default(),
-            failure.message.as_deref().unwrap_or_default()
-        );
-        let error_type =
-            if http::has_context_overflow_marker(&description, &self.policy.overflow_markers) {
-                ModelErrorType::ContextOverflow
-            } else {
-                ModelErrorType::Provider
-            };
-
-        model::ModelError::classified_request(
-            error_type,
-            None,
-            Box::new(StreamedFailure {
-                code: failure.code.unwrap_or_else(|| "unknown".to_string()),
-                message: schema_contract::bounded_diagnostic(failure.message.unwrap_or_default()),
-                provider: self.policy.display_name.clone(),
-            }),
+        http::streamed_failure(
+            &self.policy.display_name,
+            &self.policy.overflow_markers,
+            failure.code,
+            failure.message,
         )
     }
 
@@ -393,25 +389,6 @@ impl<'spec> ResponsesBackend<'spec> {
     }
 }
 
-/// Production streaming transport for Responses requests, built on first
-/// use and shared by every router, so hosts that build a router per model
-/// do not build an HTTP client per router.
-static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> = LazyLock::new(new_default_transport);
-
-/// Returns the shared production streaming transport for Responses
-/// requests.
-pub(crate) fn default_transport() -> Arc<HttpTransport> {
-    Arc::clone(&DEFAULT_TRANSPORT)
-}
-
-/// Creates the production streaming transport for Responses requests.
-fn new_default_transport() -> Arc<HttpTransport> {
-    Arc::new(HttpTransport::streaming(
-        STREAM_IDLE_TIMEOUT,
-        REQUEST_TIMEOUT,
-    ))
-}
-
 /// Returns the readable view of reasoning content holding Responses
 /// reasoning items, exactly as requests replay them, or `None` for other
 /// content: their summary text, with parts separated by blank lines, or
@@ -457,43 +434,40 @@ fn reasoning_items(content: &str) -> Option<Vec<Value>> {
 }
 
 /// Incremental reader of a Responses server-sent event stream that keeps
-/// only completed output items and the terminal response. Each pending event
-/// and the completed items together stay within the success body limit, so
+/// only completed output items and the terminal response, and, when
+/// `observed`, the content deltas not yet reported. Each pending event and
+/// the completed items together stay within the success body limit, so
 /// memory is bounded however long the stream runs.
 #[derive(Default)]
 struct EventStream {
-    buffer: Vec<u8>,
-    data: String,
+    /// Position among the response's calls of each function call, by its
+    /// output index.
+    call_indexes: HashMap<u64, usize>,
+    /// Deltas read but not yet reported.
+    deltas: Vec<ResponseDelta>,
+    events: SseDecoder,
     items: Vec<Value>,
     /// Serialized bytes of the events behind `items`.
     items_bytes: usize,
+    observed: bool,
 }
 
 impl EventStream {
-    /// Reads `chunk`, returning the terminal response once its event
-    /// arrives.
-    fn push(&mut self, chunk: &[u8]) -> Result<Option<ResponsesResponse>, TransportError> {
-        self.buffer.extend_from_slice(chunk);
-        while let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let line = self.buffer.drain(..=end).collect::<Vec<_>>();
-            let line = String::from_utf8_lossy(&line);
-            let line = line.trim_end_matches(['\n', '\r']);
-            if line.is_empty() {
-                if let Some(response) = self.dispatch()? {
-                    return Ok(Some(response));
-                }
-            } else if let Some(data) = line.strip_prefix("data:") {
-                if !self.data.is_empty() {
-                    self.data.push('\n');
-                }
-                self.data.push_str(data.strip_prefix(' ').unwrap_or(data));
-            }
-            if self.data.len() > SUCCESS_BODY_LIMIT_BYTES {
-                return Err(TransportError::ResponseBodyTooLarge);
-            }
+    /// Creates a reader that keeps content deltas when `observed`.
+    fn new(observed: bool) -> Self {
+        Self {
+            observed,
+            ..Self::default()
         }
-        if self.buffer.len() > SUCCESS_BODY_LIMIT_BYTES {
-            return Err(TransportError::ResponseBodyTooLarge);
+    }
+
+    /// Reads `chunk`, returning the terminal response once its event
+    /// arrives; later events are not read.
+    fn push(&mut self, chunk: &[u8]) -> Result<Option<ResponsesResponse>, TransportError> {
+        for data in self.events.push(chunk)? {
+            if let Some(response) = self.dispatch(&data)? {
+                return Ok(Some(response));
+            }
         }
 
         Ok(None)
@@ -502,23 +476,24 @@ impl EventStream {
     /// Reads the event left when the stream closed, failing when the stream
     /// ended before its terminal event.
     fn finish(mut self) -> Result<ResponsesResponse, TransportError> {
-        // A trailing line without its newline cannot complete an event, so
-        // reading it only adds its data to the pending event.
-        if !self.buffer.is_empty() {
-            self.push(b"\n")?;
-        }
+        let data = std::mem::take(&mut self.events).finish()?;
+        let response = match data {
+            Some(data) => self.dispatch(&data)?,
+            None => None,
+        };
 
-        self.dispatch()?
-            .ok_or_else(|| TransportError::transport(StreamClosed))
+        response.ok_or_else(|| TransportError::transport(StreamClosed))
     }
 
-    fn dispatch(&mut self) -> Result<Option<ResponsesResponse>, TransportError> {
-        let data = std::mem::take(&mut self.data);
-        if data.is_empty() || data == "[DONE]" {
+    fn dispatch(&mut self, data: &str) -> Result<Option<ResponsesResponse>, TransportError> {
+        if data == "[DONE]" {
             return Ok(None);
         }
         let event =
-            serde_json::from_str::<StreamEvent>(&data).map_err(TransportError::InvalidResponse)?;
+            serde_json::from_str::<StreamEvent>(data).map_err(TransportError::InvalidResponse)?;
+        if self.observed {
+            self.read_delta(&event);
+        }
         if event.kind == "response.output_item.done" {
             self.items_bytes = self.items_bytes.saturating_add(data.len());
             if self.items_bytes > SUCCESS_BODY_LIMIT_BYTES {
@@ -548,20 +523,50 @@ impl EventStream {
 
         Ok(Some(response))
     }
-}
 
-/// The stream closed before a terminal event.
-#[derive(Debug, thiserror::Error)]
-#[error("the response stream closed before the response completed")]
-struct StreamClosed;
+    /// Keeps the content delta `event` carries, numbering function calls by
+    /// the order they start: when announced, or else at their first
+    /// arguments delta.
+    fn read_delta(&mut self, event: &StreamEvent) {
+        let delta = event.delta.clone().filter(|delta| !delta.is_empty());
+        match (event.kind.as_str(), delta) {
+            ("response.output_item.added", _) => {
+                let is_call = event
+                    .item
+                    .as_ref()
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("function_call");
+                if is_call {
+                    self.call_index(event.output_index);
+                }
+            }
+            ("response.output_text.delta", Some(text)) => {
+                self.deltas.push(ResponseDelta::Text(text));
+            }
+            (
+                "response.reasoning_summary_text.delta" | "response.reasoning_text.delta",
+                Some(text),
+            ) => self.deltas.push(ResponseDelta::Reasoning(text)),
+            ("response.function_call_arguments.delta", Some(arguments)) => {
+                let index = self.call_index(event.output_index);
+                self.deltas
+                    .push(ResponseDelta::ToolArguments { arguments, index });
+            }
+            _ => {}
+        }
+    }
 
-/// A response that failed after its stream began.
-#[derive(Debug, thiserror::Error)]
-#[error("{provider} response failed with `{code}`: {message}")]
-struct StreamedFailure {
-    code: String,
-    message: String,
-    provider: String,
+    /// Returns the position of the function call at `output_index`,
+    /// numbering a call not seen before as the next one.
+    fn call_index(&mut self, output_index: Option<u64>) -> usize {
+        let next = self.call_indexes.len();
+
+        *self
+            .call_indexes
+            .entry(output_index.unwrap_or_default())
+            .or_insert(next)
+    }
 }
 
 #[derive(Serialize)]
@@ -687,6 +692,8 @@ struct StreamEvent {
     #[serde(default, deserialize_with = "deserialize_optional")]
     code: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional")]
+    delta: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     error: Option<ResponseFailure>,
     #[serde(default)]
     item: Option<Value>,
@@ -694,6 +701,8 @@ struct StreamEvent {
     kind: String,
     #[serde(default, deserialize_with = "deserialize_optional")]
     message: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    output_index: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     response: Option<ResponsesResponse>,
 }
