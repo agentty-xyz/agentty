@@ -33,7 +33,7 @@
   ],
   "$defs": {
     "RunEventKind": {
-      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, may be added.",
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds may be added.",
       "oneOf": [
         {
           "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
@@ -70,7 +70,7 @@
           ]
         },
         {
-          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes.",
+          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes. So was a tool-call item a streamed model\nresponse opened when that response was discarded, such as a response\nthat failed or an invalid final answer that was requested again; the\ndiscarded response's reasoning and message items complete with the\ntext it streamed.",
           "type": "object",
           "properties": {
             "type": {
@@ -90,6 +90,29 @@
             "type",
             "id",
             "item_kind"
+          ]
+        },
+        {
+          "description": "A fragment of an open item's content as the model streams it,\nbetween the item's [`Self::ItemStarted`] and [`Self::ItemCompleted`].\n\nOnly the built-in [`crate::model::ModelClient`] streams, for\nproviders on the Responses and Chat Completions protocols, and only\nfor the run's turn requests. A response's reasoning streams into a\n[`ItemKind::Reasoning`] item, its text into a [`ItemKind::Message`]\nitem, and each tool call's arguments into that call's\n[`ItemKind::ToolCall`] item, each started at its first fragment.\nFragments of one item concatenate to its streamed content; the\ncompleted item stays authoritative.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item_delta"
+            },
+            "delta": {
+              "description": "The fragment.",
+              "$ref": "#/$defs/Delta"
+            },
+            "id": {
+              "description": "Identifier of the item, as [`Self::ItemStarted`] reported it.",
+              "$ref": "#/$defs/ItemId"
+            }
+          },
+          "required": [
+            "type",
+            "delta",
+            "id"
           ]
         },
         {
@@ -278,7 +301,7 @@
       "description": "What an item is, known when it starts.",
       "oneOf": [
         {
-          "description": "Assistant text written beside tool calls.",
+          "description": "Assistant text written beside tool calls, or streamed by a response.",
           "type": "string",
           "const": "message"
         },
@@ -299,11 +322,70 @@
         }
       ]
     },
+    "Delta": {
+      "description": "A fragment of streamed item content, carried by\n[`RunEventKind::ItemDelta`].",
+      "oneOf": [
+        {
+          "description": "Assistant text of a [`ItemKind::Message`] item.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "description": "The text fragment.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Provider reasoning of a [`ItemKind::Reasoning`] item, such as a\nreasoning summary.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            },
+            "text": {
+              "description": "The reasoning fragment.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Arguments of a [`ItemKind::ToolCall`] item's call, as JSON text that\nis incomplete until the last fragment.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_arguments"
+            },
+            "arguments": {
+              "description": "The arguments fragment.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "arguments"
+          ]
+        }
+      ]
+    },
     "Item": {
       "description": "Content of a finished item.",
       "oneOf": [
         {
-          "description": "Assistant text the model wrote beside its tool calls; never the\nrun's final output.",
+          "description": "Assistant text the model wrote beside its tool calls, or the text a\nstreamed response wrote as it went (see [`RunEventKind::ItemDelta`]):\nfor a final answer, its raw text, which [`Self::Output`] then carries\nvalidated. A final answer that did not stream emits only\n[`Self::Output`].",
           "type": "object",
           "properties": {
             "type": {

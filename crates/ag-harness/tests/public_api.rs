@@ -59,6 +59,11 @@ mod run_events_test;
 
 #[cfg(test)]
 #[cfg(feature = "providers-compat")]
+#[path = "support/run_deltas.rs"]
+mod run_deltas_test;
+
+#[cfg(test)]
+#[cfg(feature = "providers-compat")]
 #[path = "support/run_retries.rs"]
 mod run_retries_test;
 

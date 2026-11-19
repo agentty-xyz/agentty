@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_router::{
-    Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
-    ModelMessage, ModelRequest, OutputSchema, ReasoningEffort, RetryKind, RetryNotice,
-    RetryObserver, RetryPolicy, Router, ToolCall, ToolDefinition, TurnInput, preset,
+    Completion, DeltaObserver, ErrorClass, ImageContent, ImageMediaType, InputBlock,
+    JsonSchemaFormat, ModelError, ModelMessage, ModelRequest, OutputSchema, ReasoningEffort,
+    ResponseDelta, RetryKind, RetryNotice, RetryObserver, RetryPolicy, Router, ToolCall,
+    ToolDefinition, TurnInput, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, method, path};
@@ -821,6 +822,92 @@ async fn reports_a_stream_closed_before_completion_as_a_transport_failure()
         error
             .to_string()
             .contains("the response stream closed before the response completed")
+    );
+
+    Ok(())
+}
+
+/// Records the deltas a router reports.
+#[derive(Default)]
+struct RecordedDeltas(Mutex<Vec<ResponseDelta>>);
+
+#[async_trait::async_trait]
+impl DeltaObserver for RecordedDeltas {
+    async fn delta(&self, delta: ResponseDelta) {
+        if let Ok(mut deltas) = self.0.lock() {
+            deltas.push(delta);
+        }
+    }
+}
+
+#[tokio::test]
+async fn reports_deltas_as_they_stream_and_returns_the_completed_items()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let reasoning =
+        |kind: &str, delta: &str| json!({"type": kind, "output_index": 0, "delta": delta});
+    let events = [
+        json!({"type": "response.created", "response": {"status": "in_progress"}}),
+        json!({"type": "response.output_item.added", "output_index": 0,
+               "item": {"type": "reasoning"}}),
+        reasoning("response.reasoning_summary_text.delta", "Check "),
+        reasoning("response.reasoning_text.delta", "a.txt."),
+        reasoning("response.reasoning_summary_text.delta", ""),
+        item_done(reasoning_item("rs_1")),
+        json!({"type": "response.output_text.delta", "output_index": 1, "delta": "Reading."}),
+        item_done(message_item("Reading.")),
+        json!({"type": "response.output_item.added", "output_index": 2,
+               "item": {"type": "function_call"}}),
+        json!({"type": "response.function_call_arguments.delta", "output_index": 2,
+               "delta": "{\"path\":"}),
+        json!({"type": "response.function_call_arguments.delta", "output_index": 2,
+               "delta": "\"a.txt\"}"}),
+        item_done(function_call_item("call_a", "a.txt")),
+        // A call announced without its added event is numbered at its first
+        // delta.
+        json!({"type": "response.function_call_arguments.delta", "output_index": 3,
+               "delta": "{\"path\":\"b.txt\"}"}),
+        item_done(function_call_item("call_b", "b.txt")),
+        completed(json!(null)),
+    ];
+    let server = MockServer::start().await;
+    mount_stream(&server, &events).await;
+    let observer = Arc::new(RecordedDeltas::default());
+
+    // Act
+    let streamed = router(&server, "openai/gpt-6.1-sol")
+        .execute_streamed(user_request("openai/gpt-6.1-sol")?, observer.clone(), None)
+        .await?;
+    let unobserved = router(&server, "openai/gpt-6.1-sol")
+        .execute(user_request("openai/gpt-6.1-sol")?)
+        .await?;
+
+    // Assert
+    assert_eq!(streamed, unobserved);
+    let Completion::ToolCalls { calls, .. } = streamed else {
+        return Err("expected tool calls".into());
+    };
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].assistant_text(), Some("Reading."));
+    let deltas = observer
+        .0
+        .lock()
+        .map_err(|_| "the deltas lock is poisoned")?
+        .clone();
+    let arguments = |index: usize, arguments: &str| ResponseDelta::ToolArguments {
+        arguments: arguments.to_string(),
+        index,
+    };
+    assert_eq!(
+        deltas,
+        [
+            ResponseDelta::Reasoning("Check ".to_string()),
+            ResponseDelta::Reasoning("a.txt.".to_string()),
+            ResponseDelta::Text("Reading.".to_string()),
+            arguments(0, "{\"path\":"),
+            arguments(0, "\"a.txt\"}"),
+            arguments(1, "{\"path\":\"b.txt\"}"),
+        ]
     );
 
     Ok(())

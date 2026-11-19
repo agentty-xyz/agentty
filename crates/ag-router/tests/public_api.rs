@@ -766,7 +766,16 @@ async fn openai_compatible_sends_only_portable_fields_without_a_key()
         .cloned()
         .collect::<Vec<_>>();
     fields.sort();
-    assert_eq!(fields, ["messages", "model", "response_format"]);
+    assert_eq!(
+        fields,
+        [
+            "messages",
+            "model",
+            "response_format",
+            "stream",
+            "stream_options"
+        ]
+    );
     let schema_text = schema()?.value().to_string();
     assert_eq!(body["messages"][0]["role"], "system");
     assert!(

@@ -383,6 +383,26 @@ fn context_overflow_markers_match_case_insensitively() {
 }
 
 #[test]
+fn stream_failures_classify_by_their_code_and_message() {
+    // Arrange
+    let failure = |code: Option<&str>| TransportError::StreamFailed {
+        code: code.map(str::to_string),
+        message: Some("try later".to_string()),
+    };
+
+    // Act
+    let description = failure(None).to_string();
+    let overflow = failure(Some("context_length_exceeded")).into_model_error("Gateway", &[]);
+    let unknown = failure(None).into_model_error("Gateway", &[]);
+
+    // Assert
+    assert_eq!(description, "model API stream reported a failure");
+    assert!(overflow.is_context_overflow());
+    assert_eq!(unknown.error_class(), model::ErrorClass::Provider);
+    assert!(error_chain(&unknown).contains("Gateway response failed with `unknown`: try later"));
+}
+
+#[test]
 fn streaming_transport_keeps_the_whole_request_bound() {
     // Arrange / Act
     let transport = HttpTransport::streaming(Duration::from_secs(7), Duration::from_secs(70));

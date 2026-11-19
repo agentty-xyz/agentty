@@ -97,24 +97,39 @@ and `Jitter`. A spent quota (`402`, or a `429` reporting one) and a timed-out re
 are never retried. `Router::execute_observed` reports each retry to a `RetryObserver`
 before its wait, and dropping the request future stops a pending wait.
 
+Responses and Chat Completions requests stream (`stream: true`). Chat Completions also
+asks for usage with `stream_options.include_usage`, which every preset keeps;
+`ProviderSpec::with_stream_usage(false)` turns it off for a server that rejects it. A
+stream may run for 30 minutes in total but fails after 5 minutes of silence. A Chat
+Completions server that ignores `stream` and answers with one JSON body is read as
+before. `Router::execute_streamed` reports each `ResponseDelta` (text, reasoning, or a
+call's arguments by its position) to a `DeltaObserver` as it arrives. The returned
+completion is decoded exactly as an unstreamed response would be, so deltas only preview
+it. A failure reported inside a stream is classified like an HTTP rejection, and a
+stream that ends before its response finishes is a transport failure. Anthropic Messages
+requests are unstreamed and report no deltas.
+
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
-carry only `model`, `messages`, `tools`, `response_format`, and the legacy `max_tokens`,
-with no `prompt_cache_key`, reasoning controls, or image input, and turn instructions
-join the preceding user message for chat templates that require alternating roles. A
-server that supports more opts in with the preset's `with_*` methods, such as
-`with_image_input(true)` or `JsonSchema` structured output. The schema is stated in a
-leading system message like Kimi and Qwen, worded to invite tool calls before the final
-JSON answer because small local models read an unconditional "return only JSON" as
-forbidding them; requests without tools also send the `json_schema` response format,
-which Ollama, llama.cpp, LM Studio, and vLLM all accept. Reasoning a server returns is
-not replayed, so the history stays portable. Context overflow is recognized from the
-shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`. `LocalServer` reads
-such a server's model inventory (`LocalServer::inventory`: Ollama's `/api/tags` and
-`/api/show` with context windows, tool support, and loaded windows from `/api/ps`, else
-`GET {base}/models`) under two-second request timeouts, and the window the server runs a
-model with (`LocalServer::running_context_window`), loading an unloaded Ollama model
-first because Ollama reports the window only for loaded models.
+carry only `model`, `messages`, `tools`, `response_format`, the legacy `max_tokens`, and
+the `stream` and `stream_options` fields every streamed Chat Completions request sends
+(Ollama, llama.cpp, LM Studio, and vLLM report streamed usage only when asked;
+`with_stream_usage(false)` drops `stream_options`), with no `prompt_cache_key`,
+reasoning controls, or image input, and turn instructions join the preceding user
+message for chat templates that require alternating roles. A server that supports more
+opts in with the preset's `with_*` methods, such as `with_image_input(true)` or
+`JsonSchema` structured output. The schema is stated in a leading system message like
+Kimi and Qwen, worded to invite tool calls before the final JSON answer because small
+local models read an unconditional "return only JSON" as forbidding them; requests
+without tools also send the `json_schema` response format, which Ollama, llama.cpp, LM
+Studio, and vLLM all accept. Reasoning a server returns is not replayed, so the history
+stays portable. Context overflow is recognized from the shared `OpenAI` markers and
+llama.cpp's `exceed_context_size_error`. `LocalServer` reads such a server's model
+inventory (`LocalServer::inventory`: Ollama's `/api/tags` and `/api/show` with context
+windows, tool support, and loaded windows from `/api/ps`, else `GET {base}/models`)
+under two-second request timeouts, and the window the server runs a model with
+(`LocalServer::running_context_window`), loading an unloaded Ollama model first because
+Ollama reports the window only for loaded models.
 
 `openai` sends requests to `{base_url}/responses`, the only `OpenAI` API that offers
 function tools to the current GPT models. Requests are stateless (`store: false`) and
@@ -127,9 +142,9 @@ content of its first call or output, and replayed verbatim before that assistant
 reasoning content that is not such an array is omitted. Usage reports cached input
 tokens. An overflow is recognized from an HTTP rejection or from a streamed
 `response.failed`, a response cut short reports its `incomplete_details` reason, and a
-stream that closes before its terminal event is a transport failure. The current `Task`
-surface supports chat only. Streaming to callers and other model modes are not yet
-implemented.
+stream that closes before its terminal event is a transport failure. Output text,
+reasoning summary, and function-argument deltas reach a `DeltaObserver`. The current
+`Task` surface supports chat only; other model modes are not yet implemented.
 
 `anthropic` sends unstreamed requests to `{base_url}/messages` with the key in
 `x-api-key` and the protocol's `anthropic-version: 2023-06-01` header, which

@@ -264,7 +264,17 @@ pub struct ProviderSpec {
     pub(crate) replay: HistoryReplay,
     pub(crate) response_format_with_tools: bool,
     pub(crate) retry: RetryPolicy,
+    pub(crate) stream_usage: StreamUsage,
     pub(crate) structured_output: StructuredOutputMode,
+}
+
+/// Whether a streamed Chat Completions request asks for its usage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StreamUsage {
+    /// Send `stream_options.include_usage`.
+    Requested,
+    /// Send no `stream_options`.
+    Unrequested,
 }
 
 /// How Chat Completions history replays earlier turns.
@@ -312,6 +322,7 @@ impl fmt::Debug for ProviderSpec {
             .field("replay", &self.replay)
             .field("overflow_markers", &self.overflow_markers)
             .field("retry", &self.retry)
+            .field("stream_usage", &self.stream_usage)
             .finish()
     }
 }
@@ -380,6 +391,11 @@ impl ProviderSpec {
             replay: HistoryReplay::default(),
             response_format_with_tools: false,
             retry: RetryPolicy::default(),
+            stream_usage: if chat {
+                StreamUsage::Requested
+            } else {
+                StreamUsage::Unrequested
+            },
             structured_output: if chat {
                 StructuredOutputMode::SchemaPrompt
             } else {
@@ -508,6 +524,24 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_prompt_cache_key(mut self, prompt_cache_key: bool) -> Self {
         self.prompt_cache_key = prompt_cache_key;
+
+        self
+    }
+
+    /// Sets whether a streamed Chat Completions request asks for its usage
+    /// with `stream_options.include_usage`, on by default. A server that
+    /// rejects `stream_options` must turn it off, and then reports no
+    /// usage unless it volunteers some. Only Chat Completions sends it:
+    /// Responses streams always report usage and Anthropic Messages
+    /// requests are unstreamed, so either protocol fails validation with it
+    /// on.
+    #[must_use]
+    pub fn with_stream_usage(mut self, stream_usage: bool) -> Self {
+        self.stream_usage = if stream_usage {
+            StreamUsage::Requested
+        } else {
+            StreamUsage::Unrequested
+        };
 
         self
     }
@@ -792,6 +826,8 @@ impl ProviderSpec {
                     Some("instructions placed other than as their own message")
                 } else if self.replay.reasoning_text || self.replay.tool_result_name {
                     Some("reasoning-content replay or tool-result names")
+                } else if self.stream_usage == StreamUsage::Requested {
+                    Some("`stream_options.include_usage`")
                 } else {
                     None
                 }
@@ -829,6 +865,8 @@ impl ProviderSpec {
             Some("reasoning-content replay or tool-result names")
         } else if self.prompt_cache_key {
             Some("a prompt cache key")
+        } else if self.stream_usage == StreamUsage::Requested {
+            Some("`stream_options.include_usage`")
         } else {
             None
         }

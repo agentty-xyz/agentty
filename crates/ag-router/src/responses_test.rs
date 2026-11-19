@@ -5,6 +5,7 @@ use serde_json::json;
 use super::{EventStream, replayed_reasoning};
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
 use crate::reasoning::{ReasoningView, reasoning_view};
+use crate::stream::ResponseDelta;
 
 #[test]
 fn reads_events_split_across_chunks_and_lines() {
@@ -123,6 +124,50 @@ fn bounds_the_completed_items_kept_across_events() {
     assert!(matches!(kept[0], Ok(None)));
     assert!(matches!(kept[1], Ok(None)));
     assert!(matches!(kept[2], Err(TransportError::ResponseBodyTooLarge)));
+}
+
+#[test]
+fn keeps_deltas_numbering_calls_and_separating_summary_parts_when_observed() {
+    // Arrange
+    let events = [
+        json!({"type": "response.reasoning_summary_part.added", "summary_index": 0}),
+        json!({"type": "response.reasoning_summary_text.delta", "delta": "First."}),
+        json!({"type": "response.reasoning_summary_part.added", "summary_index": 1}),
+        json!({"type": "response.reasoning_summary_text.delta", "delta": "Second."}),
+        json!({"type": "response.output_item.added", "item": {"type": "message"}}),
+        json!({"type": "response.function_call_arguments.delta", "delta": "{}"}),
+        json!({"type": "response.output_text.delta", "delta": ""}),
+    ];
+    let stream = events.iter().fold(String::new(), |stream, event| {
+        format!("{stream}data: {event}\n\n")
+    });
+    let mut observed = EventStream::new(true);
+    let mut unobserved = EventStream::new(false);
+
+    // Act
+    observed
+        .push(stream.as_bytes())
+        .expect("the events should read");
+    unobserved
+        .push(stream.as_bytes())
+        .expect("the events should read");
+
+    // Assert
+    let reasoning = |text: &str| ResponseDelta::Reasoning(text.to_string());
+    assert_eq!(
+        observed.deltas,
+        [
+            reasoning("First."),
+            reasoning("\n\n"),
+            reasoning("Second."),
+            // A call without an output index is numbered on its first delta.
+            ResponseDelta::ToolArguments {
+                arguments: "{}".to_string(),
+                index: 0,
+            },
+        ]
+    );
+    assert_eq!(unobserved.deltas, []);
 }
 
 #[test]

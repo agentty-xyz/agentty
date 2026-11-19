@@ -10,6 +10,7 @@
 //! Every type derives `Serialize`, `Deserialize`, and `JsonSchema`, so the
 //! same shape can be sent over a wire protocol.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -168,8 +169,7 @@ impl RunEvent {
 ///
 /// [`Self::Completed`] is always the last event, including for a run that
 /// failed or was cancelled, unless the run itself was dropped before it
-/// finished; then the stream ends without it. New kinds, such as
-/// streamed deltas, may be added.
+/// finished; then the stream ends without it. New kinds may be added.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -192,12 +192,33 @@ pub enum RunEventKind {
     /// An item started. Its content arrives with [`Self::ItemCompleted`]
     /// for the same `id`, unless the run fails or is cancelled first: an
     /// item still open when [`Self::Completed`] arrives was interrupted
-    /// and never completes.
+    /// and never completes. So was a tool-call item a streamed model
+    /// response opened when that response was discarded, such as a response
+    /// that failed or an invalid final answer that was requested again; the
+    /// discarded response's reasoning and message items complete with the
+    /// text it streamed.
     ItemStarted {
         /// Identifier of the item.
         id: ItemId,
         /// What the item is.
         item_kind: ItemKind,
+    },
+    /// A fragment of an open item's content as the model streams it,
+    /// between the item's [`Self::ItemStarted`] and [`Self::ItemCompleted`].
+    ///
+    /// Only the built-in [`crate::model::ModelClient`] streams, for
+    /// providers on the Responses and Chat Completions protocols, and only
+    /// for the run's turn requests. A response's reasoning streams into a
+    /// [`ItemKind::Reasoning`] item, its text into a [`ItemKind::Message`]
+    /// item, and each tool call's arguments into that call's
+    /// [`ItemKind::ToolCall`] item, each started at its first fragment.
+    /// Fragments of one item concatenate to its streamed content; the
+    /// completed item stays authoritative.
+    ItemDelta {
+        /// The fragment.
+        delta: Delta,
+        /// Identifier of the item, as [`Self::ItemStarted`] reported it.
+        id: ItemId,
     },
     /// An item finished with its content.
     ItemCompleted {
@@ -350,12 +371,37 @@ pub enum CompactionOutcome {
     Failed(RunFailure),
 }
 
+/// A fragment of streamed item content, carried by
+/// [`RunEventKind::ItemDelta`].
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Delta {
+    /// Assistant text of a [`ItemKind::Message`] item.
+    Text {
+        /// The text fragment.
+        text: String,
+    },
+    /// Provider reasoning of a [`ItemKind::Reasoning`] item, such as a
+    /// reasoning summary.
+    Reasoning {
+        /// The reasoning fragment.
+        text: String,
+    },
+    /// Arguments of a [`ItemKind::ToolCall`] item's call, as JSON text that
+    /// is incomplete until the last fragment.
+    ToolArguments {
+        /// The arguments fragment.
+        arguments: String,
+    },
+}
+
 /// What an item is, known when it starts.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ItemKind {
-    /// Assistant text written beside tool calls.
+    /// Assistant text written beside tool calls, or streamed by a response.
     Message,
     /// The run's final output.
     Output,
@@ -370,8 +416,11 @@ pub enum ItemKind {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Item {
-    /// Assistant text the model wrote beside its tool calls; never the
-    /// run's final output.
+    /// Assistant text the model wrote beside its tool calls, or the text a
+    /// streamed response wrote as it went (see [`RunEventKind::ItemDelta`]):
+    /// for a final answer, its raw text, which [`Self::Output`] then carries
+    /// validated. A final answer that did not stream emits only
+    /// [`Self::Output`].
     Message {
         /// The assistant text.
         text: String,
@@ -612,33 +661,197 @@ impl Stream for EventStream {
     }
 }
 
-tokio::task_local! {
-    /// Sink of the streamed run whose model request is in flight, which a
-    /// built-in client reports that request's retries to.
-    static RETRY_EVENTS: Arc<EventSink>;
-}
-
-/// Runs `request`, a model request of the run streaming to `events`, so a
-/// built-in client reports its retries there as [`RunEventKind::Retrying`].
-pub(crate) async fn with_retry_events<F: Future>(
-    events: Option<Arc<EventSink>>,
-    request: F,
-) -> F::Output {
-    match events {
-        Some(events) => RETRY_EVENTS.scope(events, request).await,
-        None => request.await,
-    }
-}
-
-/// Returns the sink [`with_retry_events`] scoped the current model request
-/// to, if any.
 #[cfg(any(
     feature = "providers-anthropic",
     feature = "providers-compat",
     feature = "providers-openai"
 ))]
-pub(crate) fn retry_events() -> Option<Arc<EventSink>> {
-    RETRY_EVENTS.try_with(Arc::clone).ok()
+tokio::task_local! {
+    /// Events of the streamed run whose model request is in flight, which
+    /// a built-in client reports that request's retries and deltas to.
+    static REQUEST_EVENTS: RequestEvents;
+}
+
+/// Where a built-in client reports one model request of a streamed run.
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+#[derive(Clone)]
+pub(crate) struct RequestEvents {
+    /// Sink of the run, which receives the request's retries and deltas.
+    pub(crate) sink: Arc<EventSink>,
+    /// Items the request's streamed deltas open, or `None` for a request
+    /// whose response is no item of the run, such as a summary request.
+    pub(crate) streamed: Option<Arc<StreamedItems>>,
+}
+
+/// Runs `request`, a model request of the run streaming to `events`, so a
+/// built-in client reports its retries there as [`RunEventKind::Retrying`]
+/// and, with `streamed`, its deltas as [`RunEventKind::ItemDelta`]. Without
+/// a built-in client, nothing reports either.
+pub(crate) async fn with_request_events<F: Future>(
+    events: Option<Arc<EventSink>>,
+    streamed: Option<Arc<StreamedItems>>,
+    request: F,
+) -> F::Output {
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
+    if let Some(sink) = events {
+        return REQUEST_EVENTS
+            .scope(RequestEvents { sink, streamed }, request)
+            .await;
+    }
+    #[cfg(not(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    )))]
+    let _ = (events, streamed);
+
+    request.await
+}
+
+/// Returns the events [`with_request_events`] scoped the current model
+/// request to, if any.
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+pub(crate) fn request_events() -> Option<RequestEvents> {
+    REQUEST_EVENTS.try_with(RequestEvents::clone).ok()
+}
+
+/// Items one streamed model response opened, each at its first delta: its
+/// reasoning, its assistant text, and its tool calls by position.
+pub(crate) struct StreamedItems {
+    state: Mutex<OpenItems>,
+}
+
+impl StreamedItems {
+    /// Creates the items of one response of a run streaming to `events`,
+    /// or `None` for a run that streams no events.
+    pub(crate) fn for_run(events: Option<&Arc<EventSink>>) -> Option<Arc<Self>> {
+        events.map(|_| {
+            Arc::new(Self {
+                state: Mutex::new(OpenItems::default()),
+            })
+        })
+    }
+
+    /// Streams reasoning `text` into the response's reasoning item, sending
+    /// its events to `sink`.
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
+    pub(crate) async fn reasoning(&self, sink: &EventSink, text: String) {
+        self.stream_text(sink, ItemKind::Reasoning, text).await;
+    }
+
+    /// Streams assistant `text` into the response's message item, sending
+    /// its events to `sink`.
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
+    pub(crate) async fn text(&self, sink: &EventSink, text: String) {
+        self.stream_text(sink, ItemKind::Message, text).await;
+    }
+
+    /// Streams `arguments` into the item of the response's call at
+    /// position `index`, sending its events to `sink`.
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
+    pub(crate) async fn arguments(&self, sink: &EventSink, index: usize, arguments: String) {
+        let mut state = self.state.lock().await;
+        let id = if let Some(id) = state.calls.get(&index) {
+            *id
+        } else {
+            let id = sink.start_item(ItemKind::ToolCall).await;
+            state.calls.insert(index, id);
+
+            id
+        };
+        sink.emit(RunEventKind::ItemDelta {
+            delta: Delta::ToolArguments { arguments },
+            id,
+        })
+        .await;
+    }
+
+    /// Streams `text` into the response's reasoning item, for
+    /// [`ItemKind::Reasoning`], or else its message item, starting it at
+    /// the first fragment.
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
+    async fn stream_text(&self, sink: &EventSink, item_kind: ItemKind, text: String) {
+        let mut state = self.state.lock().await;
+        let reasoning = item_kind == ItemKind::Reasoning;
+        let open = if reasoning {
+            &mut state.reasoning
+        } else {
+            &mut state.message
+        };
+        let id = if let Some(item) = open {
+            item.text.push_str(&text);
+
+            item.id
+        } else {
+            let id = sink.start_item(item_kind).await;
+            *open = Some(StreamedText {
+                id,
+                text: text.clone(),
+            });
+
+            id
+        };
+        let delta = if reasoning {
+            Delta::Reasoning { text }
+        } else {
+            Delta::Text { text }
+        };
+        sink.emit(RunEventKind::ItemDelta { delta, id }).await;
+    }
+}
+
+/// Items a streamed response opened and the engine completes.
+#[derive(Default)]
+pub(crate) struct OpenItems {
+    /// Tool call items by the call's position in the response.
+    pub(crate) calls: HashMap<usize, ItemId>,
+    pub(crate) message: Option<StreamedText>,
+    pub(crate) reasoning: Option<StreamedText>,
+}
+
+impl OpenItems {
+    /// Takes the items `streamed` opened, leaving none open there; none
+    /// without a tracker.
+    pub(crate) async fn take(streamed: Option<&StreamedItems>) -> Self {
+        match streamed {
+            Some(streamed) => std::mem::take(&mut *streamed.state.lock().await),
+            None => Self::default(),
+        }
+    }
+}
+
+/// An open text item and the text streamed into it.
+pub(crate) struct StreamedText {
+    pub(crate) id: ItemId,
+    pub(crate) text: String,
 }
 
 /// Producing side of one run's [`EventStream`].
@@ -686,12 +899,6 @@ impl EventSink {
             .await;
 
         id
-    }
-
-    /// Starts and completes one item of `item_kind` holding `item`.
-    pub(crate) async fn publish_item(&self, item_kind: ItemKind, item: Item) {
-        let id = self.start_item(item_kind).await;
-        self.emit(RunEventKind::ItemCompleted { id, item }).await;
     }
 
     /// Sends the settled `outcome`'s output item, when it succeeded, and

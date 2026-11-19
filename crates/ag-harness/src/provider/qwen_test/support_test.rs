@@ -82,6 +82,8 @@ pub(super) async fn mount_structured_response(
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": schema_instruction, "role": "system"},
                 {"content": prompt, "role": "user"}
@@ -118,6 +120,8 @@ pub(super) async fn mount_read_response(
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(
@@ -151,6 +155,8 @@ pub(super) async fn mount_qwen_3_8_tool_response(
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(
@@ -196,6 +202,8 @@ pub(super) async fn mount_qwen_3_8_continuation(
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {
                     "content": format!(

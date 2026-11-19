@@ -194,9 +194,8 @@ impl HttpTransport {
         request: &ProviderRequest,
     ) -> Result<Response, TransportError> {
         let mut response = self.send(request).await?;
-        let body = success_body(&mut response).await?;
 
-        serde_json::from_slice(&body).map_err(TransportError::InvalidResponse)
+        decode_success_body(&mut response).await
     }
 
     /// Sends `request` and returns its successful response with the body
@@ -396,6 +395,58 @@ async fn error_body_summary(response: &mut reqwest::Response) -> String {
     summary
 }
 
+/// Reads the bounded body of a successful `response` and decodes it.
+///
+/// # Errors
+/// Returns a transport, size, or decoding failure.
+pub(crate) async fn decode_success_body<Response: DeserializeOwned>(
+    response: &mut reqwest::Response,
+) -> Result<Response, TransportError> {
+    let body = success_body(response).await?;
+
+    serde_json::from_slice(&body).map_err(TransportError::InvalidResponse)
+}
+
+/// Classifies a failure `provider` reported inside a stream it had already
+/// begun answering, such as an input over the context window, by its
+/// `code` and `message`.
+pub(crate) fn streamed_failure(
+    provider: &str,
+    overflow_markers: &[String],
+    code: Option<String>,
+    message: Option<String>,
+) -> model::ModelError {
+    let description = format!(
+        "{} {}",
+        code.as_deref().unwrap_or_default(),
+        message.as_deref().unwrap_or_default()
+    );
+    let error_type = if has_context_overflow_marker(&description, overflow_markers) {
+        model::ModelErrorType::ContextOverflow
+    } else {
+        model::ModelErrorType::Provider
+    };
+
+    model::ModelError::classified_request(
+        error_type,
+        None,
+        Box::new(StreamedFailure {
+            code: code.unwrap_or_else(|| "unknown".to_string()),
+            message: schema_contract::bounded_diagnostic(message.unwrap_or_default()),
+            provider: provider.to_string(),
+        }),
+    )
+}
+
+/// A response that failed after its stream began.
+#[derive(Debug, Error)]
+#[error("{provider} response failed with `{code}`: {message}")]
+struct StreamedFailure {
+    code: String,
+    message: String,
+    provider: String,
+}
+
 async fn success_body(response: &mut reqwest::Response) -> Result<Vec<u8>, TransportError> {
     let limit = u64::try_from(SUCCESS_BODY_LIMIT_BYTES).unwrap_or(u64::MAX);
     if response
@@ -444,6 +495,13 @@ pub(crate) enum TransportError {
     Redirected(reqwest::StatusCode),
     #[error("model API response body exceeds the size limit")]
     ResponseBodyTooLarge,
+    /// A failure the provider reported inside a stream it had begun
+    /// answering, classified by [`streamed_failure`].
+    #[error("model API stream reported a failure")]
+    StreamFailed {
+        code: Option<String>,
+        message: Option<String>,
+    },
     #[error("model API transport failed: {0}")]
     Transport(#[source] Box<dyn Error + Send + Sync>),
 }
@@ -492,6 +550,9 @@ impl TransportError {
                 error.into(),
             ),
             Self::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,
+            Self::StreamFailed { code, message } => {
+                streamed_failure(provider, overflow_markers, code, message)
+            }
             error @ Self::Transport(_) => model::ModelError::classified_request(
                 model::ModelErrorType::Transport,
                 None,

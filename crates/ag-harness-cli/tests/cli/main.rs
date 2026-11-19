@@ -54,7 +54,8 @@ const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
 );
 
 /// Matches a session request whose body equals the wrapped value plus the
-/// `prompt_cache_key` that Muse and Kimi receive for every session turn.
+/// `prompt_cache_key` that Muse and Kimi receive for every session turn and
+/// the streaming fields of every Chat Completions request.
 struct SessionBody(serde_json::Value);
 
 impl Match for SessionBody {
@@ -62,13 +63,18 @@ impl Match for SessionBody {
         let Ok(mut body) = request.body_json::<serde_json::Value>() else {
             return false;
         };
-        let key = body
-            .as_object_mut()
-            .and_then(|body| body.remove("prompt_cache_key"));
+        let Some(fields) = body.as_object_mut() else {
+            return false;
+        };
+        let key = fields.remove("prompt_cache_key");
+        let streamed = fields.remove("stream") == Some(json!(true))
+            && fields.remove("stream_options") == Some(json!({"include_usage": true}));
 
-        key.as_ref()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|key| key.starts_with("ag-session-"))
+        streamed
+            && key
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|key| key.starts_with("ag-session-"))
             && body == self.0
     }
 }
@@ -318,6 +324,8 @@ async fn qwen_3_8_uses_graded_reasoning_effort() {
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
         .and(body_json(json!({
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": [
                 {"content": structured_output_instruction(), "role": "system"},
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
@@ -487,6 +495,8 @@ async fn provider_flags_select_alternate_wire_formats() {
                 {"content": "Hello", "role": "user"}
             ],
             "model": model,
+            "stream": true,
+            "stream_options": {"include_usage": true},
             "tools": [read_tool()]
         });
         match provider {

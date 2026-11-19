@@ -18,6 +18,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use super::DeltaEvents;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use super::ModelClient;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use super::RetryEvents;
@@ -26,6 +28,8 @@ use super::{
     ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse, ProviderStatus,
     ReasoningEffort,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use crate::event::{EventSink, RunId};
 #[cfg(all(
     feature = "providers-compat",
     feature = "providers-openai",
@@ -1611,4 +1615,26 @@ fn retry_kinds_report_the_failure_kind_their_final_error_would() {
         // Assert
         assert_eq!(reported, expected, "{kind:?}");
     }
+}
+
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[tokio::test]
+async fn deltas_of_a_request_without_streamed_items_are_dropped() {
+    // Arrange
+    let (sink, mut stream) = EventSink::channel(RunId::generate());
+    let deltas = DeltaEvents {
+        sink: Arc::clone(&sink),
+        streamed: None,
+    };
+
+    // Act
+    ag_router::DeltaObserver::delta(&deltas, ag_router::ResponseDelta::Text("a".to_string())).await;
+    drop((deltas, sink));
+
+    // Assert
+    let next = std::future::poll_fn(|context| {
+        futures_core::Stream::poll_next(std::pin::Pin::new(&mut stream), context)
+    })
+    .await;
+    assert_eq!(next, None);
 }
