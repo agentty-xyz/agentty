@@ -43,8 +43,6 @@ struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
     active_prompt_output: TextFingerprint,
     draft_prompt: TextFingerprint,
-    /// Whether the draft preview should render stacked-session start guidance.
-    is_stacked_child: bool,
     markdown_render_version: u64,
     output_width: u16,
     queued_messages: TextFingerprint,
@@ -64,7 +62,6 @@ struct SessionOutputLayoutCacheKey {
 struct SessionOutputBodyCacheKey {
     draft_prompt: TextFingerprint,
     has_active_turn: bool,
-    is_stacked_child: bool,
     markdown_render_version: u64,
     output_width: u16,
     queued_messages: TextFingerprint,
@@ -771,7 +768,6 @@ impl<'a> SessionOutput<'a> {
             active_progress: TextFingerprint::from_text(context.active_progress),
             active_prompt_output: TextFingerprint::from_text(context.active_prompt_output),
             draft_prompt: Self::draft_prompt_fingerprint(session),
-            is_stacked_child: session.is_stacked_child(),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             queued_messages: TextFingerprint::from_texts(
@@ -804,7 +800,6 @@ impl<'a> SessionOutput<'a> {
         SessionOutputBodyCacheKey {
             draft_prompt: Self::draft_prompt_fingerprint(session),
             has_active_turn: session_output_assembly::status_has_active_turn(session.status),
-            is_stacked_child: session.is_stacked_child(),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             queued_messages: TextFingerprint::from_texts(

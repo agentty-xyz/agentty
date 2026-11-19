@@ -22,7 +22,9 @@ use crate::domain::session::{
     SessionId, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
-use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
+use crate::domain::transient_message::{
+    GeneratedTurnUpdate, TransientMessageBody, TransientMessageSlot,
+};
 use crate::domain::turn_prompt::TurnPromptTextSource;
 use crate::infra::db::SessionReviewWatchRow;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -1675,7 +1677,19 @@ async fn attention_retries_follow_ups_that_cannot_start_and_reports_them_once() 
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
     app.enable_review_watch(&session_id).await;
-    app.sessions.sessions_mut()[0].parent_session_id = Some(SessionId::from("missing-parent"));
+    // A running project sync blocks the conflict sync, and a waiting
+    // generated turn rejects the review-comment turn.
+    app.project_sync_status = Some(ProjectSyncStatus {
+        context: ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: app.active_project_id(),
+            project_name: "agentty".to_string(),
+        },
+        phase: ProjectSyncPhase::Running,
+    });
+    app.sessions
+        .queue_generated_turn(&session_id, 0, "earlier follow-up".to_string());
 
     // Act
     app.apply_review_request_attention(&session_id, conflict_attention())
@@ -1730,14 +1744,16 @@ async fn failed_check_follow_up_rejected_by_the_session_starts_on_the_next_repor
         head_commit: "abc123".to_string(),
         ..ReviewRequestAttention::default()
     };
-    // A stacked session whose stack cannot accept replies rejects the turn.
-    app.sessions.sessions_mut()[0].parent_session_id = Some(SessionId::from("missing-parent"));
+    // A waiting generated turn rejects the new one.
+    app.sessions
+        .queue_generated_turn(&session_id, 0, "earlier follow-up".to_string());
 
     // Act
     app.apply_review_request_attention(&session_id, failed_checks.clone())
         .await;
     let rejected_keys = app.review_watch.handled_keys.get(&session_id).cloned();
-    app.sessions.sessions_mut()[0].parent_session_id = None;
+    app.sessions
+        .update_generated_turn(&session_id, GeneratedTurnUpdate::Skipped);
     app.apply_review_request_attention(&session_id, failed_checks)
         .await;
 

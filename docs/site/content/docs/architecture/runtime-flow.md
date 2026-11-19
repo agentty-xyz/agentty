@@ -150,8 +150,8 @@ flowchart TD
    `SessionRunClient` after acquiring shared session capacity.
 1. Progress remains transient. Post-turn handling persists the answer, questions, usage,
    and provider continuation state before projecting them into the UI.
-1. Ordered post-processing commits changes, coordinates publishing and stacked children,
-   refreshes diff metadata, and enters `Review` or `Question`.
+1. Ordered post-processing commits changes, coordinates publishing, refreshes diff
+   metadata, and enters `Review` or `Question`.
 
 The worker applies each harness's configured
 [execution policy](@/docs/core-components/execution-components/run-worker.md#execution-policy)
@@ -275,8 +275,8 @@ never discards worktree changes to fit a prompt.
 - **Publishing** shares branch ownership with sync and auto-push and uses
   force-with-lease. Review-request descriptions come from a read-only utility run over
   the published commits, preserving existing description content.
-- **Remote merge** marks `Merged`. A successful manual target sync persists archival and
-  child-restack intent before cleanup.
+- **Remote merge** marks `Merged`. A successful manual target sync persists archival
+  before cleanup.
 - **Review-request watching** is opt-in per session. For sessions in `Watching`, forge
   refresh reports head commit, conflicts, checks, and unresolved threads from trusted
   bots configured in `.agentty/review-watch.json`. The reducer starts at most one

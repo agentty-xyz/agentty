@@ -1,13 +1,9 @@
-//! Merge confirmation and stack-sync key-handler tests.
+//! Merge confirmation key-handler tests.
 
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-use super::super::{
-    handle_confirmation_decision, handle_merge_confirmation, handle_stack_append_parent_key,
-};
-use super::support::{appendable_stack_test_app, session_replay_text};
+use super::super::{handle_confirmation_decision, handle_merge_confirmation};
+use super::support::session_replay_text;
 use crate::app::App;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -53,32 +49,6 @@ async fn test_merge_confirmation_accepts_an_already_active_merge() {
     // Assert
     assert!(matches!(event_result, Ok(EventResult::Continue)));
     assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-async fn test_stack_parent_selector_surfaces_sync_start_failure() {
-    // Arrange
-    let (mut app, _base_dir, _parent_session_id, source_session_id) =
-        appendable_stack_test_app().await;
-    app.sessions
-        .session_handles_mut()
-        .remove(source_session_id.as_str());
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: source_session_id.into(),
-    };
-
-    // Act
-    let result =
-        handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
-
-    // Assert
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::SyncBlockedPopup { ref title, .. } if title == "Append to stack failed"
-    ));
 }
 
 #[tokio::test]

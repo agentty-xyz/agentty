@@ -764,6 +764,58 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
     );
 }
 
+/// Verifies review-request publication to the default session branch stops
+/// before forge work when the session branch is mid-rebase.
+#[tokio::test]
+async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progress() {
+    // Arrange
+    let database = review_session_database().await;
+    let branch_publish_session = BranchPublishTaskSession {
+        base_branch: "main".to_string(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: None,
+        review_request: None,
+        status: Status::Review,
+    };
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Rebase)) }));
+    mock_git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .times(0);
+    mock_git_client.expect_repo_url().times(0);
+    let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
+    let run_client = ag_worker::MockRunClient::new();
+    let transcript = Mutex::new(SessionTranscript::default());
+
+    // Act
+    let result = publish_pull_request(
+        &branch_publish_session,
+        Arc::new(FixedClock::unix_epoch()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+        &ReviewRequestGenerator {
+            db: &database,
+            folder: &branch_publish_session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        },
+        None,
+    )
+    .await;
+
+    // Assert
+    let failure = result.expect_err("publication should be blocked");
+    assert!(failure.is_blocked);
+    assert_eq!(failure.title, "Review request publish blocked");
+    assert!(failure.message.contains("rebase is in progress"));
+}
+
 /// Builds a forge client that finds no existing review request and creates
 /// `summary` from the generated `review/topic` publication.
 fn creating_publication_forge_client(

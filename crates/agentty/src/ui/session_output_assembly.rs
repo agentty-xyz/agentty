@@ -32,16 +32,8 @@ const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter
                                         first draft locally, then press `s` in session view to \
                                         start the bundle.";
 
-const DRAFT_PREVIEW_STACKED_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to \
-                                                stage the first draft locally. The `s` start \
-                                                action appears after the parent is review-ready.";
-
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
-
-const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
-    "Draft messages stay local until the parent is review-ready and you press `s` in session view \
-     to start the stacked bundle from its parent branch.";
 
 const USER_PROMPT_TAB_WIDTH: usize = 4;
 
@@ -604,20 +596,10 @@ fn render_draft_session_preview(session: &Session) -> String {
     let mut output = String::from(DRAFT_PREVIEW_HEADER);
 
     if session.has_staged_drafts() {
-        let draft_note = if session.is_stacked_child() {
-            DRAFT_PREVIEW_STACKED_STAGED_NOTE
-        } else {
-            DRAFT_PREVIEW_STAGED_NOTE
-        };
-        let _ = write!(output, "\n\n{draft_note}\n\n");
+        let _ = write!(output, "\n\n{DRAFT_PREVIEW_STAGED_NOTE}\n\n");
         output.push_str(&staged_draft_transcript_block(&session.prompt));
     } else {
-        let draft_note = if session.is_stacked_child() {
-            DRAFT_PREVIEW_STACKED_EMPTY_NOTE
-        } else {
-            DRAFT_PREVIEW_EMPTY_NOTE
-        };
-        let _ = write!(output, "\n\n{draft_note}\n");
+        let _ = write!(output, "\n\n{DRAFT_PREVIEW_EMPTY_NOTE}\n");
     }
 
     if let Some(transcript_text) = session

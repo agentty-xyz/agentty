@@ -1176,47 +1176,6 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
     Ok(())
 }
 
-/// Verify that disabled creation options use readable gray in the default
-/// theme.
-#[tokio::test]
-async fn session_creation_default_theme_disabled_options() -> E2eResult {
-    // Arrange
-    FeatureTest::new("session_creation_default_theme_disabled_options")
-        .env("NO_COLOR", "")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_sessions_tab(env).await }))
-        .run(
-            |scenario| {
-                // Act
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .press_key("a")
-                    .wait_for_text("Select parent first", 5000)
-                    .press_key("j")
-                    .wait_for_stable_frame(300, 5000)
-            },
-            |frame, _report| {
-                Box::pin(async move {
-                    // Assert
-                    let disabled_color = CellColor::new(192, 192, 192);
-                    for text in [
-                        "Stacked",
-                        "Select parent first",
-                        "Append to stack",
-                        "[Preview] Review only",
-                    ] {
-                        assertion::assert_text_has_fg_color(frame, text, &disabled_color);
-                        assertion::assert_text_has_bg_color(frame, text, &CellColor::black());
-                    }
-                    assertion::assert_span_is_highlighted(frame, "Draft");
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
 /// Verify that pressing `a` on the Sessions tab opens the creation selector,
 /// and choosing the regular option opens prompt mode with the submit footer.
 #[tokio::test]
@@ -1227,7 +1186,7 @@ async fn session_creation_opens_prompt_mode() -> E2eResult {
         .setup(|env| Box::pin(async move { seed_sessions_tab(env).await }))
         .zola(
             "Session creation",
-            "Create a session or append a review-ready session to an existing stack.",
+            "Create a regular or draft session from the Sessions tab.",
             30,
         )
         .run(
@@ -1253,22 +1212,8 @@ async fn session_creation_opens_prompt_mode() -> E2eResult {
                     assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
                     assertion::assert_text_in_region(&selector_frame, "Draft", &selector_full);
                     assertion::assert_not_visible(&selector_frame, "Orchestrator");
-                    assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
-                    assertion::assert_text_in_region(
-                        &selector_frame,
-                        "Select parent first",
-                        &selector_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &selector_frame,
-                        "Append to stack",
-                        &selector_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &selector_frame,
-                        "[Preview] Review only",
-                        &selector_full,
-                    );
+                    assertion::assert_not_visible(&selector_frame, "Stacked");
+                    assertion::assert_not_visible(&selector_frame, "Append to stack");
                     assertion::assert_text_in_region(
                         &selector_frame,
                         "Enter: select",

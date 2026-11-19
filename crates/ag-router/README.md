@@ -84,6 +84,17 @@ prefix (`Router::keeps_prefix_across_schemas`), and the caller states the reques
 schema after the conversation; Muse receives the requested schema natively. Provider
 selection is explicit; routing does not retry a request on another provider.
 
+Each specification retries failed requests under its `RetryPolicy`
+(`ProviderSpec::with_retry`). The default, which every preset keeps, retries a `429`
+without a spent-quota marker up to five times and one connection failure, waiting an
+exponential backoff from one second capped at five, or the provider's `Retry-After`
+(delta-seconds or an HTTP date, capped at sixty seconds) when longer. `with_retried`
+opts in server errors (`500`, `502`-`504`, `RetryKind::ServerError`) and an overloaded
+`529` (`RetryKind::Overloaded`); the builder also sets the attempts, base delay, caps,
+and `Jitter`. A spent quota (`402`, or a `429` reporting one) and a timed-out request
+are never retried. `Router::execute_observed` reports each retry to a `RetryObserver`
+before its wait, and dropping the request future stops a pending wait.
+
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
 carry only `model`, `messages`, `tools`, `response_format`, and the legacy `max_tokens`,

@@ -1,12 +1,11 @@
-//! Session manager synchronization tests covering rebase, merge, stacking,
-//! and main-branch sync queueing and validation.
+//! Session manager synchronization tests covering rebase, merge, and
+//! main-branch sync queueing and validation.
 
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
-use ag_session::session_branch;
 use ag_telemetry::KeyValue;
 use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
@@ -15,20 +14,18 @@ use tokio::sync::Notify;
 use super::super::SessionManager;
 use super::support::{
     add_manual_session, allow_detect_git_info, assert_sync_waits_without_canceling_turn,
-    create_and_start_session, create_default_mock_git_client,
-    create_mock_git_client_for_successful_noop_merges, create_passthrough_mock_fs_client,
-    install_mock_git_client, new_test_app, new_test_app_with_git, new_test_app_with_git_and_db,
-    refresh_with_session_table_unavailable, session_replay_text, session_status_or_done,
-    test_loading_review, test_session_manager, wait_for_all_sessions_done,
-    wait_for_first_merge_to_complete_before_second_starts, wait_for_output_contains,
-    wait_for_output_contains_after_events, wait_for_second_merge_to_start, wait_for_status,
-    wait_for_status_with_retries,
+    create_default_mock_git_client, create_mock_git_client_for_successful_noop_merges,
+    create_passthrough_mock_fs_client, install_mock_git_client, new_test_app,
+    new_test_app_with_git, new_test_app_with_git_and_db, refresh_with_session_table_unavailable,
+    session_replay_text, session_status_or_done, test_loading_review, test_session_manager,
+    wait_for_all_sessions_done, wait_for_first_merge_to_complete_before_second_starts,
+    wait_for_output_contains, wait_for_output_contains_after_events,
+    wait_for_second_merge_to_start, wait_for_status_with_retries,
 };
 use crate::app::App;
-use crate::app::session::SessionError;
 use crate::app::test_support::{SyncSessionStartError, TestSessionRunFactory};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{SessionId, Status};
+use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::AppRepositories;
@@ -154,34 +151,6 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
     assert!(sync_completion_index < queued_prompt_index);
 }
 
-#[test]
-fn test_append_stacked_rebase_failure_notices_updates_affected_child() {
-    // Arrange
-    let mut session_manager = test_session_manager("child-session", None);
-    let failures = vec![(
-        SessionId::from("child-session"),
-        SessionError::HandlesNotFound,
-    )];
-
-    // Act
-    session_manager
-        .append_stacked_rebase_failure_notices(failures, "Stacked child auto-sync failed");
-
-    // Assert
-    let child_session = session_manager
-        .sessions()
-        .iter()
-        .find(|session| session.id.as_str() == "child-session")
-        .expect("expected affected child session");
-    assert_eq!(
-        child_session
-            .transient_messages
-            .get(TransientMessageSlot::WorkflowNotice)
-            .map(|message| message.body.text()),
-        Some("[Sync Error] Stacked child auto-sync failed: Session handles not found")
-    );
-}
-
 #[tokio::test]
 async fn test_cleanup_merged_session_worktree_without_repo_hint() {
     // Arrange
@@ -235,137 +204,6 @@ async fn test_cleanup_merged_session_worktree_without_repo_hint() {
         !worktree_folder.exists(),
         "worktree should be removed after cleanup"
     );
-}
-
-#[tokio::test]
-async fn test_append_session_to_stack_persists_parent_and_queues_sync() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let session_id = app.create_session().await.expect("failed to create child");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
-    let expected_parent_branch = session_branch(&parent_session_id);
-
-    // Act
-    let result = app
-        .append_session_to_stack(&session_id, &parent_session_id)
-        .await;
-    let persisted_session = app
-        .services
-        .db()
-        .sessions()
-        .load_session(&session_id)
-        .await
-        .expect("failed to load appended session")
-        .expect("appended session should exist");
-    let in_memory_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)
-        .expect("appended in-memory session should exist");
-
-    // Assert
-    assert!(result.is_ok(), "append should start: {:?}", result.err());
-    assert_eq!(
-        in_memory_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
-    assert_eq!(in_memory_session.base_branch, expected_parent_branch);
-    assert_eq!(
-        persisted_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
-    assert_eq!(persisted_session.base_branch, expected_parent_branch);
-}
-
-#[tokio::test]
-async fn test_append_session_to_stack_preserves_pending_restack_base_while_sync_is_queued() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let session_id = app.create_session().await.expect("failed to create child");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
-    let pending_restack_base = "former-parent-tip";
-    app.services
-        .db()
-        .sessions()
-        .update_session_stack_base_commit_hash(&session_id, Some(pending_restack_base.to_string()))
-        .await
-        .expect("failed to seed pending restack base");
-    let branch_operation_lock = Arc::clone(
-        &app.sessions
-            .session_handles_or_err(&session_id)
-            .expect("expected child session handles")
-            .branch_operation_lock,
-    );
-    let existing_operation_guard = branch_operation_lock.lock_owned().await;
-
-    // Act
-    let result = app
-        .append_session_to_stack(&session_id, &parent_session_id)
-        .await;
-    let preserved_restack_base = app
-        .services
-        .db()
-        .sessions()
-        .get_session_stack_base_commit_hash(&session_id)
-        .await
-        .expect("failed to load pending restack base");
-
-    // Assert
-    assert!(result.is_ok(), "append should queue: {:?}", result.err());
-    assert_eq!(
-        preserved_restack_base.as_deref(),
-        Some(pending_restack_base)
-    );
-
-    drop(app);
-    drop(existing_operation_guard);
-}
-
-#[tokio::test]
-async fn test_append_session_to_stack_rolls_back_metadata_when_sync_cannot_start() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let session_id = app.create_session().await.expect("failed to create child");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
-    app.sessions
-        .session_handles_mut()
-        .remove(session_id.as_str());
-
-    // Act
-    let result = app
-        .append_session_to_stack(&session_id, &parent_session_id)
-        .await;
-    let persisted_session = app
-        .services
-        .db()
-        .sessions()
-        .load_session(&session_id)
-        .await
-        .expect("failed to load rolled-back session")
-        .expect("rolled-back session should exist");
-    let in_memory_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)
-        .expect("rolled-back in-memory session should exist");
-
-    // Assert
-    assert!(result.is_err());
-    assert_eq!(in_memory_session.parent_session_id, None);
-    assert_eq!(in_memory_session.base_branch, "main");
-    assert_eq!(persisted_session.parent_session_id, None);
-    assert_eq!(persisted_session.base_branch, "main");
 }
 
 #[test]
@@ -926,47 +764,6 @@ async fn test_merge_session_removes_worktree_and_branch_after_success() {
     assert!(!session_folder.exists(), "worktree should be removed");
 }
 
-#[tokio::test]
-async fn test_merge_session_restacks_stacked_child_after_success() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app
-        .create_session()
-        .await
-        .expect("failed to create merge session");
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked draft session");
-    app.stage_draft_message(&child_session_id, "Ready after parent merge")
-        .await
-        .expect("failed to stage child draft message");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-    let mock_git = create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
-    app.sessions.git_client = Arc::new(mock_git);
-
-    // Act
-    let result = app.merge_session(&parent_session_id).await;
-
-    // Assert
-    assert!(result.is_ok(), "merge should enqueue successfully");
-    wait_for_status_with_retries(&mut app, &parent_session_id, Status::Done, 200, false).await;
-    let db_sessions = app
-        .services
-        .db()
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("failed to load sessions");
-    let db_child_session = db_sessions
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("missing persisted child session");
-    assert_eq!(db_child_session.parent_session_id, None);
-    assert_eq!(db_child_session.base_branch, "main");
-}
-
 /// Verifies a merge's phases nest beneath one content-free `session.merge`
 /// root instead of starting unparented traces.
 #[tokio::test]
@@ -1097,62 +894,6 @@ async fn test_merge_session_queue_processes_sessions_in_fifo_order() {
     let second_status = session_status_or_done(&app, &second_session_id);
     assert_eq!(first_status, Status::Done);
     assert_eq!(second_status, Status::Done);
-}
-
-#[tokio::test]
-async fn test_parent_turn_completion_rebases_review_ready_stacked_child() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    create_and_start_session(&mut app, "Initial").await;
-    let parent_session_id = app.sessions.sessions()[0].id.clone();
-    wait_for_status(&mut app, &parent_session_id, Status::Review).await;
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked child");
-    let child_folder = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("expected child session")
-        .folder
-        .clone();
-    app.services
-        .fs_client()
-        .create_dir_all(child_folder)
-        .await
-        .expect("failed to materialize child worktree folder");
-    crate::test_support::set_session_status_for_test(&mut app, &child_session_id, Status::Review);
-    app.services
-        .db()
-        .sessions()
-        .update_session_status_with_timing_at(&child_session_id, "Review", 0)
-        .await
-        .expect("failed to persist review status for child session");
-
-    // Act
-    app.reply(&parent_session_id, "Parent follow-up").await;
-    wait_for_status(&mut app, &parent_session_id, Status::Review).await;
-    wait_for_output_contains_after_events(
-        &mut app,
-        &child_session_id,
-        "[Sync] Successfully synced",
-        200,
-    )
-    .await;
-
-    // Assert
-    app.sessions.sync_from_handles();
-    let child_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == child_session_id)
-        .expect("expected child session");
-    assert_eq!(child_session.status, Status::Review);
-    assert!(session_replay_text(child_session).contains("onto wt/"));
 }
 
 #[tokio::test]

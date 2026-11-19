@@ -172,24 +172,24 @@ async fn create_fake_project_dirs(env: &DemoEnv) -> std::io::Result<Vec<PathBuf>
 /// protocol output with a canned reply.
 async fn install_scripted_claude_stub(env: &DemoEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
-    // Reply text is hard-coded to match the Claude session's stacked-commits
+    // Reply text is hard-coded to match the Claude session's session-commits
     // prompt. The tape uses Codex for its other session, so this canned
     // output never renders anywhere else.
-    let reply = r"Stacked sessions let you build dependent features in parallel while Agentty keeps your branches clean with a single evolving commit per session.
+    let reply = r"Each session works on its own worktree branch, and Agentty keeps that branch clean with a single evolving commit per session.
 
 ```mermaid
 flowchart LR
-    A[Base branch] --> B[Parent commit P]
-    B --> C[Child commit C]
-    B --> D[Base after parent merge]
-    D --> E[Child C replayed]
+    A[Base branch] --> B[Session commit S]
+    B --> C[S amended each turn]
+    C --> D[Synced onto base]
+    D --> E[Squash-merged into base]
 ```";
     let response = serde_json::json!({
         "answer": reply,
         "questions": [],
         "summary": {
-            "turn": "Traced the documented workflow and implementation for stack creation, commit amendment, automatic rebasing, publishing, parent merge, and cancellation.",
-            "session": "Explained Agentty’s stacked-session commit model; no workspace files were changed."
+            "turn": "Traced the documented workflow and implementation for worktree creation, commit amendment, sync, publishing, and merge.",
+            "session": "Explained Agentty’s session commit model; no workspace files were changed."
         }
     });
     let assistant_event = serde_json::json!({
@@ -722,7 +722,7 @@ Sleep 700ms
 Enter
 Sleep 700ms
 
-Type "Explain how agentty's stacked commits work"
+Type "Explain how agentty's session commits work"
 Sleep 900ms
 Enter
 Sleep 2500ms

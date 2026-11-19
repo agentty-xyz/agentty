@@ -300,7 +300,6 @@ pub(crate) enum ProjectSyncPhase {
     ResolvingConflicts { conflicted_file_count: usize },
     /// The project branch was synchronized successfully.
     Complete {
-        deferred_session_count: usize,
         pulled_commits: Option<u32>,
         pushed_commits: Option<u32>,
         resolved_conflict_count: usize,
@@ -738,8 +737,8 @@ impl SyncOrchestrator {
     ///
     /// Review-request state is refreshed before the mutating git phases, but
     /// successful terminal updates are emitted only after the main branch
-    /// sync succeeds. That keeps externally merged child restacking behind the
-    /// updated local default branch for the manual `s` workflow.
+    /// sync succeeds. That keeps externally merged session finalization behind
+    /// the updated local default branch for the manual `s` workflow.
     ///
     /// Both phases and any conflict-assistance utilities nest beneath one
     /// independent `project.sync_main` trace, which fails with the sync.

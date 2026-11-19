@@ -283,7 +283,6 @@ async fn persisted_permission_mode_controls_read_only_execution() {
             id: "researcher",
             is_draft: false,
             model: model_fixture::CODEX_MODEL_ID,
-            parent_session_id: None,
             permission_mode: PermissionMode::ReadOnly,
             project_id,
             reasoning_level: ReasoningLevel::default(),

@@ -14,14 +14,13 @@ use tokio::sync::{Notify, mpsc};
 
 use super::super::{SESSION_REFRESH_INTERVAL, session_folder};
 use super::support::{
-    TestClock, create_and_start_session, create_mock_backend, new_test_app_with_db,
-    new_test_app_with_git, new_test_app_with_git_and_db, prepare_review_comment_resolution_session,
+    TestClock, create_mock_backend, new_test_app_with_db, new_test_app_with_git,
+    new_test_app_with_git_and_db, prepare_review_comment_resolution_session,
     register_session_backend, review_comment_resolution_snapshot, review_message_body,
     session_replay_text, test_session_manager, wait_for_output_contains, wait_for_status,
 };
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
-use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -107,28 +106,6 @@ fn test_finish_review_request_publish_reports_unloaded_handle_update() {
     );
 }
 
-#[tokio::test]
-async fn test_append_session_to_stack_rejects_non_review_source() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
-
-    // Act
-    let result = app
-        .append_session_to_stack(&session_id, &parent_session_id)
-        .await;
-
-    // Assert
-    assert!(matches!(
-        result,
-        Err(crate::app::AppError::Session(SessionError::Workflow(message)))
-            if message.contains("Review")
-    ));
-}
-
 /// Ensures resumed review sessions replay persisted transcript output on
 /// the first reply after app restart.
 #[tokio::test]
@@ -211,35 +188,6 @@ async fn test_reply_replays_history_after_app_restart_for_review_session() {
     )
     .await;
     wait_for_status(&mut resumed_app, &session_id, Status::Review).await;
-}
-
-#[tokio::test]
-async fn test_start_staged_session_rejects_stacked_child_before_parent_review() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::InProgress;
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked draft session");
-    app.stage_draft_message(&child_session_id, "Stacked draft")
-        .await
-        .expect("failed to stage stacked draft message");
-
-    // Act
-    let result = app.start_staged_session(&child_session_id).await;
-
-    // Assert
-    let error = result.expect_err("parent branch work should block child start");
-    assert!(error.to_string().contains("parent is in review"));
 }
 
 #[tokio::test]
@@ -454,41 +402,6 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         focused_reviews,
         [] as [crate::infra::db::SessionFocusedReviewRow; 0]
     );
-}
-
-#[tokio::test]
-async fn test_reply_to_parent_allows_review_ready_stacked_child() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
-    create_and_start_session(&mut app, "Initial").await;
-    let parent_session_id = app.sessions.sessions()[0].id.clone();
-    wait_for_status(&mut app, &parent_session_id, Status::Review).await;
-    let child_session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create child session");
-    let child_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == child_session_id)
-        .expect("expected child session");
-    child_session.parent_session_id = Some(parent_session_id.clone());
-    child_session.status = Status::Review;
-
-    // Act
-    app.reply(&parent_session_id, "Parent follow-up").await;
-
-    // Assert
-    app.sessions.sync_from_handles();
-    let parent_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    assert!(session_replay_text(parent_session).contains("Parent follow-up"));
 }
 
 #[test]
