@@ -301,6 +301,14 @@ still describes the call by the model's arguments. A denial answers the model wi
   reports its `Enforcement` (none, filesystem, or filesystem and network), and the
   model-facing `bash` description states exactly that, so an unsandboxed executor is
   never presented as a sandbox. Output is captured within one bounded budget.
+- Native sandbox availability — the harness's `Sandbox` choice decides what a native
+  configuration does where the sandbox cannot run (missing helper or `bwrap`, user
+  namespaces disabled, no Seatbelt, or another platform). The harness checks once per
+  configuration at the first run offering `bash`. By default the run continues without
+  isolation and emits `RunEventKind::SandboxUnavailable` with the reason and a remedy;
+  `IfUnavailable::Refuse` fails it with `ErrorKind::SandboxUnavailable` before any model
+  request. The helper is the host executable calling `sandbox::dispatch` or the
+  standalone `ag-harness-sandbox` binary.
 
 Repository tools receive a validated `Repository` with a trusted Git executable outside
 the containing worktree; the library never searches `PATH`.

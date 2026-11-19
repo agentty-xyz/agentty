@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{self, timeout_at};
 
 use crate::approval::{Approval, ApprovalRequest, Approved};
-use crate::bash::BashError;
+use crate::bash::{BashConfig, BashError};
 use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
 use crate::calibration::{Calibration, ContextCalibration};
@@ -43,6 +43,8 @@ use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
+#[cfg(feature = "native-sandbox")]
+use crate::sandbox::SandboxGate;
 use crate::summary_model::SummaryModel;
 use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
@@ -126,6 +128,10 @@ pub(crate) struct Engine<'a> {
     /// such as automatic compaction, which lead the turn's report.
     pub(crate) prior_requests: Option<&'a PriorRequests>,
     pub(crate) repository: Option<&'a Repository>,
+    /// The harness's sandbox choice, which decides how native `bash`
+    /// configurations run.
+    #[cfg(feature = "native-sandbox")]
+    pub(crate) sandbox: &'a SandboxGate,
     /// Session whose turn this is, given to tool handlers.
     pub(crate) session: Option<SessionId>,
     /// Model that answers the turn's round summary requests in place of
@@ -143,8 +149,13 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<FinishedTurn, EngineFailure> {
         let started_at = Instant::now();
+        #[cfg(feature = "native-sandbox")]
+        let bash = self.bash().await.map_err(EngineFailure::unreported)?;
+        // Without the native sandbox every configuration names its executor.
+        #[cfg(not(feature = "native-sandbox"))]
+        let bash = self.options.bash().cloned();
         let (request, tools) = self
-            .prepare_request(request, journal.as_ref())
+            .prepare_request(request, journal.as_ref(), bash.as_ref())
             .map_err(EngineFailure::unreported)?;
         // Host instructions are journaled after the input, so the turn
         // replays with them.
@@ -226,6 +237,32 @@ impl Engine<'_> {
         if let Some(events) = &self.events {
             events.emit(kind).await;
         }
+    }
+
+    /// Returns the `bash` configuration the turn's commands run with: a
+    /// native one offered with a repository goes through the harness's
+    /// sandbox choice, which may run it unsandboxed and report why.
+    #[cfg(feature = "native-sandbox")]
+    async fn bash(&self) -> Result<Option<BashConfig>, TurnError> {
+        let Some(configuration) = self.options.bash() else {
+            return Ok(None);
+        };
+        let Some(repository) = self
+            .repository
+            .filter(|_| self.options.tools().permissions().allows(Builtin::Bash))
+        else {
+            return Ok(Some(configuration.clone()));
+        };
+        let (configuration, warning) = self
+            .sandbox
+            .resolve(configuration, repository.root())
+            .await?;
+        if let Some(warning) = warning {
+            self.publish(RunEventKind::SandboxUnavailable(warning))
+                .await;
+        }
+
+        Ok(Some(configuration))
     }
 
     /// Sends requests and executes tool calls until the model answers with
@@ -978,10 +1015,13 @@ impl Engine<'_> {
             })
     }
 
+    /// Prepares `request` with the turn's tools, binding a built-in `bash`
+    /// to `bash`, the configuration its commands run with.
     fn prepare_request(
         &self,
         mut request: ModelRequest,
         journal: Option<&WriteJournal>,
+        bash: Option<&BashConfig>,
     ) -> Result<(ModelRequest, Tools), TurnError> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
@@ -1007,7 +1047,7 @@ impl Engine<'_> {
                 } => (definition.clone(), Arc::clone(handler)),
                 ToolEntry::Builtin(builtin) => {
                     let repository = self.repository.ok_or(TurnError::RepositoryRequired)?;
-                    let handler = self.builtin_handler(*builtin, repository, journal)?;
+                    let handler = self.builtin_handler(*builtin, repository, journal, bash)?;
 
                     (handler.definition(), handler)
                 }
@@ -1020,19 +1060,20 @@ impl Engine<'_> {
     }
 
     /// Binds `builtin` to this turn's `repository`, `journal`, and options
-    /// as the handler its calls run through.
+    /// as the handler its calls run through; `bash` runs commands with the
+    /// isolation its description then states.
     fn builtin_handler(
         &self,
         builtin: Builtin,
         repository: &Repository,
         journal: Option<&WriteJournal>,
+        bash: Option<&BashConfig>,
     ) -> Result<Arc<dyn ToolHandler>, TurnError> {
-        let definition = context::builtin_definition(builtin, self.options);
         let root = repository.root().to_path_buf();
 
         Ok(match builtin {
             Builtin::Read => Arc::new(ReadHandler {
-                definition,
+                definition: context::builtin_definition(builtin, self.options),
                 tool: ReadTool::with_git(
                     Arc::clone(self.file_system),
                     root,
@@ -1047,18 +1088,19 @@ impl Engine<'_> {
 
                 Arc::new(WriteHandler { tool })
             }
-            Builtin::Bash => Arc::new(BashHandler {
-                definition,
-                tool: BashTool::new(
-                    self.options
-                        .bash()
-                        .cloned()
-                        .ok_or(BashError::InvalidPolicy)?,
-                    root,
-                    self.effects.commands().clone(),
-                    journal.cloned(),
-                )?,
-            }),
+            Builtin::Bash => {
+                let configuration = bash.cloned().ok_or(BashError::InvalidPolicy)?;
+
+                Arc::new(BashHandler {
+                    definition: ToolDefinition::bash(configuration.enforcement()),
+                    tool: BashTool::new(
+                        configuration,
+                        root,
+                        self.effects.commands().clone(),
+                        journal.cloned(),
+                    )?,
+                })
+            }
         })
     }
 

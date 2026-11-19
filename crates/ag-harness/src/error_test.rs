@@ -14,6 +14,7 @@ use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, HarnessError, R
 use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError, ProviderStatus};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
+use crate::sandbox::SandboxUnavailableReason;
 use crate::store::CheckpointError;
 use crate::tool::{ReadError, WriteError};
 use crate::{OutputSchemaError, RepositoryError, SessionError, TurnError, TurnInputError};
@@ -198,6 +199,10 @@ fn classifies_every_turn_failure() {
                 tool: "deploy".to_string(),
             },
             ErrorKind::ApprovalTimeout,
+        ),
+        (
+            TurnError::SandboxUnavailable(SandboxUnavailableReason::BubblewrapMissing),
+            ErrorKind::SandboxUnavailable,
         ),
         (
             TurnError::limit_reached(LimitKind::ToolCalls),
@@ -684,6 +689,7 @@ fn kinds_have_stable_names() {
         (ErrorKind::NotFound, "not_found"),
         (ErrorKind::Store, "store"),
         (ErrorKind::Config, "config"),
+        (ErrorKind::SandboxUnavailable, "sandbox_unavailable"),
     ];
 
     for (kind, expected) in cases {

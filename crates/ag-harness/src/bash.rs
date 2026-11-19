@@ -2,10 +2,12 @@
 //!
 //! Bash is the only tool that needs per-turn configuration: add `bash` to
 //! the turn's `ToolSet` and attach a [`BashConfig`] with
-//! `TurnOptions::with_bash`. `BashConfig::new` selects the native sandbox
-//! with the `native-sandbox` feature; [`BashConfig::for_executor`] selects a
-//! host [`BashExecutor`] such as [`UnsandboxedExecutor`], which enforces no
-//! isolation. Each executor reports its [`Enforcement`], and the model-facing
+//! `TurnOptions::with_bash`. `BashConfig::native` and `BashConfig::new`
+//! select the native sandbox with the `native-sandbox` feature, subject to
+//! the harness's `crate::sandbox::Sandbox` choice where it cannot run;
+//! [`BashConfig::for_executor`] selects a host [`BashExecutor`] such as
+//! [`UnsandboxedExecutor`], which enforces no isolation. Each executor
+//! reports its [`Enforcement`], and the model-facing
 //! tool description states it. Command intents are journaled before spawning
 //! and surface as [`CommandRecord`]s.
 
@@ -31,7 +33,7 @@ pub use crate::execution::{
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
 
 /// Isolation the default native sandbox enforces on every supported platform;
-/// unsupported platforms and kernels fail closed instead.
+/// where it cannot run, the harness's sandbox choice decides instead.
 pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNetwork;
 
 /// Immutable host capabilities for Bash. No external reads or environment
@@ -39,8 +41,9 @@ pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNet
 /// Grants and denials state policy; their enforcement is the selected
 /// executor's documented scope, and an unenforcing executor such as
 /// [`crate::bash::UnsandboxedExecutor`] applies none of them.
-/// The default native executor requires the matching `ag-harness-sandbox`
-/// launcher at a trusted location outside the command workspace;
+/// The default native executor requires a helper of the matching version
+/// at a trusted location outside the command workspace: the host executable
+/// calling `crate::sandbox::dispatch`, or the `ag-harness-sandbox` binary;
 /// [`BashConfig::for_executor`] selects an explicit host executor instead.
 #[derive(Clone)]
 pub struct BashConfig {
@@ -97,6 +100,34 @@ impl BashConfig {
         )
     }
 
+    /// Configures the default native sandbox executor as [`Self::new`] does,
+    /// with this host executable as the launcher: the host must call
+    /// [`crate::sandbox::dispatch`] first in `main`. Without that call, or
+    /// when the executable is inside the workspace, the harness's
+    /// [`crate::sandbox::Sandbox`] choice decides what runs instead.
+    ///
+    /// Requires the `native-sandbox` feature.
+    ///
+    /// # Errors
+    /// Rejects invalid paths, revisions, deadlines, and capture bounds.
+    #[cfg(feature = "native-sandbox")]
+    pub fn native(
+        bash: PathBuf,
+        revision: String,
+        timeout: Duration,
+        capture_bytes: usize,
+    ) -> Result<Self, BashError> {
+        Self::with_snapshot(
+            None,
+            None,
+            NATIVE_EXECUTOR.to_string(),
+            bash,
+            revision,
+            timeout,
+            capture_bytes,
+        )
+    }
+
     /// Configures an explicit host-selected executor instead of the default
     /// native sandbox launcher. Selection is always explicit: the harness
     /// never falls back to another executor or consults the environment. The
@@ -136,7 +167,8 @@ impl BashConfig {
     }
 
     /// Validates the shared policy fields; `executor` is `None` only for the
-    /// native sandbox, whose `launcher` is then set.
+    /// native sandbox, whose `launcher` is `None` when the dispatching host
+    /// executable launches it.
     fn with_snapshot(
         launcher: Option<PathBuf>,
         executor: Option<Arc<dyn BashExecutor>>,
@@ -270,8 +302,8 @@ impl BashConfig {
         self
     }
 
-    /// Selects a trusted native Linux Bubblewrap executable. No PATH lookup or
-    /// unsandboxed fallback is used.
+    /// Selects a trusted native Linux Bubblewrap executable in place of the
+    /// default `/usr/bin/bwrap`. No PATH lookup is used.
     ///
     /// Requires the `native-sandbox` feature.
     ///
@@ -308,6 +340,29 @@ impl BashConfig {
 
     pub(crate) fn fingerprint(&self) -> Value {
         json!(self.snapshot)
+    }
+
+    /// Returns this native configuration launched through the checked
+    /// `launch` executables. Recorded fingerprints come from the original
+    /// configuration, so they do not change.
+    #[cfg(feature = "native-sandbox")]
+    pub(crate) fn launched_through(&self, launch: crate::execution::NativeLaunch) -> Self {
+        let mut configuration = self.clone();
+        configuration.snapshot.launcher = Some(launch.launcher);
+        configuration.snapshot.linux_bubblewrap = launch.bubblewrap;
+
+        configuration
+    }
+
+    /// Returns this native configuration with its commands run without
+    /// isolation, which the model-facing `bash` description then states.
+    #[cfg(feature = "native-sandbox")]
+    pub(crate) fn unsandboxed(&self) -> Self {
+        Self {
+            enforcement: Enforcement::None,
+            executor: Some(Arc::new(UnsandboxedExecutor::without_isolation())),
+            ..self.clone()
+        }
     }
 }
 

@@ -15,8 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use super::{
-    Directory, Inspection, LocalInspection, Native, NativeProcess, bounded_text, inspect_tree,
-    validate_executable,
+    Directory, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess,
+    bounded_text, inspect_tree, probe, validate_executable,
 };
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
@@ -25,6 +25,7 @@ use crate::execution::contract::{
     Grants, MainExit, ProcessEvent,
 };
 use crate::execution::wire::Notice;
+use crate::sandbox::SandboxUnavailableReason;
 
 #[test]
 fn native_executor_states_identity_enforcement_and_platform_cleanup_scope() {
@@ -496,5 +497,232 @@ fn unqualified_platform_cannot_bind_native_resources() {
     ));
     for platform in ["linux", "macos"] {
         assert!(backend.bind_for_platform(platform).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn probe_reports_the_first_missing_native_sandbox_piece() {
+    // Arrange
+    let fixture = ProbeFixture::new();
+    let missing = ProbeFixture::configuration(&fixture.tools.join("missing-bwrap"));
+    let failing = ProbeFixture::configuration(&fixture.script("failing-bwrap", 1));
+    let writes = failing.clone().with_write("output".into()).expect("write");
+    let inside = fixture.workspace.join("helper");
+    std::fs::copy(&fixture.helper, &inside).expect("helper inside workspace");
+    let missing_seatbelt = fixture.tools.join("missing-sandbox-exec");
+
+    // Act
+    let reasons = [
+        probe(
+            &missing,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("freebsd", true, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &missing,
+            None,
+            &fixture.workspace,
+            host("linux", true, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &missing,
+            Some(&inside),
+            &fixture.workspace,
+            host("linux", true, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &writes,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("linux", false, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &missing,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("linux", true, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &failing,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("linux", true, &missing_seatbelt),
+        )
+        .await,
+        probe(
+            &missing,
+            Some(&fixture.helper),
+            &fixture.workspace,
+            host("macos", true, &missing_seatbelt),
+        )
+        .await,
+    ];
+
+    // Assert
+    assert_eq!(
+        reasons,
+        [
+            Err(SandboxUnavailableReason::UnsupportedPlatform),
+            Err(SandboxUnavailableReason::HelperMissing),
+            Err(SandboxUnavailableReason::HelperUntrusted),
+            Err(SandboxUnavailableReason::LandlockUnavailable),
+            Err(SandboxUnavailableReason::BubblewrapMissing),
+            Err(SandboxUnavailableReason::UserNamespacesUnavailable),
+            Err(SandboxUnavailableReason::SeatbeltMissing),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn probe_returns_the_executables_an_available_sandbox_launches_through() {
+    // Arrange
+    let fixture = ProbeFixture::new();
+    let bubblewrap = fixture.script("bwrap", 0);
+    let seatbelt = fixture.script("sandbox-exec", 0);
+    let configuration = ProbeFixture::configuration(&bubblewrap)
+        .with_write("output".into())
+        .expect("write");
+
+    // Act
+    let linux = probe(
+        &configuration,
+        Some(&fixture.helper),
+        &fixture.workspace,
+        host("linux", true, &seatbelt),
+    )
+    .await;
+    let macos = probe(
+        &configuration,
+        Some(&fixture.helper),
+        &fixture.workspace,
+        host("macos", false, &seatbelt),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        linux,
+        Ok(NativeLaunch {
+            bubblewrap: Some(bubblewrap),
+            launcher: fixture.helper.clone(),
+        })
+    );
+    assert_eq!(
+        macos,
+        Ok(NativeLaunch {
+            bubblewrap: None,
+            launcher: fixture.helper.clone(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn probe_defaults_to_the_system_bubblewrap() {
+    // Arrange
+    let fixture = ProbeFixture::new();
+    let configuration = BashConfig::native(
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .expect("config")
+    .with_host_information();
+
+    // Act
+    let checked = probe(
+        &configuration,
+        Some(&fixture.helper),
+        &fixture.workspace,
+        host("linux", true, &fixture.helper),
+    )
+    .await;
+
+    // Assert
+    match checked {
+        Ok(launch) => assert_eq!(launch.bubblewrap, Some(PathBuf::from("/usr/bin/bwrap"))),
+        Err(reason) => assert!(matches!(
+            reason,
+            SandboxUnavailableReason::BubblewrapMissing
+                | SandboxUnavailableReason::UserNamespacesUnavailable
+        )),
+    }
+}
+
+#[test]
+fn current_host_names_this_platform_and_the_system_seatbelt() {
+    // Act
+    let host = Host::current();
+
+    // Assert
+    assert_eq!(host.platform, std::env::consts::OS);
+    assert_eq!(host.seatbelt, Path::new("/usr/bin/sandbox-exec"));
+    #[cfg(not(target_os = "linux"))]
+    assert!(!host.landlock);
+}
+
+/// A workspace beside a directory of trusted executables.
+struct ProbeFixture {
+    _directory: tempfile::TempDir,
+    helper: PathBuf,
+    tools: PathBuf,
+    workspace: PathBuf,
+}
+
+impl ProbeFixture {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path().canonicalize().expect("root");
+        let tools = root.join("tools");
+        let workspace = root.join("workspace");
+        std::fs::create_dir(&tools).expect("tools");
+        std::fs::create_dir_all(workspace.join("output")).expect("workspace");
+        let mut fixture = Self {
+            _directory: directory,
+            helper: PathBuf::new(),
+            tools,
+            workspace,
+        };
+        fixture.helper = fixture.script("helper", 0);
+
+        fixture
+    }
+
+    /// Writes an executable script exiting with `code` among the tools.
+    fn script(&self, name: &str, code: u8) -> PathBuf {
+        let path = self.tools.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nexit {code}\n")).expect("script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("executable script");
+
+        path
+    }
+
+    /// Returns a native configuration launching through `bubblewrap`.
+    fn configuration(bubblewrap: &Path) -> BashConfig {
+        BashConfig::native(
+            "/bin/bash".into(),
+            "revision".into(),
+            Duration::from_secs(1),
+            1024,
+        )
+        .expect("config")
+        .with_host_information()
+        .with_linux_bubblewrap(bubblewrap.to_path_buf())
+        .expect("bubblewrap")
+    }
+}
+
+fn host(platform: &'static str, landlock: bool, seatbelt: &Path) -> Host {
+    Host {
+        landlock,
+        platform,
+        seatbelt: seatbelt.to_path_buf(),
     }
 }

@@ -262,6 +262,20 @@
           ]
         },
         {
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it; the\nmodel-facing `bash` description states that commands run without\nisolation.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "sandbox_unavailable"
+            }
+          },
+          "$ref": "#/$defs/SandboxWarning",
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn.",
           "type": "object",
           "properties": {
@@ -949,6 +963,11 @@
           "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support.",
           "type": "string",
           "const": "config"
+        },
+        {
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness was told to refuse rather than run\ncommands without it; the error names what is missing.",
+          "type": "string",
+          "const": "sandbox_unavailable"
         }
       ]
     },
@@ -1027,6 +1046,69 @@
       },
       "required": [
         "outcome"
+      ]
+    },
+    "SandboxUnavailableReason": {
+      "description": "What the native sandbox is missing on this host.",
+      "oneOf": [
+        {
+          "description": "The operating system has no native sandbox; only Linux and macOS do.",
+          "type": "string",
+          "const": "unsupported_platform"
+        },
+        {
+          "description": "No helper executable: the configuration names none and the host did\nnot call [`dispatch`].",
+          "type": "string",
+          "const": "helper_missing"
+        },
+        {
+          "description": "The helper is missing, not executable, set-ID, or inside the\nworkspace.",
+          "type": "string",
+          "const": "helper_untrusted"
+        },
+        {
+          "description": "Bubblewrap (`bwrap`) is not installed at its configured path,\n`/usr/bin/bwrap` by default.",
+          "type": "string",
+          "const": "bubblewrap_missing"
+        },
+        {
+          "description": "Bubblewrap cannot create unprivileged user namespaces.",
+          "type": "string",
+          "const": "user_namespaces_unavailable"
+        },
+        {
+          "description": "The configuration grants writes and the kernel cannot confine them\nwith Landlock, which needs Linux 6.2 or later.",
+          "type": "string",
+          "const": "landlock_unavailable"
+        },
+        {
+          "description": "`/usr/bin/sandbox-exec`, the macOS Seatbelt front end, is missing.",
+          "type": "string",
+          "const": "seatbelt_missing"
+        }
+      ]
+    },
+    "SandboxWarning": {
+      "description": "Warning that a run's Bash commands execute without the native sandbox,\nwith what is missing and how to fix it.",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "What is missing, as [`SandboxUnavailableReason::message`] states it.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What is missing.",
+          "$ref": "#/$defs/SandboxUnavailableReason"
+        },
+        "remedy": {
+          "description": "How to fix it, as [`SandboxUnavailableReason::remedy`] states it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "reason",
+        "remedy"
       ]
     },
     "RunSummary": {

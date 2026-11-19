@@ -244,6 +244,11 @@
           "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support.",
           "type": "string",
           "const": "config"
+        },
+        {
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness was told to refuse rather than run\ncommands without it; the error names what is missing.",
+          "type": "string",
+          "const": "sandbox_unavailable"
         }
       ]
     },

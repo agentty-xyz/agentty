@@ -87,6 +87,10 @@ pub enum ErrorKind {
     /// The harness, session, sandbox, or request configuration cannot be
     /// satisfied, including capabilities the model does not support.
     Config,
+    /// The run offers native-sandboxed `bash`, the sandbox cannot run on
+    /// this host, and the harness was told to refuse rather than run
+    /// commands without it; the error names what is missing.
+    SandboxUnavailable,
 }
 
 impl ErrorKind {
@@ -111,6 +115,7 @@ impl ErrorKind {
             Self::NotFound => "not_found",
             Self::Store => "store",
             Self::Config => "config",
+            Self::SandboxUnavailable => "sandbox_unavailable",
         }
     }
 
@@ -196,6 +201,10 @@ pub(crate) enum ErrorKindName {
     /// The harness, session, sandbox, or request configuration cannot be
     /// satisfied, including capabilities the model does not support.
     Config,
+    /// The run offers native-sandboxed `bash`, the sandbox cannot run on
+    /// this host, and the harness was told to refuse rather than run
+    /// commands without it; the error names what is missing.
+    SandboxUnavailable,
 }
 
 impl ErrorKindName {
@@ -229,6 +238,7 @@ impl ErrorKindName {
             (Self::NotFound, None) => ErrorKind::NotFound,
             (Self::Store, None) => ErrorKind::Store,
             (Self::Config, None) => ErrorKind::Config,
+            (Self::SandboxUnavailable, None) => ErrorKind::SandboxUnavailable,
         };
 
         Ok(kind)
@@ -256,6 +266,7 @@ impl From<ErrorKind> for ErrorKindName {
             ErrorKind::NotFound => Self::NotFound,
             ErrorKind::Store => Self::Store,
             ErrorKind::Config => Self::Config,
+            ErrorKind::SandboxUnavailable => Self::SandboxUnavailable,
         }
     }
 }
@@ -480,6 +491,7 @@ impl Classification {
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
             TurnError::ApprovalTimeout { .. } => ErrorKind::ApprovalTimeout,
+            TurnError::SandboxUnavailable(_) => ErrorKind::SandboxUnavailable,
             TurnError::LimitReached { limit } | TurnError::BudgetRefused { limit } => {
                 ErrorKind::BudgetExhausted(*limit)
             }

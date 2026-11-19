@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ag_harness::bash::{BashConfig, CommandOutcome};
+use ag_harness::sandbox::SandboxUnavailableReason;
 use ag_harness::{TurnError, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
@@ -263,10 +264,22 @@ async fn native_rejects_hardlinks_ipc_nodes_and_missing_enforcement_before_execu
             .await;
 
         // Assert
-        assert!(
-            matches!(result, Err(TurnError::CommandFailed { .. })),
-            "{result:?}"
-        );
+        if unsafe_kind == "launcher" {
+            assert!(
+                matches!(
+                    result,
+                    Err(TurnError::SandboxUnavailable(
+                        SandboxUnavailableReason::HelperUntrusted
+                    ))
+                ),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(TurnError::CommandFailed { .. })),
+                "{result:?}"
+            );
+        }
         assert!(!workspace.path().join("output/escaped").exists());
         drop(socket);
     }
@@ -563,7 +576,7 @@ fn gated_scope_options(
     std::fs::write(
         &launcher,
         format!(
-            "#!/bin/bash\nif [ \"$#\" -eq 0 ]; then printf ready > '{}'; while [ ! -e '{}' ]; do \
+            "#!/bin/bash\nif [ \"$#\" -eq 1 ]; then printf ready > '{}'; while [ ! -e '{}' ]; do \
              /bin/sleep 0.01; done; fi\nexec '{}' \"$@\"\n",
             ready.display(),
             release.display(),

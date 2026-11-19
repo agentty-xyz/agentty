@@ -22,8 +22,9 @@ use crate::command_journal::CommandCleanupScope;
 /// host-information, or Git-metadata boundary, and read or write grants are
 /// not checked. The harness still validates policy values, persists command
 /// intent before spawning, and supervises the deadline and output budget.
-/// Selecting this executor is always an explicit host decision; the harness
-/// never falls back to it.
+/// The harness also runs native configurations through it where the native
+/// sandbox cannot run, unless the host chose
+/// `crate::sandbox::IfUnavailable::Refuse`, and reports each such run.
 pub struct UnsandboxedExecutor(());
 
 impl UnsandboxedExecutor {

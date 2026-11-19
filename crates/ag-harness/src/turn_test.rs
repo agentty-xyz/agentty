@@ -11,6 +11,7 @@ use super::{
 };
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
+use crate::sandbox::SandboxUnavailableReason;
 use crate::tool::ReadAction;
 
 #[test]
@@ -89,6 +90,24 @@ fn a_host_tool_failure_is_a_tool_error() {
     // Act / Assert
     assert_eq!(error.error_type(), TurnErrorType::Tool);
     assert_eq!(error.to_string(), "tool `fetch` failed: connection refused");
+}
+
+#[test]
+fn a_refused_sandbox_is_a_tool_error_naming_its_fix() {
+    // Arrange
+    let reason = SandboxUnavailableReason::BubblewrapMissing;
+    let error = TurnError::SandboxUnavailable(reason);
+
+    // Act / Assert
+    assert_eq!(error.error_type(), TurnErrorType::Tool);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "native sandbox unavailable: {} {}",
+            reason.message(),
+            reason.remedy()
+        )
+    );
 }
 
 #[test]

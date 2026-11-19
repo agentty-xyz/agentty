@@ -34,6 +34,17 @@ use rustix::stdio::stdin;
 
 use super::wire::{Launch, Notice};
 
+/// First argument of every helper invocation: the harness starts the helper
+/// with it, and the helper passes it again whenever it re-executes itself,
+/// so a host executable can tell helper starts from its own.
+pub(crate) const HELPER_ARGUMENT: &str = "--ag-harness-sandbox";
+
+/// Returns whether `arguments`, a process's arguments including its program
+/// name, start the sandbox helper.
+pub(crate) fn is_helper(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> bool {
+    arguments.nth(1).as_deref() == Some(std::ffi::OsStr::new(HELPER_ARGUMENT))
+}
+
 pub(crate) fn run() -> ExitCode {
     // This executable has no worker threads and never returns to a host
     // runtime. CLOEXEC preserves Rust's descriptor ownership while closing
@@ -53,14 +64,15 @@ pub(crate) fn run() -> ExitCode {
 }
 
 fn launch() -> io::Result<()> {
+    // The phase follows the helper argument.
     #[cfg(target_os = "macos")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--seatbelt-child")) {
+    if std::env::args_os().nth(2).as_deref() == Some(std::ffi::OsStr::new("--seatbelt-child")) {
         let configuration = configuration()?;
 
         return Err(shell(&configuration).stdin(Stdio::null()).exec());
     }
     #[cfg(target_os = "linux")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--namespace-init")) {
+    if std::env::args_os().nth(2).as_deref() == Some(std::ffi::OsStr::new("--namespace-init")) {
         if rustix::process::getpid().as_raw_nonzero().get() != 1 {
             return Err(io::Error::other("not namespace init"));
         }
@@ -78,7 +90,7 @@ fn launch() -> io::Result<()> {
         command
             .args(["-p", &profile])
             .arg(&configuration.launcher)
-            .arg("--seatbelt-child");
+            .args([HELPER_ARGUMENT, "--seatbelt-child"]);
         command.current_dir(&configuration.directory).env_clear();
 
         supervise(command, &configuration)
@@ -372,7 +384,7 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .arg(&configuration.workspace)
         .arg("--")
         .arg(&configuration.launcher)
-        .arg("--namespace-init");
+        .args([HELPER_ARGUMENT, "--namespace-init"]);
 
     Err(command.exec())
 }

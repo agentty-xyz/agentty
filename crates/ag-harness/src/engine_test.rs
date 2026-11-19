@@ -23,6 +23,8 @@ use crate::model::{
     ReasoningEffort,
 };
 use crate::request_option::OutputMode;
+#[cfg(feature = "native-sandbox")]
+use crate::sandbox::SandboxGate;
 use crate::tool::{ReadArguments, ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
 use crate::{OutputSchema, TurnOptions};
@@ -83,6 +85,8 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         pricing: None,
         prior_requests: None,
         repository: None,
+        #[cfg(feature = "native-sandbox")]
+        sandbox: &SandboxGate::default(),
         session: None,
         summary_model: None,
     };
@@ -91,7 +95,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
 
     // Act
     let (request, tools) = engine
-        .prepare_request(request, None)
+        .prepare_request(request, None, None)
         .expect("request preparation should succeed");
 
     // Assert
@@ -154,6 +158,8 @@ async fn run_scripted(
         pricing: None,
         prior_requests: None,
         repository: None,
+        #[cfg(feature = "native-sandbox")]
+        sandbox: &SandboxGate::default(),
         session: None,
         summary_model: None,
     };

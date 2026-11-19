@@ -53,6 +53,8 @@ use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::reservation::TurnGuard;
 use crate::run::{Run, RunJournal, RunRequest, Usage};
+#[cfg(feature = "native-sandbox")]
+use crate::sandbox::{Sandbox, SandboxGate};
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, ModelSelectionError, NewSession, SessionError};
 use crate::session_model::ReplayTarget;
@@ -1540,6 +1542,8 @@ impl Harness {
             model_reasoning_effort: None,
             model_selector: None,
             repository: None,
+            #[cfg(feature = "native-sandbox")]
+            sandbox: Sandbox::default(),
             storage: None,
             summary_selector: None,
             tools: ToolSelection::default(),
@@ -2282,6 +2286,8 @@ impl Harness {
             pricing: config.pricing,
             prior_requests: None,
             repository: config.repository.as_ref(),
+            #[cfg(feature = "native-sandbox")]
+            sandbox: &config.sandbox,
             session: None,
             summary_model: config.summary_model.as_ref(),
         }
@@ -2314,6 +2320,8 @@ pub struct HarnessBuilder {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
     repository: Option<Repository>,
+    #[cfg(feature = "native-sandbox")]
+    sandbox: Sandbox,
     storage: Option<StorageSource>,
     summary_selector: Option<ModelSelector>,
     tools: ToolSelection,
@@ -2510,6 +2518,20 @@ impl HarnessBuilder {
         self
     }
 
+    /// Chooses how `bash` commands of native configurations run; the
+    /// default, [`Sandbox::default`], uses the native sandbox and runs them
+    /// without isolation, with a warning, where it cannot run. The harness
+    /// checks availability once per configuration, at the first run that
+    /// offers `bash`; see [`crate::sandbox`].
+    ///
+    /// Requires the `native-sandbox` feature.
+    #[cfg(feature = "native-sandbox")]
+    pub fn sandbox(mut self, sandbox: Sandbox) -> Self {
+        self.sandbox = sandbox;
+
+        self
+    }
+
     /// Replaces the local filesystem, like [`Harness::file_system`].
     pub fn file_system(mut self, file_system: impl FileSystem + 'static) -> Self {
         self.file_system = Some(Arc::new(file_system));
@@ -2667,6 +2689,10 @@ impl HarnessBuilder {
         config.lifecycle = self.lifecycle;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.repository = self.repository;
+        #[cfg(feature = "native-sandbox")]
+        {
+            config.sandbox = SandboxGate::new(self.sandbox);
+        }
         config.tools = self.tools;
 
         Ok(Harness::from_config(config))
@@ -2831,6 +2857,10 @@ struct HarnessConfig {
     /// selected; `None` for any other model.
     pricing: Option<Pricing>,
     repository: Option<Repository>,
+    /// Sandbox choice for native `bash` configurations and the
+    /// availability it checked.
+    #[cfg(feature = "native-sandbox")]
+    sandbox: SandboxGate,
     store: Option<Arc<dyn SessionStore>>,
     /// Cataloged model that writes compaction checkpoints and round
     /// summaries in place of [`Self::model`]; `None` summarizes with it.
@@ -2870,6 +2900,8 @@ impl HarnessConfig {
             model_registration: None,
             pricing: None,
             repository: None,
+            #[cfg(feature = "native-sandbox")]
+            sandbox: SandboxGate::default(),
             store: None,
             summary_model: None,
             summary_overrides: SizingOverrides::default(),

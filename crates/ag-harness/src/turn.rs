@@ -1207,6 +1207,12 @@ pub enum TurnError {
         /// The ledger cap the next request would pass.
         limit: LimitKind,
     },
+    /// The turn offers native-sandboxed `bash`, the sandbox cannot run on
+    /// this host, and the harness refuses to run commands without it
+    /// ([`crate::sandbox::IfUnavailable::Refuse`]). No model request was
+    /// sent.
+    #[error("native sandbox unavailable: {} {}", .0.message(), .0.remedy())]
+    SandboxUnavailable(crate::sandbox::SandboxUnavailableReason),
 }
 
 impl TurnError {
@@ -1220,7 +1226,8 @@ impl TurnError {
             | Self::Bash(_)
             | Self::CommandJournal { .. }
             | Self::CommandFailed { .. }
-            | Self::ToolFailed { .. } => TurnErrorType::Tool,
+            | Self::ToolFailed { .. }
+            | Self::SandboxUnavailable(_) => TurnErrorType::Tool,
             Self::ApprovalTimeout { .. } => TurnErrorType::ApprovalTimeout,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,

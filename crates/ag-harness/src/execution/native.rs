@@ -22,6 +22,7 @@ use super::output;
 use super::wire::{Launch, Notice};
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
+use crate::sandbox::SandboxUnavailableReason;
 
 pub(super) struct Native {
     pub(super) configuration: BashConfig,
@@ -68,6 +69,122 @@ impl BashExecutor for Native {
         self.bind_for_platform(std::env::consts::OS)
     }
 }
+
+/// Host facts the native availability check depends on.
+pub(crate) struct Host {
+    /// Whether the kernel enforces Landlock write grants (Linux only).
+    pub(crate) landlock: bool,
+    /// Operating system, as [`std::env::consts::OS`] names it.
+    pub(crate) platform: &'static str,
+    /// The Seatbelt front end (macOS only).
+    pub(crate) seatbelt: PathBuf,
+}
+
+impl Host {
+    /// Returns the facts of the host this process runs on.
+    pub(crate) fn current() -> Self {
+        #[cfg(target_os = "linux")]
+        let landlock = super::landlock::validate_write_grants(1, super::landlock::abi()).is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let landlock = false;
+
+        Self {
+            landlock,
+            platform: std::env::consts::OS,
+            seatbelt: PathBuf::from(SEATBELT),
+        }
+    }
+}
+
+/// Executables a native sandbox launch goes through once checked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeLaunch {
+    /// Bubblewrap on Linux; `None` on macOS.
+    pub(crate) bubblewrap: Option<PathBuf>,
+    /// Helper executable the launch starts.
+    pub(crate) launcher: PathBuf,
+}
+
+/// Checks once, before any command, that the native sandbox can run
+/// `configuration`'s commands in `workspace` on `host` through `helper`.
+/// On Linux it also runs the configured Bash inside fresh Bubblewrap
+/// namespaces, which fails where unprivileged user namespaces are disabled.
+///
+/// # Errors
+/// Returns what is missing for the native sandbox to run.
+pub(crate) async fn probe(
+    configuration: &BashConfig,
+    helper: Option<&Path>,
+    workspace: &Path,
+    host: Host,
+) -> Result<NativeLaunch, SandboxUnavailableReason> {
+    if !matches!(host.platform, "linux" | "macos") {
+        return Err(SandboxUnavailableReason::UnsupportedPlatform);
+    }
+    let launcher = helper.ok_or(SandboxUnavailableReason::HelperMissing)?;
+    validate_executable(&LocalInspection, launcher, workspace)
+        .await
+        .map_err(|_| SandboxUnavailableReason::HelperUntrusted)?;
+    let launcher = launcher.to_path_buf();
+    if host.platform == "macos" {
+        validate_executable(&LocalInspection, &host.seatbelt, workspace)
+            .await
+            .map_err(|_| SandboxUnavailableReason::SeatbeltMissing)?;
+
+        return Ok(NativeLaunch {
+            bubblewrap: None,
+            launcher,
+        });
+    }
+    if !host.landlock && !configuration.snapshot.workspace_writes.is_empty() {
+        return Err(SandboxUnavailableReason::LandlockUnavailable);
+    }
+    let bubblewrap = configuration
+        .snapshot
+        .linux_bubblewrap
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_BUBBLEWRAP));
+    validate_executable(&LocalInspection, &bubblewrap, workspace)
+        .await
+        .map_err(|_| SandboxUnavailableReason::BubblewrapMissing)?;
+    let namespaces = tokio::process::Command::new(&bubblewrap)
+        .env_clear()
+        .current_dir("/")
+        .args([
+            "--unshare-all",
+            "--uid",
+            "0",
+            "--gid",
+            "0",
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "--",
+        ])
+        .arg(&configuration.snapshot.bash)
+        .args(["--noprofile", "--norc", "-c", ":"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await;
+    if !namespaces.is_ok_and(|status| status.success()) {
+        return Err(SandboxUnavailableReason::UserNamespacesUnavailable);
+    }
+
+    Ok(NativeLaunch {
+        bubblewrap: Some(bubblewrap),
+        launcher,
+    })
+}
+
+/// Bubblewrap the Linux sandbox uses when the configuration names none.
+const DEFAULT_BUBBLEWRAP: &str = "/usr/bin/bwrap";
+
+/// The macOS Seatbelt front end, which the operating system ships.
+const SEATBELT: &str = "/usr/bin/sandbox-exec";
 
 struct NativeProcess {
     child: Option<Child>,
@@ -172,12 +289,7 @@ impl BashProcess for NativeProcess {
             .await?;
         }
         #[cfg(target_os = "macos")]
-        validate_executable(
-            &LocalInspection,
-            Path::new("/usr/bin/sandbox-exec"),
-            policy.workspace(),
-        )
-        .await?;
+        validate_executable(&LocalInspection, Path::new(SEATBELT), policy.workspace()).await?;
         let mut git_metadata = policy.git_metadata().to_vec();
         inspect_tree(
             &LocalInspection,
@@ -256,6 +368,7 @@ impl BashProcess for NativeProcess {
             .ok_or(ExecutionError::Setup)?;
         let mut command = tokio::process::Command::new(launcher);
         command
+            .arg(super::launcher::HELPER_ARGUMENT)
             .env_clear()
             .current_dir("/")
             .process_group(0)

@@ -28,6 +28,7 @@ use crate::catalog::ModelId;
 use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, RunError};
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
+use crate::sandbox::SandboxWarning;
 use crate::tool::ToolCall;
 use crate::turn::{ContextActivity, HostToolOutcome, ToolActivity};
 use crate::usage::Cost;
@@ -296,6 +297,14 @@ pub enum RunEventKind {
         /// [`ErrorKind::Transport`] for a connection failure.
         kind: ErrorKind,
     },
+    /// The run offers native-sandboxed `bash`, the sandbox cannot run on
+    /// this host, and the harness runs the run's commands without isolation
+    /// instead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the
+    /// default, allows. It is emitted once per such run, before its first
+    /// turn request, and names what is missing and how to fix it; the
+    /// model-facing `bash` description states that commands run without
+    /// isolation.
+    SandboxUnavailable(SandboxWarning),
     /// The run finished; always the last event. It follows the run's
     /// settlement, so once it arrives the session transcript holds the
     /// turn of a run that emitted [`Self::Started`] with its terminal

@@ -46,6 +46,42 @@ Separate harnesses or processes may share a SQLite file once it exists, but let 
 them open a new file first: concurrent first opens can race on schema migration.
 `Harness::new` and `Harness::from_registry` remain available.
 
+## Embedding
+
+Add the crate with `cargo add ag-harness`. [`examples/embed.rs`](examples/embed.rs)
+shows a complete host: one model through `ModelClient::from_spec`, one host tool behind
+an approval handler, and the run's event stream. Run it against any OpenAI-compatible
+server with
+`AG_HARNESS_EXAMPLE_ENDPOINT=http://127.0.0.1:8080/v1 cargo run -p ag-harness --example embed`.
+
+The native Bash sandbox runs each command through a helper executable of the same
+`ag-harness` version. Provide it in one of two ways:
+
+- **Your own executable.** Call `ag_harness::sandbox::dispatch()` first in `main`,
+  before creating a runtime or threads, and configure Bash with `BashConfig::native`.
+  When the harness starts your executable as the helper, `dispatch` runs it and returns
+  its exit code, which `main` returns at once; otherwise it returns `None`.
+
+  ```rust,ignore
+  fn main() -> std::process::ExitCode {
+      if let Some(helper) = ag_harness::sandbox::dispatch() {
+          return helper;
+      }
+      // The host program starts here.
+      std::process::ExitCode::SUCCESS
+  }
+  ```
+
+- **The standalone helper.** Install it with
+  `cargo install ag-harness --features native-sandbox --bin ag-harness-sandbox`, outside
+  every workspace the harness runs commands in, and pass its absolute path to
+  `BashConfig::new`.
+
+On Linux the sandbox also needs the system Bubblewrap (`apt install bubblewrap` or
+`dnf install bubblewrap`) and unprivileged user namespaces; macOS ships Seatbelt. Where
+the sandbox cannot run, commands run unsandboxed with a warning unless you choose
+otherwise; see [Bash](#bash).
+
 ## Sessions
 
 ```rust
@@ -494,14 +530,27 @@ returns a corrective tool error rather than an empty result.
 
 ### Bash
 
-`BashConfig::new` selects the native sandbox: Bubblewrap, Landlock, and seccomp on
-Linux; Seatbelt on macOS. Install the matching `ag-harness-sandbox` binary outside the
-workspace and pass its absolute path plus a trusted Bash. `BashConfig::for_executor`
+`BashConfig::native` and `BashConfig::new` select the native sandbox: Bubblewrap,
+Landlock, and seccomp on Linux; Seatbelt on macOS. Both need a helper executable, set up
+as [Embedding](#embedding) describes, and a trusted Bash. `BashConfig::for_executor`
 selects your own `BashExecutor` instead, such as
 `UnsandboxedExecutor::without_isolation` for hosts already inside a container or VM.
-There is never a silent fallback. Each executor reports its `Enforcement` (none,
-filesystem, or filesystem and network), and the `bash` tool description tells the model
-exactly that.
+Each executor reports its `Enforcement` (none, filesystem, or filesystem and network),
+and the `bash` tool description tells the model exactly that.
+
+`HarnessBuilder::sandbox` decides what a native configuration does where the sandbox
+cannot run: no helper, no `bwrap` (default `/usr/bin/bwrap`), unprivileged user
+namespaces disabled, no `/usr/bin/sandbox-exec`, or another platform. The harness checks
+once per configuration, at the first run that offers `bash`, and never fails silently:
+
+| `Sandbox`                                          | Where the sandbox cannot run                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Native { if_unavailable: Unsandboxed }` (default) | Commands run without isolation; each run emits `RunEventKind::SandboxUnavailable` |
+| `Native { if_unavailable: Refuse }`                | Each run offering `bash` fails with `ErrorKind::SandboxUnavailable`               |
+| `Unsandboxed`                                      | Commands always run without isolation, without a warning                          |
+
+The warning's `SandboxWarning` names the `SandboxUnavailableReason`, a message, and a
+remedy, such as installing bubblewrap; show it to the user.
 
 The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
 environment values (`with_environment`), and host details (`with_host_information`) are
@@ -909,7 +958,7 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | Feature               | Default | Enables                                                                                   |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------- |
 | `sqlite`              | yes     | `store::SqliteStore`, `Harness::database`, `HarnessBuilder::sqlite`, bundled migrations   |
-| `native-sandbox`      | yes     | The default sandboxed Bash executor and the `ag-harness-sandbox` launcher                 |
+| `native-sandbox`      | yes     | The native Bash sandbox, `sandbox::dispatch`, and the `ag-harness-sandbox` helper         |
 | `otel`                | yes     | OpenTelemetry request metrics, `LifecycleMetrics`, `LifecycleTraceObserver`, span context |
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
@@ -923,10 +972,10 @@ provider's entries. Each `ProviderSpec` preset needs its family's feature.
 `ModelProvider::is_enabled` reports whether the build includes a provider's family; a
 client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
 any credential is read, and `ModelCatalog::from_environment` skips it. Without
-`native-sandbox`, `BashConfig::new` is absent and Bash requires
-`BashConfig::for_executor`. Without `sqlite`, durable sessions require `Harness::store`.
-Features are additive: error enums whose variants depend on them are
-`#[non_exhaustive]`.
+`native-sandbox`, `BashConfig::new`, `BashConfig::native`, `HarnessBuilder::sandbox`,
+and `sandbox::dispatch` are absent and Bash requires `BashConfig::for_executor`. Without
+`sqlite`, durable sessions require `Harness::store`. Features are additive: error enums
+whose variants depend on them are `#[non_exhaustive]`.
 
 ## Where things live
 
@@ -943,6 +992,7 @@ grouped by topic:
 | `model`      | The `Model` trait, requests, registry, context budgets   |
 | `tool`       | Tool arguments, results, and the `FileSystem` seam       |
 | `bash`       | Bash configuration, executors, enforcement, records      |
+| `sandbox`    | Native sandbox choice, helper entry point, warnings      |
 | `turn`       | Turn builders, reports, activity, and settlement errors  |
 | `store`      | Session stores and durable write and checkpoint records  |
 | `recovery`   | Execution identities and idempotent host request records |
