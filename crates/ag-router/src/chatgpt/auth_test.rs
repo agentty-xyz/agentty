@@ -13,7 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::ChatGptAuth;
 use crate::chatgpt::credentials::ChatGptCredentials;
 use crate::chatgpt::error::ChatGptAuthError;
-use crate::credential::BearerCredential;
+use crate::credential::CredentialSource;
 
 const TOKEN_PATH: &str = "/api/accounts/oauth/token";
 

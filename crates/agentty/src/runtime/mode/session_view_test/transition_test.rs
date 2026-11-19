@@ -141,29 +141,6 @@ async fn test_q_always_transitions_to_list() {
 }
 
 #[test]
-fn diff_snapshot_hides_known_empty_session_diff() {
-    // Arrange
-    let session = session_fixture(Status::Draft, false);
-    let session_id = session.id.to_string();
-    let mut sessions = session_manager_with_sessions(vec![session]);
-    let session = &mut sessions.sessions_mut()[0];
-    session.status = Status::Review;
-    session.stats.diff_state = SessionDiffState::Empty;
-    let mut mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = ViewContext::from_mode(&mut mode, &sessions).expect("expected view context");
-
-    // Act
-    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
-        .expect("expected view snapshot");
-
-    // Assert
-    assert_eq!(snapshot.inspect_diff, ViewActionState::Disabled);
-}
-
-#[test]
 fn test_open_view_help_overlay_preserves_view_context() {
     // Arrange
     let session_id = "view-session".to_string();
@@ -176,7 +153,6 @@ fn test_open_view_help_overlay_preserves_view_context() {
     let view_session_snapshot = ViewSessionSnapshot {
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
-        inspect_diff: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -258,35 +234,38 @@ async fn question_mark_dispatches_to_view_help() {
 }
 
 #[tokio::test]
-async fn test_show_diff_for_view_session_keeps_view_mode_when_diff_is_empty() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.mode = AppMode::View {
-        session_id: session_id.clone().into(),
-        scroll_offset: Some(0),
-    };
-    let context = ViewContext {
-        scroll_offset: Some(0),
-        session_id: session_id.clone().into(),
-        session_index: 0,
-    };
-
-    // Act
-    let opened = show_diff_for_view_session(&mut app, &context);
-    let loading = matches!(app.mode, AppMode::DiffLoading { .. });
-    apply_pending_session_diff(&mut app, &context.session_id, Ok("")).await;
-
-    // Assert
-    assert!(opened);
-    assert!(loading);
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            ref session_id,
+async fn test_handle_opens_empty_diff_in_every_session_status() {
+    for status in Status::ALL {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.status = status;
+        session.stats.diff_state = SessionDiffState::Empty;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
             scroll_offset: Some(0),
-            ..
-        } if session_id == &context.session_id
-    ));
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("d key should be handled");
+        let loading = matches!(app.mode, AppMode::DiffLoading { .. });
+        apply_pending_session_diff(&mut app, &session_id.clone().into(), Ok("")).await;
+
+        // Assert
+        assert!(loading, "{status:?} should start loading the diff");
+        assert!(
+            matches!(app.mode, AppMode::Diff { ref diff, .. } if diff.is_empty()),
+            "{status:?} should open the empty diff"
+        );
+    }
 }
 
 #[tokio::test]

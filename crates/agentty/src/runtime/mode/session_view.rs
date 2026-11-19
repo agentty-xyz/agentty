@@ -111,7 +111,6 @@ struct ViewSessionSnapshot {
     continue_terminal_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
     fork_session: ViewActionState,
-    inspect_diff: ViewActionState,
     merge_session_branch: ViewActionState,
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
@@ -148,7 +147,6 @@ impl ViewSessionSnapshot {
             fork_session: ViewActionState::from_bool(session.allows_fork_action()),
             follow_up_task_action: sessions
                 .selected_follow_up_task_action(&view_context.session_id),
-            inspect_diff: ViewActionState::from_bool(session.allows_diff_view()),
             merge_session_branch: ViewActionState::from_bool(
                 sessions.can_merge_session_branch_in_stack(view_context.session_id.as_str()),
             ),
@@ -482,12 +480,7 @@ fn open_review_comments_in_diff(app: &mut App, view_context: &ViewContext) {
         return;
     }
 
-    app.start_diff_view_load(
-        &view_context.session_id,
-        None,
-        DiffSidebarFocus::Comments,
-        true,
-    );
+    app.start_diff_view_load(&view_context.session_id, None, DiffSidebarFocus::Comments);
 }
 
 /// Opens a regular worktree immediately or warns for a managed worker.
@@ -508,10 +501,7 @@ async fn handle_workflow_view_key(
     pending_update: &mut ViewPendingUpdate,
 ) -> Option<bool> {
     match key.code {
-        KeyCode::Char('d')
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.inspect_diff.is_enabled() =>
-        {
+        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             show_diff_for_view_session(app, view_context);
         }
         KeyCode::Char(character)
@@ -973,7 +963,6 @@ fn open_view_help_overlay(
             can_open_worktree: view_session_snapshot.can_open_worktree(),
             can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
             can_reply_to_session: view_session_snapshot.can_reply_to_session(),
-            can_show_diff: view_session_snapshot.inspect_diff.is_enabled(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
@@ -1096,11 +1085,11 @@ fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     app.start_manual_review_diff_load(&view_context.session_id);
 }
 
-/// Opens diff mode only when the viewed session has actual worktree changes.
+/// Starts loading the viewed session diff in any lifecycle state, so live
+/// agent edits stay inspectable while a turn runs.
 ///
-/// Returns `true` when diff mode was opened and `false` when the session diff
-/// is empty, which keeps the view page in place so the `d` shortcut behaves as
-/// unavailable for unchanged review sessions.
+/// Returns `false` without changing mode when the session at the view index
+/// no longer matches the viewed session.
 fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool {
     if app
         .sessions
@@ -1110,12 +1099,7 @@ fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool
         return false;
     }
 
-    app.start_diff_view_load(
-        &view_context.session_id,
-        None,
-        DiffSidebarFocus::Files,
-        false,
-    )
+    app.start_diff_view_load(&view_context.session_id, None, DiffSidebarFocus::Files)
 }
 
 /// Starts session sync and reports a rejected rebase in the transcript.

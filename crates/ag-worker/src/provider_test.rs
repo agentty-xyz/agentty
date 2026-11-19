@@ -44,7 +44,7 @@ fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
     let original = RuntimeConfig::default();
     let selected = ExecutionPolicy {
         max_concurrent_subagents: NonZeroUsize::new(5),
-        mcp: McpPolicy::Inherit,
+        mcp: McpPolicy::Disabled,
         tools: ToolPolicy::AllowOnly(vec!["Read".into()]),
     };
     // Act
@@ -55,7 +55,7 @@ fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
     assert_eq!(changed.execution_policy(AgentKind::Claude), selected);
     let claude = original.execution_policy(AgentKind::Claude);
     assert_eq!(claude.max_concurrent_subagents, NonZeroUsize::new(2));
-    assert_eq!(claude.mcp, McpPolicy::Disabled);
+    assert_eq!(claude.mcp, McpPolicy::Inherit);
     assert_eq!(
         claude.tools,
         ToolPolicy::AutoApprove(

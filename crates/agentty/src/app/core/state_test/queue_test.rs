@@ -133,7 +133,6 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
                     can_mutate_session_branch: false,
                     can_open_worktree: false,
                     can_rebase_session_branch: false,
-                    can_show_diff: false,
                     can_reply_to_session: false,
                     can_start_staged_session: false,
                     can_view_review_comments: false,

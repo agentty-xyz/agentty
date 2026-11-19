@@ -11,10 +11,10 @@ use ag_agent::{
     NativeHarnessConfig, RealOneShotClient, create_agent_channel, instruction_bootstrap_key,
 };
 use ag_contracts::{
-    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentRequestKind,
-    ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
-    TurnRequest,
+    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
+    AgentRequestKind, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest,
+    PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
+    TurnEvent, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
@@ -25,6 +25,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -1238,37 +1239,70 @@ async fn configuration_failures_stop_before_any_provider_call() {
     assert_eq!(request_bodies(&server).await, Vec::<String>::new());
 }
 
-#[tokio::test]
-async fn shutdown_cancels_a_running_command_and_waits_for_cleanup() {
-    // Arrange
-    let server = MockServer::start().await;
+/// Session turn left running a 30-second `bash` command.
+struct RunningBashTurn {
+    events: mpsc::UnboundedReceiver<TurnEvent>,
+    task: JoinHandle<Result<ag_contracts::TurnResult, AgentError>>,
+}
+
+/// Scripts `server` to answer `prompt` with a slow `bash` call, starts that
+/// session turn on `channel`, and waits until the command is running.
+async fn start_running_bash_turn(
+    server: &MockServer,
+    channel: &Arc<dyn AgentChannel>,
+    worktree: &Path,
+    session_id: &str,
+    prompt: &str,
+) -> RunningBashTurn {
     respond(
-        &server,
-        "Run slowly",
+        server,
+        prompt,
         tool_call("call-sleep", "bash", &json!({"command": "sleep 30"})),
         1,
     )
     .await;
+    let (events_tx, mut events) = mpsc::unbounded_channel();
+    let task = tokio::spawn(channel.run_turn(
+        session_id.to_string(),
+        turn_request(worktree, MUSE_MODEL, prompt),
+        events_tx,
+    ));
+    let bash_running = async {
+        while let Some(event) = events.recv().await {
+            if matches!(
+                &event,
+                TurnEvent::Activity(activity)
+                    if activity.name == "bash" && activity.status == ActivityStatus::Running
+            ) {
+                return;
+            }
+        }
+    };
+    let started = tokio::time::timeout(Duration::from_secs(10), bash_running).await;
+    assert!(started.is_ok(), "the bash command should start running");
+
+    RunningBashTurn { events, task }
+}
+
+#[tokio::test]
+async fn shutdown_cancels_a_running_command_and_waits_for_cleanup() {
+    // Arrange
+    let server = MockServer::start().await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
     let config = config(data_root.path(), environment(&server));
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
-    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
-    let turn = channel.run_turn(
-        "session-cancel".to_string(),
-        turn_request(worktree.path(), MUSE_MODEL, "Run slowly"),
-        events_tx,
-    );
-    let running = tokio::spawn(turn);
-    while let Some(event) = events_rx.recv().await {
-        if matches!(
-            &event,
-            TurnEvent::Activity(activity)
-                if activity.name == "bash" && activity.status == ActivityStatus::Running
-        ) {
-            break;
-        }
-    }
+    let RunningBashTurn {
+        events: mut events_rx,
+        task: running,
+    } = start_running_bash_turn(
+        &server,
+        &channel,
+        worktree.path(),
+        "session-cancel",
+        "Run slowly",
+    )
+    .await;
 
     // Act
     running.abort();
@@ -1291,6 +1325,78 @@ async fn shutdown_cancels_a_running_command_and_waits_for_cleanup() {
         );
     }
     assert!(interrupted);
+}
+
+#[tokio::test]
+async fn shutdown_during_a_running_turn_reports_it_interrupted() {
+    // Arrange
+    let server = MockServer::start().await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let running = start_running_bash_turn(
+        &server,
+        &channel,
+        worktree.path(),
+        "session-stop",
+        "Run until stopped",
+    )
+    .await;
+
+    // Act
+    let shutdown = tokio::time::timeout(
+        Duration::from_secs(10),
+        channel.shutdown_session("session-stop".to_string()),
+    )
+    .await;
+    let result = tokio::time::timeout(Duration::from_secs(10), running.task)
+        .await
+        .expect("cancelled turn should finish")
+        .expect("turn task should not panic");
+
+    // Assert
+    assert!(matches!(shutdown, Ok(Ok(()))), "{shutdown:?}");
+    assert!(
+        matches!(&result, Err(AgentError::InterruptedByUser(message)) if message.starts_with("[Stopped]")),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn overloaded_provider_fails_the_turn_noting_the_requested_wait() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(
+        &server,
+        "Busy provider",
+        ResponseTemplate::new(503).insert_header("Retry-After", "7"),
+        1,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-overloaded",
+        turn_request(worktree.path(), MUSE_MODEL, "Busy provider"),
+    )
+    .await;
+
+    // Assert
+    let error = result.expect_err("an overloaded provider should fail the turn");
+    assert!(error.starts_with("Harness turn failed: "), "{error}");
+    assert!(
+        error.ends_with(
+            "\n\nThis failure may be temporary (overloaded); retrying later may succeed. The \
+             provider asked to wait at least 7 seconds."
+        ),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -1666,6 +1772,32 @@ async fn utility_run_stops_when_cancelled() {
     assert_eq!(
         result.expect_err("cancelled run should stop").to_string(),
         "[Stopped] Agent run canceled"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_provider_fails_the_utility_run_as_possibly_temporary() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Name this session", ResponseTemplate::new(503), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let client = RealOneShotClient::pooled(None)
+        .with_native_harness(config(data_root.path(), environment(&server)));
+
+    // Act
+    let result = client.submit(utility_request(worktree.path(), None)).await;
+
+    // Assert
+    let error = result
+        .expect_err("an unavailable provider should fail the run")
+        .to_string();
+    assert!(error.starts_with("Harness turn failed: "), "{error}");
+    assert!(
+        error.ends_with(
+            "\n\nThis failure may be temporary (overloaded); retrying later may succeed."
+        ),
+        "{error}"
     );
 }
 

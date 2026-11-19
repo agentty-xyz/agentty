@@ -14,7 +14,7 @@ use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
 use ag_router::{
     Completion, CompletionMetadata, CompletionUsage, JsonSchemaFormat, ModelMessage, ModelRequest,
-    OutputSchema, ProviderConfig, Router, ToolCall,
+    OutputSchema, ProviderSpec, Router, ToolCall, preset,
 };
 use serde_json::{Value, json};
 
@@ -294,7 +294,7 @@ pub(crate) async fn run() -> Result<(), DynError> {
         .append(true)
         .open(&results)?;
     let model = provider.model();
-    let router = Router::single(provider_config(provider)?);
+    let router = Router::new([provider_spec(provider, &model)?]);
     let routed_model = format!("{}/{model}", provider.as_str());
     let filter = std::env::var("AG_HARNESS_BENCHMARK_CASE").ok();
     let revision = crate::context::revision().await;
@@ -359,31 +359,26 @@ pub(crate) async fn run() -> Result<(), DynError> {
     Ok(())
 }
 
-fn provider_config(provider: Provider) -> Result<ProviderConfig, DynError> {
-    let (provider, api_key, base_url) = match provider {
-        Provider::Kimi => (
-            ag_router::Provider::Kimi,
-            std::env::var("KIMI_API_KEY")?,
+/// Returns the preset of `provider` tailored to `model`, configured from
+/// the provider's environment.
+fn provider_spec(provider: Provider, model: &str) -> Result<ProviderSpec, DynError> {
+    Ok(match provider {
+        Provider::Kimi => preset::kimi(
             std::env::var("KIMI_BASE_URL")?,
+            std::env::var("KIMI_API_KEY")?,
+            model,
         ),
-        Provider::Muse => (
-            ag_router::Provider::Muse,
-            std::env::var("MODEL_API_KEY")?,
+        Provider::Muse => preset::muse(
             std::env::var("MODEL_API_BASE_URL")
                 .unwrap_or_else(|_| crate::MODEL_API_BASE_URL.to_string()),
+            std::env::var("MODEL_API_KEY")?,
+            model,
         ),
-        Provider::Qwen => (
-            ag_router::Provider::Qwen,
-            std::env::var("DASHSCOPE_API_KEY")?,
+        Provider::Qwen => preset::qwen(
             std::env::var("DASHSCOPE_BASE_URL")?,
+            std::env::var("DASHSCOPE_API_KEY")?,
+            model,
         ),
-    };
-
-    Ok(ProviderConfig {
-        provider,
-        api_key: Some(api_key),
-        base_url,
-        credential: None,
     })
 }
 

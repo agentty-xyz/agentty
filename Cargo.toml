@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.19.3"
+version = "0.19.4"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -18,21 +18,21 @@ repository = "https://github.com/agentty-xyz/agentty"
 # along its dependent chain so those crates cannot publish against vulnerable
 # workspace crates already on crates.io.
 ag-agent = { path = "crates/ag-agent" }
-ag-contracts = { path = "crates/ag-contracts", version = "0.19.3" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.3" }
-ag-forge = { path = "crates/ag-forge", version = "0.19.3" }
-ag-git = { path = "crates/ag-git", version = "0.19.3" }
+ag-contracts = { path = "crates/ag-contracts", version = "0.19.4" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.4" }
+ag-forge = { path = "crates/ag-forge", version = "0.19.4" }
+ag-git = { path = "crates/ag-git", version = "0.19.4" }
 ag-harness = { path = "crates/ag-harness", default-features = false }
-ag-protocol = { path = "crates/ag-protocol", version = "0.19.3" }
+ag-protocol = { path = "crates/ag-protocol", version = "0.19.4" }
 ag-runtime = { path = "crates/ag-runtime" }
-ag-router = { path = "crates/ag-router", version = "0.19.3" }
-ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.3" }
-ag-session = { path = "crates/ag-session", version = "0.19.3" }
-ag-store = { path = "crates/ag-store", version = "0.19.3" }
-ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.3", default-features = false }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.3" }
-ag-worker = { path = "crates/ag-worker", version = "0.19.3" }
-testty = { path = "crates/testty", version = "0.19.3" }
+ag-router = { path = "crates/ag-router", version = "0.19.4" }
+ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.4" }
+ag-session = { path = "crates/ag-session", version = "0.19.4" }
+ag-store = { path = "crates/ag-store", version = "0.19.4" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.4", default-features = false }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.4" }
+ag-worker = { path = "crates/ag-worker", version = "0.19.4" }
+testty = { path = "crates/testty", version = "0.19.4" }
 async-trait = "0.1"
 anyhow = "1"
 assert_cmd = "2"
@@ -84,7 +84,7 @@ thiserror = "2"
 time = { version = "0.3", default-features = false, features = ["local-offset", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false }
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml = { version = "1.2", default-features = false, features = ["parse", "serde"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 unicode-segmentation = "1.13"

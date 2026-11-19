@@ -93,7 +93,7 @@ The full set in **Review**, subject to session and forge availability:
 | `o`                 | Run a launch configuration in the worktree (`tmux`) |
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
-| `d`                 | Show diff when the session has changes              |
+| `d`                 | Show diff in any state, including live edits        |
 | `w`                 | Inspect saved execution graphs                      |
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
@@ -111,7 +111,7 @@ State-specific differences:
 - **Watching**: Same as **Review**; `W` stops watching. See
   [Watching a Review Request](@/docs/usage/workflow.md#usage-review-request-watch).
 - **InProgress**: `Enter`, `r`, and `p` queue a message, sync, or publishing. `Ctrl+C`
-  retracts the newest queued message, then stops the turn. `d` opens an available diff.
+  retracts the newest queued message, then stops the turn.
 - **InProgress / Rebasing**: Slash commands offer only settings; see
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
@@ -121,8 +121,8 @@ State-specific differences:
 - **Linked review request**: `c` opens comments; local `m` is unavailable.
 - **Merged**: Read-only chat, comments, and diff until manual target sync completes.
 - **Done / Canceled**: `c` confirms a continuation draft and linked comments are hidden;
-  `d` needs an archived diff.
-- **Queued / Merging**: Navigation, scrolling, and help only.
+  `d` shows the archived diff.
+- **Queued / Merging**: Navigation, scrolling, diff, and help only.
 
 ## Execution Graph Inspector
 
@@ -323,14 +323,14 @@ to leave without answering, press `Tab` and then `q`, or press `Ctrl+C`.
 
 When chat output is focused (press `Tab` to switch):
 
-| Key                       | Action                            |
-| ------------------------- | --------------------------------- |
-| `j` / `k` / `Up` / `Down` | Scroll chat output                |
-| `g` / `G`                 | Scroll to top / bottom            |
-| `Ctrl+d` / `Ctrl+u`       | Half page down / up               |
-| `d`                       | Open available diff or diagnostic |
-| `Tab`                     | Return focus to answer input      |
-| `q`                       | Return to sessions list           |
+| Key                       | Action                       |
+| ------------------------- | ---------------------------- |
+| `j` / `k` / `Up` / `Down` | Scroll chat output           |
+| `g` / `G`                 | Scroll to top / bottom       |
+| `Ctrl+d` / `Ctrl+u`       | Half page down / up          |
+| `d`                       | Open diff or diagnostic      |
+| `Tab`                     | Return focus to answer input |
+| `q`                       | Return to sessions list      |
 
 <a id="usage-question-input-submit-flow"></a> After the last answer, Agentty sends one
 follow-up with every question and response. Leaving with `q` keeps the session in

@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.4] - 2026-11-17
+
+### Added
+
+- `ag-harness`: add an opt-in `ContextPolicy::AutoCompact` that compacts a session's
+  history into a summary checkpoint before eviction would start, and stream a
+  `Compacted` run event with the compaction outcome.
+
+### Changed
+
+- `agentty`: load inherited MCP servers by default for Claude turns, including read-only
+  and review runs, so configured plugin servers and Claude.ai connectors are available.
+- workspace: bump `toml` to `1.2` and refresh locked dependencies.
+- release: stop publishing `ag-harness-cli` to crates.io.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.4`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.3] - 2026-11-17
 
 ### Added

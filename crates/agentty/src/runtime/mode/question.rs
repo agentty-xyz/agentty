@@ -311,7 +311,6 @@ fn show_question_diff(app: &mut App, session_id: &str) {
         &SessionId::from(session_id),
         restore,
         DiffSidebarFocus::Files,
-        false,
     );
 }
 

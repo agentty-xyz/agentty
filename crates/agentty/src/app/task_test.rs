@@ -496,6 +496,35 @@ async fn session_diff_task_does_not_archive_fallback_for_unrelated_git_error() {
 }
 
 #[tokio::test]
+async fn session_diff_task_reports_empty_diff_without_worktree() {
+    // Arrange
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let input = SessionDiffTaskInput {
+        app_event_tx,
+        folder: PathBuf::from("/tmp/unstarted-worktree"),
+        session_id: "session-id".into(),
+        source: SessionDiffTaskSource::Empty,
+    };
+
+    // Act
+    let request_id = TaskService::spawn_session_diff_task(input);
+    let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+        .await
+        .expect("timed out waiting for session diff event")
+        .expect("session diff task should emit one event");
+
+    // Assert
+    assert!(matches!(
+        app_event,
+        AppEvent::SessionDiffLoaded {
+            request_id: event_request_id,
+            result: Ok(diff),
+            ref session_id,
+        } if event_request_id == request_id && diff.is_empty() && session_id == "session-id"
+    ));
+}
+
+#[tokio::test]
 async fn join_at_mention_entries_returns_empty_index_for_panicking_worker() {
     // Arrange
     let load_handle = tokio::task::spawn_blocking(|| -> Vec<FileEntry> {

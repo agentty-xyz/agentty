@@ -1,20 +1,25 @@
 //! Built-in model clients.
 //!
-//! Each provider reads its API key from the environment:
+//! [`ModelConfiguration`] selects a provider and model by name at runtime
+//! and reads the provider's API key from an injected environment lookup:
 //!
 //! ```no_run
-//! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+//! # #[cfg(feature = "providers-compat")]
+//! # {
+//! use ag_harness::provider::{MUSE_SPARK_1_3, ModelConfiguration, ModelProvider};
 //!
-//! let model = Muse::from_env(MUSE_SPARK_1_3)?;
+//! let model = ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
+//!     .client_from_environment(|name| std::env::var(name))?;
+//! # }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! [`ModelConfiguration`] selects a provider and model by name at runtime.
 //! [`ModelProvider::OpenAi`] serves `OpenAI` models through the stateless,
 //! streamed Responses API with `OPENAI_API_KEY`. [`ModelProvider::ChatGpt`]
 //! serves the same API billed to the user's `ChatGPT` plan, authenticated by
-//! the refreshing sign-in `ag-harness login chatgpt` stores at
-//! [`chatgpt_auth_file`].
+//! a refreshing sign-in stored in a credential file the host chooses with
+//! [`ModelConfiguration::auth_file`] and [`ChatGptSignIn::new`], or else
+//! names in `CHATGPT_AUTH_FILE`.
 //! [`ModelProvider::OpenAiCompatible`] serves any model of a local or
 //! self-hosted OpenAI-compatible server, by default Ollama's
 //! `http://127.0.0.1:11434/v1`, with an optional API key and a context
@@ -24,9 +29,17 @@
 //! [`LocalServer`]. [`ModelProvider::pricing`] and
 //! [`ModelProvider::capabilities`] declare each cataloged model's list
 //! prices and capabilities, and [`ModelProvider::cost_tier`] derives its
-//! [`CostTier`], so hosts can route simple tasks to cheap models.
+//! [`CostTier`], so hosts can route simple tasks to cheap models;
+//! [`ModelProvider::cost_tier_at`] classifies an OpenAI-compatible server
+//! as [`CostTier::Local`] only when its endpoint is local or private.
 //! [`crate::catalog::ModelCatalog::from_environment`] catalogs these models
 //! by role.
+//!
+//! [`ProviderSpec`] opens the list: a host describes any OpenAI-compatible
+//! Chat Completions or Responses provider by its [`WireProtocol`], base URL,
+//! [`Auth`], extra headers and query parameters, and request policy, and
+//! serves it through [`crate::model::ModelClient::from_spec`]. The built-in
+//! providers are presets of the same type, such as [`ProviderSpec::kimi`].
 //!
 //! This module requires a `providers-*` feature. Every provider's catalog
 //! entries, profiles, and prices are available with either feature; building
@@ -46,6 +59,7 @@ mod muse;
 mod openai;
 mod openai_compatible;
 mod qwen;
+mod spec;
 #[cfg(test)]
 #[cfg(feature = "providers-compat")]
 mod test_support;
@@ -60,13 +74,13 @@ pub use catalog::{
 #[cfg(feature = "providers-openai")]
 pub(crate) use chatgpt::profile as chatgpt_profile;
 pub use chatgpt::{
-    AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
-    CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
-    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL,
+    AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_CREDENTIAL_FILE, CHATGPT_GPT_5_6_LUNA,
+    CHATGPT_GPT_5_6_SOL, CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA,
+    CHATGPT_GPT_6_ASTRA, CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL,
 };
 #[cfg(feature = "providers-openai")]
 pub use chatgpt::{
-    ChatGptConfig, auth_file as chatgpt_auth_file, is_signed_in as chatgpt_is_signed_in,
+    ChatGptConfig, auth_file_in as chatgpt_auth_file_in, is_signed_in as chatgpt_is_signed_in,
 };
 #[cfg(feature = "providers-openai")]
 pub use chatgpt_sign_in::{
@@ -74,10 +88,14 @@ pub use chatgpt_sign_in::{
 };
 #[cfg(feature = "providers-compat")]
 pub use kimi::KimiConfig;
-pub use kimi::{KIMI_K2_6, KIMI_K3};
-pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR};
 #[cfg(feature = "providers-compat")]
-pub use muse::{Muse, MuseConfig};
+pub(crate) use kimi::profile as kimi_profile;
+pub use kimi::{KIMI_K2_6, KIMI_K3};
+#[cfg(feature = "providers-compat")]
+pub use muse::MuseConfig;
+#[cfg(feature = "providers-compat")]
+pub(crate) use muse::profile as muse_profile;
+pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR};
 #[cfg(feature = "providers-openai")]
 pub use openai::OpenAiConfig;
 #[cfg(feature = "providers-openai")]
@@ -94,6 +112,10 @@ pub use qwen::QwenConfig;
 #[cfg(feature = "providers-compat")]
 pub(crate) use qwen::profile as qwen_profile;
 pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX};
+pub use spec::{
+    Auth, CredentialSource, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec,
+    ProviderSpecError, ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
+};
 
 #[doc(no_inline)]
 pub use crate::catalog::CostTier;

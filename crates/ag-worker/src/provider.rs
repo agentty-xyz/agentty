@@ -95,7 +95,7 @@ impl Default for RuntimeConfig {
                     AgentKind::Claude.to_string(),
                     ExecutionPolicy {
                         max_concurrent_subagents: subagents,
-                        mcp: McpPolicy::Disabled,
+                        mcp: McpPolicy::Inherit,
                         tools: ToolPolicy::AutoApprove(
                             [
                                 "Bash",

@@ -88,7 +88,6 @@ fn test_view_actions_in_progress_shows_stop_sync_and_queue_and_hides_open_and_co
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -120,7 +119,6 @@ fn test_view_actions_in_progress_hides_queue_when_stack_blocks_reply() {
         can_merge_session_branch: ViewActionAvailability::Disabled,
         can_mutate_session_branch: ViewActionAvailability::Disabled,
         can_rebase_session_branch: ViewActionAvailability::Disabled,
-        can_show_diff: ViewActionAvailability::Disabled,
         can_open_worktree: ViewActionAvailability::Disabled,
         reply_to_session: ViewActionAvailability::Disabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -144,7 +142,6 @@ fn test_view_actions_hide_open_when_worktree_is_unavailable() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Disabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -160,26 +157,42 @@ fn test_view_actions_hide_open_when_worktree_is_unavailable() {
 }
 
 #[test]
-fn test_view_actions_hide_diff_when_session_diff_is_empty() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Disabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Review,
-    };
+fn test_view_actions_show_diff_in_every_session_state() {
+    for session_state in [
+        ViewSessionState::Done,
+        ViewSessionState::Canceled,
+        ViewSessionState::Merged,
+        ViewSessionState::InProgress,
+        ViewSessionState::Rebasing,
+        ViewSessionState::MergeQueue,
+        ViewSessionState::NewSession,
+        ViewSessionState::StackedDraft,
+        ViewSessionState::Review,
+        ViewSessionState::AgentReview,
+        ViewSessionState::Interactive,
+    ] {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state,
+        };
 
-    // Act
-    let actions = view_actions(state);
+        // Act
+        let actions = view_actions(state);
 
-    // Assert
-    assert!(!actions.iter().any(|action| action.key == "d"));
+        // Assert
+        assert!(
+            actions.iter().any(|action| action.key == "d"),
+            "{session_state:?} should offer the diff action"
+        );
+    }
 }
 
 #[test]
@@ -191,7 +204,6 @@ fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Enabled,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -219,7 +231,6 @@ fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -239,7 +250,7 @@ fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
     assert!(actions.iter().any(|action| action.key == "p"));
     assert!(!actions.iter().any(|action| action.key == "o"));
     assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(!actions.iter().any(|action| action.key == "d"));
+    assert!(actions.iter().any(|action| action.key == "d"));
 }
 
 #[test]
@@ -250,7 +261,6 @@ fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -265,7 +275,7 @@ fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
     assert!(!actions.iter().any(|action| action.key == "Enter"));
     assert!(!actions.iter().any(|action| action.key == "o"));
     assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(!actions.iter().any(|action| action.key == "d"));
+    assert!(actions.iter().any(|action| action.key == "d"));
 }
 
 #[test]
@@ -276,7 +286,6 @@ fn test_view_actions_review_shows_diff() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -320,7 +329,6 @@ fn test_view_actions_review_hides_fork_when_unavailable() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -343,7 +351,6 @@ fn test_view_actions_review_keeps_commands_when_stack_allows_reply() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Disabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -373,7 +380,6 @@ fn test_review_actions_hide_commands_when_mutation_and_reply_are_blocked() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Disabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Disabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -396,7 +402,6 @@ fn test_view_actions_review_uses_merge_gate_separately_from_sync() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Disabled,
         can_rebase_session_branch: ViewActionAvailability::Disabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -421,7 +426,6 @@ fn test_view_actions_agent_review_shows_sync() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -441,14 +445,13 @@ fn test_view_actions_agent_review_shows_sync() {
 }
 
 #[test]
-fn test_view_actions_interactive_hides_diff() {
+fn test_view_actions_interactive_hides_review_actions() {
     // Arrange
     let state = ViewHelpState {
         can_fork_session: ViewActionAvailability::Enabled,
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -460,7 +463,6 @@ fn test_view_actions_interactive_hides_diff() {
     let actions = view_actions(state);
 
     // Assert
-    assert!(!actions.iter().any(|action| action.key == "d"));
     assert!(!actions.iter().any(|action| action.key == "f"));
     assert!(!actions.iter().any(|action| action.key == "r"));
     assert!(actions.iter().any(|action| action.key == "Enter"));
@@ -475,7 +477,6 @@ fn test_view_actions_new_session_shows_add_draft_and_start() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Enabled,
@@ -509,7 +510,6 @@ fn test_view_actions_stacked_draft_shows_start_and_hides_merge_sync() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Enabled,
@@ -543,7 +543,6 @@ fn test_view_actions_stacked_draft_hides_start_without_staged_drafts() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -573,7 +572,6 @@ fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -606,7 +604,6 @@ fn test_view_actions_canceled_shows_continue_without_edit_actions() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -640,7 +637,6 @@ fn test_view_actions_terminal_sessions_hide_linked_review_comments() {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
-            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -678,7 +674,6 @@ fn test_view_actions_non_terminal_review_comments_follow_availability() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -711,7 +706,6 @@ fn test_view_actions_review_hides_stop() {
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Enabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
@@ -865,7 +859,6 @@ fn review_watch_action_follows_toggle_before_trailing_help_actions() {
         can_merge_session_branch: ViewActionAvailability::Disabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::Disabled,
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::Disabled,
