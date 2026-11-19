@@ -217,9 +217,10 @@ This keeps the one-session-one-model rule free of cross-provider projection.
   anything outside the ceiling is denied with feedback the model can correct.
   Interactive approvals belong to ordinary session chat.
 - **Sandbox.** Writer nodes run `bash` in the native sandbox with the session worktree
-  writable and Git metadata read-only. When the native launcher is unavailable, the
-  harness fails the run with `SandboxUnavailable` before any model call instead of
-  silently running unsandboxed.
+  writable and Git metadata read-only. When the native sandbox is unavailable, the run
+  follows the harness's `Sandbox` choice: by default it runs unsandboxed and emits a
+  `SandboxUnavailable` warning event; `IfUnavailable::Refuse` fails it with
+  `SandboxUnavailable` before any model call. It never runs unsandboxed silently.
 - **Sandbox is a breaking change.** Edit modes run `bash` unsandboxed with network
   today. Sandboxing writers breaks commands that fetch dependencies (for example
   `cargo build` or `npm install`) unless writers get a network grant, and fails harness
@@ -377,9 +378,9 @@ Open decisions for the owner; **(recommended)** marks the suggested option.
 - **Role resolution time.**
   - **(recommended)** When the snapshot is captured, so approved snapshots are exact.
   - At dispatch, following catalog changes.
-- **Sandbox fallback.**
-  - **(recommended)** Fail closed with `SandboxUnavailable`.
-  - Fall back to the current unsandboxed executor with a visible warning.
+- **Sandbox fallback.** Decided: the harness falls back to unsandboxed execution with a
+  typed `SandboxUnavailable` warning by default, and hosts that must fail closed choose
+  `IfUnavailable::Refuse`.
 - **Writer network access.**
   - **(recommended)** Grant writers network so dependency fetches keep working, with the
     filesystem still confined.

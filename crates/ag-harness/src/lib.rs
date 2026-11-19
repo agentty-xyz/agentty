@@ -62,6 +62,19 @@
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
 //!   [`SessionError`] by [`ErrorKind`] and whether a retry may succeed.
 //!
+//! # Embedding
+//!
+//! The crate's `examples/embed.rs` is a complete host: a model through
+//! `ModelClient::from_spec`, a host tool behind an [`ApprovalHandler`], and
+//! the run's event stream. The native Bash sandbox runs commands through a
+//! helper executable: call `sandbox::dispatch` first in `main` so the
+//! host's own executable is the helper, or install the standalone one with
+//! `cargo install ag-harness --version <version> --features native-sandbox
+//! --bin ag-harness-sandbox` and pass its path to `BashConfig::new`. Where the
+//! sandbox cannot run, commands run unsandboxed with a warning unless the host
+//! chooses otherwise with `sandbox::Sandbox`; the [`sandbox`] module describes
+//! both.
+//!
 //! # Modules
 //!
 //! The crate root holds everything a typical host needs. Extension points and
@@ -75,6 +88,7 @@
 //! | [`model`]      | The [`Model`] trait, requests, registry, context profiles  |
 //! | [`tool`]       | Tool handlers and sets, built-in arguments, file system    |
 //! | [`bash`]       | Bash configuration, executors, enforcement, records        |
+//! | [`sandbox`]    | Native sandbox choice, helper entry point, warnings        |
 //! | [`turn`]       | Turn builders, reports, activity, and settlement errors    |
 //! | [`store`]      | Session stores and durable write and checkpoint records    |
 //! | [`recovery`]   | Execution identities and idempotent host request records   |
@@ -166,6 +180,7 @@ mod request_option;
 mod reservation;
 mod round_summary;
 mod run;
+pub mod sandbox;
 mod schema_contract;
 mod session;
 mod session_model;
@@ -218,12 +233,3 @@ pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
 pub use usage::{Cost, UsageTotals};
 pub use write_journal::WriteStatus;
-
-/// Entry point for the matching trusted `ag-harness-sandbox` executable.
-/// Run only in a dedicated process, before creating any runtime or threads.
-/// Host applications should launch the executable through Bash turn options.
-#[cfg(feature = "native-sandbox")]
-#[doc(hidden)]
-pub fn run_sandbox_launcher() -> std::process::ExitCode {
-    execution::run_launcher()
-}

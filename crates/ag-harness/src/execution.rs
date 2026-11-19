@@ -24,6 +24,8 @@ pub use contract::{
     ExecutionPolicy, MainExit, OutputStream, ProcessEvent,
 };
 #[cfg(feature = "native-sandbox")]
-pub(crate) use launcher::run as run_launcher;
+pub(crate) use launcher::{is_helper, run as run_launcher};
+#[cfg(feature = "native-sandbox")]
+pub(crate) use native::{Host, NativeLaunch, probe};
 pub(crate) use tool::BashTool;
 pub use unsandboxed::UnsandboxedExecutor;

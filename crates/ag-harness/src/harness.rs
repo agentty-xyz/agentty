@@ -2,7 +2,7 @@
 //! session builders, turn handles, and history.
 
 use std::future::{Future, IntoFuture};
-#[cfg(not(feature = "sqlite"))]
+#[cfg(any(not(feature = "sqlite"), not(feature = "native-sandbox")))]
 use std::future::{Ready, ready};
 use std::hash::{BuildHasher, RandomState};
 use std::num::NonZeroUsize;
@@ -33,7 +33,7 @@ use crate::context::{
     HeuristicContextEstimator, HistoryLimit, HistoryProjection, HistoryTurn, ReplayedHistory,
 };
 use crate::effect::Effects;
-use crate::engine::{Engine, EngineFailure, FinishedTurn, PriorRequests};
+use crate::engine::{Engine, EngineFailure, FinishedTurn, PriorRequests, TurnBash};
 use crate::error::{HarnessError, RunError};
 use crate::event::{
     CompactionOutcome, CompactionReport, RunEventKind, RunFailure, SessionId, TurnIndex,
@@ -53,6 +53,8 @@ use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::reservation::TurnGuard;
 use crate::run::{Run, RunJournal, RunRequest, Usage};
+#[cfg(feature = "native-sandbox")]
+use crate::sandbox::{Sandbox, SandboxGate};
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, ModelSelectionError, NewSession, SessionError};
 use crate::session_model::ReplayTarget;
@@ -60,6 +62,8 @@ use crate::session_model::ReplayTarget;
 use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::summary_model::{SizingOverrides, SummaryModel};
+#[cfg(feature = "native-sandbox")]
+use crate::tool::Builtin;
 #[expect(deprecated, reason = "maps the deprecated `allow` setters")]
 use crate::tool::Tool;
 use crate::tool::ToolSet;
@@ -854,6 +858,8 @@ impl Session {
             .admit_mandatory_content(None, self.system_prompt.as_deref(), &input, options)
             .map_err(SessionError::from)?;
         self.check_image_history_budget(&input)?;
+        // A refused sandbox fails the turn before it is admitted.
+        let bash = Harness::turn_bash(&self.harness.inner, options).await?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
         let acquisition = self.acquire_turn(&input, options, control, request, &effects);
@@ -896,6 +902,7 @@ impl Session {
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let engine = Engine {
+            bash,
             prior_requests: prior_requests.as_ref(),
             ..Harness::controlled_engine(&self.harness, options, control, effects, &self.id)
         };
@@ -1540,6 +1547,8 @@ impl Harness {
             model_reasoning_effort: None,
             model_selector: None,
             repository: None,
+            #[cfg(feature = "native-sandbox")]
+            sandbox: Sandbox::default(),
             storage: None,
             summary_selector: None,
             tools: ToolSelection::default(),
@@ -1970,6 +1979,7 @@ impl Harness {
         self.check_input_capability(&input)?;
         self.check_output_capability(&options)?;
         self.admit_mandatory_content(None, None, &input, &options)?;
+        let bash = Self::turn_bash(&self.inner, &options).await?;
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.output().clone())
             .with_instructions(options.instructions())
@@ -1978,10 +1988,62 @@ impl Harness {
         let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let mut engine = self.engine(&options);
+        engine.bash = bash;
         engine.effects = effects;
         let result = engine.run(request, turn_id, None).await;
 
         Self::finish_turn(turn, result)
+    }
+
+    /// Returns the `bash` configuration a turn with `options` runs its
+    /// commands with under `config`: a native one it offers with a
+    /// repository goes through the harness's [`Sandbox`] choice, which may
+    /// run it unsandboxed and report why, or refuse the turn.
+    ///
+    /// # Errors
+    /// Returns [`TurnError::SandboxUnavailable`] when the sandbox is
+    /// unavailable and the harness refuses to run without it.
+    #[cfg(feature = "native-sandbox")]
+    async fn turn_bash(
+        config: &HarnessConfig,
+        options: &TurnOptions,
+    ) -> Result<TurnBash, TurnError> {
+        let configuration = options.bash();
+        let native = configuration.zip(
+            config
+                .repository
+                .as_ref()
+                .filter(|_| options.tools().permissions().allows(Builtin::Bash)),
+        );
+        let Some((configuration, repository)) = native else {
+            return Ok(TurnBash {
+                configuration: configuration.cloned(),
+                warning: None,
+            });
+        };
+        let (configuration, warning) = config
+            .sandbox
+            .resolve(configuration, repository.root())
+            .await?;
+
+        Ok(TurnBash {
+            configuration: Some(configuration),
+            warning,
+        })
+    }
+
+    /// Returns the `bash` configuration a turn with `options` runs its
+    /// commands with; without the native sandbox every configuration names
+    /// its own executor, whatever the harness configuration.
+    #[cfg(not(feature = "native-sandbox"))]
+    fn turn_bash(
+        _config: &HarnessConfig,
+        options: &TurnOptions,
+    ) -> Ready<Result<TurnBash, TurnError>> {
+        ready(Ok(TurnBash {
+            configuration: options.bash().cloned(),
+            warning: None,
+        }))
     }
 
     /// Returns a fresh prompt-cache key for one stateless turn, so its tool
@@ -2263,6 +2325,10 @@ impl Harness {
 
         Engine {
             approval: config.approval.as_ref(),
+            bash: TurnBash {
+                configuration: options.bash().cloned(),
+                warning: None,
+            },
             budget: config.budget.as_ref(),
             concurrency: config.concurrency.as_deref(),
             context_budget: config.context_budget,
@@ -2314,6 +2380,8 @@ pub struct HarnessBuilder {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
     repository: Option<Repository>,
+    #[cfg(feature = "native-sandbox")]
+    sandbox: Sandbox,
     storage: Option<StorageSource>,
     summary_selector: Option<ModelSelector>,
     tools: ToolSelection,
@@ -2510,6 +2578,21 @@ impl HarnessBuilder {
         self
     }
 
+    /// Chooses how `bash` commands of native configurations run; the
+    /// default, [`Sandbox::default`], uses the native sandbox and runs them
+    /// without isolation, with a warning, where it cannot run. The harness
+    /// checks availability before admitting a turn that offers `bash`,
+    /// until one check succeeds for its configuration; see
+    /// [`crate::sandbox`].
+    ///
+    /// Requires the `native-sandbox` feature.
+    #[cfg(feature = "native-sandbox")]
+    pub fn sandbox(mut self, sandbox: Sandbox) -> Self {
+        self.sandbox = sandbox;
+
+        self
+    }
+
     /// Replaces the local filesystem, like [`Harness::file_system`].
     pub fn file_system(mut self, file_system: impl FileSystem + 'static) -> Self {
         self.file_system = Some(Arc::new(file_system));
@@ -2667,6 +2750,10 @@ impl HarnessBuilder {
         config.lifecycle = self.lifecycle;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.repository = self.repository;
+        #[cfg(feature = "native-sandbox")]
+        {
+            config.sandbox = SandboxGate::new(self.sandbox);
+        }
         config.tools = self.tools;
 
         Ok(Harness::from_config(config))
@@ -2831,6 +2918,10 @@ struct HarnessConfig {
     /// selected; `None` for any other model.
     pricing: Option<Pricing>,
     repository: Option<Repository>,
+    /// Sandbox choice for native `bash` configurations and the
+    /// availability it checked.
+    #[cfg(feature = "native-sandbox")]
+    sandbox: SandboxGate,
     store: Option<Arc<dyn SessionStore>>,
     /// Cataloged model that writes compaction checkpoints and round
     /// summaries in place of [`Self::model`]; `None` summarizes with it.
@@ -2870,6 +2961,8 @@ impl HarnessConfig {
             model_registration: None,
             pricing: None,
             repository: None,
+            #[cfg(feature = "native-sandbox")]
+            sandbox: SandboxGate::default(),
             store: None,
             summary_model: None,
             summary_overrides: SizingOverrides::default(),

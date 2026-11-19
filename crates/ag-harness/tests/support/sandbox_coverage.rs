@@ -29,9 +29,10 @@ impl Coverage {
         };
         // Read-only sandbox policies leave the profile directory unwritable
         // inside the namespace; those inner profiles are discarded on tmpfs
-        // instead of emitting profile warnings into captured output.
+        // instead of emitting profile warnings into captured output. The
+        // phase follows the helper argument.
         let script = format!(
-            "#!/bin/bash\nphase=outer\ncase \"${{1-}}\" in --seatbelt-child|--namespace-init) \
+            "#!/bin/bash\nphase=outer\ncase \"${{2-}}\" in --seatbelt-child|--namespace-init) \
              phase=inner;; esac\nprefix={}\nif [ \"$phase\" = inner ] && [ ! -w \"$prefix\" ]; \
              then prefix=; fi\nexport \
              LLVM_PROFILE_FILE=\"$prefix\"/\"$phase-$$-$RANDOM-$RANDOM-%p%c.profraw\"\nexec {} \

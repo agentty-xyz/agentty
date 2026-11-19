@@ -1,12 +1,18 @@
 [package]
 name = "ag-harness"
+autoexamples = false
 autotests = false
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description.workspace = true
+description = "Structured LLM turns with deny-by-default tools, durable sessions, and a native Bash sandbox"
 repository.workspace = true
+readme = "README.md"
+keywords = ["llm", "agent", "sandbox", "structured-output", "tools"]
+categories = ["development-tools"]
+# Contributor instructions stay in the repository.
+exclude = ["AGENTS.md", "CLAUDE.md"]
 
 # Document every feature and badge each gated item with the one it needs.
 [package.metadata.docs.rs]
@@ -44,6 +50,11 @@ unstable-protocol = []
 [[bin]]
 name = "ag-harness-sandbox"
 required-features = ["native-sandbox"]
+
+[[example]]
+name = "embed"
+test = true
+required-features = ["native-sandbox", "providers-compat"]
 
 [[test]]
 name = "benchmark_summary"

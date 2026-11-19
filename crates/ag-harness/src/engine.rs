@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{self, timeout_at};
 
 use crate::approval::{Approval, ApprovalRequest, Approved};
-use crate::bash::BashError;
+use crate::bash::{BashConfig, BashError};
 use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
 use crate::calibration::{Calibration, ContextCalibration};
@@ -43,6 +43,7 @@ use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
+use crate::sandbox::SandboxWarning;
 use crate::summary_model::SummaryModel;
 use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
@@ -96,6 +97,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) approval: Option<&'a Approval>,
     /// Ledger that reserves every model request before it is sent.
     pub(crate) budget: &'a dyn BudgetLedger,
+    /// Configuration the turn's `bash` commands run with, resolved through
+    /// the harness's sandbox choice before the turn was admitted.
+    pub(crate) bash: TurnBash,
     /// Permits of the model's concurrency cap, shared by every harness
     /// built from its catalog; one is held for each request in flight.
     pub(crate) concurrency: Option<&'a Semaphore>,
@@ -133,6 +137,14 @@ pub(crate) struct Engine<'a> {
     pub(crate) summary_model: Option<&'a SummaryModel>,
 }
 
+/// The `bash` configuration a turn's commands run with, and the warning to
+/// report when it runs a native configuration without the sandbox.
+#[derive(Default)]
+pub(crate) struct TurnBash {
+    pub(crate) configuration: Option<BashConfig>,
+    pub(crate) warning: Option<SandboxWarning>,
+}
+
 impl Engine<'_> {
     /// Runs one turn to its final output. A turn that fails after
     /// preparing its request still reports what it did before failing.
@@ -143,8 +155,12 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<FinishedTurn, EngineFailure> {
         let started_at = Instant::now();
+        if let Some(warning) = &self.bash.warning {
+            self.publish(RunEventKind::SandboxUnavailable(warning.clone()))
+                .await;
+        }
         let (request, tools) = self
-            .prepare_request(request, journal.as_ref())
+            .prepare_request(request, journal.as_ref(), self.bash.configuration.as_ref())
             .map_err(EngineFailure::unreported)?;
         // Host instructions are journaled after the input, so the turn
         // replays with them.
@@ -172,6 +188,10 @@ impl Engine<'_> {
         if let Some(prior) = self.prior_requests {
             progress.state.prepend(prior);
         }
+        progress
+            .state
+            .sandbox_warning
+            .clone_from(&self.bash.warning);
         // A turn's wall-clock limit also covers the compaction before it.
         let deadline = self.options.limits().deadline(
             self.prior_requests
@@ -978,10 +998,13 @@ impl Engine<'_> {
             })
     }
 
+    /// Prepares `request` with the turn's tools, binding a built-in `bash`
+    /// to `bash`, the configuration its commands run with.
     fn prepare_request(
         &self,
         mut request: ModelRequest,
         journal: Option<&WriteJournal>,
+        bash: Option<&BashConfig>,
     ) -> Result<(ModelRequest, Tools), TurnError> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
@@ -1007,7 +1030,7 @@ impl Engine<'_> {
                 } => (definition.clone(), Arc::clone(handler)),
                 ToolEntry::Builtin(builtin) => {
                     let repository = self.repository.ok_or(TurnError::RepositoryRequired)?;
-                    let handler = self.builtin_handler(*builtin, repository, journal)?;
+                    let handler = self.builtin_handler(*builtin, repository, journal, bash)?;
 
                     (handler.definition(), handler)
                 }
@@ -1020,19 +1043,20 @@ impl Engine<'_> {
     }
 
     /// Binds `builtin` to this turn's `repository`, `journal`, and options
-    /// as the handler its calls run through.
+    /// as the handler its calls run through; `bash` runs commands with the
+    /// isolation its description then states.
     fn builtin_handler(
         &self,
         builtin: Builtin,
         repository: &Repository,
         journal: Option<&WriteJournal>,
+        bash: Option<&BashConfig>,
     ) -> Result<Arc<dyn ToolHandler>, TurnError> {
-        let definition = context::builtin_definition(builtin, self.options);
         let root = repository.root().to_path_buf();
 
         Ok(match builtin {
             Builtin::Read => Arc::new(ReadHandler {
-                definition,
+                definition: context::builtin_definition(builtin, self.options),
                 tool: ReadTool::with_git(
                     Arc::clone(self.file_system),
                     root,
@@ -1047,18 +1071,19 @@ impl Engine<'_> {
 
                 Arc::new(WriteHandler { tool })
             }
-            Builtin::Bash => Arc::new(BashHandler {
-                definition,
-                tool: BashTool::new(
-                    self.options
-                        .bash()
-                        .cloned()
-                        .ok_or(BashError::InvalidPolicy)?,
-                    root,
-                    self.effects.commands().clone(),
-                    journal.cloned(),
-                )?,
-            }),
+            Builtin::Bash => {
+                let configuration = bash.cloned().ok_or(BashError::InvalidPolicy)?;
+
+                Arc::new(BashHandler {
+                    definition: ToolDefinition::bash(configuration.enforcement()),
+                    tool: BashTool::new(
+                        configuration,
+                        root,
+                        self.effects.commands().clone(),
+                        journal.cloned(),
+                    )?,
+                })
+            }
         })
     }
 
@@ -1552,6 +1577,8 @@ struct TurnState {
     overflow: OverflowRecovery,
     /// Whether a response's tool calls are running.
     running_tools: bool,
+    /// Why the turn's `bash` runs without the native sandbox it selected.
+    sandbox_warning: Option<SandboxWarning>,
 }
 
 impl TurnState {
@@ -1570,6 +1597,7 @@ impl TurnState {
             repetition_nudges: 0,
             overflow: OverflowRecovery::default(),
             running_tools: false,
+            sandbox_warning: None,
         }
     }
 
@@ -1602,6 +1630,7 @@ impl TurnState {
         .with_repetition_nudges(self.repetition_nudges)
         .with_context_overflow_recoveries(self.overflow.recoveries)
         .with_context_summary_failures(self.context_fit.summary_failures())
+        .with_sandbox_warning(self.sandbox_warning.clone())
     }
 
     /// Records the already published `prior` requests ahead of the turn's

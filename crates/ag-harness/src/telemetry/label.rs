@@ -31,6 +31,7 @@ pub(crate) const ERROR_CONTEXT_SUMMARY_BUDGET_EXHAUSTED: &str = "context_summary
 pub(crate) const ERROR_CONTEXT_SUMMARY_INVALID_OUTPUT: &str = "context_summary_invalid_output";
 pub(crate) const ERROR_CONTEXT_SUMMARY_MODEL: &str = "context_summary_model_error";
 pub(crate) const ERROR_CONTEXT_SUMMARY_REJECTED: &str = "context_summary_rejected";
+pub(crate) const ERROR_SANDBOX_UNAVAILABLE: &str = "sandbox_unavailable";
 pub(crate) const ERROR_SESSION: &str = "session_error";
 pub(crate) const ERROR_UNSUPPORTED_INPUT: &str = "unsupported_input";
 pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";

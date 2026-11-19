@@ -11,6 +11,31 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::coverage::launcher;
 
+/// First argument the harness starts every sandbox helper with.
+const HELPER_ARGUMENT: &str = "--ag-harness-sandbox";
+
+#[tokio::test]
+async fn manual_start_without_the_helper_argument_fails_without_launching() {
+    // Arrange
+    let mut command = tokio::process::Command::new(launcher());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    // Act
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+        .await
+        .expect("bounded manual start")
+        .expect("launcher");
+
+    // Assert
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("started by ag-harness"));
+}
+
 #[tokio::test]
 async fn malformed_launcher_protocol_reports_failure_and_exits() {
     // Arrange
@@ -64,6 +89,7 @@ async fn rejected(arguments: &[&str], input: &[u8]) {
     let mut parent = tokio::net::UnixStream::from_std(parent).expect("async channel");
     let child: OwnedFd = child.into();
     let mut child = tokio::process::Command::new(launcher())
+        .arg(HELPER_ARGUMENT)
         .args(arguments)
         .stdin(Stdio::from(child))
         .stdout(Stdio::null())
@@ -109,6 +135,7 @@ async fn private_channel_cancellation_requires_host_process_group_cleanup() {
     let mut parent = tokio::net::UnixStream::from_std(parent).expect("async channel");
     let child: OwnedFd = child.into();
     let mut child = tokio::process::Command::new(workspace.launcher())
+        .arg(HELPER_ARGUMENT)
         .stdin(Stdio::from(child))
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -211,6 +238,7 @@ impl Namespace {
         let parent = tokio::net::UnixStream::from_std(parent).expect("async channel");
         let child: OwnedFd = child.into();
         let mut child = tokio::process::Command::new(workspace.launcher())
+            .arg(HELPER_ARGUMENT)
             .env_clear()
             .current_dir("/")
             .stdin(Stdio::from(child))

@@ -8,6 +8,7 @@ use std::time::Duration;
 use ag_harness::bash::{BashConfig, CommandOutcome, UnsandboxedExecutor};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::sandbox::{IfUnavailable, Sandbox};
 use ag_harness::store::SqliteStore;
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, OutputSchema, Repository, ToolSet, TurnOptions};
@@ -77,10 +78,19 @@ impl Workspace {
             .expect("canonical workspace")
     }
 
+    /// Returns a harness that refuses to run commands without the native
+    /// sandbox, so missing isolation fails the qualification.
     pub(super) fn harness(&self) -> Harness {
-        Harness::new(ShellModel, unbounded_context_budget())
+        Harness::builder()
+            .model(Arc::new(ShellModel))
+            .context_budget(unbounded_context_budget())
             .repository(Repository::new(self.path(), "/usr/bin/git").expect("repository"))
             .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
+            .sandbox(Sandbox::Native {
+                if_unavailable: IfUnavailable::Refuse,
+            })
+            .build()
+            .expect("harness")
     }
 
     pub(super) fn options(&self, timeout: Duration, capture: usize) -> TurnOptions {

@@ -936,6 +936,11 @@
           "type": "string",
           "const": "config",
           "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support."
+        },
+        {
+          "type": "string",
+          "const": "sandbox_unavailable",
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness was told to refuse rather than run\ncommands without it; the error names what is missing."
         }
       ],
       "description": "Stable reason that a run or harness operation failed, for embedder retry\nand recovery policy, by its wire name.\n\nEvery harness failure maps to exactly one kind. New kinds may be added as\nthe harness gains failure modes. Data a kind carries travels beside it."
@@ -1727,6 +1732,20 @@
           "description": "A model request of the run, a turn request or a compaction or round\nsummary request, failed transiently and is retried after `after`, as\nits provider's [`crate::provider::RetryPolicy`] allows. It is\nemitted before the wait, so cancelling the run then stops it. A turn\nrequest that still fails after its last retry fails the run; a\nsummary request's failure is handled as that summary's failure.\n\nOnly the built-in [`crate::model::ModelClient`] reports retries, and\nonly from the task that sends the request; a custom\n[`crate::Model`] that retries on its own emits none. Later fields\nmay be added, so match it with `..`."
         },
         {
+          "$ref": "#/$defs/SandboxWarning",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "sandbox_unavailable"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it, as the\nturn's [`crate::TurnReport::sandbox_warning`] does; the model-facing\n`bash` description states that commands run without isolation."
+        },
+        {
           "$ref": "#/$defs/RunSummary",
           "type": "object",
           "properties": {
@@ -2079,6 +2098,74 @@
         "outcome"
       ],
       "description": "What a compaction attempt did."
+    },
+    "SandboxUnavailableReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "unsupported_platform",
+          "description": "The operating system has no native sandbox; only Linux and macOS do."
+        },
+        {
+          "type": "string",
+          "const": "helper_missing",
+          "description": "No helper executable: the configuration names none and the host did\nnot call [`dispatch`]."
+        },
+        {
+          "type": "string",
+          "const": "helper_untrusted",
+          "description": "The helper is missing, not executable, set-ID, or inside the\nworkspace."
+        },
+        {
+          "type": "string",
+          "const": "bubblewrap_missing",
+          "description": "Bubblewrap (`bwrap`) is not installed at its configured path,\n`/usr/bin/bwrap` by default."
+        },
+        {
+          "type": "string",
+          "const": "user_namespaces_unavailable",
+          "description": "Bubblewrap cannot create unprivileged user namespaces."
+        },
+        {
+          "type": "string",
+          "const": "landlock_unavailable",
+          "description": "The configuration grants writes and the kernel cannot confine them\nwith Landlock, which needs Linux 6.2 or later."
+        },
+        {
+          "type": "string",
+          "const": "seatbelt_missing",
+          "description": "`/usr/bin/sandbox-exec`, the macOS Seatbelt front end, is missing."
+        },
+        {
+          "type": "string",
+          "const": "seatbelt_unavailable",
+          "description": "Seatbelt cannot start a sandbox, for example because this process\nalready runs inside one."
+        }
+      ],
+      "description": "What the native sandbox is missing on this host."
+    },
+    "SandboxWarning": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "What is missing, as [`SandboxUnavailableReason::message`] states it."
+        },
+        "reason": {
+          "$ref": "#/$defs/SandboxUnavailableReason",
+          "description": "What is missing."
+        },
+        "remedy": {
+          "type": "string",
+          "description": "How to fix it, as [`SandboxUnavailableReason::remedy`] states it."
+        }
+      },
+      "required": [
+        "message",
+        "reason",
+        "remedy"
+      ],
+      "description": "Warning that a run's Bash commands execute without the native sandbox,\nwith what is missing and how to fix it."
     },
     "RunSummary": {
       "type": "object",

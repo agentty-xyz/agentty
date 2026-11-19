@@ -5,6 +5,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use ag_harness::event::RunEvent;
+use ag_harness::sandbox::{SandboxUnavailableReason, SandboxWarning};
 use ag_harness::{
     ApprovalRequest, Decision, ErrorKind, GenerationParams, LimitKind, OutputMode, RunLimits,
     TurnRange,
@@ -418,6 +419,44 @@ fn server_messages_encode_as_schema_valid_lines() -> Result<(), serde_json::Erro
         decoded[4]["params"]["event"]["kind"]["type"],
         json!("completed")
     );
+
+    Ok(())
+}
+
+#[test]
+fn sandbox_warnings_and_refusals_reach_clients_in_the_schema() -> Result<(), serde_json::Error> {
+    // Arrange
+    let validator = validator();
+    let warning = SandboxWarning::new(SandboxUnavailableReason::BubblewrapMissing);
+    let event: RunEvent = serde_json::from_value(json!({
+        "at": 1_700_000_000_000_u64,
+        "kind": {"type": "sandbox_unavailable", "message": warning.message,
+                 "reason": "bubblewrap_missing", "remedy": warning.remedy},
+        "run": "run-1",
+        "seq": 1
+    }))?;
+    let refusal = ErrorObject {
+        code: SERVER_ERROR,
+        data: Some(ErrorData::new(ErrorKind::SandboxUnavailable, false)),
+        message: "native sandbox unavailable".to_string(),
+    };
+
+    // Act
+    let notification: Value =
+        serde_json::from_str(&line(&Notification::run_event("s".to_string(), event))?)?;
+    let error: Value = serde_json::from_str(&line(&ErrorResponse::new(
+        Some(RequestId(json!(3))),
+        refusal,
+    ))?)?;
+
+    // Assert
+    assert!(validator.is_valid(&notification), "{notification}");
+    assert!(validator.is_valid(&error), "{error}");
+    assert_eq!(
+        notification["params"]["event"]["kind"]["remedy"],
+        json!(SandboxUnavailableReason::BubblewrapMissing.remedy())
+    );
+    assert_eq!(error["error"]["data"]["kind"], json!("sandbox_unavailable"));
 
     Ok(())
 }
