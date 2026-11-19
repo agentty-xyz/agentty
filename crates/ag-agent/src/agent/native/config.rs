@@ -10,6 +10,7 @@ use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
+use ag_harness::catalog::Capabilities;
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
     ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
@@ -36,6 +37,11 @@ use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
 /// it and require the same value on resume.
+///
+/// Image input joined the declared capabilities without a new revision: the
+/// harness weighs that capability only for image-bearing input, which
+/// Agentty rejects before a harness turn, so recorded sessions and text
+/// retries are unaffected while older sessions keep resuming.
 const REGISTRATION_REVISION: &str = "agentty-native-2";
 /// Conservative profile for a harness model without a declared profile. Its
 /// default estimator runs up to 46% under dense content and further under
@@ -554,17 +560,15 @@ impl ModelSelection {
                 )
             })?;
 
-        let profile = self.profile(environment, running_context_window)?;
-        match provider_call_budget {
-            Some(budget) => self.register(
-                BudgetedModel {
-                    budget: budget.clone(),
-                    inner: client,
-                },
-                profile,
-            ),
-            None => self.register(client, profile),
-        }
+        let model: Arc<dyn Model> = match provider_call_budget {
+            Some(budget) => Arc::new(BudgetedModel {
+                budget: budget.clone(),
+                inner: client,
+            }),
+            None => Arc::new(client),
+        };
+
+        self.register(model, self.profile(environment, running_context_window)?)
     }
 
     /// Builds a harness for this model with Agentty's defaults.
@@ -613,26 +617,34 @@ impl ModelSelection {
         };
         let metadata = client.metadata().clone();
         let profile = self.profile(context.environment, None)?;
-        let registry = self.register(ResumeOnlyModel { metadata }, profile)?;
+        let registry = self.register(Arc::new(ResumeOnlyModel { metadata }), profile)?;
 
         self.harness_from(&registry, context, observer)
     }
 
-    /// Registers `model` under this selection's key with `profile`.
+    /// Registers `model` under this selection's key with `profile` and the
+    /// tool calls and image input the harness provider catalog declares for
+    /// the model. A selection only holds a cataloged model or one an
+    /// OpenAI-compatible server serves, both of which the catalog describes.
     fn register(
         &self,
-        model: impl Model + 'static,
+        model: Arc<dyn Model>,
         profile: ModelProfile,
     ) -> Result<ModelRegistry, String> {
         let identity = ExecutionIdentity::new(self.key(), REGISTRATION_REVISION)
             .map_err(failure("Invalid harness model registration"))?;
+        let declared = self
+            .provider
+            .capabilities(&self.model)
+            .unwrap_or(Capabilities::NONE);
         let capabilities = ModelCapabilities {
-            tool_calls: true,
+            image_input: declared.image_input(),
+            tool_calls: declared.tool_calls(),
             ..ModelCapabilities::new(profile)
         };
         let mut registry = ModelRegistry::new();
         registry
-            .register(identity, model, capabilities)
+            .register_shared(identity, model, capabilities)
             .map_err(failure("Invalid harness model registration"))?;
 
         Ok(registry)
