@@ -279,8 +279,8 @@ The orchestrator session type is retired. Former controllers and their children 
 independent sessions with transcripts and workspaces intact; pending campaign work is
 stopped, and former controllers and research sessions stay read-only.
 
-Stacked sessions are retired. Existing stacked sessions become independent sessions that
-keep their former parent branch as their base branch.
+Stacked sessions are retired. Existing stacked sessions become independent sessions;
+unfinished ones target their root session's base branch.
 
 ## Branch Publish Flow
 
