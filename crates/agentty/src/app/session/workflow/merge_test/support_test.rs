@@ -13,8 +13,8 @@ use tempfile::{TempDir, tempdir};
 use tokio::sync::mpsc;
 
 use super::super::{
-    MergeTaskInput, RebaseAssistInput, RebaseAssistMode, RebasePlan, SyncAssistClient,
-    SyncMainOutcome, SyncRebaseAssistInput,
+    MergeTaskInput, RebaseAssistInput, RebaseAssistMode, SyncAssistClient, SyncMainOutcome,
+    SyncRebaseAssistInput,
 };
 use crate::app::AppEvent;
 use crate::app::service::HarnessModels;
@@ -148,7 +148,7 @@ pub(super) async fn build_rebase_assist_input_for_test(
             id: "session-123".into(),
             run_client: test_run_client(),
             transcript: empty_transcript(),
-            rebase_plan: RebasePlan::target("main".to_string()),
+            rebase_target: "main".to_string(),
             session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
             session_update_versions: Arc::default(),
         },
@@ -310,7 +310,6 @@ pub(super) fn successful_sync_conflict_git_client() -> git::MockGitClient {
 pub(super) fn successful_sync_conflict_outcome() -> SyncMainOutcome {
     SyncMainOutcome {
         default_branch: "main".to_string(),
-        deferred_merged_session_ids: Vec::new(),
         pulled_commit_titles: vec![
             "Update changelog format".to_string(),
             "Fix sync status copy".to_string(),

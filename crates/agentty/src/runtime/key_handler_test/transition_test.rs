@@ -1,5 +1,5 @@
 //! Key-handler mode transition tests for launch-configuration selectors,
-//! confirmations, info popups, and stack-parent selection.
+//! confirmations, and info popups.
 
 use std::sync::Arc;
 
@@ -8,19 +8,14 @@ use mockall::predicate::eq;
 use ratatui::layout::Rect;
 
 use super::super::{
-    append_session_to_selected_stack, content_area_for_terminal,
-    current_project_switcher_selection, current_session_creation_selection,
-    handle_cancel_session_confirmation, handle_confirmation_decision,
-    handle_launch_configuration_selector_key, handle_merge_confirmation,
-    handle_pre_commit_hook_warning_key, handle_publish_branch_input_key,
-    handle_regenerate_review_confirmation, handle_stack_append_parent_key,
-    handle_view_info_popup_key, next_launch_configuration_index,
-    previous_launch_configuration_index, stack_append_parent_session_ids,
+    content_area_for_terminal, current_project_switcher_selection,
+    current_session_creation_selection, handle_cancel_session_confirmation,
+    handle_confirmation_decision, handle_launch_configuration_selector_key,
+    handle_merge_confirmation, handle_pre_commit_hook_warning_key, handle_publish_branch_input_key,
+    handle_regenerate_review_confirmation, handle_view_info_popup_key,
+    next_launch_configuration_index, previous_launch_configuration_index,
     update_project_switcher_selection, update_session_creation_selection,
-    update_stack_append_parent_selection,
 };
-use super::support::appendable_stack_test_app;
-use crate::domain::session::SessionId;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, HelpContext,
@@ -298,154 +293,6 @@ fn test_previous_launch_configuration_index_wraps_to_end() {
         // Assert
         assert_eq!(index, expected_index);
     }
-}
-
-#[tokio::test]
-async fn test_stack_parent_selector_appends_session_and_returns_to_list() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let source_session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &parent_session_id,
-        crate::domain::session::Status::Review,
-    );
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &source_session_id,
-        crate::domain::session::Status::Review,
-    );
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: source_session_id.clone().into(),
-    };
-
-    // Act
-    let result =
-        handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
-
-    // Assert
-    let source_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == source_session_id)
-        .expect("source session should remain loaded");
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(matches!(app.mode, AppMode::List));
-    assert_eq!(
-        source_session.parent_session_id.as_deref(),
-        Some(parent_session_id.as_str())
-    );
-}
-
-#[tokio::test]
-async fn test_stack_parent_selector_handles_navigation_close_and_unbound_keys() {
-    // Arrange
-    let (mut app, _base_dir, _parent_session_id, source_session_id) =
-        appendable_stack_test_app().await;
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: source_session_id.clone().into(),
-    };
-
-    // Act
-    for key_code in [KeyCode::Down, KeyCode::Up, KeyCode::Char('x')] {
-        handle_stack_append_parent_key(&mut app, KeyEvent::new(key_code, KeyModifiers::NONE))
-            .await
-            .expect("parent navigation should continue");
-    }
-    assert!(matches!(
-        app.mode,
-        AppMode::StackAppendParentSelection {
-            selected_parent_index: 0,
-            ..
-        }
-    ));
-    handle_stack_append_parent_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("parent selector should close");
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-async fn test_stack_parent_selector_selects_parent_beyond_compact_viewport() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    for _ in 0..8 {
-        let parent_session_id = app.create_session().await.expect("failed to create parent");
-        crate::test_support::set_session_status_for_test(
-            &mut app,
-            &parent_session_id,
-            crate::domain::session::Status::Review,
-        );
-    }
-    let source_session_id = app.create_session().await.expect("failed to create source");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &source_session_id,
-        crate::domain::session::Status::Review,
-    );
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: source_session_id.clone().into(),
-    };
-    let eligible_parent_ids =
-        stack_append_parent_session_ids(&app, &SessionId::from(source_session_id.as_str()));
-    let expected_parent_id = eligible_parent_ids
-        .last()
-        .expect("expected eligible parents")
-        .clone();
-
-    // Act
-    for _ in 1..eligible_parent_ids.len() {
-        handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-            .await
-            .expect("failed to move parent selection");
-    }
-    handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to append to selected parent");
-    let source_session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == source_session_id)
-        .expect("source session should remain loaded");
-
-    // Assert
-    assert_eq!(
-        source_session.parent_session_id.as_deref(),
-        Some(expected_parent_id.as_str())
-    );
-}
-
-#[tokio::test]
-async fn test_stack_parent_helpers_ignore_inactive_or_empty_selection() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-
-    // Act
-    update_stack_append_parent_selection(&mut app, true);
-    append_session_to_selected_stack(&mut app).await;
-    app.mode = AppMode::StackAppendParentSelection {
-        selected_parent_index: 0,
-        session_id: "missing-source".into(),
-    };
-    let result =
-        handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await;
-
-    // Assert
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert!(matches!(app.mode, AppMode::List));
 }
 
 #[tokio::test]

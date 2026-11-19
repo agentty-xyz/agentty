@@ -3,14 +3,15 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{
-    ViewActionState, ViewKeyContext, ViewPendingUpdate, handle_view_key,
-    session_prompt_history_entries, switch_view_to_prompt, view_context,
+    ViewKeyContext, ViewPendingUpdate, handle_view_key, session_prompt_history_entries,
+    switch_view_to_prompt, view_context,
 };
 use super::support::{new_test_app_with_session, reply_enabled_review_snapshot};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::presentation::app_mode::{AppMode, ChatFocus, PromptModeSnapshot};
+use crate::presentation::help_action::ViewSessionState;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
 #[test]
@@ -90,7 +91,7 @@ async fn test_handle_view_key_enter_opens_empty_prompt_composer() {
 }
 
 #[tokio::test]
-async fn test_handle_view_key_slash_opens_for_reply_enabled_stacked_parent() {
+async fn test_handle_view_key_slash_opens_for_review_session() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     app.mode = AppMode::View {
@@ -99,8 +100,7 @@ async fn test_handle_view_key_slash_opens_for_reply_enabled_stacked_parent() {
     };
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
-    let mut view_session_snapshot = reply_enabled_review_snapshot();
-    view_session_snapshot.mutate_session_branch = ViewActionState::Disabled;
+    let view_session_snapshot = reply_enabled_review_snapshot();
     let view_key_context = ViewKeyContext {
         context: &view_context,
         session_snapshot: &view_session_snapshot,
@@ -131,7 +131,7 @@ async fn test_handle_view_key_slash_opens_for_reply_enabled_stacked_parent() {
 }
 
 #[tokio::test]
-async fn test_handle_view_key_slash_stays_closed_when_mutation_and_reply_are_blocked() {
+async fn test_handle_view_key_slash_stays_closed_for_merge_queue_session() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     app.mode = AppMode::View {
@@ -141,8 +141,8 @@ async fn test_handle_view_key_slash_stays_closed_when_mutation_and_reply_are_blo
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
     let mut view_session_snapshot = reply_enabled_review_snapshot();
-    view_session_snapshot.mutate_session_branch = ViewActionState::Disabled;
-    view_session_snapshot.reply_to_session = ViewActionState::Disabled;
+    view_session_snapshot.session_state = ViewSessionState::MergeQueue;
+    view_session_snapshot.session_status = Status::Queued;
     let view_key_context = ViewKeyContext {
         context: &view_context,
         session_snapshot: &view_session_snapshot,

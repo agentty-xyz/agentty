@@ -18,22 +18,22 @@ use ag_worker::{SessionRunClient, WorkerHost as _};
 use mockall::Sequence;
 use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
-    CREATE_REVIEW_REQUEST_OPERATION_KIND, REBASE_OPERATION_KIND, ScheduledSessionCommand,
-    ScheduledSessionWork, SessionCommand, SessionWorkerContext, SessionWorkerHost,
-    SessionWorkerRebaseAssistClient, SessionWorkerService, TurnMetadata,
+    REBASE_OPERATION_KIND, ScheduledSessionCommand, ScheduledSessionWork, SessionCommand,
+    SessionWorkerContext, SessionWorkerHost, SessionWorkerRebaseAssistClient, SessionWorkerService,
+    TurnMetadata,
 };
 use super::support::{
     apply_worker_turn_result, auto_commit_git_client, auto_commit_git_client_with_push_failure,
-    auto_commit_run_client, blocking_stack_metadata_git_client, empty_transcript,
-    insert_in_progress_session_with_review_request, insert_in_progress_test_session,
-    mock_successful_conflict_rebase_git_client, queue_helper_context, queue_test_context,
-    queued_review_request_command, rebase_assist_worker_harness, review_metadata_sync_client,
-    seed_existing_session_rebase_metadata, seed_recovery_test_operation, successful_turn_result,
-    test_graph_resources, transcript_text, write_rebase_conflict_file,
+    auto_commit_run_client, empty_transcript, insert_in_progress_session_with_review_request,
+    insert_in_progress_test_session, mock_successful_conflict_rebase_git_client,
+    queue_helper_context, queue_test_context, rebase_assist_worker_harness,
+    review_metadata_sync_client, seed_existing_session_rebase_metadata,
+    seed_recovery_test_operation, successful_turn_result, test_graph_resources, transcript_text,
+    write_rebase_conflict_file,
 };
 use crate::app::AppEvent;
 use crate::app::graph_activity::GraphActivityRegistry;
@@ -384,7 +384,7 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     let base_dir = tempdir().expect("failed to create temp dir");
     write_rebase_conflict_file(base_dir.path());
     let db = AppRepositories::in_memory().await.expect("db should open");
-    seed_existing_session_rebase_metadata(&db, None).await;
+    seed_existing_session_rebase_metadata(&db).await;
     db.sessions()
         .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
         .await
@@ -437,7 +437,7 @@ async fn test_session_sync_root_parents_its_conflicted_rebase_step() {
     let base_dir = tempdir().expect("failed to create temp dir");
     write_rebase_conflict_file(base_dir.path());
     let db = AppRepositories::in_memory().await.expect("db should open");
-    seed_existing_session_rebase_metadata(&db, None).await;
+    seed_existing_session_rebase_metadata(&db).await;
     db.sessions()
         .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
         .await
@@ -640,105 +640,6 @@ async fn test_fail_unfinished_operations_from_previous_run_aborts_interrupted_re
 
     // Assert
     assert_eq!(sessions[0].status, "Review");
-}
-
-#[tokio::test]
-/// Verifies a review request queued behind rebase cannot begin after the
-/// raw Git command but before metadata persistence and finalization end.
-async fn test_queued_review_request_waits_for_full_rebase_finalization() {
-    // Arrange
-    let base_dir = tempdir().expect("failed to create temp dir");
-    write_rebase_conflict_file(base_dir.path());
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    seed_existing_session_rebase_metadata(&db, Some("parent-session")).await;
-    db.operations()
-        .insert_session_operation("op-rebase", "sess1", REBASE_OPERATION_KIND)
-        .await
-        .expect("failed to insert rebase operation");
-    db.operations()
-        .insert_session_operation(
-            "op-review-request",
-            "sess1",
-            CREATE_REVIEW_REQUEST_OPERATION_KIND,
-        )
-        .await
-        .expect("failed to insert review-request operation");
-
-    let metadata_persistence_started = Arc::new(tokio::sync::Notify::new());
-    let release_metadata_persistence = Arc::new(tokio::sync::Notify::new());
-    let mut harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db.clone(), {
-        let metadata_persistence_started = Arc::clone(&metadata_persistence_started);
-        let release_metadata_persistence = Arc::clone(&release_metadata_persistence);
-
-        move |main_checkout_root| {
-            blocking_stack_metadata_git_client(
-                main_checkout_root,
-                metadata_persistence_started,
-                release_metadata_persistence,
-            )
-        }
-    });
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    harness.context.app_event_tx = app_event_tx;
-    let transcript = Arc::clone(&harness.context.transcript);
-    let status = Arc::clone(&harness.status);
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
-    super::support::spawn_session_worker(
-        harness.context,
-        auto_commit_run_client(),
-        Arc::new(Notify::new()),
-        command_rx,
-    );
-    command_tx
-        .send(ScheduledSessionCommand::immediate(SessionCommand::Rebase {
-            base_branch: "main".to_string(),
-            operation_id: "op-rebase".to_string(),
-        }))
-        .expect("failed to queue rebase");
-    command_tx
-        .send(ScheduledSessionCommand::queued(
-            queued_review_request_command(base_dir.path().to_path_buf()),
-            0,
-        ))
-        .expect("failed to queue review request");
-
-    // Act
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        metadata_persistence_started.notified(),
-    )
-    .await
-    .expect("rebase should reach metadata persistence");
-    let events_before_release =
-        std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
-    release_metadata_persistence.notify_one();
-    let publish_started = tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let event = app_event_rx.recv().await.expect("missing app event");
-            if matches!(event, AppEvent::BranchPublishActionStarted { .. }) {
-                break;
-            }
-        }
-    })
-    .await;
-
-    // Assert
-    assert!(
-        events_before_release
-            .iter()
-            .all(|event| !matches!(event, AppEvent::BranchPublishActionStarted { .. }))
-    );
-    assert_eq!(*status.lock().expect("status lock"), Status::Review);
-    assert!(transcript_text(&transcript).contains("[Sync] Successfully synced wt/sess1 onto main"));
-    publish_started.expect("review request should start after rebase finalization");
-    assert_eq!(
-        db.sessions()
-            .get_session_stack_base_commit_hash("sess1")
-            .await
-            .expect("failed to load stack-base hash")
-            .as_deref(),
-        Some("parent-tip")
-    );
 }
 
 #[tokio::test]

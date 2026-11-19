@@ -93,7 +93,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     // Act
     analytics.record_launch().await;
     analytics
-        .record_session_start(SessionType::Stacked, agent)
+        .record_session_start(SessionType::Fork, agent)
         .await;
     analytics.record_turn_start(turn).await;
     analytics.record_turn_end(turn, TurnOutcome::Finished).await;
@@ -141,7 +141,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
             expected_event(
                 "agentty_session_start",
                 &[
-                    ("session_type", "stacked"),
+                    ("session_type", "fork"),
                     ("agent", agent.kind().name()),
                     ("model", agent.model().as_str()),
                 ],

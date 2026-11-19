@@ -1,14 +1,14 @@
 //! Prepared session creation and foreground completion routing.
 
 use ag_session::{CreateSessionRequest, SessionError, SessionId};
-use ag_telemetry::{KeyValue, Span};
+use ag_telemetry::Span;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::app::session::{self, SessionCreationSettings};
 use crate::app::{App, AppError, AppEvent, SessionManager, spawn};
 use crate::domain::input::InputState;
-use crate::domain::session::{Session, Status};
+use crate::domain::session::Status;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::SessionPreparationState;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -134,14 +134,7 @@ impl App {
     ) {
         let services = self.services.clone();
         let completion_request_id = request_id.clone();
-        let stacked = self
-            .sessions
-            .session_for_id(&session_id)
-            .is_some_and(Session::is_stacked_child);
-        let mut trace = Span::root(
-            workflow,
-            vec![KeyValue::new("agentty.session.stacked", stacked)],
-        );
+        let mut trace = Span::root(workflow, Vec::new());
         trace.identify("agentty.session.id", session_id.clone());
         let task = spawn::spawn_detached(async move {
             let result = trace
@@ -415,7 +408,7 @@ impl App {
         let was_draft = session.is_draft_session();
         if was_draft && !self.sessions.can_start_staged_session(session_id) {
             return Err(AppError::Workflow(
-                "The parent stack is no longer ready to start this session".to_string(),
+                "The draft session is no longer ready to start".to_string(),
             ));
         }
         if session.status == Status::Draft {

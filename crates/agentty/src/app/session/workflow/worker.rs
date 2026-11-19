@@ -230,7 +230,8 @@ impl SessionCommand {
 pub(super) struct ScheduledSessionCommand {
     command: SessionCommand,
     trace: QueuedTrace,
-    /// Reserves stack branch work until this command is dropped or finishes.
+    /// Reserves workspace preparation until this command is dropped or
+    /// finishes.
     preparation_reservation: Option<Arc<()>>,
     queued_order: Option<u64>,
     /// First turns wait until the foreground has persisted their operation
@@ -2161,13 +2162,6 @@ impl SessionManager {
                     "Graph session is unavailable or its Env changed".into(),
                 ));
             }
-            if node.execution.workspace_access == ag_session::GraphWorkspaceAccess::ExclusiveWrite
-                && !self.can_reply_to_session_in_stack(session_id)
-            {
-                return Err(SessionError::Workflow(
-                    "Graph writer requires an idle session stack".into(),
-                ));
-            }
             Self::validate_graph_task_claim(services, &request, task_id, attempt_id).await?;
             self.validate_agent_task_workspace(services, session_id)?;
             let runtime = self.session_worker_runtime_or_err(services, session_id)?;
@@ -2253,46 +2247,21 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Checks live readiness and stack ownership before isolated admission.
-    /// Reading every handle prevents delayed reducer events from hiding an
-    /// active sibling's branch work.
+    /// Checks live readiness before isolated admission. Reading the live
+    /// handle prevents a delayed reducer event from hiding active work.
     pub(in crate::app) fn validate_agent_task_admission(
         &mut self,
         session_id: &str,
         definition: ag_session::TaskAgentRole,
     ) -> Result<(), SessionError> {
-        let sessions = self.session_handles().keys().cloned().collect::<Vec<_>>();
-        for session in sessions {
-            self.sync_session_from_handle(&session);
-        }
-        let session = self.session_or_err(session_id)?;
-        let status = session.status;
+        self.sync_session_from_handle(session_id);
+        let status = self.session_or_err(session_id)?.status;
         let planner_start =
             definition == ag_session::TaskAgentRole::Planner && status == Status::Draft;
-        let needs_workspace = planner_start && session.is_draft_session();
-        let parent = session.parent_session_id.clone();
         if !status.allows_review_actions() && !planner_start {
             return Err(SessionError::Workflow(format!(
                 "Session cannot accept isolated task in status `{status}`"
             )));
-        }
-        if needs_workspace
-            && (!self.can_reply_to_session_in_stack(session_id)
-                || parent
-                    .as_ref()
-                    .is_some_and(|id| !self.can_create_stacked_child(id)))
-        {
-            return Err(SessionError::Workflow(
-                "Task workspace preparation requires a review-ready parent and an idle stack"
-                    .to_string(),
-            ));
-        }
-        if definition == ag_session::TaskAgentRole::Implementer
-            && !self.can_reply_to_session_in_stack(session_id)
-        {
-            return Err(SessionError::Workflow(
-                "Stacked task execution requires no other active stack session".to_string(),
-            ));
         }
 
         Ok(())

@@ -17,7 +17,6 @@ use crate::app::prompt_intent::PromptSessionMode;
 use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputCommand;
-use crate::domain::session::SessionId;
 use crate::presentation::app_mode::AppMode;
 
 #[test]
@@ -430,40 +429,6 @@ async fn test_handle_prompt_char_loads_at_mention_entries_from_project_root_for_
             session_id,
         } => {
             assert_eq!(session_id, app.sessions.sessions()[0].id.as_str());
-            assert!(entries.contains(&FileEntry {
-                is_dir: false,
-                path: expected_path.to_string(),
-            }));
-        }
-        _ => unreachable!("expected at-mention entries event"),
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_char_loads_parent_worktree_entries_for_stacked_draft() {
-    // Arrange
-    let (mut app, base_dir) = new_test_draft_prompt_app("", None).await;
-    let parent_session_id = SessionId::from("parent-session");
-    let parent_folder = base_dir.path().join("parent-worktree");
-    let expected_path = "parent_lookup_target.txt";
-    std::fs::create_dir_all(&parent_folder).expect("failed to create parent worktree");
-    std::fs::write(parent_folder.join(expected_path), "parent")
-        .expect("failed to write parent worktree file");
-    app.sessions.sessions_mut()[0].parent_session_id = Some(parent_session_id.clone());
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id(parent_session_id)
-            .folder(parent_folder)
-            .build(),
-    );
-
-    // Act
-    press_prompt_key(&mut app, KeyCode::Char('@')).await;
-    let next_event = wait_for_at_mention_entries_event(&mut app).await;
-
-    // Assert
-    match next_event {
-        crate::app::AppEvent::AtMentionEntriesLoaded { entries, .. } => {
             assert!(entries.contains(&FileEntry {
                 is_dir: false,
                 path: expected_path.to_string(),
