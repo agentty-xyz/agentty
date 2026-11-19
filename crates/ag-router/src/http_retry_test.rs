@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use super::tests::PostJson as _;
 use super::{HttpTransport, ProviderRequest, RetryClock, TransportError};
 use crate::retry::{Jitter, RetryKind, RetryNotice, RetryObserver, RetryPolicy};
 

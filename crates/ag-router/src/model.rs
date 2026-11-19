@@ -576,6 +576,28 @@ impl ModelError {
         Self::Request(Box::new(ClassifiedRequestError {
             class,
             http_status,
+            rejection: None,
+            source,
+        }))
+    }
+
+    /// Returns a failure reported inside a response stream, classified as
+    /// an unsuccessful response with `http_status` and `rejection` is.
+    pub(crate) fn streamed_rejection(
+        http_status: u16,
+        rejection: ProviderRejection,
+        source: Box<dyn Error + Send + Sync>,
+    ) -> Self {
+        let class = if rejection.context_overflow {
+            ErrorClass::ContextOverflow
+        } else {
+            ErrorClass::Provider
+        };
+
+        Self::Request(Box::new(ClassifiedRequestError {
+            class,
+            http_status: Some(http_status),
+            rejection: Some(rejection),
             source,
         }))
     }
@@ -585,7 +607,12 @@ impl ModelError {
             Self::WithMetadata { source, .. } => source.provider_rejection(),
             Self::Request(source) => source
                 .downcast_ref::<ProviderRequestError>()
-                .map(|error| &error.rejection),
+                .map(|error| &error.rejection)
+                .or_else(|| {
+                    source
+                        .downcast_ref::<ClassifiedRequestError>()
+                        .and_then(|error| error.rejection.as_ref())
+                }),
             _ => None,
         }
     }
@@ -697,6 +724,8 @@ struct ProviderRequestError {
 struct ClassifiedRequestError {
     class: ErrorClass,
     http_status: Option<u16>,
+    /// Classification of a streamed failure that names an HTTP status.
+    rejection: Option<ProviderRejection>,
     #[source]
     source: Box<dyn Error + Send + Sync>,
 }

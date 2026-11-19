@@ -1,10 +1,19 @@
 //! Anthropic Messages API backend.
 //!
-//! Requests are unstreamed `POST {base_url}/messages` calls carrying the
+//! Requests are streamed `POST {base_url}/messages` calls carrying the
 //! whole history. Each system message joins the top-level `system` blocks,
 //! consecutive messages of one role merge into one message, and turn
 //! instructions become a user text block under the shared instructions
-//! heading.
+//! heading. Unless the policy turns it off, the last tool definition, the
+//! last `system` block, and the last message's last block that is not
+//! signed thinking carry a `cache_control` breakpoint, so a request that
+//! repeats an earlier request's prefix reads it from the prompt cache.
+//!
+//! Text, thinking, and tool-argument deltas reach an observer as they
+//! arrive, and the events accumulate into the same message an unstreamed
+//! response carries, which is then decoded exactly as one. A server that
+//! ignores `stream` and answers with one JSON body is read as before, and an
+//! `error` event fails as the HTTP status its error type stands for.
 //!
 //! A response's `thinking` and `redacted_thinking` blocks are signed and must
 //! return unchanged, in their place among the text and `tool_use` blocks, on
@@ -16,21 +25,26 @@
 //! the caller cleared to save context or another provider's reasoning, is
 //! omitted.
 
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::sync::Arc;
 
+use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chat_completion::TURN_INSTRUCTIONS_HEADING;
-use crate::http::{HttpTransport, ProviderRequest, deserialize_optional};
+use crate::http::{
+    self, HttpTransport, ProviderRequest, SUCCESS_BODY_LIMIT_BYTES, TransportError,
+    deserialize_optional,
+};
 use crate::model::{GeneratedResponse, ModelErrorType};
 use crate::provider_spec::{
-    DEFAULT_FALLBACK_MAX_TOKENS, ProviderSpec, ReasoningMapping, StructuredOutputMode,
+    CacheBreakpoints, DEFAULT_FALLBACK_MAX_TOKENS, ProviderSpec, ReasoningMapping,
+    StructuredOutputMode,
 };
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
+use crate::stream::{self, DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Messages endpoint under a provider base URL.
@@ -41,9 +55,20 @@ pub(crate) const OUTPUT_TOOL_NAME: &str = "structured_output";
 /// Description of the [`OUTPUT_TOOL_NAME`] tool.
 const OUTPUT_TOOL_DESCRIPTION: &str =
     "Give your final answer as this tool's input once you need no other tool.";
-/// Bound for one unstreamed response, matching the Anthropic SDKs' default
-/// request timeout.
-const REQUEST_TIMEOUT: Duration = Duration::from_mins(10);
+/// HTTP status each stream `error` type stands for, as the Messages API
+/// answers an unstreamed request failing the same way.
+const ERROR_STATUSES: [(&str, u16); 10] = [
+    ("api_error", 500),
+    ("authentication_error", 401),
+    ("billing_error", 402),
+    ("invalid_request_error", 400),
+    ("not_found_error", 404),
+    ("overloaded_error", 529),
+    ("permission_error", 403),
+    ("rate_limit_error", 429),
+    ("request_too_large", 413),
+    ("timeout_error", 504),
+];
 /// Content block types a reasoning-content array may hold.
 const REPLAYED_BLOCK_TYPES: [&str; 4] = ["redacted_thinking", "text", "thinking", "tool_use"];
 /// Signed reasoning block types, replayed verbatim.
@@ -52,6 +77,7 @@ const THINKING_BLOCK_TYPES: [&str; 2] = ["redacted_thinking", "thinking"];
 /// Structured-output backend for the Anthropic Messages API, applying the
 /// request policy of one [`ProviderSpec`].
 pub(crate) struct AnthropicBackend<'spec> {
+    deltas: Option<Arc<dyn DeltaObserver>>,
     headers: HeaderMap,
     http: Arc<HttpTransport>,
     model: String,
@@ -61,16 +87,18 @@ pub(crate) struct AnthropicBackend<'spec> {
 
 impl<'spec> AnthropicBackend<'spec> {
     /// Creates a backend sending `headers` through `http`, retrying under
-    /// the spec's [`crate::RetryPolicy`] and reporting retries to
-    /// `observer`.
+    /// the spec's [`crate::RetryPolicy`], and reporting retries to
+    /// `observer` and streamed content to `deltas`.
     pub(crate) fn new(
         policy: &'spec ProviderSpec,
         model: String,
         headers: HeaderMap,
         http: Arc<HttpTransport>,
         observer: Option<Arc<dyn RetryObserver>>,
+        deltas: Option<Arc<dyn DeltaObserver>>,
     ) -> Self {
         Self {
+            deltas,
             headers,
             http,
             model,
@@ -138,6 +166,7 @@ impl<'spec> AnthropicBackend<'spec> {
                 ToolChoice::Any
             };
             tools.push(ToolPayload {
+                cache_control: None,
                 description: OUTPUT_TOOL_DESCRIPTION,
                 input_schema: format.schema().value(),
                 name: OUTPUT_TOOL_NAME,
@@ -145,7 +174,10 @@ impl<'spec> AnthropicBackend<'spec> {
 
             choice
         });
-        let (system, messages) = Self::messages(request);
+        let (mut system, mut messages) = Self::messages(request);
+        if self.policy.cache_breakpoints == CacheBreakpoints::Marked {
+            mark_cache_breakpoints(&mut tools, &mut system, &mut messages);
+        }
         let payload = MessagesPayload {
             max_tokens: request
                 .options
@@ -157,6 +189,7 @@ impl<'spec> AnthropicBackend<'spec> {
             model: &self.model,
             output_config: (effort.is_some() || format.is_some())
                 .then_some(OutputConfig { effort, format }),
+            stream: true,
             system,
             thinking: effort.map(|_| Thinking {
                 display: "summarized",
@@ -173,14 +206,49 @@ impl<'spec> AnthropicBackend<'spec> {
         )
         .with_retry(self.policy.retry, self.observer.clone());
         let response = self
-            .http
-            .post_json::<MessagesResponse>(&request_body)
+            .create(&request_body, output_tool.is_some())
             .await
             .map_err(|error| {
                 error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
             })?;
 
         Ok(self.decode(&response, output_tool.is_some()))
+    }
+
+    /// Sends `request` and accumulates its streamed message, reporting
+    /// deltas as they arrive and the input of a call to [`OUTPUT_TOOL_NAME`]
+    /// as answer text when `output_tool` holds, or reads the one JSON
+    /// message of a server that does not stream.
+    async fn create(
+        &self,
+        request: &ProviderRequest,
+        output_tool: bool,
+    ) -> Result<MessagesResponse, TransportError> {
+        let mut response = self.http.send(request).await?;
+        if !stream::is_event_stream(&response) {
+            return http::decode_success_body(&mut response).await;
+        }
+        let mut events = MessageStream::new(self.deltas.is_some(), output_tool);
+        while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
+            let done = events.push(&chunk)?;
+            self.report(&mut events).await;
+            if done {
+                return events.finish();
+            }
+        }
+        events.close()?;
+        self.report(&mut events).await;
+
+        events.finish()
+    }
+
+    /// Reports the deltas `events` read so far to the delta observer.
+    async fn report(&self, events: &mut MessageStream) {
+        if let Some(observer) = &self.deltas {
+            for delta in std::mem::take(&mut events.deltas) {
+                observer.delta(delta).await;
+            }
+        }
     }
 
     /// Returns the `system` blocks and the messages of `request`.
@@ -282,17 +350,6 @@ impl<'spec> AnthropicBackend<'spec> {
     }
 }
 
-/// Production transport for Messages requests, built on first use and
-/// shared by every router, so hosts that build many routers without an
-/// Anthropic model pay for no extra HTTP client.
-static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> =
-    LazyLock::new(|| Arc::new(HttpTransport::new(REQUEST_TIMEOUT)));
-
-/// Returns the shared production transport for Messages requests.
-pub(crate) fn default_transport() -> Arc<HttpTransport> {
-    Arc::clone(&DEFAULT_TRANSPORT)
-}
-
 /// Returns the readable view of reasoning content holding Anthropic
 /// thinking blocks, or `None` for other content: their thinking text, which
 /// summarizes the model's reasoning, with blocks separated by blank lines,
@@ -368,6 +425,50 @@ fn replayed_blocks(content: &str) -> Option<Vec<Value>> {
         });
 
     valid.then_some(blocks)
+}
+
+/// Marks the stable prefix of a request with `cache_control` breakpoints:
+/// the last tool definition, the last `system` block, and the last block of
+/// the last message that is not signed thinking, which the API does not let
+/// carry one. A later request whose prefix repeats up to a breakpoint reads
+/// it from the cache, and the previous request's last message stays a read
+/// point once newer messages follow it.
+fn mark_cache_breakpoints(
+    tools: &mut [ToolPayload<'_>],
+    system: &mut [Value],
+    messages: &mut [MessagePayload],
+) {
+    if let Some(tool) = tools.last_mut() {
+        tool.cache_control = Some(ephemeral_cache_control());
+    }
+    let last_message_block = messages.last_mut().and_then(|message| {
+        message
+            .content
+            .iter_mut()
+            .rev()
+            .find(|block| !is_thinking_block(block))
+    });
+    let marked = system
+        .last_mut()
+        .into_iter()
+        .chain(last_message_block)
+        .filter_map(Value::as_object_mut);
+    for block in marked {
+        block.insert("cache_control".to_string(), ephemeral_cache_control());
+    }
+}
+
+/// Returns the `cache_control` of a breakpoint with the default lifetime.
+fn ephemeral_cache_control() -> Value {
+    json!({"type": "ephemeral"})
+}
+
+/// Returns whether `block` is signed thinking, replayed verbatim.
+fn is_thinking_block(block: &Value) -> bool {
+    block
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| THINKING_BLOCK_TYPES.contains(&kind))
 }
 
 /// Returns a text block, or `None` for text the API rejects as blank.
@@ -561,6 +662,324 @@ fn decode_calls(
     Ok(decoded)
 }
 
+/// Incremental reader of a Messages event stream that accumulates the
+/// message an unstreamed response carries and, when `observed`, keeps the
+/// content deltas not yet reported. The accumulated content stays within the
+/// success body limit, so memory is bounded however long the stream runs.
+#[derive(Default)]
+struct MessageStream {
+    /// Content blocks in the order they started.
+    blocks: Vec<StreamedBlock>,
+    /// Calls started so far, the position of the next one.
+    calls: usize,
+    /// Bytes of accumulated content: started blocks and their deltas.
+    content_bytes: usize,
+    /// Deltas read but not yet reported.
+    deltas: Vec<ResponseDelta>,
+    events: SseDecoder,
+    observed: bool,
+    /// Read a call to [`OUTPUT_TOOL_NAME`] as the answer.
+    output_tool: bool,
+    /// Every field but the content.
+    response: MessagesResponse,
+    /// The `message_stop` event arrived.
+    stopped: bool,
+}
+
+impl MessageStream {
+    /// Creates a reader that keeps content deltas when `observed`, reading
+    /// a call to [`OUTPUT_TOOL_NAME`] as the answer when `output_tool`
+    /// holds.
+    fn new(observed: bool, output_tool: bool) -> Self {
+        Self {
+            observed,
+            output_tool,
+            ..Self::default()
+        }
+    }
+
+    /// Reads `chunk`, returning whether the stream's `message_stop` event
+    /// arrived; later events are not read.
+    fn push(&mut self, chunk: &[u8]) -> Result<bool, TransportError> {
+        for data in self.events.push(chunk)? {
+            if self.dispatch(&data)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Reads the event left when the stream closed without its blank line.
+    fn close(&mut self) -> Result<(), TransportError> {
+        if let Some(data) = std::mem::take(&mut self.events).finish()? {
+            self.dispatch(&data)?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the accumulated message, failing when the stream closed
+    /// before `message_stop` or a call's streamed input is not JSON.
+    fn finish(mut self) -> Result<MessagesResponse, TransportError> {
+        if !self.stopped {
+            return Err(TransportError::transport(StreamClosed));
+        }
+        self.blocks.sort_by_key(|block| block.index);
+        let content = self
+            .blocks
+            .into_iter()
+            .map(StreamedBlock::into_block)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.response.content = Some(content);
+
+        Ok(self.response)
+    }
+
+    /// Reads one event, returning whether it is `message_stop`. Unknown
+    /// events, such as `ping`, are skipped.
+    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
+        let event =
+            serde_json::from_str::<StreamEvent>(data).map_err(TransportError::InvalidResponse)?;
+        match event.kind.as_str() {
+            "message_start" => {
+                let message = event.message.unwrap_or_default();
+                self.response.id = message.id;
+                self.response.model = message.model;
+                self.response.usage = message.usage;
+            }
+            "content_block_start" => {
+                let block = event.content_block.unwrap_or_default();
+                self.grow(block.to_string().len())?;
+                self.start(event.index, block);
+            }
+            "content_block_delta" => {
+                let delta = event.delta.unwrap_or_default();
+                self.read_delta(event.index, delta)?;
+            }
+            "message_delta" => {
+                let delta = event.delta.unwrap_or_default();
+                self.response.stop_reason = delta.stop_reason.or(self.response.stop_reason.take());
+                self.response.stop_details =
+                    delta.stop_details.or(self.response.stop_details.take());
+                let mut usage = self.response.usage.take().unwrap_or_default();
+                usage.update(event.usage.unwrap_or_default());
+                self.response.usage = Some(usage);
+            }
+            "message_stop" => {
+                self.stopped = true;
+
+                return Ok(true);
+            }
+            "error" => {
+                let error = event.error.unwrap_or_default();
+                let status = error.kind.as_deref().and_then(|kind| {
+                    ERROR_STATUSES
+                        .iter()
+                        .find(|(name, _)| *name == kind)
+                        .and_then(|(_, status)| StatusCode::from_u16(*status).ok())
+                });
+
+                return Err(TransportError::StreamFailed {
+                    code: error.kind,
+                    message: error.message,
+                    status,
+                });
+            }
+            _ => {}
+        }
+
+        Ok(false)
+    }
+
+    /// Starts the block at wire `index`, numbering calls by the order they
+    /// start; a call to [`OUTPUT_TOOL_NAME`] under forced-tool output is the
+    /// answer rather than a call.
+    fn start(&mut self, index: u64, block: Value) {
+        let kind = block.get("type").and_then(Value::as_str);
+        let answer = self.output_tool
+            && kind == Some("tool_use")
+            && block.get("name").and_then(Value::as_str) == Some(OUTPUT_TOOL_NAME);
+        let call = (kind == Some("tool_use") && !answer).then(|| {
+            self.calls += 1;
+
+            self.calls - 1
+        });
+        self.blocks.push(StreamedBlock {
+            answer,
+            block,
+            call,
+            index,
+            ..StreamedBlock::default()
+        });
+    }
+
+    /// Accumulates one delta into the block at wire `index`, reporting its
+    /// content; a delta for a block that never started is skipped.
+    fn read_delta(&mut self, index: u64, delta: EventDelta) -> Result<(), TransportError> {
+        let reasoned = self.blocks.iter().any(|block| block.reasoned);
+        let Some(block) = self.blocks.iter_mut().rfind(|block| block.index == index) else {
+            return Ok(());
+        };
+        let (accumulated, fragment) = match delta.kind.as_str() {
+            "input_json_delta" => (&mut block.input, delta.partial_json),
+            "signature_delta" => (&mut block.signature, delta.signature),
+            "text_delta" => (&mut block.text, delta.text),
+            "thinking_delta" => (&mut block.thinking, delta.thinking),
+            _ => return Ok(()),
+        };
+        let fragment = fragment.unwrap_or_default();
+        accumulated.push_str(&fragment);
+        let bytes = fragment.len();
+        let first_thought = delta.kind == "thinking_delta"
+            && !fragment.is_empty()
+            && !std::mem::replace(&mut block.reasoned, true);
+        let reported = match delta.kind.as_str() {
+            "input_json_delta" if block.answer => Some(ResponseDelta::Text(fragment)),
+            "input_json_delta" => block.call.map(|index| ResponseDelta::ToolArguments {
+                arguments: fragment,
+                index,
+            }),
+            "text_delta" => Some(ResponseDelta::Text(fragment)),
+            "thinking_delta" => Some(ResponseDelta::Reasoning(fragment)),
+            _ => None,
+        };
+        self.grow(bytes)?;
+        // Thinking blocks read as one text with blank lines between them,
+        // as the reasoning view of the response joins them.
+        if first_thought && reasoned {
+            self.report(ResponseDelta::Reasoning("\n\n".to_string()));
+        }
+        if let Some(delta) = reported {
+            self.report(delta);
+        }
+
+        Ok(())
+    }
+
+    /// Counts `bytes` more accumulated content, failing past the success
+    /// body limit.
+    fn grow(&mut self, bytes: usize) -> Result<(), TransportError> {
+        self.content_bytes = self.content_bytes.saturating_add(bytes);
+        if self.content_bytes > SUCCESS_BODY_LIMIT_BYTES {
+            return Err(TransportError::ResponseBodyTooLarge);
+        }
+
+        Ok(())
+    }
+
+    /// Keeps `delta` for the observer, when there is one and the delta
+    /// carries content.
+    fn report(&mut self, delta: ResponseDelta) {
+        let empty = match &delta {
+            ResponseDelta::Reasoning(text) | ResponseDelta::Text(text) => text.is_empty(),
+            ResponseDelta::ToolArguments { arguments, .. } => arguments.is_empty(),
+        };
+        if self.observed && !empty {
+            self.deltas.push(delta);
+        }
+    }
+}
+
+/// One content block accumulated from its start and its deltas.
+#[derive(Default)]
+struct StreamedBlock {
+    /// A call to [`OUTPUT_TOOL_NAME`] read as the answer.
+    answer: bool,
+    /// The block as it started.
+    block: Value,
+    /// Position of a call among the response's calls.
+    call: Option<usize>,
+    /// Wire index of the block in the message's content.
+    index: u64,
+    /// Partial JSON of a call's input.
+    input: String,
+    /// The block has streamed thinking text.
+    reasoned: bool,
+    signature: String,
+    text: String,
+    thinking: String,
+}
+
+impl StreamedBlock {
+    /// Returns the block as an unstreamed response carries it: each
+    /// streamed text appended to the field it started with, and a call's
+    /// streamed input parsed in place of its empty start.
+    fn into_block(self) -> Result<Value, TransportError> {
+        let mut block = self.block;
+        if let Some(fields) = block.as_object_mut() {
+            for (field, fragment) in [
+                ("signature", self.signature),
+                ("text", self.text),
+                ("thinking", self.thinking),
+            ] {
+                if !fragment.is_empty() {
+                    let start = fields
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let whole = format!("{start}{fragment}");
+                    fields.insert(field.to_string(), Value::String(whole));
+                }
+            }
+            if !self.input.is_empty() {
+                let input = serde_json::from_str::<Value>(&self.input)
+                    .map_err(TransportError::InvalidResponse)?;
+                fields.insert("input".to_string(), input);
+            }
+        }
+
+        Ok(block)
+    }
+}
+
+/// One server-sent event of a Messages stream.
+#[derive(Deserialize)]
+struct StreamEvent {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    content_block: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    delta: Option<EventDelta>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    error: Option<StreamError>,
+    #[serde(default)]
+    index: u64,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    message: Option<MessagesResponse>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    usage: Option<MessagesUsage>,
+}
+
+/// The `delta` of a `content_block_delta` or `message_delta` event.
+#[derive(Default, Deserialize)]
+struct EventDelta {
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    partial_json: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    signature: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    stop_details: Option<StopDetails>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    stop_reason: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    text: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    thinking: Option<String>,
+}
+
+/// The failure an `error` event reports.
+#[derive(Default, Deserialize)]
+struct StreamError {
+    #[serde(default, deserialize_with = "deserialize_optional", rename = "type")]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    message: Option<String>,
+}
+
 /// A response the provider stopped before an answer, such as on an input
 /// that filled the context window.
 #[derive(Debug, thiserror::Error)]
@@ -577,6 +996,7 @@ struct MessagesPayload<'a> {
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_config: Option<OutputConfig<'a>>,
+    stream: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     system: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -625,6 +1045,8 @@ enum ToolChoice {
 
 #[derive(Serialize)]
 struct ToolPayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     description: &'a str,
     input_schema: &'a Value,
     name: &'a str,
@@ -633,6 +1055,7 @@ struct ToolPayload<'a> {
 impl<'a> From<&'a tool::ToolDefinition> for ToolPayload<'a> {
     fn from(definition: &'a tool::ToolDefinition) -> Self {
         Self {
+            cache_control: None,
             description: definition.description(),
             input_schema: definition.parameters(),
             name: definition.name(),
@@ -640,7 +1063,7 @@ impl<'a> From<&'a tool::ToolDefinition> for ToolPayload<'a> {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct MessagesResponse {
     #[serde(default, deserialize_with = "deserialize_optional")]
     content: Option<Vec<Value>>,
@@ -692,7 +1115,7 @@ struct StopDetails {
 
 /// Token counts of one response. The API's `input_tokens` excludes the
 /// cache reads and writes, which [`model::CompletionUsage`] counts as input.
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Default, Deserialize)]
 struct MessagesUsage {
     #[serde(
         default,
@@ -718,6 +1141,17 @@ struct MessagesUsage {
         rename = "output_tokens"
     )]
     output: Option<u64>,
+}
+
+impl MessagesUsage {
+    /// Takes each count `later` reports, as the cumulative usage of a
+    /// stream's `message_delta` updates the usage of its `message_start`.
+    fn update(&mut self, later: Self) {
+        self.cache_creation = later.cache_creation.or(self.cache_creation);
+        self.cache_read = later.cache_read.or(self.cache_read);
+        self.input = later.input.or(self.input);
+        self.output = later.output.or(self.output);
+    }
 }
 
 impl From<&MessagesUsage> for model::CompletionUsage {
@@ -753,3 +1187,7 @@ struct ToolUse {
 #[cfg(test)]
 #[path = "anthropic_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "anthropic_stream_test.rs"]
+mod stream_tests;

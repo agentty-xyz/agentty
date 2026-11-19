@@ -365,22 +365,22 @@ let outcome = session
   index, and catalog model ID, assistant text, reasoning, tool calls with their
   arguments and results, per-request usage and cost, context reductions, each retry a
   built-in client sends (`Retrying`, with its attempt, delay, and `ErrorKind`, before
-  the wait), and a successful run's committed `Output` item. A built-in client on the
-  Responses or Chat Completions protocol streams each turn response as `ItemDelta`
-  events (`Delta::Text`, `Delta::Reasoning`, or `Delta::ToolArguments`). Each goes to
-  the response's reasoning, message, or tool-call item, which starts at its first
-  fragment and completes after the response. A streamed final answer's text completes a
-  `Message` item before the validated `Output`. A discarded response, such as an invalid
-  answer that is re-requested, completes its reasoning and message items with the text
-  it streamed; its tool-call items stay open. `Completed` is always the last event, also
-  after a failure or cancellation; items still open then were interrupted. It follows
-  settlement, so the transcript then holds the terminal status of a run that emitted
-  `Started`, unless persistence cleanup failed. Delivery is lossless: the run waits
-  while the stream is full, so read it while awaiting the outcome. Cancelling still
-  resolves a run whose stream is full. Dropping the stream discards events without
-  stalling the run. Events carry session content, so never export them as telemetry.
-  Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
-  `crates/ag-harness/schema/run_event.json`.
+  the wait), and a successful run's committed `Output` item. A built-in client on any
+  protocol (Responses, Chat Completions, or Anthropic Messages) streams each turn
+  response as `ItemDelta` events (`Delta::Text`, `Delta::Reasoning`, or
+  `Delta::ToolArguments`). Each goes to the response's reasoning, message, or tool-call
+  item, which starts at its first fragment and completes after the response. A streamed
+  final answer's text completes a `Message` item before the validated `Output`. A
+  discarded response, such as an invalid answer that is re-requested, completes its
+  reasoning and message items with the text it streamed; its tool-call items stay open.
+  `Completed` is always the last event, also after a failure or cancellation; items
+  still open then were interrupted. It follows settlement, so the transcript then holds
+  the terminal status of a run that emitted `Started`, unless persistence cleanup
+  failed. Delivery is lossless: the run waits while the stream is full, so read it while
+  awaiting the outcome. Cancelling still resolves a run whose stream is full. Dropping
+  the stream discards events without stalling the run. Events carry session content, so
+  never export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`;
+  the schema is committed in `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy
@@ -746,24 +746,27 @@ let model = ModelClient::from_spec(ProviderSpec::anthropic(AnthropicConfig {
 }))?;
 ```
 
-Requests are unstreamed. Structured output uses the native `output_config.format`;
-`StructuredOutputMode::ForcedTool` instead reads the answer from a `structured_output`
-tool call, for models or schemas native output rejects. It forces that tool only for a
-specification without a reasoning mapping, since thinking, which current Claude models
-do by default, forbids a forced tool. A reasoning effort turns on summarized adaptive
-thinking for the models that take one. Signed `thinking` and `redacted_thinking` blocks
-are recorded and replayed verbatim in their original place on later requests, and
-earlier turns replay with their turn instructions as first sent
-(`Model::replays_turn_instructions`), because the newest Claude models drop or reject
-signed thinking after an edited earlier message. Context reductions that clear or elide
-earlier rounds still edit history, so long sessions on those models can lose earlier
-thinking. Every Claude model shares one reasoning family, and a switch to another
-provider carries that reasoning as a short note. A request without an output bound sends
-`max_tokens` 16,000 (`ProviderSpec::with_fallback_max_tokens`), since the API requires
-one. Usage counts cache reads and cache writes as input, and `Usage::cache_write`
-reports the writes. A `refusal` or `max_tokens` stop fails as an incomplete response, a
-`model_context_window_exceeded` stop or a "prompt is too long" `400` as a context
-overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
+Requests stream, so thinking, text, and tool arguments arrive as `ItemDelta` events, and
+mark the tools, `system` blocks, and latest message as prompt-cache breakpoints
+(`ProviderSpec::with_cache_breakpoints(false)` turns that off). Context reductions never
+alter the signed thinking of the round a tool loop continues. Structured output uses the
+native `output_config.format`; `StructuredOutputMode::ForcedTool` instead reads the
+answer from a `structured_output` tool call, for models or schemas native output
+rejects. It forces that tool only for a specification without a reasoning mapping, since
+thinking, which current Claude models do by default, forbids a forced tool. A reasoning
+effort turns on summarized adaptive thinking for the models that take one. Signed
+`thinking` and `redacted_thinking` blocks are recorded and replayed verbatim in their
+original place on later requests, and earlier turns replay with their turn instructions
+as first sent (`Model::replays_turn_instructions`), because the newest Claude models
+drop or reject signed thinking after an edited earlier message. Context reductions that
+clear or elide earlier rounds still edit history, so long sessions on those models can
+lose earlier thinking. Every Claude model shares one reasoning family, and a switch to
+another provider carries that reasoning as a short note. A request without an output
+bound sends `max_tokens` 16,000 (`ProviderSpec::with_fallback_max_tokens`), since the
+API requires one. Usage counts cache reads and cache writes as input, and
+`Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop fails as an
+incomplete response, a `model_context_window_exceeded` stop or a "prompt is too long"
+`400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and

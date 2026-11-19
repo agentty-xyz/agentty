@@ -3,9 +3,10 @@
 
 use serde_json::{Value, json};
 
-use super::{AnthropicBackend, MessagesResponse, default_transport, reasoning_view, replayed_turn};
+use super::{AnthropicBackend, MessagesResponse, reasoning_view, replayed_turn};
 use crate::model::{GeneratedResponse, ModelError};
 use crate::provider_spec::{ProviderSpec, WireProtocol};
+use crate::stream::default_transport;
 use crate::tool::ToolCall;
 
 /// Decodes `response` through a backend with the default policy, reading a
@@ -21,6 +22,7 @@ fn decode(response: &Value, output_tool: bool) -> GeneratedResponse {
         "claude".to_string(),
         reqwest::header::HeaderMap::new(),
         default_transport(),
+        None,
         None,
     );
     let response = serde_json::from_value::<MessagesResponse>(response.clone())

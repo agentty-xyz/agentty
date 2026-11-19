@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use reqwest::header::{CONTENT_TYPE, HeaderMap};
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ use crate::provider_spec::{
     StructuredOutputMode, ThinkingOptions,
 };
 use crate::retry::RetryObserver;
-use crate::stream::{DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
+use crate::stream::{self, DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Chat Completions endpoint under a provider base URL.
@@ -449,12 +449,7 @@ impl<'spec> ChatCompletionBackend<'spec> {
         request: &ProviderRequest,
     ) -> Result<Option<ChatCompletion>, TransportError> {
         let mut response = self.http.send(request).await?;
-        let streamed = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.trim_start().starts_with("text/event-stream"));
-        if !streamed {
+        if !stream::is_event_stream(&response) {
             let response =
                 http::decode_success_body::<ChatCompletionResponse>(&mut response).await?;
 
@@ -667,6 +662,7 @@ impl ChunkStream {
             return Err(TransportError::StreamFailed {
                 code: error.code,
                 message: error.message,
+                status: None,
             });
         }
         self.id = self.id.take().or(chunk.id);

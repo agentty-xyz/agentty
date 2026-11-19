@@ -28,8 +28,9 @@ const STREAM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 pub enum ResponseDelta {
     /// Assistant text: the answer, or the text written beside tool calls.
     Text(String),
-    /// Provider reasoning text, such as a Responses reasoning summary or a
-    /// Chat Completions `reasoning_content`.
+    /// Provider reasoning text, such as a Responses reasoning summary, a
+    /// Chat Completions `reasoning_content`, or Anthropic thinking, whose
+    /// blocks are separated by a blank line.
     Reasoning(String),
     /// Arguments of one tool call, as JSON text that is incomplete until
     /// the call's last fragment.
@@ -47,8 +48,8 @@ pub enum ResponseDelta {
 /// arrives, such as a host that renders a model's answer while it is
 /// written.
 ///
-/// Only the Responses and Chat Completions protocols stream; an Anthropic
-/// Messages request reports no deltas.
+/// Every protocol streams: Responses, Chat Completions, and Anthropic
+/// Messages, whose signed thinking reports as [`ResponseDelta::Reasoning`].
 #[async_trait]
 pub trait DeltaObserver: Send + Sync {
     /// Reports `delta`; the stream is not read further until this call
@@ -73,6 +74,16 @@ static DEFAULT_TRANSPORT: LazyLock<Arc<HttpTransport>> = LazyLock::new(|| {
 /// Returns the shared production transport for streamed requests.
 pub(crate) fn default_transport() -> Arc<HttpTransport> {
     Arc::clone(&DEFAULT_TRANSPORT)
+}
+
+/// Returns whether `response` streams server-sent events, rather than the
+/// one JSON body of a server that ignored `stream`.
+pub(crate) fn is_event_stream(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim_start().starts_with("text/event-stream"))
 }
 
 /// Incremental reader of a server-sent event stream that returns the
