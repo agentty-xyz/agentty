@@ -177,35 +177,36 @@ fn model_catalog_applies_an_explicit_base_url_only_to_its_provider() {
         "KIMI_API_KEY" | "DASHSCOPE_API_KEY" => Ok("test-key".to_string()),
         _ => Err(env::VarError::NotPresent),
     };
-    let kimi = ModelProvider::Kimi.known_models()[0];
+    // Qwen has no built-in base URL, unlike Kimi.
+    let qwen = ModelProvider::Qwen.known_models()[0];
 
     let mut warnings = Vec::new();
 
     // Act
-    let with_kimi_url = model_catalog(
-        ModelProvider::Kimi,
-        Some("https://models.example/v1"),
-        &mut environment,
-        &mut warnings,
-    )
-    .expect("Kimi with a base URL should be cataloged");
     let with_qwen_url = model_catalog(
         ModelProvider::Qwen,
         Some("https://models.example/v1"),
         &mut environment,
         &mut warnings,
     )
-    .expect("Kimi without a base URL should be skipped");
+    .expect("Qwen with a base URL should be cataloged");
+    let with_kimi_url = model_catalog(
+        ModelProvider::Kimi,
+        Some("https://models.example/v1"),
+        &mut environment,
+        &mut warnings,
+    )
+    .expect("Qwen without a base URL should be skipped");
 
     // Assert
-    let kimi_id = ModelSelection {
-        model: kimi.to_string(),
-        provider: ModelProvider::Kimi,
+    let qwen_id = ModelSelection {
+        model: qwen.to_string(),
+        provider: ModelProvider::Qwen,
     }
     .id();
-    assert!(with_kimi_url.spec(&kimi_id).is_some());
-    assert!(with_qwen_url.spec(&kimi_id).is_none());
-    assert!(with_qwen_url.specs().next().is_some());
+    assert!(with_qwen_url.spec(&qwen_id).is_some());
+    assert!(with_kimi_url.spec(&qwen_id).is_none());
+    assert!(with_kimi_url.specs().next().is_some());
     assert_eq!(warnings, [] as [u8; 0]);
 }
 

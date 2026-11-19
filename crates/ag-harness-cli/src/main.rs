@@ -995,12 +995,7 @@ fn model_connector(
             .as_deref()
             .filter(|_| selection.provider == provider);
 
-        Ok(connect_model(
-            selection.provider,
-            &selection.model,
-            base_url,
-            environment,
-        )?)
+        connect_model(selection.provider, &selection.model, base_url, environment)
     }
 }
 
@@ -1009,13 +1004,15 @@ fn model_connector(
 /// else [`MODEL_PROFILE`].
 ///
 /// # Errors
-/// Returns the provider configuration the environment lacks or gets wrong.
+/// Returns the provider configuration the environment lacks or gets wrong,
+/// or [`CliError::ChatGptAuthFileLocation`] when no `ChatGPT` sign-in
+/// location is known.
 fn connect_model(
     provider: ModelProvider,
     model: &str,
     base_url: Option<&str>,
     environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
-) -> Result<(ag_harness::model::ModelClient, ModelProfile), ModelConfigurationError> {
+) -> Result<(ag_harness::model::ModelClient, ModelProfile), CliError> {
     let mut configuration = ModelConfiguration::new(provider, model);
     if let Some(base_url) = base_url {
         configuration = configuration.base_url(base_url);
