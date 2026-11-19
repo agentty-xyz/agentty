@@ -26,7 +26,7 @@ x86_64-unknown-linux-gnu = "ubuntu-22.04"
 #[test]
 fn plan_prints_json_on_stdout_and_fails_with_an_error_on_stderr() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let workspace = demo_workspace(DEMO_MANIFEST)?;
+    let workspace = demo_workspace(DEMO_MANIFEST, &["demo-app"])?;
 
     // Act
     let planned = ag_release(workspace.path(), &["plan", "--tag", "v0.1.0"]).output()?;

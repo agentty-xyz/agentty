@@ -29,7 +29,7 @@ rev = "0123456789abcdef0123456789abcdef01234567"
 fn workflow_writes_the_file_that_check_then_accepts_until_it_changes() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let workspace = demo_workspace(DEMO_MANIFEST)?;
+    let workspace = demo_workspace(DEMO_MANIFEST, &["demo-app"])?;
     let root = workspace.path();
     let path = root.join(".github/workflows/release.yml");
 
