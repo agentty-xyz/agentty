@@ -54,4 +54,6 @@ pub(crate) use sync::{
     push_current_branch_to_remote_branch, ref_hash, remote_branch_exists, run_pre_commit_hook,
     stage_all, tracked_worktree_status, worktree_status,
 };
-pub(crate) use worktree::{create_worktree, detect_git_info, find_git_repo_root, remove_worktree};
+pub(crate) use worktree::{
+    create_worktree, detect_git_info, find_git_repo_root, prune_worktrees, remove_worktree,
+};

@@ -1092,7 +1092,7 @@ impl SessionManager {
                     Arc::clone(&fs_client),
                     Arc::clone(&git_client),
                     source_branch.clone(),
-                    Some(repo_root),
+                    repo_root,
                 ),
                 SessionError::trace_outcome,
             )
@@ -2707,10 +2707,11 @@ impl SessionManager {
         }
     }
 
-    /// Removes a merged session worktree and deletes its source branch.
+    /// Removes a merged session worktree and deletes its source branch in
+    /// `repo_root` before the in-app merge marks the session `Done`.
     ///
-    /// When `repo_root` is not provided, this resolves the shared repository
-    /// root through `git rev-parse` via `GitClient`.
+    /// Unlike archived-session cleanup, this stops at the first Git failure
+    /// so the merge workflow can return the session to review.
     ///
     /// # Errors
     /// Returns an error if worktree or branch cleanup fails.
@@ -2719,18 +2720,10 @@ impl SessionManager {
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         source_branch: String,
-        repo_root: Option<PathBuf>,
+        repo_root: PathBuf,
     ) -> Result<(), SessionError> {
-        let repo_root = match repo_root {
-            Some(repo_root) => Some(repo_root),
-            None => git_client.main_repo_root(folder.clone()).await.ok(),
-        };
-
         git_client.remove_worktree(folder.clone()).await?;
-
-        if let Some(repo_root) = repo_root {
-            git_client.delete_branch(repo_root, source_branch).await?;
-        }
+        git_client.delete_branch(repo_root, source_branch).await?;
 
         if let Err(error) = fs_client.remove_dir_all(folder).await {
             warn!(

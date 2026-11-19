@@ -269,6 +269,9 @@ struct DeletedSessionCleanup {
     staged_draft_root: PathBuf,
     task_runtime_ids: Vec<String>,
     working_dir: PathBuf,
+    /// Lane held while the worktree is removed, so deletion never overlaps
+    /// another archived-session removal or the startup sweep.
+    worktree_cleanup_lane: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Askama view model for rendering one-shot title-generation prompts.
@@ -2071,6 +2074,7 @@ impl SessionManager {
             staged_draft_root,
             task_runtime_ids,
             working_dir: projects.working_dir().to_path_buf(),
+            worktree_cleanup_lane: services.worktree_cleanup_lane(),
         })
     }
 
@@ -2086,6 +2090,7 @@ impl SessionManager {
             None
         };
 
+        let worktree_cleanup_turn = cleanup.worktree_cleanup_lane.lock().await;
         let cleanup_errors = Self::cleanup_session_worktree_resources(
             fs_client.clone(),
             git_client,
@@ -2095,6 +2100,7 @@ impl SessionManager {
             cleanup.has_git_branch,
         )
         .await;
+        drop(worktree_cleanup_turn);
         Self::warn_cleanup_errors(&cleanup.session_id, &cleanup_errors);
         if fs_client.is_dir(cleanup.staged_draft_root.clone())
             && let Err(error) = fs_client.remove_dir_all(cleanup.staged_draft_root).await
@@ -3475,11 +3481,11 @@ impl SessionManager {
     /// after persisted status changes instead of waiting on git and filesystem
     /// removal.
     ///
-    /// The background task resolves the shared repository root only when a
-    /// worktree exists, waits for utility runtime cleanup, removes git
-    /// worktree/branch resources, then clears the
-    /// session-scoped prompt temp directory. Cleanup remains best-effort and
-    /// reports failures through debug-visible warnings.
+    /// The background task waits for utility runtime cleanup and, only when a
+    /// worktree exists, removes its directory, Git record, and branch while
+    /// holding the worktree cleanup lane. It then clears the session-scoped
+    /// prompt temp directory. Cleanup remains best-effort and reports
+    /// failures through debug-visible warnings.
     pub(super) fn spawn_canceled_session_cleanup(
         services: &AppServices,
         folder: PathBuf,
@@ -3489,6 +3495,7 @@ impl SessionManager {
     ) {
         let fs_client = services.fs_client();
         let git_client = services.git_client();
+        let worktree_cleanup_lane = services.worktree_cleanup_lane();
         let cleanup_services = services.clone();
         let cleanup_task_handle = spawn::spawn_detached(async move {
             cleanup_services
@@ -3509,13 +3516,13 @@ impl SessionManager {
                 }
             }
             if has_worktree {
-                let repo_root = git_client.main_repo_root(folder.clone()).await.ok();
+                let _worktree_cleanup_turn = worktree_cleanup_lane.lock().await;
                 let cleanup_errors = Self::cleanup_session_worktree_resources(
                     Arc::clone(&fs_client),
                     Arc::clone(&git_client),
                     folder,
                     branch_name,
-                    repo_root,
+                    None,
                     true,
                 )
                 .await;
@@ -3567,13 +3574,18 @@ impl SessionManager {
 
     /// Removes git and filesystem resources for one session worktree.
     ///
-    /// This best-effort helper is shared by terminal-state cleanup and session
-    /// deletion so both paths remove the linked worktree checkout, delete the
-    /// session branch when the shared repository root is known, and finally
-    /// remove the directory from disk. Any cleanup failures are returned as
-    /// human-readable messages so callers can surface them when needed.
+    /// This best-effort helper is shared by terminal-state cleanup, external
+    /// merge finalization, the startup sweep of archived sessions, session
+    /// deletion, and failed-setup rollback. It deletes the directory first
+    /// through the filesystem boundary, so a large ignored subtree such as a
+    /// build `target/` never depends on a time-bounded Git command. It then
+    /// prunes Git's record of the now-missing worktree and deletes the session
+    /// branch. When `repo_root` is `None`, the shared repository root is
+    /// resolved from the worktree before its directory is deleted. Every step
+    /// runs even when an earlier one fails; failures are returned as
+    /// human-readable messages so callers can report them once.
     #[must_use]
-    pub(super) async fn cleanup_session_worktree_resources(
+    pub(crate) async fn cleanup_session_worktree_resources(
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn git::GitClient>,
         folder: PathBuf,
@@ -3582,21 +3594,24 @@ impl SessionManager {
         remove_git_resources: bool,
     ) -> Vec<String> {
         let mut cleanup_errors = Vec::new();
-
-        if remove_git_resources {
-            if let Err(error) = git_client.remove_worktree(folder.clone()).await {
-                cleanup_errors.push(format!("failed to remove worktree: {error}"));
-            }
-
-            if let Some(repo_root) = repo_root
-                && let Err(error) = git_client.delete_branch(repo_root, branch_name).await
-            {
-                cleanup_errors.push(format!("failed to delete branch: {error}"));
-            }
-        }
+        let repo_root = match (remove_git_resources, repo_root) {
+            (false, _) => None,
+            (true, Some(repo_root)) => Some(repo_root),
+            (true, None) => git_client.main_repo_root(folder.clone()).await.ok(),
+        };
 
         if let Err(error) = fs_client.remove_dir_all(folder).await {
             cleanup_errors.push(format!("failed to remove worktree directory: {error}"));
+        }
+
+        if let Some(repo_root) = repo_root {
+            if let Err(error) = git_client.prune_worktrees(repo_root.clone()).await {
+                cleanup_errors.push(format!("failed to prune worktree record: {error}"));
+            }
+
+            if let Err(error) = git_client.delete_branch(repo_root, branch_name).await {
+                cleanup_errors.push(format!("failed to delete branch: {error}"));
+            }
         }
 
         cleanup_errors
