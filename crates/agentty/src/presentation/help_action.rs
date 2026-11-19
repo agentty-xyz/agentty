@@ -143,8 +143,6 @@ pub(crate) struct ViewHelpState {
     /// Whether this session can start sync work under the current stack
     /// consistency rules.
     pub(crate) can_rebase_session_branch: ViewActionAvailability,
-    /// Whether the current session has a diff available to inspect.
-    pub(crate) can_show_diff: ViewActionAvailability,
     /// Whether the current draft session has staged prompts and can launch.
     pub(crate) can_start_staged_session: ViewActionAvailability,
     /// Pull-request publish action available for the current session, when
@@ -167,7 +165,6 @@ struct ViewActionSet {
     open_prompt: ViewActionAvailability,
     open_worktree: ViewActionAvailability,
     rebase_session: ViewActionAvailability,
-    show_diff: ViewActionAvailability,
     show_review: ViewActionAvailability,
     stop_session: ViewActionAvailability,
 }
@@ -198,15 +195,6 @@ impl ViewActionSet {
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
         );
-        let can_show_diff = state.can_show_diff.is_enabled()
-            && (can_show_review
-                || matches!(
-                    state.session_state,
-                    ViewSessionState::InProgress
-                        | ViewSessionState::Merged
-                        | ViewSessionState::Done
-                        | ViewSessionState::Canceled
-                ));
 
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
@@ -221,7 +209,6 @@ impl ViewActionSet {
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
-            show_diff: ViewActionAvailability::from_bool(can_show_diff),
             show_review: ViewActionAvailability::from_bool(can_show_review),
             stop_session: ViewActionAvailability::from_bool(
                 state.session_state == ViewSessionState::InProgress,
@@ -371,9 +358,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     append_view_open_action(&mut actions, action_set);
 
-    if action_set.show_diff.is_enabled() {
-        actions.push(HelpAction::new("diff", "d", "Show diff"));
-    }
+    actions.push(HelpAction::new("diff", "d", "Show diff"));
 
     append_view_review_actions(&mut actions, state, action_set);
 

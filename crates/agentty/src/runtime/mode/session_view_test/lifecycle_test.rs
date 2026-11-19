@@ -291,7 +291,6 @@ async fn done_session_loads_archived_diff_without_worktree() {
     let session = &mut app.sessions.sessions_mut()[0];
     session.folder = PathBuf::from("missing-managed-worktree");
     session.status = Status::Done;
-    session.has_archived_diff = true;
     let context = ViewContext {
         scroll_offset: Some(0),
         session_id: session_id.into(),
@@ -299,8 +298,6 @@ async fn done_session_loads_archived_diff_without_worktree() {
     };
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
-    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app).await;
 
@@ -323,7 +320,7 @@ async fn done_session_loads_archived_diff_without_worktree() {
 
     // Assert
     assert!(missing_opened);
-    assert!(matches!(app.mode, AppMode::View { .. }));
+    assert!(matches!(app.mode, AppMode::Diff { ref diff, .. } if diff.is_empty()));
 }
 
 #[tokio::test]
@@ -336,7 +333,6 @@ async fn done_session_restores_view_after_archived_diff_load_failure() {
         .expect("failed to create session");
     let session = &mut app.sessions.sessions_mut()[0];
     session.status = Status::Done;
-    session.has_archived_diff = true;
     app.mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: Some(0),
@@ -349,8 +345,6 @@ async fn done_session_restores_view_after_archived_diff_load_failure() {
     pool.close().await;
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
-    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app)
         .with_subscriber(crate::test_support::TestSubscriber)
@@ -392,7 +386,6 @@ async fn canceled_session_loads_archived_diff_without_worktree() {
     let session = &mut app.sessions.sessions_mut()[0];
     session.folder = PathBuf::from("reclaimed-research-worktree");
     session.status = Status::Canceled;
-    session.has_archived_diff = true;
     let context = ViewContext {
         scroll_offset: Some(0),
         session_id: session_id.into(),
@@ -400,8 +393,6 @@ async fn canceled_session_loads_archived_diff_without_worktree() {
     };
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
-    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app).await;
 

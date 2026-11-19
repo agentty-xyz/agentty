@@ -21,9 +21,9 @@ use super::support::{
     expect_prompt_effects, install_mock_clipboard_image_client, install_mock_fs_client,
     install_mock_git_client, mode_focus, mode_input, new_test_draft_prompt_app,
     new_test_prompt_app, new_test_prompt_context, new_test_prompt_mode, press_prompt_key,
-    prompt_focus, reduce_prompt_code, reduce_prompt_event, reduce_test_prompt_key,
-    refresh_test_input_mode, run_prompt_cancel, run_prompt_slash_submit, run_prompt_submit,
-    session_replay_text, test_terminal,
+    reduce_prompt_code, reduce_prompt_event, reduce_test_prompt_key, refresh_test_input_mode,
+    run_prompt_cancel, run_prompt_slash_submit, run_prompt_submit, session_replay_text,
+    test_terminal,
 };
 use crate::app::AppEvent;
 use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate, PromptSessionMode};
@@ -529,7 +529,7 @@ fn test_d_key_in_chat_focus_opens_diff_with_prompt_snapshot() {
 }
 
 #[tokio::test]
-async fn test_d_key_in_chat_focus_keeps_prompt_when_diff_empty() {
+async fn test_d_key_in_chat_focus_opens_empty_diff_with_prompt_restore() {
     // Arrange — prompt mode with chat focused over an unchanged worktree.
     let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
     let mut mock_git_client = ag_git::MockGitClient::new();
@@ -544,11 +544,16 @@ async fn test_d_key_in_chat_focus_keeps_prompt_when_diff_empty() {
     press_prompt_key(&mut app, KeyCode::Char('d')).await;
     apply_next_session_diff(&mut app).await;
 
-    // Assert — no diff to show, so loading restores the composer with its
-    // draft intact and returns focus to the editable input.
-    assert_eq!(prompt_focus(&app), ChatFocus::Input);
-    let snapshot = take_prompt_snapshot(&mut app.mode).expect("expected AppMode::Prompt");
-    assert_eq!(snapshot.input.text(), "draft text");
+    // Assert — the empty diff opens and keeps the draft for restoration.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Diff {
+            diff,
+            restore: Some(restore),
+            ..
+        } if diff.is_empty()
+            && matches!(restore.as_ref(), DiffRestoreTarget::Prompt(snapshot) if snapshot.input.text() == "draft text")
+    ));
 }
 
 #[test]
