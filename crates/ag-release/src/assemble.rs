@@ -19,7 +19,7 @@ use crate::plan::ReleasePlan;
 use crate::process::ProcessCommand;
 use crate::shell_installer::ShellInstaller;
 use crate::tag::ReleaseTag;
-use crate::workspace::Workspace;
+use crate::workspace::{App, Workspace};
 use crate::{archive, artifact, checksum};
 
 /// Verifies the archives in `options.artifacts_dir` for the selected targets
@@ -42,7 +42,8 @@ pub(crate) fn run(
     let plan = ReleasePlan::new(&workspace, Some(&tag))?;
     let mtime = archive::modification_time(host.source_date_epoch.as_deref())?;
     let mut assembly = Assembly::verify(host, &options.artifacts_dir, &plan)?;
-    for app in &plan.apps {
+    // The plan lists the apps in the workspace's order.
+    for (workspace_app, app) in workspace.apps.iter().zip(&plan.apps) {
         if let Some(name) = &app.shell_installer {
             let script = ShellInstaller::render(&plan, app, &tag.name, &assembly.sha256)?;
             assembly.publish(name, script.as_bytes())?;
@@ -50,7 +51,7 @@ pub(crate) fn run(
         if let (Some(tarball), Some(name)) = (&app.npm_tarball, &app.npm_package) {
             let package = NpmPackage {
                 app,
-                documents: npm_documents(host, &workspace.root)?,
+                documents: npm_documents(host, &workspace, workspace_app)?,
                 name,
                 plan: &plan,
                 sha256: &assembly.sha256,
@@ -67,14 +68,18 @@ pub(crate) fn run(
     Host::report_written(stdout, &written)
 }
 
-/// Returns each of the npm package's documents that is a file in the
-/// workspace `root`, with its contents.
-fn npm_documents(host: &Host<'_>, root: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+/// Returns each of the npm package's documents that `app`'s package
+/// directory or the workspace root holds, with the contents of the file that
+/// [`Host::app_file`] resolves it to.
+fn npm_documents(
+    host: &Host<'_>,
+    workspace: &Workspace,
+    app: &App,
+) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     let mut documents = Vec::new();
     for name in npm_package::DOCUMENTS {
-        let path = root.join(name);
-        if host.is_file(&path)? {
-            documents.push((name, host.read_file(&path)?));
+        if let Some(source) = host.app_file(workspace, app, name)? {
+            documents.push((name, host.read_file(&source)?));
         }
     }
 

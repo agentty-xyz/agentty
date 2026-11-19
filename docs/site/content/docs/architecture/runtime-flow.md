@@ -243,6 +243,7 @@ work; it does not submit an empty reply.
 | `ChatGPT` plan sign-in              | Composer sign-in popup                    |
 | Project discovery                   | Accepted discovery suggestion             |
 | Worktree preparation and cleanup    | Session lifecycle                         |
+| Archived worktree sweep             | Startup                                   |
 | File indexing and image capture     | Composer interaction                      |
 | Full diff and Markdown preview      | Inspection request                        |
 | Process resource sampling           | Foreground ticks, rate-limited            |
@@ -276,7 +277,8 @@ never discards worktree changes to fit a prompt.
   force-with-lease. Review-request descriptions come from a read-only utility run over
   the published commits, preserving existing description content.
 - **Remote merge** marks `Merged`. A successful manual target sync persists archival
-  before cleanup.
+  before cleanup. A review request closed without merging cancels the session with the
+  same cleanup as an in-app cancel.
 - **Review-request watching** is opt-in per session. For sessions in `Watching`, forge
   refresh reports head commit, conflicts, checks, and unresolved threads from trusted
   bots configured in `.agentty/review-watch.json`. The reducer starts at most one
@@ -300,6 +302,17 @@ abandoned queued operations without dismissing pending clarification.
 Each Harness session keeps its durable history under `harness/<session id>/` in the
 Agentty root, outside the worktree; deleting, canceling, or rolling back the session
 removes it. See [`ag-harness` Design](@/docs/architecture/ag-harness-design.md).
+
+<a id="architecture-runtime-flow-worktree-cleanup"></a> Archiving a session as `Done` or
+`Canceled` removes its worktree in the background, after the status is saved; the in-app
+merge instead removes it before saving `Done` and returns to `Review` on failure.
+Cleanup deletes the directory first, without a Git time bound, then prunes Git's record
+of the worktree and deletes the session branch, attempting every step and reporting
+failures once. One lane serializes archived-session and deletion cleanups, so large
+removals never run concurrently. Startup captures the archived sessions before handling
+any event and sweeps their leftover folders in the background, rechecking each row under
+that lane; it skips any folder that a non-archived session also maps to, symbolic links,
+and directories without a session row.
 
 ## Headless execution ownership
 

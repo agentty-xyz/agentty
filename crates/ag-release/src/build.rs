@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::archive::{self, Archive, FileMode};
 use crate::cli::{BuildOptions, Host};
@@ -35,7 +35,11 @@ pub(crate) fn run(
     if let Some(profile) = &options.profile {
         workspace.config.profile.clone_from(profile);
     }
-    host.check_include(&workspace)?;
+    let includes = workspace
+        .apps
+        .iter()
+        .map(|app| host.include_files(&workspace, app))
+        .collect::<Result<Vec<_>, String>>()?;
     let mtime = archive::modification_time(host.source_date_epoch.as_deref())?;
     host.process
         .stream(&cargo_build(host.cargo.clone(), &workspace, target))?;
@@ -49,8 +53,8 @@ pub(crate) fn run(
         .join(target.triple())
         .join(profile_directory(&workspace.config.profile));
     let mut written = Vec::new();
-    for app in &workspace.apps {
-        let contents = app_archive(host, &workspace, app, target, &binary_dir)?.to_tar_gz(mtime)?;
+    for (app, includes) in workspace.apps.iter().zip(&includes) {
+        let contents = app_archive(host, app, includes, target, &binary_dir)?.to_tar_gz(mtime)?;
         let name = artifact::archive(&app.name, target);
         let checksum_name = artifact::checksum(&name);
         let checksum_line = checksum::line(&checksum::sha256(&contents), &name);
@@ -102,27 +106,22 @@ fn profile_directory(profile: &str) -> &str {
     }
 }
 
-/// Returns `app`'s archive: its binaries and the configured `include` files
-/// below the archive's top-level directory.
+/// Returns `app`'s archive below its top-level directory: its binaries and
+/// its `include` entries, each read from the source file it resolved to.
 fn app_archive(
     host: &Host<'_>,
-    workspace: &Workspace,
     app: &App,
+    includes: &[(&str, PathBuf)],
     target: Target,
     binary_dir: &Path,
 ) -> Result<Archive, String> {
     let mut archive = Archive::new(artifact::archive_directory(&app.name, target));
-    let binaries = app
-        .binaries
-        .iter()
-        .map(|binary| (binary, binary_dir.join(binary), FileMode::Executable));
-    let includes = workspace
-        .config
-        .include
-        .iter()
-        .map(|include| (include, workspace.root.join(include), FileMode::Regular));
-    for (archive_path, source, mode) in binaries.chain(includes) {
-        archive.add_file(archive_path, mode, host.read_file(&source)?)?;
+    for binary in &app.binaries {
+        let contents = host.read_file(&binary_dir.join(binary))?;
+        archive.add_file(binary, FileMode::Executable, contents)?;
+    }
+    for (include, source) in includes {
+        archive.add_file(include, FileMode::Regular, host.read_file(source)?)?;
     }
 
     Ok(archive)

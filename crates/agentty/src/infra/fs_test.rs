@@ -204,6 +204,27 @@ async fn test_real_fs_client_is_file_returns_true_only_for_regular_files() {
     assert!(!directory_exists);
 }
 
+/// Verifies `RealFsClient::is_symlink()` reports the link itself instead of
+/// the directory it points to.
+#[tokio::test]
+async fn test_real_fs_client_is_symlink_does_not_follow_links() {
+    // Arrange
+    let temp_dir = tempdir().expect("create temp dir");
+    let target = temp_dir.path().join("target");
+    let link = temp_dir.path().join("link");
+    std::fs::create_dir(&target).expect("create target");
+    std::os::unix::fs::symlink(&target, &link).expect("create link");
+    let fs_client = RealFsClient;
+
+    // Act
+    let link_is_symlink = fs_client.is_symlink(link);
+    let target_is_symlink = fs_client.is_symlink(target);
+
+    // Assert
+    assert!(link_is_symlink);
+    assert!(!target_is_symlink);
+}
+
 /// Verifies `RealFsClient::canonicalize()` resolves files to absolute
 /// paths through the async filesystem boundary.
 #[tokio::test]

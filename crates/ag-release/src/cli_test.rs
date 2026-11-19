@@ -7,10 +7,16 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use serde_json::Value;
 
-use crate::cli::{AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions};
+use crate::cli::{
+    AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions, WorkflowOptions,
+};
 use crate::file_system::MockFileSystem;
 use crate::process::MockProcessRunner;
-use crate::workspace::test_support::{BrokenPipe, demo_metadata, metadata_process};
+use crate::workspace::Workspace;
+use crate::workspace::test_support::{
+    BrokenPipe, MemoryFiles, demo_metadata, memory_file_system, memory_files, metadata_bytes,
+    metadata_process,
+};
 
 /// Returns a process runner that answers one `cargo metadata` call with the
 /// demo workspace.
@@ -37,18 +43,44 @@ fn plan_targets(tag: Option<&str>, targets: &[&str]) -> Command {
     })
 }
 
+/// Returns the demo workspace that [`demo_metadata`] describes.
+fn demo_workspace() -> Workspace {
+    Workspace::from_metadata(&metadata_bytes(&demo_metadata())).expect("demo workspace")
+}
+
+/// Returns the demo workspace's `README.md` and `LICENSE`, and a
+/// package-local `README.md` of `demo-tool`.
+fn demo_documents() -> MemoryFiles {
+    memory_files(&[
+        ("/workspace/demo/README.md", b"# demo\n"),
+        ("/workspace/demo/LICENSE", b"license\n"),
+        (
+            "/workspace/demo/crates/demo-tool/README.md",
+            b"# demo-tool\n",
+        ),
+    ])
+}
+
+/// Returns a host on `process` and `file_system`.
+fn host<'host>(
+    process: &'host MockProcessRunner,
+    file_system: &'host MockFileSystem,
+) -> Host<'host> {
+    Host {
+        cargo: OsString::from("cargo"),
+        file_system,
+        process,
+        source_date_epoch: None,
+    }
+}
+
 /// Runs `command` and returns its result with the captured output.
 fn run(
     command: &Command,
     process: &MockProcessRunner,
     file_system: &MockFileSystem,
 ) -> (Result<(), String>, String) {
-    let host = Host {
-        cargo: OsString::from("cargo"),
-        file_system,
-        process,
-        source_date_epoch: None,
-    };
+    let host = host(process, file_system);
     let mut stdout = Vec::new();
     let result = host.run(command, &mut stdout);
 
@@ -93,6 +125,8 @@ fn cli_parses_every_command() {
         ],
         vec!["ag-release", "notes", "--tag", "v1.2.3"],
         vec!["ag-release", "notes", "--tag", "v1.2.3", "--title"],
+        vec!["ag-release", "workflow"],
+        vec!["ag-release", "workflow", "--check"],
     ];
 
     // Act
@@ -109,6 +143,7 @@ fn cli_parses_every_command() {
             targets,
         }) => format!("assemble {tag} {} {targets:?}", artifacts_dir.display()),
         Command::Notes(NotesOptions { tag, title }) => format!("notes {tag} {title}"),
+        Command::Workflow(WorkflowOptions { check }) => format!("workflow {check}"),
     });
 
     // Assert
@@ -124,6 +159,8 @@ fn cli_parses_every_command() {
             "assemble v1.2.3 artifacts [\"a\"]",
             "notes v1.2.3 false",
             "notes v1.2.3 true",
+            "workflow false",
+            "workflow true",
         ]
     );
 }
@@ -157,14 +194,15 @@ fn report_written_prints_one_path_per_line_and_reports_write_failures() {
 fn plan_prints_the_plan_json_after_checking_include_files() {
     // Arrange
     let process = demo_process();
-    let mut file_system = MockFileSystem::new();
-    for name in ["README.md", "LICENSE"] {
-        file_system
-            .expect_is_file()
-            .withf(move |path| path == Path::new("/workspace/demo").join(name))
-            .once()
-            .returning(|_| Ok(true));
-    }
+    let files = memory_files(&[
+        ("/workspace/demo/README.md", b"# demo\n"),
+        ("/workspace/demo/crates/demo-app/LICENSE", b"app license\n"),
+        (
+            "/workspace/demo/crates/demo-tool/LICENSE",
+            b"tool license\n",
+        ),
+    ]);
+    let file_system = memory_file_system(&files);
 
     // Act
     let (result, stdout) = run(&plan(Some("v1.2.3")), &process, &file_system);
@@ -175,6 +213,102 @@ fn plan_prints_the_plan_json_after_checking_include_files() {
     let plan: Value = serde_json::from_str(&stdout).expect("plan JSON");
     assert_eq!(plan["tag"], "v1.2.3");
     assert_eq!(plan["apps"][0]["name"], "demo-app");
+    assert_eq!(plan["include"], serde_json::json!(["README.md", "LICENSE"]));
+}
+
+#[test]
+fn app_file_prefers_the_package_directory_over_the_workspace_root() {
+    // Arrange
+    let process = MockProcessRunner::new();
+    let files = demo_documents();
+    let file_system = memory_file_system(&files);
+    let host = host(&process, &file_system);
+    let workspace = demo_workspace();
+    let (demo_app, demo_tool) = (&workspace.apps[0], &workspace.apps[1]);
+
+    // Act
+    let app_readme = host.app_file(&workspace, demo_app, "README.md");
+    let tool_readme = host.app_file(&workspace, demo_tool, "README.md");
+    let tool_changelog = host.app_file(&workspace, demo_tool, "CHANGELOG.md");
+
+    // Assert
+    assert_eq!(
+        app_readme,
+        Ok(Some(PathBuf::from("/workspace/demo/README.md")))
+    );
+    assert_eq!(
+        tool_readme,
+        Ok(Some(PathBuf::from(
+            "/workspace/demo/crates/demo-tool/README.md"
+        )))
+    );
+    assert_eq!(tool_changelog, Ok(None));
+}
+
+#[test]
+fn include_files_resolve_every_entry_per_app_or_name_the_missing_one() {
+    // Arrange
+    let process = MockProcessRunner::new();
+    let files = demo_documents();
+    let file_system = memory_file_system(&files);
+    let host = host(&process, &file_system);
+    let workspace = demo_workspace();
+    let mut with_changelog = demo_workspace();
+    with_changelog
+        .config
+        .include
+        .push("CHANGELOG.md".to_string());
+
+    // Act
+    let tool = host.include_files(&workspace, &workspace.apps[1]);
+    let missing = host.include_files(&with_changelog, &with_changelog.apps[1]);
+
+    // Assert
+    assert_eq!(
+        tool,
+        Ok(vec![
+            (
+                "README.md",
+                PathBuf::from("/workspace/demo/crates/demo-tool/README.md")
+            ),
+            ("LICENSE", PathBuf::from("/workspace/demo/LICENSE")),
+        ])
+    );
+    assert_eq!(
+        missing,
+        Err(
+            "`workspace.metadata.release.include` entry `CHANGELOG.md` is not a file in the \
+             package directory of app `demo-tool` or in the workspace root"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn include_files_of_an_app_packaged_at_the_workspace_root_come_from_the_root() {
+    // Arrange
+    let process = MockProcessRunner::new();
+    let files = memory_files(&[("/workspace/demo/README.md", b"# demo\n")]);
+    let file_system = memory_file_system(&files);
+    let host = host(&process, &file_system);
+    let mut workspace = demo_workspace();
+    workspace.apps[0].package_directory = PathBuf::from("/workspace/demo");
+    let root_package = &workspace.apps[0];
+
+    // Act
+    let readme = host.app_file(&workspace, root_package, "README.md");
+    let includes = host.include_files(&workspace, root_package);
+
+    // Assert
+    assert_eq!(readme, Ok(Some(PathBuf::from("/workspace/demo/README.md"))));
+    assert_eq!(
+        includes,
+        Err(
+            "`workspace.metadata.release.include` entry `LICENSE` is not a file in the package \
+             directory of app `demo-app` or in the workspace root"
+                .to_string()
+        )
+    );
 }
 
 #[test]
@@ -230,13 +364,17 @@ fn plan_rejects_missing_or_unreadable_include_files() {
             (
                 Err(
                     "`workspace.metadata.release.include` entry `README.md` is not a file in the \
-                     workspace root"
+                     package directory of app `demo-app` or in the workspace root"
                         .to_string()
                 ),
                 String::new()
             ),
             (
-                Err("failed to inspect `/workspace/demo/README.md`: permission denied".to_string()),
+                Err(
+                    "failed to inspect `/workspace/demo/crates/demo-app/README.md`: permission \
+                     denied"
+                        .to_string()
+                ),
                 String::new()
             ),
         ]
@@ -278,12 +416,7 @@ fn plan_reports_output_write_failures() {
     // Arrange
     let process = demo_process();
     let file_system = file_system(|_| Ok(true));
-    let host = Host {
-        cargo: OsString::from("cargo"),
-        file_system: &file_system,
-        process: &process,
-        source_date_epoch: None,
-    };
+    let host = host(&process, &file_system);
 
     // Act
     let result = host.run(&plan(None), &mut BrokenPipe);

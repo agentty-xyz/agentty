@@ -350,6 +350,9 @@ pub(super) fn setup_mock_worktree_expectations(mock: &mut git::MockGitClient, re
                 Ok(())
             })
         });
+    mock.expect_prune_worktrees()
+        .times(0..)
+        .returning(|_| Box::pin(async { Ok(()) }));
     mock.expect_pull_rebase().times(0..).returning(|_| {
         Box::pin(async {
             Err(git::GitError::OutputParse(

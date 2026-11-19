@@ -153,6 +153,37 @@ x86_64-unknown-linux-gnu = "ubuntu-22.04"
 [workspace.metadata.release.apps.testty]
 npm-scope = "@agentty-xyz"
 
+# `ag-release workflow` generates `.github/workflows/release.yml` from these
+# settings; `ag-release` itself is built from this workspace.
+[workspace.metadata.release.workflow]
+node-version = "24.x"
+smoke-paths = [".github/workflows/publish-npm-oidc.yml"]
+
+# The dry run's install test: "" must install and run; other values are text
+# the installer's failure must contain.
+[workspace.metadata.release.workflow.distributions]
+"ubuntu:22.04" = ""
+"debian:stable-slim" = ""
+"fedora:45" = ""
+"ubuntu:20.04" = "needs glibc"
+"alpine:3.24" = "with musl libc"
+
+[workspace.metadata.release.workflow.jobs.release-checks]
+stage = "check"
+uses = "$/.github/workflows/release-checks.yml"
+permissions = { contents = "read" }
+
+[workspace.metadata.release.workflow.jobs.publish-npm]
+stage = "publish"
+uses = "$/.github/workflows/publish-npm-oidc.yml"
+permissions = { contents = "read", id-token = "write" }
+plan = true
+
+[workspace.metadata.release.workflow.jobs.publish-crates-io]
+stage = "publish"
+uses = "$/.github/workflows/publish-crates-io.yml"
+permissions = { contents = "read", id-token = "write" }
+
 [profile.dev]
 debug = "line-tables-only"
 

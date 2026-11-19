@@ -1,0 +1,13 @@
+[%- if job.permissions.is_empty() %]
+    permissions: {}
+[%- else %]
+    permissions:
+[%- for (name, level) in job.permissions %]
+      [= name =]: [= level =]
+[%- endfor %]
+[%- endif %]
+    uses: [= job.uses =]
+[%- if job.plan %]
+    with:
+      plan: ${{ needs.plan.outputs.plan }}
+[%- endif %]

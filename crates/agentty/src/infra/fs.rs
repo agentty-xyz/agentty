@@ -102,6 +102,10 @@ pub trait FsClient: Send + Sync {
 
     /// Returns whether `path` currently resolves to an existing regular file.
     fn is_file(&self, path: PathBuf) -> bool;
+
+    /// Returns whether the entry at `path` is itself a symbolic link, without
+    /// following it.
+    fn is_symlink(&self, path: PathBuf) -> bool;
 }
 
 /// Production [`FsClient`] implementation backed by real filesystem calls.
@@ -193,6 +197,10 @@ impl FsClient for RealFsClient {
 
     fn is_file(&self, path: PathBuf) -> bool {
         path.is_file()
+    }
+
+    fn is_symlink(&self, path: PathBuf) -> bool {
+        path.is_symlink()
     }
 }
 

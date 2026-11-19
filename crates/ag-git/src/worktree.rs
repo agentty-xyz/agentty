@@ -101,6 +101,28 @@ pub(crate) async fn remove_worktree(worktree_path: PathBuf) -> Result<(), GitErr
     Ok(())
 }
 
+/// Drops the administrative records of linked worktrees whose directories
+/// no longer exist in the repository at `repo_path`.
+///
+/// Runs `git worktree prune`, which never touches a working tree on disk and
+/// keeps locked worktrees, so callers can delete a worktree directory
+/// without a Git time bound and then reconcile Git's records.
+///
+/// # Errors
+/// Returns [`GitError::CommandTimedOut`] when pruning exceeds its runtime
+/// bound, or [`GitError::CommandFailed`] if spawning fails or the command
+/// exits with a non-zero status.
+pub(crate) async fn prune_worktrees(repo_path: PathBuf) -> Result<(), GitError> {
+    run_git_command(
+        repo_path,
+        vec!["worktree".to_string(), "prune".to_string()],
+        "Git worktree prune failed".to_string(),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// Returns branch information for a repository directory in synchronous code.
 pub(super) fn detect_git_info_sync(dir: &Path) -> Option<String> {
     let repo_dir = find_git_repo(dir)?;

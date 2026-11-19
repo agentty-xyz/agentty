@@ -152,58 +152,52 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
 }
 
 #[tokio::test]
-async fn test_cleanup_merged_session_worktree_without_repo_hint() {
-    // Arrange
-    let dir = tempdir().expect("failed to create temp dir");
-    let worktree_folder = dir.path().join("merged-worktree");
-    let branch_name = "wt/cleanup123";
-    std::fs::create_dir_all(&worktree_folder).expect("failed to create worktree folder");
-    assert!(
-        worktree_folder.exists(),
-        "worktree should exist before cleanup"
-    );
-    let repo_root = dir.path().to_path_buf();
-    let mut mock_git_client = git::MockGitClient::new();
-    mock_git_client
-        .expect_main_repo_root()
-        .times(1)
-        .returning(move |_| {
-            let repo_root = repo_root.clone();
-            Box::pin(async move { Ok(repo_root) })
-        });
-    mock_git_client
-        .expect_remove_worktree()
-        .times(1)
-        .returning(|worktree_path| {
-            Box::pin(async move {
-                let fs_client = create_passthrough_mock_fs_client();
-                let _ = fs_client.remove_dir_all(worktree_path).await;
+async fn test_cleanup_merged_session_worktree_removes_the_directory_git_leaves_behind() {
+    crate::test_support::enable_tracing_log_fallback();
+    for git_removes_directory in [true, false] {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let worktree_folder = dir.path().join("merged-worktree");
+        let branch_name = "wt/cleanup123";
+        std::fs::create_dir_all(&worktree_folder).expect("failed to create worktree folder");
+        let repo_root = dir.path().to_path_buf();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_remove_worktree()
+            .times(1)
+            .returning(move |worktree_path| {
+                Box::pin(async move {
+                    if git_removes_directory {
+                        let fs_client = create_passthrough_mock_fs_client();
+                        let _ = fs_client.remove_dir_all(worktree_path).await;
+                    }
 
-                Ok(())
-            })
-        });
-    mock_git_client
-        .expect_delete_branch()
-        .times(1)
-        .withf(|_, branch| branch == "wt/cleanup123")
-        .returning(|_, _| Box::pin(async { Ok(()) }));
+                    Ok(())
+                })
+            });
+        mock_git_client
+            .expect_delete_branch()
+            .times(1)
+            .withf(|_, branch| branch == "wt/cleanup123")
+            .returning(|_, _| Box::pin(async { Ok(()) }));
 
-    // Act
-    let result = SessionManager::cleanup_merged_session_worktree(
-        worktree_folder.clone(),
-        Arc::new(create_passthrough_mock_fs_client()),
-        Arc::new(mock_git_client),
-        branch_name.to_string(),
-        None,
-    )
-    .await;
+        // Act
+        let result = SessionManager::cleanup_merged_session_worktree(
+            worktree_folder.clone(),
+            Arc::new(create_passthrough_mock_fs_client()),
+            Arc::new(mock_git_client),
+            branch_name.to_string(),
+            repo_root,
+        )
+        .await;
 
-    // Assert
-    assert!(result.is_ok(), "cleanup should succeed: {:?}", result.err());
-    assert!(
-        !worktree_folder.exists(),
-        "worktree should be removed after cleanup"
-    );
+        // Assert
+        assert!(result.is_ok(), "cleanup should succeed: {:?}", result.err());
+        assert!(
+            !worktree_folder.exists(),
+            "worktree should be removed after cleanup"
+        );
+    }
 }
 
 #[test]

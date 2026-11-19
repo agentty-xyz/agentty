@@ -70,6 +70,7 @@ pub struct AppServices {
     session_update_versions: SessionUpdateVersionMap,
     session_worker_tasks: Arc<Mutex<Vec<(String, SessionWorkerTask)>>>,
     telemetry_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    worktree_cleanup_lane: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppServices {
@@ -146,6 +147,7 @@ impl AppServices {
             session_update_versions: Arc::default(),
             session_worker_tasks: Arc::default(),
             telemetry_task_handles: Arc::default(),
+            worktree_cleanup_lane: Arc::default(),
         }
     }
 
@@ -548,6 +550,17 @@ impl AppServices {
     /// Returns the shared forge review-request client.
     pub(crate) fn review_request_client(&self) -> Arc<dyn ReviewRequestClient> {
         Arc::clone(&self.review_request_client)
+    }
+
+    /// Returns the lane that serializes removal of archived and deleted
+    /// session worktrees.
+    ///
+    /// Holders remove one worktree at a time, so large deletions never slow
+    /// each other down and the startup sweep of archived sessions never
+    /// overlaps another removal. The lock is fair, so queued removals run in
+    /// the order they were requested.
+    pub(crate) fn worktree_cleanup_lane(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.worktree_cleanup_lane)
     }
 
     /// Returns the shared per-app session update version counters.

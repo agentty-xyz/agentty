@@ -60,6 +60,7 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
         license: Some("Apache-2.0".to_string()),
         name: name.to_string(),
         npm_scope: npm_scope.map(ToString::to_string),
+        package_directory: PathBuf::from(DEMO_ROOT).join("crates").join(name),
         repository: demo_repository(),
         version: version.clone(),
     };
@@ -77,7 +78,23 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
         workspace.target_directory,
         PathBuf::from(DEMO_ROOT).join("target")
     );
+    assert_eq!(workspace.tool_directory, None);
     assert_eq!(workspace.version, version);
+}
+
+#[test]
+fn from_metadata_finds_the_tool_package_directory() {
+    // Arrange
+    let metadata = demo_metadata_with("/packages/0/name", json!(env!("CARGO_PKG_NAME")));
+
+    // Act
+    let workspace = Workspace::from_metadata(&metadata).expect("workspace");
+
+    // Assert
+    assert_eq!(
+        workspace.tool_directory,
+        Some(PathBuf::from(DEMO_ROOT).join("crates/demo-lib"))
+    );
 }
 
 #[test]
@@ -121,6 +138,10 @@ fn from_metadata_rejects_invalid_apps() {
             demo_metadata_with("/packages/2/version", json!("1.2")),
             "app `demo-tool` has an invalid version: unexpected end of input while parsing \
              minor version number",
+        ),
+        (
+            demo_metadata_with("/packages/2/manifest_path", json!("/")),
+            "app `demo-tool` has manifest path `/` without a parent directory",
         ),
         (
             demo_metadata_with("/packages/2/version", json!("1.3.0")),
