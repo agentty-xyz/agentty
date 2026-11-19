@@ -74,6 +74,8 @@ npx agentty
 <details>
 <summary>Shell</summary>
 
+Shell installs also update automatically.
+
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
 ```

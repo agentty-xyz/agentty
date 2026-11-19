@@ -757,7 +757,7 @@ still awaits a restart: Agentty downloads the latest installer and reruns it for
 recorded install directory without changing `PATH`. The status bar shows progress and
 asks you to restart. Otherwise, or if the update fails, rerun your original installation
 command. Cargo, local, and `npx` installs always update manually. Shell installs of
-`v0.19.3` or earlier used an older installer: rerun the shell installer once to enable
+`v0.19.4` or earlier used an older installer: rerun the shell installer once to enable
 automatic updates. See [Installation](@/docs/getting-started/installation.md) for update
 commands.
 
