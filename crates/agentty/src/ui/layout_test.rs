@@ -59,7 +59,6 @@ fn view_help_text(session: &Session, can_open_worktree: bool) -> String {
         can_mutate_session_branch: ViewActionAvailability::Enabled,
         can_open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
         can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::from_bool(session.stats.should_show_diff()),
         reply_to_session: ViewActionAvailability::Enabled,
         can_start_staged_session: ViewActionAvailability::from_bool(
             session.can_start_staged_session(),
@@ -282,7 +281,7 @@ fn test_session_view_help_actions_in_progress_shows_stop_and_hides_open() {
 }
 
 #[test]
-fn test_session_view_help_actions_hides_known_empty_diff() {
+fn test_session_view_help_actions_show_diff_for_known_empty_diff() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Review;
@@ -292,7 +291,7 @@ fn test_session_view_help_actions_hides_known_empty_diff() {
     let help_text = view_help_text(&session, true);
 
     // Assert
-    assert!(!help_text.contains("d: diff"));
+    assert!(help_text.contains("d: diff"));
     assert!(help_text.contains("Enter: reply"));
 }
 
@@ -339,7 +338,7 @@ fn test_session_view_help_actions_new_session_shows_draft_and_start_actions() {
     assert!(help_text.contains("m: add to merge queue"));
     assert!(!help_text.contains("r: sync"));
     assert!(help_text.contains("/: commands menu"));
-    assert!(!help_text.contains("d: diff"));
+    assert!(help_text.contains("d: diff"));
 }
 
 #[test]
@@ -435,17 +434,11 @@ fn test_prompt_footer_line_shows_scroll_actions_while_chat_is_focused() {
     session.stats.diff_state = SessionDiffState::Empty;
 
     // Act
-    let unchanged_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat, false);
-    session.stats.diff_state = SessionDiffState::Present;
-    let changed_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat, false);
+    let footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat, false);
 
     // Assert
     assert_eq!(
-        unchanged_footer_line.to_string(),
-        "Tab: focus | j/k: scroll | q: sessions"
-    );
-    assert_eq!(
-        changed_footer_line.to_string(),
+        footer_line.to_string(),
         "Tab: focus | j/k: scroll | d: diff | q: sessions"
     );
 }
@@ -928,20 +921,14 @@ fn test_question_help_footer_line_switches_actions_by_focus() {
     // Arrange
 
     // Act
-    let unchanged_chat_focus_line =
-        question_help_footer_line(ChatFocus::Chat, false, false, QuestionLookupState::Closed);
-    let changed_chat_focus_line =
-        question_help_footer_line(ChatFocus::Chat, true, false, QuestionLookupState::Closed);
+    let chat_focus_line =
+        question_help_footer_line(ChatFocus::Chat, false, QuestionLookupState::Closed);
     let answer_focus_line =
-        question_help_footer_line(ChatFocus::Input, false, false, QuestionLookupState::Closed);
+        question_help_footer_line(ChatFocus::Input, false, QuestionLookupState::Closed);
 
     // Assert
     assert_eq!(
-        unchanged_chat_focus_line.to_string(),
-        "Tab: focus | j/k: scroll | q: sessions"
-    );
-    assert_eq!(
-        changed_chat_focus_line.to_string(),
+        chat_focus_line.to_string(),
         "Tab: focus | j/k: scroll | d: diff | q: sessions"
     );
     assert_eq!(
@@ -960,10 +947,9 @@ fn test_question_help_footer_line_shows_sessions_in_answer_focus_when_navigating
 
     // Act
     let answer_focus_with_options =
-        question_help_footer_line(ChatFocus::Input, false, true, QuestionLookupState::Closed)
-            .to_string();
+        question_help_footer_line(ChatFocus::Input, true, QuestionLookupState::Closed).to_string();
     let answer_focus_with_overlay =
-        question_help_footer_line(ChatFocus::Input, false, false, QuestionLookupState::Matches)
+        question_help_footer_line(ChatFocus::Input, false, QuestionLookupState::Matches)
             .to_string();
 
     // Assert

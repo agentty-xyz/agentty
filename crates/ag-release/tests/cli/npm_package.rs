@@ -443,7 +443,14 @@ fn proxy_variables_route_downloads_through_curl() -> Result<(), Box<dyn Error>> 
 
     // Act
     let mut without_curl = Vec::new();
-    for variable in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+    for variable in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "npm_config_https_proxy",
+        "npm_config_proxy",
+    ] {
         let output = sandbox
             .demo_app(&[])?
             .env(variable, "http://127.0.0.1:9")
@@ -455,6 +462,17 @@ fn proxy_variables_route_downloads_through_curl() -> Result<(), Box<dyn Error>> 
         .demo_app(&[])?
         .env("HTTPS_PROXY", "http://127.0.0.1:9")
         .output()?;
+    let standard_arguments = fs::read_to_string(sandbox.path("curl.log"))?;
+    let standard_binary = sandbox.installed_binary()?.is_file();
+    fs::remove_file(sandbox.installed_binary()?)?;
+    // npm's settings take precedence over the standard variables.
+    let with_npm_config = sandbox
+        .demo_app(&[])?
+        .env("npm_config_https_proxy", "http://127.0.0.1:8")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("npm_config_noproxy", "demo.invalid")
+        .output()?;
+    let npm_config_arguments = fs::read_to_string(sandbox.path("curl.log"))?;
 
     // Assert
     assert!(result(&installed).is_ok(), "{installed:?}");
@@ -465,11 +483,26 @@ fn proxy_variables_route_downloads_through_curl() -> Result<(), Box<dyn Error>> 
             "{variable}: {stderr}"
         );
     }
+    let source = format!("{}/{}\n", sandbox.download_url, host_archive());
     assert!(result(&with_curl).is_ok(), "{with_curl:?}");
-    let curl_arguments = fs::read_to_string(sandbox.path("curl.log"))?;
     assert!(
-        curl_arguments.ends_with(&format!("{}/{}\n", sandbox.download_url, host_archive())),
-        "{curl_arguments}"
+        standard_arguments.starts_with("--proxy\nhttp://127.0.0.1:9\n--fail\n"),
+        "{standard_arguments}"
+    );
+    assert!(
+        standard_arguments.ends_with(&source),
+        "{standard_arguments}"
+    );
+    assert!(standard_binary);
+    assert!(result(&with_npm_config).is_ok(), "{with_npm_config:?}");
+    assert!(
+        npm_config_arguments
+            .starts_with("--proxy\nhttp://127.0.0.1:8\n--noproxy\ndemo.invalid\n--fail\n"),
+        "{npm_config_arguments}"
+    );
+    assert!(
+        npm_config_arguments.ends_with(&source),
+        "{npm_config_arguments}"
     );
     assert!(sandbox.installed_binary()?.is_file());
 

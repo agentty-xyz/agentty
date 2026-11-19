@@ -109,7 +109,7 @@ async fn cancel_diff_view_load_restores_view_and_discards_completion() {
         session_id: session_id.clone(),
     };
     assert_eq!(loading_request_id(&app), None);
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
 
     // Act
@@ -134,14 +134,14 @@ async fn cancel_diff_view_load_restores_view_and_discards_completion() {
 }
 
 #[tokio::test]
-async fn empty_open_diff_completion_restores_view_scroll_offset() {
+async fn empty_open_diff_completion_opens_diff_mode() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
     app.mode = AppMode::View {
         scroll_offset: Some(7),
         session_id: session_id.clone(),
     };
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
 
     // Act
@@ -156,10 +156,11 @@ async fn empty_open_diff_completion_restores_view_scroll_offset() {
     assert!(app.pending_session_diff_requests.is_empty());
     assert!(matches!(
         app.mode,
-        AppMode::View {
-            session_id: ref viewed_session_id,
-            scroll_offset: Some(7),
-        } if viewed_session_id == &session_id
+        AppMode::Diff {
+            ref diff,
+            session_id: ref diff_session_id,
+            ..
+        } if diff == " \n\t" && diff_session_id == &session_id
     ));
 }
 
@@ -167,7 +168,7 @@ async fn empty_open_diff_completion_restores_view_scroll_offset() {
 async fn stale_open_diff_completion_keeps_newer_loading_generation() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
     let newer_request_id = request_id.saturating_add(1);
     app.mode = AppMode::DiffLoading {
@@ -201,7 +202,7 @@ async fn stale_open_diff_completion_keeps_newer_loading_generation() {
 async fn open_diff_completion_after_mode_change_is_discarded() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
     app.mode = AppMode::List;
 
@@ -223,7 +224,7 @@ async fn open_diff_completion_preserves_comment_focus() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
     attach_review_request(&mut app);
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Comments, true,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Comments));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
 
     // Act
@@ -260,7 +261,7 @@ async fn open_diff_failure_restores_prompt_snapshot() {
         session_id: session_id.clone(),
         slash_state: PromptSlashState::default(),
     });
-    assert!(app.start_diff_view_load(&session_id, Some(restore), DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, Some(restore), DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
 
     // Act
@@ -287,7 +288,7 @@ async fn open_diff_failure_restores_prompt_snapshot() {
 async fn mismatched_session_diff_completion_is_ignored() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
-    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
     let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
 
     // Act
@@ -310,8 +311,7 @@ async fn missing_session_cannot_start_diff_requests() {
     let missing_session_id = SessionId::from("missing-session");
 
     // Act
-    let diff_started =
-        app.start_diff_view_load(&missing_session_id, None, DiffSidebarFocus::Files, false);
+    let diff_started = app.start_diff_view_load(&missing_session_id, None, DiffSidebarFocus::Files);
     let apply_started =
         app.start_apply_review_diff_load(&missing_session_id, 1, "suggestion".to_string());
     let review_started = app.start_manual_review_diff_load(&missing_session_id);
@@ -1039,6 +1039,32 @@ async fn merging_session_diff_target_keeps_archived_fallback() {
             ref base_branch,
             ..
         } if base_branch == "main"
+    ));
+}
+
+#[tokio::test]
+async fn unstarted_session_diff_target_uses_worktree_only_once_available() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let mut session =
+        crate::test_support::session_fixture_with_folder(base_dir.path().to_path_buf());
+    session.status = Status::Draft;
+
+    // Act
+    let (_, unprepared_source) = app.session_diff_task_target(&session);
+    app.sessions
+        .set_session_worktree_available(session.id.as_str(), true);
+    let (folder, prepared_source) = app.session_diff_task_target(&session);
+
+    // Assert
+    assert!(matches!(unprepared_source, SessionDiffTaskSource::Empty));
+    assert_eq!(folder, base_dir.path());
+    assert!(matches!(
+        prepared_source,
+        SessionDiffTaskSource::Worktree {
+            archived_fallback: None,
+            ..
+        }
     ));
 }
 

@@ -284,12 +284,14 @@ let outcome = session
   index, and catalog model ID, assistant text, reasoning, tool calls with their
   arguments and results, per-request usage and cost, context reductions, and a
   successful run's committed `Output` item. `Completed` is always the last event, also
-  after a failure or cancellation; items still open then were interrupted. Delivery is
-  lossless: the run waits while the stream is full, so read it while awaiting the
-  outcome. Cancelling still resolves a run whose stream is full. Dropping the stream
-  discards events without stalling the run. Events carry session content, so never
-  export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`; the
-  schema is committed in `crates/ag-harness/schema/run_event.json`.
+  after a failure or cancellation; items still open then were interrupted. It follows
+  settlement, so the transcript then holds the terminal status of a run that emitted
+  `Started`, unless persistence cleanup failed. Delivery is lossless: the run waits
+  while the stream is full, so read it while awaiting the outcome. Cancelling still
+  resolves a run whose stream is full. Dropping the stream discards events without
+  stalling the run. Events carry session content, so never export them as telemetry.
+  Every type derives `serde` and `schemars::JsonSchema`; the schema is committed in
+  `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy
@@ -466,8 +468,8 @@ silently.
 
 ## Models
 
-`provider::Muse::from_env` builds the Muse client from environment variables. For any
-built-in provider selected at runtime, use `provider::ModelConfiguration`:
+For any built-in provider selected at runtime, use `provider::ModelConfiguration`, which
+reads the provider's key and endpoint through an injected environment lookup:
 
 ```rust
 use ag_harness::provider::{KIMI_K3, ModelConfiguration, ModelProvider};
@@ -505,10 +507,14 @@ let profile = match server.running_context_window("qwen3:latest").await? {
 .expect("OpenAI-compatible models declare their profile");
 ```
 
-Its requests carry only portable fields: the schema is stated in the prompt (with the
-`json_schema` response format when no tools are offered), reasoning is neither requested
-nor replayed, and no prompt cache key or image input is sent. The server must support
-tool calls.
+Its requests carry only portable fields plus the quirks local servers need: the schema
+is stated in the prompt (with the `json_schema` response format when no tools are
+offered), the output bound is sent as the legacy `max_tokens`, turn instructions join
+the preceding user message for chat templates that require alternating roles, reasoning
+is neither requested nor replayed, and no prompt cache key or image input is sent. The
+server must support tool calls. A server that supports more opts in through
+`ProviderSpec::openai_compatible(config)` and `ModelClient::from_spec`, such as
+`with_image_input(true)` for a vision model or `JsonSchema` structured output for vLLM.
 
 `ModelProvider::OpenAi` serves `OpenAI` models such as `GPT_6_1_SOL` through the
 Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
@@ -516,8 +522,10 @@ Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
 resends its history, encrypted reasoning from earlier responses is replayed verbatim,
 and output is constrained by a native JSON Schema format. `declared_profile` returns
 each cataloged model's documented window under the default estimator with a 50% margin,
-as it does for the Qwen flash models, and `None` for other models and the remaining
-Muse, Kimi, and Qwen models, whose hosts declare their own:
+as it does for the Qwen flash models. For the Muse and Kimi models it returns the
+documented window under an estimator fitted to the provider's reported tokens, and
+`None` for other models and the remaining Qwen models, whose hosts declare their own.
+Kimi defaults to `https://api.moonshot.ai/v1` (override with `KIMI_BASE_URL`):
 
 ```rust
 use ag_harness::provider::GPT_6_1_SOL;
@@ -531,21 +539,84 @@ let profile = ModelProvider::OpenAi
 
 `ModelProvider::ChatGpt` serves the same Responses API billed to the user's ChatGPT plan
 through OpenAI's "Sign in with ChatGPT". Instead of an API key it reads the sign-in
-stored at `chatgpt_auth_file` (`CHATGPT_AUTH_FILE`, else `auth/chatgpt.json` under
-`AGENTTY_ROOT` or `~/.agentty`), written by `ag-harness login chatgpt` or by a host
-through `ChatGptLogin`. `client_from_environment` fails with
+stored in a credential file the host chooses with `ModelConfiguration::auth_file`, else
+the one `CHATGPT_AUTH_FILE` names; the harness has no default location. A host writes it
+with `ChatGptSignIn::from_environment_with_auth_file(environment, auth_file)` or
+`ChatGptLogin`, and `ModelCatalog::from_environment_with_auth_file` catalogs its models
+from it. `chatgpt_auth_file_in(environment, data_dir)` locates the file under a host's
+data directory, so `ag-harness login chatgpt` and Agentty share
+`~/.agentty/auth/chatgpt.json`. `client_from_environment` fails with
 `ModelConfigurationError::SignIn` until the user signs in, and each request refreshes
 the one-hour access token shortly before it expires, serializing rotating refreshes
 across processes with a lock file. Its models report `openai_chatgpt` as their provider,
 so resumed sessions keep plan billing.
+
+### Custom providers
+
+`provider::ProviderSpec` describes any OpenAI-compatible Chat Completions or Responses
+provider as data, and `ModelClient::from_spec` serves one of its models without new
+code. A specification names its `WireProtocol`, base URL, `Auth` (none, a bearer key, a
+named header, or a refreshing `CredentialSource`), extra headers and query parameters,
+and request policy: structured-output mode, reasoning mapping, reasoning-text replay,
+output-bound field, image input, prompt cache key, and context-overflow markers. Its
+`ReasoningFamily` decides which recorded turns its models replay with their provider
+reasoning intact after a model switch; other turns replay their reasoning as short
+notes. `ProviderSpec::new` starts from the standard request for the protocol with no
+optional capabilities, bounding Chat Completions output with the current `OpenAI` field
+`max_completion_tokens`; a server that ignores it needs
+`with_max_tokens_field(Some(MaxTokensField::MaxTokens))`. Provider quirks, such as that
+legacy field or turn instructions joined to the preceding user message
+(`with_instruction_placement(InstructionPlacement::JoinPreviousUser)`), are opt-ins that
+each Chat Completions preset enables for its provider. Keys are literal values the host
+resolved, so the harness reads no environment variables for a specification. The
+built-in providers are presets of the same type, such as `ProviderSpec::kimi`, behind
+their family's `providers-*` feature, and the `ModelClient` constructors send exactly
+what their preset does. A preset serves its configured model under a policy tailored to
+it; a custom specification names its model with `ProviderSpec::for_model`:
+
+```rust
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{Auth, ProviderSpec, WireProtocol};
+
+let spec = ProviderSpec::new(
+    "azure_openai",
+    WireProtocol::Responses,
+    "https://example.openai.azure.com/openai/v1",
+)
+.with_auth(Auth::Header {
+    name: "api-key".to_string(),
+    value: std::env::var("AZURE_OPENAI_API_KEY")?,
+})
+.with_query("api-version", "preview")
+.for_model("gpt-6-luna");
+let model = ModelClient::from_spec(spec)?;
+```
+
+The provider name, here `azure_openai`, is what telemetry, persisted sessions, and
+provider errors record, and a built-in provider name keeps its built-in
+`ReasoningFamily` unless `ProviderSpec::with_reasoning_family` replaces it.
+`ModelClient::from_spec` runs `ProviderSpec::validate` and fails with
+`ProviderSpecError::Invalid`, naming the field, for a specification no request can be
+sent with: a base URL that is not an absolute `http(s)` URL without credentials or a
+query, a blank key, an invalid header or one the harness sets itself, a blank effort
+name or overflow marker, or an option its protocol cannot express. It fails with
+`ProviderSpecError::MissingModel` for a specification that names no model. Header and
+query values are sent as secrets: debug output and errors never print them, nor
+credentials or a query in the base URL, and requests follow no redirect.
+`ModelClient::from_spec` declares no context profile, even for a preset whose
+constructor, such as `ModelClient::kimi`, attaches the catalog's, so hosts set the
+budget explicitly.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and
 `ModelProvider::capabilities` its image, reasoning, native structured output, and tool
 support. `ModelProvider::cost_tier` derives each cataloged model's `CostTier` from those
 prices (`Cheap` up to $2.50 per million output tokens, `Premium` from $15, `Standard`
-between), with `Plan` for every ChatGPT plan model and `Local` for every
-OpenAI-compatible model, so a host can route simple tasks to a cheap model.
+between), with `Plan` for every ChatGPT plan model, so a host can route simple tasks to
+a cheap model. An OpenAI-compatible server's price depends on where it runs:
+`ModelProvider::cost_tier` returns `None` for it, as for an uncataloged model, and
+`ModelProvider::cost_tier_at(model, base_url)` returns `Local` for a local or
+private-network endpoint and `None` for a hosted one, such as OpenRouter.
 `ModelProvider::trains_on_prompts` flags tiers, such as `muse-spark-1.3-contributor`,
 that let the provider train on requests:
 
@@ -609,9 +680,10 @@ unpriced model reports no cost, so a selected summary model without prices leave
 runs it summarizes in unpriced. Each `ModelRequestCompleted` event and
 `ModelRequestActivity` names the cataloged model that answered it, with its own cost.
 
-Built-in clients call `ag-router` for provider transport and schema validation. Hosts
-can also use `ag-router` directly for structured chat calls without a harness. Implement
-the `model::Model` trait to bring any other provider into `ag-harness`.
+Built-in and specification-defined clients call `ag-router` for provider transport and
+schema validation. Hosts can also use `ag-router` directly for structured chat calls
+without a harness. Implement the `model::Model` trait to bring a provider whose wire
+protocol no `ProviderSpec` describes into `ag-harness`.
 
 `model::ModelRegistry` selects models by stable host keys with declared capabilities:
 
@@ -622,7 +694,8 @@ use ag_harness::recovery::ExecutionIdentity;
 let mut models = ModelRegistry::new();
 models.register(
     ExecutionIdentity::new("review-model", "config-v1")?,
-    Muse::from_env(MUSE_SPARK_1_3)?,
+    ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
+        .client_from_environment(|name| std::env::var(name))?,
     ModelCapabilities {
         image_input: true,
         tool_calls: true,
@@ -654,6 +727,22 @@ let harness = Harness::from_registry(&models, "review-model")?;
   every call, so its sources are sized by its raw estimator. The checkpoint records the
   model that wrote it. A switched session compacts and summarizes on its registered
   model.
+- `context_policy(ContextPolicy::auto_compact())` compacts automatically. By default
+  (`ContextPolicy::Evict`) history that outgrows the weight left for it is re-projected
+  and its oldest turns are evicted. With `auto_compact()` (90 percent) or
+  `auto_compact_at(threshold_percent)`, a turn whose uncovered history passes that share
+  first runs the same compaction on the summary model, leaving the newest turn
+  uncovered, and then admits the turn against the new checkpoint. If compaction fails or
+  history still does not fit, the turn evicts as before, and after a failure the
+  in-memory `Session` handle waits a growing number of turns before trying again; the
+  backoff is not stored, so keep a long-lived handle to benefit from it. A streamed run
+  reports each attempt as `RunEventKind::Compacted`, whose `CompactionOutcome` is
+  `Compacted`, `NothingToCover`, or `Failed`. Compaction requests lead the `TurnReport`
+  as `ModelRequestPurpose::Compaction`, belong to the turn's lifecycle turn, reserve
+  from the run's budget ledger, and count toward its limits and usage, even when the run
+  is cancelled during compaction. They may spend all but one of the run's model requests
+  and half its tokens; the ledger refusing a request, the wall-clock limit, or a store
+  failure fails the turn rather than the compaction.
 - Bump the registration revision whenever configuration or credentials scope changes.
   Never put secrets in it. A revised `ModelProfile` alone needs no new revision: it only
   shapes how new requests are fitted, while a new revision would strand stored sessions.
@@ -724,15 +813,16 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `providers-anthropic` | no      | Reserved for the Anthropic Messages client; enables nothing yet                           |
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
-Either provider feature builds the `provider` module, `ModelClient`, and
-`ModelCatalog::from_environment` with every provider's catalog entries.
-`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
-client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
-any credential is read, and `ModelCatalog::from_environment` skips it. Without
-`native-sandbox`, `BashConfig::new` is absent and Bash requires
-`BashConfig::for_executor`. Without `sqlite`, durable sessions require `Harness::store`.
-Features are additive: error enums whose variants depend on them are
-`#[non_exhaustive]`.
+Either provider feature builds the `provider` module, `ModelClient`, `ProviderSpec` with
+`ModelClient::from_spec` for both wire protocols, and `ModelCatalog::from_environment`
+with every provider's catalog entries; each `ProviderSpec` preset needs its family's
+feature. `ModelProvider::is_enabled` reports whether the build includes a provider's
+family; a client whose family is off fails with
+`ModelConfigurationError::ProviderDisabled` before any credential is read, and
+`ModelCatalog::from_environment` skips it. Without `native-sandbox`, `BashConfig::new`
+is absent and Bash requires `BashConfig::for_executor`. Without `sqlite`, durable
+sessions require `Harness::store`. Features are additive: error enums whose variants
+depend on them are `#[non_exhaustive]`.
 
 ## Where things live
 

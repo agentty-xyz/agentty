@@ -1511,7 +1511,7 @@
             "session",
             "turn"
           ],
-          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request. A run that fails before admission, such as one\nwhose session is busy, emits only [`Self::Completed`]."
+          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`]."
         },
         {
           "type": "object",
@@ -1614,6 +1614,20 @@
           "description": "The next model request is sent reduced to fit the context budget.\nCounts describe that whole request, so a reduction carried over from\nan earlier request is reported again."
         },
         {
+          "$ref": "#/$defs/CompactionReport",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "compacted"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests, each emitted as it completed. The\nturn's [`crate::turn::HistoryActivity`] counts what its first request\nstill evicted."
+        },
+        {
           "$ref": "#/$defs/RunSummary",
           "type": "object",
           "properties": {
@@ -1625,7 +1639,7 @@
           "required": [
             "type"
           ],
-          "description": "The run finished; always the last event."
+          "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn."
         }
       ],
       "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added."
@@ -1731,6 +1745,67 @@
       ],
       "description": "Content-free counts of how one provider request was reduced to fit the\ncontext budget.\n\nReduction applies only to the copy sent to the provider: canonical turn\nmessages, durable journals, and replayed history keep the original\ncontent. Counts describe the whole sent request, so a reduction carried\nover from an earlier request of the same turn is counted again. All counts\nare zero when the request was sent unchanged."
     },
+    "CompactionOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "compacted"
+            },
+            "covered_through": {
+              "$ref": "#/$defs/TurnIndex",
+              "description": "Newest turn the published checkpoint covers."
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Catalog identifier of the model that answered the compaction\nrequests, as their [`RunEventKind::ModelRequestCompleted`]\nevents name it; `None` for a model the host supplied directly.\nThe checkpoint itself records the provider's model metadata."
+            }
+          },
+          "required": [
+            "status",
+            "covered_through"
+          ],
+          "description": "A new checkpoint was published."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "nothing_to_cover"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "description": "The store held no uncovered turn to compact, for example because\nanother handle of the session published a checkpoint covering them\nfirst. No model request was sent and the turn replays the store's\ncheckpoint."
+        },
+        {
+          "$ref": "#/$defs/RunFailure",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "description": "Compaction failed, so the previous checkpoint stays and the turn\nfell back to eviction."
+        }
+      ],
+      "description": "How an automatic compaction attempt ended."
+    },
     "RunFailure": {
       "type": "object",
       "properties": {
@@ -1764,6 +1839,19 @@
         "retryable"
       ],
       "description": "A run's failure as plain data.\n\nOn the wire its `kind` is the [`ErrorKind::as_str`] name, and a\n[`ErrorKind::BudgetExhausted`] failure adds the reached `limit`."
+    },
+    "CompactionReport": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/CompactionOutcome",
+          "description": "Whether a checkpoint was published."
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "description": "What a compaction attempt did."
     },
     "RunSummary": {
       "type": "object",

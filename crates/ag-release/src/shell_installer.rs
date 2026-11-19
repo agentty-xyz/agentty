@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use askama::Template;
 use serde_json::json;
 
+use crate::artifact;
 use crate::config::GlibcVersion;
 use crate::plan::{AppPlan, ReleasePlan};
 use crate::target::Target;
@@ -27,6 +28,8 @@ pub(crate) struct ShellInstaller<'plan> {
     binaries: String,
     /// Release download URL used without `<APP>_DOWNLOAD_URL`.
     download_url: String,
+    /// File name of the installer as written in its usage.
+    installer: String,
     min_glibc: Option<GlibcVersion>,
     /// JSON values that the receipt embeds verbatim.
     receipt_binaries: String,
@@ -88,6 +91,7 @@ impl<'plan> ShellInstaller<'plan> {
                 .collect::<Vec<_>>()
                 .join(" "),
             download_url: Self::quote(&plan.download_url(tag)),
+            installer: artifact::shell_installer(&app.name),
             min_glibc: plan.min_glibc,
             receipt_binaries: Self::quote(&json!(app.binaries).to_string()),
             receipt_provider: Self::quote(

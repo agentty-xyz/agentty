@@ -319,18 +319,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// Returns whether the diff action has an available source for this status.
-    pub fn allows_diff_view(&self) -> bool {
-        if matches!(self.status, Status::Done | Status::Canceled) {
-            return self.has_archived_diff;
-        }
-        if self.status == Status::InProgress {
-            return self.stats.diff_state == SessionDiffState::Present;
-        }
-
-        self.status.allows_diff_view() && self.stats.should_show_diff()
-    }
-
     /// Returns the latest persisted user-prompt position for transient-message
     /// lifecycle binding.
     pub(crate) fn latest_user_prompt_position(&self) -> Option<i64> {

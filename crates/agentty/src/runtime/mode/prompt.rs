@@ -410,7 +410,7 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
             selected_agent,
         } => app.open_chatgpt_sign_in(selected_agent, restore),
         PromptEffect::OpenDiff { restore } => {
-            app.start_diff_view_load(session_id, restore, DiffSidebarFocus::Files, false);
+            app.start_diff_view_load(session_id, restore, DiffSidebarFocus::Files);
         }
         PromptEffect::PersistPermissionMode(permission_mode) => {
             persist_prompt_permission_mode(app, session_id, permission_mode).await;

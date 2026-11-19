@@ -5,11 +5,14 @@
 //! store conformance suite.
 
 use std::error::Error;
-use std::future::IntoFuture;
+use std::future::{IntoFuture, poll_fn};
 use std::num::NonZeroU32;
 #[cfg(feature = "sqlite")]
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Poll;
 
 use ag_harness::event::{Item, SessionId, ToolCallItem, ToolCallStatus, TurnIndex};
 use ag_harness::model::{
@@ -23,10 +26,11 @@ use ag_harness::store::{MemoryStore, SessionStore};
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::{TranscriptInput, TurnStatus};
 use ag_harness::{
-    ErrorKind, Harness, LimitKind, Model, ModelError, OutputMode, OutputSchema, RunLimits,
-    RunOutput, RunRequest, Session, TurnRange, TurnRecord,
+    ErrorKind, EventStream, Harness, LimitKind, Model, ModelError, OutputMode, OutputSchema,
+    RunEventKind, RunLimits, RunOutput, RunRequest, Session, TurnRange, TurnRecord,
 };
 use async_trait::async_trait;
+use futures_core::Stream;
 use serde_json::json;
 #[cfg(feature = "sqlite")]
 use tempfile::tempdir;
@@ -34,6 +38,7 @@ use tokio::sync::Notify;
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
+use crate::store_gate::Gate;
 
 /// Assistant text sent with every tool-call response.
 const CALL_TEXT: &str = "Reading";
@@ -160,6 +165,28 @@ async fn cancelled_run(
     );
 
     Ok(transcript?)
+}
+
+/// Reads `stream` through the first event whose kind `last` accepts,
+/// without waiting for the run's outcome, and returns the kinds read.
+async fn kinds_until(
+    stream: &mut EventStream,
+    last: impl Fn(&RunEventKind) -> bool,
+) -> Vec<RunEventKind> {
+    let mut kinds = Vec::new();
+    while let Some(event) = poll_fn(|context| Pin::new(&mut *stream).poll_next(context)).await {
+        let done = last(&event.kind);
+        kinds.push(event.kind);
+        if done {
+            break;
+        }
+    }
+
+    kinds
+}
+
+fn is_completed(kind: &RunEventKind) -> bool {
+    matches!(kind, RunEventKind::Completed(_))
 }
 
 fn text(text: &str) -> Vec<TranscriptInput> {
@@ -350,6 +377,88 @@ async fn transcript_records_completed_failed_and_interrupted_turns() -> Result<(
             }]
         );
         assert_recorded_usage(&session, &all).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_events_follow_the_settled_status_of_cancelled_turns()
+-> Result<(), Box<dyn Error>> {
+    for store in journaled_stores().await? {
+        // Arrange
+        let model = ScriptedModel::default();
+        let gate = Arc::new(Gate::new(store, true));
+        gate.pause_interrupt.store(true, Ordering::SeqCst);
+        let session = harness(&model, Arc::clone(&gate) as Arc<dyn SessionStore>)?
+            .session("settled", answer_schema()?)
+            .create()
+            .await?;
+        let (mut unadmitted, handle) = session.run(RunRequest::new("hang")).into_parts();
+        handle.cancel();
+        let unadmitted_outcome = tokio::spawn(handle.outcome());
+        let unadmitted_kinds = kinds_until(&mut unadmitted, is_completed).await;
+        let before_admission = session.transcript(TurnRange::All).await?;
+        let unadmitted_outcome = unadmitted_outcome.await?;
+        let (mut admitted, handle) = session.run(RunRequest::new("hang")).into_parts();
+        let cancel = handle.cancel_token();
+        let admitted_outcome = tokio::spawn(handle.outcome());
+        gate.entered.notified().await;
+        gate.release.notify_one();
+        let started = kinds_until(&mut admitted, |kind| {
+            matches!(kind, RunEventKind::Started { .. })
+        })
+        .await;
+
+        // Act
+        cancel.cancel();
+        gate.entered.notified().await;
+        let while_interrupting =
+            poll_fn(|context| Poll::Ready(Pin::new(&mut admitted).poll_next(context).is_pending()))
+                .await;
+        let before_settlement = session.transcript(TurnRange::All).await?;
+        gate.release.notify_one();
+        let admitted_kinds = kinds_until(&mut admitted, is_completed).await;
+        let after_admission = session.transcript(TurnRange::All).await?;
+
+        // Assert
+        assert!(matches!(
+            unadmitted_kinds.as_slice(),
+            [RunEventKind::Completed(_)]
+        ));
+        assert_eq!(
+            indices(&before_admission),
+            Vec::<u64>::new(),
+            "a run cancelled before admission records no turn"
+        );
+        assert_eq!(
+            unadmitted_outcome.result.err().map(|error| error.kind()),
+            Some(ErrorKind::Cancelled)
+        );
+        assert!(matches!(started.as_slice(), [RunEventKind::Started { .. }]));
+        assert!(
+            while_interrupting,
+            "`completed` waits for the interrupted status"
+        );
+        assert_eq!(indices(&before_settlement), Vec::<u64>::new());
+        assert!(matches!(
+            admitted_kinds.as_slice(),
+            [RunEventKind::Completed(_)]
+        ));
+        let statuses: Vec<_> = after_admission.iter().map(|record| record.status).collect();
+        assert_eq!(
+            statuses,
+            [TurnStatus::Interrupted],
+            "the turn is settled once `completed` arrives"
+        );
+        assert_eq!(
+            admitted_outcome
+                .await?
+                .result
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::Cancelled)
+        );
     }
 
     Ok(())

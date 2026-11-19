@@ -1,9 +1,8 @@
-//! Responses API event-stream parsing, bounds, reasoning replay, and endpoint
-//! tests.
+//! Responses API event-stream parsing, bounds, and reasoning replay tests.
 
 use serde_json::json;
 
-use super::{EventStream, ReasoningView, endpoint, reasoning_view, replayed_reasoning};
+use super::{EventStream, ReasoningView, reasoning_view, replayed_reasoning};
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
 
 #[test]
@@ -163,13 +162,4 @@ fn reasoning_view_reads_summaries_of_exactly_the_replayed_items() {
     assert_eq!(reasoning_view(&mixed), ReasoningView::Text(&mixed));
     assert_eq!(reasoning_view("[]"), ReasoningView::Text("[]"));
     assert_eq!(reasoning_view("plain"), ReasoningView::Text("plain"));
-}
-
-#[test]
-fn appends_the_responses_path_to_the_base_url() {
-    // Arrange / Act / Assert
-    assert_eq!(
-        endpoint("https://api.openai.com/v1/"),
-        "https://api.openai.com/v1/responses"
-    );
 }

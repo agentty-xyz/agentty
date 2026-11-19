@@ -468,16 +468,18 @@ fn environment_catalogs_configured_providers_with_default_roles() {
             "qwen/qwen3.8-max",
         ]
     );
+    // Kimi declares its profiles, so its models take their roles.
     assert_eq!(
         ids(catalog.candidates(&Role::SMART)),
-        ["openai/gpt-6.1-sol"]
+        ["openai/gpt-6.1-sol", "kimi/kimi-k3"]
     );
     assert_eq!(
         ids(catalog.candidates(&Role::CHEAP)),
         [
             "openai/gpt-6-luna",
             "qwen/qwen3.8-flash",
-            "qwen/qwen3.7-flash"
+            "qwen/qwen3.7-flash",
+            "kimi/kimi-k2.6"
         ]
     );
     assert_eq!(
@@ -490,7 +492,7 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
     assert_eq!(
         ids(catalog.candidates(&Role::VISION)),
-        ["openai/gpt-6.1-sol"]
+        ["openai/gpt-6.1-sol", "kimi/kimi-k3"]
     );
     for role in [Role::SMART, Role::CHEAP, Role::FAST, Role::VISION] {
         for id in catalog.candidates(&role) {
@@ -518,13 +520,42 @@ fn environment_catalogs_configured_providers_with_default_roles() {
 #[test]
 fn environment_skips_a_provider_whose_required_base_url_is_absent() {
     // Arrange
-    let environment = lookup(&[("KIMI_API_KEY", "kimi-key")]);
+    let environment = lookup(&[("DASHSCOPE_API_KEY", "qwen-key")]);
 
     // Act
     let catalog = ModelCatalog::from_environment_with(environment).expect("valid environment");
 
     // Assert
     assert_eq!(catalog.specs().count(), 0);
+}
+
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn environment_reads_a_chatgpt_sign_in_at_a_host_chosen_path() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory.path().join("host/chatgpt.json");
+    std::fs::create_dir_all(auth_file.parent().expect("host directory")).expect("directory");
+    save_chatgpt_sign_in(&auth_file);
+    let environment = lookup(&[("MODEL_API_KEY", "muse-key")]);
+
+    // Act
+    let unset = ModelCatalog::from_environment_with_auth_file(
+        lookup(&[("MODEL_API_KEY", "muse-key")]),
+        None,
+    )
+    .expect("valid environment");
+    let injected = ModelCatalog::from_environment_with_auth_file(environment, Some(&auth_file))
+        .expect("valid environment");
+
+    // Assert
+    // Without the path the plan-billed models are skipped; with it they
+    // stay the first candidates.
+    assert_eq!(ids(unset.candidates(&Role::SMART)), ["muse/muse-spark-1.3"]);
+    assert_eq!(
+        ids(injected.candidates(&Role::SMART)),
+        ["chatgpt/gpt-6.1-sol", "muse/muse-spark-1.3"]
+    );
 }
 
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
@@ -547,7 +578,7 @@ fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     assert_eq!(catalog.specs().count(), 9);
     assert_eq!(
         ids(catalog.candidates(&Role::SMART)),
-        ["chatgpt/gpt-6.1-sol"]
+        ["chatgpt/gpt-6.1-sol", "muse/muse-spark-1.3"]
     );
     assert_eq!(
         ids(catalog.candidates(&Role::CHEAP)),

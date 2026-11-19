@@ -232,6 +232,11 @@ impl TurnControl {
         self.lock_record().report = Some(report.clone());
     }
 
+    /// Returns a copy of the report recorded so far, if any.
+    pub(crate) fn report(&self) -> Option<TurnReport> {
+        self.lock_record().report.clone()
+    }
+
     /// Takes what the turn recorded for its run outcome.
     pub(crate) fn take_record(&self) -> TurnRecord {
         std::mem::take(&mut *self.lock_record())

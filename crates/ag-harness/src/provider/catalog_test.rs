@@ -12,7 +12,7 @@ use super::{
 use crate::catalog::{Capabilities, ModelId, PricingSource};
 use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::input::TurnInput;
-use crate::model::{Model, ModelMetadataError, ModelProfile};
+use crate::model::{HeuristicContextEstimator, Model, ModelMetadataError, ModelProfile};
 
 /// Returns every cataloged provider and model pair.
 fn cataloged_models() -> Vec<(ModelProvider, &'static str)> {
@@ -115,7 +115,10 @@ fn catalog_exposes_every_provider_and_known_model() {
         ModelProvider::Muse.default_base_url(),
         Some("https://api.meta.ai/v1")
     );
-    assert_eq!(ModelProvider::Kimi.default_base_url(), None);
+    assert_eq!(
+        ModelProvider::Kimi.default_base_url(),
+        Some("https://api.moonshot.ai/v1")
+    );
     assert_eq!(ModelProvider::Qwen.default_base_url(), None);
 }
 
@@ -263,15 +266,27 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
                 .expect("cataloged models read no environment")
         })
         .collect::<Vec<_>>();
-    let host_profiled = [
-        ModelProvider::Muse,
-        ModelProvider::Kimi,
-        ModelProvider::Qwen,
+    let fitted = [
+        (ModelProvider::Muse, muse::MUSE_SPARK_1_3, 1_048_576),
+        (
+            ModelProvider::Muse,
+            muse::MUSE_SPARK_1_3_CONTRIBUTOR,
+            1_048_576,
+        ),
+        (ModelProvider::Kimi, kimi::KIMI_K3, 1_048_576),
+        (ModelProvider::Kimi, kimi::KIMI_K2_6, 262_144),
     ]
-    .iter()
-    .map(|provider| provider.declared_profile(provider.known_models()[0], missing_environment))
-    .collect::<Result<Vec<_>, _>>()
-    .expect("host-profiled providers read no profile");
+    .map(|(provider, model, window)| {
+        let profile = provider
+            .declared_profile(model, missing_environment)
+            .expect("cataloged models read no environment")
+            .expect("Kimi and Muse declare a profile");
+
+        (profile, window)
+    });
+    let host_profiled = ModelProvider::Qwen
+        .declared_profile(qwen::QWEN3_8_MAX, missing_environment)
+        .expect("host-profiled models read no environment");
 
     // Assert
     assert_eq!(
@@ -280,7 +295,12 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
     );
     assert!(openai.iter().all(Option::is_some));
     assert_eq!(unlisted, None);
-    assert!(host_profiled.iter().all(Option::is_none));
+    assert_eq!(host_profiled, None);
+    for (profile, window) in fitted {
+        assert_eq!(profile.context_window_tokens(), window);
+        // Fitted estimators replace the default one.
+        assert_ne!(profile.estimator(), HeuristicContextEstimator::DEFAULT);
+    }
     for profile in qwen_flash {
         let profile = profile.expect("Qwen flash models declare a profile");
         assert_eq!(profile.context_window_tokens(), 1_000_000);
@@ -329,10 +349,70 @@ fn declares_a_cost_tier_for_every_cataloged_model() {
     );
     assert_eq!(
         ModelProvider::OpenAiCompatible.cost_tier("qwen3:latest"),
-        Some(CostTier::Local)
+        None
     );
     assert_eq!(ModelProvider::Qwen.cost_tier("qwen-unlisted"), None);
     assert_eq!(ModelProvider::Kimi.cost_tier(muse::MUSE_SPARK_1_3), None);
+}
+
+#[test]
+fn openai_compatible_servers_are_local_only_at_local_or_private_endpoints() {
+    // Arrange
+    let local = [
+        "http://127.0.0.1:11434/v1",
+        "http://LOCALHOST:8080/v1",
+        "http://llm.localhost/v1",
+        "http://0.0.0.0:8000/v1",
+        "http://10.0.0.5/v1",
+        "http://172.16.1.2/v1",
+        "http://192.168.1.20:1234/v1",
+        "http://169.254.1.1/v1",
+        "http://[::1]:11434/v1",
+        "http://[::]:8000/v1",
+        "http://[fd12::1]/v1",
+        "http://[fe80::1]/v1",
+        "http://localhost.:11434/v1",
+        "http://ollama:11434/v1",
+        "http://gpu-box.local:8000/v1",
+        "http://host.docker.internal:11434/v1",
+        "http://100.64.0.1/v1",
+        "http://100.127.255.254/v1",
+        "http://[::ffff:127.0.0.1]:11434/v1",
+        "http://[::ffff:192.168.1.20]/v1",
+    ];
+    let hosted = [
+        "https://openrouter.ai/api/v1",
+        "https://api.together.xyz/v1",
+        "https://openrouter.ai./api/v1",
+        "http://8.8.8.8/v1",
+        "http://100.63.255.255/v1",
+        "http://100.128.0.1/v1",
+        "http://[::ffff:8.8.8.8]/v1",
+        "http://[2001:db8::1]/v1",
+        "not a url",
+        "file:///tmp/socket",
+    ];
+
+    // Act / Assert
+    for base_url in local {
+        assert_eq!(
+            ModelProvider::OpenAiCompatible.cost_tier_at("qwen3:latest", base_url),
+            Some(CostTier::Local),
+            "{base_url}"
+        );
+    }
+    for base_url in hosted {
+        assert_eq!(
+            ModelProvider::OpenAiCompatible.cost_tier_at("qwen3:latest", base_url),
+            None,
+            "{base_url}"
+        );
+    }
+    // Other providers bill the same at any endpoint.
+    assert_eq!(
+        ModelProvider::Kimi.cost_tier_at(kimi::KIMI_K3, "http://127.0.0.1/v1"),
+        Some(CostTier::Premium)
+    );
 }
 
 #[test]
@@ -419,8 +499,12 @@ fn chatgpt_configuration_requires_a_stored_sign_in() {
         .expect("a stored sign-in should configure a client");
     let unlocated = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
         .client_from_environment(missing_environment);
+    let injected = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
+        .auth_file(&auth_file)
+        .client_from_environment(missing_environment);
 
     // Assert
+    assert!(injected.is_ok(), "{:?}", injected.err());
     assert!(matches!(
         missing,
         Err(ModelConfigurationError::SignIn(
@@ -519,12 +603,77 @@ fn configuration_uses_default_and_explicit_base_urls() {
 }
 
 #[test]
+fn configuration_treats_a_blank_base_url_variable_as_unset() {
+    // Arrange
+    let blank_base_url = |name: &str| match name {
+        kimi::KIMI_API_KEY_ENV | qwen::DASHSCOPE_API_KEY_ENV => Ok("test-key".to_string()),
+        _ => Ok("  ".to_string()),
+    };
+
+    // Act
+    let kimi = ModelConfiguration::new(ModelProvider::Kimi, kimi::KIMI_K3)
+        .client_from_environment(blank_base_url);
+    let qwen = ModelConfiguration::new(ModelProvider::Qwen, qwen::QWEN_PLUS)
+        .client_from_environment(blank_base_url);
+
+    // Assert
+    // Kimi falls back to its default endpoint, as when the variable is
+    // unset; Qwen, without a default, still asks for it.
+    assert!(kimi.is_ok(), "{:?}", kimi.err());
+    assert!(matches!(
+        qwen.err(),
+        Some(ModelConfigurationError::BaseUrl {
+            name: qwen::DASHSCOPE_BASE_URL_ENV
+        })
+    ));
+}
+
+#[test]
+fn openai_compatible_servers_declare_no_catalog_limits() {
+    // Arrange / Act
+    let limits = ModelProvider::OpenAiCompatible.declared_limits("qwen3:latest");
+
+    // Assert
+    assert_eq!(limits, (None, None));
+}
+
+#[test]
 fn configuration_requires_non_default_base_url() {
+    // Arrange
+    let configuration = ModelConfiguration::new(ModelProvider::Qwen, qwen::QWEN_PLUS);
+
+    // Act
+    let error = configuration
+        .client_from_environment(|name| {
+            if name == qwen::DASHSCOPE_API_KEY_ENV {
+                Ok("test-key".to_string())
+            } else {
+                Err(env::VarError::NotPresent)
+            }
+        })
+        .err()
+        .expect("Qwen without an endpoint should be rejected");
+
+    // Assert
+    assert!(matches!(
+        error,
+        ModelConfigurationError::BaseUrl {
+            name: qwen::DASHSCOPE_BASE_URL_ENV
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "no explicit base URL was provided and DASHSCOPE_BASE_URL is unavailable"
+    );
+}
+
+#[test]
+fn kimi_defaults_to_moonshot_ai_and_declares_its_profile() {
     // Arrange
     let configuration = ModelConfiguration::new(ModelProvider::Kimi, kimi::KIMI_K2_6);
 
     // Act
-    let error = configuration
+    let client = configuration
         .client_from_environment(|name| {
             if name == kimi::KIMI_API_KEY_ENV {
                 Ok("test-key".to_string())
@@ -532,19 +681,13 @@ fn configuration_requires_non_default_base_url() {
                 Err(env::VarError::NotPresent)
             }
         })
-        .err()
-        .expect("Kimi without an endpoint should be rejected");
+        .expect("Kimi defaults to Moonshot AI's endpoint");
 
     // Assert
-    assert!(matches!(
-        error,
-        ModelConfigurationError::BaseUrl {
-            name: kimi::KIMI_BASE_URL_ENV
-        }
-    ));
+    assert_eq!(client.metadata().provider(), "moonshot_ai");
     assert_eq!(
-        error.to_string(),
-        "no explicit base URL was provided and KIMI_BASE_URL is unavailable"
+        client.profile().map(ModelProfile::context_window_tokens),
+        Some(262_144)
     );
 }
 
@@ -810,8 +953,8 @@ fn model_specs_carry_cataloged_profiles_limits_and_prices() {
     assert!(!flash.capabilities().structured_output());
     assert_eq!(max.profile(), None);
     assert_eq!(max.max_output(), None);
-    assert_eq!(kimi.profile(), None);
-    assert_eq!(kimi.max_output(), None);
+    assert_eq!(kimi.context_window(), Some(1_048_576));
+    assert_eq!(kimi.max_output(), Some(131_072));
     assert!(kimi.pricing().is_some());
     assert_eq!(luna.max_concurrency(), None);
     assert_eq!(
@@ -823,7 +966,7 @@ fn model_specs_carry_cataloged_profiles_limits_and_prices() {
         ModelProvider::Muse
             .model_spec(muse::MUSE_SPARK_1_3_CONTRIBUTOR)
             .map(|spec| spec.max_output()),
-        Some(None)
+        Some(Some(131_072))
     );
 }
 

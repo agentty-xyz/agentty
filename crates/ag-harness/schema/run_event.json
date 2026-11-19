@@ -36,7 +36,7 @@
       "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added.",
       "oneOf": [
         {
-          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request. A run that fails before admission, such as one\nwhose session is busy, emits only [`Self::Completed`].",
+          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request, or the compaction requests that precede it (see\n[`Self::Compacted`]). A run that fails before admission, such as\none whose session is busy, emits only [`Self::Completed`].",
           "type": "object",
           "properties": {
             "type": {
@@ -170,7 +170,21 @@
           ]
         },
         {
-          "description": "The run finished; always the last event.",
+          "description": "Under [`crate::model::ContextPolicy::AutoCompact`], the session tried\nto compact earlier turns before the run's first turn request. It\nfollows [`Self::Started`] and the [`Self::ModelRequestCompleted`]\nevents of the compaction requests, each emitted as it completed. The\nturn's [`crate::turn::HistoryActivity`] counts what its first request\nstill evicted.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "compacted"
+            }
+          },
+          "$ref": "#/$defs/CompactionReport",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The run finished; always the last event. It follows the run's\nsettlement, so once it arrives the session transcript holds the\nturn of a run that emitted [`Self::Started`] with its terminal\nstatus, unless persistence cleanup failed (see\n[`crate::RunOutcome::settlement`]). A run that stopped before\n[`Self::Started`] may have recorded no turn.",
           "type": "object",
           "properties": {
             "type": {
@@ -567,38 +581,65 @@
         "truncated_results"
       ]
     },
-    "RunFailure": {
-      "description": "A run's failure as plain data.\n\nOn the wire its `kind` is the [`ErrorKind::as_str`] name, and a\n[`ErrorKind::BudgetExhausted`] failure adds the reached `limit`.",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "description": "Failure classification; `cancelled` for a cancelled run.",
-          "$ref": "#/$defs/ErrorKind"
-        },
-        "limit": {
-          "description": "The run limit a `budget_exhausted` failure reached.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LimitKind"
+    "CompactionOutcome": {
+      "description": "How an automatic compaction attempt ended.",
+      "oneOf": [
+        {
+          "description": "A new checkpoint was published.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "compacted"
             },
-            {
-              "type": "null"
+            "covered_through": {
+              "description": "Newest turn the published checkpoint covers.",
+              "$ref": "#/$defs/TurnIndex"
+            },
+            "model": {
+              "description": "Catalog identifier of the model that answered the compaction\nrequests, as their [`RunEventKind::ModelRequestCompleted`]\nevents name it; `None` for a model the host supplied directly.\nThe checkpoint itself records the provider's model metadata.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
+          },
+          "required": [
+            "status",
+            "covered_through"
           ]
         },
-        "message": {
-          "description": "Bounded failure description.",
-          "type": "string"
+        {
+          "description": "The store held no uncovered turn to compact, for example because\nanother handle of the session published a checkpoint covering them\nfirst. No model request was sent and the turn replays the store's\ncheckpoint.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "nothing_to_cover"
+            }
+          },
+          "required": [
+            "status"
+          ]
         },
-        "retryable": {
-          "description": "Whether retrying the run may succeed.",
-          "type": "boolean"
+        {
+          "description": "Compaction failed, so the previous checkpoint stays and the turn\nfell back to eviction.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "$ref": "#/$defs/RunFailure",
+          "required": [
+            "status"
+          ]
         }
-      },
-      "required": [
-        "kind",
-        "message",
-        "retryable"
       ]
     },
     "ErrorKind": {
@@ -719,6 +760,53 @@
           "type": "string",
           "const": "cost"
         }
+      ]
+    },
+    "RunFailure": {
+      "description": "A run's failure as plain data.\n\nOn the wire its `kind` is the [`ErrorKind::as_str`] name, and a\n[`ErrorKind::BudgetExhausted`] failure adds the reached `limit`.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Failure classification; `cancelled` for a cancelled run.",
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "limit": {
+          "description": "The run limit a `budget_exhausted` failure reached.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "description": "Bounded failure description.",
+          "type": "string"
+        },
+        "retryable": {
+          "description": "Whether retrying the run may succeed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "retryable"
+      ]
+    },
+    "CompactionReport": {
+      "description": "What a compaction attempt did.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "Whether a checkpoint was published.",
+          "$ref": "#/$defs/CompactionOutcome"
+        }
+      },
+      "required": [
+        "outcome"
       ]
     },
     "RunSummary": {

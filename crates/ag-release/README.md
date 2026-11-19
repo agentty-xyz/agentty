@@ -9,8 +9,10 @@ setup.
 
 ## Quick Start
 
-1. Install the tool:
-   `cargo install --git https://github.com/agentty-xyz/agentty ag-release --locked`.
+1. Install the tool from a pinned commit:
+   `cargo install --git https://github.com/agentty-xyz/agentty --rev <commit> ag-release --locked`.
+   The tool is not published to crates.io and its configuration, plan, and artifacts
+   change with that repository, so an unpinned install can change a release.
 1. Add `[workspace.metadata.release]` to the workspace `Cargo.toml` (see
    [Configuration](#configuration)).
 1. Set `repository = "https://github.com/<owner>/<name>"` on each released package.
@@ -207,15 +209,19 @@ curl -LsSf https://github.com/<owner>/<name>/releases/latest/download/<app>-inst
 
 The script is POSIX `sh` plus `local` (which dash, bash, BusyBox ash, and zsh provide)
 with the release's values baked in, and its whole body is a function called on the last
-line, so a truncated download runs nothing. It:
+line, so a truncated download runs nothing. `--help` (or `-h`) prints its usage and
+environment variables without installing; any other argument fails before anything is
+downloaded or written. It:
 
 1. Maps `uname -s` and `uname -m` to a configured target, preferring
-   `aarch64-apple-darwin` under Rosetta 2. On Linux it rejects musl and, when
-   `min-glibc` is set, a glibc older than that (read from `ldd --version`). Other
-   platforms fail with the list of supported targets.
-1. Downloads `<app>-<target>.tar.gz` with `curl`, or `wget` without `curl`, and fails
-   unless the archive's SHA-256, recorded by `assemble`, matches by `sha256sum` or
-   `shasum -a 256`. It also fails when neither tool exists.
+   `aarch64-apple-darwin` under Rosetta 2. On Linux it rejects a 32-bit userland (read
+   from the ELF header of `/proc/self/exe`, else `/bin/sh`, and assumed 64-bit when
+   neither is readable), musl, and, when `min-glibc` is set, a glibc older than that
+   (read from `ldd --version`). Other platforms fail with the list of supported targets.
+1. Downloads `<app>-<target>.tar.gz` with `curl`, or `wget` without `curl` or when
+   `curl` is a snap (whose private `/tmp` it cannot use; it fails when `wget` is absent
+   too), and fails unless the archive's SHA-256, recorded by `assemble`, matches by
+   `sha256sum` or `shasum -a 256`. It also fails when neither tool exists.
 1. Installs the binaries into `<prefix>/bin`, where `<prefix>` is `$<APP>_INSTALL_DIR`,
    else `$CARGO_HOME`, else `$HOME/.cargo`. Each binary is copied to a temporary file in
    that directory and renamed over the old one, so a running binary is never written
@@ -262,11 +268,15 @@ A file that already sources the script is left unchanged.
 ## npm Package
 
 `<app>-npm-package.tar.gz` is a ready-to-publish npm package named `<npm-scope>/<app>`,
-or `<app>` without a scope. Publish it as is:
+or `<app>` without a scope. Publish it with public access, which a scoped package needs
+because npm publishes scoped packages as restricted by default:
 
 ```sh
-npm publish <app>-npm-package.tar.gz
+npm publish --access public <app>-npm-package.tar.gz
 ```
+
+npm 11 and newer refuse to publish a prerelease version without a dist-tag, so add
+`--tag <dist-tag>` (for example `--tag next`) for one.
 
 Its `package.json` takes `version`, `description`, `license`, `repository`, and
 `contributors` (the authors) from Cargo metadata, declares one `bin` command per binary,
@@ -291,10 +301,16 @@ and ends by the binary's signal when the binary is killed. It ignores `SIGINT` a
 `SIGQUIT`, which the terminal also sends to the binary, and passes `SIGHUP` and
 `SIGTERM` on to it.
 
-| Variable                                               | Effect                                                                                                   |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `<APP>_DOWNLOAD_URL`                                   | Archive base URL instead of `https://github.com/<owner>/<name>/releases/download/<tag>`; `file://` works |
-| `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` | Any of them set: download with `curl`, which honors them, instead of Node's built-in `fetch`             |
+| Variable                                                                 | Effect                                                                                                   |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `<APP>_DOWNLOAD_URL`                                                     | Archive base URL instead of `https://github.com/<owner>/<name>/releases/download/<tag>`; `file://` works |
+| `npm_config_https_proxy`, `https_proxy`, `npm_config_proxy`, `all_proxy` | Proxy: download with `curl --proxy <proxy>` instead of Node's built-in `fetch`, which ignores proxies    |
+| `npm_config_no_proxy`, `npm_config_noproxy`, `no_proxy`                  | With a proxy, hosts to reach directly, passed as `curl --noproxy <hosts>`                                |
+
+The first variable of each row that is set, in the order listed and each name in lower,
+then upper case, wins, as in `proxy-from-env` 1.x. npm passes its `https-proxy`,
+`proxy`, and `noproxy` settings (from `npm config set` or `.npmrc`) to install scripts
+as these `npm_config_*` variables.
 
 npm, Bun, and pnpm installs update through their package manager, for example
 `npm install --global <package>@latest`.
@@ -310,15 +326,17 @@ installer updates itself in three steps:
    running executable proves a shell install.
 1. Download
    `https://github.com/<owner>/<name>/releases/latest/download/<app>-installer.sh`.
-1. Run it with `sh`, `<APP>_INSTALL_DIR=<install_prefix>`, and `<APP>_NO_MODIFY_PATH=1`.
+1. Run it with `sh`, `<APP>_INSTALL_DIR=<install_prefix>`, `<APP>_NO_MODIFY_PATH=1`, and
+   `<APP>_UNMANAGED_INSTALL` set to empty, because an inherited value would install
+   somewhere else.
 
 ## Limitations
 
 - GitHub-hosted repositories only.
 - macOS and glibc Linux targets only: no Windows or musl.
 - No Homebrew, MSI, or PowerShell installers, updater binaries, or workflow generation.
-- The shell installer needs `curl` or `wget`, `tar` with gzip support, and `sha256sum`
-  or `shasum`.
+- The shell installer needs `curl` (not a snap) or `wget`, `tar` with gzip support, and
+  `sha256sum` or `shasum`.
 - The npm package needs Node 18 or newer, `tar` with gzip support, and `curl` when a
   proxy variable is set. Yarn Plug'n'Play must unplug it (`preferUnplugged` asks for
   that).

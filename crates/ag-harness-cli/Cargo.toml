@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
+# Keep this companion CLI out of crates.io releases.
+publish = false
 
 [[bin]]
 name = "ag-harness"

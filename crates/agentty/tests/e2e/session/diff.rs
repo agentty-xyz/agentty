@@ -40,6 +40,9 @@ const ARCHIVED_TIMING_MARKER: &str = "Timer: ";
 /// Help overlay title rendered while `?` keybindings are open.
 const HELP_OVERLAY_TITLE: &str = "Keybindings";
 
+/// Diff body placeholder rendered when the loaded diff has no changes.
+const EMPTY_DIFF_MARKER: &str = "No changes found.";
+
 /// File and changed-line selection remain distinct while moving focus.
 #[tokio::test]
 async fn selection_visibility_in_diff_views() -> E2eResult {
@@ -313,6 +316,27 @@ async fn seed_review_session_with_compact_diff_tree(
 async fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
     seed_clean_review_ready_session(env).await?;
     install_worktree_edit_tmux_stub(env)
+}
+
+/// Seeds a running session whose worktree already has an edit while its
+/// persisted diff statistics still report no changes.
+async fn seed_in_progress_session_with_live_edit(env: &BuilderEnv) -> E2eResult {
+    seed_clean_review_ready_session(env).await?;
+    std::fs::write(
+        env.agentty_root.join("wt/review-s/src/main.rs"),
+        "fn main() {\n    println!(\"review\");\n}\n",
+    )?;
+
+    (async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_status_with_timing_at("review-shortcut-0001", "InProgress", 0)
+            .await
+    })
+    .await?;
+
+    Ok(())
 }
 
 /// Seeds branching folders deep enough to exercise narrow tree rendering.
@@ -600,11 +624,12 @@ async fn test_deep_diff_tree_connectors() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a known-clean session neither advertises nor opens Diff mode.
+/// Verify that a known-clean session still advertises Diff mode and opens an
+/// empty diff.
 #[tokio::test]
-async fn test_clean_session_hides_diff_action() -> E2eResult {
+async fn test_clean_session_opens_empty_diff() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("clean_session_hides_diff_action")
+    FeatureTest::new("clean_session_opens_empty_diff")
         .with_git()
         .with_terminal_size(120, 40)
         .setup(|env| Box::pin(async move { seed_clean_review_ready_session(env).await }))
@@ -617,30 +642,21 @@ async fn test_clean_session_hides_diff_action() -> E2eResult {
                         .compose(&common::open_selected_session_view()),
                     &[SESSION_COMPOSER_MARKER],
                     "clean_session_help",
-                    "Clean session help omits the diff action",
+                    "Clean session help offers the diff action",
                 )
                 .press_key("d")
-                .wait_for_stable_frame(300, 5000)
-                .capture_labeled(
-                    "clean_session_view",
-                    "Clean session remains in chat after pressing d",
-                )
+                .wait_for_text(EMPTY_DIFF_MARKER, 5000)
+                .capture_labeled("clean_session_diff", "Clean session opens an empty diff")
             },
             |frame, report| {
                 Box::pin(async move {
                     let help_frame = common::frame_from_capture(&report.captures[0]);
                     let help_full = Region::full(help_frame.cols(), help_frame.rows());
                     assertion::assert_text_in_region(&help_frame, "Enter: Reply", &help_full);
-                    assertion::assert_not_visible(&help_frame, "Show diff");
+                    assertion::assert_text_in_region(&help_frame, "d: Show diff", &help_full);
 
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "Review-ready session shortcuts",
-                        &full,
-                    );
-                    assertion::assert_text_in_region(frame, SESSION_COMPOSER_MARKER, &full);
-                    assertion::assert_not_visible(frame, DIFF_PANEL_TITLE_MARKER);
+                    assertion::assert_text_in_region(frame, EMPTY_DIFF_MARKER, &full);
                     assertion::assert_not_visible(frame, "Loading diff...");
                 })
             },
@@ -650,11 +666,12 @@ async fn test_clean_session_hides_diff_action() -> E2eResult {
     Ok(())
 }
 
-/// Verify opening a clean writable worktree makes subsequent edits inspectable.
+/// Verify edits made through an opened worktree are inspectable even though the
+/// persisted diff statistics still report a clean session.
 #[tokio::test]
-async fn test_worktree_open_reenables_diff_action() -> E2eResult {
+async fn test_worktree_edit_diff_ignores_stale_clean_stats() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("worktree_open_reenables_diff_action")
+    FeatureTest::new("worktree_edit_diff_ignores_stale_clean_stats")
         .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
         .with_git()
         .with_terminal_size(120, 40)
@@ -670,7 +687,7 @@ async fn test_worktree_open_reenables_diff_action() -> E2eResult {
                         .compose(&common::open_selected_session_view()),
                     &[SESSION_COMPOSER_MARKER],
                     "clean_session",
-                    "Clean session hides the diff action",
+                    "Clean session offers the worktree and diff actions",
                 )
                 .press_key("o")
                 .wait_for_stable_frame(300, 5000)
@@ -686,10 +703,99 @@ async fn test_worktree_open_reenables_diff_action() -> E2eResult {
                     let clean_frame = common::frame_from_capture(&report.captures[0]);
                     let clean_full = Region::full(clean_frame.cols(), clean_frame.rows());
                     assertion::assert_text_in_region(&clean_frame, "o: Open worktree", &clean_full);
-                    assertion::assert_not_visible(&clean_frame, "Show diff");
+                    assertion::assert_text_in_region(&clean_frame, "d: Show diff", &clean_full);
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "external worktree edit", &full);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that a running turn's worktree edits are inspectable before its
+/// diff statistics refresh.
+#[tokio::test]
+async fn test_in_progress_session_diff_shows_live_edits() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("in_progress_session_diff_shows_live_edits")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| Box::pin(async move { seed_in_progress_session_with_live_edit(env).await }))
+        .run(
+            |scenario| {
+                open_session_help_and_close(
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .compose(&common::open_selected_session_view())
+                        .wait_for_text("Working...", 5000),
+                    &["Working..."],
+                    "in_progress_help",
+                    "Running session help offers the diff action",
+                )
+                .press_key("d")
+                .wait_for_text("println!(\"review\")", 5000)
+                .capture_labeled("in_progress_diff", "Running session diff shows live edits")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Ctrl+c", &help_full);
+                    assertion::assert_text_in_region(&help_frame, "d: Show diff", &help_full);
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that an unstarted draft, whose worktree does not exist yet, opens an
+/// empty diff instead of reporting a Git failure.
+#[tokio::test]
+async fn test_unstarted_draft_opens_empty_diff() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("unstarted_draft_opens_empty_diff")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| {
+            Box::pin(async move {
+                common::seed_session(
+                    env,
+                    SessionSeed::draft(
+                        "draft-diff-0001",
+                        model_fixture::CODEX_MODEL_ID,
+                        "main",
+                        "Draft",
+                    )
+                    .with_title("Unstarted draft diff"),
+                )
+                .await
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text(EMPTY_DIFF_MARKER, 5000)
+                    .capture_labeled("draft_diff", "Unstarted draft opens an empty diff")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, EMPTY_DIFF_MARKER, &full);
                     assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
                 })
             },
@@ -1540,12 +1646,12 @@ fn assert_diff_row_selection_comments(
     assertion::assert_text_in_region(frame, "Explain these lines.", &full);
 }
 
-/// Canceling a changed session disables diff inspection when cleanup leaves no
-/// archive.
+/// Canceling a changed session keeps diff inspection available, showing an
+/// empty diff when cleanup leaves no archive.
 #[tokio::test]
-async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
+async fn canceled_session_without_archive_opens_empty_diff() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("canceled_session_without_archive_hides_diff_action")
+    FeatureTest::new("canceled_session_without_archive_opens_empty_diff")
         .with_git()
         .with_terminal_size(120, 40)
         .setup(|env| {
@@ -1576,14 +1682,11 @@ async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
                     scenario,
                     &[ARCHIVED_TIMING_MARKER],
                     "canceled_help",
-                    "Canceled session help offers continuation without diff",
+                    "Canceled session help offers continuation and diff",
                 )
                 .press_key("d")
-                .wait_for_stable_frame(300, 5000)
-                .capture_labeled(
-                    "canceled_chat",
-                    "Canceled session has no archived diff action",
-                )
+                .wait_for_text(EMPTY_DIFF_MARKER, 5000)
+                .capture_labeled("canceled_diff", "Canceled session opens an empty diff")
             },
             |frame, report| {
                 Box::pin(async move {
@@ -1594,13 +1697,11 @@ async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
                         "c: Continue in new session",
                         &help_full,
                     );
-                    assertion::assert_not_visible(&help_frame, "Show diff");
+                    assertion::assert_text_in_region(&help_frame, "d: Show diff", &help_full);
 
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, ARCHIVED_TIMING_MARKER, &full);
-                    assertion::assert_not_visible(frame, SESSION_COMPOSER_MARKER);
+                    assertion::assert_text_in_region(frame, EMPTY_DIFF_MARKER, &full);
                     assertion::assert_not_visible(frame, "Loading diff...");
-                    assertion::assert_not_visible(frame, DIFF_PANEL_TITLE_MARKER);
                 })
             },
         )
