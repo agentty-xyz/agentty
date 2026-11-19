@@ -484,6 +484,8 @@ fn openai_compatible_registration_uses_the_declared_profile() {
         registration.capabilities().profile.context_window_tokens(),
         40_960
     );
+    assert!(registration.capabilities().tool_calls);
+    assert!(!registration.capabilities().image_input);
     assert_eq!(
         registration
             .metadata()
@@ -675,6 +677,7 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
 /// Registers each served model under the current revision with its declared
 /// context profile: the provider catalog's where it declares one, Agentty's
 /// for the others, and the conservative fallback for uncataloged models.
+/// Tool calls and image input follow the catalog specification.
 fn registrations_declare_revision_and_per_model_context_profiles() {
     // Arrange
     let (_directory, auth_file) = signed_in_auth_file();
@@ -693,6 +696,8 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
             .iter()
             .map(move |model| (*provider, *model))
     });
+
+    let mut image_registrations = 0;
 
     // Act / Assert
     for (provider, model) in models {
@@ -716,9 +721,24 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
                     .and_then(model_profile::declared)
             })
             .unwrap_or(FALLBACK_MODEL_PROFILE);
+        let declared = provider
+            .model_spec(model)
+            .expect("cataloged model")
+            .capabilities();
         assert_eq!(registration.identity().revision(), "agentty-native-2");
         assert_eq!(registration.capabilities().profile, expected, "{model}");
+        assert!(registration.capabilities().tool_calls, "{model}");
+        assert_eq!(
+            registration.capabilities().image_input,
+            declared.image_input(),
+            "{model}"
+        );
+        image_registrations += usize::from(declared.image_input());
     }
+    assert!(
+        image_registrations > 0,
+        "the catalog's image-reading models must register image input"
+    );
     let sol = ModelSelection::resolve("gpt-6.1-sol", &environment).expect("served model");
     let sol_registry = sol.registry(&environment, None, None).expect("registry");
     let sol_profile = sol_registry
