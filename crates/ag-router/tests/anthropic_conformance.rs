@@ -894,6 +894,8 @@ async fn fails_a_stream_error_event_as_its_unstreamed_rejection() -> Result<(), 
         "id": "msg_failed", "model": "claude-opus-5-5", "content": [],
         "usage": {"input_tokens": 10, "output_tokens": 1}
     }});
+    // Each failure follows streamed content, so even a retried status is
+    // not retried.
     let partial = json!({"type": "content_block_start", "index": 0,
         "content_block": {"type": "text", "text": ""}});
     let delta = json!({"type": "content_block_delta", "index": 0,
@@ -955,6 +957,79 @@ async fn fails_a_stream_error_event_as_its_unstreamed_rejection() -> Result<(), 
 }
 
 #[tokio::test]
+async fn retries_a_stream_that_fails_before_any_content_under_the_spec_policy()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let overloaded = MockServer::start().await;
+    let failed_early = sse(&[
+        json!({"type": "message_start", "message": {"id": "msg_failed", "content": []}}),
+        json!({"type": "ping"}),
+        serde_json::from_str(OVERLOADED)?,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(failed_early, "text/event-stream"))
+        .up_to_n_times(1)
+        .mount(&overloaded)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(event_stream(MESSAGE)?, "text/event-stream"),
+        )
+        .mount(&overloaded)
+        .await;
+    let invalid = event_stream_server("data: {\"type\":\n\n".to_string()).await;
+    let too_long = event_stream_server(sse(&[
+        json!({"type": "message_start", "message": {"id": "msg_failed", "content": []}}),
+        serde_json::from_str(PROMPT_TOO_LONG)?,
+    ]))
+    .await;
+    let policy = RetryPolicy::default()
+        .with_retried(RetryKind::Overloaded, true)
+        .with_base_delay(Duration::from_millis(1));
+    let request = || {
+        structured(
+            "anthropic/claude-opus-5-5",
+            vec![ModelMessage::User("Find the name".to_string())],
+        )
+    };
+    let retries = Arc::new(RecordedRetries::default());
+
+    // Act
+    let completion = Router::new([anthropic(&overloaded, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await?;
+    let malformed = Router::new([anthropic(&invalid, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await
+        .err()
+        .ok_or("a malformed stream should fail")?;
+    let rejected = Router::new([anthropic(&too_long, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await
+        .err()
+        .ok_or("a rejected request should fail")?;
+
+    // Assert
+    assert!(matches!(completion, Completion::Output { .. }));
+    let notices = retries
+        .0
+        .lock()
+        .map_err(|_| "the notices lock is poisoned")?
+        .clone();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].attempt, 1);
+    assert_eq!(notices[0].kind, RetryKind::Overloaded);
+    assert_eq!(notices[0].status, Some(529));
+    assert_eq!(malformed.error_class(), ErrorClass::InvalidProviderResponse);
+    // A status the policy does not retry fails at once, even before content.
+    assert_eq!(rejected.error_class(), ErrorClass::ContextOverflow);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn fails_a_stream_that_closes_before_message_stop() -> Result<(), Box<dyn Error>> {
     // Arrange
     let recorded = event_stream(MESSAGE)?;
@@ -989,13 +1064,29 @@ async fn marks_cache_breakpoints_only_while_the_policy_asks_for_them() -> Result
     // Arrange
     let marked = server(400, "{}").await;
     let unmarked = server(400, "{}").await;
-    let request = || {
-        conformance::golden_request(
+    let tool = ToolDefinition::new(
+        "read",
+        "Read one file.",
+        json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    );
+    let request = || -> Result<ModelRequest, Box<dyn Error>> {
+        Ok(ModelRequest::chat(
             "custom/claude",
-            true,
-            conformance::options(None, false, None),
-        )
+            vec![
+                ModelMessage::System("You extract names.".to_string()),
+                ModelMessage::System("Answer in English.".to_string()),
+                ModelMessage::User("Find the name".to_string()),
+                ModelMessage::User("in a.txt".to_string()),
+            ],
+            vec![tool.clone()],
+            conformance::format()?,
+        ))
     };
+    // Forced-tool output appends `structured_output` after the request's
+    // tools, so it is the last tool.
+    let forced = custom(&marked)
+        .with_reasoning(ReasoningMapping::None)
+        .with_structured_output(StructuredOutputMode::ForcedTool);
     let chat = ProviderSpec::new(
         "chat",
         WireProtocol::ChatCompletions,
@@ -1004,7 +1095,7 @@ async fn marks_cache_breakpoints_only_while_the_policy_asks_for_them() -> Result
     .with_cache_breakpoints(true);
 
     // Act
-    let _ = Router::new([custom(&marked)]).execute(request()?).await;
+    let _ = Router::new([forced]).execute(request()?).await;
     let _ = Router::new([custom(&unmarked).with_cache_breakpoints(false)])
         .execute(request()?)
         .await;
@@ -1014,10 +1105,17 @@ async fn marks_cache_breakpoints_only_while_the_policy_asks_for_them() -> Result
     let marked = received_body(&marked).await?;
     let breakpoint = json!({"type": "ephemeral"});
     assert_eq!(marked["stream"], json!(true));
-    assert_eq!(marked["tools"][0]["cache_control"], breakpoint);
-    assert_eq!(marked["system"][0]["cache_control"], breakpoint);
+    assert_eq!(marked["tools"][0].get("cache_control"), None);
+    assert_eq!(marked["tools"][1]["name"], json!("structured_output"));
+    assert_eq!(marked["tools"][1]["cache_control"], breakpoint);
+    assert_eq!(marked["system"][0].get("cache_control"), None);
+    assert_eq!(marked["system"][1]["cache_control"], breakpoint);
     assert_eq!(
-        marked["messages"][2]["content"][1]["cache_control"],
+        marked["messages"][0]["content"][0].get("cache_control"),
+        None
+    );
+    assert_eq!(
+        marked["messages"][0]["content"][1]["cache_control"],
         breakpoint
     );
     assert_eq!(marked.to_string().matches("cache_control").count(), 3);

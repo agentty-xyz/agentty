@@ -62,6 +62,8 @@ fn every_reduction_sends_the_latest_rounds_signed_thinking_unchanged() {
     let mut request = request(Vec::new(), Vec::new(), "inspect");
     let mut fit = ContextFit::default();
     let mut cleared_reasoning = 0;
+    let mut dropped_tool_calls = 0;
+    let mut elided_results = 0;
     let mut shrunk_latest_writes = 0;
 
     // Act / Assert
@@ -79,7 +81,9 @@ fn every_reduction_sends_the_latest_rounds_signed_thinking_unchanged() {
             .fit(&ByteEstimator, budget(9000), &request, None)
             .map(sent)
             .expect("the request fits after reductions");
-        cleared_reasoning += activity.cleared_reasoning();
+        cleared_reasoning = cleared_reasoning.max(activity.cleared_reasoning());
+        dropped_tool_calls = dropped_tool_calls.max(activity.dropped_tool_calls());
+        elided_results = elided_results.max(activity.elided_results());
         shrunk_latest_writes += activity.shrunk_latest_write_calls();
         let sent = fitted.unwrap_or_else(|| request.clone());
         assert_eq!(
@@ -88,7 +92,11 @@ fn every_reduction_sends_the_latest_rounds_signed_thinking_unchanged() {
             "round {index}"
         );
     }
+    // Results were elided, reasoning cleared, and rounds dropped before the
+    // latest write's patch was shrunk as the last resort.
+    assert!(elided_results > 0);
     assert!(cleared_reasoning > 0);
+    assert!(dropped_tool_calls > 0);
     assert_eq!(shrunk_latest_writes, 1);
 }
 

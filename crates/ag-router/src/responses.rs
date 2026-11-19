@@ -76,11 +76,8 @@ impl<'spec> ResponsesBackend<'spec> {
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        for message in request.messages() {
-            if let model::ModelMessage::UserInput(input) = message {
-                self.policy.validate_input(&self.model, input)?;
-            }
-        }
+        self.policy
+            .validate_inputs(&self.model, request.messages())?;
         let payload = ResponsesPayload {
             include: ["reasoning.encrypted_content"],
             input: Self::input(request),

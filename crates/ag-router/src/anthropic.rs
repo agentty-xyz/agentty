@@ -44,7 +44,7 @@ use crate::provider_spec::{
 };
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
-use crate::stream::{self, DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
+use crate::stream::{self, DeltaObserver, EventReader, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Messages endpoint under a provider base URL.
@@ -113,11 +113,8 @@ impl<'spec> AnthropicBackend<'spec> {
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        for message in request.messages() {
-            if let model::ModelMessage::UserInput(input) = message {
-                self.policy.validate_input(&self.model, input)?;
-            }
-        }
+        self.policy
+            .validate_inputs(&self.model, request.messages())?;
         let output_tool = request
             .response_format
             .as_ref()
@@ -218,28 +215,55 @@ impl<'spec> AnthropicBackend<'spec> {
     /// Sends `request` and accumulates its streamed message, reporting
     /// deltas as they arrive and the input of a call to [`OUTPUT_TOOL_NAME`]
     /// as answer text when `output_tool` holds, or reads the one JSON
-    /// message of a server that does not stream.
+    /// message of a server that does not stream. A stream that fails
+    /// before any content, such as on an `overloaded_error` event, is sent
+    /// again as the request's retry policy retries the matching status.
     async fn create(
         &self,
         request: &ProviderRequest,
         output_tool: bool,
     ) -> Result<MessagesResponse, TransportError> {
-        let mut response = self.http.send(request).await?;
-        if !stream::is_event_stream(&response) {
-            return http::decode_success_body(&mut response).await;
+        let mut stream_retries = 0;
+        loop {
+            let mut response = self.http.send(request).await?;
+            if !stream::is_event_stream(&response) {
+                return http::decode_success_body(&mut response).await;
+            }
+            let mut events = MessageStream::new(self.deltas.is_some(), output_tool);
+            match self.read(&mut response, &mut events).await {
+                Ok(()) => return events.finish(),
+                Err(failure)
+                    if events.blocks.is_empty()
+                        && self
+                            .http
+                            .retry_streamed(request, &failure, stream_retries)
+                            .await =>
+                {
+                    stream_retries += 1;
+                }
+                Err(failure) => return Err(failure),
+            }
         }
-        let mut events = MessageStream::new(self.deltas.is_some(), output_tool);
+    }
+
+    /// Reads `response` into `events` until its `message_stop` or its end,
+    /// reporting deltas as they arrive.
+    async fn read(
+        &self,
+        response: &mut reqwest::Response,
+        events: &mut MessageStream,
+    ) -> Result<(), TransportError> {
         while let Some(chunk) = response.chunk().await.map_err(TransportError::reqwest)? {
             let done = events.push(&chunk)?;
-            self.report(&mut events).await;
+            self.report(events).await;
             if done {
-                return events.finish();
+                return Ok(());
             }
         }
         events.close()?;
-        self.report(&mut events).await;
+        self.report(events).await;
 
-        events.finish()
+        Ok(())
     }
 
     /// Reports the deltas `events` read so far to the delta observer.
@@ -431,8 +455,11 @@ fn replayed_blocks(content: &str) -> Option<Vec<Value>> {
 /// the last tool definition, the last `system` block, and the last block of
 /// the last message that is not signed thinking, which the API does not let
 /// carry one. A later request whose prefix repeats up to a breakpoint reads
-/// it from the cache, and the previous request's last message stays a read
-/// point once newer messages follow it.
+/// it from the cache. The entry written at the previous request's last
+/// message carries no marker on the next request: the next request's last
+/// breakpoint finds it by the API's lookback of up to 20 blocks, so a turn
+/// that appends more blocks than that rewrites the conversation's cache.
+/// The tools and `system` breakpoints are read however long a turn grows.
 fn mark_cache_breakpoints(
     tools: &mut [ToolPayload<'_>],
     system: &mut [Value],
@@ -698,27 +725,6 @@ impl MessageStream {
         }
     }
 
-    /// Reads `chunk`, returning whether the stream's `message_stop` event
-    /// arrived; later events are not read.
-    fn push(&mut self, chunk: &[u8]) -> Result<bool, TransportError> {
-        for data in self.events.push(chunk)? {
-            if self.dispatch(&data)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    /// Reads the event left when the stream closed without its blank line.
-    fn close(&mut self) -> Result<(), TransportError> {
-        if let Some(data) = std::mem::take(&mut self.events).finish()? {
-            self.dispatch(&data)?;
-        }
-
-        Ok(())
-    }
-
     /// Returns the accumulated message, failing when the stream closed
     /// before `message_stop` or a call's streamed input is not JSON.
     fn finish(mut self) -> Result<MessagesResponse, TransportError> {
@@ -734,62 +740,6 @@ impl MessageStream {
         self.response.content = Some(content);
 
         Ok(self.response)
-    }
-
-    /// Reads one event, returning whether it is `message_stop`. Unknown
-    /// events, such as `ping`, are skipped.
-    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
-        let event =
-            serde_json::from_str::<StreamEvent>(data).map_err(TransportError::InvalidResponse)?;
-        match event.kind.as_str() {
-            "message_start" => {
-                let message = event.message.unwrap_or_default();
-                self.response.id = message.id;
-                self.response.model = message.model;
-                self.response.usage = message.usage;
-            }
-            "content_block_start" => {
-                let block = event.content_block.unwrap_or_default();
-                self.grow(block.to_string().len())?;
-                self.start(event.index, block);
-            }
-            "content_block_delta" => {
-                let delta = event.delta.unwrap_or_default();
-                self.read_delta(event.index, delta)?;
-            }
-            "message_delta" => {
-                let delta = event.delta.unwrap_or_default();
-                self.response.stop_reason = delta.stop_reason.or(self.response.stop_reason.take());
-                self.response.stop_details =
-                    delta.stop_details.or(self.response.stop_details.take());
-                let mut usage = self.response.usage.take().unwrap_or_default();
-                usage.update(event.usage.unwrap_or_default());
-                self.response.usage = Some(usage);
-            }
-            "message_stop" => {
-                self.stopped = true;
-
-                return Ok(true);
-            }
-            "error" => {
-                let error = event.error.unwrap_or_default();
-                let status = error.kind.as_deref().and_then(|kind| {
-                    ERROR_STATUSES
-                        .iter()
-                        .find(|(name, _)| *name == kind)
-                        .and_then(|(_, status)| StatusCode::from_u16(*status).ok())
-                });
-
-                return Err(TransportError::StreamFailed {
-                    code: error.kind,
-                    message: error.message,
-                    status,
-                });
-            }
-            _ => {}
-        }
-
-        Ok(false)
     }
 
     /// Starts the block at wire `index`, numbering calls by the order they
@@ -878,6 +828,68 @@ impl MessageStream {
         if self.observed && !empty {
             self.deltas.push(delta);
         }
+    }
+}
+
+impl EventReader for MessageStream {
+    fn decoder(&mut self) -> &mut SseDecoder {
+        &mut self.events
+    }
+
+    /// Reads one event, returning whether it is `message_stop`. Unknown
+    /// events, such as `ping`, are skipped.
+    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
+        let event =
+            serde_json::from_str::<StreamEvent>(data).map_err(TransportError::InvalidResponse)?;
+        match event.kind.as_str() {
+            "message_start" => {
+                let message = event.message.unwrap_or_default();
+                self.response.id = message.id;
+                self.response.model = message.model;
+                self.response.usage = message.usage;
+            }
+            "content_block_start" => {
+                let block = event.content_block.unwrap_or_default();
+                self.grow(block.to_string().len())?;
+                self.start(event.index, block);
+            }
+            "content_block_delta" => {
+                let delta = event.delta.unwrap_or_default();
+                self.read_delta(event.index, delta)?;
+            }
+            "message_delta" => {
+                let delta = event.delta.unwrap_or_default();
+                self.response.stop_reason = delta.stop_reason.or(self.response.stop_reason.take());
+                self.response.stop_details =
+                    delta.stop_details.or(self.response.stop_details.take());
+                let mut usage = self.response.usage.take().unwrap_or_default();
+                usage.update(event.usage.unwrap_or_default());
+                self.response.usage = Some(usage);
+            }
+            "message_stop" => {
+                self.stopped = true;
+
+                return Ok(true);
+            }
+            "error" => {
+                let error = event.error.unwrap_or_default();
+                let status = error.kind.as_deref().and_then(|kind| {
+                    ERROR_STATUSES
+                        .iter()
+                        .find(|(name, _)| *name == kind)
+                        .and_then(|(_, status)| StatusCode::from_u16(*status).ok())
+                });
+
+                return Err(TransportError::StreamFailed {
+                    code: error.kind,
+                    message: error.message,
+                    status,
+                });
+            }
+            _ => {}
+        }
+
+        Ok(false)
     }
 }
 

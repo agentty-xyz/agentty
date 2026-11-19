@@ -30,9 +30,9 @@ const CUSTOM_ROUTE: &str = "custom";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WireProtocol {
-    /// The Anthropic Messages API (`POST {base_url}/messages`), sent
-    /// unstreamed: Claude models with signed thinking replayed verbatim to
-    /// models of the same reasoning family.
+    /// The Anthropic Messages API (`POST {base_url}/messages`), streamed:
+    /// Claude models with signed thinking replayed verbatim to models of the
+    /// same reasoning family.
     AnthropicMessages,
     /// The `OpenAI` Chat Completions API (`POST {base_url}/chat/completions`),
     /// implemented by most OpenAI-compatible servers.
@@ -618,9 +618,10 @@ impl ProviderSpec {
 
     /// Sets the `max_tokens` an Anthropic Messages request sends when the
     /// request sets no output-token bound, in place of 16,000. The API
-    /// requires a bound, and requests are unstreamed, so a larger one risks
-    /// the ten-minute request timeout. Other protocols send no bound then,
-    /// so validation rejects this setting for them.
+    /// requires a bound; requests stream, so a larger one is bounded only by
+    /// the streaming transport's whole-response and idle timeouts. Other
+    /// protocols send no bound then, so validation rejects this setting for
+    /// them.
     #[must_use]
     pub fn with_fallback_max_tokens(mut self, max_tokens: NonZeroU32) -> Self {
         self.spec = self.spec.with_fallback_max_tokens(max_tokens);
@@ -678,6 +679,19 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_overflow_marker(mut self, marker: impl Into<String>) -> Self {
         self.spec = self.spec.with_overflow_marker(marker);
+
+        self
+    }
+
+    /// Sets whether an Anthropic Messages request marks its stable prefix
+    /// with `cache_control` breakpoints, on by default: the last tool, the
+    /// last `system` block, and the last message. A cache write costs more
+    /// than uncached input, so a host whose requests share no prefix, or a
+    /// gateway that rejects the field, turns it off; other protocols fail
+    /// validation with it on.
+    #[must_use]
+    pub fn with_cache_breakpoints(mut self, cache_breakpoints: bool) -> Self {
+        self.spec = self.spec.with_cache_breakpoints(cache_breakpoints);
 
         self
     }

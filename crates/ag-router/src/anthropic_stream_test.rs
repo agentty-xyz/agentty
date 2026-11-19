@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{MessagePayload, MessageStream, mark_cache_breakpoints};
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
-use crate::stream::ResponseDelta;
+use crate::stream::{EventReader as _, ResponseDelta};
 
 /// Returns the server-sent event carrying `event`.
 fn event(event: &Value) -> String {
@@ -182,25 +182,21 @@ fn fails_invalid_events_and_call_input() {
 #[test]
 fn bounds_the_accumulated_content() {
     // Arrange
-    let half = "x".repeat(SUCCESS_BODY_LIMIT_BYTES / 2 + 1);
+    // Each stream starts with the limit already reached, so one more byte
+    // of content exceeds it without building megabytes of text.
     let text = json!({"type": "text", "text": ""});
     let mut deltas = MessageStream::new(false, false);
     deltas
         .push(start(0, &text).as_bytes())
         .expect("the start should read");
-    deltas
-        .push(delta(0, &json!({"type": "text_delta", "text": half})).as_bytes())
-        .expect("half the limit should read");
+    deltas.content_bytes = SUCCESS_BODY_LIMIT_BYTES;
     let mut started = MessageStream::new(false, false);
-    started
-        .push(start(0, &json!({"type": "redacted_thinking", "data": half})).as_bytes())
-        .expect("half the limit should read");
+    started.content_bytes = SUCCESS_BODY_LIMIT_BYTES;
 
     // Act
-    let delta_error =
-        deltas.push(delta(0, &json!({"type": "text_delta", "text": half})).as_bytes());
+    let delta_error = deltas.push(delta(0, &json!({"type": "text_delta", "text": "x"})).as_bytes());
     let start_error =
-        started.push(start(1, &json!({"type": "redacted_thinking", "data": half})).as_bytes());
+        started.push(start(0, &json!({"type": "redacted_thinking", "data": "x"})).as_bytes());
 
     // Assert
     assert!(matches!(
@@ -234,6 +230,35 @@ fn reads_events_without_their_optional_fields() {
     assert_eq!(message.content, Some(vec![Value::Null]));
     assert_eq!(message.stop_reason, None);
     assert!(message.usage.is_some());
+}
+
+#[test]
+fn later_usage_counts_replace_earlier_ones() {
+    // Arrange
+    let events = [
+        event(&json!({"type": "message_start", "message": {"usage": {
+            "input_tokens": 10, "cache_read_input_tokens": 4, "output_tokens": 1
+        }}})),
+        event(
+            &json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 12, "cache_creation_input_tokens": 3, "output_tokens": 9}}),
+        ),
+        event(&json!({"type": "message_stop"})),
+    ];
+
+    // Act
+    let message = read(&events)
+        .expect("the events should read")
+        .finish()
+        .expect("the message stopped");
+
+    // Assert
+    let usage = message.usage.expect("usage");
+    assert_eq!(usage.input, Some(12));
+    assert_eq!(usage.cache_read, Some(4));
+    assert_eq!(usage.cache_creation, Some(3));
+    assert_eq!(usage.output, Some(9));
+    assert_eq!(message.stop_reason.as_deref(), Some("end_turn"));
 }
 
 #[test]

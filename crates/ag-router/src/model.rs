@@ -476,7 +476,11 @@ impl ModelError {
         self.error_class() == ErrorClass::ContextOverflow
     }
 
-    /// Returns the provider HTTP status when the request reached a provider.
+    /// Returns the provider HTTP status when the request reached a provider,
+    /// or, for a failure the provider reported inside a stream it answered
+    /// with `200`, the status the failure's error type stands for, such as
+    /// `529` for an Anthropic `overloaded_error` event, so it is handled as
+    /// the same failure of an unstreamed request is.
     pub fn http_status(&self) -> Option<u16> {
         match self {
             Self::WithMetadata { source, .. } => source.http_status(),
@@ -697,7 +701,8 @@ impl GeneratedResponse {
 }
 
 /// Classification of an unsuccessful provider HTTP response, read from its
-/// status, headers, and bounded body.
+/// status, headers, and bounded body, or of a stream failure read from the
+/// status its error type stands for and its code and message.
 #[derive(Debug)]
 pub(crate) struct ProviderRejection {
     /// The input exceeded the model's context window.

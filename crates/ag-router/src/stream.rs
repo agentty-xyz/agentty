@@ -86,6 +86,37 @@ pub(crate) fn is_event_stream(response: &reqwest::Response) -> bool {
         .is_some_and(|value| value.trim_start().starts_with("text/event-stream"))
 }
 
+/// Reader of one protocol's events that reads each event's data as its
+/// [`SseDecoder`] completes it, until the event ending the stream.
+pub(crate) trait EventReader {
+    /// Returns the decoder of the stream's server-sent events.
+    fn decoder(&mut self) -> &mut SseDecoder;
+
+    /// Reads the data of one event, returning whether it ends the stream.
+    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError>;
+
+    /// Reads `chunk`, returning whether the event ending the stream arrived;
+    /// later events are not read.
+    fn push(&mut self, chunk: &[u8]) -> Result<bool, TransportError> {
+        for data in self.decoder().push(chunk)? {
+            if self.dispatch(&data)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Reads the event left when the stream closed without its blank line.
+    fn close(&mut self) -> Result<(), TransportError> {
+        if let Some(data) = std::mem::take(self.decoder()).finish()? {
+            self.dispatch(&data)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Incremental reader of a server-sent event stream that returns the
 /// `data` of each event. Each pending line and event stays within the
 /// success body limit, so memory is bounded however long the stream runs.

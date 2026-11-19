@@ -24,7 +24,7 @@ use crate::provider_spec::{
     StructuredOutputMode, ThinkingOptions,
 };
 use crate::retry::RetryObserver;
-use crate::stream::{self, DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
+use crate::stream::{self, DeltaObserver, EventReader, ResponseDelta, SseDecoder, StreamClosed};
 use crate::{input, model, schema as schema_contract, tool};
 
 /// Path of the Chat Completions endpoint under a provider base URL.
@@ -605,27 +605,6 @@ impl ChunkStream {
         }
     }
 
-    /// Reads `chunk`, returning whether the stream's `[DONE]` event
-    /// arrived; later events are not read.
-    fn push(&mut self, chunk: &[u8]) -> Result<bool, TransportError> {
-        for data in self.events.push(chunk)? {
-            if self.dispatch(&data)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    /// Reads the event left when the stream closed without `[DONE]`.
-    fn close(&mut self) -> Result<(), TransportError> {
-        if let Some(data) = std::mem::take(&mut self.events).finish()? {
-            self.dispatch(&data)?;
-        }
-
-        Ok(())
-    }
-
     /// Returns the completion, failing when no choice finished.
     fn finish(self) -> Result<ChatCompletion, TransportError> {
         let finish_reason = self
@@ -649,64 +628,6 @@ impl ChunkStream {
                 .map(StreamedToolCall::into_tool_call)
                 .collect(),
         })
-    }
-
-    /// Reads one event, returning whether it is `[DONE]`.
-    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
-        if data == "[DONE]" {
-            return Ok(true);
-        }
-        let chunk = serde_json::from_str::<ChatCompletionChunk>(data)
-            .map_err(TransportError::InvalidResponse)?;
-        if let Some(error) = chunk.error {
-            return Err(TransportError::StreamFailed {
-                code: error.code,
-                message: error.message,
-                status: None,
-            });
-        }
-        self.id = self.id.take().or(chunk.id);
-        self.model = self.model.take().or(chunk.model);
-        self.system_fingerprint = self.system_fingerprint.take().or(chunk.system_fingerprint);
-        if chunk.usage.is_some() {
-            self.usage = chunk.usage;
-        }
-        let first = chunk
-            .choices
-            .into_iter()
-            .flatten()
-            .find(|choice| choice.index == 0);
-        let Some(choice) = first else {
-            return Ok(false);
-        };
-        // Some providers, such as Moonshot, report streamed usage on the
-        // choice instead.
-        if self.usage.is_none() {
-            self.usage = choice.usage;
-        }
-        if choice.finish_reason.is_some() {
-            self.finish_reason = choice.finish_reason;
-        }
-        let Some(delta) = choice.delta else {
-            return Ok(false);
-        };
-        if let Some(text) = delta.content.filter(|text| !text.is_empty()) {
-            self.grow(text.len())?;
-            self.content.get_or_insert_default().push_str(&text);
-            self.report(ResponseDelta::Text(text));
-        }
-        if let Some(text) = delta.reasoning_content.filter(|text| !text.is_empty()) {
-            self.grow(text.len())?;
-            self.reasoning_content
-                .get_or_insert_default()
-                .push_str(&text);
-            self.report(ResponseDelta::Reasoning(text));
-        }
-        for call in delta.tool_calls.into_iter().flatten() {
-            self.read_call(call)?;
-        }
-
-        Ok(false)
     }
 
     /// Accumulates one tool-call fragment into the call at its wire index,
@@ -769,6 +690,70 @@ impl ChunkStream {
         if self.observed {
             self.deltas.push(delta);
         }
+    }
+}
+
+impl EventReader for ChunkStream {
+    fn decoder(&mut self) -> &mut SseDecoder {
+        &mut self.events
+    }
+
+    /// Reads one event, returning whether it is `[DONE]`.
+    fn dispatch(&mut self, data: &str) -> Result<bool, TransportError> {
+        if data == "[DONE]" {
+            return Ok(true);
+        }
+        let chunk = serde_json::from_str::<ChatCompletionChunk>(data)
+            .map_err(TransportError::InvalidResponse)?;
+        if let Some(error) = chunk.error {
+            return Err(TransportError::StreamFailed {
+                code: error.code,
+                message: error.message,
+                status: None,
+            });
+        }
+        self.id = self.id.take().or(chunk.id);
+        self.model = self.model.take().or(chunk.model);
+        self.system_fingerprint = self.system_fingerprint.take().or(chunk.system_fingerprint);
+        if chunk.usage.is_some() {
+            self.usage = chunk.usage;
+        }
+        let first = chunk
+            .choices
+            .into_iter()
+            .flatten()
+            .find(|choice| choice.index == 0);
+        let Some(choice) = first else {
+            return Ok(false);
+        };
+        // Some providers, such as Moonshot, report streamed usage on the
+        // choice instead.
+        if self.usage.is_none() {
+            self.usage = choice.usage;
+        }
+        if choice.finish_reason.is_some() {
+            self.finish_reason = choice.finish_reason;
+        }
+        let Some(delta) = choice.delta else {
+            return Ok(false);
+        };
+        if let Some(text) = delta.content.filter(|text| !text.is_empty()) {
+            self.grow(text.len())?;
+            self.content.get_or_insert_default().push_str(&text);
+            self.report(ResponseDelta::Text(text));
+        }
+        if let Some(text) = delta.reasoning_content.filter(|text| !text.is_empty()) {
+            self.grow(text.len())?;
+            self.reasoning_content
+                .get_or_insert_default()
+                .push_str(&text);
+            self.report(ResponseDelta::Reasoning(text));
+        }
+        for call in delta.tool_calls.into_iter().flatten() {
+            self.read_call(call)?;
+        }
+
+        Ok(false)
     }
 }
 

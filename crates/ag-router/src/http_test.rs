@@ -7,36 +7,14 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use super::test_support::PostJson as _;
 use super::{
     ERROR_BODY_LIMIT_BYTES, HttpTransport, ProviderRequest, RetryClock, SUCCESS_BODY_LIMIT_BYTES,
-    TransportError, append_success_chunk, decode_success_body, has_context_overflow_marker,
-    is_quota_exceeded,
+    TransportError, append_success_chunk, has_context_overflow_marker, is_quota_exceeded,
 };
 use crate::model;
-
-/// Sends a request and decodes its successful JSON body, as the backends
-/// read a response that does not stream.
-pub(super) trait PostJson {
-    /// Sends `request` and decodes its successful body.
-    async fn post_json<Response: DeserializeOwned>(
-        &self,
-        request: &ProviderRequest,
-    ) -> Result<Response, TransportError>;
-}
-
-impl PostJson for HttpTransport {
-    async fn post_json<Response: DeserializeOwned>(
-        &self,
-        request: &ProviderRequest,
-    ) -> Result<Response, TransportError> {
-        let mut response = self.send(request).await?;
-
-        decode_success_body(&mut response).await
-    }
-}
 
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
 /// Rate-limit retries of the default policy.

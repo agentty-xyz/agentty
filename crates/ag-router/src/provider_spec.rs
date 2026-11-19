@@ -11,7 +11,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 
 use crate::credential::CredentialSource;
 use crate::input::TurnInput;
-use crate::model::{GenerationOptions, ModelError, ReasoningEffort};
+use crate::model::{GenerationOptions, ModelError, ModelMessage, ReasoningEffort};
 use crate::retry::RetryPolicy;
 use crate::schema::OutputSchema;
 
@@ -735,6 +735,22 @@ impl ProviderSpec {
         }
 
         Ok(())
+    }
+
+    /// Validates every user input among `messages` as
+    /// [`Self::validate_input`] does.
+    pub(crate) fn validate_inputs(
+        &self,
+        model: &str,
+        messages: &[ModelMessage],
+    ) -> Result<(), ModelError> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                ModelMessage::UserInput(input) => Some(input),
+                _ => None,
+            })
+            .try_for_each(|input| self.validate_input(model, input))
     }
 
     /// Rejects an output-token bound the provider does not accept: any bound

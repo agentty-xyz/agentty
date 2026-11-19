@@ -161,16 +161,19 @@ went, and replayed verbatim in that order; other reasoning content is omitted. S
 thinking survives only history that grows, so `Router::replays_turn_instructions` tells
 callers to replay earlier turns' instructions as first sent. Text, thinking, and
 tool-argument deltas reach a `DeltaObserver`, thinking blocks separated by a blank line,
-and a forced-tool answer streams as text. Unless `with_cache_breakpoints(false)` turns
-it off, the last tool definition, the last `system` block, and the last message's last
-block that is not signed thinking carry a `cache_control: {"type": "ephemeral"}`
-breakpoint, so a request repeating an earlier prefix reads it from the prompt cache.
-Usage counts cache reads and writes as input and reports the writes. A `max_tokens`,
-`pause_turn`, or `refusal` stop is an incomplete response, a
-`model_context_window_exceeded` stop or a "prompt is too long" `400` is a context
-overflow, and an HTTP `529` keeps its status for the caller's overload handling. A
-stream `error` event fails as the HTTP status its type stands for, such as `529` for
-`overloaded_error`, but is not retried, since the response had begun.
+and a forced-tool answer streams as text, after any text the model wrote before the
+call, which the completion leaves out of the answer. Unless
+`with_cache_breakpoints(false)` turns it off, the last tool definition, the last
+`system` block, and the last message's last block that is not signed thinking carry a
+`cache_control: {"type": "ephemeral"}` breakpoint, so a request repeating an earlier
+prefix reads it from the prompt cache. Usage counts cache reads and writes as input and
+reports the writes. A `max_tokens`, `pause_turn`, or `refusal` stop is an incomplete
+response, a `model_context_window_exceeded` stop or a "prompt is too long" `400` is a
+context overflow, and an HTTP `529` keeps its status for the caller's overload handling.
+A stream `error` event fails as the HTTP status its type stands for, such as `529` for
+`overloaded_error`. One that arrives before any content is retried as the policy retries
+that status, reported to the `RetryObserver`; one after content began is not, since its
+deltas were already reported.
 
 `chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
 OpenAI's "Sign in with ChatGPT" instead of API credits. Its preset authenticates with

@@ -280,6 +280,46 @@ impl HttpTransport {
         }
     }
 
+    /// Decides whether to send `request` again after `failure`, a failure
+    /// its provider reported inside a stream before any content, such as
+    /// an Anthropic `overloaded_error` event: the request's
+    /// [`RetryPolicy`] retries it as it retries an unsuccessful response
+    /// with the status the failure stands for, reporting the retry to its
+    /// observer and waiting it out first. `retries` counts the request's
+    /// earlier stream retries; a stream that had begun its content is not
+    /// retried, since its deltas were already reported.
+    pub(crate) async fn retry_streamed(
+        &self,
+        request: &ProviderRequest,
+        failure: &TransportError,
+        retries: u32,
+    ) -> bool {
+        let TransportError::StreamFailed {
+            code,
+            message,
+            status: Some(status),
+        } = failure
+        else {
+            return false;
+        };
+        let description = format!(
+            "{} {}",
+            code.as_deref().unwrap_or_default(),
+            message.as_deref().unwrap_or_default()
+        );
+        let policy = &request.retry;
+        let Some(kind) = RetryKind::of_status(*status).filter(|kind| {
+            !is_quota_exceeded(*status, &description) && policy.allows(*kind, retries, 0)
+        }) else {
+            return false;
+        };
+        let delay = policy.status_delay(retries, None, (self.clock.jitter)());
+        self.wait(request, retries + 1, delay, kind, Some(status.as_u16()))
+            .await;
+
+        true
+    }
+
     /// Reports retry `attempt` of `request` to its observer, then waits
     /// `delay`.
     async fn wait(
@@ -594,3 +634,7 @@ mod tests;
 #[cfg(test)]
 #[path = "http_retry_test.rs"]
 mod retry_tests;
+
+#[cfg(test)]
+#[path = "http_support_test.rs"]
+mod test_support;
