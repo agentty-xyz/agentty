@@ -16,7 +16,7 @@
 #   distributions, but creates no GitHub release and publishes nothing.
 # - A release tag push additionally attests the artifacts and publishes the
 #   GitHub release.
-#   It first requires the `check` jobs: `release-checks`, `check-homebrew-tap`.
+#   It first requires the `check` jobs: `release-checks`.
 #   Then it runs the `publish` jobs, which skip prereleases unless configured
 #   otherwise: `publish-npm`, `publish-crates-io`, `publish-homebrew`.
 
@@ -253,18 +253,6 @@ jobs:
       contents: read
     uses: $/.github/workflows/release-checks.yml
 
-  # A `check` job from `[workspace.metadata.release.workflow.jobs]`: tag
-  # pushes only, and `host` requires it.
-  check-homebrew-tap:
-    needs: plan
-    if: ${{ github.event_name == 'push' }}
-    permissions: {}
-    uses: $/.github/workflows/check-homebrew-tap.yml
-    with:
-      plan: ${{ needs.plan.outputs.plan }}
-    secrets:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-
   build:
     name: build (${{ matrix.target }})
     needs: plan
@@ -455,7 +443,7 @@ jobs:
   # Tag pushes only. Running without `always()` requires every needed job,
   # and so the `check` jobs and every build, to have succeeded.
   host:
-    needs: [plan, release-checks, check-homebrew-tap, build, assemble]
+    needs: [plan, release-checks, build, assemble]
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
@@ -545,4 +533,4 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.plan }}
     secrets:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

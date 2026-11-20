@@ -183,14 +183,6 @@ stage = "check"
 uses = "$/.github/workflows/release-checks.yml"
 permissions = { contents = "read" }
 
-# Stops the release before it is published when `HOMEBREW_TAP_TOKEN` can no
-# longer push to the tap, and warns when the token is about to expire.
-[workspace.metadata.release.workflow.jobs.check-homebrew-tap]
-stage = "check"
-uses = "$/.github/workflows/check-homebrew-tap.yml"
-plan = true
-secrets = ["HOMEBREW_TAP_TOKEN"]
-
 [workspace.metadata.release.workflow.jobs.publish-npm]
 stage = "publish"
 uses = "$/.github/workflows/publish-npm-oidc.yml"
@@ -202,15 +194,14 @@ stage = "publish"
 uses = "$/.github/workflows/publish-crates-io.yml"
 permissions = { contents = "read", id-token = "write" }
 
-# Pushes the formulas to `agentty-xyz/homebrew-tap` with a fine-grained token
-# limited to Contents read and write on that repository; it expires every 90
-# days and is renewed with `gh secret set HOMEBREW_TAP_TOKEN`.
+# Pushes the formulas to `agentty-xyz/homebrew-tap` with that repository's
+# write-access deploy key.
 [workspace.metadata.release.workflow.jobs.publish-homebrew]
 stage = "publish"
 uses = "$/.github/workflows/publish-homebrew.yml"
 permissions = { contents = "read" }
 plan = true
-secrets = ["HOMEBREW_TAP_TOKEN"]
+secrets = ["HOMEBREW_TAP_DEPLOY_KEY"]
 
 [profile.dev]
 debug = "line-tables-only"
