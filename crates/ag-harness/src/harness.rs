@@ -119,12 +119,15 @@ impl Session {
     /// one within a provider, restarts the history projection, so the new
     /// model's first request shares no cached prompt prefix with the old
     /// one.
-    /// A registered model has no prices, so later runs report no
-    /// [`crate::Cost`] and their turns count as unpriced, no catalog
-    /// concurrency cap, so later requests no longer take its permits, and
-    /// no cataloged maximum output for budget estimates. The switch also
-    /// drops the catalog and its summary model, so compaction and round
-    /// summaries run on the registered model.
+    /// A model registered with [`ModelRegistry::register`] or
+    /// [`ModelRegistry::register_shared`] has no prices, so later runs
+    /// report no [`crate::Cost`] and their turns count as unpriced, no
+    /// catalog concurrency cap, so later requests no longer take its
+    /// permits, and no cataloged maximum output for budget estimates; one
+    /// registered with [`ModelRegistry::register_catalog_entry`] brings its
+    /// catalog entry's prices, concurrency cap, and maximum output instead.
+    /// The switch also drops the catalog and its summary model, so
+    /// compaction and round summaries run on the registered model.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
     /// handle. The session keeps its stored history byte budget (see
@@ -153,11 +156,8 @@ impl Session {
         )
         .await?;
         let config = self.harness.config_mut();
-        config.concurrency = None;
-        config.max_output = None;
+        config.adopt_catalog_entry(registration.catalog_entry());
         config.model = registration.model();
-        config.model_id = None;
-        config.pricing = None;
         config.context_budget = registration.context_budget();
         config.context_calibration = ContextCalibration::default();
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
@@ -1546,6 +1546,7 @@ impl Harness {
             model: None,
             model_reasoning_effort: None,
             model_selector: None,
+            registration_revision: None,
             repository: None,
             #[cfg(feature = "native-sandbox")]
             sandbox: Sandbox::default(),
@@ -1571,6 +1572,9 @@ impl Harness {
     /// can outlive the registry. Capabilities are host declarations, not tool
     /// permissions. Durable sessions retain the key and revision and require
     /// the same registration on resume. This does not switch a stored model.
+    /// A registration made with [`ModelRegistry::register_catalog_entry`]
+    /// also prices runs and caps concurrent requests like
+    /// [`HarnessBuilder::catalog`].
     ///
     /// # Errors
     /// Returns [`ModelRegistryError::UnknownKey`] for an unregistered key.
@@ -1580,7 +1584,8 @@ impl Harness {
         Ok(Self::from_registration(registration))
     }
 
-    /// Returns the captured registration, or `None` for direct construction.
+    /// Returns the captured registration, or `None` for a harness built
+    /// without one.
     pub fn model_registration(&self) -> Option<&ModelRegistration> {
         self.inner.model_registration.as_ref()
     }
@@ -2359,9 +2364,11 @@ impl Harness {
 /// Start with [`Harness::builder`], select a model with [`Self::model`], and
 /// finish with [`Self::build`]. Each setter replaces its earlier value; unset
 /// options keep the [`Harness::new`] defaults: deny-by-default tools, the
-/// local filesystem, and no store. Registered models still use
-/// [`Harness::from_registry`]. Instead of a model, a host may give a
-/// [`ModelCatalog`] and a [`ModelSelector`].
+/// local filesystem, and no store. Models registered in a
+/// [`ModelRegistry`] use [`Harness::from_registry`]. Instead of a model, a
+/// host may give a [`ModelCatalog`] and a [`ModelSelector`], and with
+/// [`Self::registration_revision`] record the selected entry's registration
+/// so durable sessions can resume and switch models.
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
     approval: Option<Arc<dyn ApprovalHandler>>,
@@ -2379,6 +2386,7 @@ pub struct HarnessBuilder {
     model: Option<Arc<dyn Model>>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
+    registration_revision: Option<String>,
     repository: Option<Repository>,
     #[cfg(feature = "native-sandbox")]
     sandbox: Sandbox,
@@ -2471,6 +2479,32 @@ impl HarnessBuilder {
     /// fails without a catalog or together with an explicit [`Self::model`].
     pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.model_selector = Some(selector.into());
+
+        self
+    }
+
+    /// Records the [`Self::catalog`] entry the harness selects as a model
+    /// registration under its [`ModelId`] and the host's `revision`, the
+    /// same registration [`ModelRegistry::register_catalog_entry`] makes.
+    ///
+    /// Durable sessions then retain the registration's key and revision, so
+    /// they resume on any harness whose registration has the same ones,
+    /// whether built this way, by [`Harness::from_registry`], or from a
+    /// manual registration, and they switch models with
+    /// [`Session::switch_model`]. Without a revision, a harness built from a
+    /// catalog records no registration, and its sessions resume only on
+    /// harnesses that record none. The execution identity defaults to the
+    /// registration's, as with [`Harness::from_registry`]; an explicit
+    /// [`Self::execution_identity`] replaces it. Revise `revision` as
+    /// [`ModelRegistry::register`] describes.
+    ///
+    /// Building fails with [`HarnessBuildError::RegistrationRequiresCatalog`]
+    /// when the model is not selected from a catalog, and with
+    /// [`HarnessBuildError::Registration`] when the entry declares no
+    /// context profile or its identifier and `revision` do not form an
+    /// [`ExecutionIdentity`].
+    pub fn registration_revision(mut self, revision: impl Into<String>) -> Self {
+        self.registration_revision = Some(revision.into());
 
         self
     }
@@ -2693,6 +2727,9 @@ impl HarnessBuilder {
             (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
             (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
         };
+        if self.registration_revision.is_some() && cataloged.is_none() {
+            return Err(HarnessBuildError::RegistrationRequiresCatalog.into());
+        }
         if self.tools.resolve().has_builtin() && self.repository.is_none() {
             return Err(HarnessBuildError::RepositoryRequired.into());
         }
@@ -2723,10 +2760,15 @@ impl HarnessBuilder {
             config.budget = budget;
         }
         if let Some((catalog, handle)) = cataloged {
-            config.concurrency = handle.concurrency();
-            config.max_output = handle.spec().max_output();
-            config.model_id = Some(handle.id().clone());
-            config.pricing = handle.spec().pricing();
+            config.adopt_catalog_entry(Some(&handle));
+            if let Some(revision) = &self.registration_revision {
+                let registration = ModelRegistration::from_catalog_entry(&handle, revision)
+                    .map_err(HarnessBuildError::Registration)?;
+                config
+                    .execution_identity
+                    .get_or_insert_with(|| registration.identity().clone());
+                config.model_registration = Some(registration);
+            }
             config.summary_model = match self.summary_selector {
                 Some(selector) => {
                     let summary = catalog
@@ -2861,6 +2903,13 @@ pub enum HarnessBuildError {
     /// repository is set.
     #[error("the tool set holds built-in repository tools; call `repository`")]
     RepositoryRequired,
+    /// A registration revision was set, but the model was not selected
+    /// from a catalog.
+    #[error("a registration revision requires a model selected from a catalog; call `catalog`")]
+    RegistrationRequiresCatalog,
+    /// The selected catalog entry cannot be registered.
+    #[error("cannot register the selected catalog model")]
+    Registration(#[source] ModelRegistryError),
 }
 
 /// Session storage selected on a [`HarnessBuilder`].
@@ -2885,9 +2934,9 @@ struct HarnessConfig {
     /// Catalog the builder selected [`Self::model`] from, which resolves
     /// [`Session::compact_with`] selectors.
     catalog: Option<Arc<ModelCatalog>>,
-    /// Concurrency cap of [`Self::model`], from the catalog entry the
-    /// builder selected and shared with every harness built from that
-    /// catalog; `None` for any other model.
+    /// Concurrency cap of [`Self::model`], from the catalog entry it comes
+    /// from and shared with every harness using that entry; `None` for any
+    /// other model.
     concurrency: Option<Arc<Semaphore>>,
     context_budget: ContextBudget,
     context_calibration: ContextCalibration,
@@ -2909,13 +2958,13 @@ struct HarnessConfig {
     /// request's budget estimate; `None` for any other model.
     max_output: Option<u64>,
     model: Arc<dyn Model>,
-    /// Catalog identifier of [`Self::model`] when the builder selected it
-    /// from a [`ModelCatalog`].
+    /// Catalog identifier of [`Self::model`] when it comes from a
+    /// [`ModelCatalog`] entry.
     model_id: Option<ModelId>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_registration: Option<ModelRegistration>,
-    /// Prices of [`Self::model`], from the catalog entry the builder
-    /// selected; `None` for any other model.
+    /// Prices of [`Self::model`], from the catalog entry it comes from;
+    /// `None` for any other model.
     pricing: Option<Pricing>,
     repository: Option<Repository>,
     /// Sandbox choice for native `bash` configurations and the
@@ -2975,11 +3024,22 @@ impl HarnessConfig {
     fn registered(registration: ModelRegistration) -> Self {
         let mut config = Self::new(registration.model(), registration.context_budget());
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
+        config.adopt_catalog_entry(registration.catalog_entry());
         config.execution_identity = Some(registration.identity().clone());
         config.history_budget = HistoryBudget::Window;
         config.model_registration = Some(registration);
 
         config
+    }
+
+    /// Adopts the prices, concurrency cap, maximum output, and identifier of
+    /// the catalog entry `handle` that [`Self::model`] comes from, or clears
+    /// them for a model without one.
+    fn adopt_catalog_entry(&mut self, handle: Option<&ModelHandle>) {
+        self.concurrency = handle.and_then(ModelHandle::concurrency);
+        self.max_output = handle.and_then(|handle| handle.spec().max_output());
+        self.model_id = handle.map(|handle| handle.id().clone());
+        self.pricing = handle.and_then(|handle| handle.spec().pricing());
     }
 
     /// Returns the retained history bytes of a new session with
