@@ -635,6 +635,8 @@ pub(super) async fn load_session_speed_mode(
 ///
 /// - [`TurnEvent::Activity`]: publishes live rows and reduces the usage
 ///   summary.
+/// - [`TurnEvent::Output`]: accumulates streamed model output, published at
+///   most once per frame.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -652,6 +654,7 @@ pub(super) async fn consume_turn_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             TurnEvent::Activity(event) => activity.observe_live(event, &app_event_tx, &session_id),
+            TurnEvent::Output(event) => activity.observe_output(event, &app_event_tx, &session_id),
             TurnEvent::ThoughtDelta(thought) => {
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
@@ -714,6 +717,7 @@ fn coalesce_ready_turn_progress_events(
         coalesced_events += 1;
         match event {
             TurnEvent::Activity(event) => activity.observe_live(event, app_event_tx, session_id),
+            TurnEvent::Output(event) => activity.observe_output(event, app_event_tx, session_id),
             TurnEvent::ThoughtDelta(thought) => {
                 if let Some(thought) = normalize_thinking_stream_text(&thought) {
                     latest_thought = thought;

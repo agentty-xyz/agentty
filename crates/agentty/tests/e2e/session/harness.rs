@@ -1,6 +1,8 @@
 //! Preview Harness sessions behind `--experimental-harness`.
 
 use std::fmt::Write as _;
+use std::io::{Read as _, Write as _};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::time::Duration;
 
@@ -16,7 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fixture::E2eResult;
 use crate::common;
-use crate::common::{FeatureTest, SettingsRow};
+use crate::common::{FeatureTest, ReleaseGate, SettingsRow};
 
 /// Answer the scripted provider returns after the write tool succeeds.
 const HARNESS_ANSWER: &str = "Created notes.txt through the harness.";
@@ -1215,4 +1217,192 @@ async fn test_harness_model_picker_signs_in_with_chatgpt() -> E2eResult {
     );
 
     Ok(())
+}
+
+/// Prompt of the streamed-answer scenario.
+const STREAM_PROMPT: &str = "Stream a reply";
+/// Reasoning the gated provider streams before its answer.
+const STREAM_REASONING: &str = "Planning the reply.";
+/// Answer text the gated provider streams before its gate opens.
+const STREAM_ANSWER_HEAD: &str = "Streaming part one";
+/// Answer text the gated provider streams after its gate opens.
+const STREAM_ANSWER_TAIL: &str = " and part two.";
+/// Heading of the title-generation prompt, which repeats the session request.
+const TITLE_PROMPT: &str = "Generate a concise, commit-style title";
+
+/// Serves Chat Completions on a local port and returns its base URL.
+///
+/// The session turn streams its reasoning and the first part of its answer,
+/// then holds the response open until `gate` is released before streaming
+/// the rest. Every other request, such as title generation, gets
+/// `404 Not Found`.
+fn gated_stream_provider(gate: ReleaseGate) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let gate = gate.clone();
+            std::thread::spawn(move || serve_gated_stream(stream, &gate));
+        }
+    });
+
+    Ok(format!("http://{address}"))
+}
+
+/// Answers one provider connection for [`gated_stream_provider`].
+fn serve_gated_stream(mut stream: TcpStream, gate: &ReleaseGate) {
+    let Some(body) = read_request_body(&mut stream) else {
+        return;
+    };
+    if !body.contains(STREAM_PROMPT) || body.contains(TITLE_PROMPT) {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        return;
+    }
+    let answer = json!({
+        "answer": format!("{STREAM_ANSWER_HEAD}{STREAM_ANSWER_TAIL}"),
+        "questions": []
+    })
+    .to_string();
+    let (head, tail) = answer.split_at(answer.find(STREAM_ANSWER_TAIL).unwrap_or_default());
+    let finished = json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+    });
+    let _ = stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+    );
+    let _ = stream.write_all(
+        sse_chunks(&[
+            json!({"choices": [{"index": 0, "delta": {"reasoning_content": STREAM_REASONING}}]}),
+            json!({"choices": [{"index": 0, "delta": {"content": head}}]}),
+        ])
+        .as_bytes(),
+    );
+    // A scenario that never opens the gate sees the stream end unfinished.
+    if !gate.wait_blocking(Duration::from_secs(60)) {
+        return;
+    }
+    let _ = stream.write_all(
+        sse_chunks(&[
+            json!({"choices": [{"index": 0, "delta": {"content": tail}}]}),
+            finished,
+        ])
+        .as_bytes(),
+    );
+    let _ = stream.write_all(b"data: [DONE]\n\n");
+}
+
+/// Formats `chunks` as server-sent events.
+fn sse_chunks(chunks: &[serde_json::Value]) -> String {
+    chunks.iter().fold(String::new(), |mut events, chunk| {
+        let _ = write!(events, "data: {chunk}\n\n");
+
+        events
+    })
+}
+
+/// Reads one HTTP request from `stream` and returns its body, or `None`
+/// when the connection closes first.
+fn read_request_body(stream: &mut TcpStream) -> Option<String> {
+    let mut request = Vec::new();
+    let mut chunk = [0; 8192];
+    let header_end = loop {
+        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break end + 4;
+        }
+        let read = stream.read(&mut chunk).ok().filter(|read| *read > 0)?;
+        request.extend_from_slice(&chunk[..read]);
+    };
+    let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+    let length = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|length| length.trim().parse::<usize>().ok())
+        .unwrap_or_default();
+    while request.len() < header_end + length {
+        let read = stream.read(&mut chunk).ok().filter(|read| *read > 0)?;
+        request.extend_from_slice(&chunk[..read]);
+    }
+
+    Some(String::from_utf8_lossy(&request[header_end..]).into_owned())
+}
+
+#[tokio::test]
+async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> E2eResult {
+    // Arrange
+    let gate = ReleaseGate::new()?;
+    let server = gated_stream_provider(gate.clone())?;
+
+    // Act, Assert
+    FeatureTest::new("harness_streaming")
+        .with_git()
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("[Preview] Built-in agent", 5000)
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text(STREAM_PROMPT)
+                    .wait_for_text(STREAM_PROMPT, 3000)
+                    .press_key("Enter")
+                    // The provider holds the rest of its answer until the
+                    // gate opens, so this frame is mid-stream.
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(frame, STREAM_REASONING, &full)?;
+                            assertion::match_text_in_region(frame, STREAM_ANSWER_HEAD, &full)?;
+
+                            assertion::match_not_visible(frame, STREAM_ANSWER_TAIL.trim())
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_streaming_partial",
+                        "The answer streams before the turn completes",
+                    )
+                    .compose(&gate.release())
+                    // The persisted answer replaces the stream, whose
+                    // reasoning is never stored.
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(
+                                frame,
+                                &format!("{STREAM_ANSWER_HEAD}{STREAM_ANSWER_TAIL}"),
+                                &full,
+                            )?;
+
+                            assertion::match_not_visible(frame, STREAM_REASONING)
+                        },
+                    )
+                    .wait_for_stable_frame(500, 10000)
+                    .capture_labeled(
+                        "harness_streaming_answer",
+                        "The persisted answer replaces the stream",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    assertion::assert_match_count(frame, STREAM_ANSWER_TAIL.trim(), 1);
+                    assertion::assert_not_visible(frame, STREAM_REASONING);
+                })
+            },
+        )
+        .await
 }

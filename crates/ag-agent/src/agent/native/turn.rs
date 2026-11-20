@@ -1,20 +1,22 @@
-//! Prompt assembly, settlement, and result conversion shared by native
-//! session turns and one-shot utility runs.
+//! Prompt assembly and result conversion shared by native session turns and
+//! one-shot utility runs.
+
+use std::future::IntoFuture as _;
 
 use ag_contracts::{
     AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, SessionDiffState, SessionStats,
     TurnEvent,
 };
-use ag_harness::turn::TurnReport;
-use ag_harness::{TurnControl, TurnOutcome};
+use ag_harness::{RunError, RunOutput, Unsettled};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
 };
 use ag_session::AgentKind;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::activity::ActivityBridge;
-use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig};
+use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig, RunOptions};
 use super::failure;
 use super::turn_error::NativeTurnError;
 use crate::agent::{
@@ -80,51 +82,19 @@ pub(crate) fn reject_attachments(attachments: &[TurnPromptAttachment]) -> Result
     )
 }
 
-/// Waits until a turn's persistence, writes, and commands settle, retrying
-/// failed persistence and command cleanup once.
-///
-/// The harness blocks the session's admission until a failed cleanup is
-/// retried successfully, so callers keep a failed `control` to settle again
-/// before the session's next turn.
-///
-/// # Errors
-/// Returns the settlement phase that still failed.
-pub(crate) async fn settle(control: &TurnControl) -> Result<(), String> {
-    let mut settlement = control.settled().await;
-    if settlement.is_err() {
-        settlement = control.retry_settlement().await;
-        if settlement.is_ok() {
-            settlement = control.settled().await;
-        }
-    }
-
-    settlement.map_err(|error| format!("Harness turn cleanup failed: {error}"))
-}
-
-/// Parses a settled harness outcome into the shared protocol response.
+/// Parses the validated output of a settled harness run into the shared
+/// protocol response.
 ///
 /// # Errors
 /// Returns an error when the schema-valid output still fails strict protocol
 /// parsing.
-pub(crate) fn parse_outcome(
-    outcome: &TurnOutcome,
+pub(crate) fn parse_output(
+    output: &RunOutput,
     profile: ProtocolRequestProfile,
 ) -> Result<AgentResponse, String> {
-    parse_turn_response(AgentKind::Harness, &outcome.output().to_string(), profile)
-}
+    let output = output.parse::<Value>().unwrap_or_default();
 
-/// Sums provider-reported input and output tokens across model requests.
-pub(crate) fn token_usage(report: &TurnReport) -> (u64, u64) {
-    report
-        .model_requests()
-        .iter()
-        .filter_map(|request| request.completion()?.usage().copied())
-        .fold((0, 0), |(input, output), usage| {
-            (
-                input + usage.input_tokens().unwrap_or(0),
-                output + usage.output_tokens().unwrap_or(0),
-            )
-        })
+    parse_turn_response(AgentKind::Harness, &output.to_string(), profile)
 }
 
 /// Runs one stateless utility prompt with the request's permissions and
@@ -145,7 +115,7 @@ pub(crate) async fn run_one_shot(
     let environment = config.environment();
     let selection = ModelSelection::resolve(&request.model, &environment)?;
     let profile = request.request_kind.protocol_profile();
-    let options = config::turn_options(profile, request.permission_mode, &environment)?;
+    let options = RunOptions::new(profile, request.permission_mode, &environment)?;
     let repository = config::repository(&request.folder, &environment)?;
     let running_context_window = config::running_context_window(&selection, &environment).await?;
     let activity_tx = request.activity_tx.clone();
@@ -173,17 +143,25 @@ pub(crate) async fn run_one_shot(
         workspace_root: &request.folder,
     }
     .render()?;
-    let turn = harness.turn(prompt, options).start();
-    let control = turn.control();
+    let run = harness.run(options.request(prompt));
+    let cancel = run.cancel_token();
+    let mut outcome = run.into_future();
+    // A cancelled run still resolves only once its effects settle.
     let outcome = tokio::select! {
         biased;
-        () = cancellation.cancelled() => Err(NativeTurnError::Stopped),
-        outcome = turn => outcome.map_err(NativeTurnError::from_run),
+        () = cancellation.cancelled() => {
+            cancel.cancel();
+            outcome.await
+        }
+        outcome = &mut outcome => outcome,
     };
-    settle(&control).await?;
-    let outcome = outcome?;
-    let response = parse_outcome(&outcome, profile)?;
-    let (input_tokens, output_tokens) = token_usage(outcome.report());
+    outcome
+        .settlement
+        .as_ref()
+        .map_err(Unsettled::error)
+        .map_err(cleanup_failure)?;
+    let output = outcome.result.map_err(NativeTurnError::from_run)?;
+    let response = parse_output(&output, profile)?;
 
     Ok(OneShotSubmission {
         response,
@@ -191,8 +169,13 @@ pub(crate) async fn run_one_shot(
             added_lines: 0,
             deleted_lines: 0,
             diff_state: SessionDiffState::Unknown,
-            input_tokens,
-            output_tokens,
+            input_tokens: outcome.usage.input,
+            output_tokens: outcome.usage.output,
         },
     })
+}
+
+/// Describes cleanup of a finished run that still failed to settle.
+pub(crate) fn cleanup_failure(error: &RunError) -> String {
+    format!("Harness turn cleanup failed: {error}")
 }

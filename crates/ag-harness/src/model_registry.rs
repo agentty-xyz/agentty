@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::catalog::{ModelHandle, ModelSpec};
 use crate::model::{ContextBudget, ContextBudgetError, ModelMetadata, ModelProfile};
 use crate::recovery::ExecutionIdentity;
 use crate::{Model, TurnInput};
@@ -44,6 +45,9 @@ impl ModelCapabilities {
 #[derive(Clone)]
 pub struct ModelRegistration {
     capabilities: ModelCapabilities,
+    /// Catalog entry the registration came from, whose prices, concurrency
+    /// cap, and maximum output harnesses adopt with the model.
+    catalog_entry: Option<ModelHandle>,
     context_budget: ContextBudget,
     identity: ExecutionIdentity,
     model: Arc<dyn Model>,
@@ -65,6 +69,55 @@ impl ModelRegistration {
         self.model.metadata()
     }
 
+    /// Returns the catalog specification of a registration made from a
+    /// catalog entry, or `None` for one made from a bare model.
+    pub fn catalog_spec(&self) -> Option<&ModelSpec> {
+        self.catalog_entry.as_ref().map(ModelHandle::spec)
+    }
+
+    /// Returns the registration of the catalog entry `handle` under its
+    /// catalog identifier and `revision`, declaring the entry's tool calls,
+    /// image input, and context profile.
+    ///
+    /// # Errors
+    /// Returns [`ModelRegistryError::InvalidIdentity`] when the identifier
+    /// and `revision` do not form an [`ExecutionIdentity`], and
+    /// [`ModelRegistryError::ProfileRequired`] for an entry without a
+    /// context profile.
+    pub(crate) fn from_catalog_entry(
+        handle: &ModelHandle,
+        revision: &str,
+    ) -> Result<Self, ModelRegistryError> {
+        let key = handle.id().as_str();
+        let identity = ExecutionIdentity::new(key, revision).map_err(|_| {
+            ModelRegistryError::InvalidIdentity {
+                key: key.to_string(),
+                revision: revision.to_string(),
+            }
+        })?;
+        // The catalog derives an entry's budget from its profile when it
+        // builds, so both are present or both absent.
+        let (Some(profile), Some(context_budget)) = (handle.profile(), handle.context_budget())
+        else {
+            return Err(ModelRegistryError::ProfileRequired {
+                key: key.to_string(),
+            });
+        };
+        let declared = handle.spec().capabilities();
+
+        Ok(Self {
+            capabilities: ModelCapabilities {
+                image_input: declared.image_input(),
+                profile,
+                tool_calls: declared.tool_calls(),
+            },
+            catalog_entry: Some(handle.clone()),
+            context_budget,
+            identity,
+            model: handle.model(),
+        })
+    }
+
     /// Returns the declared capabilities narrowed by what the adapter accepts,
     /// so a declaration alone never admits image history the adapter rejects.
     pub(crate) fn history_capabilities(&self) -> ModelCapabilities {
@@ -83,13 +136,19 @@ impl ModelRegistration {
     pub(crate) fn model(&self) -> Arc<dyn Model> {
         Arc::clone(&self.model)
     }
+
+    /// Returns the catalog entry the registration came from, if any.
+    pub(crate) fn catalog_entry(&self) -> Option<&ModelHandle> {
+        self.catalog_entry.as_ref()
+    }
 }
 
 /// Host model catalog keyed by [`ExecutionIdentity::key`].
 ///
-/// Register built-in clients or injected [`Model`] implementations. Keys are
-/// unique regardless of revision; construct a new registry to revise a
-/// registration. Existing harnesses retain their selected model and identity.
+/// Register built-in clients, injected [`Model`] implementations, or
+/// [`crate::catalog::ModelCatalog`] entries. Keys are unique regardless of
+/// revision; construct a new registry to revise a registration. Existing
+/// harnesses retain their selected model and identity.
 #[derive(Default)]
 pub struct ModelRegistry {
     models: HashMap<String, ModelRegistration>,
@@ -145,21 +204,47 @@ impl ModelRegistry {
             }
         })?;
 
-        match self.models.entry(identity.key().to_string()) {
-            Entry::Occupied(entry) => Err(ModelRegistryError::DuplicateKey {
-                key: entry.key().clone(),
-            }),
-            Entry::Vacant(entry) => {
-                entry.insert(ModelRegistration {
-                    capabilities,
-                    context_budget,
-                    identity,
-                    model,
-                });
+        self.insert(ModelRegistration {
+            capabilities,
+            catalog_entry: None,
+            context_budget,
+            identity,
+            model,
+        })
+    }
 
-                Ok(())
-            }
-        }
+    /// Registers the catalog entry `handle` under its
+    /// [`crate::catalog::ModelId`] as key and the host's `revision`.
+    ///
+    /// The registration declares the entry's
+    /// [`crate::catalog::Capabilities::tool_calls`],
+    /// [`crate::catalog::Capabilities::image_input`], and context profile,
+    /// exactly as [`Self::register_shared`] would with those
+    /// [`ModelCapabilities`], so a session recorded on an equal manual
+    /// registration resumes on this one and the reverse. Unlike a bare
+    /// model, it also keeps the entry's prices, concurrency cap, and
+    /// maximum output, which [`crate::Harness::from_registry`] and
+    /// [`crate::Session::switch_model`] adopt with the model. An entry
+    /// without a context profile cannot be registered.
+    /// [`crate::HarnessBuilder::registration_revision`] records the same
+    /// registration for a harness built from the catalog. Revise
+    /// `revision` as [`Self::register`] describes.
+    ///
+    /// # Errors
+    /// Returns [`ModelRegistryError::InvalidIdentity`] when the identifier
+    /// and `revision` do not form an [`ExecutionIdentity`],
+    /// [`ModelRegistryError::ProfileRequired`] for an entry without a
+    /// context profile, and [`ModelRegistryError::DuplicateKey`] without
+    /// replacing an existing registration when the key is already present.
+    pub fn register_catalog_entry(
+        &mut self,
+        handle: &ModelHandle,
+        revision: impl Into<String>,
+    ) -> Result<(), ModelRegistryError> {
+        self.insert(ModelRegistration::from_catalog_entry(
+            handle,
+            &revision.into(),
+        )?)
     }
 
     /// Resolves an exact host key without contacting a provider.
@@ -173,16 +258,39 @@ impl ModelRegistry {
                 key: key.to_string(),
             })
     }
+
+    /// Adds `registration` unless its key is already registered.
+    fn insert(&mut self, registration: ModelRegistration) -> Result<(), ModelRegistryError> {
+        match self.models.entry(registration.identity.key().to_string()) {
+            Entry::Occupied(entry) => Err(ModelRegistryError::DuplicateKey {
+                key: entry.key().clone(),
+            }),
+            Entry::Vacant(entry) => {
+                entry.insert(registration);
+
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Failure to register or select a host model key.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ModelRegistryError {
     /// A registration already owns this key.
     #[error("model key `{key}` is already registered")]
     DuplicateKey {
         /// Conflicting host key.
         key: String,
+    },
+    /// A catalog identifier and revision do not form an execution identity.
+    #[error("model key `{key}` with revision `{revision}` is not a valid execution identity")]
+    InvalidIdentity {
+        /// Rejected catalog identifier.
+        key: String,
+        /// Rejected host revision.
+        revision: String,
     },
     /// The declared profile leaves no request capacity.
     #[error("model key `{key}` declares an invalid context profile: {source}")]
@@ -192,6 +300,13 @@ pub enum ModelRegistryError {
         /// Budget derivation failure.
         #[source]
         source: ContextBudgetError,
+    },
+    /// A catalog entry declares no context profile, which a registration
+    /// needs to bound its requests.
+    #[error("model key `{key}` declares no context profile")]
+    ProfileRequired {
+        /// Catalog identifier of the entry.
+        key: String,
     },
     /// No registration owns this key.
     #[error("unknown model key `{key}`")]

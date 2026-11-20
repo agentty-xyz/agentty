@@ -1374,6 +1374,21 @@ impl ReleaseGate {
             ))
     }
 
+    /// Blocks the calling thread until the gate is released, returning
+    /// `false` when `timeout` elapses first. In-process fixtures, such as a
+    /// scripted provider, wait on it from their own threads.
+    pub(crate) fn wait_blocking(&self, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while !self.path().is_file() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        true
+    }
+
     fn path(&self) -> PathBuf {
         self.directory.path().join("released")
     }

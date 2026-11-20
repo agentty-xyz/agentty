@@ -7,6 +7,7 @@ mod contract;
 mod execution_policy;
 mod input_size;
 mod one_shot;
+mod output;
 mod permission;
 mod provider_call_budget;
 mod reasoning;
@@ -26,6 +27,7 @@ pub use input_size::is_input_size_error;
 #[cfg(any(test, feature = "test-utils"))]
 pub use one_shot::MockOneShotClient;
 pub use one_shot::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
+pub use output::{OutputEvent, OutputKind};
 pub use permission::PermissionMode;
 pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;

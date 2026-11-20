@@ -13,8 +13,8 @@ use ag_agent::{
 use ag_contracts::{
     ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
     AgentRequestKind, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest,
-    PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
-    TurnEvent, TurnRequest,
+    OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle,
+    SpeedMode, TurnContinuation, TurnEvent, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
@@ -272,6 +272,103 @@ async fn session_turn_answers_and_resumes_with_stored_history() {
             })
             .await
             .is_ok()
+    );
+}
+
+/// Returns one streamed Chat Completions response carrying `chunks` as its
+/// deltas.
+fn chat_stream(chunks: &[Value]) -> ResponseTemplate {
+    let finished = json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+    });
+    let mut body = chunks
+        .iter()
+        .chain([&finished])
+        .fold(String::new(), |mut body, chunk| {
+            let _ = write!(body, "data: {chunk}\n\n");
+
+            body
+        });
+    body.push_str("data: [DONE]\n\n");
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Returns one streamed Chat Completions delta.
+fn chat_delta(delta: &Value) -> Value {
+    json!({"choices": [{"index": 0, "delta": delta}]})
+}
+
+#[tokio::test]
+async fn streamed_session_turn_forwards_its_output_before_the_answer() {
+    // Arrange
+    let server = MockServer::start().await;
+    let response = json!({"answer": "Streamed answer", "questions": []}).to_string();
+    let (head, tail) = response.split_at(response.len() / 2);
+    respond(
+        &server,
+        "Stream it",
+        chat_stream(&[
+            chat_delta(&json!({"reasoning_content": "Checking."})),
+            chat_delta(&json!({"content": head})),
+            chat_delta(&json!({"content": tail})),
+        ]),
+        1,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, events) = run_turn(
+        &channel,
+        "session-stream",
+        turn_request(worktree.path(), MUSE_MODEL, "Stream it"),
+    )
+    .await;
+
+    // Assert
+    let result = result.expect("streamed turn should succeed");
+    assert_eq!(result.assistant_message.answer, "Streamed answer");
+    let outputs = events
+        .into_iter()
+        .filter_map(|event| match event {
+            TurnEvent::Output(output) => Some(output),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let streamed = outputs
+        .iter()
+        .filter_map(|output| match output {
+            OutputEvent::Delta { id: 1, text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(streamed, "Streamed answer");
+    assert_eq!(
+        outputs.first(),
+        Some(&OutputEvent::Started {
+            id: 0,
+            kind: OutputKind::Reasoning,
+        })
+    );
+    assert!(outputs.contains(&OutputEvent::Completed {
+        id: 0,
+        text: "Checking.".to_string(),
+    }));
+    assert!(outputs.contains(&OutputEvent::Completed {
+        id: 1,
+        text: "Streamed answer".to_string(),
+    }));
+    assert_eq!(
+        outputs.last(),
+        Some(&OutputEvent::Answer {
+            replaces: Some(1),
+            text: "Streamed answer".to_string(),
+        })
     );
 }
 
@@ -1511,7 +1608,7 @@ async fn failed_shutdown_cleanup_is_retried_before_the_next_turn() {
 }
 
 #[tokio::test]
-async fn failed_command_cleanup_is_retried_before_the_next_turn() {
+async fn failed_command_cleanup_is_retried_by_shutdown_and_the_next_turn() {
     // Arrange
     let server = MockServer::start().await;
     respond(&server, "Next question", answer("Recovered"), 1).await;
@@ -1561,19 +1658,29 @@ async fn failed_command_cleanup_is_retried_before_the_next_turn() {
     .await
     .expect("outcome fault");
     let (failed, _) = run_turn(&channel, "session-cleanup", resume_request("Run printf")).await;
+
+    // Act
+    let still_failing = channel
+        .shutdown_session("session-cleanup".to_string())
+        .await;
     sqlx::query("DROP TRIGGER fail_outcome")
         .execute(&pool)
         .await
         .expect("remove outcome fault");
     pool.close().await;
-
-    // Act
     let (recovered, _) =
         run_turn(&channel, "session-cleanup", resume_request("Next question")).await;
 
     // Assert
     let failed = failed.expect_err("unrecorded command outcome should fail the turn");
     assert!(failed.contains("Harness turn cleanup failed"), "{failed}");
+    let still_failing = still_failing.expect_err("a retry under the fault should fail again");
+    assert!(
+        still_failing
+            .to_string()
+            .contains("Harness turn cleanup failed"),
+        "{still_failing}"
+    );
     assert_eq!(
         recovered
             .expect("next turn should be admitted after cleanup is retried")

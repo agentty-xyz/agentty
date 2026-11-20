@@ -15,6 +15,7 @@ ag-contracts.workspace = true
 ag-session.workspace = true
 askama.workspace = true
 async-trait.workspace = true
+futures-core.workspace = true
 rustix.workspace = true
 semver.workspace = true
 serde.workspace = true

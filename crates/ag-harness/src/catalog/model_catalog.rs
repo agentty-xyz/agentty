@@ -581,7 +581,7 @@ pub enum CatalogError {
         role: Role,
     },
     /// A model's declared profile leaves no request capacity.
-    #[error("model `{id}` declares an invalid context profile")]
+    #[error("model `{id}` declares an invalid context profile: {source}")]
     InvalidProfile {
         /// Model with the invalid profile.
         id: ModelId,

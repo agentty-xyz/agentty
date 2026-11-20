@@ -102,7 +102,7 @@ The adapter consumes the run's `EventStream` and its terminal `RunOutcome`.
 ```mermaid
 flowchart LR
   E[RunEvent stream] -->|ItemStarted, ItemCompleted| AC[TurnEvent::Activity]
-  E -->|ItemDelta| TD[TurnEvent::ThoughtDelta]
+  E -->|ItemDelta, ItemCompleted| TD[TurnEvent::Output]
   E -->|ModelRequestCompleted| U[usage and cost so far]
   O[RunOutcome] -->|usage, cost, files, commands| TR[TurnResult]
   TR -->|settlement| DB[(execution record)]
@@ -111,8 +111,9 @@ flowchart LR
 
 - **Activity.** Tool items map to the existing `TurnEvent::Activity` snapshots, keyed by
   attempt and item ID, so the TUI's turn activity needs no harness-specific code.
-- **Deltas.** Streaming text and reasoning deltas map to transient loader updates. They
-  never enter the persisted transcript or graph outputs.
+- **Deltas.** Streaming text and reasoning deltas map to the transient
+  `TurnEvent::Output` changes that harness session turns already stream. They never
+  enter the persisted transcript or graph outputs.
 - **Usage and cost.** `RunOutcome` replaces the hand-folded `TurnReport` usage. The
   contracts gain an additive, optional cost in micro-USD next to the token counts;
   backends without prices report none, and older records read as unknown, never zero.
