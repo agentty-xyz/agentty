@@ -1,13 +1,15 @@
-//! Bounded per-turn activity reduction for live rows and durable usage footers.
+//! Bounded per-turn activity reduction for live rows and durable usage
+//! footers, beside the turn's streamed model output.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OutputEvent};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use super::output::LiveOutput;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
 
@@ -17,10 +19,12 @@ const LIVE_INTERRUPTED_LIMIT: usize = 3;
 /// `ActivityState::usage_section`.
 const USAGE_SECTIONS: [&str; 3] = ["Tools: ", "MCP: ", "Skills: "];
 
-/// Reduces snapshots without counting lifecycle updates as additional calls.
+/// Reduces snapshots without counting lifecycle updates as additional calls,
+/// beside the turn's streamed model output.
 #[derive(Default)]
 pub(super) struct TurnActivity {
     live: LiveActivity,
+    output: LiveOutput,
 }
 
 impl TurnActivity {
@@ -57,6 +61,17 @@ impl TurnActivity {
         self.live.notify(sender, session_id);
     }
 
+    /// Applies one streamed output change and queues at most one unread
+    /// notification.
+    pub(super) fn observe_output(
+        &self,
+        event: OutputEvent,
+        sender: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &SessionId,
+    ) {
+        self.output.observe(event, sender, session_id);
+    }
+
     /// Settles calls lacking a terminal provider event when the stream closes.
     pub(super) fn finish_live(
         &mut self,
@@ -85,12 +100,24 @@ impl TurnActivity {
         }
     }
 
-    /// Removes live rows after the caller has handled the completed turn.
+    /// Removes the streamed output once the turn's saved answer or failure
+    /// notice replaces it.
+    pub(super) fn clear_output(
+        &self,
+        sender: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &SessionId,
+    ) {
+        self.output.clear(sender, session_id);
+    }
+
+    /// Removes live rows and any streamed output still shown after the
+    /// caller has handled the completed turn.
     pub(super) fn clear_live(
         &self,
         sender: &mpsc::UnboundedSender<AppEvent>,
         session_id: &SessionId,
     ) {
+        self.clear_output(sender, session_id);
         if !self
             .live
             .state

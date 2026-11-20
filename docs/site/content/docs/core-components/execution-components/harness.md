@@ -56,3 +56,12 @@ provider replay and telemetry export. Each attempt and each turn retain a bounde
 of calls, so these are observations, not an exhaustive audit log. Utility callers may
 supply `OneShotRequest::activity_tx` through `RunClient::submit` to receive the same
 events, including repairs. Hosts own persistence and rendering.
+
+## Streamed Output
+
+`TurnEvent::Output` carries the model output an in-process `ag-harness` session turn
+streams. Items start, receive fragments, and complete with authoritative text. The
+validated final answer names the message it replaces, and the items of a discarded
+response, or items a run left unfinished, are dropped. External agent adapters emit none
+and keep showing answers when the turn completes. Like activity, the output is transient
+session content: hosts render it and never persist, replay, or export it.

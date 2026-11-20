@@ -235,7 +235,11 @@ disabling the other session types.
 - `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
   run unsandboxed `bash`, which can reach the network and paths outside the worktree.
   Provider keys and endpoints are removed from the `bash` environment.
-- Answers arrive in one piece; the activity footer shows tool calls while a turn runs.
+- Answers and reasoning stream into the session view as the model writes them, with a
+  short "Preparing a tool call" line while tool arguments arrive; the activity footer
+  shows tool calls while a turn runs. Streamed text is replaced by the saved answer when
+  the turn ends, and only the saved answer is kept; a stopped or failed turn keeps only
+  its error notice.
 - Commit messages, titles, and focused reviews use the project's default models when
   their agent CLI is installed, otherwise the session's harness model.
 - History is stored per session under `~/.agentty/harness/` and removed with the

@@ -318,6 +318,9 @@ pub enum TurnEvent {
     /// A streamed thinking/planning or tool-status fragment shown in the
     /// transient loader.
     ThoughtDelta(String),
+    /// Model output streamed by an in-process harness turn, shown
+    /// transiently until the turn result is persisted.
+    Output(crate::OutputEvent),
     /// The turn completed successfully with final token counts.
     Completed {
         /// Whether the provider reset its context for this turn.

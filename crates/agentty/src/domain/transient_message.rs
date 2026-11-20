@@ -9,6 +9,9 @@ use rustc_hash::FxHasher;
 pub(crate) enum TransientMessageSlot {
     /// Ordered tool and skill invocations from the current provider turn.
     Activity,
+    /// Model output the current turn streams, shown below its activity rows
+    /// until the persisted result replaces it.
+    StreamedOutput,
     /// Durable workspace setup projected into inline session output.
     WorkspacePreparation,
     /// Focused review loading, result, or failure output.

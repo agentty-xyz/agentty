@@ -22,8 +22,8 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, ToolSet, TurnInput,
-    TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, RunRequest, ToolSet,
+    TurnInput,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -731,24 +731,49 @@ pub(crate) fn output_schema(profile: ProtocolRequestProfile) -> Result<OutputSch
     .map_err(failure("The harness rejected the protocol schema"))
 }
 
-/// Builds explicit options for one turn: `read` always, plus `write` and
-/// unsandboxed `bash` outside read-only mode.
-///
-/// # Errors
-/// Returns an error when the schema or `bash` policy is rejected.
-pub(crate) fn turn_options(
-    profile: ProtocolRequestProfile,
-    permission_mode: PermissionMode,
-    environment: &BTreeMap<String, String>,
-) -> Result<TurnOptions, String> {
-    let options = TurnOptions::from_output(output_schema(profile)?);
-    if permission_mode == PermissionMode::ReadOnly {
-        return Ok(options.with_tools(ToolSet::empty().with_read()));
+/// Explicit output schema and tools of one harness turn or run.
+pub(crate) struct RunOptions {
+    bash: Option<BashConfig>,
+    output: OutputSchema,
+    tools: ToolSet,
+}
+
+impl RunOptions {
+    /// Builds the options for one turn: `read` always, plus `write` and
+    /// unsandboxed `bash` outside read-only mode.
+    ///
+    /// # Errors
+    /// Returns an error when the schema or `bash` policy is rejected.
+    pub(crate) fn new(
+        profile: ProtocolRequestProfile,
+        permission_mode: PermissionMode,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let output = output_schema(profile)?;
+        if permission_mode == PermissionMode::ReadOnly {
+            return Ok(Self {
+                bash: None,
+                output,
+                tools: ToolSet::empty().with_read(),
+            });
+        }
+
+        Ok(Self {
+            bash: Some(bash_config(environment)?),
+            output,
+            tools: ToolSet::builtins(),
+        })
     }
 
-    Ok(options
-        .with_tools(ToolSet::builtins())
-        .with_bash(bash_config(environment)?))
+    /// Returns a run request for `input` with these options.
+    pub(crate) fn request(self, input: String) -> RunRequest {
+        let request = RunRequest::new(input).output(self.output).tools(self.tools);
+
+        match self.bash {
+            Some(bash) => request.bash(bash),
+            None => request,
+        }
+    }
 }
 
 /// Configures unsandboxed `bash` with the host environment minus provider

@@ -606,6 +606,8 @@ impl AppServices {
             }
             AppEvent::SessionActivityReady { .. } => "SessionActivityReady",
             AppEvent::SessionActivityUpdated { .. } => "SessionActivityUpdated",
+            AppEvent::SessionOutputReady { .. } => "SessionOutputReady",
+            AppEvent::SessionOutputCleared { .. } => "SessionOutputCleared",
             AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
             AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
             AppEvent::SyncMainConflictResolutionStarted { .. } => {

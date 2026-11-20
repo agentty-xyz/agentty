@@ -65,13 +65,13 @@ checkouts are validated when opened.
 
 <a id="architecture-runtime-flow-channels"></a>
 
-| Channel                 | Carries                                     |
-| ----------------------- | ------------------------------------------- |
-| Terminal events         | Keyboard and terminal input                 |
-| `AppEvent` bus          | Background results for the reducer          |
-| Session runtime mailbox | Programmatic lifecycle requests and replies |
-| `TurnEvent` stream      | Transient progress and process identity     |
-| Shared session handles  | Live transcript, status, and queued work    |
+| Channel                 | Carries                                      |
+| ----------------------- | -------------------------------------------- |
+| Terminal events         | Keyboard and terminal input                  |
+| `AppEvent` bus          | Background results for the reducer           |
+| Session runtime mailbox | Programmatic lifecycle requests and replies  |
+| `TurnEvent` stream      | Transient progress, output, process identity |
+| Shared session handles  | Live transcript, status, and queued work     |
 
 Workers and handles survive project switches; project reloads replace display snapshots,
 not execution ownership.
@@ -108,6 +108,15 @@ theme changes.
 Live tool activity follows the same worker event path as progress: the host reduces it
 into one replaceable snapshot per turn, and a durable usage summary replaces it when the
 turn finishes. Usage summaries are saved history but excluded from provider replay.
+
+Harness sessions also stream model output on that path. The agent runtime turns the
+harness run's item events into `TurnEvent::Output` changes, decoding the protocol answer
+as it arrives; the worker accumulates them into one replaceable snapshot below the
+activity rows. One notification stays armed while the output changes, and the foreground
+applies further changes once per frame, so a fast stream cannot flood the event loop.
+The runtime drops a discarded response's items and reports which message the validated
+answer replaces. The worker removes the snapshot right after it saves the answer or
+failure notice to the transcript; streamed output is never persisted or replayed.
 
 With `--experimental-graph`, session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is

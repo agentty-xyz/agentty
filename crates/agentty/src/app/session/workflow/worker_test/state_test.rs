@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, TurnEvent,
-    TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, OutputEvent,
+    OutputKind, TurnEvent, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -22,7 +22,8 @@ use super::super::{SessionWorkerContext, SessionWorkerService};
 use super::support::{
     auto_commit_run_client, default_turn_metadata, empty_transcript,
     insert_in_progress_test_session, mock_fs_client_with_existing_directories,
-    mock_git_client_detecting_main_repo, seed_recovery_test_operation, transcript_text,
+    mock_git_client_detecting_main_repo, queue_test_context, seed_recovery_test_operation,
+    successful_turn_result, transcript_text,
 };
 use crate::app::AppEvent;
 use crate::app::graph_activity::GraphActivityRegistry;
@@ -438,6 +439,146 @@ async fn test_consume_activity_survives_progress_coalescing() {
 
     // Assert
     assert_eq!(activity.summary(), "Tools: Read ×2\n");
+}
+
+#[tokio::test]
+/// Verifies streamed output, including events drained while coalescing a
+/// thought, is published once and cleared with the turn's live rows.
+async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
+    // Arrange
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    for event in [
+        TurnEvent::Output(OutputEvent::Started {
+            id: 0,
+            kind: OutputKind::ToolCall,
+        }),
+        TurnEvent::ThoughtDelta("thinking".to_string()),
+        TurnEvent::Output(OutputEvent::Completed {
+            id: 0,
+            text: String::new(),
+        }),
+        TurnEvent::Output(OutputEvent::Started {
+            id: 1,
+            kind: OutputKind::Message,
+        }),
+        TurnEvent::Output(OutputEvent::Delta {
+            id: 1,
+            text: "Hello".to_string(),
+        }),
+        TurnEvent::Activity(ActivityEvent {
+            status: ActivityStatus::Running,
+            ..activity_event()
+        }),
+    ] {
+        event_tx.send(event).expect("send");
+    }
+    drop(event_tx);
+
+    // Act
+    let activity = consume_turn_events(
+        event_rx,
+        app_event_tx.clone(),
+        "session".into(),
+        Arc::new(Mutex::new(None)),
+    )
+    .await;
+    activity.clear_live(&app_event_tx, &"session".into());
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    let outputs = events
+        .iter()
+        .filter_map(|event| match event {
+            AppEvent::SessionOutputReady { output, session_id } => {
+                Some((output, session_id.as_str()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].1, "session");
+    assert_eq!(outputs[0].0.snapshot(), "Hello");
+    assert_eq!(
+        events.last(),
+        Some(&AppEvent::SessionActivityUpdated {
+            activity: None,
+            session_id: "session".into(),
+        })
+    );
+    assert!(events.contains(&AppEvent::SessionOutputCleared {
+        session_id: "session".into(),
+    }));
+}
+
+#[tokio::test]
+/// Verifies a turn removes its streamed output right after the saved answer
+/// and before the usage summary replaces its live rows, exactly once.
+async fn test_run_channel_turn_clears_streamed_output_beside_the_saved_answer() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .once()
+        .returning(|_session_id, _req, events| {
+            Box::pin(async move {
+                for event in [
+                    TurnEvent::Output(OutputEvent::Started {
+                        id: 0,
+                        kind: OutputKind::Message,
+                    }),
+                    TurnEvent::Output(OutputEvent::Delta {
+                        id: 0,
+                        text: "done".to_string(),
+                    }),
+                    TurnEvent::Activity(activity_event()),
+                ] {
+                    events.send(event).expect("turn event");
+                }
+
+                Ok(successful_turn_result("done"))
+            })
+        });
+    let (mut context, _db, _queued_messages, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = app_event_tx;
+
+    // Act
+    let result = run_channel_turn(
+        &context,
+        auto_commit_run_client(),
+        default_turn_metadata(),
+        AgentRequestKind::SessionStart,
+        None,
+        "test prompt".into(),
+    )
+    .await;
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    let is_cleared = |event: &AppEvent| matches!(event, AppEvent::SessionOutputCleared { .. });
+    let cleared = events
+        .iter()
+        .position(is_cleared)
+        .expect("streamed output cleared");
+    assert!(matches!(
+        events[cleared - 1],
+        AppEvent::SessionUpdated { .. }
+    ));
+    let rows_cleared = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                AppEvent::SessionActivityUpdated { activity: None, .. }
+            )
+        })
+        .expect("live rows cleared");
+    assert!(cleared < rows_cleared);
+    assert_eq!(events.iter().filter(|event| is_cleared(event)).count(), 1);
+    assert!(transcript_text(&context.transcript).contains("done"));
 }
 
 #[tokio::test]
