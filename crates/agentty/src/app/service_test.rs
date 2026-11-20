@@ -840,6 +840,13 @@ fn background_event_labels_preserve_variant_identity() {
             activity: None,
             session_id: session_id.clone(),
         },
+        AppEvent::SessionOutputReady {
+            output: crate::app::session::LiveOutput::default(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::SessionOutputCleared {
+            session_id: session_id.clone(),
+        },
         AppEvent::SessionProgressUpdated {
             progress_message: None,
             session_id,

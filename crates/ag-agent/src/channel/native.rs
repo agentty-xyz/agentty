@@ -10,8 +10,10 @@
 //! replays that input; history eviction re-sends the full contract.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::poll_fn;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_contracts::{
@@ -20,26 +22,28 @@ use ag_contracts::{
 };
 use ag_harness::transcript::TranscriptInput;
 use ag_harness::{
-    ErrorKind, Harness, HarnessError, Repository, Session, SessionError, TurnControl, TurnRange,
-    TurnRecord,
+    CancelToken, ErrorKind, EventStream, Harness, HarnessError, Repository, Run, RunOutcome,
+    Session, SessionError, TurnRange, TurnRecord, Unsettled,
 };
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentKind;
-use tokio::sync::mpsc;
+use ag_telemetry::{Context, FutureExt as _};
+use futures_core::Stream as _;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, failure, output_schema, parse_outcome, reject_attachments, repository,
-    running_context_window, settle, system_prompt, token_usage, turn_options,
+    NativeTurnError, OutputProjector, RunOptions, cleanup_failure, failure, output_schema,
+    parse_output, reject_attachments, repository, running_context_window, system_prompt,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
     instruction_bootstrap_key, plan_instruction_delivery,
 };
 
-/// Started turns whose settlement a shutdown or the session's next turn must
+/// Started runs whose settlement a shutdown or the session's next turn must
 /// still observe, by session.
-type ActiveTurns = Arc<Mutex<HashMap<String, TurnControl>>>;
+type ActiveTurns = Arc<Mutex<HashMap<String, ActiveRun>>>;
 
 /// [`AgentChannel`] adapter that runs harness turns in process.
 pub(crate) struct NativeAgentChannel {
@@ -101,9 +105,9 @@ impl AgentChannel for NativeAgentChannel {
         let active = Arc::clone(&self.active);
 
         Box::pin(async move {
-            let control = lock(&active).get(&session_id).cloned();
-            if let Some(control) = control {
-                control.cancel();
+            let run = lock(&active).get(&session_id).cloned();
+            if let Some(run) = run {
+                run.cancel.cancel();
             }
 
             settle_previous_turn(&active, &session_id)
@@ -126,7 +130,7 @@ async fn run_session_turn(
     let environment = config.environment();
     let selection = ModelSelection::resolve(&req.model, &environment)?;
     let profile = req.request_kind.protocol_profile();
-    let options = turn_options(profile, req.permission_mode, &environment)?;
+    let options = RunOptions::new(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
@@ -153,7 +157,7 @@ async fn run_session_turn(
         running_context_window,
         session_id: &session_id,
     };
-    let (mut session, history) = opener.open(&selection).await?;
+    let (session, history) = opener.open(&selection).await?;
     // Turns since the last full contract, counting its own turn; `None` once
     // the harness no longer loads it.
     let bootstrap_age = bootstrap
@@ -176,21 +180,24 @@ async fn run_session_turn(
     }
     .render()?;
     let input_digest = input_digest(&input);
-    let turn = session.turn(input).options(options).start();
-    let control = turn.control();
-    lock(active).insert(session_id.clone(), control.clone());
-    let outcome = turn.await;
+    let (run, stream) = ActiveRun::start(session.run(options.request(input)));
+    // Dropping this turn cancels the run, which keeps settling on its task.
+    let _cancel_on_drop = CancelOnDrop(run.cancel.clone());
+    lock(active).insert(session_id.clone(), run.clone());
+    let ((), settled) = tokio::join!(forward_output(stream, &events), run.settle());
     // A failed settlement stays registered so the next turn retries it.
-    settle(&control).await?;
+    let outcome = settled?;
     lock(active).remove(&session_id);
-    let outcome = outcome.map_err(NativeTurnError::from_run)?;
-    let assistant_message = parse_outcome(&outcome, profile)?;
-    let (input_tokens, output_tokens) = token_usage(outcome.report());
+    // Only a concurrent shutdown observes the outcome first, after
+    // cancelling the run.
+    let outcome = outcome.ok_or(NativeTurnError::Stopped)?;
+    let output = outcome.result.map_err(NativeTurnError::from_run)?;
+    let assistant_message = parse_output(&output, profile)?;
     // An unversioned id makes the next session turn re-send the session
     // contract: a utility or review turn bootstrapped its own, or the
     // context budget dropped the turn that carried it from this request.
     let bootstrap_replayed =
-        bootstrap_age.is_some_and(|age| outcome.report().history().replayed_turns() >= age);
+        bootstrap_age.is_some_and(|age| outcome.report.history().replayed_turns() >= age);
     let provider_conversation_id = if profile != ProtocolRequestProfile::SessionTurn {
         Some(session_id)
     } else if delivery != InstructionDeliveryMode::DeltaOnly {
@@ -204,11 +211,113 @@ async fn run_session_turn(
     Ok(TurnResult {
         assistant_message,
         context_reset: false,
-        harness_report: serde_json::to_string(outcome.report()).ok(),
-        input_tokens,
-        output_tokens,
+        harness_report: serde_json::to_string(&outcome.report).ok(),
+        input_tokens: outcome.usage.input,
+        output_tokens: outcome.usage.output,
         provider_conversation_id,
     })
+}
+
+/// Forwards the output a run streams as [`TurnEvent::Output`] events until
+/// the run's stream ends.
+async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
+    let mut projector = OutputProjector::default();
+    while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
+        if let Some(output) = projector.project(event.kind) {
+            let _ = events.send(TurnEvent::Output(output));
+        }
+    }
+}
+
+/// One session's started run, shared by its turn and a concurrent shutdown.
+#[derive(Clone)]
+struct ActiveRun {
+    cancel: CancelToken,
+    settlement: Arc<tokio::sync::Mutex<Settlement>>,
+}
+
+impl ActiveRun {
+    /// Starts `run` on its own task in the current trace context, so a
+    /// dropped turn still settles it, and returns it with its event stream.
+    fn start(run: Run) -> (Self, EventStream) {
+        let (stream, handle) = run.into_parts();
+        let cancel = handle.cancel_token();
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(
+            async move {
+                let _ = sender.send(handle.outcome().await);
+            }
+            .with_context(Context::current()),
+        );
+        let settlement = Settlement {
+            outcome: Some(receiver),
+            unsettled: None,
+        };
+
+        (
+            Self {
+                cancel,
+                settlement: Arc::new(tokio::sync::Mutex::new(settlement)),
+            },
+            stream,
+        )
+    }
+
+    /// Waits until the run settles, or retries cleanup that failed, and
+    /// returns the outcome to the first caller that observes it.
+    ///
+    /// # Errors
+    /// Returns the cleanup that still failed; it stays pending for the next
+    /// call.
+    async fn settle(&self) -> Result<Option<RunOutcome>, String> {
+        let mut settlement = self.settlement.lock().await;
+        let mut outcome = None;
+        if let Some(receiver) = settlement.outcome.as_mut() {
+            // The sender drops unsent only if the run's task panicked.
+            outcome = receiver.await.ok();
+            settlement.outcome = None;
+            let cleanup = outcome
+                .as_mut()
+                .map(|outcome| std::mem::replace(&mut outcome.settlement, Ok(())));
+            if let Some(Err(unsettled)) = cleanup {
+                return Err(settlement.keep(unsettled));
+            }
+        } else if let Some(unsettled) = settlement.unsettled.take()
+            && let Err(unsettled) = unsettled.retry().await
+        {
+            return Err(settlement.keep(unsettled));
+        }
+
+        Ok(outcome)
+    }
+}
+
+/// What an [`ActiveRun`] still needs to settle.
+struct Settlement {
+    /// Outcome the run's task sends once the run settles, until observed.
+    outcome: Option<oneshot::Receiver<RunOutcome>>,
+    /// Cleanup that failed, retried by the next settlement.
+    unsettled: Option<Unsettled>,
+}
+
+impl Settlement {
+    /// Keeps failed cleanup for the next settlement and describes it.
+    fn keep(&mut self, unsettled: Unsettled) -> String {
+        let error = cleanup_failure(unsettled.error());
+        self.unsettled = Some(unsettled);
+
+        error
+    }
+}
+
+/// Cancels a run when the turn waiting for it is dropped; cancelling a
+/// finished run has no effect.
+struct CancelOnDrop(CancelToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 /// Versioned instruction key and input digest of the session turn that last
@@ -247,17 +356,17 @@ impl BootstrapMarker {
 /// # Errors
 /// Returns an error when that cleanup still cannot be acknowledged.
 async fn settle_previous_turn(active: &ActiveTurns, session_id: &str) -> Result<(), String> {
-    let control = lock(active).get(session_id).cloned();
-    if let Some(control) = control {
-        settle(&control).await?;
+    let run = lock(active).get(session_id).cloned();
+    if let Some(run) = run {
+        run.settle().await?;
         lock(active).remove(session_id);
     }
 
     Ok(())
 }
 
-/// Locks the started-turn registry; its map stays valid after a panic.
-fn lock(active: &ActiveTurns) -> MutexGuard<'_, HashMap<String, TurnControl>> {
+/// Locks the started-run registry; its map stays valid after a panic.
+fn lock(active: &ActiveTurns) -> MutexGuard<'_, HashMap<String, ActiveRun>> {
     active.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

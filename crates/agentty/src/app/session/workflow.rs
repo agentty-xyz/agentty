@@ -17,6 +17,7 @@ pub(super) mod isolation;
 pub(super) mod lifecycle;
 pub(super) mod load;
 pub(super) mod merge;
+pub(super) mod output;
 pub(super) mod post_turn;
 pub(super) mod preparation;
 mod prompt_context;

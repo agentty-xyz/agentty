@@ -19,9 +19,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     BudgetedModel, FALLBACK_MODEL_PROFILE, HarnessContext, ModelSelection, NativeHarnessConfig,
-    ResumeOnlyModel, bash_environment, chatgpt_auth_file, configuration_status, harness_models,
-    model_cost, output_schema, provider_display_name, reasoning_effort, repository,
-    running_context_window, turn_options, unicode_environment,
+    ResumeOnlyModel, RunOptions, bash_environment, chatgpt_auth_file, configuration_status,
+    harness_models, model_cost, output_schema, provider_display_name, reasoning_effort, repository,
+    running_context_window, unicode_environment,
 };
 use crate::agent::model_profile;
 
@@ -845,19 +845,19 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
 
 #[test]
 /// Skips variables beyond the harness grant limit instead of failing.
-fn turn_options_tolerate_oversized_environments() {
+fn run_options_tolerate_oversized_environments() {
     // Arrange
     let environment = (0..100)
         .map(|index| (format!("VAR_{index:03}"), "value".to_string()))
         .collect::<BTreeMap<_, _>>();
 
     // Act
-    let edit = turn_options(
+    let edit = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::AutoEdit,
         &environment,
     );
-    let read_only = turn_options(
+    let read_only = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::ReadOnly,
         &environment,
@@ -865,14 +865,14 @@ fn turn_options_tolerate_oversized_environments() {
 
     // Assert
     let edit = edit.expect("edit options should build");
-    assert!(edit.bash().is_some());
+    assert!(edit.bash.is_some());
     assert_eq!(
-        edit.tools().names().collect::<Vec<_>>(),
+        edit.tools.names().collect::<Vec<_>>(),
         ["read", "write", "bash"]
     );
     let read_only = read_only.expect("read-only options should build");
-    assert!(read_only.bash().is_none());
-    assert_eq!(read_only.tools().names().collect::<Vec<_>>(), ["read"]);
+    assert!(read_only.bash.is_none());
+    assert_eq!(read_only.tools.names().collect::<Vec<_>>(), ["read"]);
     assert!(output_schema(ProtocolRequestProfile::UtilityPrompt).is_ok());
 }
 

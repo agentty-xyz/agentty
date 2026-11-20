@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, TurnEvent,
-    TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, OutputEvent,
+    OutputKind, TurnEvent, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -438,6 +438,77 @@ async fn test_consume_activity_survives_progress_coalescing() {
 
     // Assert
     assert_eq!(activity.summary(), "Tools: Read ×2\n");
+}
+
+#[tokio::test]
+/// Verifies streamed output, including events drained while coalescing a
+/// thought, is published once and cleared with the turn's live rows, and a
+/// running call replaces its streamed preparation.
+async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
+    // Arrange
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    for event in [
+        TurnEvent::Output(OutputEvent::Started {
+            id: 0,
+            kind: OutputKind::ToolCall,
+        }),
+        TurnEvent::ThoughtDelta("thinking".to_string()),
+        TurnEvent::Output(OutputEvent::Delta {
+            id: 0,
+            text: "{}".to_string(),
+        }),
+        TurnEvent::Output(OutputEvent::Started {
+            id: 1,
+            kind: OutputKind::Message,
+        }),
+        TurnEvent::Output(OutputEvent::Delta {
+            id: 1,
+            text: "Hello".to_string(),
+        }),
+        TurnEvent::Activity(ActivityEvent {
+            status: ActivityStatus::Running,
+            ..activity_event()
+        }),
+    ] {
+        event_tx.send(event).expect("send");
+    }
+    drop(event_tx);
+
+    // Act
+    let activity = consume_turn_events(
+        event_rx,
+        app_event_tx.clone(),
+        "session".into(),
+        Arc::new(Mutex::new(None)),
+    )
+    .await;
+    activity.clear_live(&app_event_tx, &"session".into());
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    let outputs = events
+        .iter()
+        .filter_map(|event| match event {
+            AppEvent::SessionOutputReady { output, session_id } => {
+                Some((output, session_id.as_str()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].1, "session");
+    assert_eq!(outputs[0].0.snapshot(), "Hello");
+    assert_eq!(
+        events.last(),
+        Some(&AppEvent::SessionActivityUpdated {
+            activity: None,
+            session_id: "session".into(),
+        })
+    );
+    assert!(events.contains(&AppEvent::SessionOutputCleared {
+        session_id: "session".into(),
+    }));
 }
 
 #[tokio::test]

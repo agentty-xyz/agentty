@@ -121,7 +121,7 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
 async fn test_enqueue_message_under_a_graph_lease_runs_at_once() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let (mut app, session_id) = restarted_app_without_worker(dir.path()).await;
+    let (mut app, session_id) = Box::pin(restarted_app_without_worker(dir.path())).await;
     let status = Arc::clone(
         &app.sessions
             .session_handles_or_err(&session_id)
@@ -151,7 +151,7 @@ async fn test_enqueue_message_under_a_graph_lease_runs_at_once() {
 async fn test_enqueue_message_after_the_graph_lease_ends_still_runs() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let (mut app, session_id) = restarted_app_without_worker(dir.path()).await;
+    let (mut app, session_id) = Box::pin(restarted_app_without_worker(dir.path())).await;
     let status = Arc::clone(
         &app.sessions
             .session_handles_or_err(&session_id)
