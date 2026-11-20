@@ -244,7 +244,8 @@ impl BashConfig {
 
     /// Grants read access to the platform's system directories, which Bash,
     /// Git, and developer toolchains need to start: on macOS `/bin`, `/sbin`,
-    /// `/usr`, `/System`, `/Library/Developer`, the selected Xcode and its
+    /// `/usr`, `/System`, `/Library/Apple`, `/Library/Developer`, the
+    /// selected Xcode and its
     /// license record,
     /// `/private/etc`, and the shell and time zone selections under
     /// `/private/var`; on Linux `/bin`, `/sbin`, `/usr`, `/lib*`, and `/etc`,

@@ -16,6 +16,10 @@ const SYSTEM_READS: &[&str] = &[
     "/usr",
     "/System",
     "/Library/Developer",
+    // System frameworks installed apart from the sealed system volume, such
+    // as `MobileDevice`, which Xcode's tools load through links in
+    // `/System/Library`.
+    "/Library/Apple",
     // Where a selected Xcode records its accepted license, which its tool
     // shims check before running.
     "/Library/Preferences/com.apple.dt.Xcode.plist",
