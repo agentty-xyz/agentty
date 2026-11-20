@@ -1,0 +1,63 @@
+name: Check Homebrew tap token
+
+# Fails unless `HOMEBREW_TAP_TOKEN` may push to the Homebrew tap, and warns
+# when the token expires within 14 days. `.github/workflows/release.yml` runs
+# it before publishing a release, so an expired token stops the release before
+# its GitHub release exists. Pull requests that change this file run it too.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The `ag-release plan` JSON, which names the tap repository.
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        description: Fine-grained token with Contents read and write on the tap repository only.
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/check-homebrew-tap.yml
+
+permissions: {}
+
+jobs:
+  check:
+    # Pull requests from forks receive no secrets.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    env:
+      REPOSITORY: ${{ inputs.plan && fromJson(inputs.plan).homebrew_tap.repository || 'agentty-xyz/homebrew-tap' }}
+      TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check push access and expiration
+        shell: bash
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set"
+            exit 1
+          fi
+          # The token goes to curl through a process substitution, so it
+          # never appears in a command line.
+          # Git serves the push endpoint only to credentials that may write.
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --config <(printf 'user = "x-access-token:%s"\n' "$TOKEN") \
+            "https://github.com/$REPOSITORY.git/info/refs?service=git-receive-pack")"
+          if [ "$status" != 200 ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN cannot push to $REPOSITORY (HTTP $status); renew it with Contents read and write on that repository"
+            exit 1
+          fi
+          echo "HOMEBREW_TAP_TOKEN can push to $REPOSITORY"
+          expiration="$(curl --silent --head \
+            --config <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") \
+            "https://api.github.com/repos/$REPOSITORY" |
+            sed -n 's/^github-authentication-token-expiration: *//Ip' | tr -d '\r')"
+          if [ -z "$expiration" ]; then
+            echo "HOMEBREW_TAP_TOKEN does not expire"
+            exit 0
+          fi
+          echo "HOMEBREW_TAP_TOKEN expires $expiration"
+          remaining_days=$(( ($(date -d "$expiration" +%s) - $(date +%s)) / 86400 ))
+          if [ "$remaining_days" -lt 14 ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN expires in $remaining_days days ($expiration); create a new token and run gh secret set HOMEBREW_TAP_TOKEN"
+          fi

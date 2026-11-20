@@ -106,7 +106,7 @@ plan = true
 stage = "publish"
 uses = "./.github/workflows/publish-homebrew.yml"
 plan = true
-secrets = ["HOMEBREW_TAP_DEPLOY_KEY"]
+secrets = ["HOMEBREW_TAP_TOKEN"]
 ```
 
 | Key                     | Default                  | Value                                                                                                   |

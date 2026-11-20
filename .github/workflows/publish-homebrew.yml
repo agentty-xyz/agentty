@@ -11,8 +11,8 @@ on:
         required: true
         type: string
     secrets:
-      HOMEBREW_TAP_DEPLOY_KEY:
-        description: SSH deploy key with write access to the tap repository only.
+      HOMEBREW_TAP_TOKEN:
+        description: Fine-grained token with Contents read and write on the tap repository only.
         required: true
 
 permissions:
@@ -30,13 +30,13 @@ jobs:
           name: release
           path: release/
 
-      # The deploy key stays configured for the push below and is scoped to
-      # the tap, whose checkout no later step uploads.
+      # The token stays configured for the push below and is scoped to the
+      # tap, whose checkout no later step uploads.
       - name: Checkout the tap
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 zizmor: ignore[artipacked]
         with:
           repository: ${{ fromJson(inputs.plan).homebrew_tap.repository }}
-          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
       - name: Push the formulas
