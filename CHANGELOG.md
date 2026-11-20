@@ -7,6 +7,61 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.6] - 2026-11-19
+
+### Added
+
+- `ag-router`: implement the Anthropic Messages wire protocol, with signed thinking
+  replay, native or forced-tool structured output, and streamed responses.
+- `ag-router`: stream Chat Completions and report text, reasoning, and tool-argument
+  deltas through `Router::execute_streamed`; harness runs emit them as `ItemDelta`
+  events.
+- `ag-router`: mark Anthropic prompt-cache breakpoints on the tools, `system` prompt,
+  and latest message by default (`ProviderSpec::with_cache_breakpoints`).
+- `ag-router`: add a per-provider `RetryPolicy` with jitter, opt-in `5xx` and `529`
+  retries, and HTTP-date `Retry-After`, and report waits as `Retrying` run events.
+- `ag-harness`: gate writing and executing tool calls behind an `ApprovalHandler` with a
+  decision timeout, carried over `serve` as server-to-client requests.
+- `ag-harness`: choose the native sandbox behavior with `HarnessBuilder::sandbox`, embed
+  the sandbox helper through `ag_harness::sandbox::dispatch`, and add
+  `Session::replayed_range`.
+- `ag-harness-cli`: pick models from the provider catalog, show per-turn usage and cost,
+  and add `/usage` and `/history`.
+- release: add `ag-release`, which plans, builds, and packages releases, writes the
+  release notes, and generates `.github/workflows/release.yml`.
+
+### Changed
+
+- release: build and publish releases with `ag-release` instead of `dist`. Archives are
+  `.tar.gz` instead of `.tar.xz`, `release-manifest.json` replaces `dist-manifest.json`,
+  and the `agentty-update` and `testty-update` binaries are no longer published.
+- release: the npm packages have no dependencies and need Node.js 18 or newer; the shell
+  installer verifies each archive's SHA-256 and rejects musl and too-old glibc.
+- `agentty`: update shell installs in the background through the shell installer. Shell
+  installs of `v0.19.5` or earlier need one manual reinstall first.
+- `agentty`: declare image input and tool calls for harness models from the harness
+  provider catalog.
+- `ag-harness`: run commands unsandboxed with a `SandboxWarning` when the native sandbox
+  cannot start; `IfUnavailable::Refuse` keeps failing closed.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.6`.
+
+### Removed
+
+- `agentty`: remove stacked sessions and the append-to-stack action; unfinished former
+  stacked children now target their root session's base branch.
+
+### Fixed
+
+- `agentty`: remove worktrees of archived sessions reliably, including sessions whose
+  pull request was closed without merging, and sweep leftover worktrees at startup.
+- `ag-harness-cli`: `serve` no longer fails `session/create` for cataloged models
+  without a declared context profile.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.5] - 2026-11-18
 
 ### Added
