@@ -16,6 +16,9 @@ const SYSTEM_READS: &[&str] = &[
     "/usr",
     "/System",
     "/Library/Developer",
+    // Where a selected Xcode records its accepted license, which its tool
+    // shims check before running.
+    "/Library/Preferences/com.apple.dt.Xcode.plist",
     "/private/etc",
     "/private/var/db/timezone",
     "/private/var/db/xcode_select_link",

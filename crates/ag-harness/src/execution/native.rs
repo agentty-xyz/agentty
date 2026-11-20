@@ -369,7 +369,21 @@ async fn resolve_access(
     }
     if policy.allows_git_writes() {
         let repository = repository.ok_or(ExecutionError::Unsupported)?;
-        access.git_writes = Some(repository.writes(files).await?);
+        let git_writes = repository.writes(files).await?;
+        // A Landlock rule covers everything beneath its directory, and the
+        // writable Git mounts replace the read-only ones, so a write grant
+        // around a Git directory would open its configuration and hooks.
+        #[cfg(target_os = "linux")]
+        if access.writes.iter().any(|write| {
+            git_writes
+                .admin
+                .iter()
+                .chain(std::iter::once(&git_writes.common))
+                .any(|git| overlaps(write, git))
+        }) {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.git_writes = Some(git_writes);
     }
 
     Ok(access)

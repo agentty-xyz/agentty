@@ -303,13 +303,14 @@ still describes the call by the model's arguments. A denial answers the model wi
   Git writes, networking, environment values, and host information require explicit
   grants. The native sandbox applies grants by path at launch, without walking granted
   directories, and resolves links at access time, so links can reach only granted
-  targets. Git configuration, hooks, and worktree links stay read-only even under the
-  Git-writes grant, because Git run later outside the sandbox would execute or follow
-  them. Unsupported policy fails closed on enforcing executors, and a command the native
-  sandbox refuses to start returns to the model as a rejected tool call. Each executor
-  reports its `Enforcement` (none, filesystem, or filesystem and network), and the
-  model-facing `bash` description states exactly that, so an unsandboxed executor is
-  never presented as a sandbox. Output is captured within one bounded budget.
+  targets. Git configuration, hooks, worktree links, submodule metadata, and rebase and
+  cherry-pick state stay read-only even under the Git-writes grant, because Git run
+  later outside the sandbox would execute or follow them. Unsupported policy fails
+  closed on enforcing executors, and a command the native sandbox refuses to start
+  returns to the model as a rejected tool call. Each executor reports its `Enforcement`
+  (none, filesystem, or filesystem and network), and the model-facing `bash` description
+  states exactly that, so an unsandboxed executor is never presented as a sandbox.
+  Output is captured within one bounded budget.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks

@@ -574,7 +574,7 @@ too:
 | `with_read`                | Reads one more directory, such as `~/.rustup` or `/opt/homebrew`                                                                                                               |
 | `with_write`               | Writes beneath a workspace directory; `with_write(".")` grants the whole worktree                                                                                              |
 | `with_temporary_directory` | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
-| `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, and rebase state                                          |
+| `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, submodule metadata, and rebase and cherry-pick state      |
 | `with_network`             | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
 | `with_environment`         | Passes one environment value                                                                                                                                                   |
 | `with_host_information`    | Exposes host details such as `uname`; required                                                                                                                                 |
@@ -584,13 +584,14 @@ grant or a large `target/` or `node_modules` costs nothing per command. Links re
 their targets, which stay subject to the policy, so a link inside the workspace works
 while one leading elsewhere cannot be followed. Hard links already inside a write grant
 are files of that grant; commands cannot create new ones that reach outside it. On Linux
-only a linked worktree can stage and commit under `with_git_writes`, and only the
-repository's own Git metadata and a repository at the top of each write grant stay
-read-only; macOS protects every `.git` name. A command the sandbox refuses to start, for
-example because a granted directory is missing, comes back to the model as a rejected
-tool call, and the turn continues. Enforcing a grant or a denial is the selected
-executor's job. Long output keeps each stream's start and end within the capture budget
-(`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
+only a linked worktree can stage and commit under `with_git_writes`, which refuses a
+write grant containing a Git directory, and only the repository's own Git metadata and a
+repository at the top of each write grant stay read-only; macOS protects every `.git`
+name. A command the sandbox refuses to start, for example because a granted directory is
+missing, comes back to the model as a rejected tool call, and the turn continues.
+Enforcing a grant or a denial is the selected executor's job. Long output keeps each
+stream's start and end within the capture budget (`capture_bytes`, up to
+`BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
 `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
 results are not deferred by the per-round result share, so a larger budget spends more
 of the context window per command. The omitted byte counts are on the `CommandOutcome`.

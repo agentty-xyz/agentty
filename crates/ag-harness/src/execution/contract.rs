@@ -14,7 +14,8 @@
 //! enforcement. Git metadata includes `.git` entries, resolved Git
 //! directories, common directories, and linked-worktree administration; only
 //! the explicit Git-writes grant permits mutation, and never of Git
-//! configuration, hooks, worktree links, or submodule metadata. Applied
+//! configuration, hooks, worktree links, submodule metadata, or rebase and
+//! cherry-pick state. Applied
 //! workspace writes survive cancellation and failure; there is no rollback.
 //! Aggregate memory, process-count, and disk quotas are outside this
 //! contract.
@@ -286,7 +287,8 @@ impl ExecutionPolicy {
         &self.workspace
     }
 
-    /// Known Git administration roots that no grant permits mutating.
+    /// Known Git administration roots that no grant but
+    /// [`Self::allows_git_writes`] permits mutating.
     pub fn git_metadata(&self) -> &[PathBuf] {
         &self.git_metadata
     }
@@ -311,8 +313,10 @@ impl ExecutionPolicy {
         self.host_information
     }
 
-    /// Whether the host granted network access. An executor enforcing a
-    /// network denial must refuse a policy that grants it.
+    /// Whether the host granted network access. An executor that cannot
+    /// open the network it otherwise denies must refuse a policy that grants
+    /// it; `BashConfig::with_network` already stops describing network
+    /// access as denied to the model.
     pub fn allows_network(&self) -> bool {
         self.network
     }
@@ -324,16 +328,20 @@ impl ExecutionPolicy {
     }
 
     /// Whether the host granted writes to the repository's Git directories,
-    /// except Git configuration, hooks, worktree links, and submodule
-    /// metadata, which no grant permits mutating.
+    /// except the entries `BashConfig::with_git_writes` keeps read-only:
+    /// Git configuration, hooks, worktree links, submodule metadata, and
+    /// rebase and cherry-pick state. An executor that cannot keep those
+    /// read-only must refuse a policy granting Git writes.
     pub fn allows_git_writes(&self) -> bool {
         self.git_writes
     }
 
     /// Reports lexical intent only; never use this as a filesystem access
     /// check. Protected metadata can be read only where a read grant
-    /// already exists. Relative, empty, traversing, and NUL-containing paths
-    /// report [`ExecutionAccess::Denied`].
+    /// already exists, and Git metadata reports read-only even under the
+    /// Git-writes grant, whose exceptions are not lexical. Relative, empty,
+    /// traversing, and NUL-containing paths report
+    /// [`ExecutionAccess::Denied`].
     pub fn requested_access(&self, path: &Path) -> ExecutionAccess {
         if validate_path(path, true).is_err() {
             return ExecutionAccess::Denied;

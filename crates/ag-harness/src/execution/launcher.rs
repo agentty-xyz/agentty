@@ -323,11 +323,21 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
             pattern(&git.common)?
         )
         .map_err(io::Error::other)?;
+        // Path rules follow names, so the directories holding protected
+        // entries must not move either: a command could otherwise move one
+        // aside, change what it holds, and move it back.
+        writeln!(
+            profile,
+            "(deny file-write* (regex #\"^{}(/worktrees(/[^/]+)?)?$\"))",
+            pattern(&git.common)?
+        )
+        .map_err(io::Error::other)?;
         if let Some(admin) = &git.admin {
             writeln!(
                 profile,
-                "(deny file-write* (regex #\"^{}/({GIT_WORKTREE_PROTECTED})(/|$)\"))",
-                pattern(admin)?
+                "(deny file-write* (regex #\"^{admin}/({GIT_WORKTREE_PROTECTED})(/|$)\"))\n(deny \
+                 file-write* (regex #\"^{admin}$\"))",
+                admin = pattern(admin)?
             )
             .map_err(io::Error::other)?;
         }
@@ -388,7 +398,8 @@ fn pattern(path: &std::path::Path) -> io::Result<String> {
         .chars()
         .map(|character| match character {
             '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' | '$' => format!("[{character}]"),
-            '^' | '[' | ']' | '\\' => format!("\\{character}"),
+            // `[`, `\`, `]`, and `^`.
+            '['..='^' => format!("\\{character}"),
             other => other.to_string(),
         })
         .collect())

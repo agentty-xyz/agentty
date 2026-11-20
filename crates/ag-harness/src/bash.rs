@@ -244,7 +244,8 @@ impl BashConfig {
 
     /// Grants read access to the platform's system directories, which Bash,
     /// Git, and developer toolchains need to start: on macOS `/bin`, `/sbin`,
-    /// `/usr`, `/System`, `/Library/Developer`, the selected Xcode,
+    /// `/usr`, `/System`, `/Library/Developer`, the selected Xcode and its
+    /// license record,
     /// `/private/etc`, and the shell and time zone selections under
     /// `/private/var`; on Linux `/bin`, `/sbin`, `/usr`, `/lib*`, and `/etc`,
     /// with a private `/proc` and a minimal `/dev`. Paths missing on the host
@@ -297,6 +298,9 @@ impl BashConfig {
     /// directory per session, such as one the host creates under the system
     /// temporary directory, so commands never share temporary files with
     /// other sessions. It must not overlap the workspace or its Git metadata.
+    /// The path is part of the policy fingerprint that identifies host
+    /// requests and command records, so derive it from a stable session
+    /// identity rather than choosing a fresh random name at each start.
     ///
     /// # Errors
     /// Rejects relative paths, a second temporary directory, and a
@@ -322,8 +326,13 @@ impl BashConfig {
     /// branches. On Linux only a linked worktree can stage and commit:
     /// Landlock cannot keep a main worktree's Git directory from gaining a
     /// `commondir` link, so there only its object, reference, and log stores
-    /// are writable. A linked worktree whose repository enables
-    /// `extensions.worktreeConfig` needs its `config.worktree` to exist.
+    /// are writable, and commands are refused while a write grant contains a
+    /// Git directory, such as `with_write(".")` in a main worktree. A linked
+    /// worktree whose repository enables `extensions.worktreeConfig` needs
+    /// its `config.worktree` to exist.
+    ///
+    /// An executor other than the native sandbox that cannot keep these
+    /// entries read-only must refuse a policy granting Git writes.
     #[must_use]
     pub fn with_git_writes(mut self) -> Self {
         self.snapshot.capabilities.insert(Capability::GitWrites);
@@ -397,9 +406,12 @@ impl BashConfig {
     /// on macOS through Seatbelt network rules that still deny Unix-domain
     /// sockets other than the system resolver's; on Linux by sharing the
     /// host network namespace while seccomp still refuses every socket
-    /// family but IPv4 and IPv6. The model-facing description then states
-    /// that network access is not restricted. An executor that enforces a
-    /// network denial must refuse a policy granting network access.
+    /// family but IPv4 and IPv6. An executor's [`Enforcement`] describes the
+    /// isolation it applies to policies without this grant; with it, the
+    /// configuration reports at most [`Enforcement::FileSystem`], so the
+    /// model-facing description states that network access is not
+    /// restricted. A host executor that cannot open the network it otherwise
+    /// denies must refuse a policy granting it.
     #[must_use]
     pub fn with_network(mut self) -> Self {
         self.snapshot.capabilities.insert(Capability::Network);

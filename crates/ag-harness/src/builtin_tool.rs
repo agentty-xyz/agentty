@@ -127,10 +127,11 @@ impl ToolHandler for BashHandler {
 }
 
 /// Feedback for a `bash` call whose command the sandbox refused to start.
-const SANDBOX_REFUSED: &str = "The sandbox refused to start this command, so nothing ran. Its \
-                               configuration cannot be honored right now, for example because a \
-                               granted directory is missing; the same command fails the same way \
-                               until that changes, so continue without it.";
+const SANDBOX_REFUSED: &str = "The sandbox refused to start this command, so nothing ran. The \
+                               refusal comes from the sandbox configuration, not the command, for \
+                               example a granted directory that is missing, so every `bash` \
+                               command fails the same way until the host fixes it; continue \
+                               without `bash` and report the problem.";
 
 /// Returns whether `outcome` records a command the sandbox refused before
 /// starting it: the policy could not be enforced, nothing ran, and nothing
