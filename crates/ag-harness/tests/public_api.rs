@@ -9,6 +9,10 @@ mod model_switch_test;
 mod model_registry_test;
 
 #[cfg(test)]
+#[path = "support/catalog_registration.rs"]
+mod catalog_registration_test;
+
+#[cfg(test)]
 #[path = "support/recovery.rs"]
 mod recovery_test;
 

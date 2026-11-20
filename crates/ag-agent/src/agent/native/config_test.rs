@@ -5,12 +5,17 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::lifecycle::LifecycleEvent;
-use ag_harness::model::{ModelMetadata, ModelProfile, ModelRequest, ReasoningEffort};
+use ag_harness::model::{
+    ModelCapabilities, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ReasoningEffort,
+};
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
-use ag_harness::{ImageContent, ImageMediaType, InputBlock, Model, TurnInput};
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::{MemoryStore, SessionStore};
+use ag_harness::{Harness, ImageContent, ImageMediaType, InputBlock, Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::json;
@@ -728,7 +733,15 @@ fn registrations_declare_revision_profiles_and_capabilities() {
                     .and_then(model_profile::declared)
             })
             .unwrap_or(FALLBACK_MODEL_PROFILE);
+        assert_eq!(registration.identity().key(), selection.key());
         assert_eq!(registration.identity().revision(), "agentty-native-2");
+        let spec = registration.catalog_spec().expect("catalog entry");
+        assert_eq!(spec.id().as_str(), selection.key());
+        assert_eq!(
+            (spec.pricing(), spec.max_output(), spec.max_concurrency()),
+            (None, None, None),
+            "runs stay unpriced and unmetered"
+        );
         assert_eq!(registration.capabilities().profile, expected, "{model}");
         assert!(registration.capabilities().tool_calls, "{model}");
         assert_eq!(
@@ -993,4 +1006,67 @@ fn budgeted_registration_keeps_the_identity_and_capabilities() {
     assert_eq!(registration.identity().revision(), "agentty-native-2");
     assert!(registration.capabilities().tool_calls);
     assert!(registration.capabilities().image_input);
+}
+
+#[tokio::test]
+/// Resumes a session recorded on the hand-built registration of earlier
+/// releases, which declared the same `provider/model` key, revision, and
+/// capabilities the catalog registration now derives.
+async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registrations() {
+    // Arrange
+    let environment = environment(&[("KIMI_API_KEY", "key"), ("KIMI_BASE_URL", "http://kimi")]);
+    let selection = ModelSelection::resolve("kimi-k3", &environment).expect("served model");
+    let registry = selection
+        .registry(&environment, None, None)
+        .expect("registry");
+    let current = registry.resolve("kimi/kimi-k3").expect("registration");
+    // Earlier releases declared the provider catalog's profile for Kimi K3.
+    let recorded_profile = ModelProvider::Kimi
+        .declared_profile("kimi-k3", |_| Err(std::env::VarError::NotPresent))
+        .expect("hosted catalog profiles read no environment")
+        .expect("Kimi K3 declares a profile");
+    let capabilities = ModelCapabilities {
+        image_input: true,
+        tool_calls: true,
+        ..ModelCapabilities::new(recorded_profile)
+    };
+    let mut recorded = ModelRegistry::new();
+    recorded
+        .register(
+            ExecutionIdentity::new("kimi/kimi-k3", "agentty-native-2").expect("identity"),
+            ResumeOnlyModel {
+                metadata: current.metadata().expect("metadata"),
+            },
+            capabilities,
+        )
+        .expect("recorded registration");
+    let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+    Harness::from_registry(&recorded, "kimi/kimi-k3")
+        .expect("recorded harness")
+        .store(Arc::clone(&store))
+        .session(
+            "recorded",
+            output_schema(ProtocolRequestProfile::SessionTurn).expect("schema"),
+        )
+        .create()
+        .await
+        .expect("recorded session");
+
+    // Act
+    let resumed = Harness::from_registry(&registry, &selection.key())
+        .expect("harness")
+        .store(store)
+        .resume("recorded")
+        .await;
+
+    // Assert
+    assert_eq!(
+        current.identity(),
+        recorded
+            .resolve("kimi/kimi-k3")
+            .expect("recorded")
+            .identity()
+    );
+    assert_eq!(current.capabilities(), capabilities);
+    resumed.expect("the catalog registration resumes the recorded session");
 }
