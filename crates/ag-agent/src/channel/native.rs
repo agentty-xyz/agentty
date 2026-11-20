@@ -188,8 +188,8 @@ async fn run_session_turn(
     // A failed settlement stays registered so the next turn retries it.
     let outcome = settled?;
     lock(active).remove(&session_id);
-    // Only a concurrent shutdown observes the outcome first, after
-    // cancelling the run.
+    // Only a concurrent shutdown, which cancelled the run, observes its
+    // outcome first.
     let outcome = outcome.ok_or(NativeTurnError::Stopped)?;
     let output = outcome.result.map_err(NativeTurnError::from_run)?;
     let assistant_message = parse_output(&output, profile)?;
@@ -223,7 +223,7 @@ async fn run_session_turn(
 async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
     let mut projector = OutputProjector::default();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
-        if let Some(output) = projector.project(event.kind) {
+        for output in projector.project(event.kind) {
             let _ = events.send(TurnEvent::Output(output));
         }
     }
@@ -237,22 +237,16 @@ struct ActiveRun {
 }
 
 impl ActiveRun {
-    /// Starts `run` on its own task in the current trace context, so a
-    /// dropped turn still settles it, and returns it with its event stream.
+    /// Diagnostic for a settlement task that panicked before reporting.
+    const TASK_PANICKED: &'static str = "Harness run stopped without reporting its outcome";
+
+    /// Starts `run` on its own task, so a dropped turn still settles it, and
+    /// returns it with its event stream.
     fn start(run: Run) -> (Self, EventStream) {
         let (stream, handle) = run.into_parts();
         let cancel = handle.cancel_token();
-        let (sender, receiver) = oneshot::channel();
-        tokio::spawn(
-            async move {
-                let _ = sender.send(handle.outcome().await);
-            }
-            .with_context(Context::current()),
-        );
-        let settlement = Settlement {
-            outcome: Some(receiver),
-            unsettled: None,
-        };
+        let mut settlement = Settlement::default();
+        settlement.spawn(async move { Attempt::Finished(Box::new(handle.outcome().await)) });
 
         (
             Self {
@@ -263,44 +257,64 @@ impl ActiveRun {
         )
     }
 
-    /// Waits until the run settles, or retries cleanup that failed, and
-    /// returns the outcome to the first caller that observes it.
+    /// Waits until the run settles, or until a retry of cleanup that failed
+    /// finishes, and returns the outcome to the first caller that observes
+    /// it. The run and each retry execute on their own tasks, so a dropped
+    /// caller loses neither.
     ///
     /// # Errors
-    /// Returns the cleanup that still failed; it stays pending for the next
-    /// call.
+    /// Returns the cleanup that still failed, which the next call retries,
+    /// or a failure when a settlement task panicked.
     async fn settle(&self) -> Result<Option<RunOutcome>, String> {
         let mut settlement = self.settlement.lock().await;
-        let mut outcome = None;
-        if let Some(receiver) = settlement.outcome.as_mut() {
-            // The sender drops unsent only if the run's task panicked.
-            outcome = receiver.await.ok();
-            settlement.outcome = None;
-            let cleanup = outcome
-                .as_mut()
-                .map(|outcome| std::mem::replace(&mut outcome.settlement, Ok(())));
-            if let Some(Err(unsettled)) = cleanup {
-                return Err(settlement.keep(unsettled));
-            }
-        } else if let Some(unsettled) = settlement.unsettled.take()
-            && let Err(unsettled) = unsettled.retry().await
+        if settlement.pending.is_none()
+            && let Some(unsettled) = settlement.unsettled.take()
         {
-            return Err(settlement.keep(unsettled));
+            settlement.spawn(async move { Attempt::Retried(unsettled.retry().await) });
         }
+        let Some(receiver) = settlement.pending.as_mut() else {
+            return Ok(None);
+        };
+        let attempt = receiver.await;
+        settlement.pending = None;
+        let (outcome, cleanup) = match attempt.ok().ok_or(Self::TASK_PANICKED)? {
+            Attempt::Finished(mut outcome) => {
+                let cleanup = std::mem::replace(&mut outcome.settlement, Ok(()));
+
+                (Some(*outcome), cleanup)
+            }
+            Attempt::Retried(cleanup) => (None, cleanup),
+        };
+        cleanup.map_err(|unsettled| settlement.keep(unsettled))?;
 
         Ok(outcome)
     }
 }
 
 /// What an [`ActiveRun`] still needs to settle.
+#[derive(Default)]
 struct Settlement {
-    /// Outcome the run's task sends once the run settles, until observed.
-    outcome: Option<oneshot::Receiver<RunOutcome>>,
+    /// Report of the run's task, or of the latest cleanup retry, until
+    /// observed.
+    pending: Option<oneshot::Receiver<Attempt>>,
     /// Cleanup that failed, retried by the next settlement.
     unsettled: Option<Unsettled>,
 }
 
 impl Settlement {
+    /// Runs `attempt` on its own task in the current trace context and waits
+    /// for its report next.
+    fn spawn(&mut self, attempt: impl Future<Output = Attempt> + Send + 'static) {
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(
+            async move {
+                let _ = sender.send(attempt.await);
+            }
+            .with_context(Context::current()),
+        );
+        self.pending = Some(receiver);
+    }
+
     /// Keeps failed cleanup for the next settlement and describes it.
     fn keep(&mut self, unsettled: Unsettled) -> String {
         let error = cleanup_failure(unsettled.error());
@@ -308,6 +322,14 @@ impl Settlement {
 
         error
     }
+}
+
+/// What a settlement task reports.
+enum Attempt {
+    /// The run finished with its outcome.
+    Finished(Box<RunOutcome>),
+    /// A cleanup retry finished.
+    Retried(Result<(), Unsettled>),
 }
 
 /// Cancels a run when the turn waiting for it is dropped; cancelling a

@@ -364,11 +364,11 @@ async fn streamed_session_turn_forwards_its_output_before_the_answer() {
         text: "Streamed answer".to_string(),
     }));
     assert_eq!(
-        outputs[outputs.len() - 2..],
-        [
-            OutputEvent::Answer("Streamed answer".to_string()),
-            OutputEvent::DiscardOpen,
-        ]
+        outputs.last(),
+        Some(&OutputEvent::Answer {
+            replaces: Some(1),
+            text: "Streamed answer".to_string(),
+        })
     );
 }
 
@@ -1608,7 +1608,7 @@ async fn failed_shutdown_cleanup_is_retried_before_the_next_turn() {
 }
 
 #[tokio::test]
-async fn failed_command_cleanup_is_retried_before_the_next_turn() {
+async fn failed_command_cleanup_is_retried_by_shutdown_and_the_next_turn() {
     // Arrange
     let server = MockServer::start().await;
     respond(&server, "Next question", answer("Recovered"), 1).await;
@@ -1658,6 +1658,8 @@ async fn failed_command_cleanup_is_retried_before_the_next_turn() {
     .await
     .expect("outcome fault");
     let (failed, _) = run_turn(&channel, "session-cleanup", resume_request("Run printf")).await;
+
+    // Act
     let still_failing = channel
         .shutdown_session("session-cleanup".to_string())
         .await;
@@ -1666,8 +1668,6 @@ async fn failed_command_cleanup_is_retried_before_the_next_turn() {
         .await
         .expect("remove outcome fault");
     pool.close().await;
-
-    // Act
     let (recovered, _) =
         run_turn(&channel, "session-cleanup", resume_request("Next question")).await;
 

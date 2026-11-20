@@ -1,7 +1,7 @@
 //! Projects the content-bearing events of a harness run onto the streamed
 //! output Agentty shows while a session turn runs.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ag_contracts::{OutputEvent, OutputKind};
 use ag_harness::event::{Delta, Item, ItemKind};
@@ -13,31 +13,57 @@ const ANSWER_FIELD: &str = "answer";
 
 /// Turns one run's item events into [`OutputEvent`]s, decoding the answer of
 /// a streamed protocol response as it arrives.
+///
+/// A model request that completes reports `ModelRequestCompleted` before its
+/// response's items complete. A streamed response whose items complete
+/// without it was discarded, such as a failed response or an invalid final
+/// answer requested again, so its items are dropped when the next response
+/// starts streaming, a request is retried, or the run ends.
 #[derive(Default)]
 pub(crate) struct OutputProjector {
-    /// Decoders of the open message items, by item.
+    /// Committed protocol answer that the run's final output replaces.
+    answer: Option<u64>,
+    /// Whether the streaming response's items completed without its request
+    /// completing.
+    discarded: bool,
+    /// Decoders of the open message items.
     messages: HashMap<u64, AnswerDecoder>,
+    /// Items shown and not yet completed or dropped.
+    open: HashSet<u64>,
+    /// Tool calls whose arguments are streaming.
+    preparing: BTreeSet<u64>,
+    /// Items that streamed into the response whose request has not
+    /// completed.
+    streaming: Vec<u64>,
+    /// Tool calls whose arguments have not streamed, which stay unshown.
+    unstreamed_tools: HashSet<u64>,
 }
 
 impl OutputProjector {
-    /// Returns the output change `event` makes, or `None` for an event that
-    /// carries no displayed output.
-    pub(crate) fn project(&mut self, event: RunEventKind) -> Option<OutputEvent> {
+    /// Returns the output changes `event` makes, in order.
+    pub(crate) fn project(&mut self, event: RunEventKind) -> Vec<OutputEvent> {
         match event {
             RunEventKind::ItemStarted { id, item_kind } => self.start(id.get(), item_kind),
             RunEventKind::ItemDelta { delta, id } => self.delta(id.get(), delta),
-            RunEventKind::ItemCompleted { id, item } => Some(self.complete(id.get(), item)),
-            // A retried request discards the response it was streaming, and
-            // a finished run never completes what it left open.
-            RunEventKind::Retrying { .. } | RunEventKind::Completed(_) => {
-                Some(OutputEvent::DiscardOpen)
+            RunEventKind::ItemCompleted { id, item } => {
+                self.complete(id.get(), item).into_iter().collect()
             }
-            _ => None,
+            RunEventKind::ModelRequestCompleted { .. } => self.commit(),
+            // A retried request discards the response it was streaming.
+            RunEventKind::Retrying { .. } => self.drop_items(Vec::new()),
+            // A finished run never completes what it left open.
+            RunEventKind::Completed(_) => {
+                let open = self.open.iter().copied().collect();
+
+                self.drop_items(open)
+            }
+            _ => Vec::new(),
         }
     }
 
-    /// Opens an item; the final output is shown only once it completes.
-    fn start(&mut self, id: u64, item_kind: ItemKind) -> Option<OutputEvent> {
+    /// Opens an item. A tool call is shown once its arguments stream, and
+    /// the final output once it completes.
+    fn start(&mut self, id: u64, item_kind: ItemKind) -> Vec<OutputEvent> {
         let kind = match item_kind {
             ItemKind::Message => {
                 self.messages.insert(id, AnswerDecoder::default());
@@ -45,45 +71,140 @@ impl OutputProjector {
                 OutputKind::Message
             }
             ItemKind::Reasoning => OutputKind::Reasoning,
-            ItemKind::ToolCall => OutputKind::ToolCall,
-            _ => return None,
-        };
+            ItemKind::ToolCall => {
+                self.unstreamed_tools.insert(id);
 
-        Some(OutputEvent::Started { id, kind })
+                return Vec::new();
+            }
+            _ => return Vec::new(),
+        };
+        self.open.insert(id);
+
+        vec![OutputEvent::Started { id, kind }]
     }
 
-    /// Appends a text or reasoning fragment, dropping message fragments that
-    /// add no answer text yet, such as the opening of a protocol response.
-    /// Tool arguments stay unshown: hosts summarize a call being prepared.
-    fn delta(&mut self, id: u64, delta: Delta) -> Option<OutputEvent> {
+    /// Applies one fragment, dropping a discarded response first. Message
+    /// fragments that add no answer text yet, such as the opening of a
+    /// protocol response, emit nothing.
+    fn delta(&mut self, id: u64, delta: Delta) -> Vec<OutputEvent> {
+        let mut events = if self.discarded {
+            self.drop_items(Vec::new())
+        } else {
+            Vec::new()
+        };
+        if self.streaming.is_empty() {
+            self.answer = None;
+        }
+        if !self.streaming.contains(&id) {
+            self.streaming.push(id);
+        }
         let text = match delta {
             Delta::Text { text } => self
                 .messages
                 .get_mut(&id)
                 .map(|decoder| decoder.push(&text)),
             Delta::Reasoning { text } => Some(text),
-            _ => None,
-        };
+            _ => {
+                events.extend(self.prepare_tool_call(id));
 
-        text.filter(|text| !text.is_empty())
-            .map(|text| OutputEvent::Delta { id, text })
+                return events;
+            }
+        };
+        events.extend(
+            text.filter(|text| !text.is_empty())
+                .map(|text| OutputEvent::Delta { id, text }),
+        );
+
+        events
+    }
+
+    /// Shows a tool call at its first argument fragment; its arguments
+    /// themselves stay unshown.
+    fn prepare_tool_call(&mut self, id: u64) -> Option<OutputEvent> {
+        self.unstreamed_tools.remove(&id).then(|| {
+            self.open.insert(id);
+            self.preparing.insert(id);
+
+            OutputEvent::Started {
+                id,
+                kind: OutputKind::ToolCall,
+            }
+        })
     }
 
     /// Completes an item with its authoritative text, or reports the run's
-    /// final answer.
-    fn complete(&mut self, id: u64, item: Item) -> OutputEvent {
+    /// final answer. A streamed item completing before its request
+    /// completed marks its response discarded.
+    fn complete(&mut self, id: u64, item: Item) -> Option<OutputEvent> {
+        let discarded = self.streaming.contains(&id);
         let text = match item {
+            Item::Output { output } => {
+                return Some(OutputEvent::Answer {
+                    replaces: self.answer.take(),
+                    text: answer(&output),
+                });
+            }
             Item::Message { text } => {
                 self.messages.remove(&id);
+                let mut decoder = AnswerDecoder::default();
+                let text = decoder.push(&text);
+                if decoder.is_answer() && !discarded {
+                    self.answer = Some(id);
+                }
 
-                AnswerDecoder::default().push(&text)
+                text
             }
             Item::Reasoning { text } => text,
-            Item::Output { output } => return OutputEvent::Answer(answer(&output)),
-            _ => String::new(),
-        };
+            _ => {
+                // A tool call ran, so the newest message was no answer. A
+                // streamed call's line already completed with its request.
+                self.unstreamed_tools.remove(&id);
+                self.answer = None;
 
-        OutputEvent::Completed { id, text }
+                return None;
+            }
+        };
+        self.discarded |= discarded;
+        self.open.remove(&id);
+
+        Some(OutputEvent::Completed { id, text })
+    }
+
+    /// Accepts the streamed response of a completed request; its tool calls'
+    /// arguments are complete, so their preparation lines complete.
+    fn commit(&mut self) -> Vec<OutputEvent> {
+        self.streaming.clear();
+        self.discarded = false;
+
+        std::mem::take(&mut self.preparing)
+            .into_iter()
+            .map(|id| {
+                self.open.remove(&id);
+
+                OutputEvent::Completed {
+                    id,
+                    text: String::new(),
+                }
+            })
+            .collect()
+    }
+
+    /// Drops `ids` and the streaming response's items.
+    fn drop_items(&mut self, mut ids: Vec<u64>) -> Vec<OutputEvent> {
+        ids.append(&mut self.streaming);
+        ids.sort_unstable();
+        ids.dedup();
+        self.discarded = false;
+        for id in &ids {
+            self.messages.remove(id);
+            self.open.remove(id);
+            self.preparing.remove(id);
+        }
+        if ids.is_empty() {
+            return Vec::new();
+        }
+
+        vec![OutputEvent::Discard { ids }]
     }
 }
 
@@ -131,6 +252,11 @@ impl AnswerDecoder {
         }
 
         text
+    }
+
+    /// Returns whether the message is a JSON protocol response.
+    fn is_answer(&self) -> bool {
+        matches!(self.mode, DecoderMode::Json(_))
     }
 }
 

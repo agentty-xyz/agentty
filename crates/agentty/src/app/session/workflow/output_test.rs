@@ -92,61 +92,59 @@ fn fragments_accumulate_and_the_completed_item_replaces_them() {
 }
 
 #[test]
-fn tool_calls_show_a_preparation_line_until_they_run() {
+fn tool_calls_show_a_preparation_line_until_their_arguments_complete() {
     // Arrange
     let mut fixture = Fixture::new();
     fixture.observe([started(2, OutputKind::ToolCall)]);
     let preparing = fixture.output.snapshot();
-    fixture.observe([started(3, OutputKind::ToolCall), completed(3, "")]);
-    let completed_removed = fixture.output.snapshot();
     fixture.notifications();
     // Nothing changed since the snapshot, so this releases the notification.
     fixture.output.refresh();
 
     // Act
-    fixture
-        .output
-        .settle_tool_calls(&fixture.sender, &fixture.session_id);
-    let settled = fixture.notifications();
-    fixture
-        .output
-        .settle_tool_calls(&fixture.sender, &fixture.session_id);
+    fixture.observe([completed(2, "")]);
+    let completed_removed = fixture.notifications();
+    fixture.output.refresh();
+    fixture.output.refresh();
+    fixture.observe([completed(2, "")]);
 
     // Assert
     assert_eq!(preparing, "_Preparing a tool call…_");
-    assert_eq!(completed_removed, preparing);
-    assert_eq!(settled, 1);
+    assert_eq!(completed_removed, 1);
     assert_eq!(fixture.notifications(), 0);
     assert_eq!(fixture.output.snapshot(), "");
 }
 
 #[test]
-fn final_answer_replaces_the_newest_streamed_message() {
+fn final_answer_replaces_the_message_it_streamed_as() {
     // Arrange
     let replaced = Fixture::new();
     let appended = Fixture::new();
     replaced.observe([
         started(0, OutputKind::Message),
-        delta(0, "{\"answer\""),
+        completed(0, "Draft answer"),
         started(1, OutputKind::Message),
-        completed(1, "Draft answer"),
+        completed(1, "Progress"),
     ]);
-    appended.observe([started(0, OutputKind::Reasoning), completed(0, "Thought.")]);
+    appended.observe([started(0, OutputKind::Message), completed(0, "Progress")]);
 
     // Act
-    replaced.observe([OutputEvent::Answer("Final answer".to_string())]);
-    appended.observe([OutputEvent::Answer("Unstreamed answer".to_string())]);
+    replaced.observe([OutputEvent::Answer {
+        replaces: Some(0),
+        text: "Final answer".to_string(),
+    }]);
+    appended.observe([OutputEvent::Answer {
+        replaces: None,
+        text: "Unstreamed answer".to_string(),
+    }]);
 
     // Assert
-    assert_eq!(replaced.output.snapshot(), "{\"answer\"\n\nFinal answer");
-    assert_eq!(
-        appended.output.snapshot(),
-        "> Thought.\n\nUnstreamed answer"
-    );
+    assert_eq!(replaced.output.snapshot(), "Final answer\n\nProgress");
+    assert_eq!(appended.output.snapshot(), "Progress\n\nUnstreamed answer");
 }
 
 #[test]
-fn discarding_open_items_keeps_completed_output() {
+fn discarded_items_disappear_and_unknown_ones_change_nothing() {
     // Arrange
     let mut fixture = Fixture::new();
     fixture.observe([
@@ -155,18 +153,17 @@ fn discarding_open_items_keeps_completed_output() {
         started(1, OutputKind::Message),
         delta(1, "Partial"),
         started(2, OutputKind::ToolCall),
-        delta(2, "{}"),
     ]);
     fixture.output.snapshot();
     fixture.notifications();
     fixture.output.refresh();
 
     // Act
-    fixture.observe([OutputEvent::DiscardOpen]);
+    fixture.observe([OutputEvent::Discard { ids: vec![1, 2] }]);
     let discarded = fixture.notifications();
     fixture.output.refresh();
     fixture.output.refresh();
-    fixture.observe([OutputEvent::DiscardOpen]);
+    fixture.observe([OutputEvent::Discard { ids: vec![7] }]);
 
     // Assert
     assert_eq!(discarded, 1);
@@ -191,7 +188,10 @@ fn history_keeps_the_most_recent_items() {
     fixture.observe([
         started(limit + 1, OutputKind::Reasoning),
         completed(limit + 1, "last"),
-        OutputEvent::Answer("answer".to_string()),
+        OutputEvent::Answer {
+            replaces: Some(0),
+            text: "answer".to_string(),
+        },
     ]);
 
     // Assert
@@ -207,7 +207,8 @@ fn history_keeps_the_most_recent_items() {
 fn foreground_keeps_one_notification_armed_while_output_changes() {
     // Arrange
     let mut fixture = Fixture::new();
-    let streamed_before = fixture.output.has_streamed();
+    fixture.output.clear(&fixture.sender, &fixture.session_id);
+    let cleared_before = fixture.notifications();
 
     // Act
     fixture.observe([started(0, OutputKind::Message), delta(0, "a")]);
@@ -219,10 +220,17 @@ fn foreground_keeps_one_notification_armed_while_output_changes() {
     let unchanged = fixture.output.refresh();
     fixture.observe([delta(0, "c")]);
     let after_release = fixture.notifications();
+    fixture.output.clear(&fixture.sender, &fixture.session_id);
+    fixture.output.clear(&fixture.sender, &fixture.session_id);
 
     // Assert
-    assert!(!streamed_before);
-    assert!(fixture.output.has_streamed());
+    assert_eq!(cleared_before, 0);
+    assert_eq!(
+        std::iter::from_fn(|| fixture.receiver.try_recv().ok()).collect::<Vec<_>>(),
+        [AppEvent::SessionOutputCleared {
+            session_id: fixture.session_id.clone(),
+        }]
+    );
     assert_eq!(first, 1);
     assert_eq!(snapshot, "a");
     assert_eq!(while_armed, 0);
@@ -276,8 +284,6 @@ async fn foreground_shows_streamed_output_once_per_frame_below_activity_rows() {
         .iter()
         .map(|message| message.slot)
         .collect::<Vec<_>>();
-    app.sessions
-        .track_live_output(SessionId::from("missing"), Some(LiveOutput::default()));
     app.apply_app_events(AppEvent::SessionOutputCleared {
         session_id: fixture.session_id.clone(),
     })
@@ -298,25 +304,28 @@ async fn foreground_shows_streamed_output_once_per_frame_below_activity_rows() {
     assert_eq!(cleared, None);
 }
 
-#[tokio::test]
-async fn empty_streamed_output_shows_nothing() {
+#[test]
+fn empty_or_unknown_session_output_shows_nothing() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
+    let mut manager = crate::test_support::session_manager_with_sessions(vec![
         crate::test_support::SessionFixtureBuilder::new()
             .id("session")
             .status(Status::InProgress)
             .build(),
-    );
-    app.sessions
-        .update_live_activity("session", Some("Tools: read ×1".to_string()));
+    ]);
+    manager.update_live_activity("session", Some("Tools: read ×1".to_string()));
 
     // Act
-    app.sessions
-        .track_live_output(SessionId::from("session"), Some(LiveOutput::default()));
+    manager.track_live_output(SessionId::from("session"), Some(LiveOutput::default()));
+    manager.track_live_output(SessionId::from("missing"), Some(LiveOutput::default()));
 
     // Assert
-    assert_eq!(shown_output(&app), None);
+    assert_eq!(
+        manager.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::StreamedOutput),
+        None
+    );
 }
 
 #[test]

@@ -1280,7 +1280,10 @@ fn serve_gated_stream(mut stream: TcpStream, gate: &ReleaseGate) {
         ])
         .as_bytes(),
     );
-    gate.wait_blocking(Duration::from_secs(60));
+    // A scenario that never opens the gate sees the stream end unfinished.
+    if !gate.wait_blocking(Duration::from_secs(60)) {
+        return;
+    }
     let _ = stream.write_all(
         sse_chunks(&[
             json!({"choices": [{"index": 0, "delta": {"content": tail}}]}),

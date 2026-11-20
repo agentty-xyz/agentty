@@ -50,17 +50,13 @@ impl TurnActivity {
     }
 
     /// Updates retained calls in place and queues at most one unread
-    /// notification. A running call replaces the streamed preparation of
-    /// its arguments.
+    /// notification.
     pub(super) fn observe_live(
         &mut self,
         event: ActivityEvent,
         sender: &mpsc::UnboundedSender<AppEvent>,
         session_id: &SessionId,
     ) {
-        if event.status == ActivityStatus::Running {
-            self.output.settle_tool_calls(sender, session_id);
-        }
         self.observe(event);
         self.live.notify(sender, session_id);
     }
@@ -104,18 +100,24 @@ impl TurnActivity {
         }
     }
 
-    /// Removes live rows and streamed output after the caller has handled
-    /// the completed turn.
+    /// Removes the streamed output once the turn's saved answer or failure
+    /// notice replaces it.
+    pub(super) fn clear_output(
+        &self,
+        sender: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &SessionId,
+    ) {
+        self.output.clear(sender, session_id);
+    }
+
+    /// Removes live rows and any streamed output still shown after the
+    /// caller has handled the completed turn.
     pub(super) fn clear_live(
         &self,
         sender: &mpsc::UnboundedSender<AppEvent>,
         session_id: &SessionId,
     ) {
-        if self.output.has_streamed() {
-            let _ = sender.send(AppEvent::SessionOutputCleared {
-                session_id: session_id.clone(),
-            });
-        }
+        self.clear_output(sender, session_id);
         if !self
             .live
             .state

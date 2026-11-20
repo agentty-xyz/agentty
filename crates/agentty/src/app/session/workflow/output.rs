@@ -69,24 +69,15 @@ impl LiveOutput {
         self.mark_changed(&mut state, sender, session_id);
     }
 
-    /// Drops tool calls still being prepared once one starts running, since
-    /// its activity row then reports it.
-    pub(super) fn settle_tool_calls(
-        &self,
-        sender: &mpsc::UnboundedSender<AppEvent>,
-        session_id: &SessionId,
-    ) {
-        let mut state = self.lock();
-        let item_count = state.items.len();
-        state.items.retain(|item| item.kind != OutputKind::ToolCall);
-        if state.items.len() != item_count {
-            self.mark_changed(&mut state, sender, session_id);
+    /// Removes the output from the session view once the turn's saved
+    /// result replaces it; later calls, or a turn that streamed nothing,
+    /// send nothing.
+    pub(super) fn clear(&self, sender: &mpsc::UnboundedSender<AppEvent>, session_id: &SessionId) {
+        if std::mem::take(&mut self.lock().streamed) {
+            let _ = sender.send(AppEvent::SessionOutputCleared {
+                session_id: session_id.clone(),
+            });
         }
-    }
-
-    /// Returns whether the turn streamed any output.
-    pub(super) fn has_streamed(&self) -> bool {
-        self.lock().streamed
     }
 
     /// Records a change and queues a notification when none is armed.
@@ -150,11 +141,12 @@ impl OutputState {
                 };
                 item.text.push_str(&text);
             }
-            OutputEvent::Completed { id, text } => self.complete(id, text),
-            OutputEvent::Answer(text) => self.answer(text),
-            OutputEvent::DiscardOpen => {
+            OutputEvent::Completed { id, text } => return self.complete(id, text),
+            OutputEvent::Answer { replaces, text } => self.answer(replaces, text),
+            OutputEvent::Discard { ids } => {
                 let item_count = self.items.len();
-                self.items.retain(|item| !item.open);
+                self.items
+                    .retain(|item| !item.id.is_some_and(|id| ids.contains(&id)));
 
                 return self.items.len() != item_count;
             }
@@ -179,29 +171,30 @@ impl OutputState {
             .find(|item| item.open && item.id == Some(id))
     }
 
-    /// Replaces an item's fragments with its completed text; a completed
-    /// tool call is reported by its activity row instead.
-    fn complete(&mut self, id: u64, text: String) {
+    /// Replaces an item's fragments with its completed text, returning
+    /// whether the item exists. A tool call's line goes once its arguments
+    /// are complete, when its activity row takes over.
+    fn complete(&mut self, id: u64, text: String) -> bool {
         let Some(index) = self.items.iter().rposition(|item| item.id == Some(id)) else {
-            return;
+            return false;
         };
         if self.items[index].kind == OutputKind::ToolCall {
             self.items.remove(index);
 
-            return;
+            return true;
         }
         let item = &mut self.items[index];
         item.open = false;
         item.text = text;
+
+        true
     }
 
-    /// Shows the validated answer in place of the newest item when that is
-    /// the streamed message it was validated from.
-    fn answer(&mut self, text: String) {
-        if let Some(item) = self
-            .items
-            .last_mut()
-            .filter(|item| item.kind == OutputKind::Message)
+    /// Shows the validated answer in place of the message it streamed as,
+    /// or after the other items when it did not stream.
+    fn answer(&mut self, replaces: Option<u64>, text: String) {
+        if let Some(item) =
+            replaces.and_then(|id| self.items.iter_mut().rev().find(|item| item.id == Some(id)))
         {
             item.open = false;
             item.text = text;

@@ -23,21 +23,28 @@ pub enum OutputEvent {
         /// The fragment.
         text: String,
     },
-    /// Item `id` finished; `text` replaces its streamed fragments. A
-    /// finished tool call carries no text, since its activity row reports
-    /// it.
+    /// Item `id` finished, and `text` replaces its fragments. A tool call
+    /// finishes once its arguments are complete and carries no text.
     Completed {
         /// Identifier of the item, as [`Self::Started`] reported it.
         id: u64,
         /// The authoritative item text.
         text: String,
     },
-    /// The turn's validated final answer, shown in place of the latest
-    /// message when that message is the newest item.
-    Answer(String),
-    /// Items still open will never complete, such as the tool calls of a
-    /// discarded response, so their partial text is dropped.
-    DiscardOpen,
+    /// The turn's validated final answer.
+    Answer {
+        /// Message item that held the answer as it streamed, which the answer
+        /// supersedes, or `None` when the answer did not stream.
+        replaces: Option<u64>,
+        /// The answer text.
+        text: String,
+    },
+    /// Items that belong to a discarded response, or that the turn left
+    /// unfinished, are void.
+    Discard {
+        /// Identifiers of the void items.
+        ids: Vec<u64>,
+    },
 }
 
 /// What one streamed output item holds.

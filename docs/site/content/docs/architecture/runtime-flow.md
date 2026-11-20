@@ -114,9 +114,9 @@ harness run's item events into `TurnEvent::Output` changes, decoding the protoco
 as it arrives; the worker accumulates them into one replaceable snapshot below the
 activity rows. One notification stays armed while the output changes, and the foreground
 applies further changes once per frame, so a fast stream cannot flood the event loop.
-The final answer replaces the newest streamed message, and the whole snapshot is removed
-when the saved answer reaches the transcript; streamed output is never persisted or
-replayed.
+The runtime drops a discarded response's items and reports which message the validated
+answer replaces. The worker removes the snapshot right after it saves the answer or
+failure notice to the transcript; streamed output is never persisted or replayed.
 
 With `--experimental-graph`, session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
