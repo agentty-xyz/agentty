@@ -135,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-latest, ubuntu-22.04, ubuntu-22.04-arm]
+        runner: [macos-26, ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -384,13 +384,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - { image: "ubuntu:26.04", error: "" }
+          - { image: "ubuntu:24.04", error: "" }
           - { image: "ubuntu:22.04", error: "" }
           - { image: "debian:stable-slim", error: "" }
           - { image: "fedora:45", error: "" }
           - { image: "ubuntu:20.04", error: "" }
           - { image: "alpine:3.24", error: "" }
           - { image: "i386/alpine:3.24", error: "with a 32-bit userland" }
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     permissions: {}
     env:
       EXPECTED_ERROR: ${{ matrix.error }}

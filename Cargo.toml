@@ -134,10 +134,12 @@ debug_assert_with_mut_call = "warn"
 
 # Release configuration read by `crates/ag-release`, which
 # `.github/workflows/release.yml` runs; see `crates/ag-release/README.md`.
-# Linux glibc builds run on Ubuntu 22.04, so their binaries need its glibc
-# 2.35; installers fall back to the statically linked musl builds on older
+# Linux glibc builds run on Ubuntu 26.04. Their binaries reference glibc 2.34
+# symbols, plus 2.39 `pidfd` functions that Rust links weakly and does without,
+# so they run on Ubuntu 22.04's glibc 2.35, which the dry run's install test
+# checks. Installers fall back to the statically linked musl builds on older
 # glibc and on musl systems such as Alpine. Both macOS targets build on the
-# Apple Silicon `macos-latest` runner.
+# Apple Silicon `macos-26` runner.
 [workspace.metadata.release]
 profile = "dist"
 min-glibc = "2.35"
@@ -146,12 +148,12 @@ homebrew-tap = "agentty-xyz/tap"
 include = ["README.md", "LICENSE", "CHANGELOG.md"]
 
 [workspace.metadata.release.targets]
-aarch64-apple-darwin = "macos-latest"
-x86_64-apple-darwin = "macos-latest"
-aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
-x86_64-unknown-linux-gnu = "ubuntu-22.04"
-aarch64-unknown-linux-musl = "ubuntu-22.04-arm"
-x86_64-unknown-linux-musl = "ubuntu-22.04"
+aarch64-apple-darwin = "macos-26"
+x86_64-apple-darwin = "macos-26"
+aarch64-unknown-linux-gnu = "ubuntu-26.04-arm"
+x86_64-unknown-linux-gnu = "ubuntu-26.04"
+aarch64-unknown-linux-musl = "ubuntu-26.04-arm"
+x86_64-unknown-linux-musl = "ubuntu-26.04"
 
 # Homebrew wants descriptions under 80 characters that do not start with the
 # formula name, unlike the shared package description.
@@ -171,6 +173,8 @@ smoke-paths = [".github/workflows/publish-npm-oidc.yml"]
 # The dry run's install test: "" must install and run; other values are text
 # the installer's failure must contain.
 [workspace.metadata.release.workflow.distributions]
+"ubuntu:26.04" = ""
+"ubuntu:24.04" = ""
 "ubuntu:22.04" = ""
 "debian:stable-slim" = ""
 "fedora:45" = ""
