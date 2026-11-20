@@ -16,3 +16,5 @@ mod stale;
 mod summary;
 #[path = "context_test/support_test.rs"]
 mod support;
+#[path = "context_test/thinking_test.rs"]
+mod thinking;

@@ -11,7 +11,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 
 use crate::credential::CredentialSource;
 use crate::input::TurnInput;
-use crate::model::{GenerationOptions, ModelError, ReasoningEffort};
+use crate::model::{GenerationOptions, ModelError, ModelMessage, ReasoningEffort};
 use crate::retry::RetryPolicy;
 use crate::schema::OutputSchema;
 
@@ -20,8 +20,7 @@ const MIN_MAX_OUTPUT_TOKENS: u32 = 16;
 
 /// `max_tokens` an Anthropic Messages request sends when neither the request
 /// nor [`ProviderSpec::with_fallback_max_tokens`] sets a bound, since the API
-/// requires one: Anthropic's guidance for unstreamed requests, which must
-/// finish within the ten-minute request timeout.
+/// requires one: Anthropic's guidance for a request without a stated bound.
 pub(crate) const DEFAULT_FALLBACK_MAX_TOKENS: NonZeroU32 = NonZeroU32::MIN.saturating_add(15_999);
 
 /// Header naming the Anthropic Messages API version.
@@ -39,8 +38,8 @@ const RESERVED_HEADERS: [&str; 4] = ["authorization", "content-length", "content
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WireProtocol {
-    /// The Anthropic Messages API (`POST {base_url}/messages`), sent
-    /// unstreamed: Claude models with signed thinking replayed verbatim.
+    /// The Anthropic Messages API (`POST {base_url}/messages`), streamed:
+    /// Claude models with signed thinking replayed verbatim.
     AnthropicMessages,
     /// The `OpenAI` Chat Completions API (`POST {base_url}/chat/completions`),
     /// implemented by most OpenAI-compatible servers.
@@ -248,6 +247,7 @@ pub enum MaxTokensField {
 pub struct ProviderSpec {
     pub(crate) auth: Auth,
     pub(crate) base_url: String,
+    pub(crate) cache_breakpoints: CacheBreakpoints,
     pub(crate) display_name: String,
     pub(crate) fallback_max_tokens: Option<NonZeroU32>,
     pub(crate) headers: Vec<(String, String)>,
@@ -266,6 +266,16 @@ pub struct ProviderSpec {
     pub(crate) retry: RetryPolicy,
     pub(crate) stream_usage: StreamUsage,
     pub(crate) structured_output: StructuredOutputMode,
+}
+
+/// Whether an Anthropic Messages request marks its stable prefix with
+/// prompt-cache breakpoints.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CacheBreakpoints {
+    /// Send `cache_control` on the tools, `system`, and the last message.
+    Marked,
+    /// Send no `cache_control`.
+    Unmarked,
 }
 
 /// Whether a streamed Chat Completions request asks for its usage.
@@ -315,6 +325,7 @@ impl fmt::Debug for ProviderSpec {
             .field("image_input", &self.image_input)
             .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("cache_breakpoints", &self.cache_breakpoints)
             .field(
                 "response_format_with_tools",
                 &self.response_format_with_tools,
@@ -347,8 +358,10 @@ impl ProviderSpec {
     /// Messages starts with native structured output (`output_config.format`),
     /// efforts under their own names, image input, the required `max_tokens`
     /// field (16,000 when a request sets no bound, see
-    /// [`Self::with_fallback_max_tokens`]), and the `anthropic-version:
-    /// 2023-06-01` header, which [`Self::with_header`] can replace; it needs
+    /// [`Self::with_fallback_max_tokens`]), prompt-cache breakpoints on the
+    /// stable prefix ([`Self::with_cache_breakpoints`]), and the
+    /// `anthropic-version: 2023-06-01` header, which [`Self::with_header`]
+    /// can replace; it needs
     /// `x-api-key` authentication, which the [`crate::preset::anthropic`]
     /// preset sets.
     pub fn new(id: impl Into<String>, protocol: WireProtocol, base_url: impl Into<String>) -> Self {
@@ -360,6 +373,11 @@ impl ProviderSpec {
         Self {
             auth: Auth::None,
             base_url: base_url.into(),
+            cache_breakpoints: if anthropic {
+                CacheBreakpoints::Marked
+            } else {
+                CacheBreakpoints::Unmarked
+            },
             display_name: id.clone(),
             fallback_max_tokens: None,
             headers: if anthropic {
@@ -446,9 +464,10 @@ impl ProviderSpec {
 
     /// Sets the `max_tokens` an Anthropic Messages request sends when the
     /// request sets no output-token bound, in place of 16,000. The API
-    /// requires a bound, and requests are unstreamed, so a larger one risks
-    /// the ten-minute request timeout. Other protocols send no bound then,
-    /// so validation rejects this setting for them.
+    /// requires a bound; requests stream, so a larger one is bounded only by
+    /// the streaming transport's whole-response and idle timeouts. Other
+    /// protocols send no bound then, so validation rejects this setting for
+    /// them.
     #[must_use]
     pub fn with_fallback_max_tokens(mut self, max_tokens: NonZeroU32) -> Self {
         self.fallback_max_tokens = Some(max_tokens);
@@ -518,6 +537,24 @@ impl ProviderSpec {
         self
     }
 
+    /// Sets whether an Anthropic Messages request marks its stable prefix
+    /// with `cache_control: {"type": "ephemeral"}` breakpoints, on by
+    /// default: the last tool definition, the last `system` block, and the
+    /// last block of the last message that is not signed thinking, three of
+    /// the API's four breakpoints. A cache write costs more than uncached
+    /// input, so a host whose requests share no prefix may turn it off;
+    /// other protocols fail validation with it on.
+    #[must_use]
+    pub fn with_cache_breakpoints(mut self, cache_breakpoints: bool) -> Self {
+        self.cache_breakpoints = if cache_breakpoints {
+            CacheBreakpoints::Marked
+        } else {
+            CacheBreakpoints::Unmarked
+        };
+
+        self
+    }
+
     /// Sets whether requests carry
     /// [`crate::GenerationOptions::prompt_cache_key`]; providers that reject
     /// unknown body fields must leave it off.
@@ -532,9 +569,8 @@ impl ProviderSpec {
     /// with `stream_options.include_usage`, on by default. A server that
     /// rejects `stream_options` must turn it off, and then reports no
     /// usage unless it volunteers some. Only Chat Completions sends it:
-    /// Responses streams always report usage and Anthropic Messages
-    /// requests are unstreamed, so either protocol fails validation with it
-    /// on.
+    /// Responses and Anthropic Messages streams always report usage, so
+    /// either protocol fails validation with it on.
     #[must_use]
     pub fn with_stream_usage(mut self, stream_usage: bool) -> Self {
         self.stream_usage = if stream_usage {
@@ -701,6 +737,22 @@ impl ProviderSpec {
         Ok(())
     }
 
+    /// Validates every user input among `messages` as
+    /// [`Self::validate_input`] does.
+    pub(crate) fn validate_inputs(
+        &self,
+        model: &str,
+        messages: &[ModelMessage],
+    ) -> Result<(), ModelError> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                ModelMessage::UserInput(input) => Some(input),
+                _ => None,
+            })
+            .try_for_each(|input| self.validate_input(model, input))
+    }
+
     /// Rejects an output-token bound the provider does not accept: any bound
     /// without a [`MaxTokensField`], and one below
     /// [`MIN_MAX_OUTPUT_TOKENS`] in `max_output_tokens`, which the Responses
@@ -800,6 +852,9 @@ impl ProviderSpec {
         let unsupported = match self.protocol {
             WireProtocol::AnthropicMessages => self.unsupported_by_anthropic(),
             _ if self.fallback_max_tokens.is_some() => Some("a fallback `max_tokens`"),
+            _ if self.cache_breakpoints == CacheBreakpoints::Marked => {
+                Some("`cache_control` breakpoints")
+            }
             WireProtocol::ChatCompletions => {
                 if self.max_tokens_field == Some(MaxTokensField::MaxOutputTokens) {
                     Some("the `max_output_tokens` field")

@@ -2,21 +2,23 @@
 //! specifications against an in-process server and recorded fixtures:
 //! request shape, byte-identical preset requests, response parsing, signed
 //! thinking replay, structured-output modes, images, stop reasons, error
-//! mapping, and specification validation.
+//! mapping, streamed responses and their deltas, prompt-cache breakpoints,
+//! and specification validation.
 
 #[path = "support/conformance.rs"]
 mod conformance;
 
 use std::error::Error;
-use std::sync::Arc;
+use std::fmt::Write as _;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_router::ReasoningEffort::{High, Max, XHigh};
 use ag_router::{
-    Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, ModelError, ModelMessage,
-    ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, RetryKind, RetryNotice,
-    RetryObserver, RetryPolicy, Router, StructuredOutputMode, ThinkingOptions, ToolDefinition,
-    TurnInput, WireProtocol, preset, reasoning_view,
+    Completion, DeltaObserver, ErrorClass, ImageContent, ImageMediaType, InputBlock, ModelError,
+    ModelMessage, ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, ResponseDelta,
+    RetryKind, RetryNotice, RetryObserver, RetryPolicy, Router, StructuredOutputMode,
+    ThinkingOptions, ToolDefinition, TurnInput, WireProtocol, preset, reasoning_view,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -211,7 +213,8 @@ async fn replays_signed_thinking_verbatim_in_its_original_order() -> Result<(), 
             {"role": "assistant", "content": recorded["content"]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "toolu_1", "content": "{\"text\":\"Ada\"}"},
-                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "{\"text\":\"Ada\"}"}
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "{\"text\":\"Ada\"}",
+                    "cache_control": {"type": "ephemeral"}}
             ]}
         ])
     );
@@ -283,7 +286,9 @@ async fn sends_images_as_base64_blocks() -> Result<(), Box<dyn Error>> {
     let request = structured("custom/claude", vec![ModelMessage::UserInput(input)])?;
 
     // Act
-    Router::new([custom(&server)]).execute(request).await?;
+    Router::new([custom(&server).with_cache_breakpoints(false)])
+        .execute(request)
+        .await?;
 
     // Assert
     let body = received_body(&server).await?;
@@ -617,6 +622,511 @@ async fn retries_an_overloaded_response_under_the_spec_policy_and_reports_it()
     assert_eq!(notices[0].attempt, 1);
     assert_eq!(notices[0].kind, RetryKind::Overloaded);
     assert_eq!(notices[0].status, Some(529));
+
+    Ok(())
+}
+
+/// Returns the server-sent events of `events`, each named by its type.
+fn sse(events: &[Value]) -> String {
+    events.iter().fold(String::new(), |mut body, event| {
+        let kind = event["type"].as_str().unwrap_or_default();
+        let _ = write!(body, "event: {kind}\ndata: {event}\n\n");
+
+        body
+    })
+}
+
+/// Returns the event stream the Messages API sends for `recorded`, an
+/// unstreamed response: its envelope in `message_start` with a partial
+/// usage, each block started empty and streamed in five-character deltas
+/// (a thinking block's signature in one), redacted thinking started whole,
+/// then the stop reason and cumulative usage in `message_delta`, with a
+/// `ping` among them.
+fn event_stream(recorded: &str) -> Result<String, Box<dyn Error>> {
+    let message: Value = serde_json::from_str(recorded)?;
+    let mut start = message.clone();
+    start["content"] = json!([]);
+    start["stop_reason"] = Value::Null;
+    start["stop_details"] = Value::Null;
+    start["usage"]["output_tokens"] = json!(1);
+    let mut events = vec![
+        json!({"type": "message_start", "message": start}),
+        json!({"type": "ping"}),
+    ];
+    let pieces = |text: &str| -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut pieces: Vec<String> = chars
+            .chunks(5)
+            .map(|chunk| chunk.iter().collect())
+            .collect();
+        if pieces.is_empty() {
+            pieces.push(String::new());
+        }
+
+        pieces
+    };
+    let content = message["content"].as_array().ok_or("content")?;
+    for (index, block) in content.iter().enumerate() {
+        let delta =
+            |delta: Value| json!({"type": "content_block_delta", "index": index, "delta": delta});
+        let (started, deltas) = match block["type"].as_str() {
+            Some("text") => (
+                json!({"type": "text", "text": ""}),
+                pieces(block["text"].as_str().unwrap_or_default())
+                    .into_iter()
+                    .map(|text| delta(json!({"type": "text_delta", "text": text})))
+                    .collect(),
+            ),
+            Some("thinking") => {
+                let mut deltas: Vec<Value> = pieces(block["thinking"].as_str().unwrap_or_default())
+                    .into_iter()
+                    .map(|thinking| delta(json!({"type": "thinking_delta", "thinking": thinking})))
+                    .collect();
+                deltas.push(delta(json!({
+                    "type": "signature_delta",
+                    "signature": block["signature"],
+                })));
+
+                (
+                    json!({"type": "thinking", "thinking": "", "signature": ""}),
+                    deltas,
+                )
+            }
+            Some("tool_use") => (
+                json!({"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}),
+                pieces(&block["input"].to_string())
+                    .into_iter()
+                    .map(|json| delta(json!({"type": "input_json_delta", "partial_json": json})))
+                    .collect(),
+            ),
+            _ => (block.clone(), Vec::new()),
+        };
+        events
+            .push(json!({"type": "content_block_start", "index": index, "content_block": started}));
+        events.extend(deltas);
+        events.push(json!({"type": "content_block_stop", "index": index}));
+    }
+    events.push(json!({
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": message["stop_reason"],
+            "stop_sequence": null,
+            "stop_details": message.get("stop_details").cloned().unwrap_or_default(),
+        },
+        "usage": {"output_tokens": message["usage"]["output_tokens"]},
+    }));
+    events.push(json!({"type": "message_stop"}));
+
+    Ok(sse(&events))
+}
+
+/// Starts a server answering every Messages request with the event stream
+/// `body`.
+async fn event_stream_server(body: String) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Records every streamed delta in order.
+#[derive(Default)]
+struct RecordedDeltas(Mutex<Vec<ResponseDelta>>);
+
+impl RecordedDeltas {
+    fn take(&self) -> Result<Vec<ResponseDelta>, Box<dyn Error>> {
+        Ok(std::mem::take(
+            &mut *self.0.lock().map_err(|_| "the deltas lock is poisoned")?,
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl DeltaObserver for RecordedDeltas {
+    async fn delta(&self, delta: ResponseDelta) {
+        if let Ok(mut deltas) = self.0.lock() {
+            deltas.push(delta);
+        }
+    }
+}
+
+/// Builds the specification of a case for its server.
+type SpecFor = fn(&MockServer) -> ProviderSpec;
+
+/// Returns a completion, or a failure as its display, class, and status, so
+/// a streamed and an unstreamed result compare.
+type Outcome = Result<Completion, (String, ErrorClass, Option<u16>)>;
+
+fn outcome(result: Result<Completion, ModelError>) -> Outcome {
+    result.map_err(|error| (error.to_string(), error.error_class(), error.http_status()))
+}
+
+#[tokio::test]
+async fn streams_each_recorded_response_into_the_unstreamed_completion()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let forced = |server: &MockServer| {
+        custom(server)
+            .with_reasoning(ReasoningMapping::None)
+            .with_structured_output(StructuredOutputMode::ForcedTool)
+    };
+    let preset = |server: &MockServer| anthropic(server, "claude-opus-5-5");
+    let arguments = |index: usize, arguments: &str| ResponseDelta::ToolArguments {
+        arguments: arguments.to_string(),
+        index,
+    };
+    let text = |text: &str| ResponseDelta::Text(text.to_string());
+    let reasoning = |text: &str| ResponseDelta::Reasoning(text.to_string());
+    let cases: [(&str, SpecFor, Vec<ResponseDelta>); 4] = [
+        (
+            MESSAGE,
+            preset,
+            vec![
+                reasoning("The f"),
+                reasoning("ile n"),
+                reasoning("ames "),
+                reasoning("Ada."),
+                text("{\"nam"),
+                text("e\":\"A"),
+                text("da\"}"),
+            ],
+        ),
+        (
+            TOOL_USE,
+            preset,
+            vec![
+                reasoning("Read "),
+                reasoning("both "),
+                reasoning("files"),
+                reasoning("."),
+                text("Readi"),
+                text("ng th"),
+                text("e fil"),
+                text("es."),
+                arguments(0, "{\"pat"),
+                arguments(0, "h\":\"a"),
+                arguments(0, ".txt\""),
+                arguments(0, "}"),
+                arguments(1, "{\"pat"),
+                arguments(1, "h\":\"b"),
+                arguments(1, ".txt\""),
+                arguments(1, "}"),
+            ],
+        ),
+        (
+            FORCED_TOOL,
+            forced,
+            vec![text("{\"nam"), text("e\":\"A"), text("da\"}")],
+        ),
+        (REFUSAL, preset, Vec::new()),
+    ];
+
+    for (recorded, spec, expected_deltas) in cases {
+        let unstreamed = server(200, recorded).await;
+        let streamed = event_stream_server(event_stream(recorded)?).await;
+        let request = || {
+            conformance::golden_request(
+                "custom/claude-opus-5-5",
+                false,
+                conformance::options(None, false, None),
+            )
+        };
+        let build = |spec: ProviderSpec| {
+            let id = spec.id().to_string();
+            let mut request = request()?;
+            request.model = format!("{id}/claude-opus-5-5");
+
+            Ok::<_, Box<dyn Error>>((Router::new([spec]), request))
+        };
+        let deltas = Arc::new(RecordedDeltas::default());
+
+        // Act
+        let (router, request) = build(spec(&unstreamed))?;
+        let expected = outcome(router.execute(request).await);
+        let (router, request) = build(spec(&streamed))?;
+        let completion = outcome(router.execute_streamed(request, deltas.clone(), None).await);
+
+        // Assert
+        assert_eq!(completion, expected);
+        assert_eq!(deltas.take()?, expected_deltas);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reports_cache_reads_and_writes_from_the_streamed_usage() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = event_stream_server(event_stream(MESSAGE)?).await;
+    let request = structured(
+        "anthropic/claude-opus-5-5",
+        vec![ModelMessage::User("Find the name".to_string())],
+    )?;
+
+    // Act
+    let completion = Router::new([anthropic(&server, "claude-opus-5-5")])
+        .execute(request)
+        .await?;
+
+    // Assert
+    let Completion::Output { metadata, .. } = completion else {
+        return Err("expected structured output".into());
+    };
+    let usage = *metadata.usage().ok_or("usage")?;
+    assert_eq!(usage.cache_hit_tokens(), Some(1000));
+    assert_eq!(usage.cache_write_tokens(), Some(20));
+    assert_eq!(usage.input_tokens(), Some(1120));
+    assert_eq!(usage.output_tokens(), Some(50));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn fails_a_stream_error_event_as_its_unstreamed_rejection() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let billing = r#"{"type":"error","error":{"type":"billing_error","message":"Your credit balance is too low."}}"#;
+    let unknown = r#"{"type":"error","error":{"type":"novel_error","message":"Try later."}}"#;
+    let started = json!({"type": "message_start", "message": {
+        "id": "msg_failed", "model": "claude-opus-5-5", "content": [],
+        "usage": {"input_tokens": 10, "output_tokens": 1}
+    }});
+    // Each failure follows streamed content, so even a retried status is
+    // not retried.
+    let partial = json!({"type": "content_block_start", "index": 0,
+        "content_block": {"type": "text", "text": ""}});
+    let delta = json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "text_delta", "text": "{\"na"}});
+    let stream = |error: &str| -> Result<String, Box<dyn Error>> {
+        Ok(sse(&[
+            started.clone(),
+            partial.clone(),
+            delta.clone(),
+            serde_json::from_str(error)?,
+        ]))
+    };
+    let execute = |server: MockServer, retries: Arc<RecordedRetries>| async move {
+        let request = structured(
+            "anthropic/claude-opus-5-5",
+            vec![ModelMessage::User("Find the name".to_string())],
+        )?;
+        let policy = RetryPolicy::default()
+            .with_retried(RetryKind::Overloaded, true)
+            .with_base_delay(Duration::from_millis(1));
+
+        Router::new([anthropic(&server, "claude-opus-5-5").with_retry(policy)])
+            .execute_observed(request, retries)
+            .await
+            .err()
+            .ok_or_else(|| Box::<dyn Error>::from("the request should fail"))
+    };
+    let retries = Arc::new(RecordedRetries::default());
+
+    // Act
+    let overloaded = execute(
+        event_stream_server(stream(OVERLOADED)?).await,
+        retries.clone(),
+    )
+    .await?;
+    let too_long = execute(
+        event_stream_server(stream(PROMPT_TOO_LONG)?).await,
+        retries.clone(),
+    )
+    .await?;
+    let billing = execute(event_stream_server(stream(billing)?).await, retries.clone()).await?;
+    let unknown = execute(event_stream_server(stream(unknown)?).await, retries.clone()).await?;
+
+    // Assert
+    assert_eq!(overloaded.error_class(), ErrorClass::Provider);
+    assert_eq!(overloaded.http_status(), Some(529));
+    assert!(overloaded.to_string().contains("overloaded_error"));
+    assert!(!overloaded.is_quota_exceeded());
+    assert_eq!(too_long.error_class(), ErrorClass::ContextOverflow);
+    assert_eq!(too_long.http_status(), Some(400));
+    assert!(billing.is_quota_exceeded());
+    assert_eq!(billing.http_status(), Some(402));
+    assert_eq!(unknown.error_class(), ErrorClass::Provider);
+    assert_eq!(unknown.http_status(), None);
+    assert!(unknown.to_string().contains("novel_error"));
+    assert!(retries.0.lock().map_err(|_| "poisoned")?.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn retries_a_stream_that_fails_before_any_content_under_the_spec_policy()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let overloaded = MockServer::start().await;
+    let failed_early = sse(&[
+        json!({"type": "message_start", "message": {"id": "msg_failed", "content": []}}),
+        json!({"type": "ping"}),
+        serde_json::from_str(OVERLOADED)?,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(failed_early, "text/event-stream"))
+        .up_to_n_times(1)
+        .mount(&overloaded)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(event_stream(MESSAGE)?, "text/event-stream"),
+        )
+        .mount(&overloaded)
+        .await;
+    let invalid = event_stream_server("data: {\"type\":\n\n".to_string()).await;
+    let too_long = event_stream_server(sse(&[
+        json!({"type": "message_start", "message": {"id": "msg_failed", "content": []}}),
+        serde_json::from_str(PROMPT_TOO_LONG)?,
+    ]))
+    .await;
+    let policy = RetryPolicy::default()
+        .with_retried(RetryKind::Overloaded, true)
+        .with_base_delay(Duration::from_millis(1));
+    let request = || {
+        structured(
+            "anthropic/claude-opus-5-5",
+            vec![ModelMessage::User("Find the name".to_string())],
+        )
+    };
+    let retries = Arc::new(RecordedRetries::default());
+
+    // Act
+    let completion = Router::new([anthropic(&overloaded, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await?;
+    let malformed = Router::new([anthropic(&invalid, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await
+        .err()
+        .ok_or("a malformed stream should fail")?;
+    let rejected = Router::new([anthropic(&too_long, "claude-opus-5-5").with_retry(policy)])
+        .execute_observed(request()?, retries.clone())
+        .await
+        .err()
+        .ok_or("a rejected request should fail")?;
+
+    // Assert
+    assert!(matches!(completion, Completion::Output { .. }));
+    let notices = retries
+        .0
+        .lock()
+        .map_err(|_| "the notices lock is poisoned")?
+        .clone();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].attempt, 1);
+    assert_eq!(notices[0].kind, RetryKind::Overloaded);
+    assert_eq!(notices[0].status, Some(529));
+    assert_eq!(malformed.error_class(), ErrorClass::InvalidProviderResponse);
+    // A status the policy does not retry fails at once, even before content.
+    assert_eq!(rejected.error_class(), ErrorClass::ContextOverflow);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn fails_a_stream_that_closes_before_message_stop() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let recorded = event_stream(MESSAGE)?;
+    let cut = recorded
+        .rsplit_once("event: message_stop")
+        .ok_or("message_stop")?
+        .0
+        .to_string();
+    let server = event_stream_server(cut).await;
+    let request = structured(
+        "anthropic/claude-opus-5-5",
+        vec![ModelMessage::User("Find the name".to_string())],
+    )?;
+
+    // Act
+    let error = Router::new([anthropic(&server, "claude-opus-5-5")])
+        .execute(request)
+        .await
+        .err()
+        .ok_or("the request should fail")?;
+
+    // Assert
+    assert_eq!(error.error_class(), ErrorClass::Transport);
+    assert!(conformance::error_chain(&error).contains("closed before the response completed"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marks_cache_breakpoints_only_while_the_policy_asks_for_them() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let marked = server(400, "{}").await;
+    let unmarked = server(400, "{}").await;
+    let tool = ToolDefinition::new(
+        "read",
+        "Read one file.",
+        json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    );
+    let request = || -> Result<ModelRequest, Box<dyn Error>> {
+        Ok(ModelRequest::chat(
+            "custom/claude",
+            vec![
+                ModelMessage::System("You extract names.".to_string()),
+                ModelMessage::System("Answer in English.".to_string()),
+                ModelMessage::User("Find the name".to_string()),
+                ModelMessage::User("in a.txt".to_string()),
+            ],
+            vec![tool.clone()],
+            conformance::format()?,
+        ))
+    };
+    // Forced-tool output appends `structured_output` after the request's
+    // tools, so it is the last tool.
+    let forced = custom(&marked)
+        .with_reasoning(ReasoningMapping::None)
+        .with_structured_output(StructuredOutputMode::ForcedTool);
+    let chat = ProviderSpec::new(
+        "chat",
+        WireProtocol::ChatCompletions,
+        "https://example.test/v1",
+    )
+    .with_cache_breakpoints(true);
+
+    // Act
+    let _ = Router::new([forced]).execute(request()?).await;
+    let _ = Router::new([custom(&unmarked).with_cache_breakpoints(false)])
+        .execute(request()?)
+        .await;
+    let invalid = chat.validate().err();
+
+    // Assert
+    let marked = received_body(&marked).await?;
+    let breakpoint = json!({"type": "ephemeral"});
+    assert_eq!(marked["stream"], json!(true));
+    assert_eq!(marked["tools"][0].get("cache_control"), None);
+    assert_eq!(marked["tools"][1]["name"], json!("structured_output"));
+    assert_eq!(marked["tools"][1]["cache_control"], breakpoint);
+    assert_eq!(marked["system"][0].get("cache_control"), None);
+    assert_eq!(marked["system"][1]["cache_control"], breakpoint);
+    assert_eq!(
+        marked["messages"][0]["content"][0].get("cache_control"),
+        None
+    );
+    assert_eq!(
+        marked["messages"][0]["content"][1]["cache_control"],
+        breakpoint
+    );
+    assert_eq!(marked.to_string().matches("cache_control").count(), 3);
+    let unmarked = received_body(&unmarked).await?;
+    assert_eq!(unmarked["stream"], json!(true));
+    assert!(!unmarked.to_string().contains("cache_control"));
+    assert!(matches!(
+        invalid,
+        Some(ModelError::InvalidProviderConfig { reason })
+            if reason.contains("`cache_control` breakpoints")
+    ));
 
     Ok(())
 }

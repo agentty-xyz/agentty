@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::anthropic::{self, AnthropicBackend};
+use crate::anthropic::AnthropicBackend;
 use crate::chat_completion::ChatCompletionBackend;
 use crate::http::HttpTransport;
 use crate::model::{
@@ -22,9 +22,8 @@ type SpecKey = (String, Option<String>);
 
 /// Single entry point for configured model providers.
 pub struct Router {
-    anthropic: Arc<HttpTransport>,
     specs: HashMap<SpecKey, ProviderSpec>,
-    /// Transport of the streamed protocols, Responses and Chat Completions.
+    /// Transport every protocol streams through.
     streaming: Arc<HttpTransport>,
 }
 
@@ -47,7 +46,6 @@ impl Router {
     /// ([`ProviderSpec::validate`]) before any network access.
     pub fn new(specs: impl IntoIterator<Item = ProviderSpec>) -> Self {
         let mut router = Self {
-            anthropic: anthropic::default_transport(),
             specs: HashMap::new(),
             streaming: stream::default_transport(),
         };
@@ -184,8 +182,7 @@ impl Router {
     /// arrives, and each retry to `retries` as [`Self::execute_observed`]
     /// does.
     ///
-    /// Responses and Chat Completions requests stream; an Anthropic
-    /// Messages request reports no deltas. The returned completion is the
+    /// Requests of every protocol stream. The returned completion is the
     /// one [`Self::execute`] returns for the same response, so deltas only
     /// preview it: a response that fails after streaming began, or whose
     /// output fails validation, returns its error after its deltas.
@@ -234,8 +231,9 @@ impl Router {
                     spec,
                     model.to_string(),
                     headers,
-                    Arc::clone(&self.anthropic),
+                    Arc::clone(&self.streaming),
                     observers.retries,
+                    observers.deltas,
                 )
                 .generate(&request)
                 .await?

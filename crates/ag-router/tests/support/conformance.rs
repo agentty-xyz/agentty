@@ -16,7 +16,10 @@
 //! `content-length` 54 bytes longer, since those requests stream. The
 //! `anthropic-*` fixtures postdate that enum: they record the first Anthropic
 //! Messages requests, written by hand from the Messages API reference and
-//! then matched to the serialized key order, and the `anthropic_messages/`
+//! then matched to the serialized key order; they have since gained
+//! `"stream":true` and a `"cache_control":{"type":"ephemeral"}` breakpoint
+//! on the tool, the `system` block, and the last message's last block, with
+//! their `content-length` 125 bytes longer. The `anthropic_messages/`
 //! responses follow the same reference:
 //!
 //! ```text

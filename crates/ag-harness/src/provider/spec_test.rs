@@ -110,9 +110,11 @@ fn maps_every_option_onto_the_routed_specification() {
         ),
         (
             ProviderSpec::new("gateway", WireProtocol::AnthropicMessages, BASE_URL)
+                .with_cache_breakpoints(false)
                 .with_fallback_max_tokens(NonZeroU32::MIN)
                 .with_structured_output(StructuredOutputMode::ForcedTool),
             router_spec(ag_router::WireProtocol::AnthropicMessages)
+                .with_cache_breakpoints(false)
                 .with_fallback_max_tokens(NonZeroU32::MIN)
                 .with_structured_output(ag_router::StructuredOutputMode::ForcedTool),
         ),

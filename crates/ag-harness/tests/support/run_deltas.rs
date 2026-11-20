@@ -1,6 +1,7 @@
 //! Public streaming contract of built-in clients: a streamed turn response
 //! opens its reasoning, message, and tool-call items at their first delta,
-//! streams `ItemDelta` events into them, and completes them afterwards.
+//! streams `ItemDelta` events into them, and completes them afterwards, on
+//! the Chat Completions and Anthropic Messages protocols alike.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -261,6 +262,80 @@ async fn completes_the_streamed_text_of_a_discarded_answer() -> Result<(), Box<d
             Seen::Completed(2, Item::Output { output }),
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn streams_anthropic_thinking_and_text_into_items() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    let events = [
+        json!({"type": "message_start", "message": {"id": "msg_1", "model": "claude",
+            "content": [], "usage": {"input_tokens": 9, "output_tokens": 1}}}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Recall "}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "her."}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig-1"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "content_block_start", "index": 1,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 1,
+            "delta": {"type": "text_delta", "text": "Ada "}}),
+        json!({"type": "content_block_delta", "index": 1,
+            "delta": {"type": "text_delta", "text": "Lovelace"}}),
+        json!({"type": "content_block_stop", "index": 1}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 7}}),
+        json!({"type": "message_stop"}),
+    ];
+    let mut body = String::new();
+    for event in events {
+        let kind = event["type"].as_str().unwrap_or_default();
+        let _ = write!(body, "event: {kind}\ndata: {event}\n\n");
+    }
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+    let spec = ProviderSpec::new(
+        "claude-gateway",
+        WireProtocol::AnthropicMessages,
+        format!("{}/v1", server.uri()),
+    )
+    .for_model("claude");
+    let harness = Harness::builder()
+        .model(Arc::new(ModelClient::from_spec(spec)?))
+        .context_budget(unbounded_context_budget())
+        .build()?;
+
+    // Act
+    let request = RunRequest::new("Who?").output(OutputMode::Text);
+    let (stream, handle) = harness.run(request).into_parts();
+    let (seen, outcome) = timeout(HANG, async {
+        tokio::join!(drain(stream), handle.outcome())
+    })
+    .await?;
+
+    // Assert
+    let output = RunOutput::Text("Ada Lovelace".to_string());
+    assert_eq!(outcome.result.as_ref().ok(), Some(&output));
+    assert_eq!(
+        seen[..6],
+        [
+            Seen::Started(0, ItemKind::Reasoning),
+            Seen::reasoning(0, "Recall "),
+            Seen::reasoning(0, "her."),
+            Seen::Started(1, ItemKind::Message),
+            Seen::text(1, "Ada "),
+            Seen::text(1, "Lovelace"),
+        ]
+    );
+    assert!(seen.contains(&Seen::message(1, "Ada Lovelace")));
 
     Ok(())
 }

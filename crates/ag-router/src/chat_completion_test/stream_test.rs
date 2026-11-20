@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::chat_completion::ChunkStream;
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
-use crate::stream::ResponseDelta;
+use crate::stream::{EventReader as _, ResponseDelta};
 
 #[test]
 fn reads_a_trailing_chunk_and_keeps_only_the_first_choice() {

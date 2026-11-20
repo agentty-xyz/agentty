@@ -316,12 +316,12 @@ the containing worktree; the library never searches `PATH`.
 
 ## Provider transport
 
-`ag-router` owns the built-in Chat Completions and `OpenAI` Responses transports,
-provider wire policies, and local JSON Schema validation. Every request names a
-`provider/model` and a `JsonSchemaFormat`; terminal output is validated JSON, while
-function calls return to the harness for execution. The harness keeps tool permissions,
-sessions, lifecycle events, and telemetry. The router has no token streaming to callers
-or automatic provider fallback.
+`ag-router` owns the built-in Chat Completions, `OpenAI` Responses, and Anthropic
+Messages transports, provider wire policies, and local JSON Schema validation. Every
+request names a `provider/model` and a `JsonSchemaFormat`; terminal output is validated
+JSON, while function calls return to the harness for execution. The harness keeps tool
+permissions, sessions, lifecycle events, and telemetry. The router streams every
+protocol's deltas to an observer but has no automatic provider fallback.
 
 Providers are data, not code. A `ProviderSpec` names its `WireProtocol`, base URL,
 authentication (none, a bearer key, a named header, or a refreshing credential), extra
@@ -365,20 +365,20 @@ as opt-ins, honoring a capped `Retry-After` as delta-seconds or an HTTP date; a 
 quota (`402`, or a `429` reporting an exhausted quota) and a timed-out request are not
 retried. The router's transport reports each retry before waiting, and the engine scopes
 the run's event sink around every model request, so a streamed run emits it as
-`Retrying`; cancelling the run drops the request future and its wait. Responses and Chat
-Completions requests stream under a 30-minute bound and a 5-minute idle timeout. For
-each turn request the engine also scopes a per-response item tracker, so a built-in
-client reports the router's deltas as `ItemDelta` events. They are awaited sends under
-the stream's lossless backpressure, into reasoning, message, and tool-call items opened
-at their first fragment. After the response, the engine completes those same items
-instead of starting new ones. Summary and compaction requests do not stream into items.
-The harness `ErrorKind`, exposed through `RunError` and `HarnessError`, maps these
-failures to `RateLimited`, `Overloaded`, `QuotaExceeded`, and `Auth` with a retryable
-flag and the capped `Retry-After`. Provider context-overflow rejections map to
-`ErrorClass::ContextOverflow` so the engine can refit. Invalid final output is
-re-requested a bounded number of times with request-only feedback, and tool calls with
-undecodable arguments are answered with a rejected result instead of failing the
-response. Diagnostics never include model content.
+`Retrying`; cancelling the run drops the request future and its wait. Responses, Chat
+Completions, and Anthropic Messages requests stream under a 30-minute bound and a
+5-minute idle timeout. For each turn request the engine also scopes a per-response item
+tracker, so a built-in client reports the router's deltas as `ItemDelta` events. They
+are awaited sends under the stream's lossless backpressure, into reasoning, message, and
+tool-call items opened at their first fragment. After the response, the engine completes
+those same items instead of starting new ones. Summary and compaction requests do not
+stream into items. The harness `ErrorKind`, exposed through `RunError` and
+`HarnessError`, maps these failures to `RateLimited`, `Overloaded`, `QuotaExceeded`, and
+`Auth` with a retryable flag and the capped `Retry-After`. Provider context-overflow
+rejections map to `ErrorClass::ContextOverflow` so the engine can refit. Invalid final
+output is re-requested a bounded number of times with request-only feedback, and tool
+calls with undecodable arguments are answered with a rejected result instead of failing
+the response. Diagnostics never include model content.
 
 ## Input and output
 

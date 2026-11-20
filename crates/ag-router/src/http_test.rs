@@ -9,6 +9,7 @@ use std::time::Duration;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 
+use super::test_support::PostJson as _;
 use super::{
     ERROR_BODY_LIMIT_BYTES, HttpTransport, ProviderRequest, RetryClock, SUCCESS_BODY_LIMIT_BYTES,
     TransportError, append_success_chunk, has_context_overflow_marker, is_quota_exceeded,
@@ -388,6 +389,7 @@ fn stream_failures_classify_by_their_code_and_message() {
     let failure = |code: Option<&str>| TransportError::StreamFailed {
         code: code.map(str::to_string),
         message: Some("try later".to_string()),
+        status: None,
     };
 
     // Act

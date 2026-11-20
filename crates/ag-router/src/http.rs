@@ -185,19 +185,6 @@ impl HttpTransport {
             .unwrap_or_default()
     }
 
-    /// Sends `request` and decodes its successful body.
-    ///
-    /// # Errors
-    /// Returns a transport, HTTP, size, or decoding failure.
-    pub(crate) async fn post_json<Response: DeserializeOwned>(
-        &self,
-        request: &ProviderRequest,
-    ) -> Result<Response, TransportError> {
-        let mut response = self.send(request).await?;
-
-        decode_success_body(&mut response).await
-    }
-
     /// Sends `request` and returns its successful response with the body
     /// unread, retrying the failures its [`RetryPolicy`] retries and
     /// reporting each retry to its observer before waiting. A `429` whose
@@ -291,6 +278,46 @@ impl HttpTransport {
 
             return Ok(response);
         }
+    }
+
+    /// Decides whether to send `request` again after `failure`, a failure
+    /// its provider reported inside a stream before any content, such as
+    /// an Anthropic `overloaded_error` event: the request's
+    /// [`RetryPolicy`] retries it as it retries an unsuccessful response
+    /// with the status the failure stands for, reporting the retry to its
+    /// observer and waiting it out first. `retries` counts the request's
+    /// earlier stream retries; a stream that had begun its content is not
+    /// retried, since its deltas were already reported.
+    pub(crate) async fn retry_streamed(
+        &self,
+        request: &ProviderRequest,
+        failure: &TransportError,
+        retries: u32,
+    ) -> bool {
+        let TransportError::StreamFailed {
+            code,
+            message,
+            status: Some(status),
+        } = failure
+        else {
+            return false;
+        };
+        let description = format!(
+            "{} {}",
+            code.as_deref().unwrap_or_default(),
+            message.as_deref().unwrap_or_default()
+        );
+        let policy = &request.retry;
+        let Some(kind) = RetryKind::of_status(*status).filter(|kind| {
+            !is_quota_exceeded(*status, &description) && policy.allows(*kind, retries, 0)
+        }) else {
+            return false;
+        };
+        let delay = policy.status_delay(retries, None, (self.clock.jitter)());
+        self.wait(request, retries + 1, delay, kind, Some(status.as_u16()))
+            .await;
+
+        true
     }
 
     /// Reports retry `attempt` of `request` to its observer, then waits
@@ -438,6 +465,37 @@ pub(crate) fn streamed_failure(
     )
 }
 
+/// Classifies a failure `provider` reported inside a stream it had already
+/// begun answering, by the HTTP `status` its error type names, exactly as an
+/// unsuccessful response with that status and the failure's `code` and
+/// `message` as its body: an Anthropic `overloaded_error` fails as a `529`
+/// does, a `request_too_large` as a context-window overflow, and a
+/// `billing_error` as a spent quota.
+pub(crate) fn streamed_rejection(
+    provider: &str,
+    overflow_markers: &[String],
+    status: reqwest::StatusCode,
+    code: String,
+    message: Option<String>,
+) -> model::ModelError {
+    let description = format!("{code} {}", message.as_deref().unwrap_or_default());
+    let rejection = model::ProviderRejection {
+        context_overflow: is_context_overflow(status, &description, overflow_markers),
+        quota_exceeded: is_quota_exceeded(status, &description),
+        retry_after: None,
+    };
+
+    model::ModelError::streamed_rejection(
+        status.as_u16(),
+        rejection,
+        Box::new(StreamedFailure {
+            code,
+            message: schema_contract::bounded_diagnostic(message.unwrap_or_default()),
+            provider: provider.to_string(),
+        }),
+    )
+}
+
 /// A response that failed after its stream began.
 #[derive(Debug, Error)]
 #[error("{provider} response failed with `{code}`: {message}")]
@@ -496,11 +554,13 @@ pub(crate) enum TransportError {
     #[error("model API response body exceeds the size limit")]
     ResponseBodyTooLarge,
     /// A failure the provider reported inside a stream it had begun
-    /// answering, classified by [`streamed_failure`].
+    /// answering, classified by [`streamed_rejection`] when its error `code`
+    /// names an HTTP `status`, or else by [`streamed_failure`].
     #[error("model API stream reported a failure")]
     StreamFailed {
         code: Option<String>,
         message: Option<String>,
+        status: Option<reqwest::StatusCode>,
     },
     #[error("model API transport failed: {0}")]
     Transport(#[source] Box<dyn Error + Send + Sync>),
@@ -550,7 +610,12 @@ impl TransportError {
                 error.into(),
             ),
             Self::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,
-            Self::StreamFailed { code, message } => {
+            Self::StreamFailed {
+                code: Some(code),
+                message,
+                status: Some(status),
+            } => streamed_rejection(provider, overflow_markers, status, code, message),
+            Self::StreamFailed { code, message, .. } => {
                 streamed_failure(provider, overflow_markers, code, message)
             }
             error @ Self::Transport(_) => model::ModelError::classified_request(
@@ -569,3 +634,7 @@ mod tests;
 #[cfg(test)]
 #[path = "http_retry_test.rs"]
 mod retry_tests;
+
+#[cfg(test)]
+#[path = "http_support_test.rs"]
+mod test_support;

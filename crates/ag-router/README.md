@@ -97,17 +97,16 @@ and `Jitter`. A spent quota (`402`, or a `429` reporting one) and a timed-out re
 are never retried. `Router::execute_observed` reports each retry to a `RetryObserver`
 before its wait, and dropping the request future stops a pending wait.
 
-Responses and Chat Completions requests stream (`stream: true`). Chat Completions also
-asks for usage with `stream_options.include_usage`, which every preset keeps;
+Requests of every protocol stream (`stream: true`). Chat Completions also asks for usage
+with `stream_options.include_usage`, which every preset keeps;
 `ProviderSpec::with_stream_usage(false)` turns it off for a server that rejects it. A
 stream may run for 30 minutes in total but fails after 5 minutes of silence. A Chat
-Completions server that ignores `stream` and answers with one JSON body is read as
-before. `Router::execute_streamed` reports each `ResponseDelta` (text, reasoning, or a
-call's arguments by its position) to a `DeltaObserver` as it arrives. The returned
-completion is decoded exactly as an unstreamed response would be, so deltas only preview
-it. A failure reported inside a stream is classified like an HTTP rejection, and a
-stream that ends before its response finishes is a transport failure. Anthropic Messages
-requests are unstreamed and report no deltas.
+Completions or Anthropic Messages server that ignores `stream` and answers with one JSON
+body is read as before. `Router::execute_streamed` reports each `ResponseDelta` (text,
+reasoning, or a call's arguments by its position) to a `DeltaObserver` as it arrives.
+The returned completion is decoded exactly as an unstreamed response would be, so deltas
+only preview it. A failure reported inside a stream is classified like an HTTP
+rejection, and a stream that ends before its response finishes is a transport failure.
 
 `openai-compatible` applies a conservative policy for servers whose extensions are
 unknown: the API key is optional (`None` sends no `Authorization` header), requests
@@ -146,11 +145,11 @@ stream that closes before its terminal event is a transport failure. Output text
 reasoning summary, and function-argument deltas reach a `DeltaObserver`. The current
 `Task` surface supports chat only; other model modes are not yet implemented.
 
-`anthropic` sends unstreamed requests to `{base_url}/messages` with the key in
-`x-api-key` and the protocol's `anthropic-version: 2023-06-01` header, which
-`with_header` replaces. System messages become top-level `system` blocks, consecutive
-messages of one role merge, tool results return as `tool_result` blocks, and images as
-base64 `image` blocks. A request without an output bound sends `max_tokens` 16,000
+`anthropic` sends streamed requests to `{base_url}/messages` with the key in `x-api-key`
+and the protocol's `anthropic-version: 2023-06-01` header, which `with_header` replaces.
+System messages become top-level `system` blocks, consecutive messages of one role
+merge, tool results return as `tool_result` blocks, and images as base64 `image` blocks.
+A request without an output bound sends `max_tokens` 16,000
 (`ProviderSpec::with_fallback_max_tokens`), since the API requires one. The schema is
 the native `output_config.format`, or with `StructuredOutputMode::ForcedTool` a
 `structured_output` tool whose input is the answer, forced only for a specification
@@ -160,11 +159,21 @@ sent as `output_config.effort` with summarized adaptive thinking. A response's s
 reasoning content of its first call or output, with markers where its text and calls
 went, and replayed verbatim in that order; other reasoning content is omitted. Signed
 thinking survives only history that grows, so `Router::replays_turn_instructions` tells
-callers to replay earlier turns' instructions as first sent. Usage counts cache reads
-and writes as input and reports the writes. A `max_tokens`, `pause_turn`, or `refusal`
-stop is an incomplete response, a `model_context_window_exceeded` stop or a "prompt is
-too long" `400` is a context overflow, and an HTTP `529` keeps its status for the
-caller's overload handling.
+callers to replay earlier turns' instructions as first sent. Text, thinking, and
+tool-argument deltas reach a `DeltaObserver`, thinking blocks separated by a blank line,
+and a forced-tool answer streams as text, after any text the model wrote before the
+call, which the completion leaves out of the answer. Unless
+`with_cache_breakpoints(false)` turns it off, the last tool definition, the last
+`system` block, and the last message's last block that is not signed thinking carry a
+`cache_control: {"type": "ephemeral"}` breakpoint, so a request repeating an earlier
+prefix reads it from the prompt cache. Usage counts cache reads and writes as input and
+reports the writes. A `max_tokens`, `pause_turn`, or `refusal` stop is an incomplete
+response, a `model_context_window_exceeded` stop or a "prompt is too long" `400` is a
+context overflow, and an HTTP `529` keeps its status for the caller's overload handling.
+A stream `error` event fails as the HTTP status its type stands for, such as `529` for
+`overloaded_error`. One that arrives before any content is retried as the policy retries
+that status, reported to the `RetryObserver`; one after content began is not, since its
+deltas were already reported.
 
 `chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
 OpenAI's "Sign in with ChatGPT" instead of API credits. Its preset authenticates with
