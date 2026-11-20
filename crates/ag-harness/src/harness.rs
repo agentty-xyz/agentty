@@ -2368,7 +2368,7 @@ impl Harness {
 /// [`ModelRegistry`] use [`Harness::from_registry`]. Instead of a model, a
 /// host may give a [`ModelCatalog`] and a [`ModelSelector`], and with
 /// [`Self::registration_revision`] record the selected entry's registration
-/// so durable sessions can resume and switch models.
+/// so durable sessions also resume on registered harnesses.
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
     approval: Option<Arc<dyn ApprovalHandler>>,
@@ -2490,8 +2490,7 @@ impl HarnessBuilder {
     /// Durable sessions then retain the registration's key and revision, so
     /// they resume on any harness whose registration has the same ones,
     /// whether built this way, by [`Harness::from_registry`], or from a
-    /// manual registration, and they switch models with
-    /// [`Session::switch_model`]. Without a revision, a harness built from a
+    /// manual registration. Without a revision, a harness built from a
     /// catalog records no registration, and its sessions resume only on
     /// harnesses that record none. The execution identity defaults to the
     /// registration's, as with [`Harness::from_registry`]; an explicit
@@ -2499,7 +2498,8 @@ impl HarnessBuilder {
     /// [`ModelRegistry::register`] describes.
     ///
     /// Building fails with [`HarnessBuildError::RegistrationRequiresCatalog`]
-    /// when the model is not selected from a catalog, and with
+    /// when the model is not selected from a catalog, including when an
+    /// explicit [`Self::model`] replaces the catalog, and with
     /// [`HarnessBuildError::Registration`] when the entry declares no
     /// context profile or its identifier and `revision` do not form an
     /// [`ExecutionIdentity`].
@@ -2904,8 +2904,12 @@ pub enum HarnessBuildError {
     #[error("the tool set holds built-in repository tools; call `repository`")]
     RepositoryRequired,
     /// A registration revision was set, but the model was not selected
-    /// from a catalog.
-    #[error("a registration revision requires a model selected from a catalog; call `catalog`")]
+    /// from a catalog, either for lack of one or because an explicit model
+    /// replaced it.
+    #[error(
+        "a registration revision requires the model to be selected from a catalog; call `catalog` \
+         without `model`"
+    )]
     RegistrationRequiresCatalog,
     /// The selected catalog entry cannot be registered.
     #[error("cannot register the selected catalog model")]

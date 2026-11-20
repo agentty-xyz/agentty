@@ -71,7 +71,7 @@ impl ModelRegistration {
 
     /// Returns the catalog specification of a registration made from a
     /// catalog entry, or `None` for one made from a bare model.
-    pub fn spec(&self) -> Option<&ModelSpec> {
+    pub fn catalog_spec(&self) -> Option<&ModelSpec> {
         self.catalog_entry.as_ref().map(ModelHandle::spec)
     }
 
@@ -224,7 +224,8 @@ impl ModelRegistry {
     /// registration resumes on this one and the reverse. Unlike a bare
     /// model, it also keeps the entry's prices, concurrency cap, and
     /// maximum output, which [`crate::Harness::from_registry`] and
-    /// [`crate::Session::switch_model`] adopt with the model.
+    /// [`crate::Session::switch_model`] adopt with the model. An entry
+    /// without a context profile cannot be registered.
     /// [`crate::HarnessBuilder::registration_revision`] records the same
     /// registration for a harness built from the catalog. Revise
     /// `revision` as [`Self::register`] describes.
@@ -238,9 +239,12 @@ impl ModelRegistry {
     pub fn register_catalog_entry(
         &mut self,
         handle: &ModelHandle,
-        revision: &str,
+        revision: impl Into<String>,
     ) -> Result<(), ModelRegistryError> {
-        self.insert(ModelRegistration::from_catalog_entry(handle, revision)?)
+        self.insert(ModelRegistration::from_catalog_entry(
+            handle,
+            &revision.into(),
+        )?)
     }
 
     /// Resolves an exact host key without contacting a provider.

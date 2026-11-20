@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
     not(all(feature = "providers-compat", feature = "providers-openai"))
 ))]
 use std::env::VarError;
+use std::error::Error;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
 use std::num::NonZeroU32;
@@ -354,7 +355,10 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
     let invalid = invalid.expect_err("empty window");
     assert_eq!(
         invalid.to_string(),
-        "model `host/text` declares an invalid context profile"
+        format!(
+            "model `host/text` declares an invalid context profile: {}",
+            Error::source(&invalid).expect("budget failure")
+        )
     );
     assert!(matches!(
         invalid,

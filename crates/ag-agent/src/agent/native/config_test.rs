@@ -735,7 +735,7 @@ fn registrations_declare_revision_profiles_and_capabilities() {
             .unwrap_or(FALLBACK_MODEL_PROFILE);
         assert_eq!(registration.identity().key(), selection.key());
         assert_eq!(registration.identity().revision(), "agentty-native-2");
-        let spec = registration.spec().expect("catalog entry");
+        let spec = registration.catalog_spec().expect("catalog entry");
         assert_eq!(spec.id().as_str(), selection.key());
         assert_eq!(
             (spec.pricing(), spec.max_output(), spec.max_concurrency()),
@@ -1020,10 +1020,15 @@ async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registratio
         .registry(&environment, None, None)
         .expect("registry");
     let current = registry.resolve("kimi/kimi-k3").expect("registration");
+    // Earlier releases declared the provider catalog's profile for Kimi K3.
+    let recorded_profile = ModelProvider::Kimi
+        .declared_profile("kimi-k3", |_| Err(std::env::VarError::NotPresent))
+        .expect("hosted catalog profiles read no environment")
+        .expect("Kimi K3 declares a profile");
     let capabilities = ModelCapabilities {
         image_input: true,
         tool_calls: true,
-        ..ModelCapabilities::new(current.capabilities().profile)
+        ..ModelCapabilities::new(recorded_profile)
     };
     let mut recorded = ModelRegistry::new();
     recorded
@@ -1063,5 +1068,5 @@ async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registratio
             .identity()
     );
     assert_eq!(current.capabilities(), capabilities);
-    assert!(resumed.is_ok());
+    resumed.expect("the catalog registration resumes the recorded session");
 }

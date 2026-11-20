@@ -173,10 +173,10 @@ async fn sessions_stored_on_manual_registrations_resume_and_replay_on_catalog_re
         assert_eq!(registration.capabilities(), manual.capabilities());
         assert_eq!(registration.metadata(), manual.metadata());
         assert_eq!(
-            registration.spec().map(ModelSpec::id),
+            registration.catalog_spec().map(ModelSpec::id),
             Some(&ModelId::from(KEY))
         );
-        assert!(manual.spec().is_none());
+        assert!(manual.catalog_spec().is_none());
         let answer = json!({"answer": "kimi-k3"});
         assert_eq!(outputs, vec![(answer.clone(), answer); 2]);
         assert_eq!(
@@ -222,7 +222,7 @@ async fn sessions_created_from_a_catalog_resume_on_manual_registrations()
         let with_revised_registration = revised.resume("created").await;
 
         // Assert
-        assert!(resumed.is_ok());
+        resumed.expect("the manual registration resumes the catalog session");
         let recorded = harness
             .model_registration()
             .map(|registration| registration.identity().clone());
@@ -280,13 +280,17 @@ async fn catalog_registrations_switch_models_and_keep_entry_prices() -> Result<(
 
     // Assert
     let micro_usd = |outcome: &RunOutcome| outcome.cost.map(|cost| cost.micro_usd);
+    assert_eq!(
+        unpriced.result.as_ref().ok(),
+        Some(&RunOutput::Json(json!({"answer": "kimi-k3"})))
+    );
     assert_eq!(micro_usd(&unpriced), None);
     assert_eq!(micro_usd(&switched), Some(1_000));
     assert_eq!(micro_usd(&resumed), Some(1_000));
-    assert_eq!(micro_usd(&bare), None);
     assert_eq!(
         bare.result.ok(),
-        Some(RunOutput::Json(json!({"answer": "manual"})))
+        Some(RunOutput::Json(json!({"answer": "manual"}))),
+        "a session resumed through the builder's registration switches on"
     );
 
     Ok(())
@@ -299,27 +303,46 @@ async fn catalog_registrations_supply_the_execution_identity_unless_set()
     let calls = Arc::new(AtomicUsize::new(0));
     let catalog = catalog(&calls)?;
     let store: Arc<dyn SessionStore> = stores().await.remove(0);
-    let host = ExecutionIdentity::new("host", "7")?;
-    let explicit = Harness::builder()
-        .catalog(Arc::clone(&catalog))
-        .model_selector(ModelId::from(KEY))
-        .execution_identity(host.clone())
-        .registration_revision(REVISION)
-        .build()?
-        .store(Arc::clone(&store));
+    let explicit = || {
+        Harness::builder()
+            .catalog(Arc::clone(&catalog))
+            .model_selector(ModelId::from(KEY))
+            .execution_identity(ExecutionIdentity::new("host", "7").expect("identity"))
+            .registration_revision(REVISION)
+            .build()
+            .map(|harness| harness.store(Arc::clone(&store)))
+    };
     let unregistered = Harness::builder()
         .catalog(Arc::clone(&catalog))
         .model_selector(ModelId::from(KEY))
         .build()?
         .store(Arc::clone(&store));
     let registered = catalog_harness(&catalog, KEY, REVISION)?.store(Arc::clone(&store));
+    let mut recorded = explicit()?.session("explicit", schema()).create().await?;
+    recorded
+        .turn("hello")
+        .options(options())
+        .host_id("first")
+        .await?;
+    drop(recorded);
 
     // Act
-    let mut outcomes = Vec::new();
-    for (id, harness) in [("explicit", explicit), ("registered", registered)] {
-        let mut session = harness.session(id, schema()).create().await?;
-        outcomes.push(session.turn("hello").options(options()).host_id(id).await);
-    }
+    // The registration identities match, so both resume; only the explicit
+    // execution identity reproduces the recorded request's fingerprint.
+    let on_registration_identity = registered
+        .resume("explicit")
+        .await?
+        .turn("hello")
+        .options(options())
+        .host_id("first")
+        .await;
+    let on_explicit_identity = explicit()?
+        .resume("explicit")
+        .await?
+        .turn("hello")
+        .options(options())
+        .host_id("first")
+        .await;
     let mut session = unregistered
         .session("unregistered", schema())
         .create()
@@ -331,7 +354,19 @@ async fn catalog_registrations_supply_the_execution_identity_unless_set()
         .await;
 
     // Assert
-    assert!(outcomes.iter().all(Result::is_ok));
+    assert!(
+        on_registration_identity.is_err(),
+        "the registration identity must not replace the explicit one"
+    );
+    assert_eq!(
+        on_explicit_identity?.output(),
+        &json!({"answer": "kimi-k3"})
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "only the first request reached the model"
+    );
     assert!(matches!(
         without_identity,
         Err(SessionError::ExecutionIdentityRequired)
@@ -421,7 +456,8 @@ fn catalog_registration_rejects_invalid_entries() -> Result<(), Box<dyn Error>> 
     ));
     assert_eq!(
         explicit_model.get_ref().to_string(),
-        "a registration revision requires a model selected from a catalog; call `catalog`"
+        "a registration revision requires the model to be selected from a catalog; call `catalog` \
+         without `model`"
     );
     let Some(HarnessBuildError::Registration(source)) = unprofiled_build
         .get_ref()
