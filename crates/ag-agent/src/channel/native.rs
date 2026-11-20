@@ -238,7 +238,7 @@ struct ActiveRun {
 
 impl ActiveRun {
     /// Diagnostic for a settlement task that panicked before reporting.
-    const TASK_PANICKED: &'static str = "Harness run stopped without reporting its outcome";
+    const TASK_PANICKED: &str = "Harness run stopped without reporting its outcome";
 
     /// Starts `run` on its own task, so a dropped turn still settles it, and
     /// returns it with its event stream.
