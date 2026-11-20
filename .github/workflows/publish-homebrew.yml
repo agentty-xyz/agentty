@@ -33,8 +33,8 @@ jobs:
       # The deploy key stays configured for the push below and is scoped to
       # the tap, whose checkout no later step uploads.
       - name: Checkout the tap
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 zizmor: ignore[artipacked]
-        with:
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: # zizmor: ignore[artipacked]
           repository: ${{ fromJson(inputs.plan).homebrew_tap.repository }}
           ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
