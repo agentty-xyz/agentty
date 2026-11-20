@@ -2,8 +2,9 @@
 //! rights, grant identity, and kernel rejection handling.
 
 use super::{
-    ACCESS_REFER, ACCESS_TRUNCATE, DEVICE_ACCESS, GRANT_ACCESS, enforceable, ruleset_access,
-    validate_write_grants, verify_grant_identity,
+    ACCESS_MAKE_DIR, ACCESS_MAKE_SYM, ACCESS_REFER, ACCESS_TRUNCATE, DEVICE_ACCESS,
+    GIT_ADMIN_ACCESS, GRANT_ACCESS, enforceable, ruleset_access, validate_write_grants,
+    verify_grant_identity,
 };
 use crate::execution::contract::ExecutionError;
 
@@ -40,6 +41,16 @@ fn handled_rights_cover_link_rename_and_truncate_bypasses() {
 }
 
 #[test]
+fn git_administration_rights_replace_files_but_create_no_directories_or_links() {
+    // Arrange / Act / Assert
+    assert_eq!(GIT_ADMIN_ACCESS & GRANT_ACCESS, GIT_ADMIN_ACCESS);
+    assert_eq!(
+        GIT_ADMIN_ACCESS & (ACCESS_MAKE_DIR | ACCESS_MAKE_SYM | ACCESS_REFER),
+        0
+    );
+}
+
+#[test]
 fn grant_identity_requires_the_validated_device_and_inode() {
     // Arrange / Act / Assert
     assert!(verify_grant_identity(Some((7, 9)), (7, 9)).is_ok());
@@ -64,12 +75,15 @@ mod linux {
             executable: "/bin/bash".into(),
             external_reads: vec![],
             git_metadata: vec![workspace.join(".git")],
+            git_writes: None,
             host_information: true,
             launcher: "/trusted/launcher".into(),
             linux_bubblewrap: None,
+            network: false,
+            system: false,
             workspace: workspace.to_path_buf(),
-            workspace_write_nodes: vec![],
-            workspace_writes: vec![],
+            write_nodes: vec![],
+            writes: vec![],
         }
     }
 
@@ -111,13 +125,31 @@ mod linux {
         // Act / Assert
         assert_ne!(abi(), 0);
         confine(&configuration).expect("no grants apply no ruleset");
-        configuration.workspace_writes.push("missing".into());
-        configuration.workspace_write_nodes.push((1, 1));
+        configuration.writes.push(workspace.join("missing"));
+        configuration.write_nodes.push((1, 1));
         assert!(confine(&configuration).is_err(), "missing grant directory");
-        configuration.workspace_writes = vec!["output".into()];
-        configuration.workspace_write_nodes = vec![(u64::MAX, u64::MAX)];
+        configuration.writes = vec![workspace.join("output")];
+        configuration.write_nodes = vec![(u64::MAX, u64::MAX)];
         assert!(confine(&configuration).is_err(), "swapped grant identity");
-        configuration.workspace_write_nodes = vec![];
+        configuration.write_nodes = vec![];
         assert!(confine(&configuration).is_err(), "absent grant identity");
+        configuration.writes = vec![];
+        if !enforceable(abi()) {
+            return;
+        }
+        std::fs::write(workspace.join("objects"), "not a directory").expect("store file");
+        configuration.git_writes = Some(crate::execution::wire::GitWrites {
+            admin: Some(workspace.join("missing-admin")),
+            common: workspace.clone(),
+        });
+        assert!(
+            confine(&configuration).is_err(),
+            "a store that is not a directory"
+        );
+        std::fs::remove_file(workspace.join("objects")).expect("store file");
+        assert!(
+            confine(&configuration).is_err(),
+            "missing worktree administration"
+        );
     }
 }

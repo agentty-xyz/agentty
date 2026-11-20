@@ -224,10 +224,10 @@ This keeps the one-session-one-model rule free of cross-provider projection.
   `SandboxUnavailable` before any model call. It never runs unsandboxed silently.
 - **Sandbox is a breaking change.** Edit modes run `bash` unsandboxed with network
   today. Sandboxing writers breaks commands that fetch dependencies (for example
-  `cargo build` or `npm install`) unless writers get a network grant, and fails harness
-  writer nodes on hosts without the launcher. It therefore has its own setting, separate
-  from `--experimental-harness`, so users can turn it off; whether writers get network
-  is an open decision.
+  `cargo build` or `npm install`) unless writers get the network grant
+  (`BashConfig::with_network`), and fails harness writer nodes on hosts without the
+  launcher. It therefore has its own setting, separate from `--experimental-harness`, so
+  users can turn it off; whether writers get network is an open decision.
 
 ## Sequencing with the Migration Plan
 

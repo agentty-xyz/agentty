@@ -78,9 +78,10 @@ The native Bash sandbox runs each command through a helper executable of the sam
   outside every workspace the harness runs commands in, and pass its absolute path to
   `BashConfig::new`. A helper of another version fails its commands.
 
-On Linux the helper runs inside the sandbox, so grant `with_read` access to the shared
-libraries it links (`ldd` lists them) as well as Bash's; a host executable usually links
-more than the standalone helper. Without them the sandbox starts but each command fails
+On Linux the helper runs inside the sandbox, so it needs read access to the shared
+libraries it links (`ldd` lists them) as well as Bash's: `with_system_reads` grants the
+system directories, and `with_read` anything else. A host executable usually links more
+than the standalone helper. Without them the sandbox starts but each command fails
 closed. On Linux the sandbox also needs the system Bubblewrap (`apt install bubblewrap`
 or `dnf install bubblewrap`) and unprivileged user namespaces; macOS ships Seatbelt.
 Where the sandbox cannot run, commands run unsandboxed with a warning unless you choose
@@ -542,7 +543,8 @@ selects your own `BashExecutor` instead, such as
 Each executor reports its `Enforcement` (none, filesystem, or filesystem and network),
 and the `bash` tool description tells the model exactly that.
 
-`HarnessBuilder::sandbox` decides what a native configuration does where the sandbox
+`HarnessBuilder::sandbox`, or `Harness::sandbox` on a harness built another way such as
+`Harness::from_registry`, decides what a native configuration does where the sandbox
 cannot run: no helper, no `bwrap` (default `/usr/bin/bwrap`), unprivileged user
 namespaces disabled, no usable `/usr/bin/sandbox-exec`, or another platform. Before a
 turn offering `bash` is admitted, the harness checks the sandbox until one check
@@ -558,15 +560,38 @@ the next turn:
 The warning is a `SandboxWarning` naming the `SandboxUnavailableReason`, a message, and
 a remedy. A streamed run emits it as `RunEventKind::SandboxUnavailable`, and every
 turn's `TurnReport::sandbox_warning` carries it, including `run_once`, `Harness::turn`,
-and `Session::send`. Log it, and show the remedies a user can apply, such as installing
-bubblewrap; the others name the host's own configuration.
+and `Session::send`. Its message and remedy are written for the person using your
+application, such as "Install bubblewrap", so you can show them as they are;
+`SandboxUnavailableReason::remedy` documents what your own configuration can change
+instead.
 
-The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
-environment values (`with_environment`), and host details (`with_host_information`) are
-explicit too. Networking is never granted; enforcing that, like every grant, is the
-selected executor's job. Long output keeps each stream's start and end within the
-capture budget (`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually
-pass `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
+The workspace is read-only unless you grant `with_write`. Everything else is explicit
+too:
+
+| Grant                      | Native sandbox effect                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `with_system_reads`        | Reads the system directories Bash, Git, and toolchains need (`/usr`, `/System`, the Command Line Tools on macOS; `/usr`, `/lib*`, `/etc`, private `/proc` and `/dev` on Linux) |
+| `with_read`                | Reads one more directory, such as `~/.rustup` or `/opt/homebrew`                                                                                                               |
+| `with_write`               | Writes beneath a workspace directory; `with_write(".")` grants the whole worktree                                                                                              |
+| `with_temporary_directory` | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
+| `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, and rebase state                                          |
+| `with_network`             | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
+| `with_environment`         | Passes one environment value                                                                                                                                                   |
+| `with_host_information`    | Exposes host details such as `uname`; required                                                                                                                                 |
+
+Grants are paths: the sandbox never walks a granted directory, so a toolchain-sized read
+grant or a large `target/` or `node_modules` costs nothing per command. Links resolve to
+their targets, which stay subject to the policy, so a link inside the workspace works
+while one leading elsewhere cannot be followed. Hard links already inside a write grant
+are files of that grant; commands cannot create new ones that reach outside it. On Linux
+only a linked worktree can stage and commit under `with_git_writes`, and only the
+repository's own Git metadata and a repository at the top of each write grant stay
+read-only; macOS protects every `.git` name. A command the sandbox refuses to start, for
+example because a granted directory is missing, comes back to the model as a rejected
+tool call, and the turn continues. Enforcing a grant or a denial is the selected
+executor's job. Long output keeps each stream's start and end within the capture budget
+(`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
+`BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
 results are not deferred by the per-round result share, so a larger budget spends more
 of the context window per command. The omitted byte counts are on the `CommandOutcome`.
 Command intents are recorded before spawning; await `settled()` (and

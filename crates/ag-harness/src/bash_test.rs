@@ -63,6 +63,28 @@ impl BashExecutor for NamedExecutor {
     }
 }
 
+/// A host executor that enforces both the filesystem policy and a network
+/// denial.
+struct IsolatingExecutor(String);
+
+impl BashExecutor for IsolatingExecutor {
+    fn identity(&self) -> &str {
+        &self.0
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystemAndNetwork
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
+        Err(ExecutionError::Unsupported)
+    }
+}
+
 #[test]
 fn grant_limits_reject_the_next_entry_without_changing_the_original() {
     // Arrange
@@ -317,7 +339,6 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
     let valid = configuration();
 
     // Act / Assert
-    assert!(valid.clone().with_network().is_err());
     assert!(valid.clone().with_read("relative".into()).is_err());
     #[cfg(feature = "native-sandbox")]
     assert!(
@@ -384,6 +405,98 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn development_grants_validate_and_record_only_what_they_set() {
+    // Arrange
+    let valid = configuration();
+    let legacy = valid.fingerprint();
+
+    // Act
+    let granted = valid
+        .clone()
+        .with_system_reads()
+        .with_git_writes()
+        .with_network()
+        .with_temporary_directory("/private/tmp/session".into())
+        .expect("temporary directory");
+
+    // Assert
+    for name in ["capabilities", "temporary_directory"] {
+        assert!(legacy.get(name).is_none(), "{name}");
+    }
+    assert_eq!(
+        granted.fingerprint()["capabilities"],
+        json!(["git_writes", "network", "system_reads"])
+    );
+    assert_eq!(
+        granted.fingerprint()["temporary_directory"],
+        "/private/tmp/session"
+    );
+    let decoded: BashPolicySnapshot =
+        serde_json::from_value(granted.fingerprint()).expect("snapshot");
+    assert_eq!(decoded, granted.snapshot);
+    let legacy: BashPolicySnapshot = serde_json::from_value(legacy).expect("legacy snapshot");
+    assert_eq!(legacy, valid.snapshot);
+    assert!(
+        granted
+            .clone()
+            .with_temporary_directory("/private/tmp/other".into())
+            .is_err()
+    );
+    assert!(
+        valid
+            .clone()
+            .with_temporary_directory("relative".into())
+            .is_err()
+    );
+    assert!(
+        granted
+            .with_environment("TMPDIR".into(), "/elsewhere".into())
+            .is_err()
+    );
+    assert!(
+        valid
+            .with_environment("TMPDIR".into(), "/elsewhere".into())
+            .expect("host temporary directory")
+            .with_temporary_directory("/private/tmp/session".into())
+            .is_err()
+    );
+}
+
+#[test]
+fn network_grant_never_overstates_the_enforced_isolation() {
+    // Arrange
+    let unenforced = BashConfig::for_executor(
+        Arc::new(UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .expect("unsandboxed configuration");
+    let filesystem = executor_configuration(Arc::new(NamedExecutor("container".to_string())))
+        .expect("filesystem configuration");
+    let isolating = executor_configuration(Arc::new(IsolatingExecutor("isolating".to_string())))
+        .expect("isolating configuration");
+
+    // Act / Assert
+    assert_eq!(isolating.enforcement(), Enforcement::FileSystemAndNetwork);
+    assert_eq!(
+        isolating.with_network().enforcement(),
+        Enforcement::FileSystem
+    );
+    #[cfg(feature = "native-sandbox")]
+    assert_eq!(
+        configuration().with_network().enforcement(),
+        Enforcement::FileSystem
+    );
+    assert_eq!(
+        filesystem.with_network().enforcement(),
+        Enforcement::FileSystem
+    );
+    assert_eq!(unenforced.with_network().enforcement(), Enforcement::None);
 }
 
 #[test]

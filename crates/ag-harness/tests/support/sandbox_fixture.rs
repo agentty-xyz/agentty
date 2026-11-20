@@ -81,16 +81,7 @@ impl Workspace {
     /// Returns a harness that refuses to run commands without the native
     /// sandbox, so missing isolation fails the qualification.
     pub(super) fn harness(&self) -> Harness {
-        Harness::builder()
-            .model(Arc::new(ShellModel))
-            .context_budget(unbounded_context_budget())
-            .repository(Repository::new(self.path(), "/usr/bin/git").expect("repository"))
-            .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
-            .sandbox(Sandbox::Native {
-                if_unavailable: IfUnavailable::Refuse,
-            })
-            .build()
-            .expect("harness")
+        refusing_harness(&self.path())
     }
 
     pub(super) fn options(&self, timeout: Duration, capture: usize) -> TurnOptions {
@@ -187,6 +178,22 @@ impl Workspace {
 
         serde_json::from_value(output.into_output()).expect("command result")
     }
+}
+
+/// Returns a harness for the repository at `root` that refuses to run
+/// commands without the native sandbox, so missing isolation fails the
+/// qualification.
+pub(super) fn refusing_harness(root: &Path) -> Harness {
+    Harness::builder()
+        .model(Arc::new(ShellModel))
+        .context_budget(unbounded_context_budget())
+        .repository(Repository::new(root, "/usr/bin/git").expect("repository"))
+        .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
+        .sandbox(Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse,
+        })
+        .build()
+        .expect("harness")
 }
 
 pub(super) fn schema() -> OutputSchema {

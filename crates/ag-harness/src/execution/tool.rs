@@ -16,7 +16,7 @@ use super::contract::{
 use super::native::Native;
 use super::supervisor::{Monotonic, Supervisor};
 use crate::TurnError;
-use crate::bash::{BashArguments, BashConfig, BashError};
+use crate::bash::{BashArguments, BashConfig, BashError, Capability};
 use crate::command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination,
 };
@@ -28,6 +28,9 @@ pub(crate) struct BashTool {
     commands: Commands,
     configuration: BashConfig,
     executor: Arc<dyn Executor>,
+    /// Host read grants followed by the system directories present on this
+    /// host when the configuration grants them, resolved once per turn.
+    external_reads: Vec<PathBuf>,
     journal: Option<WriteJournal>,
     root: PathBuf,
 }
@@ -59,12 +62,17 @@ impl BashTool {
         let cleanup_scope = selected.cleanup_scope();
         let supervisor =
             Supervisor::new(selected, Arc::new(Monotonic)).map_err(|_| BashError::Unavailable)?;
+        let mut external_reads = configuration.snapshot.external_reads.clone();
+        if configuration.snapshot.grants(Capability::SystemReads) {
+            external_reads.extend(super::system::reads());
+        }
 
         Ok(Self {
             cleanup_scope,
             commands,
             configuration,
             executor: Arc::new(supervisor),
+            external_reads,
             journal,
             root,
         })
@@ -82,10 +90,18 @@ impl BashTool {
                 .environment
                 .iter()
                 .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                .chain(
+                    configuration
+                        .temporary_directory
+                        .iter()
+                        .map(|path| (OsString::from("TMPDIR"), path.clone().into_os_string())),
+                )
                 .collect(),
-            external_reads: configuration.external_reads.clone(),
+            external_reads: self.external_reads.clone(),
+            git_writes: configuration.grants(Capability::GitWrites),
             host_information: configuration.host_information,
-            network: false,
+            network: configuration.grants(Capability::Network),
+            temporary_directory: configuration.temporary_directory.clone(),
             workspace_writes: configuration.workspace_writes.clone(),
         };
         let policy = ExecutionPolicy::new(self.root.clone(), vec![self.root.join(".git")], grants)

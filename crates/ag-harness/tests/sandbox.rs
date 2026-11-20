@@ -17,6 +17,10 @@ mod coverage;
 mod access;
 
 #[cfg(test)]
+#[path = "support/sandbox_development.rs"]
+mod development;
+
+#[cfg(test)]
 #[path = "support/sandbox_lifecycle.rs"]
 mod lifecycle;
 

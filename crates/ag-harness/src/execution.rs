@@ -13,6 +13,7 @@ mod output;
 #[cfg(all(feature = "native-sandbox", any(target_os = "linux", test)))]
 mod seccomp;
 mod supervisor;
+mod system;
 mod tool;
 mod unsandboxed;
 #[cfg(feature = "native-sandbox")]

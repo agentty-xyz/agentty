@@ -16,9 +16,9 @@ use rustix::process::{Pid, WaitOptions, waitpid};
 #[cfg(target_os = "macos")]
 use super::seatbelt;
 use super::{ChildEvent, child_event, instruction, write_notice};
-#[cfg(target_os = "macos")]
-use crate::execution::wire::Launch;
 use crate::execution::wire::Notice;
+#[cfg(target_os = "macos")]
+use crate::execution::wire::{GitWrites, Launch};
 
 #[test]
 fn instruction_distinguishes_no_data_acknowledgment_eof_and_invalid_descriptor() {
@@ -120,27 +120,90 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         executable: "/bin/bash".into(),
         external_reads: vec![],
         git_metadata: vec![],
+        git_writes: None,
         host_information: false,
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
+        network: false,
+        system: false,
         workspace: "/workspace".into(),
-        workspace_write_nodes: vec![],
-        workspace_writes: vec![],
+        write_nodes: vec![],
+        writes: vec![],
     };
     let invalid = OsString::from_vec(vec![0xff]);
 
     // Act / Assert
-    assert!(
-        !seatbelt(&configuration)
-            .expect("profile")
-            .contains("sysctl-read")
-    );
+    let profile = seatbelt(&configuration).expect("profile");
+    assert!(!profile.contains("sysctl-read"));
+    assert!(!profile.contains("network"));
     configuration.external_reads.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
     configuration.external_reads.clear();
-    configuration.workspace_writes.push(invalid.clone().into());
+    configuration.writes.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
-    configuration.workspace_writes.clear();
-    configuration.git_metadata.push(invalid.into());
+    configuration.writes.clear();
+    configuration.git_metadata.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
+    configuration.git_metadata.clear();
+    for common in [invalid.into(), "/repo/.git\"".into(), "/repo/.git\n".into()] {
+        configuration.git_writes = Some(GitWrites {
+            admin: None,
+            common,
+        });
+        assert!(seatbelt(&configuration).is_err());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
+    // Arrange
+    let configuration = Launch {
+        arguments: vec![],
+        directory: "/workspace".into(),
+        environment: BTreeMap::new(),
+        executable: "/bin/bash".into(),
+        external_reads: vec![],
+        git_metadata: vec!["/workspace/.git".into()],
+        git_writes: Some(GitWrites {
+            admin: None,
+            common: "/workspace/.git".into(),
+        }),
+        host_information: true,
+        launcher: "/launcher".into(),
+        linux_bubblewrap: None,
+        network: true,
+        system: false,
+        workspace: "/workspace".into(),
+        write_nodes: vec![],
+        writes: vec![],
+    };
+
+    // Act
+    let profile = seatbelt(&configuration).expect("profile");
+
+    // Assert
+    let denial = profile
+        .find("(deny file-write* (regex #\"(^|/)")
+        .expect("metadata name denial");
+    let reopened = profile
+        .find("(allow file-write* (subpath \"/workspace/.git\"))")
+        .expect("Git writes");
+    let protected = profile
+        .find("(deny file-write* (regex #\"^/workspace/[.]git/((config|")
+        .expect("protected Git files");
+    assert!(denial < reopened && reopened < protected, "{profile}");
+    assert_eq!(profile.matches("(regex #\"^").count(), 1, "{profile}");
+    assert!(profile.contains("(allow network-outbound (remote ip))"));
+    assert!(profile.contains("\"/private/var/run/mDNSResponder\""));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_patterns_match_paths_literally() {
+    // Arrange / Act / Assert
+    assert_eq!(
+        super::pattern(std::path::Path::new("/a.b+c?(d)[e]{f}|g$h^i\\j*k-l m")).expect("pattern"),
+        "/a[.]b[+]c[?][(]d[)]\\[e\\][{]f[}][|]g[$]h\\^i\\\\j[*]k-l m"
+    );
 }

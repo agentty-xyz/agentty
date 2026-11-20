@@ -2,23 +2,38 @@
 
 use std::io;
 
-pub(super) fn filter(host_information: bool, architecture: &str) -> io::Result<Vec<u8>> {
-    let (architecture, denied, uname, clone) = match architecture {
+/// Address families a command may open sockets in under the network grant:
+/// IPv4 and IPv6. Unix-domain sockets stay closed, because the shared network
+/// namespace would expose the host's abstract sockets.
+const NETWORK_FAMILIES: [u32; 2] = [2, 10];
+
+/// Returns the filter the Linux sandbox installs: it kills alternate ABIs,
+/// refuses networking (or, under the network grant, every socket family but
+/// IPv4 and IPv6), keyrings, namespaces, mounts, tracing, and similar host
+/// kernel services, and, without the host-information grant, `uname`.
+pub(super) fn filter(
+    host_information: bool,
+    network: bool,
+    architecture: &str,
+) -> io::Result<Vec<u8>> {
+    let (architecture, denied, socket, uname, clone) = match architecture {
         "x86_64" => (
             0xc000_003e_u32,
             &[
-                41, 53, 101, 155, 165, 166, 169, 175, 176, 246, 248, 249, 250, 272, 298, 303, 304,
-                308, 310, 311, 321, 323, 425, 426, 427, 428, 429, 430, 431, 432, 433, 442,
+                53, 101, 155, 165, 166, 169, 175, 176, 246, 248, 249, 250, 272, 298, 303, 304, 308,
+                310, 311, 321, 323, 425, 426, 427, 428, 429, 430, 431, 432, 433, 442,
             ][..],
+            41,
             63,
             56,
         ),
         "aarch64" => (
             0xc000_00b7_u32,
             &[
-                40, 41, 97, 104, 105, 106, 117, 142, 198, 199, 217, 218, 219, 241, 264, 265, 268,
-                270, 271, 280, 282, 425, 426, 427, 428, 429, 430, 431, 432, 433, 442,
+                40, 41, 97, 104, 105, 106, 117, 142, 199, 217, 218, 219, 241, 264, 265, 268, 270,
+                271, 280, 282, 425, 426, 427, 428, 429, 430, 431, 432, 433, 442,
             ][..],
+            198,
             160,
             220,
         ),
@@ -36,10 +51,22 @@ pub(super) fn filter(host_information: bool, architecture: &str) -> io::Result<V
     for number in denied
         .iter()
         .copied()
+        .chain((!network).then_some(socket))
         .chain((!host_information).then_some(uname))
     {
         instruction(&mut program, 0x15, 0, 1, number);
         instruction(&mut program, 0x06, 0, 0, 0x0005_0001);
+    }
+    if network {
+        // socket: allow the granted families and refuse every other one.
+        // Allowing returns at once, so later checks still see the syscall
+        // number in the accumulator.
+        instruction(&mut program, 0x15, 0, 5, socket);
+        instruction(&mut program, 0x20, 0, 0, 16);
+        instruction(&mut program, 0x15, 2, 0, NETWORK_FAMILIES[0]);
+        instruction(&mut program, 0x15, 1, 0, NETWORK_FAMILIES[1]);
+        instruction(&mut program, 0x06, 0, 0, 0x0005_0001);
+        instruction(&mut program, 0x06, 0, 0, 0x7fff_0000);
     }
     // clone3 lacks inspectable flags; ENOSYS lets runtimes use ordinary clone.
     instruction(&mut program, 0x15, 0, 1, 435);

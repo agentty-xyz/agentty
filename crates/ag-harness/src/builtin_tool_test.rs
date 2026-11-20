@@ -4,10 +4,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde_json::json;
 
 use super::*;
-use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
+use crate::bash::{
+    BashConfig, BashExecutor, BashProcess, CommandCleanupScope, Enforcement, ExecutionCommand,
+    ExecutionError, ExecutionPolicy, ProcessEvent, UnsandboxedExecutor,
+};
 use crate::command_settlement::Commands;
 use crate::file_system::LocalFileSystem;
 
@@ -107,6 +111,139 @@ fn an_unencodable_bash_outcome_fails_the_turn_as_an_execution_error() {
         error.to_string(),
         TurnError::Bash(BashError::Execution).to_string()
     );
+}
+
+/// A host executor whose every command fails preparation with `error`.
+struct FailingPreparation(ExecutionError);
+
+impl BashExecutor for FailingPreparation {
+    fn identity(&self) -> &'static str {
+        "failing-preparation"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystem
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
+        Ok(Box::new(FailingProcess(self.0)))
+    }
+}
+
+struct FailingProcess(ExecutionError);
+
+#[async_trait]
+impl BashProcess for FailingProcess {
+    async fn prepare(
+        &mut self,
+        _command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
+    ) -> Result<(), ExecutionError> {
+        assert_eq!(
+            policy.environment().get(std::ffi::OsStr::new("TMPDIR")),
+            Some(&"/private/tmp/session".into())
+        );
+        assert!(policy.external_reads().len() > 1, "system reads");
+
+        Err(self.0)
+    }
+
+    async fn start(&mut self) -> Result<(), ExecutionError> {
+        Err(ExecutionError::Process)
+    }
+
+    async fn next_event(&mut self, _buffer: &mut [u8]) -> Result<ProcessEvent, ExecutionError> {
+        Err(ExecutionError::Process)
+    }
+
+    async fn cleanup(&mut self) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_command_the_sandbox_refuses_is_rejected_and_other_failures_fail_the_turn() {
+    for (error, rejected) in [
+        (ExecutionError::Unsupported, true),
+        (ExecutionError::Setup, false),
+    ] {
+        // Arrange
+        let configuration = BashConfig::for_executor(
+            Arc::new(FailingPreparation(error)),
+            "/bin/bash".into(),
+            "revision".into(),
+            Duration::from_secs(5),
+            1024,
+        )
+        .expect("configuration")
+        .with_host_information()
+        .with_system_reads()
+        .with_read("/runtime".into())
+        .expect("read grant")
+        .with_temporary_directory("/private/tmp/session".into())
+        .expect("temporary directory");
+        let handler = BashHandler {
+            definition: ToolDefinition::bash(Enforcement::FileSystem),
+            tool: BashTool::new(
+                configuration,
+                "/workspace".into(),
+                Commands::default(),
+                None,
+            )
+            .expect("bash tool"),
+        };
+
+        // Act
+        let error = handler
+            .call(json!({"command": "true"}), ToolContext::new("bash_1"))
+            .await
+            .expect_err("preparation fails");
+
+        // Assert
+        assert_eq!(error.is_rejected(), rejected, "{error}");
+        if rejected {
+            assert!(error.to_string().contains(SANDBOX_REFUSED), "{error}");
+        }
+    }
+}
+
+#[test]
+fn only_an_unstarted_command_without_cleanup_debt_counts_as_refused() {
+    // Arrange
+    let refused_outcome = CommandOutcome {
+        cleanup_failed: false,
+        cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
+        execution_failure: Some(BashError::Unavailable),
+        exit_code: None,
+        signal: None,
+        stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
+        stdout: String::new(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
+        termination: CommandTermination::Failed,
+        truncated: false,
+    };
+
+    // Act / Assert
+    assert!(refused(&refused_outcome));
+    assert!(!refused(&CommandOutcome {
+        cleanup_failed: true,
+        ..refused_outcome.clone()
+    }));
+    assert!(!refused(&CommandOutcome {
+        termination: CommandTermination::Cancelled,
+        ..refused_outcome.clone()
+    }));
+    assert!(!refused(&CommandOutcome {
+        execution_failure: Some(BashError::Execution),
+        ..refused_outcome
+    }));
 }
 
 #[tokio::test]

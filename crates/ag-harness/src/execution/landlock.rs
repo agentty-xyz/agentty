@@ -1,9 +1,12 @@
-//! Landlock write enforcement for Linux workspace write grants.
+//! Landlock write enforcement for Linux write grants: workspace
+//! directories, the temporary directory, and the Git-writes grant.
 //!
 //! Bubblewrap mounts keep the workspace read-only and Git metadata that
 //! exists at launch immutable, and mount boundaries reject cross-mount hard
 //! links and renames on their own; Landlock additionally confines every
-//! write of the shell and its descendants to the granted directories, so the
+//! write of the shell and its descendants to the granted directories, and
+//! the Git-writes grant to the object, reference, and log stores and the
+//! files at the top of a linked worktree's administration directory, so the
 //! remaining mount-writable paths — the sandbox-private tmpfs root, even
 //! through symlinks — stay unreachable and rename and link rights stay
 //! scoped to each grant. Enforcement requires ABI 3 (Linux 6.2): earlier
@@ -58,6 +61,35 @@ const GRANT_ACCESS: u64 = ACCESS_WRITE_FILE
 /// Non-directory rights for the bound `/dev/null` device.
 const DEVICE_ACCESS: u64 = ACCESS_WRITE_FILE | ACCESS_TRUNCATE;
 
+/// Rights at the top of a linked worktree's administration directory under
+/// the Git-writes grant: enough to replace its index, `HEAD`, and other
+/// state files through lock files, but not to create directories or links,
+/// so a `hooks` directory cannot appear there.
+const GIT_ADMIN_ACCESS: u64 =
+    ACCESS_WRITE_FILE | ACCESS_TRUNCATE | ACCESS_MAKE_REG | ACCESS_REMOVE_FILE;
+
+/// Git stores the Git-writes grant opens fully beneath each Git directory.
+#[cfg(target_os = "linux")]
+const GIT_STORES: [&str; 3] = ["objects", "refs", "logs"];
+
+/// Entries of a linked worktree's administration directory that stay
+/// mounted read-only under the Git-writes grant: Git follows `commondir`
+/// and `gitdir` to find the repository, reads `config.worktree` as
+/// configuration, and resumes a rebase or cherry-pick from its state
+/// directories, whose to-do lists can run commands. A missing state
+/// directory cannot appear, because the grant creates no directories there;
+/// a missing `config.worktree` is read only where the repository's
+/// protected configuration enables it, which preparation refuses.
+#[cfg(target_os = "linux")]
+pub(super) const GIT_ADMIN_PROTECTED: [&str; 6] = [
+    "commondir",
+    "gitdir",
+    "config.worktree",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+];
+
 #[cfg(target_os = "linux")]
 const RULE_PATH_BENEATH: u32 = 1;
 
@@ -80,28 +112,49 @@ pub(super) fn validate_write_grants(grants: usize, abi: i64) -> Result<(), Execu
 /// read-only policy and no ruleset is installed.
 #[cfg(target_os = "linux")]
 pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
-    if configuration.workspace_writes.is_empty() {
+    if configuration.writes.is_empty() && configuration.git_writes.is_none() {
         return Ok(());
     }
     let ruleset = ruleset(ruleset_access(abi())?)?;
-    for (index, write) in configuration.workspace_writes.iter().enumerate() {
-        let grant = rustix::fs::open(
-            configuration.workspace.join(write),
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
+    for (index, write) in configuration.writes.iter().enumerate() {
+        let grant = directory(write)?;
         let stat = rustix::fs::fstat(&grant)?;
         verify_grant_identity(
-            configuration.workspace_write_nodes.get(index).copied(),
+            configuration.write_nodes.get(index).copied(),
             (stat.st_dev, stat.st_ino),
         )?;
         add_rule(&ruleset, &grant, GRANT_ACCESS)?;
+    }
+    if let Some(git) = &configuration.git_writes {
+        for root in git.admin.iter().chain(std::iter::once(&git.common)) {
+            for store in GIT_STORES {
+                match directory(&root.join(store)) {
+                    Ok(store) => add_rule(&ruleset, &store, GRANT_ACCESS)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        if let Some(admin) = &git.admin {
+            add_rule(&ruleset, &directory(admin)?, GIT_ADMIN_ACCESS)?;
+        }
     }
     let device = rustix::fs::open("/dev/null", OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?;
     add_rule(&ruleset, &device, DEVICE_ACCESS)?;
     rustix::thread::set_no_new_privs(true)?;
 
     restrict(&ruleset)
+}
+
+/// Opens the directory at `path` as a rule anchor without following a final
+/// link.
+#[cfg(target_os = "linux")]
+fn directory(path: &std::path::Path) -> io::Result<OwnedFd> {
+    Ok(rustix::fs::open(
+        path,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
 }
 
 /// The validated identity of one write grant must match the directory

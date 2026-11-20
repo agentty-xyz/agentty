@@ -36,7 +36,7 @@ fn kernel_filter_rejects_alternate_abis_network_keyrings_and_nested_namespaces()
         ("x86_64", 0xc000_003e, 56, 41, 250, 63),
         ("aarch64", 0xc000_00b7, 220, 198, 219, 160),
     ] {
-        let program = filter(true, architecture).expect("filter");
+        let program = filter(true, false, architecture).expect("filter");
 
         // Act / Assert
         assert_eq!(evaluate(&program, 0, 0, 0), 0x8000_0000);
@@ -58,13 +58,41 @@ fn kernel_filter_rejects_alternate_abis_network_keyrings_and_nested_namespaces()
         }
         assert_eq!(evaluate(&program, clone, arch, 17), 0x7fff_0000);
         assert_eq!(evaluate(&program, uname, arch, 0), 0x7fff_0000);
-        let restricted = filter(false, architecture).expect("restricted filter");
+        let restricted = filter(false, false, architecture).expect("restricted filter");
         assert_eq!(evaluate(&restricted, uname, arch, 0), 0x0005_0001);
+    }
+}
+
+#[test]
+fn network_grant_opens_only_ip_sockets_and_keeps_every_other_denial() {
+    // Arrange
+    for (architecture, arch, clone, socket, socketpair, keyctl) in [
+        ("x86_64", 0xc000_003e, 56, 41, 53, 250),
+        ("aarch64", 0xc000_00b7, 220, 198, 199, 219),
+    ] {
+        let program = filter(true, true, architecture).expect("network filter");
+
+        // Act / Assert
+        for (family, expected) in [
+            (2, 0x7fff_0000),
+            (10, 0x7fff_0000),
+            (1, 0x0005_0001),
+            (16, 0x0005_0001),
+        ] {
+            assert_eq!(evaluate(&program, socket, arch, family), expected);
+        }
+        for syscall in [socketpair, keyctl, 442] {
+            assert_eq!(evaluate(&program, syscall, arch, 0), 0x0005_0001);
+        }
+        assert_eq!(evaluate(&program, 435, arch, 0), 0x0005_0026);
+        assert_eq!(evaluate(&program, clone, arch, 0x1000_0000), 0x0005_0001);
+        assert_eq!(evaluate(&program, clone, arch, 17), 0x7fff_0000);
+        assert_eq!(evaluate(&program, 0x4000_0000, arch, 0), 0x8000_0000);
     }
 }
 
 #[test]
 fn unsupported_architecture_cannot_produce_a_filter() {
     // Arrange / Act / Assert
-    assert!(filter(true, "unknown").is_err());
+    assert!(filter(true, false, "unknown").is_err());
 }

@@ -280,58 +280,118 @@ fn group_finished() -> io::Result<bool> {
     Ok(true)
 }
 
+/// Builds the Seatbelt profile for `configuration`. Seatbelt checks every
+/// access against the resolved path, so links grant nothing beyond their
+/// targets, and the last matching rule decides: Git metadata denials follow
+/// the write grants, and the Git-writes grant reopens the repository's Git
+/// directories after them, minus what Git would execute or follow.
 #[cfg(target_os = "macos")]
 fn seatbelt(configuration: &Launch) -> io::Result<String> {
     let mut profile = String::from(
         "(version 1)\n(deny default)\n(allow process-exec process-fork)\n(allow signal (target \
-         same-sandbox))\n(allow file-read* file-write-data (literal \"/dev/null\"))\n(deny \
-         file-link)",
+         same-sandbox))\n(allow file-read* file-write-data (literal \"/dev/null\"))\n(allow \
+         file-read* file-write-data (literal \"/dev/stdin\") (literal \"/dev/stdout\") (literal \
+         \"/dev/stderr\") (subpath \"/dev/fd\"))\n(deny file-link)\n",
     );
     for path in std::iter::once(&configuration.workspace)
         .chain(&configuration.external_reads)
         .chain(std::iter::once(&configuration.launcher))
     {
-        let path = path
-            .to_str()
-            .ok_or_else(|| io::Error::other("non-UTF8 grant"))?;
-        writeln!(
-            profile,
-            "(allow file-read* (subpath {}))",
-            serde_json::to_string(path)?
-        )
-        .map_err(io::Error::other)?;
+        rule(&mut profile, "allow file-read*", path)?;
     }
-    for path in &configuration.workspace_writes {
-        let path: std::path::PathBuf = configuration.workspace.join(path).components().collect();
-        let path = path
-            .to_str()
-            .ok_or_else(|| io::Error::other("non-UTF8 grant"))?;
-        writeln!(
-            profile,
-            "(allow file-write* (subpath {}))",
-            serde_json::to_string(path)?
-        )
-        .map_err(io::Error::other)?;
+    for path in &configuration.writes {
+        rule(&mut profile, "allow file-read* file-write*", path)?;
     }
     for path in &configuration.git_metadata {
-        let path = path
-            .to_str()
-            .ok_or_else(|| io::Error::other("non-UTF8 metadata"))?;
-        writeln!(
-            profile,
-            "(deny file-write* (subpath {}))",
-            serde_json::to_string(path)?
-        )
-        .map_err(io::Error::other)?;
+        rule(&mut profile, "deny file-write*", path)?;
     }
     if configuration.host_information {
-        profile
-            .push_str("(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))");
+        profile.push_str(
+            "(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))\n",
+        );
+    }
+    profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))\n");
+    if let Some(git) = &configuration.git_writes {
+        for directory in git.admin.iter().chain(std::iter::once(&git.common)) {
+            rule(&mut profile, "allow file-write*", directory)?;
+        }
+        writeln!(
+            profile,
+            "(deny file-write* (regex \
+             #\"^{}/((config|hooks|modules|{GIT_WORKTREE_PROTECTED})|worktrees/[^/]+/\
+             ({GIT_WORKTREE_PROTECTED}))(/|$)\"))",
+            pattern(&git.common)?
+        )
+        .map_err(io::Error::other)?;
+        if let Some(admin) = &git.admin {
+            writeln!(
+                profile,
+                "(deny file-write* (regex #\"^{}/({GIT_WORKTREE_PROTECTED})(/|$)\"))",
+                pattern(admin)?
+            )
+            .map_err(io::Error::other)?;
+        }
+    }
+    if configuration.network {
+        profile.push_str(SEATBELT_NETWORK);
     }
 
-    profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))");
-
     Ok(profile)
+}
+
+/// Entries of a worktree's Git administration that stay read-only under the
+/// Git-writes grant, as a Seatbelt pattern: Git follows `commondir` and
+/// `gitdir` to find the repository, reads `config.worktree` as
+/// configuration, and resumes a rebase or cherry-pick from its state
+/// directories, whose to-do lists can run commands.
+#[cfg(target_os = "macos")]
+const GIT_WORKTREE_PROTECTED: &str =
+    "config[.]worktree|commondir|gitdir|rebase-merge|rebase-apply|sequencer";
+
+/// Network rules of the network grant: IP connections and listeners, the
+/// system resolver, and the services that resolve names and verify TLS
+/// certificates. Other Unix-domain sockets stay denied.
+#[cfg(target_os = "macos")]
+const SEATBELT_NETWORK: &str =
+    "(allow system-socket)\n(allow network-outbound (remote ip))\n(allow network-bind \
+     network-inbound (local ip))\n(allow network-outbound (remote unix-socket (path-literal \
+     \"/private/var/run/mDNSResponder\")))\n(allow mach-lookup (global-name \
+     \"com.apple.dnssd.service\") (global-name \
+     \"com.apple.SystemConfiguration.DNSConfiguration\") (global-name \
+     \"com.apple.SystemConfiguration.configd\") (global-name \"com.apple.trustd.agent\") \
+     (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.ocspd\"))\n";
+
+/// Appends `(<action> (subpath "<path>"))` to `profile`.
+#[cfg(target_os = "macos")]
+fn rule(profile: &mut String, action: &str, path: &std::path::Path) -> io::Result<()> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| io::Error::other("non-UTF8 grant"))?;
+
+    writeln!(
+        profile,
+        "({action} (subpath {}))",
+        serde_json::to_string(path)?
+    )
+    .map_err(io::Error::other)
+}
+
+/// Returns `path` as a Seatbelt regular expression matching it literally.
+#[cfg(target_os = "macos")]
+fn pattern(path: &std::path::Path) -> io::Result<String> {
+    let path = path
+        .to_str()
+        .filter(|path| !path.contains(['"', '\n']))
+        .ok_or_else(|| io::Error::other("unsupported Git directory"))?;
+
+    Ok(path
+        .chars()
+        .map(|character| match character {
+            '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' | '$' => format!("[{character}]"),
+            '^' | '[' | ']' | '\\' => format!("\\{character}"),
+            other => other.to_string(),
+        })
+        .collect())
 }
 
 #[cfg(target_os = "linux")]
@@ -343,13 +403,17 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
     let mut filter = std::fs::File::from(memfd_create("ag-harness-seccomp", MemfdFlags::CLOEXEC)?);
     filter.write_all(&super::seccomp::filter(
         configuration.host_information,
+        configuration.network,
         std::env::consts::ARCH,
     )?)?;
     filter.rewind()?;
     fcntl_setfd(&filter, FdFlags::empty())?;
     let mut command = Command::new(bubblewrap);
-    command.env_clear().args([
-        "--unshare-all",
+    command.env_clear().arg("--unshare-all");
+    if configuration.network {
+        command.arg("--share-net");
+    }
+    command.args([
         "--uid",
         "0",
         "--gid",
@@ -361,6 +425,9 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         "--tmpfs",
         "/",
     ]);
+    if configuration.system {
+        command.args(["--proc", "/proc", "--dev", "/dev"]);
+    }
     for path in &configuration.external_reads {
         command.arg("--ro-bind").arg(path).arg(path);
     }
@@ -372,18 +439,31 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .arg("--ro-bind")
         .arg(&configuration.workspace)
         .arg(&configuration.workspace);
-    for path in &configuration.workspace_writes {
-        let path = configuration.workspace.join(path);
-        command.arg("--bind").arg(&path).arg(&path);
+    for path in &configuration.writes {
+        command.arg("--bind").arg(path).arg(path);
     }
     for path in &configuration.git_metadata {
         if path.exists() && path.starts_with(&configuration.workspace) {
             command.arg("--ro-bind").arg(path).arg(path);
         }
     }
-    command
-        .args(["--dev-bind", "/dev/null", "/dev/null", "--seccomp"])
-        .arg(filter.as_raw_fd().to_string());
+    if let Some(git) = &configuration.git_writes {
+        // Landlock confines these writable mounts to the object, reference,
+        // and log stores and to files at the top of the worktree's own
+        // administration directory, whose links stay mounted read-only.
+        command.arg("--bind").arg(&git.common).arg(&git.common);
+        if let Some(admin) = &git.admin {
+            command.arg("--bind").arg(admin).arg(admin);
+            for name in super::landlock::GIT_ADMIN_PROTECTED {
+                let path = admin.join(name);
+                command.arg("--ro-bind-try").arg(&path).arg(&path);
+            }
+        }
+    }
+    if !configuration.system {
+        command.args(["--dev-bind", "/dev/null", "/dev/null"]);
+    }
+    command.arg("--seccomp").arg(filter.as_raw_fd().to_string());
     command
         .arg("--chdir")
         .arg(&configuration.workspace)

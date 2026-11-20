@@ -57,8 +57,9 @@ async fn missing_enforcement_or_executable_reports_failure_and_exits() {
     let mut configuration = json!({
         "arguments": [], "directory": root, "environment": {},
         "executable": root.join("missing-executable"), "external_reads": [],
-        "git_metadata": [], "host_information": true, "launcher": launcher(),
-        "linux_bubblewrap": null, "workspace": root, "workspace_writes": [],
+        "git_metadata": [], "git_writes": null, "host_information": true,
+        "launcher": launcher(), "linux_bubblewrap": null, "network": false,
+        "system": false, "workspace": root, "write_nodes": [], "writes": [],
     });
 
     // Act / Assert
@@ -127,8 +128,9 @@ async fn private_channel_cancellation_requires_host_process_group_cleanup() {
         "arguments": ["--noprofile", "--norc", "-c", "printf started > output/started; exec /bin/sleep 30"],
         "directory": root, "environment": {}, "executable": "/bin/bash",
         "external_reads": ["/bin", "/usr/lib", "/System/Library", launcher()],
-        "git_metadata": [], "host_information": true, "launcher": workspace.launcher(),
-        "linux_bubblewrap": null, "workspace": root, "workspace_writes": ["output"],
+        "git_metadata": [], "git_writes": null, "host_information": true,
+        "launcher": workspace.launcher(), "linux_bubblewrap": null, "network": false,
+        "system": false, "workspace": root, "write_nodes": [], "writes": [root.join("output")],
     });
     let (parent, child) = std::os::unix::net::UnixStream::pair().expect("channel");
     parent.set_nonblocking(true).expect("nonblocking");
@@ -219,7 +221,7 @@ impl Namespace {
     async fn start_with_nodes(
         workspace: &super::fixture::Workspace,
         command: &str,
-        workspace_write_nodes: serde_json::Value,
+        write_nodes: serde_json::Value,
     ) -> Self {
         let root = workspace.path();
         let external_reads: Vec<std::path::PathBuf> =
@@ -228,10 +230,11 @@ impl Namespace {
             "arguments": ["-c", command],
             "directory": root, "environment": {}, "executable": "/bin/bash",
             "external_reads": external_reads,
-            "git_metadata": [root.join(".git")], "host_information": true,
-            "launcher": workspace.launcher(), "linux_bubblewrap": "/usr/bin/bwrap",
-            "workspace": root, "workspace_write_nodes": workspace_write_nodes,
-            "workspace_writes": ["output"],
+            "git_metadata": [root.join(".git")], "git_writes": null,
+            "host_information": true, "launcher": workspace.launcher(),
+            "linux_bubblewrap": "/usr/bin/bwrap", "network": false, "system": false,
+            "workspace": root, "write_nodes": write_nodes,
+            "writes": [root.join("output")],
         });
         let (parent, child) = std::os::unix::net::UnixStream::pair().expect("channel");
         parent.set_nonblocking(true).expect("nonblocking");

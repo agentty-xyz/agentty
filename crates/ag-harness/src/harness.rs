@@ -1636,6 +1636,20 @@ impl Harness {
         self
     }
 
+    /// Chooses how `bash` commands of native configurations run, like
+    /// [`HarnessBuilder::sandbox`], for a harness built another way, such as
+    /// [`Self::from_registry`]. The choice applies to turns started after
+    /// this call and starts with no confirmed availability.
+    ///
+    /// Requires the `native-sandbox` feature.
+    #[cfg(feature = "native-sandbox")]
+    #[must_use]
+    pub fn sandbox(mut self, sandbox: Sandbox) -> Self {
+        self.config_mut().sandbox = SandboxGate::new(sandbox);
+
+        self
+    }
+
     /// Configures the validated repository root and Git executable used by
     /// tools.
     #[must_use]
