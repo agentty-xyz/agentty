@@ -212,6 +212,38 @@ jobs:
             done
           done < "$RUNNER_TEMP/apps.tsv"
 
+      # Installs every app's formula from a local tap, with its archive URLs
+      # pointed at the local artifacts, and runs each installed binary.
+      # Runners without Homebrew skip this step.
+      - name: Install through Homebrew
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          brew="$(command -v brew || true)"
+          if [ -z "$brew" ] && [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+            brew=/home/linuxbrew/.linuxbrew/bin/brew
+          fi
+          if [ -z "$brew" ]; then
+            echo "::notice::Homebrew is not installed on this runner"
+            exit 0
+          fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+          artifacts="$RUNNER_TEMP/artifacts"
+          plan="$RUNNER_TEMP/plan.json"
+          tap=ag-release/smoke
+          "$brew" tap-new --no-git "$tap" > /dev/null
+          formulas="$("$brew" --repository "$tap")/Formula"
+          download_url="$(jq --raw-output .repository.url "$plan")/releases/download/$TAG"
+          jq --raw-output '.apps[] | [.name, .homebrew_formula, (.binaries | join(" "))] | @tsv' \
+            "$plan" > "$RUNNER_TEMP/formulas.tsv"
+          while IFS=$'\t' read -r app formula binaries; do
+            sed "s|\"$download_url/|\"file://$artifacts/|" "$artifacts/$formula" > "$formulas/$formula"
+            "$brew" install "$tap/$app"
+            for binary in $binaries; do
+              "$("$brew" --prefix "$tap/$app")/bin/$binary" --version
+            done
+          done < "$RUNNER_TEMP/formulas.tsv"
+
   # A `check` job from `[workspace.metadata.release.workflow.jobs]`: tag
   # pushes only, and `host` requires it.
   release-checks:

@@ -187,6 +187,34 @@ fn render_builds_the_plain_pipeline_and_the_tool_from_the_workspace() {
 }
 
 #[test]
+fn render_installs_the_homebrew_formulas_in_smoke_when_configured() {
+    // Arrange
+    let without_homebrew = workspace(&metadata(None));
+    let mut metadata = metadata(None);
+    metadata["metadata"]["release"]["installers"] = json!(["homebrew"]);
+    metadata["metadata"]["release"]["homebrew-tap"] = json!("demo-org/tap");
+    let with_homebrew = workspace(&metadata);
+
+    // Act
+    let (_, yaml) = render(&with_homebrew, None);
+    let (_, plain) = render(&without_homebrew, None);
+
+    // Assert
+    let step = step(&yaml, "smoke", "Install through Homebrew");
+    assert_eq!(step["env"], json!({"TAG": "${{ needs.plan.outputs.tag }}"}));
+    let script = step["run"].as_str().expect("script");
+    assert!(
+        script.contains("\"$brew\" install \"$tap/$app\"\n"),
+        "{script}"
+    );
+    assert!(
+        script.contains("sed \"s|\\\"$download_url/|\\\"file://$artifacts/|\""),
+        "{script}"
+    );
+    assert!(!step_names(&plain, "smoke").contains(&"Install through Homebrew"));
+}
+
+#[test]
 fn render_passes_configured_secrets_to_the_reusable_workflow() {
     // Arrange
     let workspace = workspace(&metadata(Some(json!({

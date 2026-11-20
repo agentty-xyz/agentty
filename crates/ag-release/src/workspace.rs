@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::artifact;
-use crate::config::{Installer, ReleaseConfig};
+use crate::config::{AppConfig, Installer, ReleaseConfig};
 use crate::process::{ProcessCommand, ProcessRunner};
 use crate::repository::GitHubRepository;
 
@@ -87,7 +87,7 @@ impl Workspace {
                     App::check_binstall(package)?;
                 }
 
-                App::from_package(package, app.npm_scope.clone())
+                App::from_package(package, app)
             })
             .collect::<Result<Vec<_>, String>>()?;
         let (repository, version) = Self::shared_identity(&apps)?;
@@ -158,6 +158,8 @@ pub(crate) struct App {
     /// Names of the package's `bin` targets, sorted.
     pub(crate) binaries: Vec<String>,
     pub(crate) description: Option<String>,
+    /// Configured Homebrew formula description, if any.
+    pub(crate) homebrew_description: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) name: String,
     pub(crate) npm_scope: Option<String>,
@@ -168,7 +170,7 @@ pub(crate) struct App {
 }
 
 impl App {
-    fn from_package(package: &MetadataPackage, npm_scope: Option<String>) -> Result<Self, String> {
+    fn from_package(package: &MetadataPackage, config: &AppConfig) -> Result<Self, String> {
         let name = &package.name;
         let mut binaries = package
             .targets
@@ -198,9 +200,10 @@ impl App {
             authors: package.authors.clone(),
             binaries,
             description: package.description.clone(),
+            homebrew_description: config.homebrew_description.clone(),
             license: package.license.clone(),
             name: name.clone(),
-            npm_scope,
+            npm_scope: config.npm_scope.clone(),
             package_directory: package_directory.to_path_buf(),
             repository,
             version,

@@ -57,6 +57,7 @@ fn load_runs_one_cargo_metadata_call_and_resolves_apps() {
         authors: vec!["Demo Author <demo@example.com>".to_string()],
         binaries: binaries.iter().map(ToString::to_string).collect(),
         description: Some("Demo package".to_string()),
+        homebrew_description: None,
         license: Some("Apache-2.0".to_string()),
         name: name.to_string(),
         npm_scope: npm_scope.map(ToString::to_string),

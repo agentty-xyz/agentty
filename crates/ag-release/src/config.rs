@@ -32,7 +32,7 @@ const RELEASE_KEYS: [&str; 8] = [
 ];
 
 /// Keys accepted in `[workspace.metadata.release.apps.<app>]`.
-const APP_KEYS: [&str; 1] = ["npm-scope"];
+const APP_KEYS: [&str; 2] = ["homebrew-description", "npm-scope"];
 
 /// Validated release configuration of one workspace.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -232,6 +232,8 @@ impl ReleaseConfig {
 /// Validated `[workspace.metadata.release.apps.<app>]` settings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AppConfig {
+    /// Homebrew formula `desc` in place of the package description.
+    pub(crate) homebrew_description: Option<String>,
     /// npm scope, such as `@example`, for the app's npm package name.
     pub(crate) npm_scope: Option<String>,
 }
@@ -244,7 +246,12 @@ impl AppConfig {
             .map(|scope| Self::parse_npm_scope(scope, &table.key("npm-scope")))
             .transpose()?;
 
-        Ok(Self { npm_scope })
+        Ok(Self {
+            homebrew_description: table
+                .optional_string("homebrew-description")?
+                .map(ToString::to_string),
+            npm_scope,
+        })
     }
 
     /// Accepts `@` followed by a lowercase, URL-safe npm scope name.

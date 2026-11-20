@@ -24,4 +24,10 @@ class {{ class_name }} < Formula
   def install
     bin.install {{ binaries }}
   end
+
+  test do
+{%- for binary in binary_names %}
+    system bin/{{ binary }}, "--version"
+{%- endfor %}
+  end
 end

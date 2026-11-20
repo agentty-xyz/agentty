@@ -59,3 +59,35 @@ jobs:
           fi
           git commit --message "Update formulas to $TAG"
           git push
+
+  # Installs every formula from the published tap as users do, and checks that
+  # each binary reports the released version.
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
+    env:
+      PLAN: ${{ inputs.plan }}
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_ANALYTICS: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+    steps:
+      - name: Install from the tap
+        shell: bash
+        run: |
+          brew="$(command -v brew || echo /home/linuxbrew/.linuxbrew/bin/brew)"
+          tap="$(jq --raw-output .homebrew_tap.name <<< "$PLAN")"
+          version="$(jq --raw-output .version <<< "$PLAN")"
+          jq --raw-output '.apps[] | select(.homebrew_formula) | [.name, (.binaries | join(" "))] | @tsv' \
+            <<< "$PLAN" > "$RUNNER_TEMP/apps.tsv"
+          while IFS=$'\t' read -r app binaries; do
+            "$brew" install "$tap/$app"
+            for binary in $binaries; do
+              reported="$("$("$brew" --prefix "$tap/$app")/bin/$binary" --version)"
+              echo "$reported"
+              grep -qF "$version" <<< "$reported"
+            done
+          done < "$RUNNER_TEMP/apps.tsv"

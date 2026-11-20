@@ -94,10 +94,10 @@ struct ReleaseWorkflow<'config> {
     musl: bool,
     /// YAML scalar of the Node.js version `smoke` sets up.
     node_version: Option<String>,
-    npm: bool,
     /// Custom jobs that run after the GitHub release.
     publish_jobs: Vec<&'config CustomJob>,
-    shell: bool,
+    /// Installers that `smoke` installs through.
+    smoke: SmokeInstallers,
     /// Shell words of the paths whose change runs `smoke`.
     smoke_paths: Vec<String>,
     /// YAML flow sequence of the distinct runner labels.
@@ -146,9 +146,12 @@ impl<'config> ReleaseWorkflow<'config> {
                 .keys()
                 .any(|target| target.libc() == Libc::Musl),
             node_version: workflow_config.node_version.as_deref().map(Self::quoted),
-            npm: config.installers.contains(&Installer::Npm),
             publish_jobs: jobs(JobStage::Publish),
-            shell,
+            smoke: SmokeInstallers {
+                homebrew: config.installers.contains(&Installer::Homebrew),
+                npm: config.installers.contains(&Installer::Npm),
+                shell,
+            },
             smoke_paths: Self::smoke_paths(workspace)?,
             smoke_runners: format!(
                 "[{}]",
@@ -263,6 +266,13 @@ impl<'config> ReleaseWorkflow<'config> {
 
         format!("'{}'", text.replace('\'', r"'\''"))
     }
+}
+
+/// The configured installers that `smoke` installs the host target through.
+struct SmokeInstallers {
+    homebrew: bool,
+    npm: bool,
+    shell: bool,
 }
 
 /// One `distributions` matrix entry as YAML scalars.

@@ -21,7 +21,7 @@ fn full_metadata() -> Value {
         "release": {
             "apps": {
                 "demo-app": {},
-                "demo-tool": {"npm-scope": "@demo-org"},
+                "demo-tool": {"homebrew-description": "Demo tool", "npm-scope": "@demo-org"},
             },
             "homebrew-tap": "demo-org/tap",
             "include": ["README.md", "docs/LICENSE"],
@@ -86,6 +86,7 @@ fn parse_reads_every_release_key() {
                 (
                     "demo-tool".to_string(),
                     AppConfig {
+                        homebrew_description: Some("Demo tool".to_string()),
                         npm_scope: Some("@demo-org".to_string()),
                     },
                 ),
@@ -160,7 +161,8 @@ fn parse_rejects_unknown_keys_and_invalid_tables() {
         (
             "/apps/demo-app/npm_scope",
             Some(json!("@demo-org")),
-            "unknown key `$.apps.demo-app.npm_scope`; expected one of: npm-scope",
+            "unknown key `$.apps.demo-app.npm_scope`; expected one of: homebrew-description, \
+             npm-scope",
         ),
         ("/apps", None, "missing `[$.apps]`; name at least one app"),
         (

@@ -153,9 +153,13 @@ x86_64-unknown-linux-gnu = "ubuntu-22.04"
 aarch64-unknown-linux-musl = "ubuntu-22.04-arm"
 x86_64-unknown-linux-musl = "ubuntu-22.04"
 
+# Homebrew wants descriptions under 80 characters that do not start with the
+# formula name, unlike the shared package description.
 [workspace.metadata.release.apps.agentty]
+homebrew-description = "Agentic development environment for structured, controllable AI coding"
 
 [workspace.metadata.release.apps.testty]
+homebrew-description = "PTY-driven end-to-end testing framework and CLI for terminal UIs"
 npm-scope = "@agentty-xyz"
 
 # `ag-release workflow` generates `.github/workflows/release.yml` from these

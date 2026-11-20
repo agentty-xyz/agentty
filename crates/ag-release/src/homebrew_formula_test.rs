@@ -9,9 +9,13 @@ use crate::plan::ReleasePlan;
 use crate::workspace::Workspace;
 use crate::workspace::test_support::{demo_metadata, metadata_bytes};
 
-/// Returns the demo release plan for `metadata`.
+/// Returns the demo release plan for `metadata` with the Homebrew installer
+/// enabled.
 fn plan(metadata: &Value) -> ReleasePlan {
-    let workspace = Workspace::from_metadata(&metadata_bytes(metadata)).expect("demo workspace");
+    let mut metadata = metadata.clone();
+    metadata["metadata"]["release"]["installers"] = json!(["homebrew"]);
+    metadata["metadata"]["release"]["homebrew-tap"] = json!("demo-org/tap");
+    let workspace = Workspace::from_metadata(&metadata_bytes(&metadata)).expect("demo workspace");
 
     ReleasePlan::new(&workspace, None).expect("release plan")
 }
@@ -104,6 +108,11 @@ class DemoApp < Formula
   def install
     bin.install "demo-app", "demo-helper"
   end
+
+  test do
+    system bin/"demo-app", "--version"
+    system bin/"demo-helper", "--version"
+  end
 end
 "#
         )
@@ -181,6 +190,25 @@ fn render_drops_the_full_stop_that_homebrew_descriptions_omit() {
     // Assert
     assert!(
         formula.contains("\n  desc \"Demo tool for demos\"\n"),
+        "{formula}"
+    );
+}
+
+#[test]
+fn render_prefers_the_configured_homebrew_description() {
+    // Arrange
+    let mut metadata = demo_metadata();
+    metadata["metadata"]["release"]["apps"]["demo-tool"]["homebrew-description"] =
+        json!("Tool that \"demos\"");
+    let plan = plan(&metadata);
+    let sha256 = digests(&plan);
+
+    // Act
+    let formula = HomebrewFormula::render(&plan, &plan.apps[1], "v1.2.3", &sha256).expect("render");
+
+    // Assert
+    assert!(
+        formula.contains("\n  desc \"Tool that \\\"demos\\\"\"\n"),
         "{formula}"
     );
 }

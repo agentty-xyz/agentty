@@ -51,6 +51,7 @@ fn plan_serializes_the_documented_contract() {
             "authors": ["Demo Author <demo@example.com>"],
             "binaries": binaries,
             "description": "Demo package",
+            "homebrew_description": "Demo package",
             "homebrew_formula": format!("{name}.rb"),
             "license": "Apache-2.0",
             "name": name,
@@ -115,6 +116,7 @@ fn plan_without_tag_or_installers_omits_installer_artifacts() {
     assert_eq!(plan["installers"], json!([]));
     assert_eq!(plan["homebrew_tap"], Value::Null);
     for app in plan["apps"].as_array().expect("apps") {
+        assert_eq!(app["homebrew_description"], Value::Null);
         assert_eq!(app["homebrew_formula"], Value::Null);
         assert_eq!(app["npm_package"], Value::Null);
         assert_eq!(app["npm_tarball"], Value::Null);

@@ -101,6 +101,9 @@ pub(crate) struct AppPlan {
     pub(crate) authors: Vec<String>,
     pub(crate) binaries: Vec<String>,
     pub(crate) description: Option<String>,
+    /// Homebrew formula `desc` when the Homebrew installer is enabled: the
+    /// configured `homebrew-description`, else the package description.
+    pub(crate) homebrew_description: Option<String>,
     /// Homebrew formula file when the Homebrew installer is enabled.
     pub(crate) homebrew_formula: Option<String>,
     pub(crate) license: Option<String>,
@@ -117,6 +120,7 @@ impl AppPlan {
     fn new(app: &App, targets: &[Target], installers: &BTreeSet<Installer>) -> Self {
         let name = app.name.as_str();
         let npm = installers.contains(&Installer::Npm);
+        let homebrew = installers.contains(&Installer::Homebrew);
 
         Self {
             archives: targets
@@ -126,9 +130,14 @@ impl AppPlan {
             authors: app.authors.clone(),
             binaries: app.binaries.clone(),
             description: app.description.clone(),
-            homebrew_formula: installers
-                .contains(&Installer::Homebrew)
-                .then(|| artifact::homebrew_formula(name)),
+            homebrew_description: homebrew
+                .then(|| {
+                    app.homebrew_description
+                        .clone()
+                        .or_else(|| app.description.clone())
+                })
+                .flatten(),
+            homebrew_formula: homebrew.then(|| artifact::homebrew_formula(name)),
             license: app.license.clone(),
             name: name.to_string(),
             npm_package: npm.then(|| artifact::npm_package(name, app.npm_scope.as_deref())),

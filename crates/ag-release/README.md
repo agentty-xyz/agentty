@@ -44,18 +44,20 @@ x86_64-unknown-linux-musl = "ubuntu-22.04"
 [workspace.metadata.release.apps.my-app]   # key = workspace package name
 [workspace.metadata.release.apps.my-tool]
 npm-scope = "@my-org"                      # optional npm scope
+homebrew-description = "Tool that does it"  # optional Homebrew `desc`
 ```
 
-| Key            | Required        | Default     | Value                                                                  |
-| -------------- | --------------- | ----------- | ---------------------------------------------------------------------- |
-| `profile`      | no              | `"release"` | Cargo profile name                                                     |
-| `min-glibc`    | no              | none        | `"MAJOR.MINOR"`                                                        |
-| `installers`   | no              | `[]`        | Unique entries from `"shell"`, `"homebrew"`, `"npm"`, and `"binstall"` |
-| `homebrew-tap` | with `homebrew` | none        | `<owner>/<name>` of the tap repository `<owner>/homebrew-<name>`       |
-| `include`      | no              | `[]`        | Unique relative paths to files                                         |
-| `targets`      | yes             |             | At least one supported target, each with a runner label                |
-| `apps`         | yes             |             | At least one workspace package with a `bin` target                     |
-| `npm-scope`    | no              | none        | Per app: `@` and a lowercase npm scope name                            |
+| Key                    | Required        | Default             | Value                                                                  |
+| ---------------------- | --------------- | ------------------- | ---------------------------------------------------------------------- |
+| `profile`              | no              | `"release"`         | Cargo profile name                                                     |
+| `min-glibc`            | no              | none                | `"MAJOR.MINOR"`                                                        |
+| `installers`           | no              | `[]`                | Unique entries from `"shell"`, `"homebrew"`, `"npm"`, and `"binstall"` |
+| `homebrew-tap`         | with `homebrew` | none                | `<owner>/<name>` of the tap repository `<owner>/homebrew-<name>`       |
+| `include`              | no              | `[]`                | Unique relative paths to files                                         |
+| `targets`              | yes             |                     | At least one supported target, each with a runner label                |
+| `apps`                 | yes             |                     | At least one workspace package with a `bin` target                     |
+| `npm-scope`            | no              | none                | Per app: `@` and a lowercase npm scope name                            |
+| `homebrew-description` | no              | package description | Per app: the Homebrew formula's `desc`                                 |
 
 Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`,
@@ -175,8 +177,9 @@ status.
 
 Each `apps[]` entry has `name`, `binaries`, `description`, `license`, `authors`,
 `archives[]` (`target`, `name`, `checksum`, `directory`), and `shell_installer`,
-`homebrew_formula`, `npm_package`, and `npm_tarball`, which are `null` unless that
-installer is enabled.
+`homebrew_formula`, `homebrew_description`, `npm_package`, and `npm_tarball`, which are
+`null` unless that installer is enabled (`homebrew_description` also when neither
+`homebrew-description` nor a package description is set).
 
 ### `build --target <triple> [--out-dir <dir>] [--profile <name>]`
 
@@ -449,16 +452,22 @@ brew install <owner>/<name>/<app>
 ```
 
 Installing by this full name also trusts just that formula, which Homebrew requires of
-formulas from other taps. The formula takes `desc` (without a trailing full stop),
-`license`, and `version` from Cargo metadata and the repository URL as its `homepage`.
-It has an `on_macos` and an `on_linux` block with an `on_arm` and an `on_intel` block
-for each configured architecture, each downloading the release archive and checking the
-SHA-256 that `assemble` recorded; Linux takes the `*-linux-gnu` archive of an
-architecture when one is configured and the `*-linux-musl` archive otherwise. `install`
-copies the binaries into the formula's `bin`. A Cargo `license` becomes `license` when
-it is one SPDX identifier or identifiers joined only by `OR` (`any_of:`) or only by
-`AND` (`all_of:`), and is left out otherwise. The formula has no `test` block, and
-Homebrew updates it with `brew upgrade` once the tap holds a newer one.
+formulas from other taps. The formula's `desc` is the app's `homebrew-description`, else
+its package description, without a trailing full stop; Homebrew wants it under 80
+characters and not starting with the formula name. It takes `license` and `version` from
+Cargo metadata and the repository URL as its `homepage`. It has an `on_macos` and an
+`on_linux` block with an `on_arm` and an `on_intel` block for each configured
+architecture, each downloading the release archive and checking the SHA-256 that
+`assemble` recorded; Linux takes the `*-linux-gnu` archive of an architecture when one
+is configured and the `*-linux-musl` archive otherwise. `install` copies the binaries
+into the formula's `bin`. A Cargo `license` becomes `license` when it is one SPDX
+identifier or identifiers joined only by `OR` (`any_of:`) or only by `AND` (`all_of:`),
+and is left out otherwise. Its `test` block, which `brew test` runs, runs each binary
+with `--version`. Homebrew updates the formula with `brew upgrade` once the tap holds a
+newer one.
+
+On runners that have Homebrew, `smoke` installs each formula from a local tap with its
+archive URLs pointed at the local artifacts, and runs each installed binary.
 
 ## cargo-binstall
 

@@ -23,6 +23,9 @@ pub(crate) struct HomebrewFormula<'plan> {
     app: &'plan str,
     /// Ruby string words of the binaries to install.
     binaries: String,
+    /// Ruby string of each binary's name, which the `test` block runs with
+    /// `--version`.
+    binary_names: Vec<String>,
     /// Formula class name that Homebrew derives from the formula name.
     class_name: String,
     /// Ruby string of the package description.
@@ -74,19 +77,20 @@ impl<'plan> HomebrewFormula<'plan> {
                 platforms.push(FormulaPlatform { archives, name });
             }
         }
+        let binary_names = app
+            .binaries
+            .iter()
+            .map(|binary| Self::quote(binary))
+            .collect::<Vec<_>>();
         let formula = Self {
             ag_release_version: env!("CARGO_PKG_VERSION"),
             app: &app.name,
-            binaries: app
-                .binaries
-                .iter()
-                .map(|binary| Self::quote(binary))
-                .collect::<Vec<_>>()
-                .join(", "),
+            binaries: binary_names.join(", "),
+            binary_names,
             class_name: Self::class_name(&app.name),
             // Homebrew descriptions end without a full stop.
             description: app
-                .description
+                .homebrew_description
                 .as_deref()
                 .map(|description| Self::quote(description.trim_end().trim_end_matches('.'))),
             formula_version: Self::quote(&plan.version),
