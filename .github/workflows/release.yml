@@ -238,7 +238,8 @@ jobs:
             "$plan" > "$RUNNER_TEMP/formulas.tsv"
           while IFS=$'\t' read -r app formula binaries; do
             sed "s|\"$download_url/|\"file://$artifacts/|" "$artifacts/$formula" > "$formulas/$formula"
-            "$brew" install "$tap/$app"
+            # `brew` reads standard input, which would consume the app list.
+            "$brew" install "$tap/$app" < /dev/null
             for binary in $binaries; do
               "$("$brew" --prefix "$tap/$app")/bin/$binary" --version
             done

@@ -84,7 +84,8 @@ jobs:
           jq --raw-output '.apps[] | select(.homebrew_formula) | [.name, (.binaries | join(" "))] | @tsv' \
             <<< "$PLAN" > "$RUNNER_TEMP/apps.tsv"
           while IFS=$'\t' read -r app binaries; do
-            "$brew" install "$tap/$app"
+            # `brew` reads standard input, which would consume the app list.
+            "$brew" install "$tap/$app" < /dev/null
             for binary in $binaries; do
               reported="$("$("$brew" --prefix "$tap/$app")/bin/$binary" --version)"
               echo "$reported"

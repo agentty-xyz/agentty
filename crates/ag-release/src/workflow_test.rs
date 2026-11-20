@@ -204,7 +204,7 @@ fn render_installs_the_homebrew_formulas_in_smoke_when_configured() {
     assert_eq!(step["env"], json!({"TAG": "${{ needs.plan.outputs.tag }}"}));
     let script = step["run"].as_str().expect("script");
     assert!(
-        script.contains("\"$brew\" install \"$tap/$app\"\n"),
+        script.contains("\"$brew\" install \"$tap/$app\" < /dev/null\n"),
         "{script}"
     );
     assert!(
