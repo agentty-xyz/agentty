@@ -1,5 +1,5 @@
 # {{ heading }}
-{%- if shell_command.is_some() || npm_command.is_some() %}
+{%- if shell_command.is_some() || homebrew_command.is_some() || npm_command.is_some() || binstall_command.is_some() %}
 
 ## Install {{ heading }}
 {%- if let Some(command) = shell_command %}
@@ -10,9 +10,25 @@
 {{ command }}
 ```
 {%- endif %}
+{%- if let Some(command) = homebrew_command %}
+
+### Install prebuilt binaries via Homebrew
+
+```sh
+{{ command }}
+```
+{%- endif %}
 {%- if let Some(command) = npm_command %}
 
 ### Install prebuilt binaries into your npm project
+
+```sh
+{{ command }}
+```
+{%- endif %}
+{%- if let Some(command) = binstall_command %}
+
+### Install prebuilt binaries via cargo-binstall
 
 ```sh
 {{ command }}

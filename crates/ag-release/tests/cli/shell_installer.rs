@@ -18,7 +18,8 @@ use std::{env, fs, io};
 use tempfile::{TempDir, tempdir};
 
 use crate::support::{
-    HOST_TARGET, Release, SUPPORTED, link_tools, result, sha256, write_executable,
+    HOST_TARGET, Release, SUPPORTED, link_tools, mixed_libc_manifest, result, sha256,
+    write_executable,
 };
 
 /// Root manifest of a demo workspace released with the shell installer for
@@ -68,6 +69,9 @@ const TOOLS: [&str; 19] = [
 
 /// `ldd --version` of a supported glibc.
 const GLIBC: &str = "echo 'ldd (GNU libc) 2.39'";
+
+/// `ldd --version` of musl, which prints its version and fails.
+const MUSL: &str = "echo 'musl libc (x86_64)' >&2; echo 'Version 1.2.5' >&2; exit 1";
 
 /// `sysctl -n hw.optional.arm64` of a Mac without Apple silicon.
 const UNKNOWN_OID: &str = "echo 'sysctl: unknown oid' >&2; exit 1";
@@ -499,15 +503,57 @@ fn installer_selects_the_archive_for_the_platform() -> Result<(), Box<dyn Error>
 }
 
 #[test]
+fn installer_prefers_glibc_and_falls_back_to_static_musl() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let release = Release::assemble(&mixed_libc_manifest(r#""shell""#), |target| {
+        format!("echo demo-app {target}")
+    })?;
+    let cases = [
+        ("amd64", GLIBC, "x86_64-unknown-linux-gnu"),
+        (
+            "x86_64",
+            "echo 'ldd (GNU libc) 2.12'",
+            "x86_64-unknown-linux-musl",
+        ),
+        (
+            "x86_64",
+            "echo 'ldd: unknown option'",
+            "x86_64-unknown-linux-musl",
+        ),
+        ("x86_64", MUSL, "x86_64-unknown-linux-musl"),
+        ("aarch64", GLIBC, "aarch64-unknown-linux-musl"),
+        ("aarch64", MUSL, "aarch64-unknown-linux-musl"),
+    ];
+
+    for (machine, ldd, target) in cases {
+        let sandbox = Sandbox::new()?;
+        sandbox.platform("Linux", machine, ldd)?;
+
+        // Act
+        let (output, flat) = sandbox.install_flat(&release.artifact(INSTALLER))?;
+
+        // Assert
+        let platform = format!("Linux {machine} ({ldd})");
+        assert!(result(&output).is_ok(), "{platform}: {output:?}");
+        assert_eq!(
+            run_binary(&flat.join("demo-app")),
+            Ok(format!("demo-app {target}\n")),
+            "{platform}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn installer_rejects_unsupported_platforms() -> Result<(), Box<dyn Error>> {
     // Arrange
     let release = release()?;
-    let musl = "echo 'musl libc (x86_64)' >&2; echo 'Version 1.2.5' >&2; exit 1";
     let cases = [
         (
             "Linux",
             "x86_64",
-            musl,
+            MUSL,
             format!("unsupported platform Linux x86_64 with musl libc; {SUPPORTED}"),
         ),
         (

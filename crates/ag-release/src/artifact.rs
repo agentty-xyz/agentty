@@ -40,6 +40,29 @@ pub(crate) fn shell_installer(app: &str) -> String {
     format!("{app}-installer.sh")
 }
 
+/// Returns an app's Homebrew formula, `<app>.rb`, the file name a tap's
+/// `Formula/` directory gives it.
+pub(crate) fn homebrew_formula(app: &str) -> String {
+    format!("{app}.rb")
+}
+
+/// `cargo binstall` URL template of an app's archive, the `pkg-url` of
+/// `[package.metadata.binstall]`, for a `v`-prefixed release tag.
+pub(crate) const BINSTALL_PKG_URL: &str =
+    "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz";
+
+/// [`BINSTALL_PKG_URL`] for a release tag without the `v` prefix.
+pub(crate) const BINSTALL_UNPREFIXED_PKG_URL: &str =
+    "{ repo }/releases/download/{ version }/{ name }-{ target }.tar.gz";
+
+/// `cargo binstall` template of a binary's path in an app's archive, the
+/// `bin-dir` of `[package.metadata.binstall]`.
+pub(crate) const BINSTALL_BIN_DIR: &str = "{ name }-{ target }/{ bin }{ binary-ext }";
+
+/// `cargo binstall` format of an app's archive, the `pkg-fmt` of
+/// `[package.metadata.binstall]`.
+pub(crate) const BINSTALL_PKG_FMT: &str = "tgz";
+
 /// Returns an app's npm package tarball.
 pub(crate) fn npm_tarball(app: &str) -> String {
     format!("{app}-npm-package.tar.gz")

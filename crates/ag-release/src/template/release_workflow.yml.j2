@@ -237,10 +237,24 @@ jobs:
         with:
           persist-credentials: false
 [% include "release_workflow_tool.yml.j2" %]
+[%- if musl %]
+
+      # musl targets link statically, and their C dependencies compile with
+      # musl-gcc, which builds for the runner's own architecture.
+      - name: Install musl tools
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+[%- endif %]
 
       - name: Build archives
         env:
           TARGET: ${{ matrix.target }}
+[%- if musl %]
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
+[%- endif %]
         run: |
           rustup target add "$TARGET"
           ag-release build --target "$TARGET" --out-dir "$RUNNER_TEMP/artifacts"

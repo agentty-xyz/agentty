@@ -134,12 +134,15 @@ debug_assert_with_mut_call = "warn"
 
 # Release configuration read by `crates/ag-release`, which
 # `.github/workflows/release.yml` runs; see `crates/ag-release/README.md`.
-# Linux builds run on Ubuntu 22.04, so their binaries need its glibc 2.35, and
-# both macOS targets build on the Apple Silicon `macos-latest` runner.
+# Linux glibc builds run on Ubuntu 22.04, so their binaries need its glibc
+# 2.35; installers fall back to the statically linked musl builds on older
+# glibc and on musl systems such as Alpine. Both macOS targets build on the
+# Apple Silicon `macos-latest` runner.
 [workspace.metadata.release]
 profile = "dist"
 min-glibc = "2.35"
-installers = ["shell", "npm"]
+installers = ["shell", "homebrew", "npm", "binstall"]
+homebrew-tap = "agentty-xyz/tap"
 include = ["README.md", "LICENSE", "CHANGELOG.md"]
 
 [workspace.metadata.release.targets]
@@ -147,6 +150,8 @@ aarch64-apple-darwin = "macos-latest"
 x86_64-apple-darwin = "macos-latest"
 aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-unknown-linux-musl = "ubuntu-22.04-arm"
+x86_64-unknown-linux-musl = "ubuntu-22.04"
 
 [workspace.metadata.release.apps.agentty]
 
@@ -165,8 +170,9 @@ smoke-paths = [".github/workflows/publish-npm-oidc.yml"]
 "ubuntu:22.04" = ""
 "debian:stable-slim" = ""
 "fedora:45" = ""
-"ubuntu:20.04" = "needs glibc"
-"alpine:3.24" = "with musl libc"
+"ubuntu:20.04" = ""
+"alpine:3.24" = ""
+"i386/alpine:3.24" = "with a 32-bit userland"
 
 [workspace.metadata.release.workflow.jobs.release-checks]
 stage = "check"
@@ -183,6 +189,15 @@ plan = true
 stage = "publish"
 uses = "$/.github/workflows/publish-crates-io.yml"
 permissions = { contents = "read", id-token = "write" }
+
+# Pushes the formulas to `agentty-xyz/homebrew-tap` with that repository's
+# write-access deploy key.
+[workspace.metadata.release.workflow.jobs.publish-homebrew]
+stage = "publish"
+uses = "$/.github/workflows/publish-homebrew.yml"
+permissions = { contents = "read" }
+plan = true
+secrets = ["HOMEBREW_TAP_DEPLOY_KEY"]
 
 [profile.dev]
 debug = "line-tables-only"

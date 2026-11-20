@@ -21,19 +21,25 @@ and launch your first session.
 - If package install scripts are blocked, the first launch downloads the binary from
   GitHub Releases, so keep network access available.
 - Cargo installs on macOS need Xcode Command Line Tools for native process bindings.
+  [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) installs the prebuilt
+  release binary instead: `cargo binstall agentty`.
+- Prebuilt Linux binaries run on glibc 2.35 or newer. On older distributions and on musl
+  systems such as Alpine, the installers pick the statically linked musl build.
 
 Global `npm`, Bun, and `pnpm` installs and shell installs update automatically; see
 [Auto-Update](@/docs/usage/workflow.md#auto-update). Shell installs of `v0.19.5` or
 earlier need one manual update first. To update manually, use your original method:
 
-| Method | Update command                        |
-| ------ | ------------------------------------- |
-| npm    | `npm install --global agentty@latest` |
-| Bun    | `bun add --global agentty@latest`     |
-| pnpm   | `pnpm add --global agentty@latest`    |
-| npx    | `npx agentty@latest`                  |
-| Cargo  | `cargo install agentty --locked`      |
-| Shell  | Rerun the shell installer above.      |
+| Method         | Update command                        |
+| -------------- | ------------------------------------- |
+| npm            | `npm install --global agentty@latest` |
+| Bun            | `bun add --global agentty@latest`     |
+| pnpm           | `pnpm add --global agentty@latest`    |
+| npx            | `npx agentty@latest`                  |
+| Homebrew       | `brew upgrade agentty`                |
+| Cargo          | `cargo install agentty --locked`      |
+| cargo-binstall | `cargo binstall agentty`              |
+| Shell          | Rerun the shell installer above.      |
 
 <details id="verify-a-github-release">
 <summary>Verify a GitHub Release</summary>

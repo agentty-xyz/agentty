@@ -20,7 +20,9 @@ use std::{env, fs, io, thread};
 
 use tempfile::{TempDir, tempdir};
 
-use crate::support::{HOST_TARGET, Release, SUPPORTED, link_tools, result, sha256};
+use crate::support::{
+    HOST_TARGET, Release, SUPPORTED, link_tools, mixed_libc_manifest, result, sha256,
+};
 
 /// Root manifest of a demo workspace released with the npm installer for
 /// every supported target.
@@ -509,14 +511,66 @@ fn proxy_variables_route_downloads_through_curl() -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+/// A simulated `"<process.platform> <process.arch>"`, glibc version, and
+/// `sysctl` command, with the target whose binary runs or the error.
+type PlatformCase<'case> = (
+    &'case str,
+    Option<&'case str>,
+    &'case str,
+    Result<String, String>,
+);
+
+/// Installs `release`'s package without install scripts, then for each case
+/// runs the command on that simulated platform and checks that it installs
+/// and runs the expected target's binary or fails with the expected error.
+fn assert_platform_detection(
+    release: &Release,
+    cases: Vec<PlatformCase<'_>>,
+) -> Result<(), Box<dyn Error>> {
+    let sandbox = Sandbox::new(release)?;
+    // `--force` installs a package whose `os` field excludes the host.
+    let installed = sandbox.install(release, &["--ignore-scripts", "--force"])?;
+    let binary = sandbox.installed_binary()?;
+    assert!(result(&installed).is_ok(), "{installed:?}");
+
+    for (simulated_platform, glibc, sysctl, expected) in cases {
+        let simulated = format!("{simulated_platform} {glibc:?} ({sysctl})");
+        let (platform, arch) = simulated_platform
+            .split_once(' ')
+            .ok_or("platform and arch")?;
+        sandbox.platform(platform, arch, glibc)?;
+        sandbox.fake("sysctl", sysctl)?;
+        if let Some(directory) = binary.parent().filter(|directory| directory.exists()) {
+            fs::remove_dir_all(directory)?;
+        }
+
+        let output = result(&sandbox.run(&[])?);
+
+        let output = output
+            .map(|stdout| stdout.lines().next().unwrap_or_default().to_string())
+            .map_err(|stderr| {
+                stderr
+                    .strip_prefix("error: ")
+                    .unwrap_or(&stderr)
+                    .trim_end()
+                    .to_string()
+            });
+        assert_eq!(output, expected, "{simulated}");
+        assert_eq!(binary.is_file(), expected.is_ok(), "{simulated}");
+    }
+
+    Ok(())
+}
+
+/// Returns the first output line of the demo binary for `target`.
+fn selected(target: &str) -> String {
+    format!("demo-app {target}")
+}
+
 #[test]
 fn platform_detection_selects_the_archive_or_fails_clearly() -> Result<(), Box<dyn Error>> {
     // Arrange
     let release = release()?;
-    let sandbox = Sandbox::new(&release)?;
-    let installed = sandbox.install(&release, &["--ignore-scripts"])?;
-    let binary = sandbox.installed_binary()?;
-    let selected = |target: &str| Ok(format!("demo-app {target}"));
     let unsupported = |platform: &str| Err(format!("unsupported platform {platform}; {SUPPORTED}"));
     let old_glibc = "demo-app needs glibc 2.17 or newer, but this system has glibc 2.12";
     let unknown_glibc = "cannot determine the glibc version; demo-app needs glibc 2.17 or newer";
@@ -526,32 +580,32 @@ fn platform_detection_selects_the_archive_or_fails_clearly() -> Result<(), Box<d
             "darwin arm64",
             None,
             UNKNOWN_OID,
-            selected("aarch64-apple-darwin"),
+            Ok(selected("aarch64-apple-darwin")),
         ),
         // Rosetta 2 runs Node for x64 on Apple silicon.
         (
             "darwin x64",
             None,
             "echo 1",
-            selected("aarch64-apple-darwin"),
+            Ok(selected("aarch64-apple-darwin")),
         ),
         (
             "darwin x64",
             None,
             UNKNOWN_OID,
-            selected("x86_64-apple-darwin"),
+            Ok(selected("x86_64-apple-darwin")),
         ),
         (
             "linux arm64",
             Some("2.17"),
             UNKNOWN_OID,
-            selected("aarch64-unknown-linux-gnu"),
+            Ok(selected("aarch64-unknown-linux-gnu")),
         ),
         (
             "linux x64",
             Some("2.39"),
             UNKNOWN_OID,
-            selected("x86_64-unknown-linux-gnu"),
+            Ok(selected("x86_64-unknown-linux-gnu")),
         ),
         (
             "linux x64",
@@ -579,37 +633,58 @@ fn platform_detection_selects_the_archive_or_fails_clearly() -> Result<(), Box<d
         ),
         ("freebsd x64", None, UNKNOWN_OID, unsupported("freebsd x64")),
     ];
-    assert!(result(&installed).is_ok(), "{installed:?}");
 
-    for (simulated_platform, glibc, sysctl, expected) in cases {
-        let simulated = format!("{simulated_platform} {glibc:?} ({sysctl})");
-        let (platform, arch) = simulated_platform
-            .split_once(' ')
-            .ok_or("platform and arch")?;
-        sandbox.platform(platform, arch, glibc)?;
-        sandbox.fake("sysctl", sysctl)?;
-        if let Some(directory) = binary.parent().filter(|directory| directory.exists()) {
-            fs::remove_dir_all(directory)?;
-        }
+    // Act and Assert
+    assert_platform_detection(&release, cases.into())
+}
 
-        // Act
-        let output = result(&sandbox.run(&[])?);
+#[test]
+fn platform_detection_prefers_glibc_and_falls_back_to_static_musl() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let release = Release::assemble(&mixed_libc_manifest(r#""npm""#), |target| {
+        format!("echo demo-app {target}")
+    })?;
+    let cases = [
+        (
+            "linux x64",
+            Some("2.39"),
+            UNKNOWN_OID,
+            Ok(selected("x86_64-unknown-linux-gnu")),
+        ),
+        (
+            "linux x64",
+            Some("2.12"),
+            UNKNOWN_OID,
+            Ok(selected("x86_64-unknown-linux-musl")),
+        ),
+        (
+            "linux x64",
+            Some("unknown"),
+            UNKNOWN_OID,
+            Ok(selected("x86_64-unknown-linux-musl")),
+        ),
+        (
+            "linux x64",
+            None,
+            UNKNOWN_OID,
+            Ok(selected("x86_64-unknown-linux-musl")),
+        ),
+        (
+            "linux arm64",
+            Some("2.39"),
+            UNKNOWN_OID,
+            Ok(selected("aarch64-unknown-linux-musl")),
+        ),
+        (
+            "linux arm64",
+            None,
+            UNKNOWN_OID,
+            Ok(selected("aarch64-unknown-linux-musl")),
+        ),
+    ];
 
-        // Assert
-        let output = output
-            .map(|stdout| stdout.lines().next().unwrap_or_default().to_string())
-            .map_err(|stderr| {
-                stderr
-                    .strip_prefix("error: ")
-                    .unwrap_or(&stderr)
-                    .trim_end()
-                    .to_string()
-            });
-        assert_eq!(output, expected, "{simulated}");
-        assert_eq!(binary.is_file(), expected.is_ok(), "{simulated}");
-    }
-
-    Ok(())
+    // Act and Assert
+    assert_platform_detection(&release, cases.into())
 }
 
 #[test]

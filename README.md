@@ -72,6 +72,17 @@ npx agentty
 </details>
 
 <details>
+<summary>Homebrew</summary>
+
+```sh
+brew install agentty-xyz/tap/agentty
+```
+
+Update with `brew upgrade agentty`.
+
+</details>
+
+<details>
 <summary>Shell</summary>
 
 Shell installs also update automatically.
@@ -91,7 +102,17 @@ macOS source builds require Xcode Command Line Tools for native process bindings
 cargo install agentty
 ```
 
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) installs the prebuilt
+release binary instead:
+
+```sh
+cargo binstall agentty
+```
+
 </details>
+
+Prebuilt Linux binaries need glibc 2.35 or newer; older distributions and musl systems
+such as Alpine get the statically linked musl build.
 
 ## Supported CLI Agents
 

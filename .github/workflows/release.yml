@@ -18,7 +18,7 @@
 #   GitHub release.
 #   It first requires the `check` jobs: `release-checks`.
 #   Then it runs the `publish` jobs, which skip prereleases unless configured
-#   otherwise: `publish-npm`, `publish-crates-io`.
+#   otherwise: `publish-npm`, `publish-crates-io`, `publish-homebrew`.
 
 name: Release
 
@@ -254,9 +254,19 @@ jobs:
           target_dir="$(cargo metadata --format-version 1 --no-deps | jq --raw-output .target_directory)"
           cp "$target_dir/debug/ag-release" "$(dirname "$(command -v cargo)")/"
 
+      # musl targets link statically, and their C dependencies compile with
+      # musl-gcc, which builds for the runner's own architecture.
+      - name: Install musl tools
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+
       - name: Build archives
         env:
           TARGET: ${{ matrix.target }}
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: |
           rustup target add "$TARGET"
           ag-release build --target "$TARGET" --out-dir "$RUNNER_TEMP/artifacts"
@@ -344,8 +354,9 @@ jobs:
           - { image: "ubuntu:22.04", error: "" }
           - { image: "debian:stable-slim", error: "" }
           - { image: "fedora:45", error: "" }
-          - { image: "ubuntu:20.04", error: "needs glibc" }
-          - { image: "alpine:3.24", error: "with musl libc" }
+          - { image: "ubuntu:20.04", error: "" }
+          - { image: "alpine:3.24", error: "" }
+          - { image: "i386/alpine:3.24", error: "with a 32-bit userland" }
     runs-on: ubuntu-22.04
     permissions: {}
     env:
@@ -477,3 +488,16 @@ jobs:
       contents: read
       id-token: write
     uses: $/.github/workflows/publish-crates-io.yml
+
+  # A `publish` job from `[workspace.metadata.release.workflow.jobs]`: runs
+  # after the GitHub release is published, except for prereleases.
+  publish-homebrew:
+    needs: [plan, host]
+    if: ${{ github.event_name == 'push' && !fromJson(needs.plan.outputs.plan).prerelease }}
+    permissions:
+      contents: read
+    uses: $/.github/workflows/publish-homebrew.yml
+    with:
+      plan: ${{ needs.plan.outputs.plan }}
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

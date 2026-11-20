@@ -1,6 +1,6 @@
 //! Target triple unit tests.
 
-use crate::target::Target;
+use crate::target::{Libc, Target};
 
 #[test]
 fn triples_round_trip_display_and_serialize() {
@@ -21,9 +21,23 @@ fn triples_round_trip_display_and_serialize() {
 }
 
 #[test]
+fn all_targets_follow_triple_order() {
+    // Arrange
+    let targets = Target::ALL;
+
+    // Act
+    let mut sorted = targets;
+    sorted.sort();
+
+    // Assert
+    assert_eq!(sorted, targets);
+    assert!(targets.is_sorted_by_key(|target| target.triple()));
+}
+
+#[test]
 fn from_triple_rejects_unsupported_targets() {
     // Arrange
-    let triples = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl", ""];
+    let triples = ["x86_64-pc-windows-msvc", "i686-unknown-linux-musl", ""];
 
     for triple in triples {
         // Act
@@ -35,46 +49,42 @@ fn from_triple_rejects_unsupported_targets() {
 }
 
 #[test]
-fn uname_names_and_glibc_follow_the_triple() {
+fn uname_names_and_libc_follow_the_triple() {
     // Arrange
+    let arm = ["arm64", "aarch64"];
+    let intel = ["x86_64", "amd64"];
     let expected = [
-        (
-            Target::Aarch64AppleDarwin,
-            "Darwin",
-            ["arm64", "aarch64"],
-            false,
-        ),
-        (
-            Target::Aarch64UnknownLinuxGnu,
-            "Linux",
-            ["arm64", "aarch64"],
-            true,
-        ),
-        (
-            Target::X8664AppleDarwin,
-            "Darwin",
-            ["x86_64", "amd64"],
-            false,
-        ),
-        (
-            Target::X8664UnknownLinuxGnu,
-            "Linux",
-            ["x86_64", "amd64"],
-            true,
-        ),
+        (Target::Aarch64AppleDarwin, "Darwin", arm, Libc::None),
+        (Target::Aarch64UnknownLinuxGnu, "Linux", arm, Libc::Glibc),
+        (Target::Aarch64UnknownLinuxMusl, "Linux", arm, Libc::Musl),
+        (Target::X8664AppleDarwin, "Darwin", intel, Libc::None),
+        (Target::X8664UnknownLinuxGnu, "Linux", intel, Libc::Glibc),
+        (Target::X8664UnknownLinuxMusl, "Linux", intel, Libc::Musl),
     ];
 
-    for (target, system, machines, glibc) in expected {
+    for (target, system, machines, libc) in expected {
         // Act
         let names = (
             target.uname_system(),
             target.uname_machines(),
-            target.is_glibc(),
+            target.libc(),
         );
 
         // Assert
-        assert_eq!(names, (system, &machines[..], glibc), "{target}");
+        assert_eq!(names, (system, &machines[..], libc), "{target}");
     }
+}
+
+#[test]
+fn libc_names_are_the_installers_match_words() {
+    // Arrange
+    let libcs = [Libc::Glibc, Libc::Musl, Libc::None];
+
+    // Act
+    let names = libcs.map(Libc::name);
+
+    // Assert
+    assert_eq!(names, ["gnu", "musl", "none"]);
 }
 
 #[test]
@@ -83,8 +93,10 @@ fn node_names_follow_the_triple() {
     let expected = [
         (Target::Aarch64AppleDarwin, "darwin", "arm64"),
         (Target::Aarch64UnknownLinuxGnu, "linux", "arm64"),
+        (Target::Aarch64UnknownLinuxMusl, "linux", "arm64"),
         (Target::X8664AppleDarwin, "darwin", "x64"),
         (Target::X8664UnknownLinuxGnu, "linux", "x64"),
+        (Target::X8664UnknownLinuxMusl, "linux", "x64"),
     ];
 
     for (target, platform, arch) in expected {
@@ -110,8 +122,10 @@ fn display_names_name_the_platform() {
         [
             "Apple Silicon macOS",
             "ARM64 Linux",
+            "ARM64 Linux (static musl)",
             "Intel macOS",
-            "x64 Linux"
+            "x64 Linux",
+            "x64 Linux (static musl)",
         ]
     );
 }

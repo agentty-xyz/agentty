@@ -166,6 +166,11 @@ fn render_builds_the_plain_pipeline_and_the_tool_from_the_workspace() {
         json!(["macos-latest", "ubuntu-22.04"])
     );
     assert!(!step_names(&yaml, "smoke").contains(&"Setup Node"));
+    assert!(!step_names(&yaml, "build").contains(&"Install musl tools"));
+    assert_eq!(
+        step(&yaml, "build", "Build archives")["env"],
+        json!({"TARGET": "${{ matrix.target }}"})
+    );
     for job in TOOL_JOBS {
         let names = step_names(&yaml, job);
         assert!(names.contains(&"Install the Rust toolchain"), "{job}");
@@ -179,6 +184,71 @@ fn render_builds_the_plain_pipeline_and_the_tool_from_the_workspace() {
             assert_eq!(step["uses"], CHECKOUT.split(' ').next().expect("ref"));
         }
     }
+}
+
+#[test]
+fn render_passes_configured_secrets_to_the_reusable_workflow() {
+    // Arrange
+    let workspace = workspace(&metadata(Some(json!({
+        "jobs": {
+            "publish-tap": {
+                "stage": "publish",
+                "uses": "./.github/workflows/tap.yml",
+                "secrets": ["TAP_KEY", "SIGNING_KEY"],
+            },
+        },
+    }))));
+
+    // Act
+    let (_, yaml) = render(&workspace, None);
+
+    // Assert
+    assert_eq!(
+        yaml["jobs"]["publish-tap"]["secrets"],
+        json!({
+            "TAP_KEY": "${{ secrets.TAP_KEY }}",
+            "SIGNING_KEY": "${{ secrets.SIGNING_KEY }}",
+        })
+    );
+}
+
+#[test]
+fn render_installs_musl_tools_for_musl_targets_and_tests_distributions_on_them() {
+    // Arrange
+    let mut metadata = metadata(Some(json!({"distributions": {"demo-os:1": ""}})));
+    metadata["metadata"]["release"]["targets"] = json!({
+        "aarch64-apple-darwin": "macos-latest",
+        "x86_64-unknown-linux-musl": "ubuntu-musl",
+    });
+    let workspace = workspace(&metadata);
+
+    // Act
+    let (_, yaml) = render(&workspace, None);
+
+    // Assert
+    let names = step_names(&yaml, "build");
+    let tools = names
+        .iter()
+        .position(|name| *name == "Install musl tools")
+        .expect("musl tools step");
+    let build = names
+        .iter()
+        .position(|name| *name == "Build archives")
+        .expect("build step");
+    assert!(tools < build, "{names:?}");
+    assert_eq!(
+        step(&yaml, "build", "Install musl tools")["if"],
+        "${{ endsWith(matrix.target, '-musl') }}"
+    );
+    assert_eq!(
+        step(&yaml, "build", "Build archives")["env"],
+        json!({
+            "TARGET": "${{ matrix.target }}",
+            "CC_aarch64_unknown_linux_musl": "musl-gcc",
+            "CC_x86_64_unknown_linux_musl": "musl-gcc",
+        })
+    );
+    assert_eq!(yaml["jobs"]["distributions"]["runs-on"], "ubuntu-musl");
 }
 
 #[test]
@@ -429,7 +499,8 @@ fn render_rejects_configurations_that_a_workflow_cannot_express() {
             workspace(&mac_only),
             "`workspace.metadata.release.workflow.distributions` needs a Linux target in \
              `workspace.metadata.release.targets`: x86_64-unknown-linux-gnu or \
-             aarch64-unknown-linux-gnu",
+             x86_64-unknown-linux-musl or aarch64-unknown-linux-gnu or \
+             aarch64-unknown-linux-musl",
         ),
         (
             workspace(&newline_runner),

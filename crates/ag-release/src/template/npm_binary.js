@@ -84,19 +84,29 @@ function detectTarget() {
   if (platform === "darwin" && arch === "x64" && sysctl("hw.optional.arm64") === "1") {
     arches.unshift("arm64");
   }
-  const target = arches
-    .map((candidate) =>
-      RELEASE.targets.find((entry) => entry.platform === platform && entry.arch === candidate),
-    )
-    .find(Boolean);
-  if (!target) {
-    throw unsupported(`${platform} ${arch}`);
+  const libc = platform === "linux" ? detectLibc(platform, arch) : { libcs: ["none"] };
+  const find = (libcs) =>
+    arches
+      .flatMap((candidate) =>
+        libcs.map((wanted) =>
+          RELEASE.targets.find(
+            (entry) =>
+              entry.platform === platform && entry.arch === candidate && entry.libc === wanted,
+          ),
+        ),
+      )
+      .find(Boolean);
+  const target = find(libc.libcs);
+  if (target) {
+    return target;
   }
-  if (target.glibc) {
-    checkGlibc(platform, arch);
+  // A platform whose only targets need a glibc this system lacks fails with
+  // the reason.
+  if (libc.problem && find(["gnu"])) {
+    throw libc.problem;
   }
 
-  return target;
+  throw unsupported(`${platform} ${arch}`);
 }
 
 function sysctl(name) {
@@ -111,26 +121,31 @@ function unsupported(platform) {
   return new Error(`unsupported platform ${platform}; ${RELEASE.app} supports ${targets}`);
 }
 
-/** Throws unless this system has glibc, at least the release minimum. */
-function checkGlibc(platform, arch) {
+/** Returns the C libraries whose targets run on this Linux system, in order
+ * of preference, as `libcs`: glibc targets when the system has glibc, at
+ * least the release minimum, and statically linked musl targets anywhere.
+ * When glibc targets do not run, `problem` is the error saying why. */
+function detectLibc(platform, arch) {
   process.report.excludeNetwork = true;
   const version = process.report.getReport().header.glibcVersionRuntime;
   if (!version) {
-    throw unsupported(`${platform} ${arch} without glibc`);
+    return { libcs: ["musl"], problem: unsupported(`${platform} ${arch} without glibc`) };
   }
   if (!RELEASE.minGlibc) {
-    return;
+    return { libcs: ["gnu", "musl"] };
   }
 
   const needs = `${RELEASE.app} needs glibc ${RELEASE.minGlibc} or newer`;
   const [major, minor] = version.split(".").map(Number);
   if (!Number.isInteger(major) || !Number.isInteger(minor)) {
-    throw new Error(`cannot determine the glibc version; ${needs}`);
+    return { libcs: ["musl"], problem: new Error(`cannot determine the glibc version; ${needs}`) };
   }
   const [minMajor, minMinor] = RELEASE.minGlibc.split(".").map(Number);
   if (major < minMajor || (major === minMajor && minor < minMinor)) {
-    throw new Error(`${needs}, but this system has glibc ${version}`);
+    return { libcs: ["musl"], problem: new Error(`${needs}, but this system has glibc ${version}`) };
   }
+
+  return { libcs: ["gnu", "musl"] };
 }
 
 /** Downloads `source` into the file `destination`. */

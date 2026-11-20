@@ -173,6 +173,52 @@ fn from_metadata_rejects_invalid_apps() {
 }
 
 #[test]
+fn binstall_installer_requires_metadata_naming_the_release_archives() {
+    // Arrange
+    let binstall = |pkg_url: &str| {
+        json!({"binstall": {
+            "bin-dir": "{ name }-{ target }/{ bin }{ binary-ext }",
+            "pkg-fmt": "tgz",
+            "pkg-url": pkg_url,
+        }})
+    };
+    let prefixed = binstall("{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz");
+    let unprefixed = binstall("{ repo }/releases/download/{ version }/{ name }-{ target }.tar.gz");
+    let metadata = |demo_app: &Value, demo_tool: &Value| {
+        let mut metadata = demo_metadata();
+        metadata["metadata"]["release"]["installers"] = json!(["binstall"]);
+        metadata["packages"][1]["metadata"] = demo_app.clone();
+        metadata["packages"][2]["metadata"] = demo_tool.clone();
+
+        metadata_bytes(&metadata)
+    };
+    let mut zip = prefixed.clone();
+    zip["binstall"]["pkg-fmt"] = json!("zip");
+    let expected = "the `binstall` installer needs these keys in \
+                    `/workspace/demo/crates/demo-tool/Cargo.toml`, with `v` removed from \
+                    `pkg-url` for release tags without \
+                    it:\n\n[package.metadata.binstall]\npkg-url = \"{ repo }/releases/download/v{ \
+                    version }/{ name }-{ target }.tar.gz\"\nbin-dir = \"{ name }-{ target }/{ bin \
+                    }{ binary-ext }\"\npkg-fmt = \"tgz\"";
+
+    // Act
+    let accepted = Workspace::from_metadata(&metadata(&prefixed, &unprefixed));
+    let rejected = [
+        Value::Null,
+        json!({"other": {}}),
+        zip,
+        binstall("{ repo }/demo.tgz"),
+    ]
+    .map(|demo_tool| Workspace::from_metadata(&metadata(&prefixed, &demo_tool)));
+
+    // Assert
+    assert!(accepted.is_ok(), "{accepted:?}");
+    for workspace in rejected {
+        assert_eq!(workspace, Err(expected.to_string()));
+    }
+}
+
+#[test]
 fn from_metadata_rejects_output_that_is_not_cargo_metadata() {
     // Arrange
     let output = b"{\"packages\": []}";

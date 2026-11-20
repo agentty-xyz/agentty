@@ -59,17 +59,19 @@ fn render_bakes_in_every_release_value() {
         "RECEIPT_VERSION='\"1.2.3\"'\n".to_string(),
         "_download_base=${DEMO_APP_DOWNLOAD_URL:-$DEFAULT_DOWNLOAD_URL}\n".to_string(),
         "_no_modify_path=${DEMO_APP_NO_MODIFY_PATH:-0}\n".to_string(),
-        "        case \"$_system $_candidate\" in\n            \
-         'Darwin arm64' | 'Darwin aarch64')\n                \
-         _target=aarch64-apple-darwin\n                \
-         _archive='demo-app-aarch64-apple-darwin.tar.gz'\n                \
-         _directory='demo-app-aarch64-apple-darwin'\n                \
-         _sha256='aarch64-apple-darwinaarch64-apple-darwin'\n                \
-         _glibc=false\n                ;;\n            \
-         'Linux x86_64' | 'Linux amd64')\n                \
+        "            case \"$_system $_candidate $_libc\" in\n                \
+         'Darwin arm64 none' | 'Darwin aarch64 none')\n                    \
+         _target=aarch64-apple-darwin\n                    \
+         _archive='demo-app-aarch64-apple-darwin.tar.gz'\n                    \
+         _directory='demo-app-aarch64-apple-darwin'\n                    \
+         _sha256='aarch64-apple-darwinaarch64-apple-darwin'\n                    \
+         ;;\n                \
+         'Linux x86_64 gnu' | 'Linux amd64 gnu')\n                    \
          _target=x86_64-unknown-linux-gnu\n"
             .to_string(),
-        "_glibc=true\n                ;;\n            *)\n".to_string(),
+        "_sha256='x86_64-unknown-linux-gnux86_64-unknown-linux-gnu'\n                    \
+         ;;\n                *)\n"
+            .to_string(),
         "for _binary in 'demo-app' 'demo-helper'; do\n".to_string(),
         "\nUsage: sh demo-app-installer.sh [--help]\n".to_string(),
         "set DEMO_APP_NO_MODIFY_PATH=1 instead\"\n".to_string(),

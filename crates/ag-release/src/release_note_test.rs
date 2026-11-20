@@ -197,6 +197,55 @@ fn notes_report_unreadable_or_non_utf8_changelogs_and_output_failures() {
 }
 
 #[test]
+fn body_lists_homebrew_and_binstall_commands_with_the_other_installers() {
+    // Arrange
+    let plan = plan(|metadata| {
+        let release = &mut metadata["metadata"]["release"];
+        release["installers"] = json!(["binstall", "homebrew", "npm", "shell"]);
+        release["homebrew-tap"] = json!("demo-org/tap");
+        let binstall = json!({"binstall": {
+            "pkg-url": "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz",
+            "bin-dir": "{ name }-{ target }/{ bin }{ binary-ext }",
+            "pkg-fmt": "tgz",
+        }});
+        metadata["packages"][1]["metadata"] = binstall.clone();
+        metadata["packages"][2]["metadata"] = binstall;
+    });
+    let note = ReleaseNote {
+        entry: None,
+        plan: &plan,
+        tag: "v1.2.3",
+    };
+
+    // Act
+    let body = note.body();
+
+    // Assert
+    let (app, _) = body.split_once("\n## Download").expect("download section");
+    let headings = app
+        .lines()
+        .filter_map(|line| line.strip_prefix("### "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        headings,
+        [
+            "Install prebuilt binaries via shell script",
+            "Install prebuilt binaries via Homebrew",
+            "Install prebuilt binaries into your npm project",
+            "Install prebuilt binaries via cargo-binstall",
+        ]
+    );
+    assert!(
+        app.contains("\n```sh\nbrew install demo-org/tap/demo-app\n```\n"),
+        "{app}"
+    );
+    assert!(
+        app.contains("\n```sh\ncargo binstall demo-app@1.2.3\n```\n"),
+        "{app}"
+    );
+}
+
+#[test]
 fn body_omits_install_commands_without_installers_and_lists_macos_before_linux() {
     // Arrange
     let plan = plan(|metadata| {

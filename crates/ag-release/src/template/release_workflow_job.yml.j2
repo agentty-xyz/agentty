@@ -11,3 +11,9 @@
     with:
       plan: ${{ needs.plan.outputs.plan }}
 [%- endif %]
+[%- if !job.secrets.is_empty() %]
+    secrets:
+[%- for secret in job.secrets %]
+      [= secret =]: ${{ secrets.[= secret =] }}
+[%- endfor %]
+[%- endif %]

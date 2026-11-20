@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::artifact;
-use crate::config::{GlibcVersion, Installer};
+use crate::config::{GlibcVersion, HomebrewTap, Installer};
 use crate::repository::GitHubRepository;
 use crate::tag::ReleaseTag;
 use crate::target::Target;
@@ -20,6 +20,8 @@ pub(crate) struct ReleasePlan {
     pub(crate) apps: Vec<AppPlan>,
     /// Release-wide artifact file names.
     pub(crate) artifacts: ReleaseArtifacts,
+    /// Homebrew tap of the formulas when the Homebrew installer is enabled.
+    pub(crate) homebrew_tap: Option<HomebrewTap>,
     /// Configured paths of the files added to every archive, which are also
     /// their paths in the archive, whichever directory supplied them.
     pub(crate) include: Vec<String>,
@@ -63,6 +65,7 @@ impl ReleasePlan {
                 .map(|app| AppPlan::new(app, &targets, &config.installers))
                 .collect(),
             artifacts: ReleaseArtifacts::new(),
+            homebrew_tap: config.homebrew_tap.clone(),
             include: config.include.clone(),
             installers: config.installers.clone(),
             matrix: BuildMatrix {
@@ -98,6 +101,8 @@ pub(crate) struct AppPlan {
     pub(crate) authors: Vec<String>,
     pub(crate) binaries: Vec<String>,
     pub(crate) description: Option<String>,
+    /// Homebrew formula file when the Homebrew installer is enabled.
+    pub(crate) homebrew_formula: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) name: String,
     /// npm package name when the npm installer is enabled.
@@ -121,6 +126,9 @@ impl AppPlan {
             authors: app.authors.clone(),
             binaries: app.binaries.clone(),
             description: app.description.clone(),
+            homebrew_formula: installers
+                .contains(&Installer::Homebrew)
+                .then(|| artifact::homebrew_formula(name)),
             license: app.license.clone(),
             name: name.to_string(),
             npm_package: npm.then(|| artifact::npm_package(name, app.npm_scope.as_deref())),
