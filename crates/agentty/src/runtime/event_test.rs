@@ -725,6 +725,53 @@ async fn test_process_events_with_handler_returns_handler_error() {
     assert_eq!(error.to_string(), "handler failed");
 }
 
+/// Verifies a quit from the first selected event exits before draining the
+/// remaining queued input.
+#[tokio::test]
+async fn test_process_events_with_handler_quits_on_first_event_before_drain() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut terminal = ();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    for _ in 0..2 {
+        event_tx
+            .send(Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+            ))))
+            .expect("failed to queue event");
+    }
+    let mut tick = tokio::time::interval(Duration::from_mins(1));
+    tick.tick().await;
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+
+    // Act
+    let result = process_events_with_handler(
+        &crate::test_support::FixedClock::unix_epoch(),
+        &mut app,
+        &mut terminal,
+        &mut event_rx,
+        &mut tick,
+        &mut CycleTiming::default(),
+        {
+            let handler_calls = Arc::clone(&handler_calls);
+
+            move |_, (), event| {
+                assert!(event.is_some(), "the queued event should be selected first");
+                handler_calls.fetch_add(1, Ordering::Relaxed);
+
+                Box::pin(async { Ok(EventResult::Quit) })
+            }
+        },
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Quit)));
+    assert_eq!(handler_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(event_rx.len(), 1);
+}
+
 /// Verifies a terminal reader failure exits the event cycle without being
 /// converted into a terminal event.
 #[tokio::test]
