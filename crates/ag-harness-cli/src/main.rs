@@ -1150,6 +1150,7 @@ fn stored_model_identity_parts(
         Some("alibaba_cloud") => ModelProvider::Qwen,
         Some("openai") => ModelProvider::OpenAi,
         Some("openai_chatgpt") => ModelProvider::ChatGpt,
+        Some("anthropic") => ModelProvider::Anthropic,
         Some("openai_compatible") => ModelProvider::OpenAiCompatible,
         _ => return Err(CliError::MissingModelIdentity),
     };

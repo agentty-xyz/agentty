@@ -1,8 +1,9 @@
 //! Declared context profiles for the catalog models whose context Agentty
 //! manages: Codex app-server compaction and native harness registrations.
 //!
-//! The `ag-harness` provider catalog declares the Kimi and Muse profiles,
-//! fitted as below; Agentty declares the Qwen3.8-Max and Qwen-Plus ones.
+//! The `ag-harness` provider catalog declares the Kimi, Muse, and Claude
+//! profiles, the first two fitted as below; Agentty declares the Qwen3.8-Max
+//! and Qwen-Plus ones.
 //!
 //! Harness models declare estimators fitted on 2026-10-18 to live
 //! provider-reported input tokens: the `ag-harness` benchmark `estimate`
@@ -72,7 +73,8 @@ const QWEN_PLUS_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator
 
 /// Returns the declared context profile of `model`, or `None` when its
 /// provider CLI manages context itself, the `ag-harness` provider catalog
-/// declares it, as for the Kimi, Muse, Qwen flash, and ChatGPT-plan models,
+/// declares it, as for the Kimi, Muse, Qwen flash, ChatGPT-plan, and Claude
+/// models,
 /// or, for the OpenAI-compatible model, the environment declares it.
 pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
     match model {

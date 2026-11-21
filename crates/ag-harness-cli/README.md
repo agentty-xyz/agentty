@@ -31,6 +31,10 @@ cargo run --locked -p ag-harness-cli -- \
 OPENAI_API_KEY=sk-... cargo run --locked -p ag-harness-cli -- \
   run gpt-6.1-sol --provider openai
 
+# Chat with a Claude model (paid Anthropic API key)
+ANTHROPIC_API_KEY=sk-ant-... cargo run --locked -p ag-harness-cli -- \
+  run claude-opus-5-5 --provider anthropic
+
 # Chat on your ChatGPT Plus or Pro plan instead of API credits (sign in once)
 cargo run --locked -p ag-harness-cli -- login chatgpt
 cargo run --locked -p ag-harness-cli -- run gpt-6.1-sol --provider chatgpt
@@ -134,12 +138,12 @@ each method's result, and `x-server-request-results` the answer to each server r
   those explicit locations is required.
 - The first valid Git in `PATH` is used; `--git-executable <FILE>` overrides it.
 - Muse is the default provider. Run `cargo run --locked -p ag-harness-cli -- run --help`
-  for Kimi, Qwen, OpenAI, OpenAI-compatible, model, and credential options.
+  for Kimi, Qwen, OpenAI, Anthropic, OpenAI-compatible, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
 - Uncataloged models and Qwen models other than the flash ones are assumed to have a
-  128k-token context window; cataloged OpenAI, Muse, Kimi, and Qwen flash models use
-  their documented windows; OpenAI-compatible models use
+  128k-token context window; cataloged OpenAI, Claude, Muse, Kimi, and Qwen flash models
+  use their documented windows; OpenAI-compatible models use
   `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
   `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default a quarter of the window, at most
   8,192). Each request replays the most recent turns that fit, and a turn fails once its

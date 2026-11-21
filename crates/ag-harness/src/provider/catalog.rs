@@ -12,13 +12,16 @@ use ag_router::chatgpt::ChatGptAuthError;
 use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
-use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
+use super::{anthropic, chatgpt, kimi, muse, openai, openai_compatible, qwen};
 use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelProvider {
+    /// Anthropic's Messages API, serving Claude models billed to an API
+    /// key.
+    Anthropic,
     /// `OpenAI`'s Responses API billed to the user's `ChatGPT` plan through
     /// "Sign in with `ChatGPT`" instead of API credits.
     ChatGpt,
@@ -36,12 +39,13 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Muse,
         Self::Kimi,
         Self::Qwen,
         Self::OpenAi,
         Self::ChatGpt,
+        Self::Anthropic,
         Self::OpenAiCompatible,
     ];
 
@@ -53,6 +57,7 @@ impl ModelProvider {
     /// Returns the stable identifier for this provider.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Anthropic => "anthropic",
             Self::ChatGpt => "chatgpt",
             Self::Kimi => "kimi",
             Self::Muse => "muse",
@@ -66,6 +71,12 @@ impl ModelProvider {
     /// none for [`Self::OpenAiCompatible`], whose server names its models.
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
+            Self::Anthropic => &[
+                anthropic::CLAUDE_FABLE_5_2,
+                anthropic::CLAUDE_OPUS_5_5,
+                anthropic::CLAUDE_SONNET_5_5,
+                anthropic::CLAUDE_HAIKU_5_5,
+            ],
             Self::ChatGpt => &[
                 chatgpt::CHATGPT_GPT_6_1_SOL,
                 chatgpt::CHATGPT_GPT_6_1_TERRA,
@@ -112,7 +123,7 @@ impl ModelProvider {
                 .known_models()
                 .contains(&model)
                 .then_some(CostTier::Plan),
-            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
+            Self::Anthropic | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
                 self.pricing(model).map(Pricing::cost_tier)
             }
         }
@@ -141,9 +152,12 @@ impl ModelProvider {
     pub fn cost_tier_at(self, model: &str, base_url: &str) -> Option<CostTier> {
         match self {
             Self::OpenAiCompatible => is_local_endpoint(base_url).then_some(CostTier::Local),
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
-                self.cost_tier(model)
-            }
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => self.cost_tier(model),
         }
     }
 
@@ -170,7 +184,10 @@ impl ModelProvider {
             tools_only
                 .with_image_input(cataloged.supports.image_input())
                 .with_reasoning(cataloged.supports.reasoning())
-                .with_structured_output(matches!(self, Self::ChatGpt | Self::Muse | Self::OpenAi)),
+                .with_structured_output(matches!(
+                    self,
+                    Self::Anthropic | Self::ChatGpt | Self::Muse | Self::OpenAi
+                )),
         )
     }
 
@@ -209,6 +226,7 @@ impl ModelProvider {
     /// for [`Self::ChatGpt`] the optional override of its credential file.
     pub const fn api_key_environment(self) -> &'static str {
         match self {
+            Self::Anthropic => anthropic::ANTHROPIC_API_KEY_ENV,
             Self::ChatGpt => chatgpt::CHATGPT_AUTH_FILE_ENV,
             Self::Kimi => kimi::KIMI_API_KEY_ENV,
             Self::Muse => muse::MODEL_API_KEY_ENV,
@@ -232,10 +250,12 @@ impl ModelProvider {
     }
 
     /// Returns whether this build includes the provider's client family:
-    /// `providers-openai` for [`Self::OpenAi`] and [`Self::ChatGpt`], and
-    /// `providers-compat` for the Chat Completions providers.
+    /// `providers-anthropic` for [`Self::Anthropic`], `providers-openai` for
+    /// [`Self::OpenAi`] and [`Self::ChatGpt`], and `providers-compat` for
+    /// the Chat Completions providers.
     pub const fn is_enabled(self) -> bool {
         match self {
+            Self::Anthropic => cfg!(feature = "providers-anthropic"),
             Self::ChatGpt | Self::OpenAi => cfg!(feature = "providers-openai"),
             Self::Kimi | Self::Muse | Self::OpenAiCompatible | Self::Qwen => {
                 cfg!(feature = "providers-compat")
@@ -254,6 +274,7 @@ impl ModelProvider {
     /// Returns the environment variable containing the provider base URL.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
+            Self::Anthropic => anthropic::ANTHROPIC_BASE_URL_ENV,
             Self::ChatGpt => chatgpt::CHATGPT_BASE_URL_ENV,
             Self::Kimi => kimi::KIMI_BASE_URL_ENV,
             Self::Muse => muse::MODEL_API_BASE_URL_ENV,
@@ -264,12 +285,14 @@ impl ModelProvider {
     }
 
     /// Returns the built-in base URL used when the environment has no
-    /// override: Moonshot AI's international `https://api.moonshot.ai/v1`
-    /// for [`Self::Kimi`], and Ollama's local endpoint for
+    /// override: `https://api.anthropic.com/v1` for [`Self::Anthropic`],
+    /// Moonshot AI's international `https://api.moonshot.ai/v1` for
+    /// [`Self::Kimi`], and Ollama's local endpoint for
     /// [`Self::OpenAiCompatible`]. [`Self::Qwen`] has none, since Model
     /// Studio serves each region from its own endpoint.
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
+            Self::Anthropic => Some(anthropic::DEFAULT_ANTHROPIC_BASE_URL),
             Self::ChatGpt => Some(chatgpt::DEFAULT_BASE_URL),
             Self::Kimi => Some(kimi::DEFAULT_BASE_URL),
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
@@ -285,10 +308,11 @@ impl ModelProvider {
     /// [`Self::Kimi`] and [`Self::Muse`] declare the documented window and
     /// output reservation of each cataloged model, weighed by an estimator
     /// fitted to the provider's reported input tokens under a 17% (Kimi) or
-    /// 18% (Muse) margin. [`Self::OpenAi`] declares the documented window
-    /// and output limit of each cataloged model, and [`Self::Qwen`] of its
-    /// flash models, weighed by the default estimator under a 50% margin,
-    /// and `None` for other models. [`Self::OpenAiCompatible`] serves
+    /// 18% (Muse) margin. [`Self::Anthropic`] and [`Self::OpenAi`] declare
+    /// the documented window and output limit of each cataloged model, and
+    /// [`Self::Qwen`] of its flash models, weighed by the default estimator
+    /// under a 50% margin, and `None` for other models.
+    /// [`Self::OpenAiCompatible`] serves
     /// models the harness cannot know, so its profile comes from
     /// `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768 tokens) and
     /// `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192), weighed the
@@ -305,6 +329,7 @@ impl ModelProvider {
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
         match self {
+            Self::Anthropic => Ok(anthropic::profile(model)),
             Self::ChatGpt => Ok(chatgpt::profile(model)),
             Self::Kimi => Ok(kimi::profile(model)),
             Self::Muse => Ok(muse::profile(model)),
@@ -338,7 +363,12 @@ impl ModelProvider {
             Self::OpenAiCompatible => {
                 openai_compatible::running_profile(environment, running_context_window).map(Some)
             }
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => Ok(None),
         }
     }
 
@@ -359,7 +389,12 @@ impl ModelProvider {
     ) -> Result<Option<LocalServer>, ModelConfigurationError> {
         match self {
             Self::OpenAiCompatible => openai_compatible::local_server(environment).map(Some),
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => Ok(None),
         }
     }
 
@@ -377,6 +412,12 @@ impl ModelProvider {
             Credential::SignIn(auth_file) => (None, Some(auth_file)),
         };
         let client = match self {
+            #[cfg(feature = "providers-anthropic")]
+            Self::Anthropic => ModelClient::anthropic(anthropic::AnthropicConfig {
+                api_key: api_key.unwrap_or_default(),
+                base_url,
+                model,
+            }),
             #[cfg(feature = "providers-openai")]
             Self::ChatGpt => ModelClient::chatgpt(chatgpt::ChatGptConfig {
                 auth_file: auth_file.unwrap_or_default(),
@@ -417,7 +458,11 @@ impl ModelProvider {
             }),
             // `client_from_environment` rejects a disabled family first; its
             // credential and endpoint go unused here.
-            #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+            #[cfg(not(all(
+                feature = "providers-anthropic",
+                feature = "providers-compat",
+                feature = "providers-openai"
+            )))]
             provider => {
                 drop((api_key, auth_file, base_url, model));
 
@@ -433,6 +478,10 @@ impl ModelProvider {
     /// server declares neither, since its limits come from the server.
     fn declared_limits(self, model: &str) -> (Option<ModelProfile>, Option<u64>) {
         match self {
+            Self::Anthropic => (
+                anthropic::profile(model),
+                anthropic::max_output_tokens(model),
+            ),
             Self::ChatGpt => (chatgpt::profile(model), chatgpt::max_output_tokens(model)),
             Self::Kimi => (kimi::profile(model), kimi::max_output_tokens(model)),
             Self::Muse => (muse::profile(model), muse::max_output_tokens(model)),
@@ -747,9 +796,12 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 /// input and output tokens at the lowest input tier, are as published on
 /// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
-/// `OpenAI`'s API pricing. Cache discounts that some of these providers
-/// publish are not modeled yet, so cached input falls back to the input
-/// price. `ChatGPT` plan models carry no per-token price.
+/// `OpenAI`'s API pricing, and on 2026-11-21 by Anthropic's API pricing.
+/// Claude models also carry Anthropic's cache-read and 5-minute cache-write
+/// prices, the breakpoints the Messages requests mark. Cache discounts that
+/// the other providers publish are not modeled yet, so their cached input
+/// falls back to the input price. `ChatGPT` plan models carry no per-token
+/// price.
 const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3,
@@ -881,14 +933,54 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
         provider: ModelProvider::ChatGpt,
         supports: MULTIMODAL_REASONING,
     },
+    CatalogedModel {
+        model: anthropic::CLAUDE_FABLE_5_2,
+        pricing: Some(Pricing::built_in_cached(
+            8_000_000, 40_000_000, 200_000, 10_000_000,
+        )),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: anthropic::CLAUDE_OPUS_5_5,
+        pricing: Some(Pricing::built_in_cached(
+            4_000_000, 20_000_000, 200_000, 5_000_000,
+        )),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: anthropic::CLAUDE_SONNET_5_5,
+        pricing: Some(Pricing::built_in_cached(
+            2_000_000, 10_000_000, 100_000, 2_500_000,
+        )),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Prompts of at most 100,000 tokens; longer ones bill five times these
+    // prices, which a single price per token cannot express.
+    CatalogedModel {
+        model: anthropic::CLAUDE_HAIKU_5_5,
+        pricing: Some(Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000)),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
 ];
 
 #[cfg(test)]
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[path = "catalog_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+#[cfg(not(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+)))]
 #[path = "catalog_disabled_test.rs"]
 mod disabled_tests;

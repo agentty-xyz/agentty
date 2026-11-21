@@ -7,7 +7,7 @@ use ag_router::chatgpt::ChatGptAuthError;
 
 use super::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
-    chatgpt, kimi, muse, openai, openai_compatible, qwen,
+    anthropic, chatgpt, kimi, muse, openai, openai_compatible, qwen,
 };
 use crate::catalog::{Capabilities, ModelId, PricingSource};
 use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
@@ -45,6 +45,7 @@ fn catalog_exposes_every_provider_and_known_model() {
             ModelProvider::Qwen,
             ModelProvider::OpenAi,
             ModelProvider::ChatGpt,
+            ModelProvider::Anthropic,
             ModelProvider::OpenAiCompatible
         ]
     );
@@ -145,6 +146,7 @@ fn provider_identifiers_round_trip_and_display() {
             "qwen",
             "openai",
             "chatgpt",
+            "anthropic",
             "openai-compatible"
         ]
     );
@@ -339,10 +341,19 @@ fn declares_a_cost_tier_for_every_cataloged_model() {
             "qwen-plus",
             "qwen3.8-flash",
             "qwen3.7-flash",
-            "gpt-6-luna"
+            "gpt-6-luna",
+            "claude-haiku-5-5"
         ]
     );
-    assert_eq!(premium, ["kimi-k3", "gpt-6-astra"]);
+    assert_eq!(
+        premium,
+        [
+            "kimi-k3",
+            "gpt-6-astra",
+            "claude-fable-5-2",
+            "claude-opus-5-5"
+        ]
+    );
     assert_eq!(
         ModelProvider::Muse.cost_tier(muse::MUSE_SPARK_1_3),
         Some(CostTier::Standard)
@@ -785,6 +796,8 @@ fn every_per_token_model_has_sane_built_in_pricing() {
     // Act
     let priced = cataloged
         .iter()
+        // Claude models carry separate cache prices, checked on their own.
+        .filter(|(provider, _)| *provider != ModelProvider::Anthropic)
         .filter_map(|(provider, model)| Some((*provider, *model, provider.pricing(model)?)))
         .collect::<Vec<_>>();
 
@@ -971,7 +984,149 @@ fn model_specs_carry_cataloged_profiles_limits_and_prices() {
 }
 
 #[test]
-fn every_provider_is_enabled_with_both_families() {
+fn claude_models_carry_built_in_prices_with_cache_rates() {
+    // Arrange
+    let provider = ModelProvider::Anthropic;
+
+    // Act
+    let prices = provider
+        .known_models()
+        .iter()
+        .map(|model| {
+            let pricing = provider.pricing(model).expect("Claude models are priced");
+
+            (
+                *model,
+                pricing.source(),
+                pricing.input_per_mtok_micro_usd(),
+                pricing.output_per_mtok_micro_usd(),
+                pricing.cache_read_per_mtok_micro_usd(),
+                pricing.cache_write_per_mtok_micro_usd(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let tiers = provider
+        .known_models()
+        .iter()
+        .map(|model| provider.cost_tier_at(model, "http://127.0.0.1/v1"))
+        .collect::<Vec<_>>();
+
+    // Assert
+    let built_in = PricingSource::BuiltIn;
+    assert_eq!(
+        prices,
+        [
+            (
+                "claude-fable-5-2",
+                built_in,
+                8_000_000,
+                40_000_000,
+                200_000,
+                10_000_000
+            ),
+            (
+                "claude-opus-5-5",
+                built_in,
+                4_000_000,
+                20_000_000,
+                200_000,
+                5_000_000
+            ),
+            (
+                "claude-sonnet-5-5",
+                built_in,
+                2_000_000,
+                10_000_000,
+                100_000,
+                2_500_000
+            ),
+            (
+                "claude-haiku-5-5",
+                built_in,
+                100_000,
+                500_000,
+                10_000,
+                125_000
+            ),
+        ]
+    );
+    assert_eq!(
+        tiers,
+        [
+            Some(CostTier::Premium),
+            Some(CostTier::Premium),
+            Some(CostTier::Standard),
+            Some(CostTier::Cheap)
+        ]
+    );
+}
+
+#[test]
+fn anthropic_configures_claude_clients_from_an_api_key() {
+    // Arrange
+    let provider = ModelProvider::Anthropic;
+    let api_key_only = |name: &str| {
+        if name == anthropic::ANTHROPIC_API_KEY_ENV {
+            Ok("claude-key".to_string())
+        } else {
+            Err(env::VarError::NotPresent)
+        }
+    };
+
+    // Act
+    let spec = provider
+        .model_spec(anthropic::CLAUDE_OPUS_5_5)
+        .expect("cataloged model has a spec");
+    let client = ModelConfiguration::new(provider, anthropic::CLAUDE_OPUS_5_5)
+        .client_from_environment(api_key_only)
+        .expect("Anthropic defaults to its public endpoint");
+    let missing_key = ModelConfiguration::new(provider, anthropic::CLAUDE_OPUS_5_5)
+        .client_from_environment(missing_environment);
+    let unlisted_profile = provider
+        .declared_profile("claude-unlisted", missing_environment)
+        .expect("unlisted models read no environment");
+
+    // Assert
+    assert_eq!(
+        provider.known_models(),
+        &[
+            "claude-fable-5-2",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5"
+        ]
+    );
+    assert_eq!(provider.api_key_environment(), "ANTHROPIC_API_KEY");
+    assert_eq!(provider.base_url_environment(), "ANTHROPIC_BASE_URL");
+    assert_eq!(
+        provider.default_base_url(),
+        Some("https://api.anthropic.com/v1")
+    );
+    assert!(provider.requires_api_key());
+    assert!(!provider.requires_sign_in());
+    assert_eq!(spec.id(), &ModelId::new("anthropic/claude-opus-5-5"));
+    assert_eq!(spec.context_window(), Some(1_000_000));
+    assert_eq!(spec.max_output(), Some(128_000));
+    assert!(spec.capabilities().structured_output());
+    assert!(spec.capabilities().image_input());
+    assert!(spec.capabilities().reasoning());
+    assert_eq!(client.metadata().provider(), "anthropic");
+    assert_eq!(
+        client.profile().map(ModelProfile::context_window_tokens),
+        Some(1_000_000)
+    );
+    assert_eq!(unlisted_profile, None);
+    assert_eq!(provider.model_spec("claude-unlisted"), None);
+    assert!(matches!(
+        missing_key,
+        Err(ModelConfigurationError::ApiKey {
+            name: anthropic::ANTHROPIC_API_KEY_ENV
+        })
+    ));
+}
+
+#[test]
+fn every_provider_is_enabled_with_every_family() {
     // Arrange and Act
     let disabled: Vec<_> = ModelProvider::all()
         .iter()

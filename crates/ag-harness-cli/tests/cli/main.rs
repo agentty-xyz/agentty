@@ -17,7 +17,7 @@ use prost::Message as _;
 use serde_json::json;
 use testty::session::PtySessionBuilder;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
-use wiremock::matchers::{bearer_token, body_json, body_string_contains, method, path};
+use wiremock::matchers::{bearer_token, body_json, body_string_contains, header, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
@@ -205,6 +205,10 @@ fn help_describes_the_chat_interface() {
     assert!(stdout.contains(
         "openai-compatible: OPENAI_COMPATIBLE_API_KEY optional (OPENAI_COMPATIBLE_BASE_URL \
          optional, default http://127.0.0.1:11434/v1)"
+    ));
+    assert!(stdout.contains(
+        "anthropic: ANTHROPIC_API_KEY (ANTHROPIC_BASE_URL optional, default \
+         https://api.anthropic.com/v1)"
     ));
     assert!(stdout.contains("OPENAI_COMPATIBLE_CONTEXT_WINDOW (default 32768 tokens)"));
     assert!(!stdout.contains("Get started:"));
@@ -510,7 +514,10 @@ async fn provider_flags_select_alternate_wire_formats() {
                 expected_request["messages"][0]["content"] =
                     json!(tool_aware_structured_output_instruction());
             }
-            ModelProvider::ChatGpt | ModelProvider::Muse | ModelProvider::OpenAi => {
+            ModelProvider::Anthropic
+            | ModelProvider::ChatGpt
+            | ModelProvider::Muse
+            | ModelProvider::OpenAi => {
                 unreachable!("the test covers alternate Chat Completions providers")
             }
         }
@@ -636,6 +643,77 @@ async fn openai_provider_streams_a_responses_request_and_resumes() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
     assert_eq!(body["input"][0]["role"], "developer");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_provider_sends_a_messages_request_and_resumes() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "claude-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_cli",
+            "model": "claude-opus-5-5",
+            "content": [{
+                "type": "text",
+                "text": json!({"message": "claude response"}).to_string()
+            }],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 2}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let (storage, mut command) = harness_command().expect("temporary storage should exist");
+    let base_url = format!("{}/v1", server.uri());
+
+    // Act
+    let run = command
+        .args([
+            "run",
+            "claude-opus-5-5",
+            "Hello",
+            "--provider",
+            "anthropic",
+            "--session",
+            "claude-session",
+        ])
+        .env("ANTHROPIC_API_KEY", "claude-key")
+        .env("ANTHROPIC_BASE_URL", &base_url)
+        .output()
+        .expect("Anthropic run should execute");
+    let resume = Command::new(cargo_bin!("ag-harness"))
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("ANTHROPIC_API_KEY", "claude-key")
+        .env("ANTHROPIC_BASE_URL", &base_url)
+        .args(["resume", "claude-session", "Again"])
+        .output()
+        .expect("Anthropic resume should execute");
+
+    // Assert
+    assert!(
+        run.status.success(),
+        "Anthropic run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(String::from_utf8_lossy(&run.stdout).contains("assistant> claude response"));
+    assert!(
+        resume.status.success(),
+        "Anthropic resume failed: {}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("provider requests should be recorded");
+    let body = requests[0]
+        .body_json::<serde_json::Value>()
+        .expect("provider request should contain JSON");
+    assert_eq!(body["model"], "claude-opus-5-5");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["max_tokens"], 128_000);
+    assert_eq!(body["output_config"]["format"]["type"], "json_schema");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

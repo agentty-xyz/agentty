@@ -9,6 +9,8 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
+#[cfg(feature = "providers-anthropic")]
+use std::num::NonZeroU32;
 use std::ops::Deref;
 #[cfg(any(
     feature = "providers-anthropic",
@@ -58,7 +60,13 @@ pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(feature = "providers-anthropic")]
+use crate::provider::AnthropicConfig;
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::provider::{self};
 #[cfg(feature = "providers-openai")]
 use crate::provider::{ChatGptConfig, OpenAiConfig};
@@ -92,8 +100,9 @@ pub trait Model: Send + Sync {
     ///
     /// [`crate::Harness::builder`] derives the request budget and estimator
     /// from this profile unless the host sets an explicit budget.
-    /// [`ModelClient`] declares the cataloged profile of `OpenAI`, `ChatGPT`,
-    /// Kimi, Muse, and Qwen flash models; OpenAI-compatible and uncataloged
+    /// [`ModelClient`] declares the cataloged profile of Claude, `OpenAI`,
+    /// `ChatGPT`, Kimi, Muse, and Qwen flash models; OpenAI-compatible and
+    /// uncataloged
     /// models declare none, so hosts set their budget explicitly.
     fn profile(&self) -> Option<ModelProfile> {
         None
@@ -213,6 +222,37 @@ pub struct ModelClient {
     feature = "providers-openai"
 ))]
 impl ModelClient {
+    /// Creates a client backed by the Anthropic Messages API for Claude
+    /// models, authenticated by an API key. Requests are streamed and carry
+    /// their whole history, with signed thinking replayed unchanged, and
+    /// output is constrained by a native JSON Schema format.
+    ///
+    /// The API requires an output-token bound on every request. A request
+    /// that sets none sends the documented output limit of a cataloged
+    /// model, 128,000 tokens, and 16,000 for a model this catalog does not
+    /// list, whose limit is unknown; see
+    /// [`ProviderSpec::with_fallback_max_tokens`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    #[cfg(feature = "providers-anthropic")]
+    pub fn anthropic(config: AnthropicConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::anthropic_profile(&config.model);
+        let fallback_max_tokens = provider::anthropic_max_output_tokens(&config.model)
+            .and_then(|limit| u32::try_from(limit).ok())
+            .and_then(NonZeroU32::new);
+        let model = config.model.clone();
+        let spec = ProviderSpec::anthropic(config);
+        let spec = match fallback_max_tokens {
+            Some(max_tokens) => spec.with_fallback_max_tokens(max_tokens),
+            None => spec,
+        };
+
+        Self::routed(spec, &model, profile)
+    }
+
     /// Creates a client backed by Moonshot AI's Kimi API.
     ///
     /// # Errors

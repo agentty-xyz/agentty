@@ -56,7 +56,7 @@ crates/
 default: `sqlite` (the SQLite store and migrations), `native-sandbox` (the native Bash
 executor and launcher), `otel` (OpenTelemetry metrics, traces, and context propagation),
 `providers-openai`, `providers-compat`, and `providers-anthropic` (the Anthropic
-Messages preset). `unstable-protocol` is reserved and empty. The core without default
+Messages client). `unstable-protocol` is reserved and empty. The core without default
 features keeps the memory store, the `Model` boundary, and host-selected executors; a
 provider whose family is off fails before reading credentials. Features are additive,
 and CI covers the core and each provider family on their own. Dependents enable the
@@ -345,9 +345,10 @@ specifications and replaces one only through `Router::with_override`, and its tr
 follows no redirect, so authentication and extra headers stay with the configured host.
 `ag-harness` wraps the type as `provider::ProviderSpec`, served by
 `ModelClient::from_spec` for the model the specification names, with presets behind
-`providers-openai` and `providers-compat`. Each specification also carries a
-`ReasoningFamily`, derived from its provider name unless the host sets one, which
-decides whose recorded reasoning a model replays natively after a model switch.
+`providers-openai`, `providers-compat`, and `providers-anthropic`. Each specification
+also carries a `ReasoningFamily`, derived from its provider name unless the host sets
+one, which decides whose recorded reasoning a model replays natively after a model
+switch.
 
 - **`openai`** uses the stateless Responses API, so the harness still owns history.
   Encrypted reasoning items are stored with the response and replayed verbatim.

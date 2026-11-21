@@ -8,8 +8,8 @@ use serde_json::json;
 use crate::agent::model_profile::declared;
 
 /// Harness models whose profiles the harness catalog declares itself: the
-/// Kimi, Muse, Qwen flash, and ChatGPT-plan models.
-const CATALOG_PROFILED: [AgentModel; 14] = [
+/// Kimi, Muse, Qwen flash, ChatGPT-plan, and Claude models.
+const CATALOG_PROFILED: [AgentModel; 18] = [
     AgentModel::MuseSpark13,
     AgentModel::MuseSpark13Contributor,
     AgentModel::KimiK3,
@@ -24,6 +24,10 @@ const CATALOG_PROFILED: [AgentModel; 14] = [
     AgentModel::ChatGptGpt56Sol,
     AgentModel::ChatGptGpt56Terra,
     AgentModel::ChatGptGpt56Luna,
+    AgentModel::ClaudeFable52,
+    AgentModel::ClaudeOpus55,
+    AgentModel::ClaudeSonnet55,
+    AgentModel::ClaudeHaiku55,
 ];
 
 #[test]
@@ -80,8 +84,8 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
     // The harness profiles the shared Codex models and the Kimi, Muse, Qwen
-    // flash, and ChatGPT-plan models from its provider catalog, and served
-    // OpenAI-compatible models from the server or environment.
+    // flash, ChatGPT-plan, and Claude models from its provider catalog, and
+    // served OpenAI-compatible models from the server or environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()

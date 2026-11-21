@@ -125,16 +125,24 @@ use ag_harness::lifecycle::{ContextSummaryErrorType, ContextSummaryTrigger};
 use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver};
 #[cfg(feature = "sqlite")]
 use ag_harness::model::ContextSummaryPolicy;
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+use ag_harness::model::ModelClient;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use ag_harness::model::ReasoningFamily;
 use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
     ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ModelResponse,
 };
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
-use ag_harness::model::{ModelClient, ReasoningFamily};
 #[cfg(feature = "providers-compat")]
 use ag_harness::provider::OpenAiCompatibleConfig;
 #[cfg(feature = "providers-openai")]
 use ag_harness::provider::OpenAiConfig;
+#[cfg(feature = "providers-anthropic")]
+use ag_harness::provider::{AnthropicConfig, CLAUDE_OPUS_5_5, DEFAULT_ANTHROPIC_BASE_URL};
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{
     Auth, EffortNames, ProviderSpec, ProviderSpecError, ReasoningMapping, ThinkingOptions,
@@ -1035,10 +1043,14 @@ fn external_consumer_configures_every_catalog_provider() {
     .save(&auth_file)
     .expect("credentials should save");
     let auth_file = auth_file.to_string_lossy().into_owned();
-    let clients = ModelProvider::all()
+    let providers = ModelProvider::all()
+        .iter()
+        .filter(|provider| provider.is_enabled())
+        .collect::<Vec<_>>();
+    let clients = providers
         .iter()
         .map(|provider| {
-            ModelConfiguration::new(*provider, model(provider))
+            ModelConfiguration::new(**provider, model(provider))
                 .base_url("https://models.example/v1")
                 .client_from_environment(|name| {
                     Ok(if name == "CHATGPT_AUTH_FILE" {
@@ -1052,8 +1064,8 @@ fn external_consumer_configures_every_catalog_provider() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(clients.len(), ModelProvider::all().len());
-    for (client, provider) in clients.iter().zip(ModelProvider::all()) {
+    assert!(providers.len() >= 6);
+    for (client, provider) in clients.iter().zip(providers) {
         assert_eq!(client.metadata().model(), model(provider));
     }
 }
@@ -2470,6 +2482,28 @@ fn external_consumer_builds_openai_presets() {
     assert_eq!(
         client.expect("valid preset").metadata().model(),
         "gpt-6-luna"
+    );
+}
+
+#[cfg(feature = "providers-anthropic")]
+#[test]
+fn external_consumer_builds_claude_clients() {
+    // Arrange
+    let config = AnthropicConfig {
+        api_key: "key".to_string(),
+        base_url: DEFAULT_ANTHROPIC_BASE_URL.to_string(),
+        model: CLAUDE_OPUS_5_5.to_string(),
+    };
+
+    // Act
+    let client = ModelClient::anthropic(config).expect("valid configuration");
+
+    // Assert
+    assert_eq!(client.metadata().provider(), "anthropic");
+    assert_eq!(client.metadata().model(), "claude-opus-5-5");
+    assert_eq!(
+        Model::profile(&client).map(ModelProfile::context_window_tokens),
+        Some(1_000_000)
     );
 }
 

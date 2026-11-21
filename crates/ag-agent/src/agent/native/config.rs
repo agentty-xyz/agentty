@@ -69,8 +69,14 @@ const AGENTTY_ROOT_ENV: &str = "AGENTTY_ROOT";
 /// Environment prefixes that carry provider keys, credential files, and
 /// endpoints, withheld from `bash`. `OPENAI_` covers both `OpenAI` and
 /// OpenAI-compatible variables.
-const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 5] =
-    ["CHATGPT_", "DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_"];
+const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 6] = [
+    "ANTHROPIC_",
+    "CHATGPT_",
+    "DASHSCOPE_",
+    "KIMI_",
+    "MODEL_",
+    "OPENAI_",
+];
 /// Variables granted to `bash` first, so the harness environment limit never
 /// drops them.
 const PRIORITY_ENVIRONMENT: [&str; 17] = [
@@ -286,6 +292,7 @@ fn model_cost(tier: CostTier) -> ModelCost {
 /// Returns the name users know a hosted provider by.
 fn provider_display_name(provider: ModelProvider) -> &'static str {
     match provider {
+        ModelProvider::Anthropic => "Anthropic",
         ModelProvider::ChatGpt => "ChatGPT plan",
         ModelProvider::Kimi => "Kimi",
         ModelProvider::Muse => "Muse",
@@ -909,6 +916,10 @@ impl Model for BudgetedModel {
 
     fn replays_reasoning_text(&self) -> bool {
         Model::replays_reasoning_text(&self.inner)
+    }
+
+    fn replays_turn_instructions(&self) -> bool {
+        Model::replays_turn_instructions(&self.inner)
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
