@@ -33,6 +33,10 @@ use crate::presentation::graph_chat::output_approval_notice;
 /// Launches retain their executor and budgets even after dispatch stops.
 pub(super) struct GraphDriver {
     cancellation: CancellationToken,
+    /// Whether a dispatch pass is admitting, running, or settling nodes. A
+    /// session turn completes before its graph response is stored, so the
+    /// persisted projection can briefly show a settling node as failed.
+    dispatching: Arc<AtomicBool>,
     executor: Arc<GraphExecutor>,
     /// Whether the graph does the session's own work, which automatic review
     /// can wait for. Host-driven graphs, such as the review itself, do not.
@@ -85,6 +89,7 @@ impl GraphDriverRegistration {
                 graph.id.clone(),
                 GraphDriver {
                     cancellation: cancellation.clone(),
+                    dispatching: Arc::default(),
                     executor,
                     is_session_work: false,
                     request: StartExecutionGraphRequest {
@@ -129,12 +134,19 @@ impl App {
     /// graph can still finish. The review then covers the finished graph
     /// instead of a diff between two nodes.
     ///
+    /// A dispatch pass in flight always holds the review: its node turns can
+    /// complete before their graph responses are stored, and the driver
+    /// reports a session update once the pass settles.
+    ///
     /// A paused graph has no live driver, and a graph that failed or whose
     /// pending node spent its budget cannot finish until the user retries or
     /// cancels it. Neither holds a review, so work the user continues outside
     /// them is still reviewed.
     pub(super) async fn graph_holds_automatic_review(&self, session_id: &str) -> bool {
         for graph_id in self.services.live_session_work_graphs(session_id) {
+            if self.services.is_graph_dispatching(&graph_id) {
+                return true;
+            }
             let can_finish = self
                 .execution_graph_progress(&graph_id)
                 .await
@@ -366,17 +378,19 @@ impl App {
                     driver.cancellation.clone(),
                     driver.executor.clone(),
                     driver.running.clone(),
+                    driver.dispatching.clone(),
                 ))
             } else {
                 None
             }
         };
-        if let Some((cancellation, executor, running)) = previous {
+        if let Some((cancellation, executor, running, dispatching)) = previous {
             self.services.spawn_graph_driver_task(
                 request.graph,
                 cancellation,
                 executor,
                 running,
+                dispatching,
                 GraphDriverSession { folder, transcript },
             );
 
@@ -531,6 +545,7 @@ impl AppServices {
         let graph = request.graph.clone();
         let executor = Arc::new(executor);
         let running = Arc::new(AtomicBool::new(false));
+        let dispatching = Arc::new(AtomicBool::new(false));
         self.graph_drivers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -538,13 +553,21 @@ impl AppServices {
                 graph.id.clone(),
                 GraphDriver {
                     cancellation: cancellation.clone(),
+                    dispatching: dispatching.clone(),
                     executor: executor.clone(),
                     is_session_work: true,
                     request,
                     running: running.clone(),
                 },
             );
-        services.spawn_graph_driver_task(graph, cancellation, executor, running, session);
+        services.spawn_graph_driver_task(
+            graph,
+            cancellation,
+            executor,
+            running,
+            dispatching,
+            session,
+        );
     }
 
     fn spawn_graph_driver_task(
@@ -553,6 +576,7 @@ impl AppServices {
         cancellation: CancellationToken,
         executor: Arc<GraphExecutor>,
         running: Arc<AtomicBool>,
+        dispatching: Arc<AtomicBool>,
         session: GraphDriverSession,
     ) {
         if running.swap(true, Ordering::AcqRel) {
@@ -562,9 +586,14 @@ impl AppServices {
         let services = self.clone();
         self.track_cleanup_task(spawn::spawn_detached(async move {
             services
-                .drive_graph(&graph, &cancellation, &executor, &session, || {
-                    services.graph_session_permission(graph.session_id.as_str())
-                })
+                .drive_graph(
+                    &graph,
+                    &cancellation,
+                    &executor,
+                    &dispatching,
+                    &session,
+                    || services.graph_session_permission(graph.session_id.as_str()),
+                )
                 .await;
             // The stopped driver no longer holds the session's automatic
             // review; the update lets the reducer start a deferred one.
@@ -579,11 +608,15 @@ impl AppServices {
 
     /// Separates readiness reads from wake coordination while retaining one
     /// driver loop for production persistence and scripted host boundaries.
+    ///
+    /// `dispatching` is set while each dispatch pass runs and cleared before
+    /// the pass reports its settlement.
     async fn drive_graph<F, P>(
         &self,
         graph: &ExecutionGraph,
         cancellation: &CancellationToken,
         executor: &GraphExecutor,
+        dispatching: &Arc<AtomicBool>,
         session: &GraphDriverSession,
         mut load_permission: F,
     ) where
@@ -606,6 +639,8 @@ impl AppServices {
                 }
                 continue;
             };
+            dispatching.store(true, Ordering::Release);
+            let pass = GraphDriverActivity(dispatching.clone());
             let result = ag_worker::in_scope(
                 ag_worker::RunScope {
                     cancellation: Some(cancellation.clone()),
@@ -616,6 +651,7 @@ impl AppServices {
                 executor.run_ready(&graph.id, graph.revision, &session.folder, permission),
             )
             .await;
+            drop(pass);
             match result {
                 Ok(receipts) if !receipts.is_empty() => {
                     self.announce_outputs_awaiting_acceptance(
@@ -813,6 +849,15 @@ impl AppServices {
             })
             .map(|(graph_id, _)| graph_id.clone())
             .collect()
+    }
+
+    /// Whether the driver of `graph_id` is inside a dispatch pass.
+    pub(super) fn is_graph_dispatching(&self, graph_id: &str) -> bool {
+        self.graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(graph_id)
+            .is_some_and(|driver| driver.dispatching.load(Ordering::Acquire))
     }
 
     pub(super) fn stop_graph_drivers(&self, session_id: Option<&str>) {
