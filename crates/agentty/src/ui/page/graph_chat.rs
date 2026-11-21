@@ -18,8 +18,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use crate::domain::agent::ReasoningLevel;
 use crate::presentation::app_mode::AppMode;
-use crate::presentation::execution_graph::{outputs_awaiting_acceptance, takes_revision_guidance};
+use crate::presentation::execution_graph::{
+    node_reasoning_level, outputs_awaiting_acceptance, takes_revision_guidance,
+};
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::help_format;
 use crate::ui::style::palette;
@@ -71,9 +74,11 @@ pub(crate) fn areas(area: Rect, mode: &AppMode, has_graph: bool) -> (Rect, Optio
 }
 
 /// Renders the proposal status and a timeline of nodes whose status glyphs
-/// sit on a dependency rail. When space runs out, wrapped objectives first
-/// shrink to one row and are then dropped; oversized graphs then collapse to
-/// one prioritized row per node.
+/// sit on a dependency rail. A muted `model [effort]` row follows each node
+/// name; task-conversation nodes show the session's `reasoning_level`, and
+/// fresh utility nodes their fixed level. When space runs out, wrapped
+/// objectives first shrink to one row and are then dropped together with the
+/// model rows; oversized graphs then collapse to one prioritized row per node.
 /// The inspector shortcut stays pinned to the bottom row. Active work
 /// animates at `spinner_frame`: working glyphs rotate, and a progress bar
 /// below the status sweeps a highlight through the nodes in flight.
@@ -81,6 +86,7 @@ pub(crate) fn render(
     frame: &mut Frame,
     area: Rect,
     snapshot: Option<&GraphChatSnapshot>,
+    reasoning_level: ReasoningLevel,
     spinner_frame: usize,
 ) {
     let block = panel_block(snapshot);
@@ -117,6 +123,7 @@ pub(crate) fn render(
                 &awaited,
                 width,
                 objective_detail,
+                reasoning_level,
                 spinner_frame,
             ));
         }
@@ -392,14 +399,16 @@ enum ObjectiveDetail {
 /// status glyph, and the rail column below it carries one highlighted label
 /// row per dependency of the next node: solid once satisfied, dotted while it
 /// still blocks. A bare rail row sets those labels apart from the next node.
-/// Each node's objective follows its name beside the rail at
-/// `objective_detail`. Unconnected roots are separated by a blank row.
+/// Each node's model and `reasoning_level`, then its objective at
+/// `objective_detail`, follow its name beside the rail; both are omitted when
+/// objectives are hidden. Unconnected roots are separated by a blank row.
 fn graph_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
     awaited: &BTreeSet<&str>,
     width: usize,
     objective_detail: ObjectiveDetail,
+    reasoning_level: ReasoningLevel,
     spinner_frame: usize,
 ) -> Vec<Line<'static>> {
     let satisfied = nodes
@@ -454,6 +463,7 @@ fn graph_lines(
             }
             _ => vec![Span::raw(DETAIL_INDENT)],
         };
+        lines.push(model_line(node, reasoning_level, &prefix, width));
         lines.extend(objective_lines(
             &node.objective,
             &prefix,
@@ -463,6 +473,26 @@ fn graph_lines(
     }
 
     lines
+}
+
+/// Muted `model [effort]` row after `prefix`, shortened to `width`.
+fn model_line(
+    node: &GraphNode,
+    reasoning_level: ReasoningLevel,
+    prefix: &[Span<'static>],
+    width: usize,
+) -> Line<'static> {
+    let mut spans = prefix.to_vec();
+    spans.push(Span::styled(
+        format!(
+            "{} [{}]",
+            node.agent.model().as_str(),
+            node_reasoning_level(node, reasoning_level).as_str()
+        ),
+        muted_style(),
+    ));
+
+    fitted_line(spans, width)
 }
 
 /// Objective rows after `prefix`: one shortened row, or word-wrapped rows of

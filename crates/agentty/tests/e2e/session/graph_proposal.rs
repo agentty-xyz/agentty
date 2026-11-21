@@ -12,6 +12,7 @@ use ag_protocol::{
 use ag_session::{GraphProposalVersionOutcome, test_support as fixture};
 use testty::assertion;
 use testty::frame::CellColor;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use crate::common::{self, BuilderEnv, FeatureTest, SessionSeed};
@@ -243,54 +244,62 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
             |_, report| {
                 Box::pin(async move {
                     // Assert
-                    let preview = common::frame_from_capture(&report.captures[0]);
-                    let execution = common::frame_from_capture(&report.captures[1]);
-                    let discussion = common::frame_from_capture(&report.captures[2]);
-                    let sidebar_width = preview.cols() * 35 / 100;
-                    let sidebar = Region::new(
-                        preview.cols() - sidebar_width,
-                        0,
-                        sidebar_width,
-                        preview.rows(),
-                    );
-                    let chat = Region::new(0, 0, preview.cols() - sidebar_width, preview.rows());
-                    assertion::assert_text_in_region(&preview, "Execution graph · v1", &sidebar);
-                    assertion::assert_text_in_region(&preview, "Awaiting your approval", &sidebar);
-                    assertion::assert_text_in_region(&preview, "○ inspect", &sidebar);
-                    assertion::assert_text_in_region(&preview, "┊ after inspect", &sidebar);
-                    assertion::assert_text_in_region(&preview, "○ node-1", &sidebar);
-                    assertion::assert_text_in_region(&execution, "✓ Completed", &sidebar);
-                    assertion::assert_text_in_region(&execution, "│ after inspect", &sidebar);
-                    assertion::assert_text_in_region(&execution, "✓ node-1", &sidebar);
-                    assertion::assert_text_in_region(
-                        &discussion,
-                        "Graph execution complete",
-                        &chat,
-                    );
-                    assert!(
-                        !discussion
-                            .text_in_region(&sidebar)
-                            .contains("Graph execution complete")
-                    );
-                    for text in [
-                        "query the current architecture",
-                        "Graph proposal v1 ready: 2 nodes. Reply to approve, revise, or cancel it.",
-                    ] {
-                        assertion::assert_text_in_region(&preview, text, &chat);
-                    }
-                    assertion::assert_text_in_region(
-                        &execution,
-                        "Graph proposal v1 approved · execution started",
-                        &chat,
-                    );
-                    assertion::assert_not_visible(&preview, "Captured instructions");
-                    assertion::assert_not_visible(&preview, "Limits:");
+                    assert_preview_approval_execution_report(report);
                 })
             },
         )
         .await?;
 
     Ok(())
+}
+
+/// Asserts the preview, execution, and discussion captures place graph state
+/// in the sidebar and approval transcript in chat.
+fn assert_preview_approval_execution_report(report: &ProofReport) {
+    let preview = common::frame_from_capture(&report.captures[0]);
+    let execution = common::frame_from_capture(&report.captures[1]);
+    let discussion = common::frame_from_capture(&report.captures[2]);
+    let sidebar_width = preview.cols() * 35 / 100;
+    let sidebar = Region::new(
+        preview.cols() - sidebar_width,
+        0,
+        sidebar_width,
+        preview.rows(),
+    );
+    let chat = Region::new(0, 0, preview.cols() - sidebar_width, preview.rows());
+    for (frame, text, region) in [
+        (&preview, "Execution graph · v1", &sidebar),
+        (&preview, "Awaiting your approval", &sidebar),
+        (&preview, "○ inspect", &sidebar),
+        (&preview, "┊ claude-haiku-5-5 [high]", &sidebar),
+        (&preview, "┊ after inspect", &sidebar),
+        (&preview, "○ node-1", &sidebar),
+        (&preview, "query the current architecture", &chat),
+        (
+            &preview,
+            "Graph proposal v1 ready: 2 nodes. Reply to approve, revise, or cancel it.",
+            &chat,
+        ),
+        (&execution, "✓ Completed", &sidebar),
+        (&execution, "│ claude-haiku-5-5 [high]", &sidebar),
+        (&execution, "│ after inspect", &sidebar),
+        (&execution, "✓ node-1", &sidebar),
+        (
+            &execution,
+            "Graph proposal v1 approved · execution started",
+            &chat,
+        ),
+        (&discussion, "Graph execution complete", &chat),
+    ] {
+        assertion::assert_text_in_region(frame, text, region);
+    }
+    assert!(
+        !discussion
+            .text_in_region(&sidebar)
+            .contains("Graph execution complete")
+    );
+    assertion::assert_not_visible(&preview, "Captured instructions");
+    assertion::assert_not_visible(&preview, "Limits:");
 }
 
 /// A scripted Wayland clipboard exercises real capture without a host

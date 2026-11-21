@@ -240,6 +240,7 @@ impl<'a> SessionChatPage<'a> {
                 frame,
                 graph_area,
                 self.graph_chat,
+                session.effective_reasoning_level(),
                 Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
             );
         }

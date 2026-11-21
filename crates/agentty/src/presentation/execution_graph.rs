@@ -8,8 +8,10 @@ use ag_session::{
     GraphCompletionGate, GraphContext, GraphNode, GraphNodeProgress, GraphNodeStatus,
     GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
 };
+use ag_worker::GraphUtilityRunner;
 
 use super::app_mode::ConfirmationViewMode;
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 
 /// A session's graph inspector. Editing retains the snapshot that owns the
@@ -312,6 +314,19 @@ pub(crate) fn takes_revision_guidance(
     });
 
     is_task_conversation && !is_accepted && !is_consumed
+}
+
+/// Reasoning effort `node` runs with: task conversations follow the session's
+/// `session_level`, while fresh utility nodes use the utility runner's fixed
+/// level.
+pub(crate) fn node_reasoning_level(
+    node: &GraphNode,
+    session_level: ReasoningLevel,
+) -> ReasoningLevel {
+    match node.execution.context {
+        GraphContext::Fresh => GraphUtilityRunner::REASONING_LEVEL,
+        GraphContext::TaskConversation { .. } => session_level,
+    }
 }
 
 /// Explicit text entry separate from ordinary session chat.
