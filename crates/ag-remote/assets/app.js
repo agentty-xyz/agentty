@@ -69,7 +69,7 @@
 
   function defaultDeviceName() {
     const platform =
-      (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+      navigator.userAgentData?.platform || navigator.platform || "";
     const agent = navigator.userAgent || "";
     for (const [pattern, name] of [
       [/iPhone/i, "iPhone"],
@@ -109,7 +109,7 @@
   }
 
   function send(frame) {
-    if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+    if (state.socket?.readyState === WebSocket.OPEN) {
       state.socket.send(JSON.stringify(frame));
 
       return true;
@@ -180,7 +180,7 @@
         if (frame.result && "ok" in frame.result) {
           pending.resolve(frame.result.ok);
         } else {
-          pending.reject(new Error((frame.result && frame.result.error) || "Request failed"));
+          pending.reject(new Error(frame.result?.error || "Request failed"));
         }
         break;
       }
@@ -242,30 +242,37 @@
     }, delay);
   }
 
-  async function refresh() {
+  // Reloads the list and the open session. Changes that arrive while a
+  // reload runs coalesce into one more reload after it.
+  function refresh() {
     if (state.isRefreshing) {
       state.refreshAgain = true;
 
       return;
     }
     state.isRefreshing = true;
-    try {
-      do {
-        state.refreshAgain = false;
-        const listed = await request({ method: "list_sessions" });
-        renderSessions(listed.sessions || []);
-        if (state.currentSessionId) {
-          const loaded = await request({
-            method: "get_session",
-            session_id: state.currentSessionId,
-          });
-          renderSession(loaded.session);
+    state.refreshAgain = false;
+    void loadSessions()
+      .catch((error) => {
+        elements["session-error"].textContent = error.message;
+      })
+      .finally(() => {
+        state.isRefreshing = false;
+        if (state.refreshAgain) {
+          refresh();
         }
-      } while (state.refreshAgain);
-    } catch (error) {
-      elements["session-error"].textContent = error.message;
-    } finally {
-      state.isRefreshing = false;
+      });
+  }
+
+  async function loadSessions() {
+    const listed = await request({ method: "list_sessions" });
+    renderSessions(listed.sessions || []);
+    if (state.currentSessionId) {
+      const loaded = await request({
+        method: "get_session",
+        session_id: state.currentSessionId,
+      });
+      renderSession(loaded.session);
     }
   }
 
