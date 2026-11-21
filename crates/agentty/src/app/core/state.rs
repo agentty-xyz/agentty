@@ -564,7 +564,8 @@ impl App {
         self.sessions.reset_archive_page();
         self.refresh_sessions_now().await;
         self.apply_pending_project_sync_completion().await;
-        self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids);
+        self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids)
+            .await;
         self.recover_graph_proposal_replies().await;
 
         Ok(())

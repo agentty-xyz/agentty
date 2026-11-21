@@ -951,6 +951,81 @@ async fn completed_turn_with_questions_is_not_deferred() {
 }
 
 #[tokio::test]
+async fn live_graph_holds_automatic_review_until_it_finishes() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app::execution_graph::tests::seed_session(&mut app.sessions, app.services.db()).await;
+    let finish_graph = app::execution_graph::tests::driver::spawn_working_graph(&app).await;
+
+    // Act
+    let was_held = settle_graph_holding_a_review(&mut app, finish_graph).await;
+
+    // Assert
+    assert!(was_held);
+    assert!(app.deferred_auto_review_session_ids.is_empty());
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn failed_graph_releases_the_automatic_review_while_its_driver_stays_live() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app::execution_graph::tests::seed_session(&mut app.sessions, app.services.db()).await;
+    let fail_graph = app::execution_graph::tests::driver::spawn_failing_graph(&app).await;
+
+    // Act
+    let was_held = settle_graph_holding_a_review(&mut app, fail_graph).await;
+
+    // Assert: the failed graph keeps its driver for a retry, yet no longer
+    // holds the review.
+    assert!(was_held);
+    assert_eq!(
+        app.services.live_session_work_graphs("sess"),
+        ["working".to_string()]
+    );
+    assert!(app.deferred_auto_review_session_ids.is_empty());
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Sends a review trigger and a project switch to session `sess` while its
+/// graph works, then settles the graph through `settle` and applies events
+/// until the review's diff load starts.
+///
+/// Returns whether the working graph held the review: the trigger stayed
+/// deferred and no diff load started.
+async fn settle_graph_holding_a_review(app: &mut App, settle: impl FnOnce()) -> bool {
+    let session_id = SessionId::from("sess");
+    app.apply_app_events(AppEvent::AgentResponseReceived {
+        session_id: session_id.clone(),
+        turn_applied_state: TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: Vec::new(),
+            token_usage_delta: crate::domain::session::SessionStats::default(),
+        },
+    })
+    .await;
+    app.resume_deferred_auto_reviews(Vec::new()).await;
+    let was_held = app.deferred_auto_review_session_ids.contains(&session_id)
+        && app.pending_session_diff_requests.is_empty();
+    settle();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while app.pending_session_diff_requests.is_empty() {
+            let event = app
+                .next_app_event()
+                .await
+                .expect("settled graph should emit a session update");
+            app.apply_app_events(event).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the held review");
+
+    was_held
+}
+
+#[tokio::test]
 async fn completed_focused_review_persists_for_inactive_project() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;

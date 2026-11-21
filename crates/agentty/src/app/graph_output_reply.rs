@@ -1,11 +1,13 @@
 //! Natural-language chat replies to a graph output awaiting acceptance.
 //!
-//! While a pending node of a live graph waits for a predecessor's output to
-//! be accepted, a composer message is a reply to that output. The reply is
-//! shown in chat, a read-only utility run on the Run Worker decides whether it
-//! accepts the output or asks for a revision, and the decided action is
-//! admitted through the command gateway for the exact inspected output version
-//! and execution. Only one reply per output is decided at a time.
+//! While a pending node of a live or paused graph waits for a predecessor's
+//! output to be accepted, a composer message is a reply to that output. A
+//! paused graph is resumed first, so the reply never runs as an ordinary turn
+//! outside the graph. The reply is shown in chat, a read-only utility run on
+//! the Run Worker decides whether it accepts the output or asks for a
+//! revision, and the decided action is admitted through the command gateway
+//! for the exact inspected output version and execution. Only one reply per
+//! output is decided at a time.
 //!
 //! Acceptance cannot carry images, so a reply with attachments always
 //! revises without a decision run. A producer without a task conversation, or
@@ -18,12 +20,15 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ag_session::{
-    ContinueGraphNodeRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphResultRef,
-    SessionError,
+    ContinueGraphNodeRequest, ExecutionGraphStatus, GraphControlRequest, GraphExecutionRef,
+    GraphNode, GraphNodeContinuation, GraphResultRef, ResumeExecutionGraphRequest, SessionError,
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::app::command_gateway::{
+    CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
+};
 use crate::app::graph_output_decision::{GraphOutputReply, GraphOutputReplyDecision};
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
@@ -33,7 +38,7 @@ use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::presentation::execution_graph::{
-    GraphViewOutput, outputs_awaiting_acceptance, takes_revision_guidance,
+    GraphViewOutput, is_focused_review_graph, outputs_awaiting_acceptance, takes_revision_guidance,
 };
 
 /// Run purpose recorded for the reply decision.
@@ -53,6 +58,9 @@ struct AwaitingOutput {
     execution: GraphExecutionRef,
     /// Graph revision the inspected snapshot belongs to.
     graph_revision: NonZeroU64,
+    /// No live driver dispatches the graph, so acting on the output needs a
+    /// resume first.
+    is_paused: bool,
     /// Producing node definition.
     node: GraphNode,
     /// Exact output version acceptance targets.
@@ -85,8 +93,13 @@ impl App {
     }
 
     /// Finds the first awaited output, in declaration order, of the most
-    /// recently created graph that has one. Paused and cancelled graphs are
-    /// skipped.
+    /// recently created graph that has one. Cancelled graphs are skipped.
+    ///
+    /// A paused graph counts only while it is the session's newest working
+    /// graph, the one the sidebar shows: its output still waits on the user.
+    /// An older paused graph the user moved on from never captures a message,
+    /// because the reply would resume it. Focused reviews are not working
+    /// graphs, so a review that ran since does not hide the paused graph.
     async fn awaiting_graph_output(
         &self,
         session_id: &SessionId,
@@ -96,7 +109,10 @@ impl App {
             .list_graphs(session_id)
             .await
             .map_err(|error| error.to_string())?;
+        let mut is_newest_working_graph = true;
         for graph in graphs.iter().rev() {
+            let may_resume = is_newest_working_graph;
+            is_newest_working_graph &= is_focused_review_graph(graph);
             let Some(progress) = self
                 .execution_graph_progress(&graph.id)
                 .await
@@ -104,6 +120,9 @@ impl App {
             else {
                 continue;
             };
+            if progress.status == ExecutionGraphStatus::Paused && !may_resume {
+                continue;
+            }
             let awaiting = outputs_awaiting_acceptance(&progress).into_iter().find_map(
                 |(producer, result)| {
                     let node = graph
@@ -129,6 +148,7 @@ impl App {
                     .to_string(),
                 execution: execution.clone(),
                 graph_revision: graph.revision,
+                is_paused: progress.status == ExecutionGraphStatus::Paused,
                 node: node.clone(),
                 reference: result.reference.clone(),
                 takes_revision_guidance: takes_revision_guidance(&graph.nodes, &progress, &node.id),
@@ -140,7 +160,8 @@ impl App {
 
     /// Echoes one reply in chat and decides it in the background. A reply
     /// with attachments to a producer that cannot take revision guidance is
-    /// rejected up front and keeps the composer open.
+    /// rejected up front and keeps the composer open, as is a reply to a
+    /// paused graph that cannot be resumed.
     async fn reply_to_graph_output(
         &mut self,
         session_id: &SessionId,
@@ -162,6 +183,20 @@ impl App {
                     &format!(
                         "`{}` cannot take images as revision guidance. Remove them to accept its \
                          output in chat, or use `w`.",
+                        output.node.id
+                    ),
+                )
+                .await;
+        }
+        if output.is_paused
+            && let Err(error) = self.resume_paused_graph(&output).await
+        {
+            return self
+                .reject_graph_output_reply(
+                    session_id,
+                    &format!(
+                        "the paused graph could not resume to act on `{}`: {error}. Resume it \
+                         from `w`, then reply again.",
                         output.node.id
                     ),
                 )
@@ -220,6 +255,28 @@ impl App {
         PromptWorkflowOutcome::ShowSession {
             session_id: session_id.clone(),
         }
+    }
+
+    /// Restarts dispatch of the paused graph that owns `output`, through the
+    /// same admission as the inspector's resume control. The reply is the
+    /// user's explicit request to continue, so it does not replay anything on
+    /// its own: nodes run only from what the graph already admitted.
+    async fn resume_paused_graph(&mut self, output: &AwaitingOutput) -> Result<(), SessionError> {
+        self.admit_session_command(SessionCommand::new(
+            CommandInitiator::SessionView,
+            CommandDelivery::Admission {
+                request: SessionMutation::ResumeExecutionGraph {
+                    request: ResumeExecutionGraphRequest {
+                        graph: GraphControlRequest {
+                            graph_id: output.reference.graph_id.clone(),
+                            revision: output.graph_revision,
+                        },
+                    },
+                },
+                response_tx: None,
+            },
+        ))
+        .await
     }
 
     /// Decides with the producer's captured selection, then admits the

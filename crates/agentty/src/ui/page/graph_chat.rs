@@ -223,8 +223,17 @@ fn summary(snapshot: Option<&GraphChatSnapshot>, spinner_frame: usize) -> Vec<(S
             } else {
                 "reply in chat to accept it"
             };
+            // A reply to a paused graph resumes it before acting.
+            let resume = if progress.status == ExecutionGraphStatus::Paused {
+                " and resume the graph"
+            } else {
+                ""
+            };
             rows.push((
-                format!("{} awaits your approval; {action}", producer.node_id),
+                format!(
+                    "{} awaits your approval; {action}{resume}",
+                    producer.node_id
+                ),
                 color_style(palette::warning()),
             ));
         }

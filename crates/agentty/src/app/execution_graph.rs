@@ -34,6 +34,9 @@ use crate::presentation::graph_chat::output_approval_notice;
 pub(super) struct GraphDriver {
     cancellation: CancellationToken,
     executor: Arc<GraphExecutor>,
+    /// Whether the graph does the session's own work, which automatic review
+    /// can wait for. Host-driven graphs, such as the review itself, do not.
+    is_session_work: bool,
     request: StartExecutionGraphRequest,
     running: Arc<AtomicBool>,
 }
@@ -83,6 +86,7 @@ impl GraphDriverRegistration {
                 GraphDriver {
                     cancellation: cancellation.clone(),
                     executor,
+                    is_session_work: false,
                     request: StartExecutionGraphRequest {
                         graph: graph.clone(),
                         provider_call_limits: std::collections::BTreeMap::new(),
@@ -118,6 +122,29 @@ impl App {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(graph_id)
             .is_some_and(GraphDriver::is_live)
+    }
+
+    /// Whether automatic review of `session_id` waits for a graph: a live
+    /// driver dispatches a graph that does the session's own work, and that
+    /// graph can still finish. The review then covers the finished graph
+    /// instead of a diff between two nodes.
+    ///
+    /// A paused graph has no live driver, and a graph that failed or whose
+    /// pending node spent its budget cannot finish until the user retries or
+    /// cancels it. Neither holds a review, so work the user continues outside
+    /// them is still reviewed.
+    pub(super) async fn graph_holds_automatic_review(&self, session_id: &str) -> bool {
+        for graph_id in self.services.live_session_work_graphs(session_id) {
+            let can_finish = self
+                .execution_graph_progress(&graph_id)
+                .await
+                .is_ok_and(|progress| progress.as_ref().is_some_and(can_still_finish));
+            if can_finish {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub(super) async fn execution_graph_progress(
@@ -512,6 +539,7 @@ impl AppServices {
                 GraphDriver {
                     cancellation: cancellation.clone(),
                     executor: executor.clone(),
+                    is_session_work: true,
                     request,
                     running: running.clone(),
                 },
@@ -533,12 +561,19 @@ impl AppServices {
         let activity = GraphDriverActivity(running);
         let services = self.clone();
         self.track_cleanup_task(spawn::spawn_detached(async move {
-            let _activity = activity;
             services
                 .drive_graph(&graph, &cancellation, &executor, &session, || {
                     services.graph_session_permission(graph.session_id.as_str())
                 })
                 .await;
+            // The stopped driver no longer holds the session's automatic
+            // review; the update lets the reducer start a deferred one.
+            drop(activity);
+            SessionTaskService::emit_session_updated(
+                &services.event_sender(),
+                &services.session_update_versions(),
+                &graph.session_id,
+            );
         }));
     }
 
@@ -619,6 +654,13 @@ impl AppServices {
                     if !has_execution {
                         break;
                     }
+                    // A failed graph no longer holds the session's automatic
+                    // review; the update lets the reducer start a deferred one.
+                    SessionTaskService::emit_session_updated(
+                        &self.event_sender(),
+                        &self.session_update_versions(),
+                        &graph.session_id,
+                    );
                 }
             }
             // Dispatch can be idle at an acceptance or clarification gate;
@@ -757,6 +799,22 @@ impl AppServices {
             .send_modify(|version| *version = version.wrapping_add(1));
     }
 
+    /// Lists the graphs with a live driver that do `session_id`'s own work.
+    /// Host-driven graphs, such as focused review, are never listed.
+    pub(super) fn live_session_work_graphs(&self, session_id: &str) -> Vec<String> {
+        self.graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(_, driver)| {
+                driver.is_session_work
+                    && driver.is_live()
+                    && driver.request.graph.session_id.as_str() == session_id
+            })
+            .map(|(graph_id, _)| graph_id.clone())
+            .collect()
+    }
+
     pub(super) fn stop_graph_drivers(&self, session_id: Option<&str>) {
         self.graph_drivers
             .lock()
@@ -771,6 +829,20 @@ impl AppServices {
                 !stop
             });
     }
+}
+
+/// Whether dispatch can still finish the graph without the user retrying or
+/// cancelling it: the graph runs or waits at a gate, and no pending node is
+/// out of provider calls.
+fn can_still_finish(progress: &ExecutionGraphProgress) -> bool {
+    matches!(
+        progress.status,
+        ExecutionGraphStatus::Running | ExecutionGraphStatus::Blocked
+    ) && !progress.nodes.iter().any(|node| {
+        node.blocked
+            .iter()
+            .any(|reason| matches!(reason, GraphBlockedReason::BudgetExhausted(_)))
+    })
 }
 
 struct GraphWakeClient {

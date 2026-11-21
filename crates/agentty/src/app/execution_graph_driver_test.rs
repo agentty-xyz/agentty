@@ -21,7 +21,8 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::{driver_session, graph, seed_session};
-use crate::app::AppServices;
+use crate::app::execution_graph::GraphDriverRegistration;
+use crate::app::{App, AppServices};
 
 #[tokio::test]
 async fn explicit_relaunch_preserves_failed_receipts_and_remaining_budget() {
@@ -249,6 +250,95 @@ async fn unclaimed_checks_wake_resource_blocked_drivers_without_external_events(
         assert_eq!(started.as_deref(), Some("waiting"));
         app.services.wait_for_cleanup_tasks(None).await;
     }
+}
+
+#[tokio::test]
+async fn only_live_graphs_doing_session_work_hold_automatic_review() {
+    // Arrange: a host-driven graph, as focused review registers one.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    let host_graph = utility_graph("host", &["waiting"]);
+    let (started, _started_rx) = mpsc::unbounded_channel();
+    let host_executor = GraphExecutor::new(
+        app.services.db().graph_dispatch(),
+        Arc::new(app.services.graph_resources.with_budgets(HashMap::new())),
+        Arc::new(StaggeredRunner {
+            fast_fails: false,
+            fast_release: Notify::new(),
+            runs: app.services.db().runs(),
+            slow_release: Notify::new(),
+            started,
+        }),
+    );
+    let _host_driver = GraphDriverRegistration::register(
+        &app.services.graph_drivers,
+        &host_graph,
+        Arc::new(host_executor),
+    );
+    let holds_with_only_a_host_graph = app.graph_holds_automatic_review("sess").await;
+
+    // Act
+    let finish = spawn_working_graph(&app).await;
+    let holds_while_working = [
+        app.graph_holds_automatic_review("sess").await,
+        app.graph_holds_automatic_review("other-session").await,
+    ];
+    finish();
+    let services = app.services.clone();
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        while !services.live_session_work_graphs("sess").is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("finished graph stops its driver");
+    let holds_after_finishing = app.graph_holds_automatic_review("sess").await;
+
+    // Assert
+    assert!(!holds_with_only_a_host_graph);
+    assert_eq!(holds_while_working, [true, false]);
+    assert!(!holds_after_finishing);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Starts a live one-node graph that does `sess`'s own work, as an approved
+/// launch runs it, and waits until its node is running. Calling the returned
+/// release lets the node finish, which completes the graph.
+pub(in crate::app) async fn spawn_working_graph(app: &App) -> impl FnOnce() + use<> {
+    spawn_session_work_graph(app, false).await
+}
+
+/// Like [`spawn_working_graph`], but the released node fails. The graph is
+/// then failed while its driver stays live for a retry.
+pub(in crate::app) async fn spawn_failing_graph(app: &App) -> impl FnOnce() + use<> {
+    spawn_session_work_graph(app, true).await
+}
+
+async fn spawn_session_work_graph(app: &App, fast_fails: bool) -> impl FnOnce() + use<> {
+    let snapshot = utility_graph("working", &["fast"]);
+    app.services
+        .db()
+        .graphs()
+        .save_graph(&snapshot, None)
+        .await
+        .expect("save working graph");
+    let (started, mut started_rx) = mpsc::unbounded_channel();
+    let runner = Arc::new(StaggeredRunner {
+        fast_fails,
+        fast_release: Notify::new(),
+        runs: app.services.db().runs(),
+        slow_release: Notify::new(),
+        started,
+    });
+    spawn_driver(
+        &app.services,
+        snapshot,
+        app.services.db().graph_dispatch(),
+        runner.clone(),
+    );
+    started_rx.recv().await.expect("working node started");
+
+    move || runner.fast_release.notify_one()
 }
 
 fn spawn_driver(
