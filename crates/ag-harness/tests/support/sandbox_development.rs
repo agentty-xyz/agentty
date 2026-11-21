@@ -1,13 +1,15 @@
 //! Native sandbox development grants on real repositories: Git in a linked
 //! worktree with links, a per-session temporary directory, system and
 //! toolchain-sized read grants without per-command inspection, an opt-in
-//! network grant, and refused launches the model can recover from.
+//! network grant, refused launches the model can recover from, hard links
+//! that cannot reach outside the grants, a real toolchain from outside the
+//! system directories, and a bound on per-command latency.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ag_harness::TurnOptions;
 use ag_harness::bash::{BashConfig, CommandOutcome};
@@ -229,6 +231,128 @@ async fn native_grants_are_not_inspected() {
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "tool-value", "{result:?}");
     assert!(fixture.worktree().join("output/written").exists());
+}
+
+/// A command cannot hard-link a file from outside its write grants into
+/// them, whether the file is readable through a grant or not granted at
+/// all, and whether the link would land in the worktree or the temporary
+/// directory. macOS denies every hard link; on Linux the read-only binds and
+/// the missing ungranted paths make each attempt fail. The files sit on the
+/// worktree's filesystem, so the attempt is not refused merely for crossing
+/// devices on the host.
+#[tokio::test]
+async fn native_hard_links_cannot_reach_files_outside_the_grants() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let secret = fixture.root().join("secret");
+    std::fs::write(&secret, "secret-value").expect("ungranted file");
+    let toolchain = fixture.root().join("toolchain");
+    std::fs::create_dir(&toolchain).expect("read grant");
+    let tool = toolchain.join("tool");
+    std::fs::write(&tool, "tool-value").expect("readable file");
+    let configuration = fixture
+        .configuration()
+        .with_read(toolchain)
+        .expect("toolchain grant");
+
+    // Act
+    let result = fixture
+        .run(
+            &format!(
+                "set -e; /bin/cat '{tool}'; if /bin/ln '{tool}' tool-link; then exit 91; fi; if \
+                 /bin/ln '{tool}' \"$TMPDIR/tool-link\"; then exit 92; fi; if /bin/ln '{secret}' \
+                 secret-link; then exit 93; fi; if /bin/ln '{secret}' \"$TMPDIR/secret-link\"; \
+                 then exit 94; fi; /bin/ln -s tracked symbolic; /bin/cat symbolic",
+                tool = tool.display(),
+                secret = secret.display(),
+            ),
+            configuration,
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "tool-valuetracked-value", "{result:?}");
+    for (path, contents) in [(&tool, "tool-value"), (&secret, "secret-value")] {
+        assert_eq!(std::fs::metadata(path).expect("outside file").nlink(), 1);
+        assert_eq!(
+            std::fs::read_to_string(path).expect("outside file"),
+            contents
+        );
+    }
+    for name in ["tool-link", "secret-link"] {
+        assert!(!fixture.worktree().join(name).exists());
+        assert!(!fixture.temporary().join(name).exists());
+    }
+}
+
+/// Toolchains installed under the home directory, such as rustup's, lie
+/// outside the system grants and once could not be granted at all, because
+/// the sandbox walked each grant before every command. The toolchain that
+/// builds this suite is present wherever it runs, so the test runs the real
+/// compiler from its read grant.
+#[tokio::test]
+async fn native_runs_a_toolchain_granted_by_path() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let sysroot = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .expect("host compiler");
+    assert!(sysroot.status.success(), "{sysroot:?}");
+    let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout).expect("sysroot").trim());
+    let compiler = sysroot.join("bin/rustc");
+    let expected = Command::new(&compiler)
+        .arg("--version")
+        .output()
+        .expect("host compiler version");
+    let configuration = fixture
+        .configuration()
+        .with_read(sysroot)
+        .expect("toolchain grant");
+
+    // Act
+    let result = fixture
+        .run(
+            &format!("'{}' --version", compiler.display()),
+            configuration,
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert!(result.stdout.starts_with("rustc "), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        String::from_utf8(expected.stdout).expect("version")
+    );
+}
+
+/// An earlier sandbox spent 3.3 to 3.9 s walking its grants before each
+/// `git status` on macOS. The fastest of three runs filters out a loaded
+/// runner, while a cost paid by every command still shows; the bound sits
+/// far above a normal launch and well below that regression.
+#[tokio::test]
+async fn native_git_command_latency_stays_bounded() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let mut fastest = Duration::MAX;
+
+    // Act
+    for _ in 0..3 {
+        let started = Instant::now();
+        let result = fixture
+            .run("git status --porcelain", fixture.configuration())
+            .await;
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        fastest = fastest.min(started.elapsed());
+    }
+
+    // Assert
+    assert!(
+        fastest < Duration::from_millis(1500),
+        "fastest sandboxed git status took {fastest:?}"
+    );
 }
 
 /// In a main worktree macOS commits while the Git directory and its
