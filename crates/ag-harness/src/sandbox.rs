@@ -117,6 +117,10 @@ pub enum SandboxUnavailableReason {
     /// Seatbelt cannot start a sandbox, for example because this process
     /// already runs inside one.
     SeatbeltUnavailable,
+    /// The configuration grants Unix-domain sockets, which only the macOS
+    /// sandbox can allow by path. Unlike the other reasons, commands still
+    /// run inside the sandbox, with every Unix-domain socket denied.
+    UnixSocketsUnsupported,
 }
 
 impl SandboxUnavailableReason {
@@ -140,6 +144,10 @@ impl SandboxUnavailableReason {
             Self::SeatbeltUnavailable => {
                 "Seatbelt cannot start a sandbox here, for example inside another sandbox."
             }
+            Self::UnixSocketsUnsupported => {
+                "The sandbox on this platform cannot allow Unix-domain sockets, so granted sockets \
+                 such as an SSH agent's stay blocked."
+            }
         }
     }
 
@@ -160,6 +168,7 @@ impl SandboxUnavailableReason {
     ///   and Git-write grants, which need Landlock.
     /// - [`Self::SeatbeltUnavailable`]: a host already isolated another way can
     ///   choose `Sandbox::Unsandboxed`.
+    /// - [`Self::UnixSocketsUnsupported`]: grant sockets only on macOS.
     pub fn remedy(self) -> &'static str {
         match self {
             Self::UnsupportedPlatform => "Run the application on Linux or macOS.",
@@ -187,6 +196,10 @@ impl SandboxUnavailableReason {
                 "Start the application outside other macOS sandboxes, for example from a regular \
                  Terminal window."
             }
+            Self::UnixSocketsUnsupported => {
+                "Run commands that need a socket, such as SSH with agent keys, outside the \
+                 application, or use it on macOS."
+            }
         }
     }
 }
@@ -198,7 +211,8 @@ impl fmt::Display for SandboxUnavailableReason {
 }
 
 /// Warning that a run's Bash commands execute without the native sandbox,
-/// with what is missing and how to fix it.
+/// or, for [`SandboxUnavailableReason::UnixSocketsUnsupported`], inside it
+/// without a grant it cannot honor, with what is missing and how to fix it.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct SandboxWarning {
@@ -311,12 +325,39 @@ impl SandboxGate {
         let checked = self.check(configuration, helper, workspace).await;
 
         match (checked, if_unavailable) {
-            (Ok(launch), _) => Ok((configuration.launched_through(launch), None)),
+            (Ok(launch), _) => {
+                self.enforce_grants(configuration.launched_through(launch), if_unavailable)
+            }
             (Err(reason), IfUnavailable::Unsandboxed) => Ok((
                 configuration.unsandboxed(),
                 Some(SandboxWarning::new(reason)),
             )),
             (Err(reason), IfUnavailable::Refuse) => Err(TurnError::SandboxUnavailable(reason)),
+        }
+    }
+
+    /// Returns `configuration`, which runs inside the native sandbox, with a
+    /// warning when this host cannot honor one of its grants: Unix-domain
+    /// sockets outside macOS stay denied.
+    ///
+    /// # Errors
+    /// Returns [`TurnError::SandboxUnavailable`] for such a grant when the
+    /// harness refuses to run without the full sandbox.
+    fn enforce_grants(
+        &self,
+        configuration: BashConfig,
+        if_unavailable: IfUnavailable,
+    ) -> Result<(BashConfig, Option<SandboxWarning>), TurnError> {
+        let unsupported = (self.host.platform != "macos"
+            && !configuration.snapshot.unix_sockets.is_empty())
+        .then_some(SandboxUnavailableReason::UnixSocketsUnsupported);
+
+        match (unsupported, if_unavailable) {
+            (None, _) => Ok((configuration, None)),
+            (Some(reason), IfUnavailable::Unsandboxed) => {
+                Ok((configuration, Some(SandboxWarning::new(reason))))
+            }
+            (Some(reason), IfUnavailable::Refuse) => Err(TurnError::SandboxUnavailable(reason)),
         }
     }
 

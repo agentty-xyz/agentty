@@ -304,16 +304,21 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     {
         rule(&mut profile, "allow file-read*", path)?;
     }
+    if configuration.host_information {
+        profile.push_str(
+            "(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))\n",
+        );
+    }
+    // Hidden paths override every read rule above, and the writable
+    // directories below stay accessible inside them.
+    for path in &configuration.hidden_paths {
+        rule(&mut profile, "deny file-read* file-write*", path)?;
+    }
     for path in &configuration.writes {
         rule(&mut profile, "allow file-read* file-write*", path)?;
     }
     for path in &configuration.git_metadata {
         rule(&mut profile, "deny file-write*", path)?;
-    }
-    if configuration.host_information {
-        profile.push_str(
-            "(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))\n",
-        );
     }
     profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))\n");
     if let Some(git) = &configuration.git_writes {
@@ -362,10 +367,6 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
         )
         .map_err(io::Error::other)?;
     }
-    // Hidden paths come last, so they override every grant above.
-    for path in &configuration.read_denials {
-        rule(&mut profile, "deny file-read* file-write*", path)?;
-    }
 
     Ok(profile)
 }
@@ -382,8 +383,10 @@ const GIT_WORKTREE_PROTECTED: &str =
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
 /// certificates, including the trust evaluation agent Apple's `LibreSSL`,
-/// and so `/usr/bin/curl`, falls back to. Other Unix-domain sockets stay
-/// denied unless granted by path.
+/// and so `/usr/bin/curl`, falls back to. The keychain service
+/// (`com.apple.SecurityServer`) stays denied, so commands cannot fetch
+/// credentials such as Git's or the GitHub CLI's from the keychain. Other
+/// Unix-domain sockets stay denied unless granted by path.
 #[cfg(target_os = "macos")]
 const SEATBELT_NETWORK: &str =
     "(allow system-socket)\n(allow network-outbound (remote ip))\n(allow network-bind \
@@ -392,8 +395,7 @@ const SEATBELT_NETWORK: &str =
      \"com.apple.dnssd.service\") (global-name \
      \"com.apple.SystemConfiguration.DNSConfiguration\") (global-name \
      \"com.apple.SystemConfiguration.configd\") (global-name \"com.apple.trustd.agent\") \
-     (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.ocspd\") (global-name \
-     \"com.apple.TrustEvaluationAgent\"))\n";
+     (global-name \"com.apple.ocspd\") (global-name \"com.apple.TrustEvaluationAgent\"))\n";
 
 /// Appends `(<action> (subpath "<path>"))` to `profile`.
 #[cfg(target_os = "macos")]
@@ -479,6 +481,20 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .arg("--ro-bind")
         .arg(&configuration.workspace)
         .arg(&configuration.workspace);
+    // Hidden paths cover the read mounts above, and the writable mounts
+    // below stay accessible inside them: an empty directory over a
+    // directory, made read-only once those are mounted, and the empty
+    // device over a file. A missing path cannot appear, since none lies
+    // inside a writable directory.
+    let mut hidden_directories = Vec::new();
+    for path in &configuration.hidden_paths {
+        if path.is_dir() {
+            command.arg("--tmpfs").arg(path);
+            hidden_directories.push(path);
+        } else if path.exists() {
+            command.arg("--ro-bind").arg("/dev/null").arg(path);
+        }
+    }
     for path in &configuration.writes {
         command.arg("--bind").arg(path).arg(path);
     }
@@ -500,18 +516,8 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
             }
         }
     }
-    // Hidden paths come last, so they cover every mount above: an empty
-    // read-only directory over a directory, the empty device over a file.
-    for path in &configuration.read_denials {
-        if path.is_dir() {
-            command
-                .arg("--tmpfs")
-                .arg(path)
-                .arg("--remount-ro")
-                .arg(path);
-        } else {
-            command.arg("--ro-bind").arg("/dev/null").arg(path);
-        }
+    for path in hidden_directories {
+        command.arg("--remount-ro").arg(path);
     }
     if !devices {
         command.args(["--dev-bind", "/dev/null", "/dev/null"]);

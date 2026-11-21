@@ -1167,11 +1167,6 @@
           "type": "string",
           "const": "unanswered",
           "description": "The turn stopped before the call was answered, as a\n[`crate::TurnRecord`] reports it; the output is empty."
-        },
-        {
-          "type": "string",
-          "const": "sandbox_denied",
-          "description": "A `bash` command ran inside the sandbox and failed with output\nsuggesting the sandbox blocked it, as\n[`ToolActivity::BashSandboxDenied`] reports; the result told the\nmodel. A host implementing approval-based escalation can ask the\nuser whether to rerun the command outside the sandbox."
         }
       ],
       "description": "How a tool call was answered."
@@ -1186,6 +1181,10 @@
         "call_id": {
           "type": "string",
           "description": "Provider identifier of the call."
+        },
+        "likely_sandbox_denial": {
+          "type": "boolean",
+          "description": "Whether a `bash` call ran inside the sandbox and failed with an\noperating-system denial the sandbox may have caused, as\n[`ToolActivity::BashLikelySandboxDenial`] reports; the result told\nthe model. It is advisory, and the command's own output can set it:\nnever rerun a command outside the sandbox automatically; route any\nsuch rerun through the user's approval with the exact command.\n`false` in a [`crate::TurnRecord`], since sessions do not store it."
         },
         "name": {
           "type": "string",
@@ -1748,7 +1747,7 @@
           "required": [
             "type"
           ],
-          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it, as the\nturn's [`crate::TurnReport::sandbox_warning`] does; the model-facing\n`bash` description states that commands run without isolation."
+          "description": "The run offers native-sandboxed `bash`, the sandbox cannot run on\nthis host, and the harness runs the run's commands without isolation\ninstead, as [`crate::sandbox::IfUnavailable::Unsandboxed`], the\ndefault, allows. It is emitted once per such run, before its first\nturn request, and names what is missing and how to fix it, as the\nturn's [`crate::TurnReport::sandbox_warning`] does; the model-facing\n`bash` description states that commands run without isolation. For\n[`crate::sandbox::SandboxUnavailableReason::UnixSocketsUnsupported`]\nthe commands still run inside the sandbox, without the socket grants."
         },
         {
           "$ref": "#/$defs/RunSummary",
@@ -1877,7 +1876,7 @@
         },
         "effects": {
           "$ref": "#/$defs/ToolEffects",
-          "description": "What the call may change, as its tool declares it."
+          "description": "What the call may change, as its tool declares it for these\narguments; allowing [`ToolEffects::ExecutesUnsandboxed`] lets the\ncommand run outside the sandbox with the host's full access."
         },
         "run": {
           "anyOf": [
@@ -1930,6 +1929,11 @@
           "type": "string",
           "const": "executes",
           "description": "Runs commands or other actions whose effects the harness cannot\nbound, like the built-in `bash`."
+        },
+        {
+          "type": "string",
+          "const": "executes_unsandboxed",
+          "description": "Runs a command outside the sandbox with the harness process's full\naccess, like a `bash` call of a program\n`BashConfig::with_excluded_command` excludes. It runs unsandboxed\nonly once the approval handler allows it; show the user the exact\ncommand, since the program can run any code its arguments name."
         }
       ],
       "description": "What one tool call may change.\n\nWith a [`crate::approval::ApprovalHandler`] configured, every call to a\ntool that is not [`Self::ReadOnly`] waits for its decision."
@@ -2145,6 +2149,11 @@
           "type": "string",
           "const": "seatbelt_unavailable",
           "description": "Seatbelt cannot start a sandbox, for example because this process\nalready runs inside one."
+        },
+        {
+          "type": "string",
+          "const": "unix_sockets_unsupported",
+          "description": "The configuration grants Unix-domain sockets, which only the macOS\nsandbox can allow by path. Unlike the other reasons, commands still\nrun inside the sandbox, with every Unix-domain socket denied."
         }
       ],
       "description": "What the native sandbox is missing on this host."
@@ -2170,7 +2179,7 @@
         "reason",
         "remedy"
       ],
-      "description": "Warning that a run's Bash commands execute without the native sandbox,\nwith what is missing and how to fix it."
+      "description": "Warning that a run's Bash commands execute without the native sandbox,\nor, for [`SandboxUnavailableReason::UnixSocketsUnsupported`], inside it\nwithout a grant it cannot honor, with what is missing and how to fix it."
     },
     "RunSummary": {
       "type": "object",

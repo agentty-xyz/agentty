@@ -303,7 +303,9 @@ pub enum RunEventKind {
     /// default, allows. It is emitted once per such run, before its first
     /// turn request, and names what is missing and how to fix it, as the
     /// turn's [`crate::TurnReport::sandbox_warning`] does; the model-facing
-    /// `bash` description states that commands run without isolation.
+    /// `bash` description states that commands run without isolation. For
+    /// [`crate::sandbox::SandboxUnavailableReason::UnixSocketsUnsupported`]
+    /// the commands still run inside the sandbox, without the socket grants.
     SandboxUnavailable(SandboxWarning),
     /// The run finished; always the last event. It follows the run's
     /// settlement, so once it arrives the session transcript holds the
@@ -459,6 +461,15 @@ pub struct ToolCallItem {
     pub arguments: String,
     /// Provider identifier of the call.
     pub call_id: String,
+    /// Whether a `bash` call ran inside the sandbox and failed with an
+    /// operating-system denial the sandbox may have caused, as
+    /// [`ToolActivity::BashLikelySandboxDenial`] reports; the result told
+    /// the model. It is advisory, and the command's own output can set it:
+    /// never rerun a command outside the sandbox automatically; route any
+    /// such rerun through the user's approval with the exact command.
+    /// `false` in a [`crate::TurnRecord`], since sessions do not store it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub likely_sandbox_denial: bool,
     /// Function name the model called.
     pub name: String,
     /// Result text the model received; empty for a call that was never
@@ -477,6 +488,7 @@ impl ToolCallItem {
         Self {
             arguments: call.arguments_json().unwrap_or_default(),
             call_id: call.id().to_string(),
+            likely_sandbox_denial: matches!(activity, ToolActivity::BashLikelySandboxDenial { .. }),
             name: call.name().to_string(),
             output: output.to_string(),
             status: ToolCallStatus::from(activity),
@@ -489,6 +501,7 @@ impl ToolCallItem {
         Self {
             arguments: call.arguments_json().unwrap_or_default(),
             call_id: call.id().to_string(),
+            likely_sandbox_denial: false,
             name: call.name().to_string(),
             output: String::new(),
             status: ToolCallStatus::Unanswered,
@@ -523,18 +536,13 @@ pub enum ToolCallStatus {
     /// The turn stopped before the call was answered, as a
     /// [`crate::TurnRecord`] reports it; the output is empty.
     Unanswered,
-    /// A `bash` command ran inside the sandbox and failed with output
-    /// suggesting the sandbox blocked it, as
-    /// [`ToolActivity::BashSandboxDenied`] reports; the result told the
-    /// model. A host implementing approval-based escalation can ask the
-    /// user whether to rerun the command outside the sandbox.
-    SandboxDenied,
 }
 
 impl From<&ToolActivity> for ToolCallStatus {
     fn from(activity: &ToolActivity) -> Self {
         match activity {
             ToolActivity::Bash { .. }
+            | ToolActivity::BashLikelySandboxDenial { .. }
             | ToolActivity::Read { .. }
             | ToolActivity::ReadInspection { .. }
             | ToolActivity::Write { .. } => Self::Completed,
@@ -549,7 +557,6 @@ impl From<&ToolActivity> for ToolCallStatus {
             | ToolActivity::ReadRejected { .. }
             | ToolActivity::WriteRejected { .. } => Self::Rejected,
             ToolActivity::ReadDeferred { .. } | ToolActivity::ReadRepeated { .. } => Self::Skipped,
-            ToolActivity::BashSandboxDenied { .. } => Self::SandboxDenied,
             ToolActivity::Unavailable { .. } => Self::Unavailable,
         }
     }

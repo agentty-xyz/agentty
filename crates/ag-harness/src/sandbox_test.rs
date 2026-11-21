@@ -22,7 +22,7 @@ use crate::execution::Host;
 use crate::turn::TurnError;
 
 /// Every reason, in declaration order.
-const REASONS: [SandboxUnavailableReason; 8] = [
+const REASONS: [SandboxUnavailableReason; 9] = [
     SandboxUnavailableReason::UnsupportedPlatform,
     SandboxUnavailableReason::HelperMissing,
     SandboxUnavailableReason::HelperUntrusted,
@@ -31,6 +31,7 @@ const REASONS: [SandboxUnavailableReason; 8] = [
     SandboxUnavailableReason::LandlockUnavailable,
     SandboxUnavailableReason::SeatbeltMissing,
     SandboxUnavailableReason::SeatbeltUnavailable,
+    SandboxUnavailableReason::UnixSocketsUnsupported,
 ];
 
 #[test]
@@ -232,6 +233,66 @@ async fn unavailable_sandbox_is_checked_again_until_a_remedy_applies() {
     assert_eq!(repeated_warning, Some(warning));
     assert_eq!(remedied.enforcement(), Enforcement::FileSystemAndNetwork);
     assert_eq!(remedied_warning, None);
+}
+
+#[cfg(feature = "native-sandbox")]
+#[tokio::test]
+async fn socket_grants_outside_macos_warn_inside_the_sandbox_or_refuse() {
+    // Arrange
+    let fixture = GateFixture::new();
+    fixture.script("sandbox-exec", 0);
+    // Socket paths are limited to about 100 bytes, so keep them short.
+    let sockets = tempfile::tempdir_in("/tmp").expect("socket directory");
+    let socket = sockets.path().join("agent");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket");
+    let native = fixture
+        .native(&fixture.helper)
+        .with_unix_socket(socket)
+        .expect("socket grant");
+    let refusing = SandboxGate {
+        sandbox: Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse,
+        },
+        ..fixture.linux_gate()
+    };
+    let macos = SandboxGate {
+        host: Host {
+            landlock: false,
+            platform: "macos",
+            seatbelt: fixture.tools.join("sandbox-exec"),
+        },
+        ..SandboxGate::default()
+    };
+
+    // Act
+    let (warned, warning) = fixture
+        .linux_gate()
+        .resolve(&native, &fixture.workspace)
+        .await
+        .expect("sandboxed with a warning");
+    let refused = refusing.resolve(&native, &fixture.workspace).await;
+    let (_, macos_warning) = macos
+        .resolve(&native, &fixture.workspace)
+        .await
+        .expect("socket grants allowed");
+
+    // Assert
+    // The commands still run inside the sandbox, without the sockets.
+    assert_eq!(warned.enforcement(), Enforcement::FileSystemAndNetwork);
+    assert!(warned.executor.is_none());
+    assert_eq!(
+        warning,
+        Some(SandboxWarning::new(
+            SandboxUnavailableReason::UnixSocketsUnsupported
+        ))
+    );
+    assert!(matches!(
+        refused,
+        Err(TurnError::SandboxUnavailable(
+            SandboxUnavailableReason::UnixSocketsUnsupported
+        ))
+    ));
+    assert_eq!(macos_warning, None);
 }
 
 #[cfg(feature = "native-sandbox")]

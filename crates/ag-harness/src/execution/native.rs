@@ -3,7 +3,8 @@
 use std::fs::Metadata;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -53,6 +54,10 @@ impl BashExecutor for Native {
 
     fn enforcement(&self) -> Enforcement {
         crate::bash::NATIVE_ENFORCEMENT
+    }
+
+    fn supports_hidden_paths(&self) -> bool {
+        true
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {
@@ -239,9 +244,9 @@ struct Access {
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
     git_writes: Option<GitWrites>,
-    /// Resolved hidden paths present at launch.
-    read_denials: Vec<PathBuf>,
-    /// Resolved Unix-domain sockets present at launch.
+    /// Resolved hidden paths, the built-in ones included.
+    hidden_paths: Vec<PathBuf>,
+    /// Unix-domain sockets, resolved when configured.
     unix_sockets: Vec<PathBuf>,
     write_nodes: Vec<(u64, u64)>,
     writes: Vec<PathBuf>,
@@ -290,7 +295,7 @@ impl NativeProcess {
                 .ok_or(ExecutionError::Unsupported)?,
             linux_bubblewrap: self.configuration.snapshot.linux_bubblewrap.clone(),
             network: policy.allows_network(),
-            read_denials: access.read_denials,
+            hidden_paths: access.hidden_paths,
             read_scope: policy.read_scope(),
             system: self.configuration.snapshot.grants(Capability::SystemReads),
             unix_sockets: access.unix_sockets,
@@ -412,9 +417,7 @@ async fn resolve_outside_grants(
     for root in policy.writable_roots() {
         let (canonical, node) = directory_identity(files, root).await?;
         // Overlapping the workspace also rules out `/`.
-        if home
-            .as_ref()
-            .is_some_and(|home| home.starts_with(&canonical))
+        if !cache_root(&canonical, home.as_deref())
             || overlaps(&canonical, workspace)
             || access
                 .git_metadata
@@ -426,30 +429,172 @@ async fn resolve_outside_grants(
         access.writes.push(canonical);
         access.write_nodes.push(node);
     }
-    // A path that cannot be resolved is missing, or unreachable for the
-    // command as for this process, so there is nothing to hide.
-    for denial in policy.read_denials() {
-        if let Ok(canonical) = files.canonicalize(denial).await {
-            if workspace.starts_with(&canonical) {
-                return Err(ExecutionError::Unsupported);
-            }
-            access.read_denials.push(canonical);
-        }
+    let mut hidden = policy.hidden_paths().to_vec();
+    if policy.allows_full_disk_read() {
+        hidden.extend(builtin_hidden_paths(files, policy, home.as_deref()).await);
     }
-    for socket in policy.unix_sockets() {
-        if let Ok(canonical) = files.canonicalize(socket).await {
-            let is_socket = files
-                .metadata(&canonical)
-                .await
-                .is_ok_and(|metadata| metadata.file_type().is_socket());
-            if !is_socket {
-                return Err(ExecutionError::Unsupported);
-            }
-            access.unix_sockets.push(canonical);
+    // A hidden path inside a writable directory could be read after
+    // renaming one of its parents.
+    for path in hidden {
+        let resolved = resolve_hidden(files, &path).await;
+        if workspace.starts_with(&resolved)
+            || access
+                .writes
+                .iter()
+                .any(|write| resolved.starts_with(write))
+        {
+            return Err(ExecutionError::Unsupported);
         }
+        access.hidden_paths.push(resolved);
+    }
+    // Sockets were resolved when configured; one a command could replace
+    // would widen the grant.
+    for socket in policy.unix_sockets() {
+        if socket.starts_with(workspace)
+            || access.writes.iter().any(|write| socket.starts_with(write))
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.unix_sockets.push(socket.clone());
     }
 
     Ok(())
+}
+
+/// Credential stores inside the home directory that full-disk reads always
+/// hide.
+const BUILTIN_HIDDEN_HOME_PATHS: [&str; 9] = [
+    "Library/Keychains",
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".config/gh/hosts.yml",
+    ".netrc",
+    ".docker/config.json",
+    ".config/gcloud",
+    ".kube/config",
+];
+
+/// System temporary directories whose other entries full-disk reads keep
+/// visible, since unrelated programs share them.
+const SYSTEM_TEMPORARY_DIRECTORIES: [&str; 5] =
+    ["/", "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"];
+
+/// Returns the paths full-disk reads always hide: the credential stores in
+/// `home`, `/run/secrets`, and the parent of the temporary directory when
+/// it is a dedicated directory, whose other entries belong to other
+/// sessions.
+async fn builtin_hidden_paths(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut paths = home.map_or_else(Vec::new, |home| {
+        BUILTIN_HIDDEN_HOME_PATHS
+            .iter()
+            .map(|path| home.join(path))
+            .collect()
+    });
+    paths.push(PathBuf::from("/run/secrets"));
+    let system_temporary = files.canonicalize(&std::env::temp_dir()).await.ok();
+    if let Some(temporary) = policy.temporary_directory() {
+        let temporary = resolve_hidden(files, temporary).await;
+        if let Some(parent) = temporary.parent().filter(|parent| {
+            !SYSTEM_TEMPORARY_DIRECTORIES
+                .iter()
+                .any(|system| *parent == Path::new(system))
+                && system_temporary.as_deref() != Some(*parent)
+                && !policy.workspace().starts_with(parent)
+                && !home.is_some_and(|home| home.starts_with(parent))
+        }) {
+            paths.push(parent.to_path_buf());
+        }
+    }
+
+    paths
+}
+
+/// Returns `path` with links resolved, or, when it is missing, its nearest
+/// existing ancestor resolved followed by the rest of it, so a rule naming
+/// it still matches once it appears.
+async fn resolve_hidden(files: &dyn Inspection, path: &Path) -> PathBuf {
+    let mut resolved = path.to_path_buf();
+    for ancestor in path.ancestors() {
+        if let Ok(base) = files.canonicalize(ancestor).await {
+            resolved = base.join(path.strip_prefix(ancestor).unwrap_or(Path::new("")));
+            break;
+        }
+    }
+
+    resolved
+}
+
+/// Cache directories inside the home directory where writable roots may
+/// lie.
+const HOME_CACHES: [&str; 6] = [
+    ".cargo/registry",
+    ".cargo/git",
+    ".npm/_cacache",
+    "go/pkg/mod",
+    ".gradle/caches",
+    ".m2/repository",
+];
+
+/// Home directories holding per-tool caches; writable roots may lie inside
+/// them, but not be them.
+const HOME_CACHE_PARENTS: [&str; 2] = [".cache", "Library/Caches"];
+
+/// Caches whose contents host tools execute: Git hook environments and
+/// browsers.
+const HOME_EXECUTED_CACHES: [&str; 4] = [
+    ".cache/prek",
+    ".cache/pre-commit",
+    ".cache/ms-playwright",
+    "Library/Caches/ms-playwright",
+];
+
+/// System and toolchain directories a writable root must not overlap.
+const SYSTEM_DIRECTORIES: [&str; 16] = [
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/lib",
+    "/lib64",
+    "/opt",
+    "/etc",
+    "/private/etc",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/nix",
+    "/snap",
+    "/boot",
+    "/root",
+    "/var/lib",
+];
+
+/// Returns whether the resolved writable root `root` is a cache location
+/// whose contents host tools do not execute: inside `home`, one of the
+/// known caches; outside it, a directory that neither contains `home` nor
+/// overlaps system or toolchain directories.
+fn cache_root(root: &Path, home: Option<&Path>) -> bool {
+    match home.and_then(|home| root.strip_prefix(home).ok()) {
+        Some(relative) => {
+            (HOME_CACHES.iter().any(|cache| relative.starts_with(cache))
+                || HOME_CACHE_PARENTS
+                    .iter()
+                    .any(|parent| relative.starts_with(parent) && relative != Path::new(parent)))
+                && !HOME_EXECUTED_CACHES
+                    .iter()
+                    .any(|executed| overlaps(relative, Path::new(executed)))
+        }
+        None => {
+            !home.is_some_and(|home| home.starts_with(root))
+                && !SYSTEM_DIRECTORIES
+                    .iter()
+                    .any(|system| overlaps(root, Path::new(system)))
+        }
+    }
 }
 
 /// Returns whether one of two paths contains the other.
@@ -752,7 +897,7 @@ impl Inspection for LocalInspection {
     }
 
     async fn home(&self) -> Option<PathBuf> {
-        let home = std::env::home_dir()?;
+        let home = account_home()?;
 
         Some(tokio::fs::canonicalize(&home).await.unwrap_or(home))
     }
@@ -764,6 +909,38 @@ impl Inspection for LocalInspection {
     async fn try_exists(&self, path: &Path) -> io::Result<bool> {
         tokio::fs::try_exists(path).await
     }
+}
+
+/// Returns the home directory the account database records for this
+/// process's user, which, unlike `HOME`, the host's environment cannot
+/// change.
+#[expect(
+    unsafe_code,
+    reason = "the account database has no safe standard-library interface"
+)]
+fn account_home() -> Option<PathBuf> {
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut found = std::ptr::null_mut();
+    // SAFETY: every pointer refers to live, writable storage of the length
+    // passed, and the call writes only within it.
+    let status = unsafe {
+        libc::getpwuid_r(
+            rustix::process::getuid().as_raw(),
+            entry.as_mut_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &raw mut found,
+        )
+    };
+
+    (status == 0 && !found.is_null()).then(|| {
+        // SAFETY: a successful lookup initialized the entry, whose
+        // directory is a NUL-terminated string inside `buffer`, still alive.
+        let directory = unsafe { std::ffi::CStr::from_ptr((*found).pw_dir) };
+
+        PathBuf::from(std::ffi::OsStr::from_bytes(directory.to_bytes()))
+    })
 }
 
 async fn validate_executable(

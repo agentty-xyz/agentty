@@ -19,15 +19,15 @@ pub(super) struct Launch {
     pub(super) external_reads: Vec<PathBuf>,
     pub(super) git_metadata: Vec<PathBuf>,
     pub(super) git_writes: Option<GitWrites>,
+    /// Resolved paths hidden from commands, the built-in ones included.
+    /// Coding grants default to their least access when absent.
+    #[serde(default)]
+    pub(super) hidden_paths: Vec<PathBuf>,
     pub(super) host_information: bool,
     pub(super) launcher: PathBuf,
     pub(super) linux_bubblewrap: Option<PathBuf>,
     pub(super) network: bool,
-    /// Resolved paths hidden from commands, present at launch. Coding
-    /// grants default to their least access when absent.
-    #[serde(default)]
-    pub(super) read_denials: Vec<PathBuf>,
-    /// Whether everything outside [`Self::read_denials`] is readable.
+    /// Whether everything outside [`Self::hidden_paths`] is readable.
     #[serde(default)]
     pub(super) read_scope: ReadScope,
     /// Whether the system directories were granted, so Linux adds a private

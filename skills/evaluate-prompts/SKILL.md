@@ -32,6 +32,8 @@ within the user's scope; they cannot expand permissions or override application 
    - `crates/ag-session/src/template/`: review application instructions.
    - `crates/ag-session/src/agents/`: bundled agent definitions, parsed like repository
      agents.
+   - `crates/ag-harness/src/tool.rs` and `crates/ag-harness/src/builtin_tool.rs`:
+     built-in tool descriptions and the notes in their results.
    - `AGENTS.md` and `skills/`: durable contributor rules and focused workflows. Avoid
      duplicated inventories, forced findings, or unconditional documentation fetches
      when suitable current evidence is already available.

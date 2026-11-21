@@ -292,21 +292,30 @@ fn coding_grants_read_everything_but_hidden_paths_and_write_writable_roots() {
     // Arrange
     let plain = policy(Grants::default());
     let granted = policy(Grants {
-        read_denials: vec!["/home/.ssh".into()],
+        hidden_paths: vec!["/home/.cache".into(), "/workspace/.env".into()],
         read_scope: ReadScope::FullDisk,
         unix_sockets: vec!["/run/agent.sock".into()],
-        writable_roots: vec!["/home/.cargo".into()],
+        writable_roots: vec!["/home/.cache/tool".into()],
         ..Grants::default()
     });
 
     // Act / Assert
-    assert!(!plain.reads_full_disk());
-    assert_eq!(plain.read_denials(), [] as [PathBuf; 0]);
+    assert!(!plain.allows_full_disk_read());
+    assert_eq!(plain.hidden_paths(), [] as [PathBuf; 0]);
     assert_eq!(plain.writable_roots(), [] as [PathBuf; 0]);
     assert_eq!(plain.unix_sockets(), [] as [PathBuf; 0]);
-    assert!(granted.reads_full_disk());
-    assert_eq!(granted.read_denials(), [PathBuf::from("/home/.ssh")]);
-    assert_eq!(granted.writable_roots(), [PathBuf::from("/home/.cargo")]);
+    assert!(granted.allows_full_disk_read());
+    assert_eq!(
+        granted.hidden_paths(),
+        [
+            PathBuf::from("/home/.cache"),
+            PathBuf::from("/workspace/.env")
+        ]
+    );
+    assert_eq!(
+        granted.writable_roots(),
+        [PathBuf::from("/home/.cache/tool")]
+    );
     assert_eq!(granted.unix_sockets(), [PathBuf::from("/run/agent.sock")]);
     for (path, plain_access, granted_access) in [
         (
@@ -314,19 +323,25 @@ fn coding_grants_read_everything_but_hidden_paths_and_write_writable_roots() {
             ExecutionAccess::Denied,
             ExecutionAccess::ReadOnly,
         ),
+        // A writable directory inside a hidden path stays accessible.
         (
-            "/home/.cargo/registry",
+            "/home/.cache/tool/entry",
             ExecutionAccess::Denied,
             ExecutionAccess::ReadWrite,
         ),
         (
-            "/home/.cargo/repo/.git/config",
+            "/home/.cache/tool/repo/.git/config",
             ExecutionAccess::Denied,
             ExecutionAccess::ReadOnly,
         ),
         (
-            "/home/.ssh/id",
+            "/home/.cache/other",
             ExecutionAccess::Denied,
+            ExecutionAccess::Denied,
+        ),
+        (
+            "/workspace/.env",
+            ExecutionAccess::ReadOnly,
             ExecutionAccess::Denied,
         ),
     ] {
@@ -341,10 +356,36 @@ fn coding_grants_must_be_absolute_and_keep_the_workspace_reachable() {
     let cases = [
         (
             Grants {
-                read_denials: vec!["relative".into()],
+                hidden_paths: vec!["relative".into()],
                 ..Grants::default()
             },
             ValidationError::InvalidPath,
+        ),
+        // A hidden path inside a writable directory, where a command could
+        // rename a parent to reveal it.
+        (
+            Grants {
+                hidden_paths: vec!["/home/.cache/tool/secret".into()],
+                writable_roots: vec!["/home/.cache/tool".into()],
+                ..Grants::default()
+            },
+            ValidationError::HiddenPathUnenforceable,
+        ),
+        (
+            Grants {
+                hidden_paths: vec!["/workspace/out/secret".into()],
+                workspace_writes: vec!["out".into()],
+                ..Grants::default()
+            },
+            ValidationError::HiddenPathUnenforceable,
+        ),
+        (
+            Grants {
+                hidden_paths: vec!["/private/tmp/session/secret".into()],
+                temporary_directory: Some("/private/tmp/session".into()),
+                ..Grants::default()
+            },
+            ValidationError::HiddenPathUnenforceable,
         ),
         (
             Grants {
@@ -355,10 +396,10 @@ fn coding_grants_must_be_absolute_and_keep_the_workspace_reachable() {
         ),
         (
             Grants {
-                read_denials: vec!["/".into()],
+                hidden_paths: vec!["/".into()],
                 ..Grants::default()
             },
-            ValidationError::InvalidWorkspace,
+            ValidationError::HiddenPathUnenforceable,
         ),
         (
             Grants {

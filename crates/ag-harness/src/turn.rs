@@ -325,7 +325,9 @@ impl TurnReport {
 
     /// Returns why the turn's `bash` commands ran without the native
     /// sandbox its configuration selected, when the harness fell back to
-    /// running them unsandboxed; the same warning a streamed run emits as
+    /// running them unsandboxed, or which grant the sandbox could not honor
+    /// ([`crate::sandbox::SandboxUnavailableReason::UnixSocketsUnsupported`]);
+    /// the same warning a streamed run emits as
     /// [`crate::RunEventKind::SandboxUnavailable`].
     pub fn sandbox_warning(&self) -> Option<&SandboxWarning> {
         self.sandbox_warning.as_deref()
@@ -765,12 +767,14 @@ pub enum ToolActivity {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
     },
-    /// A `bash` command that ran inside the sandbox and failed with output
-    /// suggesting the sandbox blocked one of its operations, such as a
-    /// write outside the writable directories. Its result tells the model
-    /// so; a host can ask the user whether to rerun the command outside the
-    /// sandbox. Command text and output are never reported.
-    BashSandboxDenied {
+    /// A `bash` command that ran to completion inside the sandbox and
+    /// failed with an operating-system denial the sandbox may have caused,
+    /// such as a write outside the writable directories; its result tells
+    /// the model so. This is an advisory guess the command's own output can
+    /// trigger: never rerun a command outside the sandbox automatically,
+    /// and show the user the exact command when offering it. Command text
+    /// and output are never reported.
+    BashLikelySandboxDenial {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
     },
@@ -942,7 +946,7 @@ impl ToolActivity {
     pub fn duration(&self) -> Duration {
         match self {
             Self::Bash { duration }
-            | Self::BashSandboxDenied { duration }
+            | Self::BashLikelySandboxDenial { duration }
             | Self::Read { duration, .. }
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
@@ -967,7 +971,7 @@ impl ToolActivity {
             | Self::ReadRepeated { .. }
             | Self::ReadDeferred { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
-            Self::Bash { .. } | Self::BashSandboxDenied { .. } => "bash",
+            Self::Bash { .. } | Self::BashLikelySandboxDenial { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
             Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
         }
@@ -978,7 +982,7 @@ impl ToolActivity {
     pub fn path(&self) -> &str {
         match self {
             Self::Bash { .. }
-            | Self::BashSandboxDenied { .. }
+            | Self::BashLikelySandboxDenial { .. }
             | Self::MalformedArguments { .. }
             | Self::Unavailable { .. }
             | Self::Host { .. } => "",
@@ -1000,7 +1004,7 @@ impl fmt::Display for ToolActivity {
             Self::Bash { duration } => {
                 write!(formatter, "bash ({})", format_report_duration(*duration))
             }
-            Self::BashSandboxDenied { duration } => write!(
+            Self::BashLikelySandboxDenial { duration } => write!(
                 formatter,
                 "bash, blocked by the sandbox ({})",
                 format_report_duration(*duration)

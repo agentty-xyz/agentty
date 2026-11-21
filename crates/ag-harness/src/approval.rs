@@ -1,10 +1,12 @@
 //! Host approval of tool calls that change state, bounded by a decision
 //! timeout.
 //!
-//! With an [`ApprovalHandler`] configured, every call to a tool whose
-//! [`ToolEffects`] are not [`ToolEffects::ReadOnly`] waits for the handler's
-//! [`Decision`] before it runs; read-only calls never ask. Without one, every
-//! tool the turn's [`crate::ToolSet`] holds runs as before.
+//! With an [`ApprovalHandler`] configured, every call whose [`ToolEffects`]
+//! (as `ToolHandler::call_effects` reports them) are not
+//! [`ToolEffects::ReadOnly`] waits for the handler's [`Decision`] before it
+//! runs; read-only calls never ask. Without one, every tool the turn's
+//! [`crate::ToolSet`] holds runs as before, and `bash` commands excluded
+//! from the sandbox stay inside it.
 
 use std::error::Error;
 use std::fmt;
@@ -54,7 +56,9 @@ pub struct ApprovalRequest {
     pub arguments: Value,
     /// Provider identifier of the call.
     pub call_id: String,
-    /// What the call may change, as its tool declares it.
+    /// What the call may change, as its tool declares it for these
+    /// arguments; allowing [`ToolEffects::ExecutesUnsandboxed`] lets the
+    /// command run outside the sandbox with the host's full access.
     pub effects: ToolEffects,
     /// Run that made the call; `None` for a call outside a run, such as one
     /// from [`crate::Harness::turn`].
