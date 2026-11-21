@@ -51,7 +51,7 @@ fn test_render_mermaid_draws_branching_diamond() {
     // Assert
     assert!(text.contains('B'));
     assert!(text.contains('C'));
-    assert_eq!(text.matches('▼').count(), 3);
+    assert_eq!(text.matches('▼').count(), 4);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn test_render_mermaid_expands_ampersand_groups() {
     // Assert
     assert!(text.contains('B'));
     assert!(text.contains('C'));
-    assert_eq!(text.matches('▼').count(), 3);
+    assert_eq!(text.matches('▼').count(), 4);
 }
 
 #[test]
@@ -480,7 +480,7 @@ fn test_render_mermaid_keeps_edge_reached_through_shared_descendant_in_layout() 
 
     // Assert
     assert!(text.contains('E'));
-    assert_eq!(text.matches('▼').count(), 4);
+    assert_eq!(text.matches('▼').count(), 5);
     assert!(!text.contains("───▶"));
 }
 
@@ -537,7 +537,7 @@ fn test_render_mermaid_draws_left_right_open_and_source_arrows() {
 }
 
 #[test]
-fn test_render_mermaid_drops_left_right_elbow_label_wider_than_entry_run() {
+fn test_render_mermaid_widens_left_right_region_for_elbow_label() {
     // Arrange
     let source = "graph LR\n    A -->|yes| B\n    A --> C";
 
@@ -546,12 +546,12 @@ fn test_render_mermaid_drops_left_right_elbow_label_wider_than_entry_run() {
     let text = diagram_text(&diagram);
 
     // Assert
-    assert!(!text.contains("yes"));
+    assert!(text.contains("─yes─▶"));
     assert_eq!(text.matches('▶').count(), 2);
 }
 
 #[test]
-fn test_render_mermaid_keeps_arrow_when_open_link_shares_target_cell() {
+fn test_render_mermaid_gives_arrow_and_open_link_separate_target_ports() {
     // Arrange
     let source = "graph TD\n    A --> C\n    B --- C";
 
@@ -561,4 +561,19 @@ fn test_render_mermaid_keeps_arrow_when_open_link_shares_target_cell() {
 
     // Assert
     assert_eq!(text.matches('▼').count(), 1);
+    assert!(text.contains("▼ │"));
+    assert!(text.contains("┌──┴┐"));
+}
+
+#[test]
+fn test_render_mermaid_keeps_arrow_when_open_link_shares_target_port() {
+    // Arrange
+    let source = "graph LR\n    A --> C\n    B --- C";
+
+    // Act
+    let diagram = render_mermaid(source).expect("shared target should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert_eq!(text.matches('▶').count(), 1);
 }

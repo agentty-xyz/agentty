@@ -9,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::mermaid_layout::{LayerEdge, LayeredGraph, LayeredLayout};
 use crate::style::{self, TextRenderSettings};
 
 const CONNECT_UP: u8 = 1;
@@ -164,12 +165,10 @@ fn render_graph(graph: MermaidGraph) -> Option<MermaidDiagram> {
         graph.direction = FlowDirection::TopDown;
     }
     let graph = expand_long_edges(graph)?;
-    let layout = layout_layers(&graph)?;
+    let node_layers = layout_layers(&graph)?;
 
-    let diagram = match graph.direction {
-        FlowDirection::TopDown => draw_top_down(&graph, &layout, &feedback_edges),
-        FlowDirection::LeftRight => draw_left_right(&graph, &layout),
-    };
+    let mut diagram = LayeredDrawing::new(&graph, node_layers).draw();
+    append_feedback_edge_lines(&mut diagram, &graph, &feedback_edges);
 
     Some(diagram)
 }
@@ -1259,12 +1258,6 @@ fn is_renderable_identifier(identifier: &str) -> bool {
             .all(|character| character.is_alphanumeric() || character == '_' || character == '-')
 }
 
-/// Node-to-layer assignment produced by longest-path layering.
-struct GraphLayout {
-    layer_members: Vec<Vec<usize>>,
-    node_layers: Vec<usize>,
-}
-
 /// Draws a compact two-node left-right feedback graph.
 ///
 /// The layered graph renderer intentionally rejects cycles. This preview keeps
@@ -1275,7 +1268,7 @@ fn draw_left_right_feedback_graph(graph: &MermaidGraph) -> Option<MermaidDiagram
         return None;
     }
 
-    let node_widths = left_right_node_widths(graph);
+    let node_widths: Vec<usize> = graph.nodes.iter().map(node_width).collect();
     let label_width = graph
         .edges
         .iter()
@@ -1565,28 +1558,14 @@ fn draw_sequence_message_label(
 ///
 /// Returns `None` for cyclic graphs or for edges that still skip layers after
 /// long-edge expansion.
-fn layout_layers(graph: &MermaidGraph) -> Option<GraphLayout> {
+fn layout_layers(graph: &MermaidGraph) -> Option<Vec<usize>> {
     let node_layers = assign_node_layers(graph)?;
 
-    for edge in &graph.edges {
-        if node_layers[edge.to_index] != node_layers[edge.from_index] + 1 {
-            return None;
-        }
-    }
-
-    let layer_count = node_layers
+    graph
+        .edges
         .iter()
-        .max()
-        .map_or(0, |max_layer| max_layer + 1);
-    let mut layer_members: Vec<Vec<usize>> = vec![Vec::new(); layer_count];
-    for (node_index, layer) in node_layers.iter().enumerate() {
-        layer_members[*layer].push(node_index);
-    }
-
-    Some(GraphLayout {
-        layer_members,
-        node_layers,
-    })
+        .all(|edge| node_layers[edge.to_index] == node_layers[edge.from_index] + 1)
+        .then_some(node_layers)
 }
 
 /// Assigns every node to a topological layer using longest-path layering.
@@ -1628,57 +1607,453 @@ fn assign_node_layers(graph: &MermaidGraph) -> Option<Vec<usize>> {
     Some(node_layers)
 }
 
-/// Routed geometry for one top-down edge.
-struct TopDownEdgePath {
-    arrow_row: usize,
-    has_arrow: bool,
-    has_source_arrow: bool,
-    is_visible: bool,
-    label: Option<String>,
-    region_top: usize,
-    source_column: usize,
-    source_marker: Option<char>,
-    target_column: usize,
-    target_marker: Option<char>,
-    track_row: usize,
+/// Layered graph with every node placed and every edge routed.
+///
+/// Geometry uses flow coordinates: `main` runs along the flow direction (rows
+/// for a top-down diagram, columns for a left-right one) and `cross` runs
+/// across it, so both directions share one layout and one edge painter.
+struct LayeredDrawing<'graph> {
+    bands: Vec<LayerBand>,
+    graph: &'graph MermaidGraph,
+    layout: LayeredLayout,
+    node_layers: Vec<usize>,
+    node_widths: Vec<usize>,
 }
 
-/// Draws a top-down diagram with forward edges as vertical elbows and feedback
-/// edges as independent return rows beneath the layered graph.
-fn draw_top_down(
-    graph: &MermaidGraph,
-    layout: &GraphLayout,
-    feedback_edges: &[MermaidEdge],
-) -> MermaidDiagram {
-    let box_widths = top_down_node_widths(graph);
-    let layer_widths = top_down_layer_widths(layout, &box_widths);
-    let canvas_width = layer_widths.iter().copied().max().unwrap_or(1);
+impl<'graph> LayeredDrawing<'graph> {
+    /// Places the nodes of a layered graph and routes its edges.
+    ///
+    /// Invisible links take part in node placement but get no port or track.
+    fn new(graph: &'graph MermaidGraph, node_layers: Vec<usize>) -> Self {
+        let node_widths: Vec<usize> = graph.nodes.iter().map(node_width).collect();
+        let (node_sizes, gap) = match graph.direction {
+            FlowDirection::TopDown => (node_widths.clone(), LAYER_GAP_COLUMNS),
+            FlowDirection::LeftRight => (
+                graph
+                    .nodes
+                    .iter()
+                    .map(|node| if node.is_hidden { 1 } else { NODE_BOX_HEIGHT })
+                    .collect(),
+                LAYER_GAP_ROWS,
+            ),
+        };
+        let layered_graph = LayeredGraph {
+            edges: graph
+                .edges
+                .iter()
+                .map(|edge| LayerEdge {
+                    from_index: edge.from_index,
+                    is_routed: edge.is_visible,
+                    to_index: edge.to_index,
+                })
+                .collect(),
+            gap,
+            node_layers,
+            node_sizes,
+        };
+        let layout = layered_graph.arrange();
+        let bands = Self::layer_bands(graph, &layered_graph.node_layers, &layout, &node_widths);
 
-    let region_edges = graph_region_edges(graph, layout);
-    let (layer_top_rows, canvas_height) = top_down_layer_top_rows(layout, &region_edges);
-    let mut canvas = Canvas::new(canvas_width, canvas_height);
-    let box_columns = draw_top_down_nodes(
-        &mut canvas,
-        graph,
-        layout,
-        &box_widths,
-        &layer_widths,
-        &layer_top_rows,
-        canvas_width,
-    );
-    let edge_paths = top_down_edge_paths(
-        graph,
-        &region_edges,
-        &layer_top_rows,
-        &box_columns,
-        &box_widths,
-    );
+        Self {
+            bands,
+            graph,
+            layout,
+            node_layers: layered_graph.node_layers,
+            node_widths,
+        }
+    }
 
-    draw_top_down_edge_paths(&mut canvas, &edge_paths);
-    let mut diagram = canvas.into_diagram();
-    append_feedback_edge_lines(&mut diagram, graph, feedback_edges);
+    /// Sizes every layer and the routing region after it along the flow.
+    ///
+    /// A top-down region holds its tracks and the arrival row. It gains one
+    /// straight row below the source layer when it has no track, or when an
+    /// edge needs that cell for a source arrow or cardinality marker. A
+    /// left-right region always has entry and exit runs, each widened to the
+    /// longest label it carries.
+    fn layer_bands(
+        graph: &MermaidGraph,
+        node_layers: &[usize],
+        layout: &LayeredLayout,
+        node_widths: &[usize],
+    ) -> Vec<LayerBand> {
+        let is_top_down = matches!(graph.direction, FlowDirection::TopDown);
+        let mut bands: Vec<LayerBand> = layout
+            .track_counts
+            .iter()
+            .copied()
+            .chain([0])
+            .map(|track_count| LayerBand {
+                entry: usize::from(!is_top_down || track_count == 0),
+                exit: usize::from(!is_top_down),
+                start: 0,
+                thickness: if is_top_down { NODE_BOX_HEIGHT } else { 0 },
+                track_count,
+            })
+            .collect();
 
-    diagram
+        if !is_top_down {
+            for (node_index, layer) in node_layers.iter().enumerate() {
+                bands[*layer].thickness = bands[*layer].thickness.max(node_widths[node_index]);
+            }
+        }
+
+        for edge in graph.edges.iter().filter(|edge| edge.is_visible) {
+            let band = &mut bands[node_layers[edge.from_index]];
+            if is_top_down {
+                if edge.has_source_arrow || edge.source_marker.is_some() {
+                    band.entry = 1;
+                }
+
+                continue;
+            }
+
+            let run_width = edge
+                .label
+                .as_deref()
+                .map_or(0, |label| UnicodeWidthStr::width(label) + 2);
+            if Self::labels_entry_run(graph, edge) {
+                band.entry = band.entry.max(run_width);
+            } else {
+                band.exit = band.exit.max(run_width);
+            }
+        }
+
+        let mut next_start = 0;
+        for band in &mut bands {
+            band.start = next_start;
+            next_start = band.arrival() + 1;
+        }
+
+        bands
+    }
+
+    /// Returns whether a left-right edge label goes on the run leaving the
+    /// source instead of the run entering the target.
+    ///
+    /// The run entering the target identifies the edge unless other edges
+    /// join it there while the source has no other edge.
+    fn labels_entry_run(graph: &MermaidGraph, edge: &MermaidEdge) -> bool {
+        let visible_edges = || graph.edges.iter().filter(|other| other.is_visible);
+
+        visible_edges()
+            .filter(|other| other.to_index == edge.to_index)
+            .count()
+            > 1
+            && visible_edges()
+                .filter(|other| other.from_index == edge.from_index)
+                .count()
+                == 1
+    }
+
+    /// Paints nodes, edge connectors, edge labels, and cardinality markers.
+    fn draw(&self) -> MermaidDiagram {
+        let main_extent = self.bands.last().map_or(0, LayerBand::region_start);
+        let (canvas_width, canvas_height) = match self.graph.direction {
+            FlowDirection::TopDown => (self.layout.extent, main_extent),
+            FlowDirection::LeftRight => (main_extent, self.layout.extent),
+        };
+        let mut canvas = FlowCanvas {
+            canvas: Canvas::new(canvas_width, canvas_height),
+            direction: self.graph.direction,
+        };
+        let edge_paths = self.edge_paths();
+
+        self.draw_nodes(&mut canvas);
+        for edge_path in &edge_paths {
+            edge_path.draw_connectors(&mut canvas);
+        }
+        for edge_path in &edge_paths {
+            self.draw_label(&mut canvas.canvas, &edge_paths, edge_path);
+        }
+        for edge_path in &edge_paths {
+            canvas.try_put_marker(
+                edge_path.region_start,
+                edge_path.source_port,
+                edge_path.edge.source_marker,
+            );
+            canvas.try_put_marker(
+                edge_path.arrival,
+                edge_path.target_port,
+                edge_path.edge.target_marker,
+            );
+        }
+
+        canvas.canvas.into_diagram()
+    }
+
+    /// Returns the routed cells of every visible edge.
+    fn edge_paths(&self) -> Vec<EdgePath<'graph>> {
+        self.graph
+            .edges
+            .iter()
+            .zip(&self.layout.routes)
+            .filter_map(|(edge, route)| {
+                let route = route.as_ref()?;
+                let band = &self.bands[self.node_layers[edge.from_index]];
+
+                Some(EdgePath {
+                    arrival: band.arrival(),
+                    edge,
+                    region_start: band.region_start(),
+                    source_port: route.source_port,
+                    target_port: route.target_port,
+                    turn: route.track.map(|track| band.track_start() + track),
+                })
+            })
+            .collect()
+    }
+
+    /// Draws node boxes and the through-connectors of hidden routing nodes.
+    fn draw_nodes(&self, canvas: &mut FlowCanvas) {
+        for (node_index, node) in self.graph.nodes.iter().enumerate() {
+            if !node.is_visible {
+                continue;
+            }
+
+            let band = &self.bands[self.node_layers[node_index]];
+            let position = self.layout.positions[node_index];
+            if node.is_hidden {
+                for main in band.start..band.region_start() {
+                    canvas.connect(main, position, CONNECT_UP | CONNECT_DOWN);
+                }
+
+                continue;
+            }
+
+            let (column, row) = canvas.cell(band.start, position);
+            let box_width = match self.graph.direction {
+                FlowDirection::TopDown => self.node_widths[node_index],
+                FlowDirection::LeftRight => band.thickness,
+            };
+            draw_node_box(&mut canvas.canvas, node, column, row, box_width);
+        }
+    }
+
+    /// Writes one edge label where the flow direction keeps it readable.
+    fn draw_label(
+        &self,
+        canvas: &mut Canvas,
+        edge_paths: &[EdgePath<'_>],
+        edge_path: &EdgePath<'_>,
+    ) {
+        let Some(label) = edge_path.edge.label.as_deref() else {
+            return;
+        };
+
+        match self.graph.direction {
+            FlowDirection::TopDown => edge_path.draw_top_down_label(canvas, edge_paths, label),
+            FlowDirection::LeftRight => {
+                let band = &self.bands[self.node_layers[edge_path.edge.from_index]];
+                let (run_start, run_width, row) =
+                    if Self::labels_entry_run(self.graph, edge_path.edge) {
+                        (band.region_start(), band.entry, edge_path.source_port)
+                    } else {
+                        (band.exit_start(), band.exit, edge_path.target_port)
+                    };
+                let start_column = run_start + (run_width - UnicodeWidthStr::width(label)) / 2;
+                canvas.try_write_label(start_column, row, label);
+            }
+        }
+    }
+}
+
+/// Placement of one layer and of the routing region after it along the flow.
+///
+/// A region holds an entry run beside the source layer, its routing tracks,
+/// an exit run, and the arrival cell that touches the next layer.
+struct LayerBand {
+    entry: usize,
+    exit: usize,
+    start: usize,
+    thickness: usize,
+    track_count: usize,
+}
+
+impl LayerBand {
+    /// Returns the first coordinate of the routing region after the layer.
+    fn region_start(&self) -> usize {
+        self.start + self.thickness
+    }
+
+    /// Returns the coordinate of the first routing track.
+    fn track_start(&self) -> usize {
+        self.region_start() + self.entry
+    }
+
+    /// Returns the first coordinate of the exit run.
+    fn exit_start(&self) -> usize {
+        self.track_start() + self.track_count
+    }
+
+    /// Returns the coordinate of the cell that touches the next layer.
+    fn arrival(&self) -> usize {
+        self.exit_start() + self.exit
+    }
+}
+
+/// Routed cells of one visible edge in flow coordinates.
+struct EdgePath<'graph> {
+    arrival: usize,
+    edge: &'graph MermaidEdge,
+    region_start: usize,
+    source_port: usize,
+    target_port: usize,
+    turn: Option<usize>,
+}
+
+impl EdgePath<'_> {
+    /// Draws the connector cells, arrow heads, and border attachments.
+    ///
+    /// A plain line end joins the node border with a tee. An arrow head
+    /// touches the border instead, which stays unbroken.
+    fn draw_connectors(&self, canvas: &mut FlowCanvas) {
+        for main in self.region_start..self.turn.unwrap_or(self.arrival) {
+            canvas.connect(main, self.source_port, CONNECT_UP | CONNECT_DOWN);
+        }
+
+        if let Some(turn) = self.turn {
+            let (source_mask, target_mask) = if self.target_port > self.source_port {
+                (CONNECT_UP | CONNECT_RIGHT, CONNECT_DOWN | CONNECT_LEFT)
+            } else {
+                (CONNECT_UP | CONNECT_LEFT, CONNECT_DOWN | CONNECT_RIGHT)
+            };
+
+            canvas.connect(turn, self.source_port, source_mask);
+            canvas.connect(turn, self.target_port, target_mask);
+            for cross in self.first_port() + 1..self.last_port() {
+                canvas.connect(turn, cross, CONNECT_LEFT | CONNECT_RIGHT);
+            }
+            for main in turn + 1..self.arrival {
+                canvas.connect(main, self.target_port, CONNECT_UP | CONNECT_DOWN);
+            }
+        }
+
+        if self.edge.has_arrow {
+            canvas.put_arrow(self.arrival, self.target_port, CONNECT_DOWN);
+        } else {
+            canvas.connect(self.arrival, self.target_port, CONNECT_UP | CONNECT_DOWN);
+            canvas.put_border_tee(self.arrival + 1, self.target_port, CONNECT_UP);
+        }
+        if self.edge.has_source_arrow {
+            canvas.put_arrow(self.region_start, self.source_port, CONNECT_UP);
+        } else {
+            canvas.put_border_tee(self.region_start - 1, self.source_port, CONNECT_DOWN);
+        }
+    }
+
+    /// Writes a top-down edge label onto the edge's own track segment, or
+    /// beside one of its vertical segments.
+    ///
+    /// The track segment carries the label only when it leaves a connector
+    /// cell on each side and no other edge of `edge_paths` runs along it.
+    /// The label is omitted only when none of those places is free.
+    fn draw_top_down_label(&self, canvas: &mut Canvas, edge_paths: &[Self], label: &str) {
+        let label_width = UnicodeWidthStr::width(label);
+        if let Some(turn) = self.turn {
+            let run_width = self.last_port() - self.first_port() - 1;
+            let is_run_shared = edge_paths.iter().any(|other| {
+                !std::ptr::eq(other.edge, self.edge)
+                    && other.turn == self.turn
+                    && other.first_port() < self.last_port()
+                    && self.first_port() < other.last_port()
+            });
+            if label_width + 2 <= run_width
+                && !is_run_shared
+                && canvas.try_write_label(
+                    self.first_port() + 1 + (run_width - label_width) / 2,
+                    turn,
+                    label,
+                )
+            {
+                return;
+            }
+        }
+
+        let target_rows = self.turn.map_or(self.region_start, |turn| turn + 1)..=self.arrival;
+        let source_rows = self.region_start..self.turn.unwrap_or(self.region_start);
+        let segment_cells = target_rows
+            .map(|row| (self.target_port, row))
+            .chain(source_rows.map(|row| (self.source_port, row)));
+        for (column, row) in segment_cells {
+            if canvas.try_write_label_beside(column, row, label) {
+                break;
+            }
+        }
+    }
+
+    /// Returns the smaller port coordinate.
+    fn first_port(&self) -> usize {
+        self.source_port.min(self.target_port)
+    }
+
+    /// Returns the larger port coordinate.
+    fn last_port(&self) -> usize {
+        self.source_port.max(self.target_port)
+    }
+}
+
+/// Canvas addressed in flow coordinates.
+///
+/// Connector masks and directions are given for a top-down flow and turned
+/// for a left-right one, where `main` is the column and `cross` the row.
+struct FlowCanvas {
+    canvas: Canvas,
+    direction: FlowDirection,
+}
+
+impl FlowCanvas {
+    /// ORs one connector mask into a cell.
+    fn connect(&mut self, main: usize, cross: usize, mask: u8) {
+        let (column, row) = self.cell(main, cross);
+        let mask = self.turned(mask);
+        self.canvas.merge_connector(column, row, mask);
+    }
+
+    /// Places an arrow head pointing along (`CONNECT_DOWN`) or against
+    /// (`CONNECT_UP`) the flow.
+    fn put_arrow(&mut self, main: usize, cross: usize, toward: u8) {
+        let (column, row) = self.cell(main, cross);
+        let arrow = match self.turned(toward) {
+            CONNECT_UP => '▲',
+            CONNECT_DOWN => '▼',
+            CONNECT_LEFT => '◀',
+            _ => '▶',
+        };
+        self.canvas.put_arrow(column, row, arrow);
+    }
+
+    /// Joins an edge to a node border cell with a tee pointing along
+    /// (`CONNECT_DOWN`) or against (`CONNECT_UP`) the flow.
+    fn put_border_tee(&mut self, main: usize, cross: usize, toward: u8) {
+        let (column, row) = self.cell(main, cross);
+        let toward = self.turned(toward);
+        self.canvas.put_border_tee(column, row, toward);
+    }
+
+    /// Replaces one straight connector cell with a cardinality marker.
+    fn try_put_marker(&mut self, main: usize, cross: usize, marker: Option<char>) {
+        let (column, row) = self.cell(main, cross);
+        self.canvas.try_put_marker(column, row, marker);
+    }
+
+    /// Returns the canvas column and row of one flow coordinate.
+    fn cell(&self, main: usize, cross: usize) -> (usize, usize) {
+        match self.direction {
+            FlowDirection::TopDown => (cross, main),
+            FlowDirection::LeftRight => (main, cross),
+        }
+    }
+
+    /// Turns a top-down connector mask to the flow direction.
+    fn turned(&self, mask: u8) -> u8 {
+        match self.direction {
+            FlowDirection::TopDown => mask,
+            FlowDirection::LeftRight => {
+                ((mask & (CONNECT_UP | CONNECT_DOWN)) << 2)
+                    | ((mask & (CONNECT_LEFT | CONNECT_RIGHT)) >> 2)
+            }
+        }
+    }
 }
 
 /// Appends each visible feedback edge on its own row so unrelated cycles
@@ -1717,494 +2092,14 @@ fn feedback_edge_line(graph: &MermaidGraph, edge: &MermaidEdge) -> Line<'static>
     ])
 }
 
-/// Returns the rendered width of each top-down graph node.
-fn top_down_node_widths(graph: &MermaidGraph) -> Vec<usize> {
-    graph.nodes.iter().map(top_down_node_width).collect()
-}
-
-/// Returns the width reserved for one top-down graph node.
-fn top_down_node_width(node: &MermaidNode) -> usize {
+/// Returns the box width of one graph node, or the single cell a hidden
+/// routing node occupies.
+fn node_width(node: &MermaidNode) -> usize {
     if node.is_hidden {
         return 1;
     }
 
     UnicodeWidthStr::width(node.label.as_str()) + 4
-}
-
-/// Returns the rendered width of each top-down graph layer.
-fn top_down_layer_widths(layout: &GraphLayout, box_widths: &[usize]) -> Vec<usize> {
-    layout
-        .layer_members
-        .iter()
-        .map(|members| {
-            members
-                .iter()
-                .map(|node_index| box_widths[*node_index])
-                .sum::<usize>()
-                + LAYER_GAP_COLUMNS * members.len().saturating_sub(1)
-        })
-        .collect()
-}
-
-/// Groups graph edges by the routing region after their source layer.
-fn graph_region_edges<'graph>(
-    graph: &'graph MermaidGraph,
-    layout: &GraphLayout,
-) -> Vec<Vec<&'graph MermaidEdge>> {
-    let mut region_edges = vec![Vec::new(); layout.layer_members.len().saturating_sub(1)];
-    for edge in &graph.edges {
-        region_edges[layout.node_layers[edge.from_index]].push(edge);
-    }
-
-    region_edges
-}
-
-/// Returns top row coordinates for top-down layers and the canvas height.
-fn top_down_layer_top_rows(
-    layout: &GraphLayout,
-    region_edges: &[Vec<&MermaidEdge>],
-) -> (Vec<usize>, usize) {
-    let layer_count = layout.layer_members.len();
-    let mut layer_top_rows = Vec::with_capacity(layer_count);
-    let mut next_row = 0;
-    for layer_index in 0..layer_count {
-        layer_top_rows.push(next_row);
-        next_row += NODE_BOX_HEIGHT;
-        if let Some(region_edges_after_layer) = region_edges.get(layer_index) {
-            next_row += region_edges_after_layer.len() + 2;
-        }
-    }
-
-    (layer_top_rows, next_row)
-}
-
-/// Draws top-down nodes and returns the left column of each node box.
-fn draw_top_down_nodes(
-    canvas: &mut Canvas,
-    graph: &MermaidGraph,
-    layout: &GraphLayout,
-    box_widths: &[usize],
-    layer_widths: &[usize],
-    layer_top_rows: &[usize],
-    canvas_width: usize,
-) -> Vec<usize> {
-    let mut box_columns = vec![0_usize; graph.nodes.len()];
-    for (layer_index, members) in layout.layer_members.iter().enumerate() {
-        let mut cursor_column = (canvas_width - layer_widths[layer_index]) / 2;
-        for node_index in members {
-            box_columns[*node_index] = cursor_column;
-            if graph.nodes[*node_index].is_hidden && graph.nodes[*node_index].is_visible {
-                draw_top_down_hidden_node(canvas, cursor_column, layer_top_rows[layer_index]);
-            } else if graph.nodes[*node_index].is_visible {
-                draw_node_box(
-                    canvas,
-                    &graph.nodes[*node_index],
-                    cursor_column,
-                    layer_top_rows[layer_index],
-                    box_widths[*node_index],
-                );
-            }
-            cursor_column += box_widths[*node_index] + LAYER_GAP_COLUMNS;
-        }
-    }
-
-    box_columns
-}
-
-/// Builds routed top-down edge geometry for every graph edge.
-fn top_down_edge_paths(
-    graph: &MermaidGraph,
-    region_edges: &[Vec<&MermaidEdge>],
-    layer_top_rows: &[usize],
-    box_columns: &[usize],
-    box_widths: &[usize],
-) -> Vec<TopDownEdgePath> {
-    let mut edge_paths = Vec::with_capacity(graph.edges.len());
-    for (layer_index, edges) in region_edges.iter().enumerate() {
-        let region_top = layer_top_rows[layer_index] + NODE_BOX_HEIGHT;
-        for (track_index, edge) in edges.iter().enumerate() {
-            edge_paths.push(TopDownEdgePath {
-                arrow_row: region_top + edges.len() + 1,
-                has_arrow: edge.has_arrow,
-                has_source_arrow: edge.has_source_arrow,
-                is_visible: edge.is_visible,
-                label: edge.label.clone(),
-                region_top,
-                source_column: box_columns[edge.from_index] + box_widths[edge.from_index] / 2,
-                source_marker: edge.source_marker,
-                target_column: box_columns[edge.to_index] + box_widths[edge.to_index] / 2,
-                target_marker: edge.target_marker,
-                track_row: region_top + 1 + track_index,
-            });
-        }
-    }
-
-    edge_paths
-}
-
-/// Draws routed top-down edge connectors, labels, and markers.
-fn draw_top_down_edge_paths(canvas: &mut Canvas, edge_paths: &[TopDownEdgePath]) {
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        draw_top_down_edge_connectors(canvas, edge_path);
-    }
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        draw_top_down_edge_label(canvas, edge_path);
-    }
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        canvas.try_put_marker(
-            edge_path.source_column,
-            edge_path.region_top,
-            edge_path.source_marker,
-        );
-        canvas.try_put_marker(
-            edge_path.target_column,
-            edge_path.arrow_row,
-            edge_path.target_marker,
-        );
-    }
-}
-
-/// Draws the through-connector for a hidden top-down routing node.
-fn draw_top_down_hidden_node(canvas: &mut Canvas, column: usize, top_row: usize) {
-    for row in top_row..top_row + NODE_BOX_HEIGHT {
-        canvas.merge_connector(column, row, CONNECT_UP | CONNECT_DOWN);
-    }
-}
-
-/// Draws the connector cells for one top-down edge.
-fn draw_top_down_edge_connectors(canvas: &mut Canvas, edge_path: &TopDownEdgePath) {
-    for row in edge_path.region_top..edge_path.track_row {
-        canvas.merge_connector(edge_path.source_column, row, CONNECT_UP | CONNECT_DOWN);
-    }
-
-    if edge_path.source_column == edge_path.target_column {
-        for row in edge_path.track_row..edge_path.arrow_row {
-            canvas.merge_connector(edge_path.source_column, row, CONNECT_UP | CONNECT_DOWN);
-        }
-    } else {
-        let left_column = edge_path.source_column.min(edge_path.target_column);
-        let right_column = edge_path.source_column.max(edge_path.target_column);
-        let (source_mask, target_mask) = if edge_path.target_column > edge_path.source_column {
-            (CONNECT_UP | CONNECT_RIGHT, CONNECT_DOWN | CONNECT_LEFT)
-        } else {
-            (CONNECT_UP | CONNECT_LEFT, CONNECT_DOWN | CONNECT_RIGHT)
-        };
-
-        canvas.merge_connector(edge_path.source_column, edge_path.track_row, source_mask);
-        canvas.merge_connector(edge_path.target_column, edge_path.track_row, target_mask);
-        for column in left_column + 1..right_column {
-            canvas.merge_connector(column, edge_path.track_row, CONNECT_LEFT | CONNECT_RIGHT);
-        }
-        for row in edge_path.track_row + 1..edge_path.arrow_row {
-            canvas.merge_connector(edge_path.target_column, row, CONNECT_UP | CONNECT_DOWN);
-        }
-    }
-
-    if edge_path.has_arrow {
-        canvas.put_arrow(edge_path.target_column, edge_path.arrow_row, '▼');
-    } else {
-        canvas.merge_connector(
-            edge_path.target_column,
-            edge_path.arrow_row,
-            CONNECT_UP | CONNECT_DOWN,
-        );
-    }
-    if edge_path.has_source_arrow {
-        canvas.put_arrow(edge_path.source_column, edge_path.region_top, '▲');
-    }
-}
-
-/// Writes one top-down edge label onto its horizontal track when it fits.
-fn draw_top_down_edge_label(canvas: &mut Canvas, edge_path: &TopDownEdgePath) {
-    let Some(label) = &edge_path.label else {
-        return;
-    };
-    let label_width = UnicodeWidthStr::width(label.as_str());
-
-    if edge_path.source_column == edge_path.target_column {
-        canvas.try_write_label(edge_path.source_column + 2, edge_path.track_row, label);
-
-        return;
-    }
-
-    let left_column = edge_path.source_column.min(edge_path.target_column);
-    let right_column = edge_path.source_column.max(edge_path.target_column);
-    let run_width = right_column.saturating_sub(left_column + 1);
-    if label_width > run_width {
-        return;
-    }
-
-    let start_column = left_column + 1 + (run_width - label_width) / 2;
-    canvas.try_write_label(start_column, edge_path.track_row, label);
-}
-
-/// Routed geometry for one left-right edge.
-struct LeftRightEdgePath {
-    arrow_column: usize,
-    has_arrow: bool,
-    has_source_arrow: bool,
-    is_visible: bool,
-    label: Option<String>,
-    region_left: usize,
-    source_marker: Option<char>,
-    source_row: usize,
-    target_marker: Option<char>,
-    target_row: usize,
-    track_column: usize,
-}
-
-/// Draws a left-right diagram: layers as columns, edges as horizontal elbows.
-fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
-    let node_widths = left_right_node_widths(graph);
-    let layer_widths = left_right_layer_widths(layout, &node_widths);
-    let layer_heights = left_right_layer_heights(layout);
-    let canvas_height = layer_heights.iter().copied().max().unwrap_or(1);
-
-    let region_edges = graph_region_edges(graph, layout);
-    let (layer_left_columns, canvas_width) =
-        left_right_layer_left_columns(layout, &region_edges, &layer_widths);
-    let mut canvas = Canvas::new(canvas_width, canvas_height);
-    let box_rows = draw_left_right_nodes(
-        &mut canvas,
-        graph,
-        layout,
-        &layer_widths,
-        &layer_heights,
-        &layer_left_columns,
-        canvas_height,
-    );
-    let edge_paths = left_right_edge_paths(
-        graph,
-        &region_edges,
-        &layer_left_columns,
-        &layer_widths,
-        &box_rows,
-    );
-
-    draw_left_right_edge_paths(&mut canvas, &edge_paths);
-
-    canvas.into_diagram()
-}
-
-/// Returns the rendered width of each left-right graph node.
-fn left_right_node_widths(graph: &MermaidGraph) -> Vec<usize> {
-    graph.nodes.iter().map(left_right_node_width).collect()
-}
-
-/// Returns the width reserved for one left-right graph node.
-fn left_right_node_width(node: &MermaidNode) -> usize {
-    if node.is_hidden {
-        return 1;
-    }
-
-    UnicodeWidthStr::width(node.label.as_str()) + 4
-}
-
-/// Returns the rendered width of each left-right graph layer.
-fn left_right_layer_widths(layout: &GraphLayout, node_widths: &[usize]) -> Vec<usize> {
-    layout
-        .layer_members
-        .iter()
-        .map(|members| {
-            members
-                .iter()
-                .map(|node_index| node_widths[*node_index])
-                .max()
-                .unwrap_or(1)
-        })
-        .collect()
-}
-
-/// Returns the rendered height of each left-right graph layer.
-fn left_right_layer_heights(layout: &GraphLayout) -> Vec<usize> {
-    layout
-        .layer_members
-        .iter()
-        .map(|members| {
-            members.len() * NODE_BOX_HEIGHT + LAYER_GAP_ROWS * members.len().saturating_sub(1)
-        })
-        .collect()
-}
-
-/// Returns left column coordinates for left-right layers and the canvas width.
-fn left_right_layer_left_columns(
-    layout: &GraphLayout,
-    region_edges: &[Vec<&MermaidEdge>],
-    layer_widths: &[usize],
-) -> (Vec<usize>, usize) {
-    let layer_count = layout.layer_members.len();
-    let mut layer_left_columns = Vec::with_capacity(layer_count);
-    let mut next_column = 0;
-    for layer_index in 0..layer_count {
-        layer_left_columns.push(next_column);
-        next_column += layer_widths[layer_index];
-        if layer_index + 1 < layer_count {
-            next_column += region_edges[layer_index].len() + 2;
-        }
-    }
-
-    (layer_left_columns, next_column)
-}
-
-/// Draws left-right nodes and returns the top row of each node box.
-fn draw_left_right_nodes(
-    canvas: &mut Canvas,
-    graph: &MermaidGraph,
-    layout: &GraphLayout,
-    layer_widths: &[usize],
-    layer_heights: &[usize],
-    layer_left_columns: &[usize],
-    canvas_height: usize,
-) -> Vec<usize> {
-    let mut box_rows = vec![0_usize; graph.nodes.len()];
-    for (layer_index, members) in layout.layer_members.iter().enumerate() {
-        let mut cursor_row = (canvas_height - layer_heights[layer_index]) / 2;
-        for node_index in members {
-            box_rows[*node_index] = cursor_row;
-            if graph.nodes[*node_index].is_hidden && graph.nodes[*node_index].is_visible {
-                draw_left_right_hidden_node(
-                    canvas,
-                    layer_left_columns[layer_index],
-                    cursor_row + 1,
-                    layer_widths[layer_index],
-                );
-            } else if graph.nodes[*node_index].is_visible {
-                draw_node_box(
-                    canvas,
-                    &graph.nodes[*node_index],
-                    layer_left_columns[layer_index],
-                    cursor_row,
-                    layer_widths[layer_index],
-                );
-            }
-            cursor_row += NODE_BOX_HEIGHT + LAYER_GAP_ROWS;
-        }
-    }
-
-    box_rows
-}
-
-/// Builds routed left-right edge geometry for every graph edge.
-fn left_right_edge_paths(
-    graph: &MermaidGraph,
-    region_edges: &[Vec<&MermaidEdge>],
-    layer_left_columns: &[usize],
-    layer_widths: &[usize],
-    box_rows: &[usize],
-) -> Vec<LeftRightEdgePath> {
-    let mut edge_paths = Vec::with_capacity(graph.edges.len());
-    for (layer_index, edges) in region_edges.iter().enumerate() {
-        let region_left = layer_left_columns[layer_index] + layer_widths[layer_index];
-        for (track_index, edge) in edges.iter().enumerate() {
-            edge_paths.push(LeftRightEdgePath {
-                arrow_column: region_left + edges.len() + 1,
-                has_arrow: edge.has_arrow,
-                has_source_arrow: edge.has_source_arrow,
-                is_visible: edge.is_visible,
-                label: edge.label.clone(),
-                region_left,
-                source_marker: edge.source_marker,
-                source_row: box_rows[edge.from_index] + 1,
-                target_marker: edge.target_marker,
-                target_row: box_rows[edge.to_index] + 1,
-                track_column: region_left + 1 + track_index,
-            });
-        }
-    }
-
-    edge_paths
-}
-
-/// Draws routed left-right edge connectors, labels, and markers.
-fn draw_left_right_edge_paths(canvas: &mut Canvas, edge_paths: &[LeftRightEdgePath]) {
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        draw_left_right_edge_connectors(canvas, edge_path);
-    }
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        draw_left_right_edge_label(canvas, edge_path);
-    }
-    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
-        canvas.try_put_marker(
-            edge_path.region_left,
-            edge_path.source_row,
-            edge_path.source_marker,
-        );
-        canvas.try_put_marker(
-            edge_path.arrow_column,
-            edge_path.target_row,
-            edge_path.target_marker,
-        );
-    }
-}
-
-/// Draws the through-connector for a hidden left-right routing node.
-fn draw_left_right_hidden_node(canvas: &mut Canvas, left_column: usize, row: usize, width: usize) {
-    for column in left_column..left_column + width {
-        canvas.merge_connector(column, row, CONNECT_LEFT | CONNECT_RIGHT);
-    }
-}
-
-/// Draws the connector cells for one left-right edge.
-fn draw_left_right_edge_connectors(canvas: &mut Canvas, edge_path: &LeftRightEdgePath) {
-    for column in edge_path.region_left..edge_path.track_column {
-        canvas.merge_connector(column, edge_path.source_row, CONNECT_LEFT | CONNECT_RIGHT);
-    }
-
-    if edge_path.source_row == edge_path.target_row {
-        for column in edge_path.track_column..edge_path.arrow_column {
-            canvas.merge_connector(column, edge_path.source_row, CONNECT_LEFT | CONNECT_RIGHT);
-        }
-    } else {
-        let top_row = edge_path.source_row.min(edge_path.target_row);
-        let bottom_row = edge_path.source_row.max(edge_path.target_row);
-        let (source_mask, target_mask) = if edge_path.target_row > edge_path.source_row {
-            (CONNECT_LEFT | CONNECT_DOWN, CONNECT_UP | CONNECT_RIGHT)
-        } else {
-            (CONNECT_LEFT | CONNECT_UP, CONNECT_DOWN | CONNECT_RIGHT)
-        };
-
-        canvas.merge_connector(edge_path.track_column, edge_path.source_row, source_mask);
-        canvas.merge_connector(edge_path.track_column, edge_path.target_row, target_mask);
-        for row in top_row + 1..bottom_row {
-            canvas.merge_connector(edge_path.track_column, row, CONNECT_UP | CONNECT_DOWN);
-        }
-        for column in edge_path.track_column + 1..edge_path.arrow_column {
-            canvas.merge_connector(column, edge_path.target_row, CONNECT_LEFT | CONNECT_RIGHT);
-        }
-    }
-
-    if edge_path.has_arrow {
-        canvas.put_arrow(edge_path.arrow_column, edge_path.target_row, '▶');
-    } else {
-        canvas.merge_connector(
-            edge_path.arrow_column,
-            edge_path.target_row,
-            CONNECT_LEFT | CONNECT_RIGHT,
-        );
-    }
-    if edge_path.has_source_arrow {
-        canvas.put_arrow(edge_path.region_left, edge_path.source_row, '◀');
-    }
-}
-
-/// Writes one left-right edge label onto its entry run when it fits.
-fn draw_left_right_edge_label(canvas: &mut Canvas, edge_path: &LeftRightEdgePath) {
-    let Some(label) = &edge_path.label else {
-        return;
-    };
-    let label_width = UnicodeWidthStr::width(label.as_str());
-    let run_end = if edge_path.source_row == edge_path.target_row {
-        edge_path.arrow_column
-    } else {
-        edge_path.track_column
-    };
-    let run_width = run_end.saturating_sub(edge_path.region_left);
-    if label_width > run_width {
-        return;
-    }
-
-    let start_column = edge_path.region_left + (run_width - label_width) / 2;
-    canvas.try_write_label(start_column, edge_path.source_row, label);
 }
 
 /// Draws one node as a bordered box with a centered single-line label.
@@ -2293,26 +2188,78 @@ impl Canvas {
         }
     }
 
-    /// Writes label text when every target cell is empty or a plain
-    /// horizontal connector, keeping other edges' verticals intact.
-    fn try_write_label(&mut self, start_column: usize, row: usize, label: &str) {
-        let character_count = label.chars().count();
-        let Some(target_cells) = self
-            .cells
-            .get(row)
-            .and_then(|row_cells| row_cells.get(start_column..start_column + character_count))
-        else {
+    /// Joins an edge to a straight box-border cell by replacing it with a tee
+    /// that points `toward` the edge. Other cells are left untouched.
+    fn put_border_tee(&mut self, column: usize, row: usize, toward: u8) {
+        let Some(cell) = self.cell_mut(column, row) else {
             return;
         };
 
-        let is_writable = target_cells.iter().all(|cell| {
-            matches!(cell, CanvasCell::Empty)
-                || matches!(cell, CanvasCell::Connector(mask) if *mask == CONNECT_LEFT | CONNECT_RIGHT)
-        });
-        if !is_writable {
-            return;
+        let tee = match (*cell, toward) {
+            (CanvasCell::Border('─'), CONNECT_DOWN) => '┬',
+            (CanvasCell::Border('─'), CONNECT_UP) => '┴',
+            (CanvasCell::Border('│'), CONNECT_RIGHT) => '├',
+            (CanvasCell::Border('│'), CONNECT_LEFT) => '┤',
+            _ => return,
+        };
+        *cell = CanvasCell::Border(tee);
+    }
+
+    /// Writes label text when every target cell is empty or a plain
+    /// horizontal connector, keeping other edges' verticals intact. Returns
+    /// whether the label was written.
+    fn try_write_label(&mut self, start_column: usize, row: usize, label: &str) -> bool {
+        let character_count = label.chars().count();
+        let is_writable = self
+            .cells
+            .get(row)
+            .and_then(|row_cells| row_cells.get(start_column..start_column + character_count))
+            .is_some_and(|target_cells| {
+                target_cells.iter().all(|cell| {
+                    matches!(cell, CanvasCell::Empty)
+                        || matches!(cell, CanvasCell::Connector(mask) if *mask == CONNECT_LEFT | CONNECT_RIGHT)
+                })
+            });
+        if is_writable {
+            self.write_label(start_column, row, label);
         }
 
+        is_writable
+    }
+
+    /// Writes label text one cell away from the edge segment in `column`: to
+    /// its right when those cells are free, otherwise to its left. Returns
+    /// whether the label was written.
+    fn try_write_label_beside(&mut self, column: usize, row: usize, label: &str) -> bool {
+        let character_count = label.chars().count();
+        let Some(start_column) = [Some(column + 2), column.checked_sub(character_count + 1)]
+            .into_iter()
+            .flatten()
+            .find(|start_column| self.is_free_for_label(*start_column, row, character_count))
+        else {
+            return false;
+        };
+        self.write_label(start_column, row, label);
+
+        true
+    }
+
+    /// Returns whether a label fits at `start_column` with an empty cell on
+    /// each side that the canvas holds.
+    fn is_free_for_label(&self, start_column: usize, row: usize, character_count: usize) -> bool {
+        let Some(row_cells) = self.cells.get(row) else {
+            return false;
+        };
+        let end_column = start_column + character_count;
+
+        end_column <= row_cells.len()
+            && row_cells[start_column.saturating_sub(1)..(end_column + 1).min(row_cells.len())]
+                .iter()
+                .all(|cell| *cell == CanvasCell::Empty)
+    }
+
+    /// Writes label text, overwriting any existing cells.
+    fn write_label(&mut self, start_column: usize, row: usize, label: &str) {
         for (character_index, character) in label.chars().enumerate() {
             self.put_label(start_column + character_index, row, character);
         }

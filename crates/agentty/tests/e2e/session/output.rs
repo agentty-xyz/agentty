@@ -295,6 +295,49 @@ sequenceDiagram
     Ok(())
 }
 
+/// Seeds one review-ready session whose flowchart chains into a three-way
+/// labelled fan-out that merges back into one node.
+async fn seed_session_with_fan_out_mermaid_output(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = "fan-out-mermaid-0001";
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, model_fixture::CODEX_MODEL_ID, "main", "Review")
+            .with_title("Fan-out Mermaid output"),
+    )
+    .await?;
+
+    (async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                session_id,
+                SessionMessageKind::AssistantAnswer,
+                "\
+```mermaid
+flowchart TD
+    A[Op::Compact] --> B[abort tasks, spawn CompactTask]
+    B --> C[path]
+    C -->|TokenBudget| D[fresh context window]
+    C --> E[append CompactionTrigger]
+    C -->|unsupported| F[local summary turn]
+    D --> G[install replacement history]
+    E --> G
+    F --> G
+```
+",
+            )
+            .await
+    })
+    .await?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("fan-out-"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session with the cyclic orchestration flow that
 /// previously fell back to a plain code block.
 async fn seed_session_with_cyclic_mermaid_output(
@@ -1027,6 +1070,47 @@ async fn session_view_mermaid_output() -> E2eResult {
                     assertion::assert_not_visible(frame, "erDiagram");
                     assertion::assert_not_visible(frame, "sequenceDiagram");
                     assertion::assert_not_visible(frame, "Agent available");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify a labelled fan-out that merges back renders with one port per edge,
+/// both labels on their own edges, and no crossing.
+#[tokio::test]
+async fn session_view_fan_out_mermaid_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_fan_out_mermaid_output")
+        .with_terminal_size(140, 50)
+        .setup(|env| Box::pin(async move { seed_session_with_fan_out_mermaid_output(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("install replacement history", 5000)
+                    .capture_labeled(
+                        "session_fan_out_mermaid_output",
+                        "Labelled Mermaid fan-out that merges back in session chat",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "└┬─┬─┬─┘", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "─TokenBudget────────┘ │ └───────unsupported─",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "┐         │         ┌", &full);
+                    assertion::assert_text_in_region(frame, "▼         ▼         ▼", &full);
+                    assertion::assert_not_visible(frame, "┼");
+                    assertion::assert_not_visible(frame, "flowchart TD");
                 })
             },
         )
