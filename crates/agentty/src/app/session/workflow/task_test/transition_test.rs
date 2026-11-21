@@ -1124,6 +1124,61 @@ async fn commit_message_generation_records_its_utility_purpose() {
 }
 
 #[tokio::test]
+/// Verifies auto-commit keeps a configured model without Fast support and
+/// runs it at `Normal` speed instead of switching to a Fast-capable model.
+async fn commit_message_generation_keeps_model_without_fast_support() {
+    // Arrange
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_diff()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok("+change".into()) }));
+    git_client
+        .expect_has_commits_since()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_commit_all_preserving_single_commit()
+        .once()
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+    git_client
+        .expect_head_short_hash()
+        .once()
+        .returning(|_| Box::pin(async { Ok("abc123".into()) }));
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|request| {
+        assert_eq!(request.model, AgentModel::Gpt53CodexSpark.as_str());
+        assert_eq!(request.speed_mode, SpeedMode::Normal);
+
+        Ok(one_shot_submission("Add change", 0, 0))
+    });
+
+    // Act
+    let outcome = SessionTaskService::commit_session_changes(
+        &git_client,
+        Path::new("project"),
+        UNPUBLISHED,
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+            ReasoningLevel::Low,
+            SpeedMode::Fast,
+        ),
+        &run_client,
+        false,
+        &Mutex::new(SessionTranscript::default()),
+    )
+    .await
+    .expect("commit should succeed");
+
+    // Assert
+    assert_eq!(outcome.commit_message, "Add change");
+}
+
+#[tokio::test]
 async fn commit_fallback_cannot_reset_an_exhausted_provider_budget() {
     // Arrange
     let mut git_client = MockGitClient::new();

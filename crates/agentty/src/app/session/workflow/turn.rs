@@ -839,12 +839,7 @@ pub(super) async fn spawn_request_title_generation(
         SettingName::DefaultFastSpeedMode,
     )
     .await;
-    let title_speed_mode = if title_agent.kind().supports_speed_mode() {
-        title_speed_mode
-    } else {
-        crate::domain::agent::SpeedMode::Normal
-    };
-    let title_agent = title_agent.compatible_with_speed_mode(title_speed_mode);
+    let title_speed_mode = setting::normalized_speed_mode(title_agent, title_speed_mode);
 
     let _title_generation_task =
         SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {

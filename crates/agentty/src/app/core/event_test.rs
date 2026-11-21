@@ -854,10 +854,10 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
                 && *review_agent == (
                     crate::domain::agent::AgentSelection::new(
                         crate::domain::agent::AgentKind::Claude,
-                        crate::domain::agent::AgentModel::ClaudeOpus55,
+                        crate::domain::agent::AgentModel::ClaudeSonnet55,
                     ),
                     crate::domain::agent::ReasoningLevel::Low,
-                    crate::domain::agent::SpeedMode::Fast,
+                    crate::domain::agent::SpeedMode::Normal,
                 )
         ));
     assert_eq!(

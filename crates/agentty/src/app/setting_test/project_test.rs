@@ -119,7 +119,7 @@ async fn settings_manager_new_loads_project_scoped_values() {
     );
     assert_eq!(
         settings.default_fast_selection,
-        model_fixture::codex_selection()
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark)
     );
     assert_eq!(
         settings.default_review_selection,
@@ -133,7 +133,7 @@ async fn settings_manager_new_loads_project_scoped_values() {
         ReasoningLevel::XHigh
     );
     assert_eq!(settings.default_smart_speed_mode, SpeedMode::Fast);
-    assert_eq!(settings.default_fast_speed_mode, SpeedMode::Fast);
+    assert_eq!(settings.default_fast_speed_mode, SpeedMode::Normal);
     assert_eq!(settings.default_review_speed_mode, SpeedMode::Fast);
     assert_eq!(settings.theme, ColorTheme::Green);
     assert!(!settings.include_coauthored_by_agentty);

@@ -112,8 +112,10 @@ native updater refreshes it at startup. If an Antigravity executable changes whi
 Agentty is running, wait for discovery or restart before retrying a turn.
 
 <a id="backends-persistent-defaults"></a> In **Settings**, choose a model and reasoning
-level for each project role; Claude and Codex also offer `Normal` or `Fast` speed.
-Unavailable backend defaults fall back to an installed backend.
+level for each project role; models that support
+[fast mode](@/docs/agents/backends.md#backends-switching-models) also offer `Normal` or
+`Fast` speed. Other models keep `Normal` speed. Unavailable backend defaults fall back
+to an installed backend.
 
 <a id="backends-reasoning-level"></a>
 

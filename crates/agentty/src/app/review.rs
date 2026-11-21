@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::task;
 use crate::app::session_state::SessionState;
+use crate::app::setting;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
@@ -557,12 +558,7 @@ pub(crate) fn session_review_agent(
 
 pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
     let (review_selection, reasoning_level, speed_mode) = review_agent;
-    let speed_mode = if review_selection.kind().supports_speed_mode() {
-        speed_mode
-    } else {
-        SpeedMode::Normal
-    };
-    let review_selection = review_selection.compatible_with_speed_mode(speed_mode);
+    let speed_mode = setting::normalized_speed_mode(review_selection, speed_mode);
 
     (review_selection, reasoning_level, speed_mode)
 }

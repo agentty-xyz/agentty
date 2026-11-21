@@ -1183,13 +1183,8 @@ impl SessionManager {
             .settings()
             .load_project_speed_mode(project_id, SettingName::DefaultFastSpeedMode)
             .await?;
-        let title_generation_speed_mode = if title_generation_agent.kind().supports_speed_mode() {
-            title_generation_speed_mode
-        } else {
-            SpeedMode::Normal
-        };
-        let title_generation_agent =
-            title_generation_agent.compatible_with_speed_mode(title_generation_speed_mode);
+        let title_generation_speed_mode =
+            setting::normalized_speed_mode(title_generation_agent, title_generation_speed_mode);
         let title_generation_folder = if services.fs_client().is_dir(session_folder.clone()) {
             session_folder
         } else {
@@ -3267,12 +3262,7 @@ impl SessionManager {
             .settings()
             .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
             .await?;
-        let speed_mode = if agent.kind().supports_speed_mode() {
-            speed_mode
-        } else {
-            SpeedMode::Normal
-        };
-        let agent = agent.compatible_with_speed_mode(speed_mode);
+        let speed_mode = setting::normalized_speed_mode(agent, speed_mode);
         self.default_session_model = agent.model();
 
         Ok(SessionCreationSettings {

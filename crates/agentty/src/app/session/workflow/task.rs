@@ -1151,12 +1151,7 @@ impl SessionTaskService {
         transcript: &Mutex<SessionTranscript>,
     ) -> Result<SessionCommitOutcome, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
-        let speed_mode = if session_agent.kind().supports_speed_mode() {
-            speed_mode
-        } else {
-            crate::domain::agent::SpeedMode::Normal
-        };
-        let session_agent = session_agent.compatible_with_speed_mode(speed_mode);
+        let speed_mode = setting::normalized_speed_mode(session_agent, speed_mode);
         let folder = folder.to_path_buf();
         if git_client.is_worktree_clean(folder.clone()).await? {
             return Err(SessionError::Workflow(

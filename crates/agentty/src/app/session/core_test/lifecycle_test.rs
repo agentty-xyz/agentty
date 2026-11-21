@@ -310,6 +310,8 @@ async fn test_set_session_model_keeps_default_smart_model_when_harness_model_is_
 }
 
 #[tokio::test]
+/// Verifies a saved Fast default on a model without Fast support keeps the
+/// configured model and starts the session at `Normal` speed.
 async fn test_create_session_reads_default_smart_model_and_speed_from_db_settings() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
@@ -349,9 +351,9 @@ async fn test_create_session_reads_default_smart_model_and_speed_from_db_setting
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing created session");
-    assert_eq!(created_session.agent.model(), AgentModel::ClaudeOpus55);
+    assert_eq!(created_session.agent.model(), AgentModel::ClaudeHaiku55);
     assert_eq!(created_session.agent.kind(), AgentKind::Claude);
-    assert_eq!(created_session.speed_mode, SpeedMode::Fast);
+    assert_eq!(created_session.speed_mode, SpeedMode::Normal);
 }
 
 #[tokio::test]
