@@ -130,7 +130,9 @@ async fn native_full_disk_read_hides_hidden_paths_and_writes_only_writable_roots
         &harness,
         &format!(
             "cat {readable}; echo; cat {key}; echo \"key=$?\"; cat {file}; echo \"file=$?\"; ls \
-             -A {secret}; echo \"list=$?\"; printf x > {new}; echo \"write=$?\"",
+             -A {secret}; echo \"list=$?\"; printf x > {new}; echo \"write=$?\"; grep -sF {root} \
+             /proc/self/mountinfo >&2; true",
+            root = quoted(&outside.path("")),
             readable = quoted(&outside.path("readable")),
             key = quoted(&outside.path("secret/key")),
             file = quoted(&outside.path("secret-file")),
