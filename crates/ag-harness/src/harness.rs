@@ -2893,7 +2893,11 @@ impl HarnessBuilder {
     /// name in their metadata. A host model without metadata is never
     /// known to share a provider.
     fn same_provider(summary: &ModelHandle, session: &ModelHandle) -> bool {
-        #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+        #[cfg(any(
+            feature = "providers-anthropic",
+            feature = "providers-compat",
+            feature = "providers-openai"
+        ))]
         if summary.spec().provider().is_some() || session.spec().provider().is_some() {
             return summary.spec().provider() == session.spec().provider();
         }

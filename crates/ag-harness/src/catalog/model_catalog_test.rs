@@ -526,6 +526,23 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     feature = "providers-openai"
 ))]
 #[test]
+fn environment_skips_a_provider_whose_required_key_is_blank() {
+    // Arrange
+    let blank = lookup(&[("ANTHROPIC_API_KEY", " "), ("OPENAI_API_KEY", "")]);
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(blank).expect("a blank key is unset");
+
+    // Assert
+    assert_eq!(catalog.specs().count(), 0);
+}
+
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+#[test]
 fn environment_catalogs_claude_models_after_other_role_candidates() {
     // Arrange
     let claude_only = lookup(&[("ANTHROPIC_API_KEY", "claude-key")]);

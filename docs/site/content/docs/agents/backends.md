@@ -196,7 +196,7 @@ local models stored as `openai-compatible/<model>`:
   `chatgpt/gpt-6-sol`, `chatgpt/gpt-6-luna`, `chatgpt/gpt-5.6-sol`,
   `chatgpt/gpt-5.6-terra`, and `chatgpt/gpt-5.6-luna`.
 - OpenAI API: `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, and `gpt-5.6-terra`.
-- Anthropic API: `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, and
+- Anthropic API: `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-fable-5-2`, and
   `claude-haiku-5-5`.
 
 Each request fits within an input budget below the model's context window, leaving out
@@ -316,11 +316,12 @@ pulled models and started servers appear without a restart.
 
 The harness model you pick never changes the project default model. It becomes the model
 new sessions start on when no backend CLI is installed. Until you pick one, those
-sessions prefer a ready local model, then the first ready paid model in list order, so
-an exported API key, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other
-tools, never makes a paid provider the default. A remembered local model stays the
-default while its server is stopped; a remembered paid model whose key is gone gives way
-to the next ready model.
+sessions prefer a ready local model, then the first ready paid model in list order. An
+exported API key, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other tools,
+therefore never displaces a ready local model or a provider listed before it; when
+nothing else is ready, its first model, `gpt-6.1-sol` or `claude-sonnet-5-5`, becomes
+the default. A remembered local model stays the default while its server is stopped; a
+remembered paid model whose key is gone gives way to the next ready model.
 
 ### OpenAI Models
 
@@ -365,8 +366,8 @@ agentty --experimental-harness   # then choose a chatgpt/ model under ag-harness
 
 ### Claude Models
 
-<a id="backends-harness-claude"></a> The harness runs `claude-fable-5-2`,
-`claude-opus-5-5`, `claude-sonnet-5-5`, and `claude-haiku-5-5` through Anthropic's
+<a id="backends-harness-claude"></a> The harness runs `claude-sonnet-5-5`,
+`claude-opus-5-5`, `claude-fable-5-2`, and `claude-haiku-5-5` through Anthropic's
 Messages API with a Claude Console API key:
 
 ```sh
@@ -378,12 +379,21 @@ agentty --experimental-harness   # then choose a claude-* model under ag-harness
   subscription.
 - `ag-harness` and the **claude** agent share these model names and descriptions but not
   their backend: `ag-harness` rows, badged `[paid]`, always use `ANTHROPIC_API_KEY`, and
-  `claude` rows always use the `claude` CLI; neither falls back to the other.
+  `claude` rows always use the `claude` CLI; neither falls back to the other. Settings
+  and the status bar show them as `claude/<model>` and `harness/<model>`, and harness
+  rows in Settings add their price class, such as `harness/claude-haiku-5-5 · cheap`.
 - `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com/v1`) selects another Messages
-  API endpoint.
+  API endpoint. It also accepts the origin alone, such as `https://api.anthropic.com`,
+  as Anthropic's SDKs and Claude Code read it.
 - Each request resends the session history, billed at Anthropic's cache-read rate where
-  cached. `claude-haiku-5-5` prompts over 100,000 tokens cost five times its listed
-  rates, which long sessions can reach.
+  cached. A `claude-haiku-5-5` request whose prompt exceeds 100,000 tokens, cached
+  tokens included, costs five times its listed rates, which long sessions can reach;
+  reported costs include it.
+- When fitting a long session to the context window rewrites earlier turns, the API
+  drops the reasoning recorded after them instead of rejecting the request, so the model
+  continues without it.
+- `ANTHROPIC_` variables and `CLAUDE_CODE_OAUTH_TOKEN` are removed from the `bash`
+  environment.
 
 ### Local and Self-Hosted Models
 

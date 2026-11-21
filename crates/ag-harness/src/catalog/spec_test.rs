@@ -183,6 +183,44 @@ fn built_in_cache_prices_keep_the_built_in_source() {
 }
 
 #[test]
+fn long_context_prices_apply_only_above_their_threshold() {
+    // Arrange
+    let base = Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000);
+    let long_prompt = Pricing::new(500_000, 2_500_000).with_cache_read(50_000);
+
+    // Act
+    let tiered = base.with_long_context(100_000, long_prompt);
+    let short = tiered.for_prompt(100_000);
+    let long = tiered.for_prompt(100_001);
+
+    // Assert
+    assert_eq!(tiered.source(), PricingSource::Host);
+    assert_eq!(base.for_prompt(u64::MAX), base);
+    assert_eq!(
+        (
+            short.input_per_mtok_micro_usd(),
+            short.output_per_mtok_micro_usd(),
+            short.cache_read_per_mtok_micro_usd(),
+            short.cache_write_per_mtok_micro_usd()
+        ),
+        (100_000, 500_000, 10_000, 125_000)
+    );
+    // The long prompt's undeclared cache-write price follows its input
+    // price, and the result declares no further tier.
+    assert_eq!(
+        (
+            long.input_per_mtok_micro_usd(),
+            long.output_per_mtok_micro_usd(),
+            long.cache_read_per_mtok_micro_usd(),
+            long.cache_write_per_mtok_micro_usd()
+        ),
+        (500_000, 2_500_000, 50_000, 500_000)
+    );
+    assert_eq!(long.for_prompt(0), long);
+    assert_eq!(tiered.cost_tier(), CostTier::Cheap);
+}
+
+#[test]
 fn pricing_derives_cost_tier_from_the_output_price_bounds() {
     // Arrange
     let output_prices = [0, 2_500_000, 2_500_001, 14_999_999, 15_000_000];

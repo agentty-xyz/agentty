@@ -58,6 +58,31 @@ fn cost_bills_uncached_input_cached_input_and_output_at_their_prices() {
 }
 
 #[test]
+fn cost_of_a_long_prompt_bills_every_token_at_the_long_context_prices() {
+    // Arrange
+    let pricing = Pricing::new(100_000, 500_000)
+        .with_cache_read(10_000)
+        .with_long_context(
+            100_000,
+            Pricing::new(500_000, 2_500_000).with_cache_read(50_000),
+        );
+
+    // Act
+    let short = Cost::of(&usage(100_000, 60_000, 1_000), pricing);
+    // Cache reads count toward the prompt, which then bills in full at the
+    // long-context prices.
+    let long = Cost::of(&usage(100_001, 60_000, 1_000), pricing);
+
+    // Assert
+    // 40,000 uncached at $0.10, 60,000 cached at $0.01, and 1,000 output at
+    // $0.50 per million tokens.
+    assert_eq!(short.micro_usd, 4_000 + 600 + 500);
+    // 40,001 uncached at $0.50, 60,000 cached at $0.05, and 1,000 output at
+    // $2.50 per million tokens.
+    assert_eq!(long.micro_usd, 20_001 + 3_000 + 2_500);
+}
+
+#[test]
 fn cost_without_cache_prices_bills_cached_input_at_the_input_price() {
     // Arrange
     let pricing = Pricing::built_in(1_000_000, 2_000_000);

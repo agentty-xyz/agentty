@@ -359,9 +359,9 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
             (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
             (AgentModel::Gpt56Terra, ModelCost::Standard, openai),
-            (AgentModel::ClaudeFable52, ModelCost::Premium, anthropic),
-            (AgentModel::ClaudeOpus55, ModelCost::Premium, anthropic),
             (AgentModel::ClaudeSonnet55, ModelCost::Standard, anthropic),
+            (AgentModel::ClaudeOpus55, ModelCost::Premium, anthropic),
+            (AgentModel::ClaudeFable52, ModelCost::Premium, anthropic),
             (AgentModel::ClaudeHaiku55, ModelCost::Cheap, anthropic),
         ]
     );
@@ -371,7 +371,11 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     assert_eq!(options[5].provider, "Qwen");
     assert_eq!(options[9].provider, "ChatGPT plan");
     assert_eq!(options[17].provider, "OpenAI");
-    assert_eq!(options[21].provider, "Anthropic");
+    let sonnet = options
+        .iter()
+        .find(|option| option.model == AgentModel::ClaudeSonnet55)
+        .expect("Claude Sonnet is listed");
+    assert_eq!(sonnet.provider, "Anthropic");
     // Only Muse's contributor tier lets the provider train on prompts.
     assert_eq!(
         options
@@ -971,6 +975,7 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
         ("ANTHROPIC_API_KEY", "secret"),
         ("ANTHROPIC_BASE_URL", "https://proxy.example/v1"),
         ("CHATGPT_AUTH_FILE", "/home/test/chatgpt.json"),
+        ("CLAUDE_CODE_OAUTH_TOKEN", "secret"),
         ("DASHSCOPE_API_KEY", "secret"),
         ("HOME", "/home/test"),
         ("KIMI_BASE_URL", "http://kimi"),

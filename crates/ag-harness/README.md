@@ -864,11 +864,12 @@ budget explicitly.
 
 `ModelProvider::Anthropic` serves the cataloged Claude models (`CLAUDE_FABLE_5_2`,
 `CLAUDE_OPUS_5_5`, `CLAUDE_SONNET_5_5`, and `CLAUDE_HAIKU_5_5`) with `ANTHROPIC_API_KEY`
-and an optional `ANTHROPIC_BASE_URL` (default `DEFAULT_ANTHROPIC_BASE_URL`). Each
-declares its documented 1,000,000-token window and 128,000-token output limit, and
-built-in prices with Anthropic's cache-read and 5-minute cache-write rates. Claude Haiku
-5.5 bills prompts over 100,000 tokens at five times those rates, which the catalog's
-single price per token understates:
+and an optional `ANTHROPIC_BASE_URL` (default `DEFAULT_ANTHROPIC_BASE_URL`), which takes
+the versioned URL or, as Anthropic's SDKs read it, the origin alone, to which
+configuration appends `/v1`. Each declares its documented 1,000,000-token window and
+128,000-token output limit, and built-in prices with Anthropic's cache-read and 5-minute
+cache-write rates. Claude Haiku 5.5 also declares its fivefold prices for a prompt over
+100,000 tokens (`Pricing::with_long_context`), which `Cost::of` applies per request:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -902,9 +903,12 @@ effort turns on summarized adaptive thinking for the models that take one. Signe
 original place on later requests, and earlier turns replay with their turn instructions
 as first sent (`Model::replays_turn_instructions`), because the newest Claude models
 drop or reject signed thinking after an edited earlier message. Context reductions that
-clear or elide earlier rounds still edit history, so long sessions on those models can
-lose earlier thinking. Every Claude model shares one reasoning family, and a switch to
-another provider carries that reasoning as a short note. The API requires an output
+clear or elide earlier rounds still edit history, so every request that sends thinking
+sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
+`thinking-binding-controls-2026-08-01` beta: the API drops the invalidated thinking for
+that request instead of rejecting it with a `400`, and long sessions on those models
+lose that earlier thinking. Every Claude model shares one reasoning family, and a switch
+to another provider carries that reasoning as a short note. The API requires an output
 bound, so a request without one sends `max_tokens` 128,000, the output limit, for a
 cataloged model through `ModelClient::anthropic`, and otherwise 16,000
 (`ProviderSpec::with_fallback_max_tokens`). Usage counts cache reads and cache writes as
@@ -1176,16 +1180,16 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
-with `ModelClient::from_spec` for every wire protocol; `providers-openai` or
-`providers-compat` also builds `ModelCatalog::from_environment` with every cataloged
-provider's entries. Each `ProviderSpec` preset needs its family's feature.
-`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
-client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
-any credential is read, and `ModelCatalog::from_environment` skips it. Without
-`native-sandbox`, `BashConfig::new`, `BashConfig::native`, `HarnessBuilder::sandbox`,
-and `sandbox::dispatch` are absent and Bash requires `BashConfig::for_executor`. Without
-`sqlite`, durable sessions require `Harness::store`. Features are additive: error enums
-whose variants depend on them are `#[non_exhaustive]`.
+with `ModelClient::from_spec` for every wire protocol, and
+`ModelCatalog::from_environment` with every cataloged provider's entries. Each
+`ProviderSpec` preset needs its family's feature. `ModelProvider::is_enabled` reports
+whether the build includes a provider's family; a client whose family is off fails with
+`ModelConfigurationError::ProviderDisabled` before any credential is read, and
+`ModelCatalog::from_environment` skips it. Without `native-sandbox`, `BashConfig::new`,
+`BashConfig::native`, `HarnessBuilder::sandbox`, and `sandbox::dispatch` are absent and
+Bash requires `BashConfig::for_executor`. Without `sqlite`, durable sessions require
+`Harness::store`. Features are additive: error enums whose variants depend on them are
+`#[non_exhaustive]`.
 
 ## Where things live
 

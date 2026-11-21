@@ -1136,3 +1136,94 @@ fn every_provider_is_enabled_with_every_family() {
     // Assert
     assert!(disabled.is_empty(), "{disabled:?}");
 }
+
+#[test]
+fn haiku_bills_five_times_its_prices_above_a_100k_token_prompt() {
+    // Arrange
+    let haiku = ModelProvider::Anthropic
+        .pricing(anthropic::CLAUDE_HAIKU_5_5)
+        .expect("Haiku is priced");
+
+    // Act
+    let short = haiku.for_prompt(100_000);
+    let long = haiku.for_prompt(100_001);
+
+    // Assert
+    assert_eq!(haiku.source(), PricingSource::BuiltIn);
+    assert_eq!(haiku.cost_tier(), CostTier::Cheap);
+    assert_eq!(
+        (
+            short.input_per_mtok_micro_usd(),
+            short.output_per_mtok_micro_usd(),
+            short.cache_read_per_mtok_micro_usd(),
+            short.cache_write_per_mtok_micro_usd()
+        ),
+        (100_000, 500_000, 10_000, 125_000)
+    );
+    assert_eq!(
+        (
+            long.input_per_mtok_micro_usd(),
+            long.output_per_mtok_micro_usd(),
+            long.cache_read_per_mtok_micro_usd(),
+            long.cache_write_per_mtok_micro_usd(),
+            long.source()
+        ),
+        (500_000, 2_500_000, 50_000, 625_000, PricingSource::BuiltIn)
+    );
+    // The other Claude models bill one price at any prompt length.
+    let sonnet = ModelProvider::Anthropic
+        .pricing(anthropic::CLAUDE_SONNET_5_5)
+        .expect("Sonnet is priced");
+    assert_eq!(sonnet.for_prompt(900_000), sonnet);
+}
+
+#[test]
+fn anthropic_base_url_variable_takes_the_origin_or_the_versioned_url() {
+    // Arrange
+    let anthropic_urls = [
+        ("https://proxy.example", "https://proxy.example/v1"),
+        ("https://proxy.example/", "https://proxy.example/v1"),
+        ("https://proxy.example/v1", "https://proxy.example/v1"),
+        ("https://proxy.example/v1/", "https://proxy.example/v1/"),
+    ];
+
+    // Act
+    let versioned =
+        anthropic_urls.map(|(value, _)| ModelProvider::Anthropic.versioned(value.to_string()));
+    let other = ModelProvider::Kimi.versioned("https://kimi.example".to_string());
+
+    // Assert
+    assert_eq!(
+        versioned,
+        anthropic_urls.map(|(_, expected)| expected.to_string())
+    );
+    assert_eq!(other, "https://kimi.example");
+    assert_eq!(
+        ModelProvider::Anthropic.default_base_url(),
+        Some(anthropic::DEFAULT_ANTHROPIC_BASE_URL)
+    );
+}
+
+#[test]
+fn configuration_treats_a_blank_required_key_as_missing() {
+    for provider in ModelProvider::all()
+        .iter()
+        .filter(|provider| provider.requires_api_key())
+    {
+        // Arrange
+        let model = provider.known_models()[0];
+
+        // Act
+        let error = ModelConfiguration::new(*provider, model)
+            .base_url("https://provider.example/v1")
+            .client_from_environment(|_| Ok("  ".to_string()))
+            .err()
+            .expect("a blank required key should be rejected");
+
+        // Assert
+        assert!(
+            matches!(error, ModelConfigurationError::ApiKey { name } if name == provider.api_key_environment()),
+            "{provider}: {error:?}"
+        );
+    }
+}

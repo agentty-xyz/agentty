@@ -52,6 +52,9 @@ const FALLBACK_MODEL_PROFILE: ModelProfile =
 /// Placeholder endpoint for resume-only registrations, which never send
 /// requests.
 const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";
+/// Placeholder key for resume-only registrations, nonblank because a blank
+/// required key counts as missing.
+const RESUME_ONLY_API_KEY: &str = "resume-only";
 /// SQLite file holding one session's durable harness history.
 const SESSION_DATABASE_FILE: &str = "harness.db";
 /// Trusted Bash executable used by edit-mode `bash` calls.
@@ -70,10 +73,12 @@ const CHATGPT_SIGN_IN_COMMAND: &str = "ag-harness login chatgpt";
 const AGENTTY_ROOT_ENV: &str = "AGENTTY_ROOT";
 /// Environment prefixes that carry provider keys, credential files, and
 /// endpoints, withheld from `bash`. `OPENAI_` covers both `OpenAI` and
-/// OpenAI-compatible variables.
-const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 6] = [
+/// OpenAI-compatible variables, and `CLAUDE_CODE_OAUTH_TOKEN` the Claude
+/// subscription token Claude Code reads beside the `ANTHROPIC_` variables.
+const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 7] = [
     "ANTHROPIC_",
     "CHATGPT_",
+    "CLAUDE_CODE_OAUTH_TOKEN",
     "DASHSCOPE_",
     "KIMI_",
     "MODEL_",
@@ -291,17 +296,26 @@ fn model_cost(tier: CostTier) -> ModelCost {
     }
 }
 
-/// Returns the name users know a hosted provider by.
+/// Returns the name users know a hosted provider by, or the provider
+/// identifier for a provider the harness adds later.
 fn provider_display_name(provider: ModelProvider) -> &'static str {
-    match provider {
-        ModelProvider::Anthropic => "Anthropic",
-        ModelProvider::ChatGpt => "ChatGPT plan",
-        ModelProvider::Kimi => "Kimi",
-        ModelProvider::Muse => "Muse",
-        ModelProvider::OpenAi => "OpenAI",
-        ModelProvider::OpenAiCompatible => LocalServerKind::OpenAiCompatible.display_name(),
-        ModelProvider::Qwen => "Qwen",
-    }
+    const DISPLAY_NAMES: [(ModelProvider, &str); 7] = [
+        (ModelProvider::Anthropic, "Anthropic"),
+        (ModelProvider::ChatGpt, "ChatGPT plan"),
+        (ModelProvider::Kimi, "Kimi"),
+        (ModelProvider::Muse, "Muse"),
+        (ModelProvider::OpenAi, "OpenAI"),
+        (
+            ModelProvider::OpenAiCompatible,
+            LocalServerKind::OpenAiCompatible.display_name(),
+        ),
+        (ModelProvider::Qwen, "Qwen"),
+    ];
+
+    DISPLAY_NAMES
+        .iter()
+        .find(|(known, _)| *known == provider)
+        .map_or(provider.as_str(), |(_, name)| name)
 }
 
 /// Returns the context window `selection`'s server runs its model with, or
@@ -720,7 +734,7 @@ impl ModelSelection {
         } else {
             ModelConfiguration::new(self.provider, &self.model)
                 .base_url(RESUME_ONLY_BASE_URL)
-                .client_from_environment(|_| Ok(String::new()))
+                .client_from_environment(|_| Ok(RESUME_ONLY_API_KEY.to_string()))
                 .map_err(failure("Invalid resume-only harness model"))?
         };
         let metadata = client.metadata().clone();
