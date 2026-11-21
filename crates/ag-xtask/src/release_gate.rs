@@ -28,14 +28,20 @@ pub(crate) struct Options {
     /// Base revision whose fork point bounds the change.
     #[arg(long, default_value = "origin/main")]
     base: String,
-    /// File that receives `run=true` or `run=false`, such as
+    /// File that receives the `run` and `release-type` outputs, such as
     /// `$GITHUB_OUTPUT`.
     #[arg(long)]
     output: PathBuf,
 }
 
 /// Appends `run=true` to the output file when the change moves
-/// `[workspace.package].version` or edits a check input, else `run=false`.
+/// `[workspace.package].version` or edits a check input, else `run=false`,
+/// followed by the `release-type` the semver check should assume.
+///
+/// A version change leaves `release-type` empty, so the check enforces the
+/// bump the new version implies. A check-input change only has to prove the
+/// tooling still runs, so it assumes `major`: an unreleased break already
+/// on the target branch is the next release's decision, not this change's.
 ///
 /// # Errors
 ///
@@ -62,7 +68,14 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
         .create(true)
         .append(true)
         .open(&options.output)
-        .and_then(|mut output| writeln!(output, "run={}", decision.runs()))
+        .and_then(|mut output| {
+            writeln!(
+                output,
+                "run={}\nrelease-type={}",
+                decision.runs(),
+                decision.release_type()
+            )
+        })
         .map_err(|error| format!("Could not write {}: {error}", options.output.display()))
 }
 
@@ -101,6 +114,15 @@ impl Decision {
     /// Returns whether the release checks run.
     fn runs(&self) -> bool {
         !matches!(self, Self::Unchanged)
+    }
+
+    /// Returns the release type the semver check assumes, or an empty string
+    /// to derive it from the workspace version.
+    fn release_type(&self) -> &'static str {
+        match self {
+            Self::InputsChanged(_) => "major",
+            Self::Unchanged | Self::VersionChanged { .. } => "",
+        }
     }
 
     /// Describes the decision for the job log.

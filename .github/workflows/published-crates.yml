@@ -57,6 +57,10 @@ jobs:
 
       # Workspace crates depend on each other with caret requirements, so a
       # break in any published library can break dependents already released.
+      # A version bump and a release tag enforce the bump; a tooling change
+      # assumes `major`, which still builds and lints every crate.
       - name: Check semver against crates.io
         if: ${{ steps.gate.outputs.run == 'true' }}
+        env:
+          AGENTTY_SEMVER_RELEASE_TYPE: ${{ steps.gate.outputs.release-type }}
         run: prek run cargo-semver-checks --all-files --hook-stage manual

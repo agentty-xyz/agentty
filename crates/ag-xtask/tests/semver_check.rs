@@ -95,6 +95,22 @@ fn checks_published_libraries_and_skips_new_crates() -> Result<(), Box<dyn Error
 }
 
 #[test]
+fn passes_an_explicit_release_type_to_semver_checks() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    // Act
+    let output = fixture.run(&["--exclude", "app", "--release-type", "major"], &[])?;
+    // Assert
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fixture.calls().last().map(String::as_str),
+        Some("semver-checks --release-type major --package core")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn skips_semver_checks_when_no_crate_has_a_baseline() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;

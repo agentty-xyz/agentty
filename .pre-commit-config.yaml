@@ -517,8 +517,10 @@ repos:
         stages: [manual]
       - id: cargo-semver-checks
         name: cargo semver-checks
-        description: Check each published library crate's public API against its newest crates.io release for changes the workspace version allows, skipping new crates without a release and the `agentty` application, which no crate depends on.
-        entry: cargo run -q --locked -p ag-xtask -- semver-checks --exclude agentty
+        description: Check each published library crate's public API against its newest crates.io release for changes the workspace version allows, or the optional AGENTTY_SEMVER_RELEASE_TYPE, skipping new crates without a release and the `agentty` application, which no crate depends on.
+        entry: >-
+          bash -eu -o pipefail -c 'cargo run -q --locked -p ag-xtask -- semver-checks --exclude agentty
+          ${AGENTTY_SEMVER_RELEASE_TYPE:+--release-type "$AGENTTY_SEMVER_RELEASE_TYPE"}'
         language: system
         always_run: true
         pass_filenames: false

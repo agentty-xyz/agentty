@@ -16,6 +16,10 @@ pub(crate) struct Options {
     /// depends on.
     #[arg(long)]
     exclude: Vec<String>,
+    /// Release type to assume instead of deriving it from the workspace
+    /// version; `major` still builds and lints every crate but allows breaks.
+    #[arg(long, value_parser = ["major", "minor", "patch"])]
+    release_type: Option<String>,
 }
 
 /// Runs `cargo semver-checks` for every publishable library crate except
@@ -50,6 +54,9 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
         return Ok(());
     }
     let mut arguments = vec!["semver-checks"];
+    if let Some(release_type) = &options.release_type {
+        arguments.extend(["--release-type", release_type.as_str()]);
+    }
     arguments.extend(
         packages
             .iter()
