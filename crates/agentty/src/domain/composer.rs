@@ -462,24 +462,17 @@ pub enum PromptSlashStage {
     Style,
 }
 
-/// Availability and request state of the experimental graph composer.
+/// Request state of the graph composer.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PromptGraphState {
-    /// Graph commands are unavailable for this launch.
+    /// Input is ordinary chat.
     #[default]
-    Disabled,
-    /// The command is available; input is ordinary chat.
     Available,
     /// The next input describes a new execution graph.
     Armed,
 }
 
 impl PromptGraphState {
-    /// Returns whether the graph command is offered in the slash menu.
-    pub fn is_available(self) -> bool {
-        self != Self::Disabled
-    }
-
     /// Returns whether the next submission is a literal graph request.
     pub fn is_armed(self) -> bool {
         self == Self::Armed
@@ -549,7 +542,7 @@ impl PromptSlashState {
     pub fn with_available_agent_kinds(available_agent_kinds: Vec<AgentKind>) -> Self {
         Self {
             available_agent_kinds,
-            graph: PromptGraphState::Disabled,
+            graph: PromptGraphState::Available,
             harness_models: Vec::new(),
             selected_agent: None,
             selected_index: 0,
@@ -1130,20 +1123,15 @@ fn build_slash_suggestion_list(
 
     let (title, items): (&str, Vec<PromptSuggestionItem>) = match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(
-                input,
-                session_agent_kind,
-                command_set,
-                slash_state.graph.is_available(),
-            )
-            .into_iter()
-            .map(|command| PromptSuggestionItem {
-                badge: None,
-                detail: Some(command_description(command).to_string()),
-                label: command.to_string(),
-                metadata: None,
-            })
-            .collect::<Vec<_>>();
+            let commands = prompt_slash_commands(input, session_agent_kind, command_set)
+                .into_iter()
+                .map(|command| PromptSuggestionItem {
+                    badge: None,
+                    detail: Some(command_description(command).to_string()),
+                    label: command.to_string(),
+                    metadata: None,
+                })
+                .collect::<Vec<_>>();
 
             ("Slash Command (j/k move, Enter select)", commands)
         }
@@ -1214,12 +1202,7 @@ fn selected_slash_action(
 ) -> Option<PromptSuggestionSelection> {
     match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(
-                input,
-                session_agent_kind,
-                command_set,
-                slash_state.graph.is_available(),
-            );
+            let commands = prompt_slash_commands(input, session_agent_kind, command_set);
             let selected_command = commands
                 .get(clamp_selected_index(
                     slash_state.selected_index,
@@ -1486,7 +1469,6 @@ fn prompt_slash_commands(
     input: &str,
     session_agent_kind: AgentKind,
     command_set: PromptSlashCommandSet,
-    allow_graph_command: bool,
 ) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
     let mut commands = vec![
@@ -1501,7 +1483,7 @@ fn prompt_slash_commands(
     if command_set != PromptSlashCommandSet::WithApply {
         commands.retain(|command| *command != "/apply");
     }
-    if !allow_graph_command || command_set == PromptSlashCommandSet::SettingsOnly {
+    if command_set == PromptSlashCommandSet::SettingsOnly {
         commands.retain(|command| *command != "/graph");
     }
     if !session_agent_kind.supports_speed_mode() {

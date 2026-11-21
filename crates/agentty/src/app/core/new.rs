@@ -43,10 +43,9 @@ impl App {
     /// runs automatically after detecting a newer version at startup or in an
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under
-    /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
-    /// `experimental_graph` enables `/graph` execution-graph proposals. The
-    /// saved `Max Subagents` setting caps provider-native subagents for every
-    /// worker this launch composes.
+    /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR). The saved
+    /// `Max Subagents` setting caps provider-native subagents for every worker
+    /// this launch composes.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
@@ -55,7 +54,6 @@ impl App {
     pub async fn new(
         auto_update: bool,
         experimental_harness: bool,
-        experimental_graph: bool,
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
@@ -87,7 +85,6 @@ impl App {
             clients,
         ))
         .await?;
-        app.experimental_graph = experimental_graph;
         app.recover_graph_proposal_replies().await;
 
         Ok(app)
@@ -174,7 +171,6 @@ impl App {
             current_version_display_text,
             prompt_progress: std::collections::HashMap::new(),
             diff_comment_progress: std::collections::HashMap::new(),
-            experimental_graph: false,
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
             deferred_session_settings: std::collections::HashMap::new(),

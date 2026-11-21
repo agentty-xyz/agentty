@@ -279,8 +279,8 @@ Prompt input also supports
 | `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu            |
 
 `Shift+Tab` cycles `Auto Edit`, `Auto Edit + Auto Address Comments`, and `Read Only`.
-With `--experimental-graph`, `/graph` arms the composer: `Enter` submits your task and
-`Esc` disarms it, keeping the draft. See
+`/graph` arms the composer: `Enter` submits your task and `Esc` disarms it, keeping the
+draft. See
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
 
 With chat focused, scroll with `j` / `k` or arrows, jump with `g` / `G`, or move half a

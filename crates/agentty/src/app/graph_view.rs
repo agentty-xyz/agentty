@@ -24,16 +24,13 @@ impl App {
     pub(crate) async fn load_graph_view(&self, view: &mut GraphView) -> Result<(), String> {
         let graphs = self.services.db().graphs();
         let mut selected_id = view.graph().map(|graph| graph.id.clone());
-        let proposal = if self.experimental_graph {
-            self.services
-                .db()
-                .graph_proposals()
-                .latest(&view.restore.session_id)
-                .await
-                .map_err(|error| error.to_string())?
-        } else {
-            None
-        };
+        let proposal = self
+            .services
+            .db()
+            .graph_proposals()
+            .latest(&view.restore.session_id)
+            .await
+            .map_err(|error| error.to_string())?;
         let is_proposal_selected = view.is_proposal_selected
             && proposal
                 .as_ref()

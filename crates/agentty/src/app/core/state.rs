@@ -231,8 +231,6 @@ pub struct App {
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
-    /// Enables the preview `/graph` command that proposes an execution graph.
-    pub(crate) experimental_graph: bool,
     /// Latest proposal and execution snapshot for the visible session.
     pub(crate) graph_chat: GraphChatCache,
     /// Graph work answered by the open question panel and pending graph

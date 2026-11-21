@@ -454,7 +454,7 @@ draft.
 | Command      | Action                                                       |
 | ------------ | ------------------------------------------------------------ |
 | `/apply`     | Verify and apply valid focused-review suggestions.           |
-| `/graph`     | Request a graph proposal; needs `--experimental-graph`.      |
+| `/graph`     | Request a graph proposal.                                    |
 | `/mode`      | Choose permissions and review automation.                    |
 | `/model`     | Choose a backend and model; local or paid models in Harness. |
 | `/reasoning` | Set reasoning effort for this session.                       |
@@ -527,10 +527,10 @@ delete with `d`, and reorder with `J` / `K`. When Agentty runs in `tmux`, sessio
 
 ## Generated Graph Proposals
 
-Start Agentty with `--experimental-graph` to enable `/graph`. In a prepared idle
-session, select `/graph`, describe the task, and press `Enter`; `Esc` disarms it and
-keeps your draft. The composer title shows `Graph`, and pasted images reach generation
-and every proposed node. Generation reads the workspace; no node runs until you approve.
+In a prepared idle session, select `/graph`, describe the task, and press `Enter`; `Esc`
+disarms it and keeps your draft. The composer title shows `Graph`, and pasted images
+reach generation and every proposed node. Generation reads the workspace; no node runs
+until you approve.
 
 Chat and questions stay in the left pane. The right pane, at most 35% of the width,
 shows the proposal version and how many nodes are done in its title. Below the overall

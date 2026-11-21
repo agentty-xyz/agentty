@@ -6,7 +6,6 @@ use crate::domain::agent::AgentKind;
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::presentation::prompt::PromptGraphState;
 
 impl App {
     /// Returns the active project identifier.
@@ -33,8 +32,7 @@ impl App {
     /// Builds prompt slash-menu state for one session.
     ///
     /// Harness sessions offer only the cached Harness models; other sessions
-    /// use the cached machine-scoped agent availability snapshot. `/graph`
-    /// needs the experimental flag.
+    /// use the cached machine-scoped agent availability snapshot.
     pub(crate) fn prompt_slash_state(
         &self,
         session_id: &str,
@@ -56,11 +54,6 @@ impl App {
         if is_harness_session {
             slash_state.harness_models = self.services.harness_model_options();
         }
-        slash_state.graph = if self.experimental_graph {
-            PromptGraphState::Available
-        } else {
-            PromptGraphState::Disabled
-        };
 
         slash_state
     }

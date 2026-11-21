@@ -8,9 +8,6 @@ use crate::presentation::graph_chat::GraphChatSnapshot;
 impl App {
     /// Refreshes the bounded graph sidebar through repository boundaries.
     pub(crate) async fn refresh_graph_chat_if_needed(&mut self) -> bool {
-        if !self.experimental_graph {
-            return false;
-        }
         let Some(session_id) = visible_review_session_id(&self.mode).map(SessionId::from) else {
             return false;
         };

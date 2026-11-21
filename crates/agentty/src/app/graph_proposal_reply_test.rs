@@ -276,11 +276,10 @@ async fn approve_reply_with_an_image_approves_at_the_generation_limit() {
 
 #[tokio::test]
 async fn sessions_without_a_pending_proposal_keep_ordinary_routing() {
-    for case in ["disabled", "missing", "cancelled", "approved"] {
+    for case in ["missing", "cancelled", "approved"] {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_graph = case != "disabled";
         let mut state = graph_proposal_state("preview", "sess");
         if case != "missing" {
             app.services
@@ -327,7 +326,6 @@ async fn failed_proposal_read_keeps_the_composer() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals.expect_latest().return_once(|_| {
         Err(DbError::InvalidData {
@@ -360,7 +358,6 @@ async fn failed_proposal_read_keeps_the_composer() {
 async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals
         .expect_latest()
@@ -429,7 +426,6 @@ async fn install_pending_proposal(
     outcome_state: GraphProposalState,
     decision: &'static str,
 ) {
-    app.experimental_graph = true;
     let mut state = graph_proposal_state("preview", "sess");
     state.limits = outcome_state.limits;
     app.services
@@ -710,21 +706,6 @@ async fn reply_decided_after_switching_away_is_applied_on_return() {
 }
 
 #[tokio::test]
-async fn restart_recovery_is_inactive_without_multi_agent_support() {
-    // Arrange
-    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
-    record_reply(&app, "reply", "Drop it").await;
-    app.experimental_graph = false;
-
-    // Act
-    app.recover_graph_proposal_replies().await;
-
-    // Assert
-    assert!(!app.is_deciding_graph_proposal_reply("preview"));
-    assert_eq!(unsettled(&app).await, ["reply"]);
-}
-
-#[tokio::test]
 async fn stopping_the_session_abandons_an_undecided_reply() {
     // Arrange
     let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
@@ -764,7 +745,6 @@ async fn failed_reply_persistence_keeps_the_composer_and_reports_the_error() {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_graph = true;
         let mut proposals = MockGraphProposalRepository::new();
         proposals
             .expect_latest()
@@ -912,7 +892,6 @@ async fn recovery_skips_lost_proposals_and_tolerates_a_failed_abandonment_write(
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals.expect_unsettled_replies().returning(|_| {
         Ok(["lost", "other"]

@@ -67,22 +67,15 @@ async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() 
 }
 
 #[tokio::test]
-async fn prompt_slash_state_offers_graph_only_with_the_experimental_flag() {
+async fn prompt_slash_state_offers_graph_by_default() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let (app, _base_dir) = crate::test_support::new_test_app().await;
 
-    for (is_enabled, expected) in [
-        (false, PromptGraphState::Disabled),
-        (true, PromptGraphState::Available),
-    ] {
-        app.experimental_graph = is_enabled;
+    // Act
+    let slash_state = app.prompt_slash_state("session");
 
-        // Act
-        let slash_state = app.prompt_slash_state("session");
-
-        // Assert
-        assert_eq!(slash_state.graph, expected);
-    }
+    // Assert
+    assert_eq!(slash_state.graph, PromptGraphState::Available);
 }
 
 #[tokio::test]

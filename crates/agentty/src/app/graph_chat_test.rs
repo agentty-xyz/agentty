@@ -11,7 +11,7 @@ use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::test_support::new_test_app;
 
 #[tokio::test]
-async fn graph_sidebar_loads_saved_proposals_only_for_the_visible_enabled_session() {
+async fn graph_sidebar_loads_saved_proposals_only_for_the_visible_session() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     let session_id = SessionId::from("graph-chat");
@@ -40,8 +40,6 @@ async fn graph_sidebar_loads_saved_proposals_only_for_the_visible_enabled_sessio
     };
 
     // Act / Assert
-    assert!(!app.refresh_graph_chat_if_needed().await);
-    app.experimental_graph = true;
     assert!(app.refresh_graph_chat_if_needed().await);
     assert_eq!(
         app.graph_chat
