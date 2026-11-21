@@ -295,6 +295,10 @@ never discards worktree changes to fit a prompt.
 - **Remote merge** marks `Merged`. A successful manual target sync persists archival
   before cleanup. A review request closed without merging cancels the session with the
   same cleanup as an in-app cancel.
+- **Review-request refresh** polls each target about once a minute. A target whose
+  result repeats for three passes is polled every fifth pass until it changes, so
+  external changes arrive at most about five minutes late. Explicit refreshes and manual
+  sync poll every target; watched requests with running checks keep the full cadence.
 - **Review-request watching** is opt-in per session. For sessions in `Watching`, forge
   refresh reports head commit, conflicts, checks, and unresolved threads from trusted
   bots configured in `.agentty/review-watch.json`. The reducer starts at most one

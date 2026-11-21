@@ -78,7 +78,8 @@ For a linked GitHub pull request, a green `[ready]` label means GitHub reports t
 non-draft request as cleanly mergeable under the repository's rules. `[ready (bypass)]`
 appears when you can bypass branch protections, every required check has passed, and
 either only a required approval is missing or a draft has no conflicts and no unresolved
-review comments. Labels refresh every minute.
+review comments. Labels refresh every minute; a request that stays unchanged for a few
+minutes is checked about every five minutes until it changes.
 
 ## Session Lifecycle
 
@@ -371,7 +372,8 @@ in session view to start or stop watching later.
 
 A watched session shows **Watching** instead of **Review** and keeps every review
 action. About once a minute, Agentty checks the request and starts at most one
-follow-up:
+follow-up. A request that stays unchanged for a few minutes, with no checks running, is
+checked about every five minutes until it changes:
 
 1. **Merge conflicts**: Syncs the branch as `r` does, unless the request now targets a
    different branch than the session.
