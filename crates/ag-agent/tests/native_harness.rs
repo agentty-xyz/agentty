@@ -17,6 +17,7 @@ use ag_contracts::{
     SpeedMode, TurnContinuation, TurnEvent, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
+use ag_harness::store::SQLITE_BUSY_TIMEOUT;
 use ag_harness::tool::ToolDefinition;
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
@@ -1755,12 +1756,12 @@ async fn execute_in_session_database(
     Ok(())
 }
 
-/// Returns connection options for a harness database that wait out the
-/// harness's own locks as long as the harness waits out theirs.
+/// Returns connection options for a harness database that wait for the
+/// harness's locks as long as the harness waits for theirs.
 fn session_database_options(database_path: &Path) -> sqlx::sqlite::SqliteConnectOptions {
     sqlx::sqlite::SqliteConnectOptions::new()
         .filename(database_path)
-        .busy_timeout(Duration::from_secs(60))
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
 }
 
 /// Returns a session resume of `prompt` continuing `provider_conversation_id`

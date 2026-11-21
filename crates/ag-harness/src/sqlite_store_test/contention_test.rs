@@ -1,39 +1,42 @@
-//! Contention tests: concurrent opens, resumes, and writes wait out another
-//! connection's write lock instead of failing with `database is locked`.
+//! Contention tests: concurrent first opens of one database file create and
+//! migrate it once, and opening an up-to-date database does not wait behind
+//! another writer.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use sqlx::Connection as _;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode};
+use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePoolOptions};
+use sqlx::{Connection as _, SqlSafeStr as _, SqlitePool};
 use tempfile::tempdir;
 use tokio::task::JoinSet;
 
-use super::support::schema;
-use crate::session::{NewSession, SessionError};
-use crate::sqlite_store::{Database, MIGRATOR};
-use crate::store::SessionStore as _;
+use crate::session::SessionError;
+use crate::sqlite_store::{Database, MIGRATOR, connect_options, create_wal_database, migrate};
 
-const CONCURRENT_HANDLES: usize = 4;
+const CONCURRENT_OPENS: usize = 8;
 
-#[tokio::test]
-async fn concurrent_opens_wait_for_a_held_write_lock_and_migrate_once() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_first_opens_of_a_new_file_migrate_it_once() {
     // Arrange
     let temp_dir = tempdir().expect("temp directory should be created");
-    let database_path = temp_dir.path().join("harness.db");
-    let mut lock_holder = hold_write_lock(&database_path).await;
+    let database_path = temp_dir.path().join("nested/harness.db");
     let mut opens = JoinSet::new();
-    for _ in 0..CONCURRENT_HANDLES {
+    for _ in 0..CONCURRENT_OPENS {
         let database_path = database_path.clone();
         opens.spawn(async move { Database::open(&database_path).await });
     }
-    tokio::task::yield_now().await;
 
     // Act
-    release_write_lock(&mut lock_holder).await;
-    let databases = join_all(opens).await;
+    let mut databases = Vec::new();
+    while let Some(result) = opens.join_next().await {
+        databases.push(result.expect("open task should not panic"));
+    }
 
     // Assert
-    let databases = databases.expect("every concurrent open should succeed");
+    let databases = databases
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("every concurrent first open should succeed");
     let (applied, distinct, succeeded) = sqlx::query_as::<_, (i64, i64, i64)>(
         "SELECT COUNT(*), COUNT(DISTINCT version), SUM(success) FROM _sqlx_migrations",
     )
@@ -45,62 +48,108 @@ async fn concurrent_opens_wait_for_a_held_write_lock_and_migrate_once() {
         (applied, distinct, succeeded),
         (expected, expected, expected)
     );
-}
-
-#[tokio::test]
-async fn concurrent_writes_and_resumes_wait_for_a_held_write_lock() {
-    // Arrange
-    let temp_dir = tempdir().expect("temp directory should be created");
-    let database_path = temp_dir.path().join("harness.db");
-    let first = Database::open(&database_path)
-        .await
-        .expect("first handle should open");
-    let second = Database::open(&database_path)
-        .await
-        .expect("second handle should open");
-    first
-        .create_session(&NewSession::new("existing", schema()), None, 100)
-        .await
-        .expect("existing session should be created");
-    let mut lock_holder = hold_write_lock(&database_path).await;
-    let mut writes = JoinSet::new();
-    for index in 0..CONCURRENT_HANDLES {
-        let database = if index % 2 == 0 {
-            first.clone()
-        } else {
-            second.clone()
-        };
-        writes.spawn(async move {
-            let session = NewSession::new(format!("session-{index}"), schema());
-            database.create_session(&session, None, 100).await?;
-
-            database.load_session("existing").await.map(|_| ())
-        });
-    }
-    tokio::task::yield_now().await;
-
-    // Act
-    release_write_lock(&mut lock_holder).await;
-    let results = join_all(writes).await;
-
-    // Assert
-    results.expect("every concurrent write and resume should succeed");
-    let sessions = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session")
-        .fetch_one(second.pool())
-        .await
-        .expect("sessions should be counted");
-    assert_eq!(
-        sessions,
-        i64::try_from(CONCURRENT_HANDLES + 1).expect("count fits")
+    assert!(
+        directory_entries(&temp_dir.path().join("nested"))
+            .iter()
+            .all(|name| name.starts_with("harness.db")),
+        "staged database files should not remain"
     );
 }
 
-/// Opens a WAL connection to `database_path` that holds the write lock.
+#[tokio::test]
+async fn creating_an_existing_database_keeps_it_and_leaves_no_staged_file() {
+    // Arrange
+    let temp_dir = tempdir().expect("temp directory should be created");
+    let database_path = temp_dir.path().join("harness.db");
+    std::fs::write(&database_path, b"existing").expect("existing file should be written");
+
+    // Act
+    let result = create_wal_database(&database_path).await;
+
+    // Assert
+    result.expect("an existing database should be kept");
+    assert_eq!(
+        std::fs::read(&database_path).expect("existing file should be readable"),
+        b"existing"
+    );
+    assert_eq!(
+        directory_entries(temp_dir.path()),
+        vec!["harness.db".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn opening_an_up_to_date_database_does_not_take_the_write_lock() {
+    // Arrange
+    let temp_dir = tempdir().expect("temp directory should be created");
+    let database_path = temp_dir.path().join("harness.db");
+    Database::open(&database_path)
+        .await
+        .expect("first open should migrate the database")
+        .pool()
+        .close()
+        .await;
+    let mut lock_holder = hold_write_lock(&database_path).await;
+
+    // Act
+    let reopened = Database::open(&database_path).await;
+
+    // Assert
+    reopened.expect("an up-to-date database should open while another connection writes");
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut lock_holder)
+        .await
+        .expect("lock holder should release the write lock");
+}
+
+#[tokio::test]
+async fn migrations_opting_out_of_transactions_are_rejected() {
+    // Arrange
+    let pool = memory_pool().await;
+    let migrator = Migrator::with_migrations(vec![Migration::new(
+        1,
+        "vacuum".into(),
+        MigrationType::Simple,
+        "VACUUM".into_sql_str(),
+        true,
+    )]);
+
+    // Act
+    let result = migrate(&pool, &migrator).await;
+
+    // Assert
+    let error = result.expect_err("a no-transaction migration should be rejected");
+    assert!(
+        matches!(error, SessionError::Migration(MigrateError::Source(_))),
+        "unexpected error: {error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("migration 1 opts out of transactions")
+    );
+}
+
+/// Returns the sorted file names in `directory`.
+fn directory_entries(directory: &Path) -> Vec<String> {
+    let mut names = std::fs::read_dir(directory)
+        .expect("directory should be readable")
+        .map(|entry| {
+            entry
+                .expect("directory entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+
+    names
+}
+
+/// Opens a connection to `database_path` that holds the write lock.
 async fn hold_write_lock(database_path: &Path) -> SqliteConnection {
-    let options = SqliteConnectOptions::new()
-        .filename(PathBuf::from(database_path))
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal);
+    let options = SqliteConnectOptions::new().filename(database_path);
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .expect("lock holder should connect");
@@ -112,22 +161,11 @@ async fn hold_write_lock(database_path: &Path) -> SqliteConnection {
     connection
 }
 
-/// Releases the write lock taken by [`hold_write_lock`].
-async fn release_write_lock(connection: &mut SqliteConnection) {
-    sqlx::raw_sql("COMMIT")
-        .execute(connection)
+/// Opens a one-connection in-memory pool with the harness connection policy.
+async fn memory_pool() -> SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options(Path::new(":memory:")))
         .await
-        .expect("lock holder should release the write lock");
-}
-
-/// Waits for every task and returns their results in completion order.
-async fn join_all<T: 'static>(
-    mut tasks: JoinSet<Result<T, SessionError>>,
-) -> Result<Vec<T>, SessionError> {
-    let mut values = Vec::new();
-    while let Some(result) = tasks.join_next().await {
-        values.push(result.expect("task should not panic")?);
-    }
-
-    Ok(values)
+        .expect("in-memory pool should open")
 }

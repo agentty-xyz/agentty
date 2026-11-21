@@ -2,6 +2,7 @@
 //! feature.
 
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,8 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{SqliteConnection, SqlitePool, Transaction};
+use sqlx::{Connection as _, SqliteConnection, SqlitePool, Transaction};
 use tokio::time::Instant;
 
 use crate::admission::{
@@ -35,14 +37,20 @@ use crate::usage::{StoredTurnUsage, TurnUsage};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, TurnError, TurnOutcome};
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+/// How long a harness database connection waits for another connection's lock
+/// before failing with `database is locked`, and how long a caller waits for a
+/// pooled connection. Use it for connections that share the file with a
+/// harness.
+///
+/// Fsyncs of a commit, or of the checkpoint a closing pool runs, can stall for
+/// many seconds on a loaded disk. A lease renewal that waits for both a
+/// connection and the lock still lands inside its lease: the 100 s renewal
+/// interval plus 60 s plus 60 s is under the 300 s lease.
+pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
-/// How long a connection waits for another connection's lock before failing
-/// with `database is locked`. Fsyncs of a commit or of the checkpoint a closing
-/// pool runs can stall for many seconds on a loaded disk, so this is generous
-/// while staying well inside the turn lease's renewal slack.
-const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 const TURN_SIZE_PAGE_SIZE: i64 = 64;
 
 struct WriteRecordRow {
@@ -354,11 +362,15 @@ impl Database {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        let temporary = path.as_os_str().is_empty() || path == Path::new(":memory:");
+        if !temporary && !tokio::fs::try_exists(path).await? {
+            create_wal_database(path).await?;
+        }
         let options = connect_options(path);
         // SQLite temporary databases belong to one connection. Additional
         // pooled connections or eviction would lose their schema and history.
-        let pool_options = SqlitePoolOptions::new();
-        let pool_options = if path.as_os_str().is_empty() || path == Path::new(":memory:") {
+        let pool_options = SqlitePoolOptions::new().acquire_timeout(SQLITE_BUSY_TIMEOUT);
+        let pool_options = if temporary {
             pool_options
                 .max_connections(1)
                 .idle_timeout(None)
@@ -372,7 +384,7 @@ impl Database {
             .await
             .session_context("open persistent session database")?;
 
-        migrate(&pool).await?;
+        migrate(&pool, &MIGRATOR).await?;
         let identity = StoreIdentity::for_path(path).await?;
 
         Ok(Self {
@@ -1740,29 +1752,117 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .busy_timeout(DB_BUSY_TIMEOUT)
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
 }
 
-/// Applies pending migrations while holding the database write lock.
+/// Creates the database at `path` already in WAL mode, unless another opener
+/// created it first.
 ///
-/// `SQLx` does not lock SQLite migrations, so concurrent opens would each list
-/// the same pending migrations and apply them twice. `BEGIN IMMEDIATE`
-/// serializes them: later openers wait out the busy timeout, then find every
-/// migration applied.
-async fn migrate(pool: &SqlitePool) -> Result<(), SessionError> {
+/// SQLite does not apply the busy timeout to the switch into WAL mode: it
+/// upgrades a read transaction to a write lock (`sqlite3BtreeSetVersion`), so
+/// concurrent first opens of one file fail at once with `database is locked`.
+/// Switching a private file and moving it into place without replacing
+/// anything gives every connection to `path` a file that is already in WAL
+/// mode.
+async fn create_wal_database(path: &Path) -> Result<(), SessionError> {
+    let operation = "create persistent session database";
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let staged = tempfile::Builder::new()
+        .prefix(".harness-")
+        .suffix(".db")
+        .tempfile_in(directory)?
+        .into_temp_path();
+    SqliteConnection::connect_with(&connect_options(&staged))
+        .await
+        .session_context(operation)?
+        .close()
+        .await
+        .session_context(operation)?;
+
+    match staged.persist_noclobber(path).map_err(|error| error.error) {
+        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Applies `migrator`'s pending migrations while holding the database write
+/// lock, and only validates applied ones when none is pending.
+///
+/// `SQLx` does not lock SQLite migrations (its `Migrate::lock` for SQLite is a
+/// no-op), so concurrent opens would each list the same pending migrations and
+/// apply them twice. `BEGIN IMMEDIATE` serializes them: later openers wait (up
+/// to the busy timeout) for the lock, then find every migration applied. An
+/// up-to-date database is checked with reads alone, so opening it never waits
+/// behind another writer.
+async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), SessionError> {
+    // A migration opting out of transactions would silently run inside the
+    // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
+    if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
+        return Err(SessionError::Migration(MigrateError::Source(
+            format!(
+                "migration {} opts out of transactions, which the locked migration path cannot \
+                 apply",
+                migration.version
+            )
+            .into(),
+        )));
+    }
+    if !has_pending_migration(pool, migrator).await? {
+        migrator.run(pool).await?;
+
+        return Ok(());
+    }
     let operation = "migrate persistent session database";
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .session_context(operation)?;
-    // `Migrator::run` over a borrowed connection trips rust-lang/rust#100013
-    // in `Send` futures; SQLx exposes `run_direct` to avoid that.
-    MIGRATOR.run_direct(None, &mut *transaction, false).await?;
+    // `run_direct` is hidden from `SQLx`'s docs and semver. The public
+    // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
+    // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx` keeps
+    // `run_direct` for exactly that error. Inside the transaction, `SQLx`'s
+    // SQLite `Migrate::apply` nests each migration in a `SAVEPOINT`. Recheck
+    // both assumptions, and whether `Migrate::lock` still does nothing for
+    // SQLite, when upgrading `SQLx`; the contention tests fail if either
+    // breaks.
+    migrator.run_direct(None, &mut *transaction, false).await?;
 
     transaction.commit().await.session_context(operation)
+}
+
+/// Returns whether `migrator` has a migration the database has not applied
+/// successfully, using reads only.
+async fn has_pending_migration(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+) -> Result<bool, SessionError> {
+    let operation = "check persistent session migrations";
+    let mut connection = pool.acquire().await.session_context(operation)?;
+    let has_table = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         '_sqlx_migrations')",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .session_context(operation)?;
+    if !has_table {
+        return Ok(true);
+    }
+    let applied =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(&mut *connection)
+            .await
+            .session_context(operation)?;
+
+    Ok(migrator.iter().any(|migration| {
+        !migration.migration_type.is_down_migration() && !applied.contains(&migration.version)
+    }))
 }
 
 async fn load_request_from(

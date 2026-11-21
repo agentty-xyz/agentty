@@ -43,9 +43,11 @@ keeps no history. For a conversation, use a session.
 A `Harness` is a cheap, `Clone + Send + Sync` handle: clones share one configuration and
 one SQLite connection pool, so one harness can serve many concurrent sessions and turns.
 Separate harnesses or processes may share a SQLite file, including a new one: opens
-apply schema migrations under the write lock, and every connection waits out another's
-lock for up to a minute before reporting `database is locked`. `Harness::new` and
-`Harness::from_registry` remain available.
+create a missing file already in WAL mode and apply pending schema migrations under the
+write lock. Each harness waits up to `store::SQLITE_BUSY_TIMEOUT` for another
+connection's lock, and as long for a pooled connection, before reporting an error;
+connections a host opens to the same file should use it as their busy timeout.
+`Harness::new` and `Harness::from_registry` remain available.
 
 ## Embedding
 

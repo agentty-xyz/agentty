@@ -13,7 +13,7 @@ use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::request_option::OutputMode;
 use crate::session::{NewSession, SessionError};
-use crate::sqlite_store::{Database, EncodedMessage, TimestampSource};
+use crate::sqlite_store::{Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource};
 use crate::store::{SessionCheckpoint, SessionStore as _};
 use crate::store_fixture::image_input;
 use crate::tool::ToolCall;
@@ -78,7 +78,14 @@ async fn on_disk_database_creates_parent_and_applies_connection_policy() {
     assert_eq!(journal_mode, "wal");
     assert_eq!(foreign_keys, 1);
     assert_eq!(synchronous, 2);
-    assert_eq!(busy_timeout_ms, 60_000);
+    assert_eq!(
+        u128::try_from(busy_timeout_ms).expect("busy timeout is positive"),
+        SQLITE_BUSY_TIMEOUT.as_millis()
+    );
+    assert_eq!(
+        database.pool.options().get_acquire_timeout(),
+        SQLITE_BUSY_TIMEOUT
+    );
 }
 
 #[tokio::test]
