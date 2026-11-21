@@ -97,7 +97,6 @@ impl App {
         &mut self,
         input: GenerateGraphProposalRequest,
     ) -> Result<(), SessionError> {
-        self.require_graph_proposal_feature()?;
         if let Some(existing) = self
             .services
             .db()
@@ -190,7 +189,6 @@ impl App {
         version: u32,
         action: GraphProposalAction,
     ) -> Result<(), SessionError> {
-        self.require_graph_proposal_feature()?;
         let state = self
             .services
             .db()
@@ -286,16 +284,6 @@ impl App {
                 self.cancel_proposal_generation(id);
                 self.spawn_graph_proposal_generation(next, folder);
             }
-        }
-
-        Ok(())
-    }
-
-    fn require_graph_proposal_feature(&self) -> Result<(), SessionError> {
-        if !self.experimental_graph {
-            return Err(SessionError::Operation(
-                "Graph proposals require --experimental-graph".into(),
-            ));
         }
 
         Ok(())

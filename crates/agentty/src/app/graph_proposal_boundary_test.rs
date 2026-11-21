@@ -62,7 +62,6 @@ async fn duplicate_generation_and_approval_receipts_do_not_start_workers() {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_graph = true;
         let mut state = graph_proposal_state("preview", "sess");
         let mut repository = MockGraphProposalRepository::new();
         if approve {
@@ -139,7 +138,6 @@ async fn duplicate_generation_and_approval_receipts_do_not_start_workers() {
 async fn proposal_query_reports_repository_failure_and_missing_actions_fail() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    app.experimental_graph = true;
     let mut repository = MockGraphProposalRepository::new();
     repository.expect_get().once().return_once(|_, _| {
         Err(DbError::InvalidData {
@@ -189,7 +187,6 @@ async fn unresolved_proposal_cannot_bypass_launch_approval() {
         .expect("capture");
     let mut graph = crate::app::execution_graph::tests::graph();
     graph.id = "proposal:preview:1".into();
-    app.experimental_graph = true;
     let service = app.session_service();
 
     // Act
@@ -271,7 +268,6 @@ async fn graph_proposal_requires_prepared_idle_session_and_available_definitions
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_graph = true;
         let expected = if matches!(case, "busy" | "draft") {
             let status = if case == "busy" {
                 Status::InProgress

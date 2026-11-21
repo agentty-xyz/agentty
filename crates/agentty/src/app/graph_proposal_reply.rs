@@ -79,7 +79,7 @@ impl App {
     }
 
     /// Returns the session's latest proposal while chat replies still act on
-    /// it, or `None` when proposals are disabled or none is pending.
+    /// it, or `None` when none is pending.
     ///
     /// # Errors
     /// Returns a displayable error when the proposal lookup fails.
@@ -87,10 +87,6 @@ impl App {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<GraphProposalState>, String> {
-        if !self.experimental_graph {
-            return Ok(None);
-        }
-
         self.services
             .db()
             .graph_proposals()
@@ -150,9 +146,6 @@ impl App {
     /// restart or a project switch, at most one per proposal. A decided reply
     /// reapplies its recorded decision instead of deciding again.
     pub(crate) async fn recover_graph_proposal_replies(&mut self) {
-        if !self.experimental_graph {
-            return;
-        }
         let session_ids: Vec<SessionId> = self
             .sessions
             .sessions()

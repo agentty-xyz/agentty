@@ -369,7 +369,6 @@ pub(crate) async fn viewing_app(repository: MockGraphRepository) -> (App, TempDi
 /// App viewing `sess` with proposals enabled and every proposal read failing.
 async fn failing_proposal_app() -> (App, TempDir) {
     let (mut app, directory) = viewing_app(MockGraphRepository::new()).await;
-    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals.expect_latest().returning(|_| {
         Err(DbError::InvalidData {

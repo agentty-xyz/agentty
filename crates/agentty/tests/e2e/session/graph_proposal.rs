@@ -192,7 +192,6 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
     FeatureTest::new("graph_proposal_request_preview_approval_execution")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 2)))
         .run(
             |scenario| {
@@ -304,7 +303,6 @@ async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2e
     FeatureTest::new("graph_request_and_revision_pasted_images")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .env("WAYLAND_DISPLAY", "agentty-test-wayland")
         .setup(|env| {
             Box::pin(async move {
@@ -368,7 +366,6 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
         .with_git()
         .with_terminal_size(160, 50)
         .env("NO_COLOR", "")
-        .args(["--experimental-graph".into()])
         .setup(move |env| Box::pin(seed_gated(env, 2, gate)))
         .run(
             |scenario| {
@@ -466,7 +463,6 @@ async fn automatic_review_waits_for_the_whole_graph() -> E2eResult {
         .with_git()
         .with_terminal_size(160, 50)
         .env("NO_COLOR", "")
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed_changing(env)))
         .run(
             |scenario| {
@@ -525,7 +521,6 @@ async fn graph_generation_shows_the_session_working_until_the_proposal_is_ready(
     FeatureTest::new("graph_generation_shows_the_session_working")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed_slow(env, 2)))
         .run(
             |scenario| {
@@ -587,7 +582,6 @@ async fn stopping_graph_generation_cancels_the_proposal() -> E2eResult {
     FeatureTest::new("stopping_graph_generation_cancels_the_proposal")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed_slow(env, 30)))
         .run(
             |scenario| {
@@ -628,7 +622,6 @@ async fn graph_proposal_clarification_and_cancel() -> E2eResult {
     FeatureTest::new("graph_proposal_clarification_and_cancel")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 1)))
         .run(
             |scenario| {
@@ -697,7 +690,6 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
     FeatureTest::new("graph_proposal_restored_pending_preview")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-graph".into()])
         .setup(|env| {
             Box::pin(async move {
                 seed(env, 1).await?;
@@ -787,7 +779,6 @@ async fn graph_sidebar_overflow_keeps_chat_and_controls_visible() -> E2eResult {
     FeatureTest::new("graph_sidebar_overflow_keeps_chat_and_controls_visible")
         .with_git()
         .with_terminal_size(120, 16)
-        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 16)))
         .run(
             |scenario| {

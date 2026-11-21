@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ag_session::test_support as model_fixture;
+use ag_session::{GraphProposalLimits, test_support as model_fixture};
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -399,7 +399,15 @@ fn test_prompt_slash_commands_lists_all_commands() {
     // Assert
     assert_eq!(
         commands,
-        vec!["/apply", "/mode", "/model", "/reasoning", "/style", "/fast"]
+        vec![
+            "/apply",
+            "/graph",
+            "/mode",
+            "/model",
+            "/reasoning",
+            "/style",
+            "/fast"
+        ]
     );
 }
 
@@ -1952,9 +1960,13 @@ fn test_handle_prompt_slash_submit_ignores_non_prompt_mode() {
 }
 
 #[test]
-fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_mode() {
+fn test_handle_prompt_slash_submit_maps_filtered_command_index_to_mode() {
     // Arrange
     let mut mode = new_test_prompt_mode("/");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
+        // `/apply` is filtered out, so `/graph` and `/mode` lead the menu.
+        slash_state.selected_index = 1;
+    }
     let mut effects = Vec::new();
 
     // Act
@@ -2343,10 +2355,13 @@ fn graph_subcommands_do_not_bypass_the_mode_selector() {
 async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     // Arrange
     let (mut app, _root) = new_test_prompt_app("/graph", None).await;
-    app.experimental_graph = true;
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         slash_state.graph = PromptGraphState::Available;
     }
+    let oversized_request = format!(
+        "/mode is part of my task {}",
+        "x".repeat(GraphProposalLimits::default().bytes)
+    );
     let context = prompt_context(&mut app).expect("context");
 
     // Act
@@ -2360,19 +2375,18 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
 
     // Arrange
     if let AppMode::Prompt { input, .. } = &mut app.mode {
-        *input = InputState::with_text("/mode is part of my task".into());
+        *input = InputState::with_text(oversized_request.clone());
     }
     let context = prompt_context(&mut app).expect("context");
     assert!(!context.is_slash_command());
 
     // Act
-    app.experimental_graph = false;
     run_prompt_submit(&mut app, &context).await;
 
     // Assert: rejected graph requests preserve the armed draft.
     assert!(
         matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
-        if input.text() == "/mode is part of my task" && slash_state.graph.is_armed())
+        if input.text() == oversized_request && slash_state.graph.is_armed())
     );
 
     // Act
@@ -2381,7 +2395,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     // Assert
     assert!(
         matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
-        if input.text() == "/mode is part of my task" && !slash_state.graph.is_armed())
+        if input.text() == oversized_request && !slash_state.graph.is_armed())
     );
 }
 

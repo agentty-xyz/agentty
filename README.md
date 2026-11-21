@@ -177,7 +177,6 @@ agentty --no-update  # Launch without automatic updates
 agentty --disable-telemetry  # Launch without PostHog usage telemetry
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --experimental-harness  # Offer preview Harness sessions
-agentty --experimental-graph  # Enable /graph proposals
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
@@ -186,8 +185,8 @@ agentty --version    # Show the installed Agentty version
   (`a`) or scan a chosen folder (`d`).
 - **Instances**: only one Agentty instance can use a given Agentty root at a time.
   Separate `AGENTTY_ROOT` directories can run independently.
-- **Graphs**: `--experimental-graph` enables `/graph` proposals you can inspect, revise,
-  and approve before any node runs. See the
+- **Graphs**: `/graph` requests execution-graph proposals you can inspect, revise, and
+  approve before any node runs. See the
   [workflow guide](https://agentty.xyz/docs/usage/workflow/).
 - **Harness**: `--experimental-harness` adds a preview session type that runs Agentty's
   built-in agent loop against local or hosted models. Its edit mode runs unsandboxed

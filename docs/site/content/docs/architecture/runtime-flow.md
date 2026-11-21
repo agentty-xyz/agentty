@@ -118,7 +118,7 @@ The runtime drops a discarded response's items and reports which message the val
 answer replaces. The worker removes the snapshot right after it saves the answer or
 failure notice to the transcript; streamed output is never persisted or replayed.
 
-With `--experimental-graph`, session chat also routes replies for
+Session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
 pending, a composer message is a reply to it; while a graph node waits for answers or
 for acceptance of a predecessor's output, the message is a reply to that exact execution

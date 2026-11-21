@@ -50,10 +50,6 @@ struct ExperimentalFeatures {
     /// `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
-    /// Enables preview execution graphs: `/graph` generates a graph for
-    /// inspection and exact-version approval before execution.
-    #[arg(long = "experimental-graph")]
-    graph: bool,
 }
 
 /// Runs the `agentty` application runtime using the configured workspace and
@@ -197,7 +193,6 @@ async fn run_application(
             let app = App::new(
                 !cli.no_update,
                 cli.experimental.harness,
-                cli.experimental.graph,
                 base_path,
                 working_dir,
                 git_branch,

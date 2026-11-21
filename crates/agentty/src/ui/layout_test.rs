@@ -23,8 +23,7 @@ use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action;
 use crate::presentation::help_action::{ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptGraphState, PromptSlashCommandSet, PromptSlashStage,
-    PromptSlashState,
+    PromptAtMentionState, PromptSlashCommandSet, PromptSlashStage, PromptSlashState,
 };
 use crate::ui::help_format::footer_line;
 use crate::ui::icon::Icon;
@@ -572,10 +571,7 @@ fn test_prompt_suggestion_list_for_command_stage_includes_commands() {
 fn test_prompt_suggestion_list_for_busy_session_offers_setting_commands_only() {
     // Arrange
     let input = InputState::with_text("/".to_string());
-    let slash_state = PromptSlashState {
-        graph: PromptGraphState::Available,
-        ..PromptSlashState::default()
-    };
+    let slash_state = PromptSlashState::default();
 
     // Act
     let menu = prompt_suggestion_list(
@@ -614,7 +610,7 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/mode", "/model", "/reasoning", "/style", "/fast"]
+        vec!["/graph", "/mode", "/model", "/reasoning", "/style", "/fast"]
     );
     assert_eq!(menu.selected_index, 0);
 }

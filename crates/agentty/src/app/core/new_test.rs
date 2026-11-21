@@ -238,7 +238,6 @@ async fn test_new_uses_production_client_bundle() {
         let app = App::new(
             false,
             false,
-            false,
             base_path.clone(),
             base_path.clone(),
             None,
@@ -248,7 +247,6 @@ async fn test_new_uses_production_client_bundle() {
         .expect("public constructor should build app");
         let harness_app = App::new(
             false,
-            true,
             true,
             base_path.clone(),
             base_path,
@@ -260,8 +258,6 @@ async fn test_new_uses_production_client_bundle() {
 
         // Assert
         assert!(app.selected_session().is_none());
-        assert!(!app.experimental_graph);
-        assert!(harness_app.experimental_graph);
         assert_eq!(
             app.services.harness_availability(),
             HarnessAvailability::Hidden

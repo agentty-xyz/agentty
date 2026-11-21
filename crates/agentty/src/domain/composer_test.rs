@@ -8,8 +8,8 @@ use ag_session::test_support as model_fixture;
 
 use super::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
-    PromptGraphState, PromptHistoryState, PromptSlashCommandSet, PromptSlashStage,
-    PromptSlashState, PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
+    PromptHistoryState, PromptSlashCommandSet, PromptSlashStage, PromptSlashState,
+    PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
     apply_attachment_input_command, build_prompt_slash_suggestion_list, command_description,
     current_line_delete_range, drain_prompt_submission, image_token_end_index,
     insert_prompt_local_image, insert_prompt_local_image_at, needs_space_after_image_placeholder,
@@ -1152,57 +1152,40 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/mode", "/model", "/reasoning", "/style", "/fast"]
+        vec!["/graph", "/mode", "/model", "/reasoning", "/style", "/fast"]
     );
     assert_eq!(suggestion_list.selected_index, 0);
 }
 
 #[test]
 fn graph_command_availability_keeps_menu_and_selection_aligned() {
-    for enabled in [false, true] {
-        // Arrange
-        let slash_state = PromptSlashState {
-            graph: if enabled {
-                PromptGraphState::Available
-            } else {
-                PromptGraphState::Disabled
-            },
-            ..PromptSlashState::default()
-        };
+    // Arrange
+    let slash_state = PromptSlashState::default();
 
+    for (command_set, is_offered) in [
+        (PromptSlashCommandSet::WithoutApply, true),
+        (PromptSlashCommandSet::SettingsOnly, false),
+    ] {
         // Act
-        let menu = build_prompt_slash_suggestion_list(
-            "/",
-            &slash_state,
-            AgentKind::Codex,
-            PromptSlashCommandSet::WithoutApply,
-        )
-        .expect("slash menu");
-        let selection = resolve_prompt_slash_selection(
-            "/graph",
-            &slash_state,
-            AgentKind::Codex,
-            PromptSlashCommandSet::WithoutApply,
-        );
+        let menu =
+            build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, command_set)
+                .expect("slash menu");
+        let selection =
+            resolve_prompt_slash_selection("/graph", &slash_state, AgentKind::Codex, command_set);
 
         // Assert
         assert_eq!(
             menu.items.iter().any(|item| item.label == "/graph"),
-            enabled
+            is_offered
         );
         assert!(!menu.items.iter().any(|item| item.label == "/plan"));
         assert_eq!(
             selection,
-            enabled.then_some(PromptSuggestionSelection::Command("/graph"))
+            is_offered.then_some(PromptSuggestionSelection::Command("/graph"))
         );
         assert_eq!(
-            prompt_slash_option_count(
-                "/graph",
-                &slash_state,
-                AgentKind::Codex,
-                PromptSlashCommandSet::WithoutApply
-            ),
-            usize::from(enabled)
+            prompt_slash_option_count("/graph", &slash_state, AgentKind::Codex, command_set),
+            usize::from(is_offered)
         );
     }
 }
@@ -1228,7 +1211,7 @@ fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/mode", "/model", "/reasoning", "/style"]
+        vec!["/graph", "/mode", "/model", "/reasoning", "/style"]
     );
 }
 
@@ -1249,7 +1232,10 @@ fn test_prompt_slash_selection_uses_filtered_command_indexes() {
     );
 
     // Assert
-    assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
+    assert_eq!(
+        selection,
+        Some(PromptSuggestionSelection::Command("/graph"))
+    );
 }
 
 #[test]
