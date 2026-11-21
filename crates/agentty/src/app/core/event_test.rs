@@ -968,6 +968,24 @@ async fn live_graph_holds_automatic_review_until_it_finishes() {
 }
 
 #[tokio::test]
+async fn graph_settling_its_node_holds_automatic_review_until_it_finishes() {
+    // Arrange: the node's run is terminal before settlement stores its
+    // response, as when a session turn ends inside a graph.
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app::execution_graph::tests::seed_session(&mut app.sessions, app.services.db()).await;
+    let settle_graph = app::execution_graph::tests::driver::spawn_settling_graph(&app).await;
+
+    // Act
+    let was_held = settle_graph_holding_a_review(&mut app, settle_graph).await;
+
+    // Assert
+    assert!(was_held);
+    assert!(app.deferred_auto_review_session_ids.is_empty());
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
 async fn failed_graph_releases_the_automatic_review_while_its_driver_stays_live() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
