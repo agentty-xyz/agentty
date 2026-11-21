@@ -119,6 +119,10 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 
 ## Git and Releases
 
+- The repository is public. Keep commit messages, PR descriptions, and review comments
+  free of sensitive information: secrets, credentials, personal data such as names,
+  emails, or usernames, home-directory paths, private or session links, and details
+  about individual users from telemetry. Describe affected users by role instead.
 - Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
   writing guidance: follow them, but never copy them into commit messages or PR
   descriptions.
