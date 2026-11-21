@@ -4,9 +4,52 @@
 use ag_contracts::SpeedMode;
 
 use crate::agent::{
-    AgentKind, AgentModel, AgentSelection, resolve_agent_selection_for_model,
-    resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
+    AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model,
+    resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
+    resolve_prompt_model_agent_kind,
 };
+
+#[test]
+/// Ensures every Claude model the Claude CLI and the harness share keeps
+/// the backend its selection stores: saved Claude and harness selections,
+/// model-only settings, and legacy rows without an agent never move between
+/// the CLI and the harness.
+fn test_shared_claude_models_keep_their_stored_backend() {
+    // Arrange
+    let shared_models = [
+        AgentModel::ClaudeOpus55,
+        AgentModel::ClaudeFable52,
+        AgentModel::ClaudeSonnet55,
+        AgentModel::ClaudeHaiku55,
+    ];
+    let both = [AgentKind::Claude, AgentKind::Harness];
+
+    for model in shared_models {
+        let id = model.as_str();
+
+        // Act
+        let resolutions = [
+            parse_persisted_session_agent_model(Some("claude"), id),
+            parse_persisted_session_agent_model(Some("harness"), id),
+            parse_persisted_session_agent_model(None, id),
+            resolve_agent_selection_for_model(model, AgentKind::Claude, &both),
+            resolve_agent_selection_for_model(model, AgentKind::Harness, &both),
+            resolve_agent_selection_for_model(model, AgentKind::Claude, &[AgentKind::Codex]),
+            resolve_agent_selection_for_model(model, AgentKind::Codex, &both),
+        ];
+
+        // Assert
+        let claude = AgentSelection::new(AgentKind::Claude, model);
+        let harness = AgentSelection::new(AgentKind::Harness, model);
+        assert_eq!(
+            resolutions,
+            [claude, harness, claude, claude, harness, claude, claude],
+            "{id}"
+        );
+        assert_eq!(model.owner_kind(), AgentKind::Claude, "{id}");
+        assert_eq!(harness.model(), model, "{id}");
+    }
+}
 
 #[test]
 /// Ensures Fast compatibility is exact and selects required fallback

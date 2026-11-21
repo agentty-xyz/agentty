@@ -15,7 +15,9 @@
 //! ```
 //!
 //! [`ModelProvider::OpenAi`] serves `OpenAI` models through the stateless,
-//! streamed Responses API with `OPENAI_API_KEY`. [`ModelProvider::ChatGpt`]
+//! streamed Responses API with `OPENAI_API_KEY`, and
+//! [`ModelProvider::Anthropic`] serves Claude models through the streamed
+//! Anthropic Messages API with `ANTHROPIC_API_KEY`. [`ModelProvider::ChatGpt`]
 //! serves the same API billed to the user's `ChatGPT` plan, authenticated by
 //! a refreshing sign-in stored in a credential file the host chooses with
 //! [`ModelConfiguration::auth_file`] and [`ChatGptSignIn::new`], or else
@@ -40,9 +42,7 @@
 //! [`WireProtocol`], base URL, [`Auth`], extra headers and query parameters,
 //! and request policy, and serves it through
 //! [`crate::model::ModelClient::from_spec`]. The built-in providers are
-//! presets of the same type, such as [`ProviderSpec::kimi`]; Claude models
-//! are served only this way, through the `ProviderSpec::anthropic` preset,
-//! and have no catalog entry yet.
+//! presets of the same type, such as [`ProviderSpec::kimi`].
 //!
 //! This module requires a `providers-*` feature. Every cataloged provider's
 //! entries, profiles, and prices are available with `providers-openai` or
@@ -50,7 +50,8 @@
 //! `providers-openai` for [`ModelProvider::OpenAi`] and
 //! [`ModelProvider::ChatGpt`], including the `ChatGPT` sign-in flow,
 //! `providers-compat` for the Chat Completions providers, and
-//! `providers-anthropic` for the Anthropic preset.
+//! `providers-anthropic` for [`ModelProvider::Anthropic`] and the
+//! `ProviderSpec::anthropic` preset.
 //! [`ModelConfiguration::client_from_environment`] returns
 //! `ModelConfigurationError::ProviderDisabled` for a provider whose family
 //! feature is off.
@@ -63,6 +64,8 @@ mod catalog;
 mod chatgpt;
 #[cfg(feature = "providers-openai")]
 mod chatgpt_sign_in;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+mod claude;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 mod kimi;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -106,6 +109,8 @@ pub use chatgpt::{
 pub use chatgpt_sign_in::{
     CHATGPT_AUTH_URL_ENV, ChatGptSignIn, ChatGptSignInError, PendingChatGptSignIn,
 };
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+pub(crate) use claude::{CLAUDE_HAIKU_5_5, CLAUDE_OPUS_5_5};
 #[cfg(feature = "providers-compat")]
 pub use kimi::KimiConfig;
 #[cfg(feature = "providers-compat")]

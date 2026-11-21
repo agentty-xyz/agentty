@@ -658,6 +658,49 @@ fn empty_environment_catalogs_nothing() {
     ));
 }
 
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+#[test]
+fn environment_catalogs_claude_with_an_anthropic_key_and_skips_a_blank_one() {
+    // Arrange
+    let configured = lookup(&[("ANTHROPIC_API_KEY", "anthropic-key")]);
+    let blank = lookup(&[("ANTHROPIC_API_KEY", " ")]);
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(configured).expect("valid environment");
+    let skipped = ModelCatalog::from_environment_with(blank).expect("a blank key is unset");
+
+    // Assert
+    assert_eq!(
+        spec_ids(&catalog),
+        [
+            "anthropic/claude-fable-5-2",
+            "anthropic/claude-haiku-5-5",
+            "anthropic/claude-opus-5-5",
+            "anthropic/claude-sonnet-5-5",
+        ]
+    );
+    assert_eq!(
+        ids(catalog.candidates(&Role::SMART)),
+        ["anthropic/claude-opus-5-5"]
+    );
+    assert_eq!(
+        ids(catalog.candidates(&Role::VISION)),
+        ["anthropic/claude-opus-5-5"]
+    );
+    for role in [Role::CHEAP, Role::FAST] {
+        assert_eq!(
+            ids(catalog.candidates(&role)),
+            ["anthropic/claude-haiku-5-5"],
+            "{role}"
+        );
+    }
+    assert_eq!(skipped.specs().count(), 0);
+}
+
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_reports_an_invalid_configured_provider() {

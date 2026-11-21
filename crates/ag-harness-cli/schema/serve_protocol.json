@@ -806,7 +806,7 @@
         {
           "type": "string",
           "const": "built_in",
-          "description": "The harness's built-in list prices, as the providers published them\non 2026-10-29 at their lowest input tier."
+          "description": "The harness's built-in list prices, as the providers published them\non 2026-10-29, or Anthropic on 2026-11-21, at their lowest input\ntier."
         },
         {
           "type": "string",

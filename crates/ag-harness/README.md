@@ -756,10 +756,13 @@ budget explicitly.
 presets it with an `AnthropicConfig` (the API key, a base URL such as
 `DEFAULT_ANTHROPIC_BASE_URL`, and the model), sending the key as `x-api-key` beside the
 protocol's `anthropic-version: 2023-06-01` header, which `ProviderSpec::with_header` can
-replace. The catalog lists no Claude model yet, so serve it with
-`ModelClient::from_spec` and declare its context profile with a `ModelRegistry`
-registration's `ModelCapabilities` (see "Model catalog" below) and its prices with
-`catalog::ModelSpec::with_pricing`:
+replace. Serve it with `ModelClient::from_spec`, which declares no context profile:
+`ModelProvider::Anthropic` catalogs `claude-opus-5-5`, `claude-fable-5-2`,
+`claude-sonnet-5-5`, and `claude-haiku-5-5` with their documented 1M-token window,
+128K-token output limit, and list prices, for a `ModelRegistry` registration (see "Model
+catalog" below). `ModelConfiguration` builds the same client from `ANTHROPIC_API_KEY`
+and an optional `ANTHROPIC_BASE_URL`, read as Anthropic's SDKs read it: the API origin
+without the `/v1` version path (default `https://api.anthropic.com`). Built directly:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -1031,7 +1034,7 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `otel`                | yes     | OpenTelemetry request metrics, `LifecycleMetrics`, `LifecycleTraceObserver`, span context |
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
-| `providers-anthropic` | yes     | The Anthropic Messages preset, `ProviderSpec::anthropic`, for Claude models               |
+| `providers-anthropic` | yes     | Anthropic Messages clients for Claude models, through `ProviderSpec::anthropic`           |
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`

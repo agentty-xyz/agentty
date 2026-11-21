@@ -322,16 +322,19 @@ const ANTIGRAVITY_MODELS: &[AgentModel] = &[
 
 /// Hosted models the native harness serves, in display order: its own
 /// catalog models, then the Codex models `OpenAI`'s Responses API also
-/// serves, which the harness shares with [`AgentKind::Codex`]. Served
-/// [`AgentModel::OpenAiCompatible`] models are discovered at runtime and
-/// listed before these.
+/// serves, which the harness shares with [`AgentKind::Codex`], then the
+/// Claude models the Anthropic Messages API serves, which it shares with
+/// [`AgentKind::Claude`]. Served [`AgentModel::OpenAiCompatible`] models are
+/// discovered at runtime and listed before these. A shared model keeps the
+/// provider its selection stores, so a Claude or Codex CLI selection never
+/// moves to the harness, nor a harness selection to a CLI.
 ///
 /// ChatGPT-plan models carry a `chatgpt/` id prefix, distinct from the bare
 /// ids of the same models on the API-billed `OpenAI` provider, so choosing
-/// one never bills API credits. They precede the `OpenAI` models, which come
-/// last because `OPENAI_API_KEY` is often set for other tools, so its mere
-/// presence must not move sessions from a deliberately configured harness
-/// provider to paid `OpenAI` usage. The
+/// one never bills API credits. They precede the `OpenAI` and Claude models,
+/// which come last because `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are often
+/// set for other tools, so their mere presence must not move sessions from a
+/// deliberately configured harness provider to paid API usage. The
 /// harness library also catalogs the deprecated `gpt-5.3-codex`, which
 /// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it. Cheap
 /// tiers follow their provider's other models, so adding one never changes
@@ -357,6 +360,10 @@ const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::Gpt6Astra,
     AgentModel::Gpt6Luna,
     AgentModel::Gpt56Terra,
+    AgentModel::ClaudeOpus55,
+    AgentModel::ClaudeFable52,
+    AgentModel::ClaudeSonnet55,
+    AgentModel::ClaudeHaiku55,
 ];
 
 /// Id prefix of every [`AgentModel::OpenAiCompatible`] model.

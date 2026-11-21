@@ -7,7 +7,7 @@ use ag_router::chatgpt::ChatGptAuthError;
 
 use super::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
-    chatgpt, kimi, muse, openai, openai_compatible, qwen,
+    chatgpt, claude, kimi, muse, openai, openai_compatible, qwen,
 };
 use crate::catalog::{Capabilities, ModelId, PricingSource};
 use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
@@ -45,6 +45,7 @@ fn catalog_exposes_every_provider_and_known_model() {
             ModelProvider::Qwen,
             ModelProvider::OpenAi,
             ModelProvider::ChatGpt,
+            ModelProvider::Anthropic,
             ModelProvider::OpenAiCompatible
         ]
     );
@@ -145,6 +146,7 @@ fn provider_identifiers_round_trip_and_display() {
             "qwen",
             "openai",
             "chatgpt",
+            "anthropic",
             "openai-compatible"
         ]
     );
@@ -339,10 +341,23 @@ fn declares_a_cost_tier_for_every_cataloged_model() {
             "qwen-plus",
             "qwen3.8-flash",
             "qwen3.7-flash",
-            "gpt-6-luna"
+            "gpt-6-luna",
+            "claude-haiku-5-5"
         ]
     );
-    assert_eq!(premium, ["kimi-k3", "gpt-6-astra"]);
+    assert_eq!(
+        premium,
+        [
+            "kimi-k3",
+            "gpt-6-astra",
+            "claude-opus-5-5",
+            "claude-fable-5-2"
+        ]
+    );
+    assert_eq!(
+        ModelProvider::Anthropic.cost_tier(claude::CLAUDE_SONNET_5_5),
+        Some(CostTier::Standard)
+    );
     assert_eq!(
         ModelProvider::Muse.cost_tier(muse::MUSE_SPARK_1_3),
         Some(CostTier::Standard)
@@ -787,6 +802,10 @@ fn every_per_token_model_has_sane_built_in_pricing() {
         .iter()
         .filter_map(|(provider, model)| Some((*provider, *model, provider.pricing(model)?)))
         .collect::<Vec<_>>();
+    // Anthropic's prices have their own test.
+    let listed = priced
+        .iter()
+        .filter(|(provider, _, _)| *provider != ModelProvider::Anthropic);
 
     // Assert
     for (_, model, pricing) in &priced {
@@ -801,8 +820,7 @@ fn every_per_token_model_has_sane_built_in_pricing() {
         );
     }
     assert_eq!(
-        priced
-            .iter()
+        listed
             .map(|(provider, model, pricing)| (
                 *provider,
                 *model,
@@ -980,4 +998,111 @@ fn every_provider_is_enabled_with_both_families() {
 
     // Assert
     assert!(disabled.is_empty(), "{disabled:?}");
+}
+
+#[test]
+fn anthropic_catalogs_claude_models_with_their_list_prices_and_environment() {
+    // Arrange
+    let provider = ModelProvider::Anthropic;
+
+    // Act
+    let prices = provider
+        .known_models()
+        .iter()
+        .map(|model| {
+            let pricing = provider.pricing(model).expect("Claude models are priced");
+
+            (
+                *model,
+                pricing.input_per_mtok_micro_usd(),
+                pricing.output_per_mtok_micro_usd(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        prices,
+        [
+            (claude::CLAUDE_OPUS_5_5, 4_000_000, 20_000_000),
+            (claude::CLAUDE_FABLE_5_2, 8_000_000, 40_000_000),
+            (claude::CLAUDE_SONNET_5_5, 2_000_000, 10_000_000),
+            (claude::CLAUDE_HAIKU_5_5, 100_000, 500_000),
+        ]
+    );
+    assert_eq!(
+        provider.known_models(),
+        &[
+            "claude-opus-5-5",
+            "claude-fable-5-2",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5"
+        ]
+    );
+    assert_eq!(provider.api_key_environment(), "ANTHROPIC_API_KEY");
+    assert_eq!(provider.base_url_environment(), "ANTHROPIC_BASE_URL");
+    assert_eq!(
+        provider.default_base_url(),
+        Some("https://api.anthropic.com")
+    );
+    assert!(provider.requires_api_key());
+    assert!(!provider.requires_sign_in());
+    assert_eq!(provider.pricing("claude-unlisted"), None);
+    assert_eq!(
+        provider
+            .declared_profile(claude::CLAUDE_OPUS_5_5, missing_environment)
+            .expect("Claude profiles read no environment"),
+        claude::profile(claude::CLAUDE_OPUS_5_5)
+    );
+}
+
+#[test]
+fn anthropic_serves_claude_with_a_nonblank_key_and_a_valid_origin() {
+    // Arrange
+    let environment = |api_key: &'static str, base_url: &'static str| {
+        move |name: &str| {
+            Ok(if name == claude::ANTHROPIC_API_KEY_ENV {
+                api_key.to_string()
+            } else {
+                base_url.to_string()
+            })
+        }
+    };
+    let configure = || ModelConfiguration::new(ModelProvider::Anthropic, claude::CLAUDE_OPUS_5_5);
+
+    // Act
+    let served = configure()
+        .client_from_environment(environment("sk-ant-test", ""))
+        .expect("a key and the default origin should configure a client");
+    let blank_key = configure()
+        .client_from_environment(environment(" ", ""))
+        .err()
+        .expect("a blank key should be rejected");
+    let invalid_origin = configure()
+        .client_from_environment(environment("sk-ant-test", "not a url"))
+        .err()
+        .expect("an origin that is not a URL should be rejected");
+    let spec = ModelProvider::Anthropic
+        .model_spec(claude::CLAUDE_HAIKU_5_5)
+        .expect("cataloged model has a spec");
+
+    // Assert
+    assert_eq!(served.metadata().provider(), "anthropic");
+    assert_eq!(served.metadata().model(), claude::CLAUDE_OPUS_5_5);
+    assert!(matches!(
+        blank_key,
+        ModelConfigurationError::ApiKey {
+            name: claude::ANTHROPIC_API_KEY_ENV
+        }
+    ));
+    assert!(
+        matches!(invalid_origin, ModelConfigurationError::Spec(_)),
+        "{invalid_origin:?}"
+    );
+    assert_eq!(spec.id(), &ModelId::new("anthropic/claude-haiku-5-5"));
+    assert_eq!(spec.context_window(), Some(1_000_000));
+    assert_eq!(spec.max_output(), Some(128_000));
+    assert!(spec.capabilities().structured_output());
+    assert!(spec.capabilities().image_input());
+    assert!(spec.capabilities().reasoning());
 }

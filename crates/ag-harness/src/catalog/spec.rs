@@ -183,7 +183,8 @@ impl fmt::Display for Capabilities {
 #[non_exhaustive]
 pub enum PricingSource {
     /// The harness's built-in list prices, as the providers published them
-    /// on 2026-10-29 at their lowest input tier.
+    /// on 2026-10-29, or Anthropic on 2026-11-21, at their lowest input
+    /// tier.
     BuiltIn,
     /// Prices the host supplied, such as a negotiated rate.
     Host,
