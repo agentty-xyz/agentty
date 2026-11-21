@@ -13,7 +13,7 @@ use ag_session::{
     GraphWorkspaceAccess, test_support as model_fixture,
 };
 use ag_worker::{GraphAdmission, GraphDispatch};
-use agentty::db::Database;
+use agentty::db::{Database, GraphOutputReplyRecord};
 use testty::assertion;
 use testty::journey::Journey;
 use testty::region::Region;
@@ -803,6 +803,80 @@ async fn chat_reply_resumes_a_paused_graph_and_continues_inside_it() -> E2eResul
                     // The reply ran as the graph's own node: the graph is no
                     // longer paused, and the node owns the question.
                     let asked = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_not_visible(&asked, "resume required");
+                    assertion::assert_not_visible(&asked, "s resume graph");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_applies_a_chat_reply_recorded_before_it_was_decided() -> E2eResult {
+    // Arrange
+    FeatureTest::new("restart_recovers_graph_output_reply")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| {
+            Box::pin(async move {
+                seed_paused_plan_graph(env).await?;
+                // The earlier run stopped while deciding this reply.
+                let database = common::open_database(env).await?;
+                let progress = database
+                    .graphs()
+                    .progress("paused-plan")
+                    .await?
+                    .ok_or("Seeded graph progress")?;
+                let plan = &progress.nodes[0];
+                database
+                    .graphs()
+                    .record_output_reply(&GraphOutputReplyRecord {
+                        attachments: Vec::new(),
+                        execution: plan.executions[0].clone(),
+                        id: uuid::Uuid::from_u128(7).to_string(),
+                        message: "Start implementing".into(),
+                        outcome: None,
+                        reference: plan.results[0].reference.clone(),
+                    })
+                    .await?;
+
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Accepted response from plan · continuing", 15000)
+                    .wait_for_text("Which branch next?", 15000)
+                    .wait_for_text("Question 1/1", 5000)
+                    .capture_labeled("recovered", "Restart decided and applied the reply")
+                    .compose(&close_graph_question())
+                    .press_key("w")
+                    .wait_for_text("paused-plan", 5000)
+                    .press_key("j")
+                    .wait_for_text("Inspect implement", 5000)
+                    .wait_for_text("Which branch next?", 5000)
+                    .capture_labeled("asked", "The recovered reply resumed the graph")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let recovered = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(recovered.cols(), recovered.rows());
+                    for expected in [
+                        "Accepted response from plan · continuing",
+                        "Implemented inside the graph.",
+                        "Question 1/1",
+                    ] {
+                        assertion::assert_text_in_region(&recovered, expected, &full);
+                    }
+                    let asked = common::frame_from_capture(&report.captures[1]);
                     assertion::assert_not_visible(&asked, "resume required");
                     assertion::assert_not_visible(&asked, "s resume graph");
                 })

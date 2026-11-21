@@ -589,10 +589,12 @@ output as awaiting approval, and your reply resumes the graph before acting on i
 applies to the session's newest graph only; an older paused graph leaves your message as
 an ordinary turn.
 
-Duplicate approvals do not launch again. Pending proposals and undecided replies survive
-a restart or project switch, though a recovered reply loses its images; stopping the
-session abandons an undecided reply. Approved graphs keep the limits fixed at approval
-and resume after restart with their remaining provider calls.
+Duplicate approvals do not launch again. Pending proposals and undecided replies, to a
+proposal or to an output awaiting approval, survive a restart or project switch. A
+recovered proposal reply loses its images; a recovered output reply keeps them and
+resumes its graph. Stopping the session abandons an undecided reply. Approved graphs
+keep the limits fixed at approval and resume after restart with their remaining provider
+calls.
 
 ## Execution Graph Inspector
 
@@ -612,8 +614,8 @@ discard it.
 
 Provider-call limits are fixed when a graph first launches, and resuming continues from
 the calls that remain; a node whose budget is spent stays blocked. Nothing replays
-automatically on restart. Focused-review graphs can be inspected and canceled here;
-regenerate them with `f`.
+automatically on restart; only a chat reply you sent before it is still applied.
+Focused-review graphs can be inspected and canceled here; regenerate them with `f`.
 
 Programmatic integrations can track outcomes through the
 [Task API](@/docs/core-components/durable-components/task.md) and query, answer, retry,

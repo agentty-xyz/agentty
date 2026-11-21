@@ -1,15 +1,57 @@
-//! Shared read-only utility run behind graph chat-reply decisions.
+//! Shared decision run and background registry behind graph chat replies.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ag_session::AgentSelection;
 use ag_worker::RunClient;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::app::AppServices;
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
+use crate::domain::session::SessionId;
 
-/// Submits `prompt` as one read-only utility run on the Run Worker and parses
-/// the answer with `parse`.
+/// Provider calls one decision may spend, including transport retries.
+pub(super) const DECISION_PROVIDER_CALLS: usize = 3;
+
+/// Replies whose background decision is in flight, keyed by the proposal or
+/// output they act on.
+pub(super) type ReplyDecisions = Arc<Mutex<HashMap<String, ReplyDecision>>>;
+
+/// A background decision, cancelled with its session or at shutdown.
+pub(super) struct ReplyDecision {
+    pub(super) cancellation: CancellationToken,
+    pub(super) is_abandoned: Arc<AtomicBool>,
+    pub(super) session_id: SessionId,
+}
+
+impl AppServices {
+    /// Cancels background reply decisions. Stopping one session abandons its
+    /// undecided replies; stopping all at shutdown keeps them recoverable.
+    pub(super) fn cancel_graph_reply_decisions(&self, session_id: Option<&str>) {
+        for decisions in [&self.proposal_reply_decisions, &self.output_reply_decisions] {
+            for decision in decisions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .values()
+            {
+                if let Some(session_id) = session_id {
+                    if decision.session_id.as_str() != session_id {
+                        continue;
+                    }
+                    decision.is_abandoned.store(true, Ordering::Release);
+                }
+                decision.cancellation.cancel();
+            }
+        }
+    }
+}
+
+/// Submits `prompt` as one read-only utility run on the Run Worker, within a
+/// bounded provider budget, and parses the answer with `parse`.
 ///
 /// Returns `None` when the run fails or `parse` rejects the answer, logging a
 /// warning tagged with `subject`, so callers can fall back to their safe
@@ -33,7 +75,9 @@ pub(super) async fn decide<Reply>(
             model: agent.model().as_str().to_string(),
             permission_mode: ag_contracts::PermissionMode::ReadOnly,
             prompt,
-            provider_call_budget: None,
+            provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(
+                DECISION_PROVIDER_CALLS,
+            )),
             reasoning_level: ReasoningLevel::default(),
             request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
             speed_mode: SpeedMode::Normal,

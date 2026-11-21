@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 use super::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry, StatusChange};
 use crate::app::SessionManager;
 use crate::app::execution_graph::tests::seed_session;
-use crate::app::graph_output_reply::OutputReplyDecision;
 use crate::app::graph_proposal::ProposalGeneration;
+use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::service::AppServices;
 use crate::app::session::StatusTransition;
 use crate::domain::session::{SessionId, Status};
@@ -390,15 +390,17 @@ async fn stopping_a_session_stops_only_its_graph_work() {
         .expect("decisions") = HashMap::from([
         (
             "result".to_string(),
-            OutputReplyDecision {
+            ReplyDecision {
                 cancellation: stopped_reply.clone(),
+                is_abandoned: Arc::default(),
                 session_id: SessionId::from("sess"),
             },
         ),
         (
             "other-result".to_string(),
-            OutputReplyDecision {
+            ReplyDecision {
                 cancellation: kept_reply.clone(),
+                is_abandoned: Arc::default(),
                 session_id: SessionId::from("other"),
             },
         ),

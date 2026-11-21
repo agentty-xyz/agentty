@@ -6,10 +6,10 @@ use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
 };
 use ag_protocol::AgentResponse;
-use ag_session::{AgentKind, AgentModel, AgentSelection};
+use ag_session::{AgentKind, AgentModel, AgentSelection, GraphOutputReplyOutcome};
 use ag_worker::MockRunClient;
 
-use super::{GraphOutputReply, GraphOutputReplyDecision};
+use super::GraphOutputReplyDecision;
 
 #[test]
 fn prompt_passes_output_and_reply_only_as_json_encoded_data() {
@@ -38,12 +38,12 @@ fn prompt_passes_output_and_reply_only_as_json_encoded_data() {
 async fn decision_accepts_only_an_explicit_accept_answer() {
     // Arrange
     let cases = [
-        ("accept", GraphOutputReply::Accept),
-        (" `Accept`.\n", GraphOutputReply::Accept),
-        ("revise", GraphOutputReply::Revise),
-        ("accept it", GraphOutputReply::Revise),
-        (r#"{"decision":"accept"}"#, GraphOutputReply::Revise),
-        ("", GraphOutputReply::Revise),
+        ("accept", GraphOutputReplyOutcome::Accept),
+        (" `Accept`.\n", GraphOutputReplyOutcome::Accept),
+        ("revise", GraphOutputReplyOutcome::Revise),
+        ("accept it", GraphOutputReplyOutcome::Revise),
+        (r#"{"decision":"accept"}"#, GraphOutputReplyOutcome::Revise),
+        ("", GraphOutputReplyOutcome::Revise),
     ];
 
     for (answer, expected) in cases {
@@ -54,6 +54,13 @@ async fn decision_accepts_only_an_explicit_accept_answer() {
             assert_eq!(request.model, AgentModel::Gpt61Sol.as_str());
             assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
             assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
+            assert_eq!(
+                request
+                    .provider_call_budget
+                    .as_ref()
+                    .map(ag_contracts::ProviderCallBudget::remaining),
+                Some(3)
+            );
             assert!(request.prompt.contains(r#""Start implementing""#));
 
             Ok(OneShotSubmission {
@@ -85,7 +92,7 @@ async fn failed_decision_run_revises_the_output() {
     let outcome = decision("Plan", "Go ahead").decide(&run_client).await;
 
     // Assert
-    assert_eq!(outcome, GraphOutputReply::Revise);
+    assert_eq!(outcome, GraphOutputReplyOutcome::Revise);
 }
 
 fn decision(output: &str, reply: &str) -> GraphOutputReplyDecision {

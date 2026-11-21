@@ -31,5 +31,6 @@ pub use proposal_state::{
     GraphProposalVersionOutcome,
 };
 pub use result::{
-    GraphExecutionRef, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
+    GraphExecutionRef, GraphOutputReplyOutcome, GraphResolvedInput, GraphResult, GraphResultRef,
+    GraphResultState,
 };

@@ -301,16 +301,7 @@ impl AppServices {
                 .await;
             generation.cancellation.cancel();
         }
-        self.cancel_proposal_reply_decisions(Some(session_id));
-        for decision in self
-            .output_reply_decisions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .filter(|decision| decision.session_id.as_str() == session_id)
-        {
-            decision.cancellation.cancel();
-        }
+        self.cancel_graph_reply_decisions(Some(session_id));
     }
 
     /// Persists and announces the latest in-memory status under the

@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_proposal_decision::GraphProposalReplyDecision;
 use crate::app::graph_question::GraphAnswerOutcome;
+use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
@@ -46,13 +47,6 @@ const DECISION_PENDING: &str =
 /// Notice shown when stopping the session abandons an undecided reply.
 const DECISION_CANCELED: &str =
     "Graph proposal: the reply decision was canceled. Reply again to act on the proposal.";
-
-/// A background decision, cancelled with its session or at shutdown.
-pub(super) struct ProposalReplyDecision {
-    cancellation: CancellationToken,
-    is_abandoned: Arc<AtomicBool>,
-    session_id: SessionId,
-}
 
 impl App {
     /// Routes one composer message to the session's pending graph proposal.
@@ -244,7 +238,7 @@ impl App {
     }
 
     /// Reads the workspace and live transcript a decision reports into.
-    fn reply_session_handles(
+    pub(super) fn reply_session_handles(
         &self,
         session_id: &SessionId,
     ) -> Option<(PathBuf, Arc<Mutex<SessionTranscript>>)> {
@@ -292,7 +286,7 @@ impl App {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(
                 reply.proposal_id.clone(),
-                ProposalReplyDecision {
+                ReplyDecision {
                     cancellation: cancellation.clone(),
                     is_abandoned: Arc::clone(&is_abandoned),
                     session_id: state.input.session_id.clone(),
@@ -363,25 +357,6 @@ impl App {
 }
 
 impl AppServices {
-    /// Cancels background reply decisions. Stopping one session abandons its
-    /// undecided replies; stopping all at shutdown keeps them recoverable.
-    pub(super) fn cancel_proposal_reply_decisions(&self, session_id: Option<&str>) {
-        for decision in self
-            .proposal_reply_decisions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-        {
-            if let Some(session_id) = session_id {
-                if decision.session_id.as_str() != session_id {
-                    continue;
-                }
-                decision.is_abandoned.store(true, Ordering::Release);
-            }
-            decision.cancellation.cancel();
-        }
-    }
-
     /// Records the first decision and admits its action for the replied-to
     /// version, then settles the reply whether or not the attempted action
     /// succeeded, and returns the notice to show.

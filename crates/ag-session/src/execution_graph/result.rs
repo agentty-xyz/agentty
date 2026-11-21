@@ -116,6 +116,16 @@ pub struct GraphResult {
     pub state: GraphResultState,
 }
 
+/// First decision recorded for a chat reply to one output awaiting
+/// acceptance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphOutputReplyOutcome {
+    /// Accept the exact replied-to output version.
+    Accept,
+    /// Send the reply to the producing node as revision guidance.
+    Revise,
+}
+
 /// Exact input captured with a newly admitted execution.
 ///
 /// Redelivery must retain this reference, even if a newer result is available.

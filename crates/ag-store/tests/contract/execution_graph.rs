@@ -8,10 +8,11 @@ use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt, TurnPromptA
 use ag_session::{
     AgentDefinition, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, EnvId,
     ExecutionGraph, GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile,
-    GraphExecutionRef, GraphInputBinding, GraphNode, GraphOutput, GraphPostProcessing,
-    GraphResolvedInput, GraphResultRef, GraphResultState, GraphWorkspaceAccess, SubmitTaskRequest,
+    GraphExecutionRef, GraphInputBinding, GraphNode, GraphOutput, GraphOutputReplyOutcome,
+    GraphPostProcessing, GraphResolvedInput, GraphResultRef, GraphResultState,
+    GraphWorkspaceAccess, SubmitTaskRequest,
 };
-use ag_store::{Database, GraphEvidence, GraphExecutionRecord};
+use ag_store::{Database, GraphEvidence, GraphExecutionRecord, GraphOutputReplyRecord};
 use ag_worker::{RunInfo, RunState};
 
 #[tokio::test]
@@ -318,6 +319,203 @@ async fn graph_handoffs_survive_reopening_without_retargeting_or_replaying_execu
     reopened.pool().close().await;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn output_replies_are_recorded_once_for_an_exact_unaccepted_output()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("graph-output-reply-")
+        .tempdir_in(".")?;
+    let (database, _, reply) = output_reply_fixture(&directory.path().join("reply.sqlite")).await?;
+    let named = |id: &str| GraphOutputReplyRecord {
+        id: id.into(),
+        ..reply.clone()
+    };
+    let replies = database.graphs();
+
+    // Act
+    let recorded = replies.record_output_reply(&reply).await?;
+    let redelivered = replies.record_output_reply(&reply).await?;
+    let conflicting = replies
+        .record_output_reply(&GraphOutputReplyRecord {
+            message: "Other".into(),
+            ..reply.clone()
+        })
+        .await;
+    let blank = replies.record_output_reply(&named(" ")).await;
+    let mut unknown = named("unknown");
+    unknown.reference.id = "missing".into();
+    let unknown = replies.record_output_reply(&unknown).await;
+    accept_plan(&database, &reply.reference).await?;
+    let accepted = replies.record_output_reply(&named("late")).await;
+    let messages = database.sessions().load_session_messages("session").await?;
+
+    // Assert
+    assert!(recorded);
+    assert!(!redelivered);
+    assert!(conflicting.is_err());
+    assert!(blank.is_err());
+    assert!(
+        unknown
+            .expect_err("unknown output")
+            .to_string()
+            .contains("exact persisted output")
+    );
+    assert!(
+        accepted
+            .expect_err("accepted output")
+            .to_string()
+            .contains("Accepted outputs")
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.content == "Start implementing [Image #1]")
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_replies_keep_their_first_decision_and_recover_until_settled()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("graph-output-reply-")
+        .tempdir_in(".")?;
+    let path = directory.path().join("reply.sqlite");
+    let (database, graph, reply) = output_reply_fixture(&path).await?;
+    let revision = GraphOutputReplyRecord {
+        id: "revise".into(),
+        ..reply.clone()
+    };
+    database.graphs().record_output_reply(&reply).await?;
+    database.pool().close().await;
+    drop(database);
+
+    // Act
+    let reopened = Database::open(&path).await?;
+    let replies = reopened.graphs();
+    let pending = replies.unsettled_output_replies("session").await?;
+    let decided = replies
+        .decide_output_reply("reply", GraphOutputReplyOutcome::Accept)
+        .await?;
+    let redecided = replies
+        .decide_output_reply("reply", GraphOutputReplyOutcome::Revise)
+        .await?;
+    let redelivered = replies.record_output_reply(&reply).await?;
+    let missing_decision = replies
+        .decide_output_reply("missing", GraphOutputReplyOutcome::Revise)
+        .await;
+    replies.settle_output_reply("reply").await?;
+    let missing_settlement = replies.settle_output_reply("missing").await;
+    replies.record_output_reply(&revision).await?;
+    replies
+        .decide_output_reply("revise", GraphOutputReplyOutcome::Revise)
+        .await?;
+    let unsettled = replies.unsettled_output_replies("session").await?;
+    sqlx::query("UPDATE execution_graph_output_reply SET attachments = 'corrupt'")
+        .execute(reopened.pool())
+        .await?;
+    let corrupt = replies.unsettled_output_replies("session").await;
+    sqlx::query("UPDATE execution_graph_output_reply SET attachments = '[]'")
+        .execute(reopened.pool())
+        .await?;
+    replies
+        .cancel(&ag_session::GraphControlRequest {
+            graph_id: graph.id.clone(),
+            revision: graph.revision,
+        })
+        .await?;
+    let after_cancel = replies.unsettled_output_replies("session").await?;
+
+    // Assert
+    assert!(!redelivered);
+    assert_eq!(pending, std::slice::from_ref(&reply));
+    assert_eq!(decided, GraphOutputReplyOutcome::Accept);
+    assert_eq!(redecided, GraphOutputReplyOutcome::Accept);
+    assert!(missing_decision.is_err());
+    assert!(missing_settlement.is_err());
+    assert_eq!(
+        unsettled,
+        [GraphOutputReplyRecord {
+            outcome: Some(GraphOutputReplyOutcome::Revise),
+            ..revision
+        }]
+    );
+    assert!(corrupt.is_err());
+    assert_eq!(after_cancel, []);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_replies_to_a_replaced_or_accepted_output_are_not_recovered()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("graph-output-reply-")
+        .tempdir_in(".")?;
+    let (database, _, reply) = output_reply_fixture(&directory.path().join("reply.sqlite")).await?;
+    let replies = database.graphs();
+    replies.record_output_reply(&reply).await?;
+    let awaited = replies.unsettled_output_replies("session").await?;
+
+    // Act
+    let retry = admit_task(&database, "attempt-2").await?;
+    let reference = produce_plan(
+        &database,
+        &retry,
+        "plan-v2",
+        NonZeroU64::MIN.saturating_add(1),
+        "Revised plan",
+    )
+    .await?;
+    let newer = GraphOutputReplyRecord {
+        execution: retry.execution,
+        id: "newer".into(),
+        reference,
+        ..reply.clone()
+    };
+    replies.record_output_reply(&newer).await?;
+    let replaced = replies.unsettled_output_replies("session").await?;
+    accept_plan(&database, &newer.reference).await?;
+    let accepted = replies.unsettled_output_replies("session").await?;
+
+    // Assert
+    assert_eq!(awaited, std::slice::from_ref(&reply));
+    assert_eq!(replaced, std::slice::from_ref(&newer));
+    assert_eq!(accepted, []);
+
+    Ok(())
+}
+
+/// Opens the lifecycle graph with an unaccepted `plan` output and a reply
+/// with one image that answers it, not yet recorded.
+async fn output_reply_fixture(
+    path: &std::path::Path,
+) -> Result<(Database, ExecutionGraph, GraphOutputReplyRecord), Box<dyn Error>> {
+    let (database, graph) = open_lifecycle_graph(path).await?;
+    let source = admit_task(&database, "attempt-1").await?;
+    let reference =
+        produce_plan(&database, &source, "plan-v1", NonZeroU64::MIN, "Exact plan").await?;
+    let reply = GraphOutputReplyRecord {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: "mock.png".into(),
+            placeholder: "[Image #1]".into(),
+        }],
+        execution: source.execution,
+        id: "reply".into(),
+        message: "Start implementing".into(),
+        outcome: None,
+        reference,
+    };
+
+    Ok((database, graph, reply))
 }
 
 async fn admit_task(

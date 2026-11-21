@@ -53,11 +53,11 @@ pub use execution_graph::{
     GenerateGraphProposalRequest, GraphBlockedReason, GraphCompletionGate, GraphContext,
     GraphContractError, GraphControlRequest, GraphDependency, GraphExecutionProfile,
     GraphExecutionRef, GraphInputBinding, GraphNode, GraphNodeContinuation, GraphNodeProgress,
-    GraphNodeStatus, GraphOutput, GraphPostProcessing, GraphProposalAction, GraphProposalApproval,
-    GraphProposalLimits, GraphProposalReplyOutcome, GraphProposalResolution, GraphProposalState,
-    GraphProposalVersion, GraphProposalVersionOutcome, GraphQuestionAnswer, GraphResolvedInput,
-    GraphResult, GraphResultRef, GraphResultState, GraphWorkspaceAccess,
-    ResumeExecutionGraphRequest,
+    GraphNodeStatus, GraphOutput, GraphOutputReplyOutcome, GraphPostProcessing,
+    GraphProposalAction, GraphProposalApproval, GraphProposalLimits, GraphProposalReplyOutcome,
+    GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
+    GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
+    GraphWorkspaceAccess, ResumeExecutionGraphRequest,
 };
 pub use harness_model::{
     HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost,

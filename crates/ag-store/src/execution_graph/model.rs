@@ -1,7 +1,10 @@
-//! Stored graph evidence, result, history, and proposal-reply records.
+//! Stored graph evidence, result, history, and chat-reply records.
 
 use ag_protocol::TurnPromptAttachment;
-use ag_session::{GraphProposalReplyOutcome, GraphResult};
+use ag_session::{
+    GraphExecutionRef, GraphOutputReplyOutcome, GraphProposalReplyOutcome, GraphResult,
+    GraphResultRef,
+};
 pub use ag_worker::GraphExecutionRecord;
 
 /// Trusted host evidence for an exact result, supplied separately from output.
@@ -67,4 +70,23 @@ pub struct GraphProposalReplyRecord {
     pub session_id: String,
     /// Exact proposal version the reply answered.
     pub version: u32,
+}
+
+/// One chat reply to an exact output version awaiting acceptance and its
+/// first decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphOutputReplyRecord {
+    /// Images sent with the reply, delivered with revision guidance.
+    pub attachments: Vec<TurnPromptAttachment>,
+    /// Producer execution that revision guidance targets.
+    pub execution: GraphExecutionRef,
+    /// Caller delivery identity, a UUID that is also the action identity of
+    /// the reply's revision guidance.
+    pub id: String,
+    /// User-authored reply text.
+    pub message: String,
+    /// Decision recorded for this reply, absent until decided.
+    pub outcome: Option<GraphOutputReplyOutcome>,
+    /// Exact output version the reply answered.
+    pub reference: GraphResultRef,
 }

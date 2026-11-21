@@ -41,13 +41,11 @@ pub struct AppServices {
     pub(super) graph_resources: Arc<ag_worker::GraphResources>,
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
     /// Graph outputs whose chat reply is waiting for its background decision.
-    pub(super) output_reply_decisions:
-        Arc<Mutex<HashMap<String, super::graph_output_reply::OutputReplyDecision>>>,
+    pub(super) output_reply_decisions: super::graph_reply_decision::ReplyDecisions,
     pub(super) proposal_generations:
         Arc<Mutex<HashMap<String, super::graph_proposal::ProposalGeneration>>>,
     /// Proposals whose chat reply is waiting for its background decision.
-    pub(super) proposal_reply_decisions:
-        Arc<Mutex<HashMap<String, super::graph_proposal_reply::ProposalReplyDecision>>>,
+    pub(super) proposal_reply_decisions: super::graph_reply_decision::ReplyDecisions,
     analytics: Option<Analytics>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
@@ -321,7 +319,7 @@ impl AppServices {
     /// Stops detached and nested utility runs owned by a canceled session.
     pub(crate) fn cancel_agent_runs(&self, session_id: &str) {
         self.stop_graph_drivers(Some(session_id));
-        self.cancel_proposal_reply_decisions(Some(session_id));
+        self.cancel_graph_reply_decisions(Some(session_id));
         self.run_worker.cancel_session(session_id);
         let worker = Arc::clone(&self.run_worker);
         let session_id = session_id.to_string();
@@ -333,7 +331,7 @@ impl AppServices {
     /// Stops the owning serial worker and utilities before removing resources.
     pub(crate) async fn finish_session_agent_runs(&self, session_id: &str) {
         self.stop_graph_drivers(Some(session_id));
-        self.cancel_proposal_reply_decisions(Some(session_id));
+        self.cancel_graph_reply_decisions(Some(session_id));
         let tasks: Vec<_> = self
             .session_worker_tasks
             .lock()
@@ -466,7 +464,7 @@ impl AppServices {
         pending_events: Option<&mut mpsc::UnboundedReceiver<AppEvent>>,
     ) {
         self.stop_graph_drivers(None);
-        self.cancel_proposal_reply_decisions(None);
+        self.cancel_graph_reply_decisions(None);
         let deadline = Instant::from_std(self.clock.now_instant()) + CLEANUP_TASK_SHUTDOWN_TIMEOUT;
         let session_tasks = std::mem::take(
             &mut *self

@@ -565,6 +565,7 @@ impl App {
         self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids)
             .await;
         self.recover_graph_proposal_replies().await;
+        self.recover_graph_output_replies().await;
 
         Ok(())
     }

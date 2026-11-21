@@ -49,7 +49,8 @@ flowchart LR
   conflicts, and exact inputs.
 - Successful provider execution alone does not satisfy a result gate, accept an output,
   or complete a task.
-- Restart restores snapshots and results without dispatching work; resume is explicit.
+- Restart restores snapshots and results without dispatching work; resume is explicit,
+  by control or by a chat reply saved before the restart.
 - Cancellation is terminal for that graph. Deleting the owning session removes its graph
   records.
 - Revisions are rejected once executions are linked.

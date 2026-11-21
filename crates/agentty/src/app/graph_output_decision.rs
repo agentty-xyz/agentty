@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ag_session::AgentSelection;
+use ag_session::{AgentSelection, GraphOutputReplyOutcome};
 use ag_worker::RunClient;
 use askama::Template;
 
@@ -14,15 +14,6 @@ use crate::app::graph_reply_decision;
 struct GraphOutputReplyDecisionPromptTemplate<'a> {
     output: &'a str,
     reply: &'a str,
-}
-
-/// Output action a chat reply resolves to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GraphOutputReply {
-    /// Accept the exact inspected output version.
-    Accept,
-    /// Send the reply to the producing node as revision guidance.
-    Revise,
 }
 
 /// Inputs for deciding whether a reply accepts one awaited output.
@@ -42,7 +33,7 @@ impl GraphOutputReplyDecision {
     /// explicit `accept` accepts the output; run failures, unparsable output,
     /// and unknown words revise it, so waiting work never starts on an
     /// uncertain decision.
-    pub(crate) async fn decide(&self, run_client: &dyn RunClient) -> GraphOutputReply {
+    pub(crate) async fn decide(&self, run_client: &dyn RunClient) -> GraphOutputReplyOutcome {
         graph_reply_decision::decide(
             run_client,
             self.agent,
@@ -52,7 +43,7 @@ impl GraphOutputReplyDecision {
             Self::parse,
         )
         .await
-        .unwrap_or(GraphOutputReply::Revise)
+        .unwrap_or(GraphOutputReplyOutcome::Revise)
     }
 
     /// Renders the task contract with output and reply passed as JSON data.
@@ -70,10 +61,10 @@ impl GraphOutputReplyDecision {
     }
 
     /// Accepts only the two contract words.
-    fn parse(answer: &str) -> Option<GraphOutputReply> {
+    fn parse(answer: &str) -> Option<GraphOutputReplyOutcome> {
         match graph_reply_decision::contract_word(answer).as_str() {
-            "accept" => Some(GraphOutputReply::Accept),
-            "revise" => Some(GraphOutputReply::Revise),
+            "accept" => Some(GraphOutputReplyOutcome::Accept),
+            "revise" => Some(GraphOutputReplyOutcome::Revise),
             _ => None,
         }
     }

@@ -18,9 +18,10 @@ use ag_worker::MockRunClient;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use super::{DECISION_PENDING, ProposalReplyDecision, clarification_questions};
+use super::{DECISION_PENDING, clarification_questions};
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
+use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, session};
 use crate::domain::session::{SessionId, Status};
@@ -538,7 +539,7 @@ pub(in crate::app) fn mark_deciding(app: &App, proposal_id: &str) {
         .expect("decision lock")
         .insert(
             proposal_id.into(),
-            ProposalReplyDecision {
+            ReplyDecision {
                 cancellation: CancellationToken::new(),
                 is_abandoned: Arc::default(),
                 session_id: "sess".into(),
@@ -713,7 +714,7 @@ async fn stopping_the_session_abandons_an_undecided_reply() {
 
     // Act
     app.recover_graph_proposal_replies().await;
-    app.services.cancel_proposal_reply_decisions(Some("other"));
+    app.services.cancel_graph_reply_decisions(Some("other"));
     app.services.cancel_agent_runs("sess");
     wait_for_message(&app, "reply decision was canceled").await;
     wait_for_idle_decisions(&app).await;
