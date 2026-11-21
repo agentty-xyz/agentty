@@ -9,8 +9,8 @@ use std::time::Duration;
 use ag_contracts::{OneShotError, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
-    ExecutionGraph, GraphContext, GraphExecutionRef, GraphNode, GraphPostProcessing,
-    StartExecutionGraphRequest,
+    ExecutionGraph, ExecutionGraphStatus, GraphContext, GraphExecutionRef, GraphNode,
+    GraphNodeStatus, GraphPostProcessing, StartExecutionGraphRequest,
 };
 use ag_worker::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
@@ -301,6 +301,81 @@ async fn only_live_graphs_doing_session_work_hold_automatic_review() {
     app.services.wait_for_cleanup_tasks(None).await;
 }
 
+#[tokio::test]
+async fn settling_node_projects_running_until_its_response_is_stored() {
+    // Arrange: the node's run is terminal, and its settlement waits before
+    // storing the graph response.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    let release = spawn_settling_graph(&app).await;
+
+    // Act
+    let settling = app
+        .execution_graph_progress("working")
+        .await
+        .expect("progress")
+        .expect("graph");
+    release();
+    let services = app.services.clone();
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        while !services.live_session_work_graphs("sess").is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("finished graph stops its driver");
+    let settled = app
+        .execution_graph_progress("working")
+        .await
+        .expect("progress")
+        .expect("graph");
+
+    // Assert
+    assert_eq!(settling.status, ExecutionGraphStatus::Running);
+    assert_eq!(settling.nodes[0].status, GraphNodeStatus::Running);
+    assert_eq!(settling.nodes[0].last_error, None);
+    assert_eq!(settled.status, ExecutionGraphStatus::Completed);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Starts a live one-node graph that does `sess`'s own work and waits until
+/// its run is terminal while settlement has not stored the response yet.
+/// Calling the returned release lets settlement finish, which completes the
+/// graph.
+pub(in crate::app) async fn spawn_settling_graph(app: &App) -> impl FnOnce() + use<> {
+    let snapshot = utility_graph("working", &["fast"]);
+    app.services
+        .db()
+        .graphs()
+        .save_graph(&snapshot, None)
+        .await
+        .expect("save working graph");
+    let (started, _started_rx) = mpsc::unbounded_channel();
+    let runner = Arc::new(StaggeredRunner {
+        fast_fails: false,
+        fast_release: Notify::new(),
+        runs: app.services.db().runs(),
+        slow_release: Notify::new(),
+        started,
+    });
+    runner.fast_release.notify_one();
+    let (settling, mut settling_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    spawn_driver(
+        &app.services,
+        snapshot,
+        Arc::new(SettlingRepository {
+            inner: app.services.db().graph_dispatch(),
+            release: release.clone(),
+            settling,
+        }),
+        runner,
+    );
+    settling_rx.recv().await.expect("node settles");
+
+    move || release.notify_one()
+}
+
 /// Starts a live one-node graph that does `sess`'s own work, as an approved
 /// launch runs it, and waits until its node is running. Calling the returned
 /// release lets the node finish, which completes the graph.
@@ -487,6 +562,44 @@ impl GraphDispatchRepository for ObservedRepository {
     }
 
     async fn finish(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), OneShotError> {
+        self.inner.finish(dispatch, body).await
+    }
+
+    async fn fail(&self, record: &GraphExecutionRecord, error: &str) -> Result<(), OneShotError> {
+        self.inner.fail(record, error).await
+    }
+}
+
+/// Delays each settlement until `release`, after reporting it on `settling`.
+struct SettlingRepository {
+    inner: Arc<dyn GraphDispatchRepository>,
+    release: Arc<Notify>,
+    settling: mpsc::UnboundedSender<()>,
+}
+
+#[async_trait]
+impl GraphDispatchRepository for SettlingRepository {
+    async fn graph(&self, id: &str, revision: NonZeroU64) -> Result<ExecutionGraph, OneShotError> {
+        self.inner.graph(id, revision).await
+    }
+
+    async fn claim(
+        &self,
+        graph_id: &str,
+        revision: NonZeroU64,
+        node_id: &str,
+        execution_id: &str,
+        folder: &Path,
+    ) -> Result<GraphAdmission, OneShotError> {
+        self.inner
+            .claim(graph_id, revision, node_id, execution_id, folder)
+            .await
+    }
+
+    async fn finish(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), OneShotError> {
+        self.settling.send(()).expect("observe settlement");
+        self.release.notified().await;
+
         self.inner.finish(dispatch, body).await
     }
 

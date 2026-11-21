@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::Poll;
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
-use ag_session::{EnvId, ExecutionGraph, GraphNode, GraphWorkspaceAccess};
+use ag_session::{EnvId, ExecutionGraph, GraphExecutionRef, GraphNode, GraphWorkspaceAccess};
 use tokio::sync::{Notify, OwnedSemaphorePermit, RwLock, Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
 
@@ -125,10 +125,27 @@ pub struct GraphExecutor {
     repository: Arc<dyn GraphDispatchRepository>,
     resources: Arc<GraphResources>,
     runner: Arc<dyn GraphNodeRunner>,
+    unsettled: UnsettledExecutions,
     wave_limit: Option<NonZeroUsize>,
 }
 
 impl GraphExecutor {
+    /// Lists the executions this executor admitted and has not finished
+    /// settling. Settlement stores the graph response, or records the failure,
+    /// only after the run itself is terminal, so an unsettled execution may
+    /// already read as finished without a response.
+    ///
+    /// Take this snapshot before reading persisted progress: an execution
+    /// leaves the list only after its settlement is stored, so any read that
+    /// follows the snapshot sees the settlement of every execution missing
+    /// from it.
+    pub fn unsettled_executions(&self) -> Vec<GraphExecutionRef> {
+        self.unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Reads a named live budget without replenishing it or reserving calls.
     pub fn remaining_provider_calls(&self, id: &str) -> Option<usize> {
         self.resources
@@ -150,6 +167,7 @@ impl GraphExecutor {
             repository,
             resources,
             runner,
+            unsettled: Arc::default(),
             wave_limit: None,
         }
     }
@@ -340,6 +358,7 @@ impl GraphExecutor {
             .cloned();
         let repository = self.repository.clone();
         let runner = self.runner.clone();
+        let unsettled = self.unsettled.clone();
 
         async move {
             let mut resource_lease = lease;
@@ -375,6 +394,7 @@ impl GraphExecutor {
             };
             resource_lease.claimed = true;
             let record = dispatch.record.clone();
+            let _unsettled = UnsettledExecution::track(unsettled, record.execution.clone());
             let _ = admitted.send(GraphNodeAdmission::Claimed(record.clone()));
             let request = GraphRunRequest {
                 dispatch: dispatch.clone(),
@@ -440,6 +460,39 @@ impl Drop for GraphWave {
 enum GraphNodeAdmission {
     Claimed(GraphExecutionRecord),
     Unclaimed(GraphNodeLease),
+}
+
+/// Executions an executor admitted and has not finished settling.
+type UnsettledExecutions = Arc<Mutex<Vec<GraphExecutionRef>>>;
+
+/// Lists one admitted execution as unsettled until its node task ends,
+/// including on panic or cancellation.
+struct UnsettledExecution {
+    execution: GraphExecutionRef,
+    unsettled: UnsettledExecutions,
+}
+
+impl UnsettledExecution {
+    fn track(unsettled: UnsettledExecutions, execution: GraphExecutionRef) -> Self {
+        unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(execution.clone());
+
+        Self {
+            execution,
+            unsettled,
+        }
+    }
+}
+
+impl Drop for UnsettledExecution {
+    fn drop(&mut self) {
+        self.unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|execution| *execution != self.execution);
+    }
 }
 
 /// One task retains both guards from before admission through settlement.

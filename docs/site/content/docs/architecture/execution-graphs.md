@@ -113,6 +113,12 @@ Successful settlement saves the complete schema-valid response. Question-free ou
 receive validation evidence; user acceptance and task completion remain separate
 actions. A wave drains admitted peers before reporting a failure.
 
+A run turns terminal before settlement stores its response. Hosts therefore report a
+node as running while its live executor still settles it, sampling
+`GraphExecutor::unsettled_executions` before reading progress. A finished run without a
+response that no live executor owns, such as after a restart or a failed store, is
+failed and needs an explicit retry.
+
 A fresh node may coordinate several child utility calls through
 `RunWorker::coordinate_recorded`. The node holds no utility slot, so its children never
 queue behind it, and it settles only after every child finishes cleanup, keeping its Env
