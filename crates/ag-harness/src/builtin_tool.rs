@@ -115,15 +115,62 @@ impl ToolHandler for BashHandler {
             }
             Err(error) => return Err(ToolError::turn(error)),
         };
-        let result = serde_json::to_string(&outcome).map_err(unencodable_outcome)?;
+        let mut result = serde_json::to_value(&outcome).map_err(unencodable_outcome)?;
+        let duration = started_at.elapsed();
+        let activity = if self.tool.enforces(&arguments) && blocked(&outcome) {
+            result["sandbox"] = Value::from(SANDBOX_BLOCKED);
 
-        Ok(ToolOutput::builtin(
-            result,
-            ToolActivity::Bash {
-                duration: started_at.elapsed(),
-            },
-        ))
+            ToolActivity::BashSandboxDenied { duration }
+        } else {
+            ToolActivity::Bash { duration }
+        };
+
+        Ok(ToolOutput::builtin(result.to_string(), activity))
     }
+}
+
+/// Note added as the `sandbox` field of a `bash` result whose command the
+/// sandbox likely blocked.
+const SANDBOX_BLOCKED: &str =
+    "The command failed, and its output suggests the sandbox blocked one of its operations, such \
+     as a write outside the writable directories, a network connection, or a socket. The \
+     restriction comes from the host, not the command: do not try to work around it. If the \
+     operation is necessary, tell the user what was blocked, so they can rerun the command \
+     outside the sandbox or extend its grants.";
+
+/// Lowercase output fragments that suggest the sandbox blocked an
+/// operation, after the heuristic Codex uses to offer an unsandboxed retry.
+const SANDBOX_DENIAL_MARKERS: [&str; 7] = [
+    "operation not permitted",
+    "permission denied",
+    "read-only file system",
+    "sandbox",
+    "landlock",
+    "seccomp",
+    "failed to write file",
+];
+
+/// Returns whether `outcome`, of a command that ran inside the sandbox,
+/// failed with output suggesting the sandbox blocked one of its
+/// operations. The operating system reports a denial as an ordinary error,
+/// so this is a heuristic: a failure the file permissions caused reads the
+/// same.
+fn blocked(outcome: &CommandOutcome) -> bool {
+    outcome.exit_code.is_some_and(|code| code != 0)
+        && [
+            &outcome.stderr,
+            &outcome.stderr_tail,
+            &outcome.stdout,
+            &outcome.stdout_tail,
+        ]
+        .into_iter()
+        .any(|text| {
+            let text = text.to_ascii_lowercase();
+
+            SANDBOX_DENIAL_MARKERS
+                .iter()
+                .any(|marker| text.contains(marker))
+        })
 }
 
 /// Feedback for a `bash` call whose command the sandbox refused to start.

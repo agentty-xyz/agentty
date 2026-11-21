@@ -147,6 +147,10 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
     let cases = [
         (ToolActivity::Bash { duration }, ToolCallStatus::Completed),
         (
+            ToolActivity::BashSandboxDenied { duration },
+            ToolCallStatus::SandboxDenied,
+        ),
+        (
             ToolActivity::ReadRejected {
                 duration,
                 path: "../x".into(),

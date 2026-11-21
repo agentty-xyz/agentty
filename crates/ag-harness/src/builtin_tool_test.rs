@@ -246,6 +246,147 @@ fn only_an_unstarted_command_without_cleanup_debt_counts_as_refused() {
     }));
 }
 
+/// Executor that claims filesystem isolation but runs commands as the
+/// unsandboxed executor does, so a test controls what a "sandboxed"
+/// command prints.
+struct ClaimedSandbox;
+
+impl BashExecutor for ClaimedSandbox {
+    fn identity(&self) -> &'static str {
+        "claimed-sandbox"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystem
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
+        UnsandboxedExecutor::without_isolation().bind()
+    }
+}
+
+#[tokio::test]
+async fn a_sandboxed_failure_that_reads_like_a_denial_is_flagged_for_escalation() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let configuration = BashConfig::for_executor(
+        Arc::new(ClaimedSandbox),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_full_disk_read()
+    .with_excluded_command("printf".into())
+    .expect("excluded command");
+    let handler = BashHandler {
+        definition: ToolDefinition::bash(Enforcement::FileSystem),
+        tool: BashTool::new(
+            configuration,
+            root.path().to_path_buf(),
+            Commands::default(),
+            None,
+        )
+        .expect("bash tool"),
+    };
+    let denial = "echo 'touch: /outside: Operation not permitted' >&2; exit 1";
+
+    // Act
+    let blocked = handler
+        .call(json!({"command": denial}), ToolContext::new("bash_1"))
+        .await
+        .expect("blocked command");
+    let failed = handler
+        .call(json!({"command": "exit 3"}), ToolContext::new("bash_2"))
+        .await
+        .expect("failed command");
+    // Bash's `printf` fails with "printf: Permission denied: invalid number".
+    let excluded = handler
+        .call(
+            json!({"command": "printf '%d' 'Permission denied'"}),
+            ToolContext::new("bash_3"),
+        )
+        .await
+        .expect("excluded command");
+    let sandboxed = handler
+        .call(
+            json!({"command": "command printf '%d' 'Permission denied'"}),
+            ToolContext::new("bash_4"),
+        )
+        .await
+        .expect("sandboxed command");
+
+    // Assert
+    let (content, activity) = blocked.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    assert_eq!(result["sandbox"], SANDBOX_BLOCKED);
+    assert_eq!(result["exit_code"], 1);
+    assert!(matches!(
+        activity,
+        Some(ToolActivity::BashSandboxDenied { .. })
+    ));
+    let (content, activity) = failed.into_parts();
+    assert!(!content.contains("\"sandbox\""), "{content}");
+    assert!(matches!(activity, Some(ToolActivity::Bash { .. })));
+    // An excluded command runs without isolation, so the sandbox cannot
+    // have blocked it.
+    let (content, activity) = excluded.into_parts();
+    assert!(content.contains("invalid number"), "{content}");
+    assert!(matches!(activity, Some(ToolActivity::Bash { .. })));
+    assert!(matches!(
+        sandboxed.into_parts().1,
+        Some(ToolActivity::BashSandboxDenied { .. })
+    ));
+}
+
+#[test]
+fn only_a_failed_command_with_denial_output_counts_as_blocked() {
+    // Arrange
+    let failed = CommandOutcome {
+        cleanup_failed: false,
+        cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
+        execution_failure: None,
+        exit_code: Some(1),
+        signal: None,
+        stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
+        stdout: String::new(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
+        termination: CommandTermination::Completed,
+        truncated: false,
+    };
+
+    // Act / Assert
+    assert!(!blocked(&failed));
+    assert!(blocked(&CommandOutcome {
+        stderr_tail: "mkdir: /x: Read-only file system".into(),
+        ..failed.clone()
+    }));
+    assert!(blocked(&CommandOutcome {
+        stdout: "Sandbox: deny file-write-create".into(),
+        ..failed.clone()
+    }));
+    assert!(!blocked(&CommandOutcome {
+        exit_code: Some(0),
+        stderr: "Permission denied".into(),
+        ..failed.clone()
+    }));
+    assert!(!blocked(&CommandOutcome {
+        exit_code: None,
+        signal: Some(9),
+        stderr: "Permission denied".into(),
+        ..failed
+    }));
+}
+
 #[tokio::test]
 async fn arguments_a_built_in_cannot_decode_are_rejected() {
     // Arrange

@@ -21,6 +21,10 @@ mod access;
 mod development;
 
 #[cfg(test)]
+#[path = "support/sandbox_coding.rs"]
+mod coding;
+
+#[cfg(test)]
 #[path = "support/sandbox_lifecycle.rs"]
 mod lifecycle;
 

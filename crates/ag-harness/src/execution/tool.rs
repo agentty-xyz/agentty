@@ -9,8 +9,8 @@ use std::time::Instant;
 #[cfg(feature = "native-sandbox")]
 use super::contract::BashExecutor;
 use super::contract::{
-    ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy, ExecutionResult, Executor,
-    Grants, Limits, MainExit, Termination,
+    Enforcement, ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy,
+    ExecutionResult, Executor, Grants, Limits, MainExit, ReadScope, Termination,
 };
 #[cfg(feature = "native-sandbox")]
 use super::native::Native;
@@ -27,6 +27,9 @@ pub(crate) struct BashTool {
     cleanup_scope: CommandCleanupScope,
     commands: Commands,
     configuration: BashConfig,
+    /// Runs the commands the configuration excludes from the sandbox
+    /// without isolation; `None` when it excludes none or isolates nothing.
+    excluded: Option<Box<BashTool>>,
     executor: Arc<dyn Executor>,
     /// Host read grants followed by the system directories present on this
     /// host when the configuration grants them, resolved once per turn.
@@ -66,11 +69,24 @@ impl BashTool {
         if configuration.snapshot.grants(Capability::SystemReads) {
             external_reads.extend(super::system::reads());
         }
+        let excluded = if configuration.snapshot.excluded_commands.is_empty()
+            || configuration.enforcement() == Enforcement::None
+        {
+            None
+        } else {
+            Some(Box::new(Self::new(
+                configuration.unsandboxed(),
+                root.clone(),
+                commands.clone(),
+                journal.clone(),
+            )?))
+        };
 
         Ok(Self {
             cleanup_scope,
             commands,
             configuration,
+            excluded,
             executor: Arc::new(supervisor),
             external_reads,
             journal,
@@ -78,7 +94,32 @@ impl BashTool {
         })
     }
 
+    /// Runs `arguments`, outside the sandbox when the configuration
+    /// excludes its command.
     pub(crate) async fn execute(
+        &self,
+        arguments: &BashArguments,
+        call_id: &str,
+    ) -> Result<CommandOutcome, TurnError> {
+        self.selected(arguments).run(arguments, call_id).await
+    }
+
+    /// Returns whether `arguments` runs under an executor that enforces
+    /// isolation, so a failure can come from the sandbox.
+    pub(crate) fn enforces(&self, arguments: &BashArguments) -> bool {
+        self.selected(arguments).configuration.enforcement() != Enforcement::None
+    }
+
+    /// Returns the tool that runs `arguments`: the unsandboxed one for an
+    /// excluded command, else this one.
+    fn selected(&self, arguments: &BashArguments) -> &Self {
+        match &self.excluded {
+            Some(excluded) if self.configuration.excludes(arguments.command()) => excluded,
+            _ => self,
+        }
+    }
+
+    async fn run(
         &self,
         arguments: &BashArguments,
         call_id: &str,
@@ -101,8 +142,16 @@ impl BashTool {
             git_writes: configuration.grants(Capability::GitWrites),
             host_information: configuration.host_information,
             network: configuration.grants(Capability::Network),
+            read_denials: configuration.read_denials.clone(),
+            read_scope: if configuration.grants(Capability::FullDiskRead) {
+                ReadScope::FullDisk
+            } else {
+                ReadScope::Granted
+            },
             temporary_directory: configuration.temporary_directory.clone(),
+            unix_sockets: configuration.unix_sockets.clone(),
             workspace_writes: configuration.workspace_writes.clone(),
+            writable_roots: configuration.writable_roots.clone(),
         };
         let policy = ExecutionPolicy::new(self.root.clone(), vec![self.root.join(".git")], grants)
             .map_err(|_| BashError::InvalidPolicy)?;

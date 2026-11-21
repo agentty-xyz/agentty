@@ -32,6 +32,8 @@ use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::process::{Pid, WaitOptions, WaitStatus, getegid, geteuid, getgid, getuid, wait};
 use rustix::stdio::stdin;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::contract::ReadScope;
 use super::wire::{Launch, Notice};
 
 /// First argument of every helper invocation: the harness starts the helper
@@ -293,6 +295,9 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
          file-read* file-write-data (literal \"/dev/stdin\") (literal \"/dev/stdout\") (literal \
          \"/dev/stderr\") (subpath \"/dev/fd\"))\n(deny file-link)\n",
     );
+    if configuration.read_scope == ReadScope::FullDisk {
+        profile.push_str("(allow file-read*)\n");
+    }
     for path in std::iter::once(&configuration.workspace)
         .chain(&configuration.external_reads)
         .chain(std::iter::once(&configuration.launcher))
@@ -345,6 +350,22 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     if configuration.network {
         profile.push_str(SEATBELT_NETWORK);
     }
+    // Seatbelt matches a socket's resolved path, which preparation supplies.
+    for socket in &configuration.unix_sockets {
+        let socket = socket
+            .to_str()
+            .ok_or_else(|| io::Error::other("non-UTF8 socket"))?;
+        writeln!(
+            profile,
+            "(allow network-outbound (remote unix-socket (path-literal {})))",
+            serde_json::to_string(socket)?
+        )
+        .map_err(io::Error::other)?;
+    }
+    // Hidden paths come last, so they override every grant above.
+    for path in &configuration.read_denials {
+        rule(&mut profile, "deny file-read* file-write*", path)?;
+    }
 
     Ok(profile)
 }
@@ -360,7 +381,9 @@ const GIT_WORKTREE_PROTECTED: &str =
 
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
-/// certificates. Other Unix-domain sockets stay denied.
+/// certificates, including the trust evaluation agent Apple's `LibreSSL`,
+/// and so `/usr/bin/curl`, falls back to. Other Unix-domain sockets stay
+/// denied unless granted by path.
 #[cfg(target_os = "macos")]
 const SEATBELT_NETWORK: &str =
     "(allow system-socket)\n(allow network-outbound (remote ip))\n(allow network-bind \
@@ -369,7 +392,8 @@ const SEATBELT_NETWORK: &str =
      \"com.apple.dnssd.service\") (global-name \
      \"com.apple.SystemConfiguration.DNSConfiguration\") (global-name \
      \"com.apple.SystemConfiguration.configd\") (global-name \"com.apple.trustd.agent\") \
-     (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.ocspd\"))\n";
+     (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.ocspd\") (global-name \
+     \"com.apple.TrustEvaluationAgent\"))\n";
 
 /// Appends `(<action> (subpath "<path>"))` to `profile`.
 #[cfg(target_os = "macos")]
@@ -433,10 +457,15 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         "--cap-drop",
         "ALL",
         "--as-pid-1",
-        "--tmpfs",
-        "/",
     ]);
-    if configuration.system {
+    let full_disk = configuration.read_scope == ReadScope::FullDisk;
+    if full_disk {
+        command.args(["--ro-bind", "/", "/"]);
+    } else {
+        command.args(["--tmpfs", "/"]);
+    }
+    let devices = configuration.system || full_disk;
+    if devices {
         command.args(["--proc", "/proc", "--dev", "/dev"]);
     }
     for path in &configuration.external_reads {
@@ -471,7 +500,20 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
             }
         }
     }
-    if !configuration.system {
+    // Hidden paths come last, so they cover every mount above: an empty
+    // read-only directory over a directory, the empty device over a file.
+    for path in &configuration.read_denials {
+        if path.is_dir() {
+            command
+                .arg("--tmpfs")
+                .arg(path)
+                .arg("--remount-ro")
+                .arg(path);
+        } else {
+            command.arg("--ro-bind").arg("/dev/null").arg(path);
+        }
+    }
+    if !devices {
         command.args(["--dev-bind", "/dev/null", "/dev/null"]);
     }
     command.arg("--seccomp").arg(filter.as_raw_fd().to_string());

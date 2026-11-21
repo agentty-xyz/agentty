@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use super::{
     Execution, ExecutionAccess, ExecutionCommand, ExecutionControl, ExecutionError,
     ExecutionPolicy, ExecutionResult, Executor, Grants, Limits, MainExit, Output, OutputStream,
-    PreparedExecution, RetainedStream, Termination, ValidationError,
+    PreparedExecution, ReadScope, RetainedStream, Termination, ValidationError,
 };
 use crate::bash::BashConfig;
 
@@ -285,6 +285,118 @@ fn development_grants_are_explicit_and_the_temporary_directory_is_writable() {
         granted.requested_access(Path::new("/private/tmp/other")),
         ExecutionAccess::Denied
     );
+}
+
+#[test]
+fn coding_grants_read_everything_but_hidden_paths_and_write_writable_roots() {
+    // Arrange
+    let plain = policy(Grants::default());
+    let granted = policy(Grants {
+        read_denials: vec!["/home/.ssh".into()],
+        read_scope: ReadScope::FullDisk,
+        unix_sockets: vec!["/run/agent.sock".into()],
+        writable_roots: vec!["/home/.cargo".into()],
+        ..Grants::default()
+    });
+
+    // Act / Assert
+    assert!(!plain.reads_full_disk());
+    assert_eq!(plain.read_denials(), [] as [PathBuf; 0]);
+    assert_eq!(plain.writable_roots(), [] as [PathBuf; 0]);
+    assert_eq!(plain.unix_sockets(), [] as [PathBuf; 0]);
+    assert!(granted.reads_full_disk());
+    assert_eq!(granted.read_denials(), [PathBuf::from("/home/.ssh")]);
+    assert_eq!(granted.writable_roots(), [PathBuf::from("/home/.cargo")]);
+    assert_eq!(granted.unix_sockets(), [PathBuf::from("/run/agent.sock")]);
+    for (path, plain_access, granted_access) in [
+        (
+            "/etc/hosts",
+            ExecutionAccess::Denied,
+            ExecutionAccess::ReadOnly,
+        ),
+        (
+            "/home/.cargo/registry",
+            ExecutionAccess::Denied,
+            ExecutionAccess::ReadWrite,
+        ),
+        (
+            "/home/.cargo/repo/.git/config",
+            ExecutionAccess::Denied,
+            ExecutionAccess::ReadOnly,
+        ),
+        (
+            "/home/.ssh/id",
+            ExecutionAccess::Denied,
+            ExecutionAccess::Denied,
+        ),
+    ] {
+        assert_eq!(plain.requested_access(Path::new(path)), plain_access);
+        assert_eq!(granted.requested_access(Path::new(path)), granted_access);
+    }
+}
+
+#[test]
+fn coding_grants_must_be_absolute_and_keep_the_workspace_reachable() {
+    // Arrange
+    let cases = [
+        (
+            Grants {
+                read_denials: vec!["relative".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidPath,
+        ),
+        (
+            Grants {
+                unix_sockets: vec!["relative".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidPath,
+        ),
+        (
+            Grants {
+                read_denials: vec!["/".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            Grants {
+                writable_roots: vec!["relative".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidPath,
+        ),
+        (
+            Grants {
+                writable_roots: vec!["/".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            Grants {
+                writable_roots: vec!["/workspace/target".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            Grants {
+                writable_roots: vec!["/admin".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+    ];
+
+    // Act / Assert
+    for (grants, expected) in cases {
+        assert_eq!(
+            ExecutionPolicy::new("/workspace".into(), vec!["/admin/repo".into()], grants).err(),
+            Some(expected)
+        );
+    }
 }
 
 #[test]

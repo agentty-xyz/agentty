@@ -16,6 +16,8 @@ use rustix::process::{Pid, WaitOptions, waitpid};
 #[cfg(target_os = "macos")]
 use super::seatbelt;
 use super::{ChildEvent, child_event, instruction, write_notice};
+#[cfg(target_os = "macos")]
+use crate::execution::contract::ReadScope;
 use crate::execution::wire::Notice;
 #[cfg(target_os = "macos")]
 use crate::execution::wire::{GitWrites, Launch};
@@ -119,13 +121,16 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         environment: BTreeMap::new(),
         executable: "/bin/bash".into(),
         external_reads: vec![],
+        read_scope: ReadScope::Granted,
         git_metadata: vec![],
         git_writes: None,
         host_information: false,
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
         network: false,
+        read_denials: vec![],
         system: false,
+        unix_sockets: vec![],
         workspace: "/workspace".into(),
         write_nodes: vec![],
         writes: vec![],
@@ -136,6 +141,13 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
     let profile = seatbelt(&configuration).expect("profile");
     assert!(!profile.contains("sysctl-read"));
     assert!(!profile.contains("network"));
+    assert!(!profile.contains("(allow file-read*)\n"));
+    configuration.unix_sockets.push(invalid.clone().into());
+    assert!(seatbelt(&configuration).is_err());
+    configuration.unix_sockets.clear();
+    configuration.read_denials.push(invalid.clone().into());
+    assert!(seatbelt(&configuration).is_err());
+    configuration.read_denials.clear();
     configuration.external_reads.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
     configuration.external_reads.clear();
@@ -164,6 +176,7 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         environment: BTreeMap::new(),
         executable: "/bin/bash".into(),
         external_reads: vec![],
+        read_scope: ReadScope::FullDisk,
         git_metadata: vec!["/workspace/.git".into()],
         git_writes: Some(GitWrites {
             admin: None,
@@ -173,10 +186,12 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
         network: true,
+        read_denials: vec!["/home/.ssh".into()],
         system: false,
+        unix_sockets: vec!["/agent.sock".into()],
         workspace: "/workspace".into(),
         write_nodes: vec![],
-        writes: vec![],
+        writes: vec!["/home/.cargo".into()],
     };
 
     // Act
@@ -199,6 +214,19 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     assert!(profile.contains("(regex #\"^/workspace/[.]git(/worktrees(/[^/]+)?)?$\")"));
     assert!(profile.contains("(allow network-outbound (remote ip))"));
     assert!(profile.contains("\"/private/var/run/mDNSResponder\""));
+    assert!(profile.contains("(global-name \"com.apple.TrustEvaluationAgent\")"));
+    // Full-disk reads, the socket grant, and hidden paths, which come last
+    // so they override the read and write grants before them.
+    assert!(profile.contains("(allow file-read*)\n"));
+    assert!(
+        profile.contains(
+            "(allow network-outbound (remote unix-socket (path-literal \"/agent.sock\")))"
+        )
+    );
+    assert!(
+        profile.ends_with("(deny file-read* file-write* (subpath \"/home/.ssh\"))\n"),
+        "{profile}"
+    );
 }
 
 #[cfg(target_os = "macos")]

@@ -620,6 +620,11 @@ too:
 | `with_temporary_directory` | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
 | `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, submodule metadata, and rebase and cherry-pick state      |
 | `with_network`             | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
+| `with_full_disk_read`      | Reads everything except hidden paths, as Claude Code and Codex do; covers system reads, toolchains, and `~/.gitconfig`                                                         |
+| `with_read_denial`         | Hides one path, such as `~/.ssh`, from reads and writes, overriding every other grant                                                                                          |
+| `with_writable_root`       | Reads and writes one absolute directory outside the workspace, such as `~/.cargo` or `~/.npm`; never `/` or the home directory                                                 |
+| `with_unix_socket`         | Allows connecting to one Unix-domain socket, such as `ssh-agent`'s; macOS only, Linux keeps them denied                                                                        |
+| `with_excluded_command`    | Runs simple commands of one program, such as `docker`, outside the sandbox                                                                                                     |
 | `with_environment`         | Passes one environment value                                                                                                                                                   |
 | `with_host_information`    | Exposes host details such as `uname`; required                                                                                                                                 |
 
@@ -632,9 +637,16 @@ only a linked worktree can stage and commit under `with_git_writes`, which refus
 write grant containing a Git directory, and only the repository's own Git metadata and a
 repository at the top of each write grant stay read-only; macOS protects every `.git`
 name. A command the sandbox refuses to start, for example because a granted directory is
-missing, comes back to the model as a rejected tool call, and the turn continues.
-Enforcing a grant or a denial is the selected executor's job. Long output keeps each
-stream's start and end within the capture budget (`capture_bytes`, up to
+missing, comes back to the model as a rejected tool call, and the turn continues. A
+sandboxed command that fails with output suggesting the sandbox blocked it, such as
+`Operation not permitted`, gets a `sandbox` note in its result telling the model so, and
+its call reports `ToolActivity::BashSandboxDenied` and `ToolCallStatus::SandboxDenied`;
+a host can ask the user whether to rerun the command without the sandbox. The detection
+is a heuristic, after Codex's. Do not grant `~/Library/Keychains` for tools such as
+`gh`: it exposes the whole login keychain. Pass a token such as `GH_TOKEN` with
+`with_environment`, or exclude the program with `with_excluded_command`. Enforcing a
+grant or a denial is the selected executor's job. Long output keeps each stream's start
+and end within the capture budget (`capture_bytes`, up to
 `BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
 `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
 results are not deferred by the per-round result share, so a larger budget spends more

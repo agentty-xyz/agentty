@@ -765,6 +765,15 @@ pub enum ToolActivity {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
     },
+    /// A `bash` command that ran inside the sandbox and failed with output
+    /// suggesting the sandbox blocked one of its operations, such as a
+    /// write outside the writable directories. Its result tells the model
+    /// so; a host can ask the user whether to rerun the command outside the
+    /// sandbox. Command text and output are never reported.
+    BashSandboxDenied {
+        /// Time spent executing and observing the sandbox.
+        duration: Duration,
+    },
     /// A bounded repository file read.
     Read {
         /// Elapsed tool-execution time.
@@ -933,6 +942,7 @@ impl ToolActivity {
     pub fn duration(&self) -> Duration {
         match self {
             Self::Bash { duration }
+            | Self::BashSandboxDenied { duration }
             | Self::Read { duration, .. }
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
@@ -957,7 +967,7 @@ impl ToolActivity {
             | Self::ReadRepeated { .. }
             | Self::ReadDeferred { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
-            Self::Bash { .. } => "bash",
+            Self::Bash { .. } | Self::BashSandboxDenied { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
             Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
         }
@@ -968,6 +978,7 @@ impl ToolActivity {
     pub fn path(&self) -> &str {
         match self {
             Self::Bash { .. }
+            | Self::BashSandboxDenied { .. }
             | Self::MalformedArguments { .. }
             | Self::Unavailable { .. }
             | Self::Host { .. } => "",
@@ -989,6 +1000,11 @@ impl fmt::Display for ToolActivity {
             Self::Bash { duration } => {
                 write!(formatter, "bash ({})", format_report_duration(*duration))
             }
+            Self::BashSandboxDenied { duration } => write!(
+                formatter,
+                "bash, blocked by the sandbox ({})",
+                format_report_duration(*duration)
+            ),
             Self::Read {
                 duration,
                 end_line,
