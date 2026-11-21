@@ -538,11 +538,13 @@ status, a progress bar fills green for finished nodes and blue for working ones,
 highlight sweeping through active work. Status glyphs spin while a preview generates or
 nodes work. Nodes form a timeline: each node's status glyph leads its name, with the
 status (Waiting, Working, Needs your input, Done, Failed, or Canceled) on the right and
-its objective wrapped underneath, up to 128 characters. The rail between nodes names
-what each one waits for, such as `after inspect` or `needs report accepted`, in a
-highlighted label; it is dotted (`┊`) while blocked and solid (`│`) once satisfied. When
-space runs out, objectives shrink to one row and are then hidden; when the graph is
-still taller than the pane, a one-row-per-node summary prioritizes nodes needing
+its model and the reasoning effort it runs at, such as `claude-opus-5-5 [high]` (the
+session's current effort for task conversations, `high` for fresh nodes), then its
+objective wrapped underneath, up to 128 characters. The rail between nodes names what
+each one waits for, such as `after inspect` or `needs report accepted`, in a highlighted
+label; it is dotted (`┊`) while blocked and solid (`│`) once satisfied. When space runs
+out, objectives shrink to one row and are then hidden along with models; when the graph
+is still taller than the pane, a one-row-per-node summary prioritizes nodes needing
 attention and counts hidden nodes. Proposals are restored when you reopen the session or
 restart Agentty.
 

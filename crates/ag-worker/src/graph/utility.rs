@@ -18,6 +18,10 @@ pub struct GraphUtilityRunner {
 }
 
 impl GraphUtilityRunner {
+    /// Reasoning effort every utility node runs with, independent of the
+    /// owning session's effort setting.
+    pub const REASONING_LEVEL: ReasoningLevel = ReasoningLevel::High;
+
     /// Reuses the existing utility worker's runtime, capacity and policy.
     pub fn new(worker: Arc<RunWorker>) -> Self {
         Self { worker }
@@ -80,7 +84,7 @@ impl GraphNodeRunner for GraphUtilityRunner {
                     permission_mode: request.permission_mode,
                     prompt: prompt.text,
                     provider_call_budget: request.provider_call_budget,
-                    reasoning_level: ReasoningLevel::default(),
+                    reasoning_level: Self::REASONING_LEVEL,
                     request_kind,
                     speed_mode: SpeedMode::default(),
                 },

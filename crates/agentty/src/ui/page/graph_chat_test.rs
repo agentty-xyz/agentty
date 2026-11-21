@@ -24,6 +24,7 @@ use super::{
     NodeStatus, areas, graph_status, render, status_glyph, status_label, status_label_width,
     summary,
 };
+use crate::domain::agent::ReasoningLevel;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::style::palette;
@@ -189,49 +190,16 @@ fn every_node_status_has_a_styled_label_and_matching_width() {
 }
 
 #[test]
-fn sidebar_draws_dependency_rail_objectives_and_live_node_status() {
+fn short_sidebar_hides_models_with_objectives_and_keeps_the_rail() {
     // Arrange
     let mut snapshot = dependency_snapshot();
-    let progress = snapshot.progress.take();
+    snapshot.progress = None;
     let row = |left: &str, right: &str| spread(left, right, 58);
 
     // Act
-    let preview = inner_rows(Some(&snapshot), 60, 20);
     let without_objectives = inner_rows(Some(&snapshot), 60, 16);
-    snapshot.proposal.version.approval = Some(GraphProposalApproval {
-        graph_id: "graph".into(),
-        limits: snapshot.proposal.limits.clone(),
-        version: 1,
-    });
-    let approved = summary_text(Some(&snapshot));
-    snapshot.progress = progress;
-    let buffer = render_buffer(Some(&snapshot), 60, 22);
-    let running = buffer_inner_rows(&buffer);
 
     // Assert
-    assert_eq!(
-        preview,
-        [
-            "Awaiting your approval",
-            "",
-            row("○ inspect", "Waiting").as_str(),
-            "┊ Inspect the requested change",
-            "┊ after inspect",
-            "┊",
-            row("○ followup", "Waiting").as_str(),
-            "┊ Inspect the requested change",
-            "┊ needs summary accepted from inspect",
-            "┊ needs notes",
-            "┊",
-            row("○ report", "Waiting").as_str(),
-            "  Inspect the requested change",
-            "",
-            row("○ audit", "Waiting").as_str(),
-            "  Inspect the requested change",
-            "",
-            "w: details and actions",
-        ]
-    );
     assert_eq!(
         without_objectives,
         [
@@ -251,26 +219,90 @@ fn sidebar_draws_dependency_rail_objectives_and_live_node_status() {
             "w: details and actions",
         ]
     );
+}
+
+#[test]
+fn sidebar_draws_dependency_rail_models_objectives_and_live_node_status() {
+    // Arrange
+    let mut snapshot = dependency_snapshot();
+    // A task conversation runs at the rendered session effort (`low`), while
+    // fresh utility nodes keep the utility runner's fixed effort (`high`).
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        launch.graph.nodes[0].execution.context = GraphContext::TaskConversation {
+            task_id: "task".into(),
+        };
+    }
+    let progress = snapshot.progress.take();
+    let row = |left: &str, right: &str| spread(left, right, 58);
+
+    // Act
+    let preview = inner_rows(Some(&snapshot), 60, 24);
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
+    let approved = summary_text(Some(&snapshot));
+    snapshot.progress = progress;
+    let buffer = render_buffer(Some(&snapshot), 60, 26);
+    let running = buffer_inner_rows(&buffer);
+
+    // Assert
+    assert_eq!(
+        preview,
+        [
+            "Awaiting your approval",
+            "",
+            row("○ inspect", "Waiting").as_str(),
+            "┊ gpt-6.1-sol [low]",
+            "┊ Inspect the requested change",
+            "┊ after inspect",
+            "┊",
+            row("○ followup", "Waiting").as_str(),
+            "┊ gpt-6.1-sol [high]",
+            "┊ Inspect the requested change",
+            "┊ needs summary accepted from inspect",
+            "┊ needs notes",
+            "┊",
+            row("○ report", "Waiting").as_str(),
+            "  gpt-6.1-sol [high]",
+            "  Inspect the requested change",
+            "",
+            row("○ audit", "Waiting").as_str(),
+            "  gpt-6.1-sol [high]",
+            "  Inspect the requested change",
+            "",
+            "w: details and actions",
+        ]
+    );
     assert!(approved.contains("Approved; loading execution status"));
     assert_eq!(
-        running[..17],
+        running[..21],
         [
             "◐ Running",
             bar(29, 29).as_str(),
             "",
             row("✓ inspect", "Done").as_str(),
+            "│ gpt-6.1-sol [low]",
             "│ Inspect the requested change",
             "│ after inspect",
             "│",
             row("◐ followup", "Working").as_str(),
+            "┊ gpt-6.1-sol [high]",
             "┊ Inspect the requested change",
             "│ needs summary accepted from inspect",
             "┊ needs notes",
             "┊",
             row("○ report", "Waiting").as_str(),
+            "  gpt-6.1-sol [high]",
             "  Inspect the requested change",
             "",
             row("✗ audit", "Failed").as_str(),
+            "  gpt-6.1-sol [high]",
             "  Inspect the requested change",
         ]
     );
@@ -280,15 +312,18 @@ fn sidebar_draws_dependency_rail_objectives_and_live_node_status() {
     assert!(title.starts_with("┌Execution graph · v1"), "{title}");
     assert!(title.ends_with("1/4 done┐"), "{title}");
     assert_eq!(buffer[(1, 5)].fg, palette::success());
-    assert_eq!(buffer[(1, 9)].fg, palette::text_muted());
+    assert_eq!(buffer[(3, 5)].fg, palette::text_muted());
+    assert!(!buffer[(3, 5)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(buffer[(1, 6)].fg, palette::success());
+    assert_eq!(buffer[(1, 11)].fg, palette::text_muted());
     assert_eq!(buffer[(1, 4)].fg, palette::success());
-    assert_eq!(buffer[(3, 6)].fg, palette::success());
-    assert_eq!(buffer[(1, 7)].fg, palette::success());
-    assert_eq!(buffer[(1, 12)].fg, palette::text_muted());
-    assert_eq!(buffer[(1, 8)].fg, palette::info());
+    assert_eq!(buffer[(3, 7)].fg, palette::success());
+    assert_eq!(buffer[(1, 8)].fg, palette::success());
+    assert_eq!(buffer[(1, 14)].fg, palette::text_muted());
+    assert_eq!(buffer[(1, 9)].fg, palette::info());
     assert!(!buffer[(3, 4)].modifier.contains(Modifier::BOLD));
-    assert!(buffer[(3, 8)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buffer[(1, 20)].fg, palette::accent());
+    assert!(buffer[(3, 9)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buffer[(1, 24)].fg, palette::accent());
 }
 
 #[test]
@@ -533,19 +568,20 @@ fn long_node_names_wrap_status_or_shorten_without_displacing_controls() {
     }
 
     // Act
-    let full = inner_rows(Some(&snapshot), 28, 15);
+    let full = inner_rows(Some(&snapshot), 28, 17);
     let compact = inner_rows(Some(&snapshot), 28, 8);
 
     // Assert
     let wrapped_status = spread("", "Waiting", 26);
     assert_eq!(full[2], bar(0, 26));
-    for name_row in [4, 8] {
+    for name_row in [4, 9] {
         assert!(full[name_row].starts_with("○ 界"), "{full:#?}");
         assert_eq!(full[name_row + 1], wrapped_status);
-        assert!(full[name_row + 2].starts_with("  Inspect"));
+        assert_eq!(full[name_row + 2], "  gpt-6.1-sol [high]");
+        assert!(full[name_row + 3].starts_with("  Inspect"));
     }
-    assert_eq!(full[7], "");
-    assert_eq!(full[12], "w: details and actions");
+    assert_eq!(full[8], "");
+    assert_eq!(full[14], "w: details and actions");
     for row in &compact[2..4] {
         assert!(row.starts_with("○ 界"), "{compact:#?}");
         assert!(row.ends_with("  Waiting"));
@@ -584,17 +620,18 @@ fn long_objectives_wrap_to_a_capped_width_and_shrink_before_hiding() {
     let wrapped_row = "alpha alpha alpha alpha";
 
     // Act
-    let tall = render_buffer(Some(&snapshot), 30, 23);
+    let tall = render_buffer(Some(&snapshot), 30, 25);
     let wrapped = buffer_inner_rows(&tall);
-    let one_row = inner_rows(Some(&snapshot), 30, 13);
+    let one_row = inner_rows(Some(&snapshot), 30, 15);
     let hidden = inner_rows(Some(&snapshot), 30, 11);
 
     // Assert
     assert_eq!(wrapped[3], spread("◐ node-0", "Working", 28));
     let rail_row = format!("┊ {wrapped_row}");
     assert_eq!(
-        wrapped[4..12],
+        wrapped[4..13],
         [
+            "┊ gpt-6.1-sol [high]",
             rail_row.as_str(),
             rail_row.as_str(),
             rail_row.as_str(),
@@ -606,20 +643,36 @@ fn long_objectives_wrap_to_a_capped_width_and_shrink_before_hiding() {
         ],
         "{wrapped:#?}"
     );
-    assert_eq!(wrapped[12], spread("○ node-1", "Waiting", 28));
-    assert_eq!(wrapped[13], format!("  {wrapped_row}"));
-    assert_eq!(wrapped[18], "  alpha...");
-    assert_eq!(tall[(3, 5)].fg, palette::text_muted());
-    assert!(!tall[(3, 5)].modifier.contains(Modifier::ITALIC));
-    assert_eq!(tall[(3, 11)].fg, palette::accent());
-    assert!(tall[(3, 11)].modifier.contains(Modifier::ITALIC));
-    assert_eq!(one_row[4], format!("┊ {wrapped_row}..."));
-    assert_eq!(one_row[5], "┊ needs plan accepted");
-    assert_eq!(one_row[6], "┊");
-    assert_eq!(one_row[8], format!("  {wrapped_row}..."));
+    assert_eq!(wrapped[13], spread("○ node-1", "Waiting", 28));
+    assert_eq!(wrapped[14], "  gpt-6.1-sol [high]");
+    assert_eq!(wrapped[15], format!("  {wrapped_row}"));
+    assert_eq!(wrapped[20], "  alpha...");
+    assert_eq!(tall[(3, 6)].fg, palette::text_muted());
+    assert!(!tall[(3, 6)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(tall[(3, 12)].fg, palette::accent());
+    assert!(tall[(3, 12)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(one_row[4], "┊ gpt-6.1-sol [high]");
+    assert_eq!(one_row[5], format!("┊ {wrapped_row}..."));
+    assert_eq!(one_row[6], "┊ needs plan accepted");
+    assert_eq!(one_row[7], "┊");
+    assert_eq!(one_row[9], "  gpt-6.1-sol [high]");
+    assert_eq!(one_row[10], format!("  {wrapped_row}..."));
     assert_eq!(hidden[4], "┊ needs plan accepted");
     assert_eq!(hidden[5], "┊");
     assert_eq!(hidden[8], "w: details and actions");
+    assert!(!hidden.join("\n").contains("gpt-6.1-sol"), "{hidden:#?}");
+}
+
+#[test]
+fn model_rows_shorten_to_fit_narrow_sidebars() {
+    // Arrange
+    let snapshot = graph_snapshot(1);
+
+    // Act
+    let rows = inner_rows(Some(&snapshot), 14, 30);
+
+    // Assert
+    assert!(rows.iter().any(|row| row == "  gpt-6.1..."), "{rows:#?}");
 }
 
 #[test]
@@ -698,7 +751,15 @@ fn render_frame(
 ) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
-        .draw(|frame| render(frame, frame.area(), snapshot, spinner_frame))
+        .draw(|frame| {
+            render(
+                frame,
+                frame.area(),
+                snapshot,
+                ReasoningLevel::Low,
+                spinner_frame,
+            );
+        })
         .expect("draw");
 
     terminal.backend().buffer().clone()
