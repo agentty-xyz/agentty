@@ -1,6 +1,5 @@
 //! Native resource ownership beneath the shared, cancellation-safe supervisor.
 
-use std::collections::HashSet;
 use std::fs::Metadata;
 use std::io;
 use std::os::fd::OwnedFd;
@@ -19,8 +18,8 @@ use super::contract::{
     ExecutionPolicy, MainExit, ProcessEvent,
 };
 use super::output;
-use super::wire::{Launch, Notice};
-use crate::bash::BashConfig;
+use super::wire::{GitWrites, Launch, Notice};
+use crate::bash::{BashConfig, Capability};
 use crate::command_journal::CommandCleanupScope;
 use crate::sandbox::SandboxUnavailableReason;
 
@@ -153,7 +152,11 @@ pub(crate) async fn probe(
             launcher,
         });
     }
-    if !host.landlock && !configuration.snapshot.workspace_writes.is_empty() {
+    let snapshot = &configuration.snapshot;
+    let writes = !snapshot.workspace_writes.is_empty()
+        || snapshot.temporary_directory.is_some()
+        || snapshot.grants(Capability::GitWrites);
+    if !host.landlock && writes {
         return Err(SandboxUnavailableReason::LandlockUnavailable);
     }
     let bubblewrap = configuration
@@ -228,13 +231,23 @@ struct NativeProcess {
     stdout: Option<ChildStdout>,
 }
 
+/// Filesystem access one command launches with, resolved by
+/// [`NativeProcess::prepare`].
+#[derive(Default)]
+struct Access {
+    external_reads: Vec<PathBuf>,
+    git_metadata: Vec<PathBuf>,
+    git_writes: Option<GitWrites>,
+    write_nodes: Vec<(u64, u64)>,
+    writes: Vec<PathBuf>,
+}
+
 impl NativeProcess {
     fn launch(
         &self,
         command: &ExecutionCommand,
         policy: &ExecutionPolicy,
-        git_metadata: Vec<PathBuf>,
-        workspace_write_nodes: Vec<(u64, u64)>,
+        access: Access,
     ) -> Result<Launch, ExecutionError> {
         let arguments = command
             .arguments()
@@ -260,8 +273,9 @@ impl NativeProcess {
                 })
                 .collect::<Result<_, ExecutionError>>()?,
             executable: command.executable().to_path_buf(),
-            external_reads: policy.external_reads().to_vec(),
-            git_metadata,
+            external_reads: access.external_reads,
+            git_metadata: access.git_metadata,
+            git_writes: access.git_writes,
             host_information: policy.exposes_host_information(),
             launcher: self
                 .configuration
@@ -270,11 +284,235 @@ impl NativeProcess {
                 .clone()
                 .ok_or(ExecutionError::Unsupported)?,
             linux_bubblewrap: self.configuration.snapshot.linux_bubblewrap.clone(),
+            network: policy.allows_network(),
+            system: self.configuration.snapshot.grants(Capability::SystemReads),
             workspace: policy.workspace().to_path_buf(),
-            workspace_write_nodes,
-            workspace_writes: policy.workspace_writes().to_vec(),
+            write_nodes: access.write_nodes,
+            writes: access.writes,
         })
     }
+}
+
+/// Resolves what one command may access without inspecting the contents of
+/// any granted directory: every check is path-level, so its cost does not
+/// grow with the workspace or the grants. The sandboxes resolve links at
+/// access time, against the granted paths.
+///
+/// # Errors
+/// Returns [`ExecutionError::Unsupported`] for a grant the sandbox cannot
+/// honor: a missing path, a read grant overlapping the workspace, a write
+/// grant that is not a directory under its own name, a temporary directory
+/// overlapping the workspace or its Git metadata, or Git writes the
+/// repository cannot confine.
+async fn resolve_access(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+) -> Result<Access, ExecutionError> {
+    let workspace = policy.workspace();
+    let repository = git_directories(files, workspace).await?;
+    let mut access = Access {
+        git_metadata: policy.git_metadata().to_vec(),
+        ..Access::default()
+    };
+    for read in policy.external_reads() {
+        let target = files
+            .canonicalize(read)
+            .await
+            .map_err(|_| ExecutionError::Unsupported)?;
+        let parent = files
+            .canonicalize(read.parent().ok_or(ExecutionError::Unsupported)?)
+            .await
+            .map_err(|_| ExecutionError::Unsupported)?;
+        if overlaps(&target, workspace)
+            || parent.starts_with(workspace)
+            || overlaps(read, workspace)
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.external_reads.push(read.clone());
+        if target != *read {
+            access.external_reads.push(target);
+        }
+    }
+    if let Some(repository) = &repository {
+        for directory in [&repository.admin, &repository.common] {
+            access.git_metadata.push(directory.clone());
+            if !directory.starts_with(workspace) {
+                access.external_reads.push(directory.clone());
+            }
+        }
+    }
+    for write in policy.workspace_writes() {
+        let path = workspace.join(write);
+        let (canonical, node) = directory_identity(files, &path).await?;
+        if canonical != path {
+            return Err(ExecutionError::Unsupported);
+        }
+        // Linux protects Git metadata by mounting it read-only, so it
+        // protects a repository at the top of each write grant too.
+        access.git_metadata.push(canonical.join(".git"));
+        access.writes.push(canonical);
+        access.write_nodes.push(node);
+    }
+    if let Some(temporary) = policy.temporary_directory() {
+        let (canonical, node) = directory_identity(files, temporary).await?;
+        if overlaps(&canonical, workspace)
+            || access
+                .git_metadata
+                .iter()
+                .any(|git| overlaps(&canonical, git))
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.writes.push(canonical);
+        access.write_nodes.push(node);
+    }
+    if policy.allows_git_writes() {
+        let repository = repository.ok_or(ExecutionError::Unsupported)?;
+        let git_writes = repository.writes(files).await?;
+        // A Landlock rule covers everything beneath its directory, and the
+        // writable Git mounts replace the read-only ones, so a write grant
+        // around a Git directory would open its configuration and hooks.
+        #[cfg(target_os = "linux")]
+        if access.writes.iter().any(|write| {
+            git_writes
+                .admin
+                .iter()
+                .chain(std::iter::once(&git_writes.common))
+                .any(|git| overlaps(write, git))
+        }) {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.git_writes = Some(git_writes);
+    }
+
+    Ok(access)
+}
+
+/// Returns whether one of two paths contains the other.
+fn overlaps(path: &Path, other: &Path) -> bool {
+    path.starts_with(other) || other.starts_with(path)
+}
+
+/// Returns the resolved path and `(device, inode)` identity of the
+/// directory `path` names.
+async fn directory_identity(
+    files: &dyn Inspection,
+    path: &Path,
+) -> Result<(PathBuf, (u64, u64)), ExecutionError> {
+    let canonical = files
+        .canonicalize(path)
+        .await
+        .map_err(|_| ExecutionError::Unsupported)?;
+    let metadata = files
+        .metadata(&canonical)
+        .await
+        .map_err(|_| ExecutionError::Unsupported)?;
+    if !metadata.is_dir() {
+        return Err(ExecutionError::Unsupported);
+    }
+
+    Ok((canonical, (metadata.dev(), metadata.ino())))
+}
+
+/// The workspace repository's resolved Git directories.
+struct GitDirectories {
+    /// The directory the workspace's `.git` entry names: the repository's
+    /// own Git directory, or a linked worktree's administration directory.
+    admin: PathBuf,
+    /// The common directory `admin/commondir` names, or `admin` itself.
+    common: PathBuf,
+}
+
+impl GitDirectories {
+    /// Returns the directories the Git-writes grant opens.
+    ///
+    /// # Errors
+    /// Returns [`ExecutionError::Unsupported`] for a linked worktree whose
+    /// repository enables per-worktree configuration while the worktree has
+    /// no `config.worktree`: the Linux sandbox could not keep a command from
+    /// creating one that Git run later outside the sandbox would read.
+    async fn writes(self, files: &dyn Inspection) -> Result<GitWrites, ExecutionError> {
+        if self.admin == self.common {
+            return Ok(GitWrites {
+                admin: None,
+                common: self.common,
+            });
+        }
+        let configuration =
+            bounded_bytes(&self.common.join("config"), MAX_GIT_CONFIGURATION_BYTES).await?;
+        let per_worktree = configuration
+            .to_ascii_lowercase()
+            .windows(WORKTREE_CONFIGURATION.len())
+            .any(|window| window == WORKTREE_CONFIGURATION);
+        if per_worktree
+            && !files
+                .try_exists(&self.admin.join("config.worktree"))
+                .await
+                .map_err(|_| ExecutionError::Setup)?
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+
+        Ok(GitWrites {
+            admin: Some(self.admin),
+            common: self.common,
+        })
+    }
+}
+
+/// Lowercase name of the `extensions.worktreeConfig` setting.
+const WORKTREE_CONFIGURATION: &[u8] = b"worktreeconfig";
+
+/// Largest Git configuration the Git-writes check reads.
+const MAX_GIT_CONFIGURATION_BYTES: u64 = 1024 * 1024;
+
+/// Largest `.git` or `commondir` pointer file read.
+const MAX_GIT_POINTER_BYTES: u64 = 4096;
+
+/// Resolves the Git directories of the workspace root's `.git` entry: a
+/// directory, or a file naming one, whose `commondir` may name another.
+/// Returns `None` when the workspace has no `.git` entry.
+async fn git_directories(
+    files: &dyn Inspection,
+    workspace: &Path,
+) -> Result<Option<GitDirectories>, ExecutionError> {
+    let entry = workspace.join(".git");
+    let metadata = match files.metadata(&entry).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ExecutionError::Setup),
+    };
+    let admin = if metadata.is_dir() {
+        entry
+    } else {
+        let text = pointer(&entry).await?;
+        let target = text
+            .trim()
+            .strip_prefix("gitdir: ")
+            .ok_or(ExecutionError::Unsupported)?;
+        workspace.join(target)
+    };
+    let admin = files
+        .canonicalize(&admin)
+        .await
+        .map_err(|_| ExecutionError::Setup)?;
+    let common = admin.join("commondir");
+    let common = if files
+        .try_exists(&common)
+        .await
+        .map_err(|_| ExecutionError::Setup)?
+    {
+        let text = pointer(&common).await?;
+        files
+            .canonicalize(&admin.join(text.trim()))
+            .await
+            .map_err(|_| ExecutionError::Setup)?
+    } else {
+        admin.clone()
+    };
+
+    Ok(Some(GitDirectories { admin, common }))
 }
 
 #[async_trait]
@@ -291,10 +529,7 @@ impl BashProcess for NativeProcess {
         // Linux write grants rely on Landlock rules applied inside the
         // launcher; kernels without the required ABI fail closed here.
         #[cfg(target_os = "linux")]
-        super::landlock::validate_write_grants(
-            policy.workspace_writes().len(),
-            super::landlock::abi(),
-        )?;
+        super::landlock::validate_write_grants(write_grants(policy), super::landlock::abi())?;
         if policy.requested_access(command.executable()) == ExecutionAccess::Denied {
             return Err(ExecutionError::Unsupported);
         }
@@ -321,57 +556,8 @@ impl BashProcess for NativeProcess {
         }
         #[cfg(target_os = "macos")]
         validate_executable(&LocalInspection, Path::new(SEATBELT), policy.workspace()).await?;
-        let mut git_metadata = policy.git_metadata().to_vec();
-        inspect_tree(
-            &LocalInspection,
-            policy.workspace(),
-            policy.workspace(),
-            &mut git_metadata,
-            true,
-            100_000,
-        )
-        .await?;
-        for read in policy.external_reads() {
-            let target = tokio::fs::canonicalize(read)
-                .await
-                .map_err(|_| ExecutionError::Unsupported)?;
-            let parent = tokio::fs::canonicalize(read.parent().ok_or(ExecutionError::Unsupported)?)
-                .await
-                .map_err(|_| ExecutionError::Unsupported)?;
-            if target.starts_with(policy.workspace())
-                || policy.workspace().starts_with(&target)
-                || parent.starts_with(policy.workspace())
-            {
-                return Err(ExecutionError::Unsupported);
-            }
-            if read.starts_with(policy.workspace()) || policy.workspace().starts_with(read) {
-                return Err(ExecutionError::Unsupported);
-            }
-            inspect_tree(
-                &LocalInspection,
-                read,
-                policy.workspace(),
-                &mut git_metadata,
-                false,
-                100_000,
-            )
-            .await?;
-        }
-        let mut workspace_write_nodes = Vec::new();
-        for write in policy.workspace_writes() {
-            let path = policy.workspace().join(write);
-            let canonical = tokio::fs::canonicalize(&path)
-                .await
-                .map_err(|_| ExecutionError::Setup)?;
-            let metadata = tokio::fs::metadata(&path)
-                .await
-                .map_err(|_| ExecutionError::Setup)?;
-            if canonical != path || !metadata.is_dir() {
-                return Err(ExecutionError::Unsupported);
-            }
-            workspace_write_nodes.push((metadata.dev(), metadata.ino()));
-        }
-        let launch = self.launch(command, policy, git_metadata, workspace_write_nodes)?;
+        let access = resolve_access(&LocalInspection, policy).await?;
+        let launch = self.launch(command, policy, access)?;
         self.encoded = serde_json::to_vec(&launch).map_err(|_| ExecutionError::Setup)?;
         if self.encoded.len() > 1024 * 1024 {
             return Err(ExecutionError::Setup);
@@ -489,13 +675,7 @@ impl BashProcess for NativeProcess {
 trait Inspection: Send + Sync {
     async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
     async fn metadata(&self, path: &Path) -> io::Result<Metadata>;
-    async fn read_dir(&self, path: &Path) -> io::Result<Box<dyn Directory>>;
     async fn try_exists(&self, path: &Path) -> io::Result<bool>;
-}
-
-#[async_trait]
-trait Directory: Send {
-    async fn next_entry(&mut self) -> io::Result<Option<PathBuf>>;
 }
 
 struct LocalInspection;
@@ -510,21 +690,8 @@ impl Inspection for LocalInspection {
         tokio::fs::metadata(path).await
     }
 
-    async fn read_dir(&self, path: &Path) -> io::Result<Box<dyn Directory>> {
-        Ok(Box::new(LocalDirectory(tokio::fs::read_dir(path).await?)))
-    }
-
     async fn try_exists(&self, path: &Path) -> io::Result<bool> {
         tokio::fs::try_exists(path).await
-    }
-}
-
-struct LocalDirectory(tokio::fs::ReadDir);
-
-#[async_trait]
-impl Directory for LocalDirectory {
-    async fn next_entry(&mut self) -> io::Result<Option<PathBuf>> {
-        Ok(self.0.next_entry().await?.map(|entry| entry.path()))
     }
 }
 
@@ -559,148 +726,36 @@ async fn validate_executable(
     Ok(())
 }
 
-async fn inspect_tree(
-    files: &dyn Inspection,
-    root: &Path,
-    workspace: &Path,
-    git: &mut Vec<PathBuf>,
-    mutable: bool,
-    max_entries: usize,
-) -> Result<(), ExecutionError> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut inspected = 0;
-    let mut visited = HashSet::new();
-    while let Some(path) = pending.pop() {
-        inspected += 1;
-        if inspected > max_entries {
-            return Err(ExecutionError::Unsupported);
-        }
-        let metadata = tokio::fs::symlink_metadata(&path)
-            .await
-            .map_err(|_| ExecutionError::Setup)?;
-        if metadata.file_type().is_symlink() {
-            if !inspect_alias(files, &path, mutable, &mut pending).await? {
-                continue;
-            }
-        } else if metadata.is_dir() {
-            if !visited.insert(path.clone()) {
-                continue;
-            }
-            let mut entries = files
-                .read_dir(&path)
-                .await
-                .map_err(|_| ExecutionError::Setup)?;
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|_| ExecutionError::Setup)?
-            {
-                if inspected + pending.len() >= max_entries {
-                    return Err(ExecutionError::Unsupported);
-                }
-                pending.push(entry);
-            }
-        } else if !metadata.is_file() || (mutable && metadata.nlink() != 1) {
-            return Err(ExecutionError::Unsupported);
-        }
-        inspect_git_metadata(files, &path, workspace, metadata.is_file(), git).await?;
-        tokio::task::yield_now().await;
-    }
-
-    Ok(())
+/// Returns the number of directories a command can write, which Linux
+/// confines with Landlock.
+#[cfg(target_os = "linux")]
+fn write_grants(policy: &ExecutionPolicy) -> usize {
+    policy.workspace_writes().len()
+        + usize::from(policy.temporary_directory().is_some())
+        + usize::from(policy.allows_git_writes())
 }
 
-async fn inspect_alias(
-    files: &dyn Inspection,
-    path: &Path,
-    mutable: bool,
-    pending: &mut Vec<PathBuf>,
-) -> Result<bool, ExecutionError> {
-    // Workspace aliases cannot be safely granted by path on both
-    // backends.
-    if mutable {
-        return Err(ExecutionError::Unsupported);
-    }
-    let target = match files.metadata(path).await {
-        Ok(target) => target,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err(ExecutionError::Setup),
-    };
-    if !target.is_file() && !target.is_dir() {
-        return Err(ExecutionError::Unsupported);
-    }
-    if target.is_dir() {
-        pending.push(
-            files
-                .canonicalize(path)
-                .await
-                .map_err(|_| ExecutionError::Setup)?,
-        );
-    }
-
-    Ok(true)
+/// Reads one Git pointer file, such as a `.git` file or `commondir`.
+async fn pointer(path: &Path) -> Result<String, ExecutionError> {
+    String::from_utf8(bounded_bytes(path, MAX_GIT_POINTER_BYTES).await?)
+        .map_err(|_| ExecutionError::Unsupported)
 }
 
-async fn inspect_git_metadata(
-    files: &dyn Inspection,
-    path: &Path,
-    workspace: &Path,
-    is_file: bool,
-    git: &mut Vec<PathBuf>,
-) -> Result<(), ExecutionError> {
-    if path
-        .file_name()
-        .is_some_and(|name| name.as_encoded_bytes().eq_ignore_ascii_case(b".git"))
-    {
-        git.push(path.to_path_buf());
-        if is_file {
-            let text = bounded_text(path).await?;
-            if text.len() > 4096 {
-                return Err(ExecutionError::Unsupported);
-            }
-            let target = text
-                .trim()
-                .strip_prefix("gitdir: ")
-                .ok_or(ExecutionError::Unsupported)?;
-            let target = files
-                .canonicalize(path.parent().unwrap_or(workspace).join(target).as_path())
-                .await
-                .map_err(|_| ExecutionError::Setup)?;
-            let common = target.join("commondir");
-            if files
-                .try_exists(&common)
-                .await
-                .map_err(|_| ExecutionError::Setup)?
-            {
-                let text = bounded_text(&common).await?;
-                if text.len() > 4096 {
-                    return Err(ExecutionError::Unsupported);
-                }
-                git.push(
-                    files
-                        .canonicalize(&target.join(text.trim()))
-                        .await
-                        .map_err(|_| ExecutionError::Setup)?,
-                );
-            }
-            git.push(target);
-        }
-    }
-
-    Ok(())
-}
-
-async fn bounded_text(path: &Path) -> Result<String, ExecutionError> {
+/// Reads the file at `path`, refusing one longer than `limit` bytes.
+async fn bounded_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, ExecutionError> {
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|_| ExecutionError::Setup)?;
-    let mut text = String::new();
-    file.take(4097)
-        .read_to_string(&mut text)
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
         .await
         .map_err(|_| ExecutionError::Setup)?;
+    if bytes.len() as u64 > limit {
+        return Err(ExecutionError::Unsupported);
+    }
 
-    Ok(text)
+    Ok(bytes)
 }
 
 #[cfg(test)]

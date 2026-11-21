@@ -99,18 +99,19 @@ async fn native_linux_denies_writes_links_and_renames_outside_grants() {
     );
 }
 
-/// The recorded Linux contract: Git metadata existing at launch stays
-/// read-only, while a repository the command itself creates inside a write
-/// grant is the command's own output. macOS keeps its stronger pattern-based
-/// denial of new metadata names.
+/// The recorded Linux contract: the repository's Git metadata and a
+/// repository at the top of a write grant stay read-only, without inspecting
+/// the grant, while a repository the command itself creates inside a write
+/// grant is the command's own output. macOS keeps its stronger
+/// pattern-based denial of every metadata name, including new ones.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in_grants() {
     // Arrange
     let workspace = Workspace::new();
     let root = workspace.path();
-    std::fs::create_dir_all(root.join("output/nested/.git")).expect("nested metadata");
-    std::fs::write(root.join("output/nested/.git/config"), "protected").expect("nested config");
+    std::fs::create_dir_all(root.join("output/.git")).expect("grant metadata");
+    std::fs::write(root.join("output/.git/config"), "protected").expect("grant config");
     let options =
         workspace.options_with_runtime(&["/bin/mkdir".into()], Duration::from_secs(10), 256);
 
@@ -118,8 +119,8 @@ async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in
     let result = workspace
         .harness()
         .turn(
-            "set -e; if printf changed > output/nested/.git/config; then exit 91; fi; /bin/mkdir \
-             -p output/fresh/.git; printf fresh > output/fresh/.git/config; printf allowed > \
+            "set -e; if printf changed > output/.git/config; then exit 91; fi; /bin/mkdir -p \
+             output/fresh/.git; printf fresh > output/fresh/.git/config; printf allowed > \
              output/ordinary",
             options,
         )
@@ -130,7 +131,7 @@ async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in
     // Assert
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(
-        std::fs::read_to_string(root.join("output/nested/.git/config")).expect("nested config"),
+        std::fs::read_to_string(root.join("output/.git/config")).expect("grant config"),
         "protected"
     );
     assert_eq!(
@@ -183,7 +184,7 @@ async fn native_positive_controls_and_filesystem_network_denials() {
 }
 
 #[tokio::test]
-async fn native_denied_tool_and_unsafe_aliases_never_execute() {
+async fn native_denied_tool_never_executes_and_workspace_links_grant_only_their_targets() {
     // Arrange
     let workspace = Workspace::new();
     let options = TurnOptions::from_output(schema());
@@ -196,13 +197,17 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
         .turn("printf escaped > output/escaped", options)
         .await;
     std::os::unix::fs::symlink(outside.path(), workspace.path().join("alias")).expect("alias");
-    let alias = workspace
+    std::os::unix::fs::symlink("input", workspace.path().join("inside")).expect("inside link");
+    let linked = workspace
         .harness()
         .turn(
-            "printf escaped > output/escaped",
-            workspace.options(Duration::from_secs(5), 128),
+            "set -e; /bin/cat inside; if /bin/cat alias/secret; then exit 91; fi; if printf \
+             escaped > alias/escaped; then exit 92; fi; printf allowed > output/written",
+            workspace.options(Duration::from_secs(5), 1024),
         )
-        .await;
+        .await
+        .expect("links do not refuse the workspace");
+    let linked: CommandOutcome = serde_json::from_value(linked.into_output()).expect("outcome");
 
     // Assert
     let denied = denied.expect("a denied tool is answered, not fatal");
@@ -211,26 +216,25 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
         denied.output()["error"],
         "tool `bash` is not available in this turn"
     );
-    let Err(TurnError::CommandFailed { outcome }) = alias else {
-        std::panic::resume_unwind(Box::new("unsafe aliases must fail before execution"));
-    };
-    assert_eq!(
-        outcome.execution_failure,
-        Some(ag_harness::bash::BashError::Unavailable)
-    );
+    assert_eq!(linked.exit_code, Some(0), "{linked:?}");
+    assert_eq!(linked.stdout, "input-value", "{linked:?}");
     assert!(!workspace.path().join("output/escaped").exists());
+    assert!(!outside.path().join("escaped").exists());
+    assert!(workspace.path().join("output/written").exists());
 }
 
 #[tokio::test]
-async fn native_rejects_hardlinks_ipc_nodes_and_missing_enforcement_before_execution() {
+async fn native_runs_beside_hard_links_and_host_sockets_but_never_with_an_untrusted_helper() {
     // Arrange
-    for unsafe_kind in ["hardlink", "socket", "launcher"] {
+    for kind in ["hardlink", "socket", "launcher"] {
         let workspace = Workspace::new();
         let mut options = workspace.options(Duration::from_secs(5), 128);
-        let socket = match unsafe_kind {
+        let socket = match kind {
             "hardlink" => {
+                std::fs::write(workspace.path().join("output/original"), "original")
+                    .expect("build output");
                 std::fs::hard_link(
-                    workspace.path().join("input"),
+                    workspace.path().join("output/original"),
                     workspace.path().join("output/alias"),
                 )
                 .expect("hardlink");
@@ -260,11 +264,11 @@ async fn native_rejects_hardlinks_ipc_nodes_and_missing_enforcement_before_execu
         // Act
         let result = workspace
             .harness()
-            .turn("printf escaped > output/escaped", options)
+            .turn("printf written > output/written", options)
             .await;
 
         // Assert
-        if unsafe_kind == "launcher" {
+        if kind == "launcher" {
             assert!(
                 matches!(
                     result,
@@ -274,13 +278,13 @@ async fn native_rejects_hardlinks_ipc_nodes_and_missing_enforcement_before_execu
                 ),
                 "{result:?}"
             );
+            assert!(!workspace.path().join("output/written").exists());
         } else {
-            assert!(
-                matches!(result, Err(TurnError::CommandFailed { .. })),
-                "{result:?}"
-            );
+            let outcome: CommandOutcome =
+                serde_json::from_value(result.expect("turn").into_output()).expect("outcome");
+            assert_eq!(outcome.exit_code, Some(0), "{kind}: {outcome:?}");
+            assert!(workspace.path().join("output/written").exists(), "{kind}");
         }
-        assert!(!workspace.path().join("output/escaped").exists());
         drop(socket);
     }
 }

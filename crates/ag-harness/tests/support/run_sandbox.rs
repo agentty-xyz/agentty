@@ -158,6 +158,48 @@ async fn turns_without_an_event_stream_report_the_warning() -> Result<(), Box<dy
     Ok(())
 }
 
+#[tokio::test]
+async fn a_built_harness_can_choose_its_sandbox_again() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let advertised = Arc::new(Mutex::new(Vec::new()));
+    let (harness, configuration) =
+        native_harness(directory.path(), Sandbox::default(), &advertised)?;
+    let options = TurnOptions::from_output(OutputSchema::new(json!({"type": "object"}))?)
+        .with_tools(ToolSet::empty().with_bash())
+        .with_bash(configuration);
+    let refusing = harness.clone().sandbox(Sandbox::Native {
+        if_unavailable: IfUnavailable::Refuse,
+    });
+    let unsandboxed = harness.clone().sandbox(Sandbox::Unsandboxed);
+
+    // Act
+    let refused = refusing.turn("printf refused", options.clone()).await;
+    let chosen = unsandboxed.turn("printf chosen", options.clone()).await?;
+    let default = harness.turn("printf default", options).await?;
+
+    // Assert
+    assert!(
+        matches!(
+            refused,
+            Err(ag_harness::TurnError::SandboxUnavailable(
+                SandboxUnavailableReason::HelperUntrusted
+            ))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(chosen.output()["stdout"], "chosen");
+    assert_eq!(chosen.report().sandbox_warning(), None);
+    assert_eq!(
+        default.report().sandbox_warning(),
+        Some(&SandboxWarning::new(
+            SandboxUnavailableReason::HelperUntrusted
+        ))
+    );
+
+    Ok(())
+}
+
 /// Runs `printf unsandboxed` through [`native_harness`] under `sandbox`.
 async fn run_native(
     root: &Path,

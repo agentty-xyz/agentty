@@ -12,7 +12,8 @@
 //!   ag-harness --version <version> --features native-sandbox --bin
 //!   ag-harness-sandbox` and pass its path to `BashConfig::new`.
 //!
-//! [`Sandbox`], set with `HarnessBuilder::sandbox`, decides what happens on
+//! [`Sandbox`], set with `HarnessBuilder::sandbox` or `Harness::sandbox`,
+//! decides what happens on
 //! a host where the sandbox cannot run, for example without `bwrap` or with
 //! unprivileged user namespaces disabled. Before a turn offering `bash` is
 //! admitted, the harness checks the sandbox, until one check succeeds for
@@ -142,36 +143,49 @@ impl SandboxUnavailableReason {
         }
     }
 
-    /// Returns a one-sentence fix a person can apply.
+    /// Returns a one-sentence fix the person using the host application can
+    /// apply, without naming APIs, so a host can show it as is.
+    ///
+    /// What the embedding host can change instead:
+    ///
+    /// - [`Self::UnsupportedPlatform`]: select an isolating executor with
+    ///   `BashConfig::for_executor`.
+    /// - [`Self::HelperMissing`]: call [`dispatch`] first in `main`, or install
+    ///   `ag-harness-sandbox` and pass its path to `BashConfig::new`.
+    /// - [`Self::HelperUntrusted`]: run from, or name a helper at, a location
+    ///   outside the workspace.
+    /// - [`Self::BubblewrapMissing`]: name another Bubblewrap with
+    ///   `BashConfig::with_linux_bubblewrap`.
+    /// - [`Self::LandlockUnavailable`]: drop the write, temporary-directory,
+    ///   and Git-write grants, which need Landlock.
+    /// - [`Self::SeatbeltUnavailable`]: a host already isolated another way can
+    ///   choose `Sandbox::Unsandboxed`.
     pub fn remedy(self) -> &'static str {
         match self {
-            Self::UnsupportedPlatform => {
-                "Run on Linux or macOS, or select an isolating executor with \
-                 `BashConfig::for_executor`."
-            }
+            Self::UnsupportedPlatform => "Run the application on Linux or macOS.",
             Self::HelperMissing => {
-                "Call `ag_harness::sandbox::dispatch()` first in `main`, or install \
-                 `ag-harness-sandbox` and pass its path to `BashConfig::new`."
+                "Reinstall or update the application, which is missing its sandbox helper."
             }
             Self::HelperUntrusted => {
-                "Install the helper as an executable outside the workspace without set-ID bits."
+                "Install the application outside the project folder as a regular executable \
+                 without set-user-ID or set-group-ID permissions."
             }
             Self::BubblewrapMissing => {
-                "Install bubblewrap, for example `apt install bubblewrap` or `dnf install \
-                 bubblewrap`, or pass its path with `BashConfig::with_linux_bubblewrap`."
+                "Install bubblewrap, for example with `sudo apt install bubblewrap` or `sudo dnf \
+                 install bubblewrap`."
             }
             Self::UserNamespacesUnavailable => {
-                "Allow unprivileged user namespaces for `bwrap`, for example with the \
-                 distribution's AppArmor profile for it or `sysctl \
+                "Allow unprivileged user namespaces for bubblewrap, for example with your \
+                 distribution's AppArmor profile for `bwrap` or `sudo sysctl \
                  kernel.unprivileged_userns_clone=1`."
             }
-            Self::LandlockUnavailable => {
-                "Upgrade to Linux 6.2 or later with Landlock enabled, or drop the write grants."
+            Self::LandlockUnavailable => "Upgrade to Linux 6.2 or later with Landlock enabled.",
+            Self::SeatbeltMissing => {
+                "Repair the macOS installation, which includes `/usr/bin/sandbox-exec`."
             }
-            Self::SeatbeltMissing => "Restore `/usr/bin/sandbox-exec`, which macOS ships.",
             Self::SeatbeltUnavailable => {
-                "Run the host outside other macOS sandboxes, or rely on the isolation it already \
-                 has with `Sandbox::Unsandboxed`."
+                "Start the application outside other macOS sandboxes, for example from a regular \
+                 Terminal window."
             }
         }
     }

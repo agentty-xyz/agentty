@@ -11,7 +11,7 @@
 //! tool description states it. Command intents are journaled before spawning
 //! and surface as [`CommandRecord`]s.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,12 +32,18 @@ pub use crate::execution::{
 /// Identity recorded for the default native sandbox executor.
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
 
-/// Isolation the default native sandbox enforces on every supported platform;
-/// where it cannot run, the harness's sandbox choice decides instead.
+/// Isolation the default native sandbox enforces on every supported platform
+/// unless the configuration grants networking; where it cannot run, the
+/// harness's sandbox choice decides instead.
 pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNetwork;
 
+/// Environment variable naming the granted temporary directory.
+const TEMPORARY_DIRECTORY_VARIABLE: &str = "TMPDIR";
+
 /// Immutable host capabilities for Bash. No external reads or environment
-/// values are inherited. Runtime libraries and executables require read grants.
+/// values are inherited. Runtime libraries and executables require read
+/// grants: [`Self::with_system_reads`] grants the platform's system
+/// directories and [`Self::with_read`] anything else, such as toolchains.
 /// Grants and denials state policy; their enforcement is the selected
 /// executor's documented scope, and an unenforcing executor such as
 /// [`crate::bash::UnsandboxedExecutor`] applies none of them.
@@ -198,6 +204,7 @@ impl BashConfig {
             executor,
             snapshot: BashPolicySnapshot {
                 bash,
+                capabilities: BTreeSet::new(),
                 capture_bytes,
                 environment_names: Vec::new(),
                 executor: identity,
@@ -206,6 +213,7 @@ impl BashConfig {
                 launcher,
                 linux_bubblewrap: None,
                 revision,
+                temporary_directory: None,
                 timeout,
                 workspace_writes: Vec::new(),
             },
@@ -213,7 +221,11 @@ impl BashConfig {
     }
 
     /// Grants recursive external read access, including runtime resources.
-    /// Workspace-overlapping aliases, devices, and IPC nodes are rejected.
+    /// The native sandbox grants the directory by path, without inspecting
+    /// its contents, so a grant as large as a toolchain costs nothing per
+    /// command; links inside it resolve to their targets, which stay subject
+    /// to the policy. The path must exist, and it must neither contain the
+    /// workspace nor resolve inside it.
     ///
     /// # Errors
     /// Rejects relative paths. Native preparation checks actual filesystem
@@ -230,9 +242,31 @@ impl BashConfig {
         Ok(self)
     }
 
+    /// Grants read access to the platform's system directories, which Bash,
+    /// Git, and developer toolchains need to start: on macOS `/bin`, `/sbin`,
+    /// `/usr`, `/System`, `/Library/Apple`, `/Library/Developer`, the
+    /// selected Xcode and its
+    /// license record,
+    /// `/private/etc`, and the shell and time zone selections under
+    /// `/private/var`; on Linux `/bin`, `/sbin`, `/usr`, `/lib*`, and `/etc`,
+    /// with a private `/proc` and a minimal `/dev`. Paths missing on the host
+    /// are skipped. Toolchains outside them, such as `~/.rustup` or
+    /// `/opt/homebrew`, still need [`Self::with_read`].
+    #[must_use]
+    pub fn with_system_reads(mut self) -> Self {
+        self.snapshot.capabilities.insert(Capability::SystemReads);
+
+        self
+    }
+
     /// Grants writes beneath an existing workspace-relative directory. Git
-    /// metadata existing at launch remains protected; a repository the
-    /// command itself creates inside a grant is the command's own output.
+    /// metadata existing at launch remains protected unless
+    /// [`Self::with_git_writes`] grants it; a repository the command itself
+    /// creates inside a grant is the command's own output. Links inside the
+    /// grant resolve to their targets, which stay subject to the policy:
+    /// one that leaves the granted directories cannot be written through.
+    /// Hard links that already exist inside the grant are files of the
+    /// grant, and commands cannot create new ones to files outside it.
     /// Writes are never rolled back. Native Linux enforcement adds Landlock
     /// rules inside the launcher and fails closed before execution on kernels
     /// without the required ABI (Linux 6.2); macOS additionally denies
@@ -260,14 +294,63 @@ impl BashConfig {
         Ok(self)
     }
 
+    /// Grants reads and writes beneath an existing absolute directory outside
+    /// the workspace and exports it to commands as `TMPDIR`. Choose one
+    /// directory per session, such as one the host creates under the system
+    /// temporary directory, so commands never share temporary files with
+    /// other sessions. It must not overlap the workspace or its Git metadata.
+    /// The path is part of the policy fingerprint that identifies host
+    /// requests and command records, so derive it from a stable session
+    /// identity rather than choosing a fresh random name at each start.
+    ///
+    /// # Errors
+    /// Rejects relative paths, a second temporary directory, and a
+    /// configuration that already grants a `TMPDIR` value.
+    pub fn with_temporary_directory(mut self, path: PathBuf) -> Result<Self, BashError> {
+        if !valid_path(&path, true)
+            || self.snapshot.temporary_directory.is_some()
+            || self.environment.contains_key(TEMPORARY_DIRECTORY_VARIABLE)
+        {
+            return Err(BashError::InvalidPolicy);
+        }
+        self.snapshot.temporary_directory = Some(path);
+
+        Ok(self)
+    }
+
+    /// Grants writes to the workspace repository's Git directory and, for a
+    /// linked worktree, its common directory, so `git add` and `git commit`
+    /// work. Configuration, hooks, worktree links, submodule metadata, and
+    /// rebase and cherry-pick state stay read-only, because Git run later
+    /// outside the sandbox would otherwise execute or follow what a command
+    /// wrote there. Commands can still move any reference, including other
+    /// branches. On Linux only a linked worktree can stage and commit:
+    /// Landlock cannot keep a main worktree's Git directory from gaining a
+    /// `commondir` link, so there only its object, reference, and log stores
+    /// are writable, and commands are refused while a write grant contains a
+    /// Git directory, such as `with_write(".")` in a main worktree. A linked
+    /// worktree whose repository enables `extensions.worktreeConfig` needs
+    /// its `config.worktree` to exist.
+    ///
+    /// An executor other than the native sandbox that cannot keep these
+    /// entries read-only must refuse a policy granting Git writes.
+    #[must_use]
+    pub fn with_git_writes(mut self) -> Self {
+        self.snapshot.capabilities.insert(Capability::GitWrites);
+
+        self
+    }
+
     /// Grants one environment value. The policy revision identifies its value
     /// for durable recovery; snapshots retain names and revision, never values.
     /// Hosts must change the revision when a value changes.
     ///
     /// # Errors
-    /// Rejects empty, duplicate, NUL-containing, or invalid variable names.
+    /// Rejects empty, duplicate, NUL-containing, or invalid variable names,
+    /// and `TMPDIR` once [`Self::with_temporary_directory`] set it.
     pub fn with_environment(mut self, name: String, value: String) -> Result<Self, BashError> {
-        if name.is_empty()
+        if (name == TEMPORARY_DIRECTORY_VARIABLE && self.snapshot.temporary_directory.is_some())
+            || name.is_empty()
             || name.contains(['=', '\0'])
             || value.contains('\0')
             || name.len() > 256
@@ -319,15 +402,25 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Networking cannot be granted: the policy always denies it. Enforcing
-    /// the denial is the selected executor's documented scope; an unenforcing
-    /// executor such as [`crate::bash::UnsandboxedExecutor`] applies no network
-    /// boundary of its own.
-    ///
-    /// # Errors
-    /// Always returns unsupported; this does not modify the configuration.
-    pub fn with_network(self) -> Result<Self, BashError> {
-        Err(BashError::Unavailable)
+    /// Grants network access, which the policy denies by default. The native
+    /// sandbox then allows IP connections, listeners, and name resolution:
+    /// on macOS through Seatbelt network rules that still deny Unix-domain
+    /// sockets other than the system resolver's; on Linux by sharing the
+    /// host network namespace while seccomp still refuses every socket
+    /// family but IPv4 and IPv6. An executor's [`Enforcement`] describes the
+    /// isolation it applies to policies without this grant; with it, the
+    /// configuration reports at most [`Enforcement::FileSystem`], so the
+    /// model-facing description states that network access is not
+    /// restricted. A host executor that cannot open the network it otherwise
+    /// denies must refuse a policy granting it.
+    #[must_use]
+    pub fn with_network(mut self) -> Self {
+        self.snapshot.capabilities.insert(Capability::Network);
+        if self.enforcement == Enforcement::FileSystemAndNetwork {
+            self.enforcement = Enforcement::FileSystem;
+        }
+
+        self
     }
 
     /// Returns the isolation the selected executor reported when this
@@ -397,6 +490,11 @@ impl Eq for BashConfig {}
 #[serde(deny_unknown_fields)]
 pub(crate) struct BashPolicySnapshot {
     pub(crate) bash: PathBuf,
+    /// Capabilities granted beyond paths and environment values. Grants
+    /// added after the first snapshots are skipped on write while unset,
+    /// so recorded fingerprints of earlier policies stay stable.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) capabilities: BTreeSet<Capability>,
     pub(crate) capture_bytes: usize,
     pub(crate) environment_names: Vec<String>,
     /// Selected executor identity. Legacy snapshots predate executor
@@ -412,8 +510,29 @@ pub(crate) struct BashPolicySnapshot {
     pub(crate) launcher: Option<PathBuf>,
     pub(crate) linux_bubblewrap: Option<PathBuf>,
     pub(crate) revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) temporary_directory: Option<PathBuf>,
     pub(crate) timeout: Duration,
     pub(crate) workspace_writes: Vec<PathBuf>,
+}
+
+impl BashPolicySnapshot {
+    /// Returns whether the configuration grants `capability`.
+    pub(crate) fn grants(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+}
+
+/// A capability a configuration grants beyond paths and environment values.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Capability {
+    /// [`BashConfig::with_git_writes`].
+    GitWrites,
+    /// [`BashConfig::with_network`].
+    Network,
+    /// [`BashConfig::with_system_reads`].
+    SystemReads,
 }
 
 fn native_executor_identity() -> String {

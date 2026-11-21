@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::bash::{BashArguments, BashError};
+use crate::bash::{BashArguments, BashError, CommandOutcome, CommandTermination};
 use crate::execution::BashTool;
 use crate::read::{self, ReadError, ReadTool, ResultFits};
 use crate::tool::{ReadAction, ReadArguments, ToolDefinition, WriteArguments};
@@ -108,11 +108,13 @@ impl ToolHandler for BashHandler {
     ) -> Result<ToolOutput, ToolError> {
         let arguments: BashArguments = decode(arguments)?;
         let started_at = Instant::now();
-        let outcome = self
-            .tool
-            .execute(&arguments, tool_context.call_id())
-            .await
-            .map_err(ToolError::turn)?;
+        let outcome = match self.tool.execute(&arguments, tool_context.call_id()).await {
+            Ok(outcome) => outcome,
+            Err(TurnError::CommandFailed { outcome }) if refused(&outcome) => {
+                return Err(ToolError::rejected(SANDBOX_REFUSED));
+            }
+            Err(error) => return Err(ToolError::turn(error)),
+        };
         let result = serde_json::to_string(&outcome).map_err(unencodable_outcome)?;
 
         Ok(ToolOutput::builtin(
@@ -122,6 +124,23 @@ impl ToolHandler for BashHandler {
             },
         ))
     }
+}
+
+/// Feedback for a `bash` call whose command the sandbox refused to start.
+const SANDBOX_REFUSED: &str = "The sandbox refused to start this command, so nothing ran. The \
+                               refusal comes from the sandbox configuration, not the command, for \
+                               example a granted directory that is missing, so every `bash` \
+                               command fails the same way until the host fixes it; continue \
+                               without `bash` and report the problem.";
+
+/// Returns whether `outcome` records a command the sandbox refused before
+/// starting it: the policy could not be enforced, nothing ran, and nothing
+/// remains to clean up. The model can continue without it, so the turn
+/// does.
+fn refused(outcome: &CommandOutcome) -> bool {
+    outcome.execution_failure == Some(BashError::Unavailable)
+        && outcome.termination == CommandTermination::Failed
+        && !outcome.cleanup_failed
 }
 
 /// Decodes a built-in tool's arguments; the engine sends only arguments it

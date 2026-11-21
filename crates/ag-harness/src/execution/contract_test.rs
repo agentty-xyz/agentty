@@ -257,18 +257,105 @@ fn policy_rejects_invalid_roots() {
 }
 
 #[test]
-fn policy_rejects_invalid_grants_and_network_enablement() {
+fn development_grants_are_explicit_and_the_temporary_directory_is_writable() {
+    // Arrange
+    let plain = policy(Grants::default());
+    let granted = policy(Grants {
+        git_writes: true,
+        network: true,
+        temporary_directory: Some("/private/tmp/session".into()),
+        ..Grants::default()
+    });
+
+    // Act / Assert
+    assert!(!plain.allows_network());
+    assert!(!plain.allows_git_writes());
+    assert_eq!(plain.temporary_directory(), None);
+    assert!(granted.allows_network());
+    assert!(granted.allows_git_writes());
+    assert_eq!(
+        granted.temporary_directory(),
+        Some(Path::new("/private/tmp/session"))
+    );
+    assert_eq!(
+        granted.requested_access(Path::new("/private/tmp/session/file")),
+        ExecutionAccess::ReadWrite
+    );
+    assert_eq!(
+        granted.requested_access(Path::new("/private/tmp/other")),
+        ExecutionAccess::Denied
+    );
+}
+
+#[test]
+fn temporary_directory_must_be_absolute_and_apart_from_the_workspace_and_metadata() {
     // Arrange
     let cases = [
         (
             "/workspace",
             vec!["/admin"],
             Grants {
-                network: true,
+                temporary_directory: Some("relative".into()),
                 ..Grants::default()
             },
-            ValidationError::UnsupportedNetworking,
+            ValidationError::InvalidPath,
         ),
+        (
+            "/workspace",
+            vec!["/admin"],
+            Grants {
+                temporary_directory: Some("/workspace/tmp".into()),
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            "/workspace/project",
+            vec!["/admin"],
+            Grants {
+                temporary_directory: Some("/workspace".into()),
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            "/workspace",
+            vec!["/admin"],
+            Grants {
+                temporary_directory: Some("/admin/tmp".into()),
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            "/workspace",
+            vec!["/tmp/admin"],
+            Grants {
+                temporary_directory: Some("/tmp".into()),
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+    ];
+
+    // Act / Assert
+    for (workspace, metadata, grants, expected) in cases {
+        assert_eq!(
+            ExecutionPolicy::new(
+                workspace.into(),
+                metadata.into_iter().map(PathBuf::from).collect(),
+                grants
+            )
+            .err(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn policy_rejects_invalid_grants() {
+    // Arrange
+    let cases = [
         (
             "/workspace",
             vec!["/admin"],

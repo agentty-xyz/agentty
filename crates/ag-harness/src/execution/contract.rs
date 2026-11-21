@@ -6,13 +6,19 @@
 //! deadlines, the combined output budget, and the no-replay rule; a selected
 //! executor owns process launch, its documented enforcement, output capture,
 //! and cleanup. Enforcing executors apply the complete policy before starting
-//! anything, including against path aliases, symlinks, hard links, renames,
-//! and races, and reject any policy they cannot enforce. Lexical validation is
-//! not enforcement. Git metadata includes `.git` entries, resolved Git
-//! directories, common directories, and linked-worktree administration; no
-//! grant permits mutation. Applied workspace writes survive cancellation and
-//! failure; there is no rollback. Aggregate memory, process-count, and disk
-//! quotas are outside this contract.
+//! anything, including against path aliases, symlinks, renames, and races,
+//! and reject any policy they cannot enforce. Symlinks resolve to their
+//! targets, which stay subject to the policy; hard links that exist inside a
+//! write grant before launch are files of that grant, and commands cannot
+//! create new ones that reach outside it. Lexical validation is not
+//! enforcement. Git metadata includes `.git` entries, resolved Git
+//! directories, common directories, and linked-worktree administration; only
+//! the explicit Git-writes grant permits mutation, and never of Git
+//! configuration, hooks, worktree links, submodule metadata, or rebase and
+//! cherry-pick state. Applied
+//! workspace writes survive cancellation and failure; there is no rollback.
+//! Aggregate memory, process-count, and disk quotas are outside this
+//! contract.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
@@ -181,8 +187,10 @@ impl ExecutionCommand {
 pub(super) struct Grants {
     pub(super) environment: Vec<(OsString, OsString)>,
     pub(super) external_reads: Vec<PathBuf>,
+    pub(super) git_writes: bool,
     pub(super) host_information: bool,
     pub(super) network: bool,
+    pub(super) temporary_directory: Option<PathBuf>,
     pub(super) workspace_writes: Vec<PathBuf>,
 }
 
@@ -197,7 +205,10 @@ pub struct ExecutionPolicy {
     environment: BTreeMap<OsString, OsString>,
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
+    git_writes: bool,
     host_information: bool,
+    network: bool,
+    temporary_directory: Option<PathBuf>,
     workspace: PathBuf,
     workspace_writes: Vec<PathBuf>,
 }
@@ -212,9 +223,6 @@ impl ExecutionPolicy {
         git_metadata: Vec<PathBuf>,
         grants: Grants,
     ) -> Result<Self, ValidationError> {
-        if grants.network {
-            return Err(ValidationError::UnsupportedNetworking);
-        }
         validate_path(&workspace, true)?;
         if has_git_component(&workspace) {
             return Err(ValidationError::InvalidWorkspace);
@@ -230,6 +238,17 @@ impl ExecutionPolicy {
         }
         for path in &grants.external_reads {
             validate_path(path, true)?;
+        }
+        if let Some(path) = &grants.temporary_directory {
+            validate_path(path, true)?;
+            if path.starts_with(&workspace)
+                || workspace.starts_with(path)
+                || git_metadata
+                    .iter()
+                    .any(|git| path.starts_with(git) || git.starts_with(path))
+            {
+                return Err(ValidationError::InvalidWorkspace);
+            }
         }
         for path in &grants.workspace_writes {
             validate_path(path, false)?;
@@ -254,7 +273,10 @@ impl ExecutionPolicy {
             environment,
             external_reads: grants.external_reads,
             git_metadata,
+            git_writes: grants.git_writes,
             host_information: grants.host_information,
+            network: grants.network,
+            temporary_directory: grants.temporary_directory,
             workspace,
             workspace_writes: grants.workspace_writes,
         })
@@ -265,7 +287,8 @@ impl ExecutionPolicy {
         &self.workspace
     }
 
-    /// Known Git administration roots that no grant permits mutating.
+    /// Known Git administration roots that no grant but
+    /// [`Self::allows_git_writes`] permits mutating.
     pub fn git_metadata(&self) -> &[PathBuf] {
         &self.git_metadata
     }
@@ -290,16 +313,46 @@ impl ExecutionPolicy {
         self.host_information
     }
 
+    /// Whether the host granted network access. An executor that cannot
+    /// open the network it otherwise denies must refuse a policy that grants
+    /// it; `BashConfig::with_network` already stops describing network
+    /// access as denied to the model.
+    pub fn allows_network(&self) -> bool {
+        self.network
+    }
+
+    /// Absolute directory outside the workspace granted recursive reads and
+    /// writes and exported as `TMPDIR`, if any.
+    pub fn temporary_directory(&self) -> Option<&Path> {
+        self.temporary_directory.as_deref()
+    }
+
+    /// Whether the host granted writes to the repository's Git directories,
+    /// except the entries `BashConfig::with_git_writes` keeps read-only:
+    /// Git configuration, hooks, worktree links, submodule metadata, and
+    /// rebase and cherry-pick state. An executor that cannot keep those
+    /// read-only must refuse a policy granting Git writes.
+    pub fn allows_git_writes(&self) -> bool {
+        self.git_writes
+    }
+
     /// Reports lexical intent only; never use this as a filesystem access
     /// check. Protected metadata can be read only where a read grant
-    /// already exists. Relative, empty, traversing, and NUL-containing paths
-    /// report [`ExecutionAccess::Denied`].
+    /// already exists, and Git metadata reports read-only even under the
+    /// Git-writes grant, whose exceptions are not lexical. Relative, empty,
+    /// traversing, and NUL-containing paths report
+    /// [`ExecutionAccess::Denied`].
     pub fn requested_access(&self, path: &Path) -> ExecutionAccess {
         if validate_path(path, true).is_err() {
             return ExecutionAccess::Denied;
         }
         let in_workspace = path.starts_with(&self.workspace);
+        let in_temporary = self
+            .temporary_directory
+            .as_ref()
+            .is_some_and(|root| path.starts_with(root));
         if !in_workspace
+            && !in_temporary
             && !self
                 .external_reads
                 .iter()
@@ -310,12 +363,13 @@ impl ExecutionPolicy {
         if has_git_component(path) || self.git_metadata.iter().any(|root| path.starts_with(root)) {
             return ExecutionAccess::ReadOnly;
         }
-        if in_workspace
-            && self.workspace_writes.iter().any(|root| {
-                let root = self.workspace.join(root);
+        if in_temporary
+            || in_workspace
+                && self.workspace_writes.iter().any(|root| {
+                    let root = self.workspace.join(root);
 
-                path.starts_with(root)
-            })
+                    path.starts_with(root)
+                })
         {
             return ExecutionAccess::ReadWrite;
         }
@@ -594,7 +648,6 @@ pub(super) enum ValidationError {
     InvalidWorkspace,
     MissingGitMetadata,
     GitMetadataWrite,
-    UnsupportedNetworking,
     InvalidDeadline,
 }
 

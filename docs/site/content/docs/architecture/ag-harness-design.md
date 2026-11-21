@@ -299,18 +299,24 @@ still describes the call by the model's arguments. A denial answers the model wi
 - `bash` — requires an explicit per-turn `BashConfig` naming an executor: the native
   sandbox launcher (Bubblewrap, Landlock, and seccomp on Linux; Seatbelt on macOS), a
   host-supplied `BashExecutor`, or the shipped unsandboxed executor for hosts already
-  inside a container or VM. Writes, external reads, environment values, and host
-  information require explicit grants. Git metadata stays read-only, networking is never
-  granted, and unsupported policy fails closed on enforcing executors. Each executor
-  reports its `Enforcement` (none, filesystem, or filesystem and network), and the
-  model-facing `bash` description states exactly that, so an unsandboxed executor is
-  never presented as a sandbox. Output is captured within one bounded budget.
+  inside a container or VM. Writes, external and system reads, a temporary directory,
+  Git writes, networking, environment values, and host information require explicit
+  grants. The native sandbox applies grants by path at launch, without walking granted
+  directories, and resolves links at access time, so links can reach only granted
+  targets. Git configuration, hooks, worktree links, submodule metadata, and rebase and
+  cherry-pick state stay read-only even under the Git-writes grant, because Git run
+  later outside the sandbox would execute or follow them. Unsupported policy fails
+  closed on enforcing executors, and a command the native sandbox refuses to start
+  returns to the model as a rejected tool call. Each executor reports its `Enforcement`
+  (none, filesystem, or filesystem and network), and the model-facing `bash` description
+  states exactly that, so an unsandboxed executor is never presented as a sandbox.
+  Output is captured within one bounded budget.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks
   before admitting a turn that offers `bash`, until one check succeeds for its
   configuration. By default the turn continues without isolation and reports a
-  `SandboxWarning` with the reason and a remedy, on its `TurnReport` and as
+  `SandboxWarning` with the reason and an end-user remedy, on its `TurnReport` and as
   `RunEventKind::SandboxUnavailable` when streamed; `IfUnavailable::Refuse` fails it
   with `ErrorKind::SandboxUnavailable` before it is admitted. The helper is the host
   executable calling `sandbox::dispatch` or the standalone `ag-harness-sandbox` binary.

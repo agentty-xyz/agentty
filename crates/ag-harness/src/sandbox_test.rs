@@ -42,6 +42,12 @@ fn reasons_state_what_is_missing_and_how_to_fix_it() {
         // Assert
         assert!(reason.message().ends_with('.'), "{reason:?}");
         assert!(reason.remedy().ends_with('.'), "{reason:?}");
+        for api in ["::", "BashConfig", "Sandbox", "dispatch", "ag-harness"] {
+            assert!(
+                !reason.remedy().contains(api),
+                "{reason:?} remedy names an API: {api}"
+            );
+        }
         assert_eq!(reason.to_string(), reason.message());
         assert_eq!(warning.reason, reason);
         assert_eq!(warning.message, reason.message());
