@@ -7,6 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.7] - 2026-11-20
+
+### Added
+
+- `agentty`: show a harness session's reasoning and answer in the session view while the
+  model writes them; the saved answer replaces the streamed text when the turn ends.
+- `ag-contracts`: add the transient `TurnEvent::Output` event for streamed turn output.
+- `ag-harness`: register catalog entries with `ModelRegistry::register_catalog_entry`
+  and `HarnessBuilder::registration_revision`, so sessions built from a catalog resume
+  through `Harness::from_registry`.
+- release: publish Homebrew formulas to `agentty-xyz/homebrew-tap`, `cargo-binstall`
+  metadata, and static musl Linux archives for x86-64 and ARM64; the shell and npm
+  installers fall back to the musl build on old glibc or musl systems.
+- `ag-release`: add `prepare <version> --date <date>`, which bumps workspace versions,
+  refreshes `Cargo.lock`, and adds the changelog heading.
+
+### Changed
+
+- release: build Linux targets on Ubuntu 26.04 runners and macOS targets on macOS 26.
+- workspace: update GitHub Actions and the Rust toolchain.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.7`.
+
+### Fixed
+
+- `agentty`: a chat reply to an output awaiting approval now resumes a paused graph, for
+  example after a restart, instead of running as an ordinary turn outside the graph.
+- `agentty`: automatic focused review waits for a working graph to finish instead of
+  starting between its nodes.
+- `agentty`: Settings offers the `Fast` speed only for models that support it, and
+  titles, auto-commit, and review keep such a model at `Normal` speed instead of
+  switching to another model.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.6] - 2026-11-19
 
 ### Added
