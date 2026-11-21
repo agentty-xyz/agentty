@@ -492,6 +492,11 @@ async fn single_batch_verifies_candidates_and_repairs_captured_source_citations(
                 .push(serde_json::json!({"details":"Unsupported candidate", "severity":"medium"}));
         } else if calls == 2 {
             assert!(request.prompt.starts_with("Cross-file review:"));
+            assert!(
+                request
+                    .prompt
+                    .contains("duplicates code added in another fragment")
+            );
             assert!(request.prompt.contains("+run();"));
             suggestions.clear();
         } else {

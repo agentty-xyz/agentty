@@ -540,9 +540,10 @@ pub(super) async fn cross_file_review(
                  immediate and deferred paths, paused states, empty queues, and \
                  compound-condition bypasses. Check test setup preconditions and silent fixture \
                  no-ops. Use the shared cross-file context to connect changes in other fragments, \
-                 and inspect their original files before reporting interactions. Do not assume \
-                 intended behavior or earlier reviews are correct; use source evidence and report \
-                 only concrete high or medium risks.\n\n{}",
+                 and inspect their original files before reporting interactions or added code \
+                 that duplicates code added in another fragment. Do not assume intended behavior \
+                 or earlier reviews are correct; use source evidence and report only concrete \
+                 high or medium risks.\n\n{}",
                 render(fragment, history, diff)?
             ))
         },

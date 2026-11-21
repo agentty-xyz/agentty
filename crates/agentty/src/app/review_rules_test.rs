@@ -116,13 +116,16 @@ fn selects_language_and_test_rules_without_excluding_changed_files() {
     // Act / Assert
     for (extension, expected) in cases {
         let diff = format!("diff --git a/x.{extension} b/x.{extension}\n");
-        assert!(rules.for_diff(&diff).expect("criteria").contains(expected));
+        let criteria = rules.for_diff(&diff).expect("criteria");
+        assert!(criteria.contains(expected));
+        assert!(criteria.contains("Reuse and simplification:"));
     }
     let tests = rules
         .for_diff("diff --git a/tests/a.rs b/tests/a.rs\ndiff --git a/tests/b.rs b/tests/b.rs\n")
         .expect("criteria");
     assert_eq!(tests.matches("Rust:").count(), 1);
     assert_eq!(tests.matches("Tests:").count(), 1);
+    assert_eq!(tests.matches("Reuse and simplification:").count(), 1);
     for path in ["crates/a/tests/check.rs", "src/a_test.rs", "src/a.test.ts"] {
         assert!(
             rules
@@ -216,7 +219,7 @@ async fn matching_rules_are_rendered_once_with_their_filters() {
     let criteria: Vec<String> = serde_json::from_str(&rendered).expect("JSON criteria");
 
     // Assert
-    assert_eq!(criteria.len(), 2);
+    assert_eq!(criteria.len(), 3);
     assert_eq!(
         criteria
             .iter()
@@ -224,7 +227,7 @@ async fn matching_rules_are_rendered_once_with_their_filters() {
             .count(),
         1
     );
-    assert!(criteria[1].contains("path_prefix: \"src/\"; extensions: [\"rs\"]"));
+    assert!(criteria[2].contains("path_prefix: \"src/\"; extensions: [\"rs\"]"));
     assert!(rendered.len() <= MAX_CRITERIA_BYTES);
 }
 

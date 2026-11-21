@@ -68,6 +68,14 @@ an empty array when that section has no content.
   is not a missing-import finding. A clean review is valid; do not fill a quota.
 - Prioritize high severity. Exclude low-severity polish, optional changes, and style
   nits. Keep findings scoped to this diff.
+- Added code that duplicates existing repository code, or that a materially simpler
+  construct replaces without changing behavior, is a `medium` maintainability finding,
+  not optional polish. Report it only after inspecting the existing code and confirming
+  the behavior matches. Anchor `evidence` to the added code, use the change that would
+  make the copies diverge or the case the extra complexity obscures as the `trigger`,
+  and name the existing path and symbol or the simpler construct in `correction`; a
+  small change that makes existing code reusable is a valid correction. Naming,
+  formatting, and preference-only rewrites stay excluded.
 - Use the session chat history as decision context, not merely background. Treat
   explicit decisions, accepted tradeoffs, and explanations as constraints. Do not repeat
   resolved suggestions unless the diff contradicts the resolution or inspection finds a
