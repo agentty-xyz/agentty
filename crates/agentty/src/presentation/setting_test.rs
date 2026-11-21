@@ -342,7 +342,10 @@ fn empty_selector_options_close_or_remain_closed() {
 #[test]
 fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
     // Arrange
-    let view = test_settings_view("");
+    let mut view = test_settings_view("");
+    // A Fast-capable smart model keeps every role on the speed-selector path.
+    view.default_smart_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
+    view.default_smart_speed_mode = SpeedMode::Fast;
 
     // Act
     let operations = [
