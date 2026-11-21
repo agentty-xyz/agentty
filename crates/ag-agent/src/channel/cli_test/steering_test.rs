@@ -6,7 +6,9 @@ use std::time::Duration;
 use ag_contracts::{
     AgentChannel as _, AgentError, AgentRequestKind, TurnEvent, TurnRequest, TurnResult,
 };
-use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use ag_protocol::{
+    AgentResponse, QuestionItem, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+};
 use ag_session::AgentKind;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -14,7 +16,7 @@ use tokio::task::JoinHandle;
 
 use super::support::make_turn_request;
 use crate::agent::MockAgentBackend;
-use crate::channel::cli::CliAgentChannel;
+use crate::channel::cli::{CliAgentChannel, append_follow_up_response};
 
 /// Claude stand-in that answers with the second stdin message it reads,
 /// then waits for stdin to close before exiting.
@@ -192,6 +194,34 @@ async fn claude_session_turn_keeps_primary_answer_when_a_follow_up_reply_is_malf
         result.assistant_message.to_display_text(),
         "first\n\nplain follow-up"
     );
+}
+
+#[test]
+fn follow_up_response_joins_only_nonempty_answers_and_keeps_questions() {
+    // Arrange
+    let cases = [
+        ("", "second", vec![], "second"),
+        (
+            "first",
+            "",
+            vec![QuestionItem::new("Which parser?")],
+            "first",
+        ),
+        ("first", " \n", vec![], "first"),
+    ];
+
+    for (primary_answer, follow_up_answer, follow_up_questions, expected_answer) in cases {
+        let mut response = AgentResponse::plain(primary_answer);
+        let mut follow_up = AgentResponse::plain(follow_up_answer);
+        follow_up.questions.clone_from(&follow_up_questions);
+
+        // Act
+        append_follow_up_response(&mut response, follow_up);
+
+        // Assert
+        assert_eq!(response.answer, expected_answer);
+        assert_eq!(response.questions, follow_up_questions);
+    }
 }
 
 #[tokio::test]
