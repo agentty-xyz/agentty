@@ -28,7 +28,7 @@ use crate::session::SessionError;
 pub use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
 pub use crate::session_model::RecordedModel;
 #[cfg(feature = "sqlite")]
-pub use crate::sqlite_store::{Database as SqliteStore, SessionInfo};
+pub use crate::sqlite_store::{Database as SqliteStore, SQLITE_BUSY_TIMEOUT, SessionInfo};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};

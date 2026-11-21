@@ -17,6 +17,7 @@ use ag_contracts::{
     SpeedMode, TurnContinuation, TurnEvent, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
+use ag_harness::store::SQLITE_BUSY_TIMEOUT;
 use ag_harness::tool::ToolDefinition;
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
@@ -1527,10 +1528,9 @@ async fn failed_shutdown_cleanup_is_retried_before_the_next_turn() {
             break;
         }
     }
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(data_root.path().join("session-stop/harness.db")),
-    )
+    let pool = sqlx::SqlitePool::connect_with(session_database_options(
+        &data_root.path().join("session-stop/harness.db"),
+    ))
     .await
     .expect("session database");
     sqlx::query(
@@ -1644,10 +1644,9 @@ async fn failed_command_cleanup_is_retried_by_shutdown_and_the_next_turn() {
     )
     .await;
     first.expect("first turn should succeed");
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(data_root.path().join("session-cleanup/harness.db")),
-    )
+    let pool = sqlx::SqlitePool::connect_with(session_database_options(
+        &data_root.path().join("session-cleanup/harness.db"),
+    ))
     .await
     .expect("session database");
     sqlx::query(
@@ -1747,15 +1746,22 @@ async fn execute_in_session_database(
     session_id: &str,
     statement: &'static str,
 ) -> Result<(), sqlx::Error> {
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(data_root.join(session_id).join("harness.db")),
-    )
+    let pool = sqlx::SqlitePool::connect_with(session_database_options(
+        &data_root.join(session_id).join("harness.db"),
+    ))
     .await?;
     sqlx::query(statement).execute(&pool).await?;
     pool.close().await;
 
     Ok(())
+}
+
+/// Returns connection options for a harness database that wait for the
+/// harness's locks as long as the harness waits for theirs.
+fn session_database_options(database_path: &Path) -> sqlx::sqlite::SqliteConnectOptions {
+    sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(database_path)
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
 }
 
 /// Returns a session resume of `prompt` continuing `provider_conversation_id`
