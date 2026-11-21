@@ -1,13 +1,17 @@
 //! Native sandbox development grants on real repositories: Git in a linked
 //! worktree with links, a per-session temporary directory, system and
 //! toolchain-sized read grants without per-command inspection, an opt-in
-//! network grant, and refused launches the model can recover from.
+//! network grant, refused launches the model can recover from, hard links
+//! that cannot reach outside the grants, a real toolchain from outside the
+//! system directories, and a bound on per-command latency.
 
 use std::io::{Read, Write};
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ag_harness::TurnOptions;
 use ag_harness::bash::{BashConfig, CommandOutcome};
@@ -91,6 +95,19 @@ impl LinkedWorktree {
         .with_git_writes()
         .with_temporary_directory(self.temporary())
         .expect("temporary directory")
+    }
+
+    /// Creates `name` beside the worktree and returns it with the
+    /// development configuration plus a read grant for it.
+    fn granted_directory(&self, name: &str) -> (PathBuf, BashConfig) {
+        let directory = self.root().join(name);
+        std::fs::create_dir(&directory).expect("granted directory");
+        let configuration = self
+            .configuration()
+            .with_read(directory.clone())
+            .expect("read grant");
+
+        (directory, configuration)
     }
 
     async fn run(&self, command: &str, configuration: BashConfig) -> CommandOutcome {
@@ -189,8 +206,8 @@ async fn native_git_stages_and_commits_in_a_linked_worktree_with_links() {
 async fn native_grants_are_not_inspected() {
     // Arrange
     let fixture = LinkedWorktree::new();
-    let toolchain = fixture.root().join("toolchain");
-    std::fs::create_dir_all(toolchain.join("bin")).expect("toolchain");
+    let (toolchain, configuration) = fixture.granted_directory("toolchain");
+    std::fs::create_dir(toolchain.join("bin")).expect("toolchain");
     std::fs::write(toolchain.join("bin/tool"), "tool-value").expect("toolchain file");
     // Negative controls: any walk of a grant would trip over an entry it
     // cannot read or a FIFO, and the earlier walk refused both.
@@ -205,10 +222,6 @@ async fn native_grants_are_not_inspected() {
             .expect("FIFO");
         assert!(fifo.success());
     }
-    let configuration = fixture
-        .configuration()
-        .with_read(toolchain.clone())
-        .expect("toolchain grant");
 
     // Act
     let result = fixture
@@ -229,6 +242,165 @@ async fn native_grants_are_not_inspected() {
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "tool-value", "{result:?}");
     assert!(fixture.worktree().join("output/written").exists());
+}
+
+/// Seatbelt denies every hard link a command tries to create: from a file
+/// readable through a grant or from one not granted at all, into the
+/// worktree or the temporary directory. Each attempt must fail with
+/// Seatbelt's `Operation not permitted`, so a failure for another reason
+/// does not pass. The files sit on the worktree's filesystem, so the
+/// attempts do not fail merely for crossing devices on the host. On Linux
+/// the mount layout is what refuses these links (`EXDEV` across binds,
+/// `ENOENT` for ungranted paths), which
+/// `access::native_linux_denies_writes_links_and_renames_outside_grants`
+/// already covers.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn native_macos_denies_hard_links_to_files_outside_the_grants() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let ungranted = fixture.root().join("ungranted");
+    std::fs::write(&ungranted, "ungranted-value").expect("ungranted file");
+    let (readable, configuration) = fixture.granted_directory("readable");
+    let granted = readable.join("granted");
+    std::fs::write(&granted, "granted-value").expect("granted file");
+
+    // Act
+    let result = fixture
+        .run(
+            &format!(
+                "set -e; [ -n \"$TMPDIR\" ] || exit 90; denied() {{ if error=$(/bin/ln \"$1\" \
+                 \"$2\" 2>&1); then exit 91; fi; case \"$error\" in *'Operation not permitted'*) \
+                 ;; *) printf '%s\\n' \"$error\" >&2; exit 92;; esac; }}; /bin/cat '{granted}'; \
+                 denied '{granted}' granted-link; denied '{granted}' \"$TMPDIR/granted-link\"; \
+                 denied '{ungranted}' ungranted-link; denied '{ungranted}' \
+                 \"$TMPDIR/ungranted-link\"; /bin/ln -s tracked symbolic; /bin/cat symbolic",
+                granted = granted.display(),
+                ungranted = ungranted.display(),
+            ),
+            configuration,
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "granted-valuetracked-value", "{result:?}");
+    for (path, contents) in [(&granted, "granted-value"), (&ungranted, "ungranted-value")] {
+        assert_eq!(std::fs::metadata(path).expect("outside file").nlink(), 1);
+        assert_eq!(
+            std::fs::read_to_string(path).expect("outside file"),
+            contents
+        );
+    }
+    for name in ["granted-link", "ungranted-link"] {
+        assert!(!fixture.worktree().join(name).exists());
+        assert!(!fixture.temporary().join(name).exists());
+    }
+}
+
+/// A dynamically linked compiler installed outside the system directories,
+/// such as rustup's under the home directory, starts from a read grant of
+/// its path, and does not start without it. The suite's own toolchain is
+/// present wherever it runs: CI installs it with rustup under the home
+/// directory. A toolchain under a system directory would make the grant add
+/// nothing, so the test refuses that host instead of passing vacuously.
+#[tokio::test]
+async fn native_runs_a_toolchain_granted_by_path() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let sysroot = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .expect("host compiler");
+    assert!(sysroot.status.success(), "{sysroot:?}");
+    let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout).expect("sysroot").trim())
+        .canonicalize()
+        .expect("canonical sysroot");
+    let system_root = SYSTEM_READ_ROOTS
+        .iter()
+        .find(|root| sysroot.starts_with(root));
+    assert!(
+        system_root.is_none(),
+        "the toolchain at {} lies under the system read root {system_root:?}, so this test cannot \
+         show its read grant matters; run it with a rustup toolchain outside the system \
+         directories",
+        sysroot.display()
+    );
+    let compiler = sysroot.join("bin/rustc");
+    let expected = Command::new(&compiler)
+        .arg("--version")
+        .output()
+        .expect("host compiler version");
+    assert!(expected.status.success(), "{expected:?}");
+    let command = format!("'{}' --version", compiler.display());
+    let configuration = fixture
+        .configuration()
+        .with_read(sysroot)
+        .expect("toolchain grant");
+
+    // Act
+    let ungranted = fixture.run(&command, fixture.configuration()).await;
+    let result = fixture.run(&command, configuration).await;
+
+    // Assert
+    assert_ne!(ungranted.exit_code, Some(0), "{ungranted:?}");
+    assert_eq!(ungranted.stdout, "", "{ungranted:?}");
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        String::from_utf8(expected.stdout).expect("version"),
+        "{result:?}"
+    );
+    assert!(result.stdout.starts_with("rustc "), "{result:?}");
+}
+
+/// Roots that cover the directories `BashConfig::with_system_reads` grants.
+#[cfg(target_os = "macos")]
+const SYSTEM_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/System",
+    "/Library/Developer",
+    "/Library/Apple",
+    "/Applications/Xcode.app",
+    "/private/etc",
+    "/private/var/db",
+    "/private/var/select",
+];
+
+/// Roots that cover the directories `BashConfig::with_system_reads` grants.
+#[cfg(target_os = "linux")]
+const SYSTEM_READ_ROOTS: &[&str] = &[
+    "/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
+];
+
+/// An earlier sandbox spent 3.3 to 3.9 s walking its grants before each
+/// `git status` on macOS. The fastest of three runs filters out a loaded
+/// runner, while a cost paid by every command still shows; the bound sits
+/// far above a normal launch and well below that regression.
+#[tokio::test]
+async fn native_git_command_latency_stays_bounded() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let mut durations = Vec::new();
+
+    // Act
+    for _ in 0..3 {
+        let started = Instant::now();
+        let result = fixture
+            .run("git status --porcelain", fixture.configuration())
+            .await;
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        durations.push(started.elapsed());
+    }
+
+    // Assert
+    let fastest = durations.iter().min().expect("three runs");
+    assert!(
+        *fastest < Duration::from_millis(1500),
+        "every sandboxed git status took at least 1.5 s: {durations:?}"
+    );
 }
 
 /// In a main worktree macOS commits while the Git directory and its
