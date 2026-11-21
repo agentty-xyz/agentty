@@ -50,7 +50,7 @@ totals (`--module-depth`, `--top`), and a duration histogram for one report. Aft
 coverage step, CI runs it as `check-slow-tests` on `target/nextest/ci/junit.xml`: a test
 over 5 s fails unless `.config/slow-tests.yaml` lists it with a reason. Allowlisted
 tests that are now fast or gone only warn; remove their entries. The threshold leaves
-headroom above the slowest unlisted coverage-run tests (about 3.3 s on loaded runners),
+headroom above the slowest unlisted coverage-run tests (about 3.7 s on loaded runners),
 so it does not flake. The PTY E2E suite is not checked.
 
 ## Timing Collector

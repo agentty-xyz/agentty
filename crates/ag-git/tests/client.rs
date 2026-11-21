@@ -79,6 +79,24 @@ impl ContractRepository {
         Ok(repository)
     }
 
+    /// Copies the layout under `root` without running Git, repointing the
+    /// absolute `origin` and hooks paths recorded in `local`'s configuration.
+    fn copy_to(&self, root: &Path) -> TestResult<Self> {
+        let root = fs::canonicalize(root)?;
+        copy_directory(&self.root, &root)?;
+        let template_root = self.root.to_str().ok_or("template path is not UTF-8")?;
+        let copy_root = root.to_str().ok_or("copy path is not UTF-8")?;
+        let config_path = root.join("local/.git/config");
+        let config = fs::read_to_string(&config_path)?;
+        fs::write(&config_path, config.replace(template_root, copy_root))?;
+
+        Ok(Self {
+            local: root.join("local"),
+            origin: root.join("origin"),
+            root,
+        })
+    }
+
     /// Returns the path of a sibling entry of `local` and `origin`.
     fn path(&self, name: &str) -> PathBuf {
         self.root.join(name)
@@ -941,12 +959,16 @@ async fn real_git_client_synchronizes_with_remote() -> TestResult<()> {
     run_contract_cases(REMOTE_CASES).await
 }
 
-/// Runs each case against its own fresh standard repository.
+/// Runs each case against its own copy of one standard repository, so the
+/// layout is built through Git once per suite rather than once per case.
 async fn run_contract_cases(cases: &[ContractCase]) -> TestResult<()> {
+    let template_directory = tempdir()?;
+    let template = ContractRepository::create(template_directory.path())?;
+
     for case in cases {
         // Arrange
         let temporary_directory = tempdir()?;
-        let repository = ContractRepository::create(temporary_directory.path())?;
+        let repository = template.copy_to(temporary_directory.path())?;
         (case.prepare)(&repository)?;
 
         // Act
@@ -954,6 +976,23 @@ async fn run_contract_cases(cases: &[ContractCase]) -> TestResult<()> {
 
         // Assert
         assert_eq!(observation, case.expected, "{}", case.operation);
+    }
+
+    Ok(())
+}
+
+/// Recursively copies the directories and regular files under `source` into
+/// the existing `destination` directory.
+fn copy_directory(source: &Path, destination: &Path) -> TestResult<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            fs::create_dir(&target)?;
+            copy_directory(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
     }
 
     Ok(())
