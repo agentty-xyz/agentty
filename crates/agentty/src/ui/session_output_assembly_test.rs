@@ -20,7 +20,7 @@ use crate::domain::transient_message::{
 };
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::ui::session_output_line::OutputLines;
-use crate::ui::{markdown, style};
+use crate::ui::{markdown, session_format, style};
 
 fn queued_message(order: u64, text: &str) -> QueuedMessage {
     QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
@@ -202,13 +202,35 @@ fn test_queued_messages_skip_blank_entries() {
     ];
 
     // Act
-    append_queued_entries(&mut lines, &[], &queued_messages, 80);
+    append_queued_entries(&mut lines, &[], &queued_messages, false, 80);
 
     // Assert
     assert_eq!(
         lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
         ["", "≡ queued › queued reply", ""]
     );
+}
+
+#[test]
+fn steerable_queued_messages_end_with_a_send_now_hint() {
+    // Arrange
+    let mut lines = OutputLines::default();
+    let queued_messages = vec![queued_message(1, "also add tests")];
+
+    // Act
+    let queued_line_indices = append_queued_entries(&mut lines, &[], &queued_messages, true, 80);
+
+    // Assert
+    assert_eq!(
+        lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        [
+            "",
+            "≡ queued › also add tests",
+            session_format::STEER_HINT_TEXT,
+            ""
+        ]
+    );
+    assert_eq!(queued_line_indices, [1]);
 }
 
 #[test]
@@ -358,7 +380,7 @@ fn test_queued_entries_follow_shared_submission_order() {
 
     // Act
     let queued_line_indices =
-        append_queued_entries(&mut lines, &transient_messages, &queued_messages, 80);
+        append_queued_entries(&mut lines, &transient_messages, &queued_messages, false, 80);
 
     // Assert
     assert_eq!(
@@ -538,7 +560,7 @@ pub(crate) fn append_queued_message_lines(
 ) {
     let mut output = OutputLines::default();
     output.extend(std::mem::take(lines));
-    append_queued_entries(&mut output, &[], queued_messages, 80);
+    append_queued_entries(&mut output, &[], queued_messages, false, 80);
     lines.extend(output.iter().cloned());
 }
 /// Appends one user prompt block while retaining its prompt marker and shading.

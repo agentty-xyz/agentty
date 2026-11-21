@@ -136,7 +136,7 @@ async fn seed_review_comment_agent_resolution(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Generate the canonical session commit message"*)
     printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Address review comments\"}","usage":{"input_tokens":5,"output_tokens":9}}'
@@ -168,7 +168,7 @@ async fn seed_incomplete_review_comment_outcomes(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Generate the canonical session commit message"*)
     printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Address review comments\"}","usage":{"input_tokens":5,"output_tokens":9}}'
@@ -626,7 +626,7 @@ async fn seed_queued_review_comment_turns(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 case "$prompt" in
   *"For this utility request"*)
@@ -1063,7 +1063,7 @@ async fn seed_review_comment_question(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"For this utility request"*)
     answer='Helper response'; response='{ \"answer\": \"Helper response\" }' ;;
@@ -1107,7 +1107,7 @@ async fn test_review_comment_clarification_retains_target() -> E2eResult {
                 std::fs::write(&claude_path, r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"For this utility request"*)
     response='{ \"answer\": \"Address review comments\" }' ;;

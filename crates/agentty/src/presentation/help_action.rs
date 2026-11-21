@@ -134,6 +134,8 @@ pub(crate) struct ViewHelpState {
     pub(crate) can_open_worktree: ViewActionAvailability,
     /// Whether the current draft session has staged prompts and can launch.
     pub(crate) can_start_staged_session: ViewActionAvailability,
+    /// Whether queued chat messages can join the running turn now.
+    pub(crate) can_steer_queued_messages: ViewActionAvailability,
     /// Pull-request publish action available for the current session, when
     /// any.
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
@@ -323,6 +325,14 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     );
 
     append_view_stop_action(&mut actions, action_set);
+
+    if action_set.stop_session.is_enabled() && state.can_steer_queued_messages.is_enabled() {
+        actions.push(HelpAction::new(
+            "send now",
+            "Ctrl+s",
+            "Send queued chat messages into the running turn",
+        ));
+    }
 
     if state.can_start_staged_session.is_enabled()
         && state.session_state == ViewSessionState::NewSession

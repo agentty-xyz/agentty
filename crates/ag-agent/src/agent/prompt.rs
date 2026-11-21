@@ -207,19 +207,6 @@ pub(crate) fn apply_response_style_prompt(
     Ok(prompt)
 }
 
-/// Builds a full prompt payload to stream over stdin for CLI providers.
-///
-/// # Errors
-/// Returns an error when the shared CLI prompt text cannot be rendered.
-pub(crate) fn build_prompt_stdin_payload(
-    request: BuildCommandRequest<'_>,
-    schema_instruction_mode: ProtocolSchemaInstructionMode,
-    backend_display_name: &str,
-) -> Result<Vec<u8>, AgentBackendError> {
-    build_cli_prompt_text(request, schema_instruction_mode, backend_display_name)
-        .map(String::into_bytes)
-}
-
 /// Prepends current agent instructions to one full bootstrap prompt.
 fn prepend_agent_profile_prompt(
     prompt: &str,

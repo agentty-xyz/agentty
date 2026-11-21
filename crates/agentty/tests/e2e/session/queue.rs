@@ -120,7 +120,7 @@ async fn install_deferred_project_review_claude_stub(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)
     case "$prompt" in
@@ -190,7 +190,7 @@ async fn install_delayed_sync_claude_stub(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 {hold_turn}
 {mark_validation_failure}printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
@@ -221,7 +221,7 @@ async fn install_queued_sync_question_claude_stub(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 {hold_turn}
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification before sync.\",\"questions\":[{{\"text\":\"{QUEUED_SYNC_QUESTION_TEXT}\",\"options\":[\"Continue\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
@@ -284,7 +284,7 @@ async fn install_queued_review_request_stubs(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-input=$(cat)
+IFS= read -r input
 case "$input" in
   *"Reconcile the current review-request title and description"*)
     printf '%s\n' '{{"type":"system","subtype":"init"}}'
@@ -425,7 +425,7 @@ emit_answer() {{
   printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"'"$1"'"}}]}}}}'
   printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\"}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 }}
-input=$(cat)
+IFS= read -r input
 case "$input" in
   *"Reconcile the current review-request title and description"*)
     printf '%s\n' '{{"type":"system","subtype":"init"}}'
@@ -1584,6 +1584,227 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                         .rect
                         .row;
                     assert!(queued_answer_row < review_request_row);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Prompt sent into the running Codex or Claude turn with `Ctrl+s`.
+const STEER_PROMPT_TEXT: &str = "focus on the parser";
+
+/// Answer each steerable stub emits only after it receives the steering prompt.
+const STEERED_ANSWER_TEXT: &str = "Steering acknowledged.";
+
+/// Installs a Codex app-server stub whose session turn stays open until a
+/// `turn/steer` request delivers [`STEER_PROMPT_TEXT`], then completes with
+/// [`STEERED_ANSWER_TEXT`].
+async fn seed_codex_steerable_turn_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let codex_path = env.stub_bin.join("codex");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'codex-cli 0.146.0\n'; exit 0; fi
+
+extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+complete_turn() {
+    printf '{"method":"item/completed","params":{"threadId":"steer-thread","turnId":"steer-turn","item":{"type":"agentMessage","id":"steer-answer","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[]}","phase":"final_answer"}}}\n' "$1"
+    printf '%s\n' '{"method":"turn/completed","params":{"threadId":"steer-thread","turn":{"id":"steer-turn","status":"completed","items":[]}}}'
+}
+
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '{"id":"%s","result":{}}\n' "$(extract_id "$request")"
+            ;;
+        *'"method":"thread/start"'*)
+            printf '{"id":"%s","result":{"thread":{"id":"steer-thread"}}}\n' "$(extract_id "$request")"
+            ;;
+        *'"method":"turn/start"'*)
+            printf '{"id":"%s","result":{"turn":{"id":"steer-turn"}}}\n' "$(extract_id "$request")"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"steer-turn"}}}'
+            case "$request" in
+                *'Generate a concise, commit-style title'*) complete_turn 'Steerable task title.' ;;
+                *'Start the steerable task'*) ;;
+                *) complete_turn 'Steerable task title.' ;;
+            esac
+            ;;
+        *'"method":"turn/steer"'*)
+            case "$request" in
+                *'"expectedTurnId":"steer-turn"'*'focus on the parser'*|*'focus on the parser'*'"expectedTurnId":"steer-turn"'*)
+                    printf '{"id":"%s","result":{"turnId":"steer-turn"}}\n' "$(extract_id "$request")"
+                    complete_turn 'Steering acknowledged.'
+                    ;;
+                *)
+                    printf '{"id":"%s","error":{"message":"unexpected steering"}}\n' "$(extract_id "$request")"
+                    ;;
+            esac
+            ;;
+    esac
+done
+"#;
+    std::fs::write(&codex_path, script)?;
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "codex"),
+            ("DefaultSmartModel", model_fixture::CODEX_MODEL_ID),
+            ("DefaultFastAgent", "codex"),
+            ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
+        ],
+    )
+    .await
+}
+
+/// Verify a chat message queued during a running Codex turn shows a send-now
+/// hint, and `Ctrl+s` delivers it into that turn: the queued row becomes a
+/// transcript prompt and the same turn's answer reflects it.
+#[tokio::test]
+async fn session_queued_chat_message_sends_into_running_codex_turn() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_chat_send_now")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_codex_steerable_turn_project(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Start the steerable task")
+                    .press_key("Enter")
+                    .wait_for_text("Working...", 30000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text(STEER_PROMPT_TEXT)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+s sends queued messages now", 5000)
+                    .capture_labeled(
+                        "queued_with_send_now_hint",
+                        "Queued chat offers to join the running turn",
+                    )
+                    .press_key("ctrl+s")
+                    .wait_for_text(STEERED_ANSWER_TEXT, 30000)
+                    .capture_labeled(
+                        "steered_turn_answer",
+                        "The running turn answers the sent message",
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let queued = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued.cols(), queued.rows());
+                    assertion::assert_text_in_region(
+                        &queued,
+                        "≡ queued › focus on the parser",
+                        &queued_full,
+                    );
+                    assertion::assert_text_in_region(&queued, "Working...", &queued_full);
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, STEERED_ANSWER_TEXT, &full);
+                    assertion::assert_text_in_region(frame, STEER_PROMPT_TEXT, &full);
+                    assertion::assert_not_visible(frame, "queued ›");
+                    assertion::assert_not_visible(frame, "Ctrl+s sends queued messages now");
+                    assertion::assert_not_visible(frame, "unexpected steering");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Installs a Claude stub whose session turn waits for a second
+/// `stream-json` stdin message and answers [`STEERED_ANSWER_TEXT`] only when
+/// it carries [`STEER_PROMPT_TEXT`].
+async fn seed_claude_steerable_turn_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+IFS= read -r prompt
+case "$prompt" in
+  *'Generate a concise, commit-style title'*)
+    answer='Steerable task title.'
+    ;;
+  *'Start the steerable task'*)
+    IFS= read -r steer
+    case "$steer" in
+      *'"type":"user"'*'focus on the parser'*) answer='Steering acknowledged.' ;;
+      *) answer='unexpected steering' ;;
+    esac
+    ;;
+  *)
+    answer='Handled an Agentty utility prompt.'
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"%s"},"usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+"#;
+    std::fs::write(&claude_path, script)?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
+        ],
+    )
+    .await
+}
+
+/// Verify `Ctrl+s` delivers a queued chat message into a running Claude turn
+/// as a second `stream-json` stdin message, and the same turn answers it.
+#[tokio::test]
+async fn session_queued_chat_message_sends_into_running_claude_turn() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_chat_send_now_claude")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_claude_steerable_turn_project(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Start the steerable task")
+                    .press_key("Enter")
+                    .wait_for_text("Working...", 30000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text(STEER_PROMPT_TEXT)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+s sends queued messages now", 5000)
+                    .press_key("ctrl+s")
+                    .wait_for_text(STEERED_ANSWER_TEXT, 30000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, STEERED_ANSWER_TEXT, &full);
+                    assertion::assert_text_in_region(frame, STEER_PROMPT_TEXT, &full);
+                    assertion::assert_not_visible(frame, "queued ›");
+                    assertion::assert_not_visible(frame, "unexpected steering");
                 })
             },
         )

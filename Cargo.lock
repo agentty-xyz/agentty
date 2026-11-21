@@ -213,6 +213,7 @@ version = "0.19.7"
 dependencies = [
  "ag-agent",
  "ag-contracts",
+ "ag-protocol",
  "ag-session",
  "async-trait",
  "tokio",

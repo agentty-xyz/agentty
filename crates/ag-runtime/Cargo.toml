@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 ag-agent.workspace = true
 ag-contracts.workspace = true
+ag-protocol.workspace = true
 ag-session.workspace = true
 async-trait.workspace = true
 tokio.workspace = true

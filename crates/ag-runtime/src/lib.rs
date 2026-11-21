@@ -8,7 +8,7 @@ mod runtime;
 
 pub use provider::{
     RealAgentAvailabilityProbe, cleanup_session_worktree_artifacts, setup_backend,
-    uses_persistent_session,
+    supports_turn_steering, uses_persistent_session,
 };
 #[cfg(feature = "test-utils")]
 pub use runtime::test_support;

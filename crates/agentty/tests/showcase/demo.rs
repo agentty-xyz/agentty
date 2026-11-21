@@ -214,8 +214,8 @@ if [ "$1" = "--version" ]; then
     printf '%s\n' 'claude 2.1.7'
     exit 0
 fi
-# Consume stdin so the parent's writer does not block.
-cat > /dev/null 2>&1
+# Read the stream-json prompt message; stdin stays open during the turn.
+IFS= read -r prompt
 # "Thinking" pause: long enough for the viewer to see InProgress in the
 # session and on the list, but short enough (~6s total with the two
 # trailing sleeps) that the session reaches Review before the tape reopens

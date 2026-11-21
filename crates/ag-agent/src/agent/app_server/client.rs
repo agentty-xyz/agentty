@@ -1,6 +1,7 @@
 //! Shared app-server runtime client scaffold.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
@@ -9,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
     AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
+    TurnSteeringInbox, TurnSteeringRegistration, steering,
 };
 
 /// Provider hook surface for the shared app-server client lifecycle.
@@ -25,6 +27,11 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
     /// Returns whether successful runtimes remain alive between turns.
     fn retain_runtime_after_turn() -> bool;
 
+    /// Returns whether interactive turns accept user prompts while running.
+    fn supports_steering() -> bool {
+        false
+    }
+
     /// Creates fresh conversation context on a compatible idle process.
     /// Returns false when the provider requires a process restart instead.
     fn reset_context<'scope>(
@@ -40,6 +47,12 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>>;
 
     /// Runs one turn against an already-started provider runtime.
+    ///
+    /// `steering` is present only for interactive turns of providers that
+    /// [support steering](Self::supports_steering); the turn delivers its
+    /// prompts while running and answers each acknowledgement. One inbox
+    /// spans every attempt of a request, so an attempt that starts over sends
+    /// [`TurnSteeringInbox::prompt_with_accepted`] instead of `prompt` alone.
     fn run_turn<'scope>(
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
@@ -47,6 +60,7 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
         reasoning_level: ReasoningLevel,
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        steering: Option<Arc<TurnSteeringInbox>>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>>;
 }
 
@@ -95,6 +109,11 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
         let reasoning_level = request.reasoning_level;
         let protocol_profile = request.request_kind.protocol_profile();
         let speed_mode = request.speed_mode;
+        // The registration closes the inbox when this request settles.
+        let steering = (Provider::supports_steering()
+            && protocol_profile == ProtocolRequestProfile::SessionTurn)
+            .then(|| sessions.turn_steering().register(&request.session_id));
+        let steering_inbox = steering.as_ref().map(TurnSteeringRegistration::inbox);
 
         app_server::run_turn_with_restart_retry(
             sessions,
@@ -123,6 +142,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
                     reasoning_level,
                     speed_mode,
                     stream_tx,
+                    steering_inbox.clone(),
                 )
             },
             move |runtime| Self::shutdown_runtime(runtime, &shutdown_stream_tx),
@@ -231,6 +251,16 @@ impl<Provider: RuntimeClientProvider> AppServerClient for ProviderRuntimeClient<
         let sessions = self.sessions.clone();
 
         Box::pin(async move { Self::run_turn_internal(&sessions, request, &stream_tx, true).await })
+    }
+
+    fn steer_turn(
+        &self,
+        session_id: String,
+        prompt: TurnPrompt,
+    ) -> AppServerFuture<Result<(), AppServerError>> {
+        let acknowledgement = self.sessions.turn_steering().submit(&session_id, prompt);
+
+        Box::pin(steering::await_acknowledgement(acknowledgement))
     }
 
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()> {

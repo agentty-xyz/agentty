@@ -2,6 +2,7 @@
 //! session worker.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,6 +33,7 @@ use crate::app::AppEvent;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
+use crate::app::session::workflow::steering::SteeringDeliveries;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
@@ -54,6 +56,8 @@ async fn abandoned_foreground_gate_releases_its_writer_before_waking_graph_drive
         graph_wake: wake,
         message_traces: Arc::default(),
         run_client: auto_commit_run_client(),
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
     let (ready, ready_rx) = oneshot::channel();
     let mut command = ScheduledSessionCommand::immediate(resume_command("not-persisted"));
@@ -760,6 +764,8 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
         context,
         message_traces: Arc::default(),
         run_client,
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
 
     // Act
@@ -799,6 +805,100 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
 }
 
 #[tokio::test]
+async fn chat_turn_is_steerable_only_while_it_runs() {
+    // Arrange
+    let steerable_turn = Arc::new(AtomicBool::new(false));
+    let steerable_during_turn = Arc::new(AtomicBool::new(false));
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning({
+        let steerable_turn = Arc::clone(&steerable_turn);
+        let steerable_during_turn = Arc::clone(&steerable_during_turn);
+
+        move |_, _, _| {
+            steerable_during_turn.store(steerable_turn.load(Ordering::Acquire), Ordering::Release);
+
+            Box::pin(async { Ok(successful_turn_result("finished queued work")) })
+        }
+    });
+    let (context, _db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
+        context,
+        message_traces: Arc::default(),
+        run_client: auto_commit_run_client(),
+        steerable_turn: Arc::clone(&steerable_turn),
+        steering_deliveries: Arc::default(),
+    };
+
+    // Act
+    host.execute(ScheduledSessionWork::Message(queued_message(
+        0,
+        "queued prompt",
+    )))
+    .await;
+
+    // Assert
+    assert!(steerable_during_turn.load(Ordering::Acquire));
+    assert!(!steerable_turn.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn chat_turn_execution_waits_for_its_steering_deliveries() {
+    // Arrange: a delivery taken during the turn has not settled when the
+    // turn ends.
+    let steerable_turn = Arc::new(AtomicBool::new(false));
+    let turn_ran = Arc::new(AtomicBool::new(false));
+    let steering_deliveries = Arc::<SteeringDeliveries>::default();
+    let delivery = steering_deliveries.begin();
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning({
+        let turn_ran = Arc::clone(&turn_ran);
+
+        move |_, _, _| {
+            turn_ran.store(true, Ordering::Release);
+
+            Box::pin(async { Ok(successful_turn_result("finished queued work")) })
+        }
+    });
+    let (context, _db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
+        context,
+        message_traces: Arc::default(),
+        run_client: auto_commit_run_client(),
+        steerable_turn: Arc::clone(&steerable_turn),
+        steering_deliveries,
+    };
+
+    // Act
+    let execution = tokio::spawn(async move {
+        host.execute(ScheduledSessionWork::Message(queued_message(
+            0,
+            "queued prompt",
+        )))
+        .await;
+    });
+    for _ in 0..200 {
+        if turn_ran.load(Ordering::Acquire) && !steerable_turn.load(Ordering::Acquire) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let turn_ended = turn_ran.load(Ordering::Acquire) && !steerable_turn.load(Ordering::Acquire);
+    let finished_with_delivery_in_flight = execution.is_finished();
+    drop(delivery);
+    execution.await.expect("execution task");
+
+    // Assert: the worker selects more work only after the execution returns.
+    assert!(turn_ended);
+    assert!(!finished_with_delivery_in_flight);
+}
+
+#[tokio::test]
 async fn untracked_queued_message_gets_a_completed_turn_trace() {
     // Arrange
     let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
@@ -820,6 +920,8 @@ async fn untracked_queued_message_gets_a_completed_turn_trace() {
         context,
         message_traces: Arc::default(),
         run_client: auto_commit_run_client(),
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
     let initiator = Span::root("test.untracked.message", Vec::new());
     let initiating_trace_id = initiator.context().span().span_context().trace_id();

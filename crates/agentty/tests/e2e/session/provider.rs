@@ -28,7 +28,7 @@ async fn seed_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 response='{"answer":"Preserve pending worktree change","questions":[],"review_comment_outcomes":[]}'
 printf '%s\n' "$GIT_OPTIONAL_LOCKS" > "$AGENTTY_TEST_EVIDENCE/optional-locks"
 case "$prompt" in
@@ -135,7 +135,7 @@ async fn seed_missing_pre_commit_hook_project(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Generate the canonical session commit message"*)
     sleep 2
@@ -192,7 +192,7 @@ async fn seed_invalid_protocol_output_project(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
 "#
@@ -375,7 +375,7 @@ async fn install_web_tool_reporting_claude_stub(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 case " $* " in
   *WebSearch*WebFetch*|*WebFetch*WebSearch*) answer='Claude web tools enabled' ;;
   *) answer='Claude web tools missing' ;;
@@ -888,7 +888,7 @@ async fn seed_commit_input_limit_project(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Use only the changed file list"*)
     printf '%s' "$prompt" > "$AGENTTY_TEST_EVIDENCE/fallback-prompt"

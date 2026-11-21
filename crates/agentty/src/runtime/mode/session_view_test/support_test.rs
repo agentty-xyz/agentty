@@ -138,6 +138,7 @@ pub(super) fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
+        steer_queued_messages: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: None,
         session_state: ViewSessionState::Review,

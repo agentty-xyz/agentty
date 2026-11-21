@@ -6,14 +6,17 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::app_server::AppServerError;
+use crate::app_server::steering::TurnSteeringRegistry;
 
 /// Shared runtime registry used by managed provider processes.
 ///
 /// Each session id maps to one idle runtime process. Workers temporarily remove
 /// a runtime while executing a turn and register a cancellation token so
-/// `shutdown_session()` can still interrupt in-flight runtimes.
+/// `shutdown_session()` can still interrupt in-flight runtimes. Interactive
+/// turns of steerable providers also register a steering inbox.
 pub(crate) struct AppServerSessionRegistry<Runtime> {
     active_turn_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    active_turn_steering: TurnSteeringRegistry,
     provider_name: &'static str,
     sessions: Arc<Mutex<HashMap<String, Runtime>>>,
 }
@@ -23,9 +26,16 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     pub(crate) fn new(provider_name: &'static str) -> Self {
         Self {
             active_turn_cancellations: Arc::new(Mutex::new(HashMap::new())),
+            active_turn_steering: TurnSteeringRegistry::default(),
             provider_name,
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Returns the steering inboxes of this provider's running interactive
+    /// turns.
+    pub(crate) fn turn_steering(&self) -> &TurnSteeringRegistry {
+        &self.active_turn_steering
     }
 
     /// Removes and returns the runtime stored for `session_id`.
@@ -132,6 +142,7 @@ impl<Runtime> Clone for AppServerSessionRegistry<Runtime> {
     fn clone(&self) -> Self {
         Self {
             active_turn_cancellations: Arc::clone(&self.active_turn_cancellations),
+            active_turn_steering: self.active_turn_steering.clone(),
             provider_name: self.provider_name,
             sessions: Arc::clone(&self.sessions),
         }

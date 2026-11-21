@@ -47,6 +47,13 @@ utility children; a child's own limit is an additional ceiling. A budget built w
 `ProviderCallBudget::with_ledger` reports each charge and refund to a host ledger, which
 graph hosts persist so restarts never replenish spent calls.
 
+## Steering
+
+`SessionRunClient::steer` offers one user prompt to the client's running session turn
+without starting a turn, so hosts may call it outside the serial worker. Success means
+the provider accepted the prompt; on error it was not delivered and the host keeps it
+for a later turn. `supports_turn_steering` reports which harnesses can accept steering.
+
 ## Task Contexts
 
 `SessionRunClient::for_task_context` gives a task its own provider resources and native

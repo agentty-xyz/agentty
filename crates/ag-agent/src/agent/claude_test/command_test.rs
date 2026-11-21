@@ -67,13 +67,12 @@ fn transcript_replay_is_independent_of_claude_native_resume() {
         let command = ClaudeBackend
             .build_command(request)
             .expect("Claude command");
-        let payload = shared_prompt::build_prompt_stdin_payload(
+        let prompt = shared_prompt::build_cli_prompt_text(
             request,
             ProtocolSchemaInstructionMode::TransportSchema,
             "Claude",
         )
         .expect("Claude stdin");
-        let prompt = String::from_utf8(payload).expect("UTF-8 prompt");
 
         // Assert
         assert_eq!(
@@ -286,29 +285,26 @@ fn test_claude_prompt_stdin_payload_includes_repo_root_path_instructions() {
     let temp_directory = tempdir().expect("failed to create temp dir");
 
     // Act
-    let prompt = String::from_utf8(
-        shared_prompt::build_prompt_stdin_payload(
-            BuildCommandRequest {
-                execution_policy: &ag_contracts::ExecutionPolicy::default(),
-                attachments: &[],
-                folder: temp_directory.path(),
-                main_checkout_root: None,
-                replay_transcript: None,
-                model: "claude-sonnet-5-5",
-                permission_mode: ag_contracts::PermissionMode::AutoEdit,
-                agent_profile_prompt: None,
-                agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
-                prompt: "Plan prompt",
-                reasoning_level: ReasoningLevel::default(),
-                request_kind: &session_start_request_kind(),
-                speed_mode: ag_contracts::SpeedMode::default(),
-            },
-            ProtocolSchemaInstructionMode::TransportSchema,
-            "Claude",
-        )
-        .expect("prompt payload should build"),
+    let prompt = shared_prompt::build_cli_prompt_text(
+        BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
+            attachments: &[],
+            folder: temp_directory.path(),
+            main_checkout_root: None,
+            replay_transcript: None,
+            model: "claude-sonnet-5-5",
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            agent_profile_prompt: None,
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
+            prompt: "Plan prompt",
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: &session_start_request_kind(),
+            speed_mode: ag_contracts::SpeedMode::default(),
+        },
+        ProtocolSchemaInstructionMode::TransportSchema,
+        "Claude",
     )
-    .expect("prompt payload should be utf-8");
+    .expect("prompt payload should build");
 
     // Assert
     assert!(prompt.contains("repository-root-relative POSIX paths"));
@@ -345,29 +341,26 @@ fn test_claude_one_shot_command_enforces_json_schema() {
     )
     .expect("command should build");
     let debug_command = format!("{command:?}");
-    let prompt = String::from_utf8(
-        shared_prompt::build_prompt_stdin_payload(
-            BuildCommandRequest {
-                execution_policy: &ag_contracts::ExecutionPolicy::default(),
-                attachments: &[],
-                folder: temp_directory.path(),
-                main_checkout_root: None,
-                replay_transcript: None,
-                model: "claude-sonnet-5-5",
-                permission_mode: ag_contracts::PermissionMode::AutoEdit,
-                agent_profile_prompt: None,
-                agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
-                prompt: "Generate title",
-                reasoning_level: ReasoningLevel::default(),
-                request_kind: &utility_request_kind(),
-                speed_mode: ag_contracts::SpeedMode::default(),
-            },
-            ProtocolSchemaInstructionMode::TransportSchema,
-            "Claude",
-        )
-        .expect("prompt payload should build"),
+    let prompt = shared_prompt::build_cli_prompt_text(
+        BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
+            attachments: &[],
+            folder: temp_directory.path(),
+            main_checkout_root: None,
+            replay_transcript: None,
+            model: "claude-sonnet-5-5",
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            agent_profile_prompt: None,
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
+            prompt: "Generate title",
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: &utility_request_kind(),
+            speed_mode: ag_contracts::SpeedMode::default(),
+        },
+        ProtocolSchemaInstructionMode::TransportSchema,
+        "Claude",
     )
-    .expect("prompt payload should be utf-8");
+    .expect("prompt payload should build");
 
     // Assert
     assert!(prompt.contains("Structured response protocol:"));
@@ -376,7 +369,13 @@ fn test_claude_one_shot_command_enforces_json_schema() {
     assert!(debug_command.contains("--output-format"));
     assert!(debug_command.contains("stream-json"));
     assert!(debug_command.contains("--json-schema"));
-    assert!(debug_command.contains("--input-format"));
+    assert!(
+        command
+            .get_args()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair == [OsStr::new("--input-format"), OsStr::new("stream-json")])
+    );
 }
 
 #[test]
@@ -408,29 +407,26 @@ fn test_claude_start_command_includes_json_schema() {
     )
     .expect("command should build");
     let debug_command = format!("{command:?}");
-    let prompt = String::from_utf8(
-        shared_prompt::build_prompt_stdin_payload(
-            BuildCommandRequest {
-                execution_policy: &ag_contracts::ExecutionPolicy::default(),
-                attachments: &[],
-                folder: temp_directory.path(),
-                main_checkout_root: None,
-                replay_transcript: None,
-                model: "claude-sonnet-5-5",
-                permission_mode: ag_contracts::PermissionMode::AutoEdit,
-                agent_profile_prompt: None,
-                agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
-                prompt: "Return protocol response",
-                reasoning_level: ReasoningLevel::default(),
-                request_kind: &session_start_request_kind(),
-                speed_mode: ag_contracts::SpeedMode::default(),
-            },
-            ProtocolSchemaInstructionMode::TransportSchema,
-            "Claude",
-        )
-        .expect("prompt payload should build"),
+    let prompt = shared_prompt::build_cli_prompt_text(
+        BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
+            attachments: &[],
+            folder: temp_directory.path(),
+            main_checkout_root: None,
+            replay_transcript: None,
+            model: "claude-sonnet-5-5",
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            agent_profile_prompt: None,
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
+            prompt: "Return protocol response",
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: &session_start_request_kind(),
+            speed_mode: ag_contracts::SpeedMode::default(),
+        },
+        ProtocolSchemaInstructionMode::TransportSchema,
+        "Claude",
     )
-    .expect("prompt payload should be utf-8");
+    .expect("prompt payload should build");
 
     // Assert
     assert!(debug_command.contains("--json-schema"));

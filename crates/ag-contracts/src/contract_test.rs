@@ -1,11 +1,13 @@
 //! Agent contract tests covering profile prompts, turn continuations,
 //! conversation-id normalization, and request-kind protocol profiles.
 
-use ag_protocol::ProtocolRequestProfile;
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use tokio::sync::mpsc;
 
 use crate::contract::{
-    AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentRequestKind, TurnContinuation,
-    normalize_instruction_conversation_id,
+    AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
+    AgentRequestKind, SessionRef, StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest,
+    TurnResult, normalize_instruction_conversation_id,
 };
 
 #[test]
@@ -172,4 +174,51 @@ fn metadata_requests_select_the_direct_wire_profile() {
         ProtocolRequestProfile::ReviewMetadata
     );
     assert!(!kind.is_resume());
+}
+
+/// Channel relying on every default [`AgentChannel`] behavior.
+struct DefaultSteeringChannel;
+
+impl AgentChannel for DefaultSteeringChannel {
+    fn start_session(
+        &self,
+        req: StartSessionRequest,
+    ) -> AgentFuture<Result<SessionRef, AgentError>> {
+        Box::pin(async move {
+            Ok(SessionRef {
+                session_id: req.session_id,
+            })
+        })
+    }
+
+    fn run_turn(
+        &self,
+        _session_id: String,
+        _req: TurnRequest,
+        _events: mpsc::UnboundedSender<TurnEvent>,
+    ) -> AgentFuture<Result<TurnResult, AgentError>> {
+        Box::pin(async { Err(AgentError::Runtime("unused".to_string())) })
+    }
+
+    fn shutdown_session(&self, _session_id: String) -> AgentFuture<Result<(), AgentError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn channels_without_steering_reject_mid_turn_prompts() {
+    // Arrange
+    let channel = DefaultSteeringChannel;
+
+    // Act
+    let result = channel
+        .steer_turn("session-1".to_string(), TurnPrompt::from("also run tests"))
+        .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AgentError::Runtime(message))
+            if message == "This agent cannot receive messages during a turn"
+    ));
 }

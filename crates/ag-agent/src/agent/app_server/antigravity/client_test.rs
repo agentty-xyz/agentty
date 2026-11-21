@@ -113,6 +113,7 @@ async fn provider_turn_surfaces_closed_transport_failure() {
         ReasoningLevel::Low,
         SpeedMode::Fast,
         stream_tx,
+        None,
     )
     .await;
     runtime.shutdown_runtime().await;

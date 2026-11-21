@@ -127,13 +127,15 @@ async fn start_runtime_rejects_unsupported_execution_policy_without_spawning() {
 }
 
 #[test]
-fn codex_runtimes_are_retained_and_enforce_schema_at_transport_level() {
+fn codex_runtimes_are_retained_steerable_and_enforce_schema_at_transport_level() {
     // Arrange / Act
     let retains_runtime = CodexRuntimeProvider::retain_runtime_after_turn();
     let schema_instruction_mode = CodexRuntimeProvider::schema_instruction_mode();
+    let supports_steering = CodexRuntimeProvider::supports_steering();
 
     // Assert
     assert!(retains_runtime);
+    assert!(supports_steering);
     assert_eq!(
         schema_instruction_mode,
         ProtocolSchemaInstructionMode::TransportSchema
@@ -155,6 +157,7 @@ async fn run_turn_forwards_speed_mode_and_surfaces_transport_failures() {
         ReasoningLevel::default(),
         SpeedMode::Fast,
         stream_tx,
+        None,
     )
     .await;
 
@@ -362,6 +365,7 @@ async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::default(),
+            steering: None,
             stream_tx,
             thread_id: "thread-1",
             turn_timeout: app_server_transport::TURN_TIMEOUT,
@@ -402,6 +406,7 @@ async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::default(),
+            steering: None,
             stream_tx,
             thread_id: "thread-1",
             turn_timeout: app_server_transport::TURN_TIMEOUT,

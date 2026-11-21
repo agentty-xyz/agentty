@@ -5,10 +5,10 @@ use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
 
 use super::{
-    prompt_session_status, session_header_lines, session_output_queued_lines,
+    STEER_HINT_TEXT, prompt_session_status, session_header_lines, session_output_queued_lines,
     session_output_status_icon, session_output_status_lines, session_output_status_message,
-    session_output_transient_loading_lines, session_output_uses_tachyon_loader,
-    session_speed_display, session_started_label,
+    session_output_steer_hint_line, session_output_transient_loading_lines,
+    session_output_uses_tachyon_loader, session_speed_display, session_started_label,
 };
 use crate::domain::agent::{AgentModel, ResponseStyle};
 use crate::domain::session::{
@@ -42,6 +42,21 @@ fn queued_preview_compacts_and_truncates_to_terminal_columns() {
     assert!(full[0].style.add_modifier.contains(Modifier::ITALIC));
     assert_eq!(blank, Vec::<ratatui::text::Line<'_>>::new());
     assert_eq!(zero_width, Vec::<ratatui::text::Line<'_>>::new());
+}
+
+#[test]
+fn steer_hint_truncates_to_terminal_columns() {
+    // Arrange / Act
+    let full = session_output_steer_hint_line(80).expect("hint");
+    let narrow = session_output_steer_hint_line(12).expect("hint");
+    let zero_width = session_output_steer_hint_line(0);
+
+    // Assert
+    assert_eq!(full.to_string(), STEER_HINT_TEXT);
+    assert_eq!(full.style.fg, Some(style::palette::text_subtle()));
+    assert_eq!(narrow.width(), 12);
+    assert!(narrow.to_string().ends_with("..."));
+    assert!(zero_width.is_none());
 }
 
 fn session_with_review_request(url: &str) -> Session {

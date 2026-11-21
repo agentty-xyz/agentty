@@ -239,6 +239,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             &mut queued_lines,
             self.session.transient_messages.messages(),
             &self.session.queued_messages,
+            self.session.can_steer_queued_messages(),
             self.inner_width,
         );
 
@@ -318,6 +319,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             &mut self.lines,
             self.session.transient_messages.messages(),
             &self.session.queued_messages,
+            self.session.can_steer_queued_messages(),
             self.inner_width,
         );
     }
@@ -714,10 +716,14 @@ fn append_transcript_message(
     }
 }
 
+/// Appends queued actions and chat prompts in submission order, followed by
+/// the send-now hint when `can_steer` reports that queued chat can join the
+/// running turn. Returns the pulsing queued-row indices.
 fn append_queued_entries(
     lines: &mut OutputLines,
     transient_messages: &[TransientMessage],
     queued_messages: &[QueuedMessage],
+    can_steer: bool,
     inner_width: usize,
 ) -> Vec<usize> {
     let mut queued_line_indices = Vec::new();
@@ -751,6 +757,9 @@ fn append_queued_entries(
     }
 
     if has_rendered_message {
+        if can_steer {
+            lines.extend(session_format::session_output_steer_hint_line(inner_width));
+        }
         lines.push(Line::from(""));
     }
 

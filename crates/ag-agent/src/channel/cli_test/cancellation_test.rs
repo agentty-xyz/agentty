@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::support::make_turn_request;
 use crate::agent::MockAgentBackend;
+use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{CliAgentChannel, CliTurnLease};
 
 #[tokio::test]
@@ -122,6 +123,7 @@ async fn poisoned_ownership_fails_closed_and_drop_remains_safe() {
         backend: Arc::new(MockAgentBackend::new()),
         kind: AgentKind::Claude,
         active: Arc::clone(&active),
+        steering: TurnSteeringRegistry::default(),
     };
     // Act
     let acquisition = CliTurnLease::acquire(active, "other".into(), CancellationToken::new());

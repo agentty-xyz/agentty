@@ -340,6 +340,29 @@ Turn preparation resolves permissions, reasoning level, response style, speed, a
 after workspace preparation; the model selection travels with the queued turn. Agent
 application state is saved only after a successful turn.
 
+<a id="architecture-runtime-flow-steering"></a> Steering bypasses the queue without
+breaking ordering: the foreground removes the leading steerable chat prompts so the
+worker cannot also start them, and a background task offers each to the running session
+turn through the worker's own `SessionRunClient::steer`. Deliveries for one session run
+one at a time, and a delivery that finds an older prompt back in the queue follows it
+instead of overtaking it. Accepted prompts become durable user prompts; the first
+rejection returns it and every later prompt to their queue positions and wakes the
+worker. If the user stopped that turn, they are discarded with the rest of the queue
+instead. After each turn the worker waits for the session's deliveries before it selects
+more work, so a prompt joins only the turn it was taken for, and a returned prompt runs
+before newer queued ones. The worker marks a session steerable only while it runs a chat
+turn, so agent-task and graph turns, which use their own conversations, leave queued
+chat waiting. Only adapters reporting `supports_turn_steering` accept steering, and only
+for session turns: the Codex app-server sends `turn/steer`, and the Claude CLI channel
+keeps `stream-json` stdin open until the first turn result so it can write more user
+messages. Closing stdin then lets Claude answer every message it read before exiting;
+when that takes follow-up turns, the turn result appends their answers in order and sums
+their usage. A follow-up answer that fails protocol parsing and repair is kept as plain
+text, so it never fails the turn. A completed Codex turn waits briefly for answers to
+`turn/steer` requests it already sent, so a prompt Codex applied is not reported as
+rejected. A Codex turn retried after a runtime restart or context compaction resends the
+prompts it already accepted.
+
 The static `GraphExecutor` drains dependency-ready graph nodes through the same session
 and utility paths; see [Execution Graphs](@/docs/architecture/execution-graphs.md).
 

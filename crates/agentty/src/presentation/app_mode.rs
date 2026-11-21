@@ -1046,6 +1046,8 @@ pub enum HelpContext {
         can_open_worktree: bool,
         /// Whether a staged draft session may begin its first turn.
         can_start_staged_session: bool,
+        /// Whether queued chat messages may join the running turn now.
+        can_steer_queued_messages: bool,
         /// Whether linked forge review comments may be opened.
         can_view_review_comments: bool,
         /// Pull-request publication action currently available.
@@ -1100,6 +1102,7 @@ impl HelpContext {
                 can_merge_session_branch,
                 can_open_worktree,
                 can_start_staged_session,
+                can_steer_queued_messages,
                 can_view_review_comments,
                 publish_pull_request_action,
                 review_watch_toggle,
@@ -1114,6 +1117,9 @@ impl HelpContext {
                     can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
                     can_start_staged_session: ViewActionAvailability::from_bool(
                         *can_start_staged_session,
+                    ),
+                    can_steer_queued_messages: ViewActionAvailability::from_bool(
+                        *can_steer_queued_messages,
                     ),
                     publish_pull_request_action: *publish_pull_request_action,
                     session_state: *session_state,

@@ -119,6 +119,7 @@ struct ViewSessionSnapshot {
     session_state: ViewSessionState,
     session_status: Status,
     start_staged_session: ViewActionState,
+    steer_queued_messages: ViewActionState,
 }
 
 impl ViewSessionSnapshot {
@@ -160,6 +161,7 @@ impl ViewSessionSnapshot {
                         .get(TransientMessageSlot::WorkspacePreparation)
                         .is_some()),
             ),
+            steer_queued_messages: ViewActionState::from_bool(session.can_steer_queued_messages()),
         })
     }
 
@@ -204,6 +206,11 @@ impl ViewSessionSnapshot {
     /// Returns whether this staged draft can start its first live turn.
     fn can_start_staged_session(&self) -> bool {
         self.start_staged_session.is_enabled()
+    }
+
+    /// Returns whether queued chat messages can join the running turn now.
+    fn can_steer_queued_messages(&self) -> bool {
+        self.steer_queued_messages.is_enabled()
     }
 
     /// Returns whether `Enter` may open a prompt composer from view mode.
@@ -504,6 +511,14 @@ async fn handle_workflow_view_key(
                 && view_session_snapshot.session_status == Status::InProgress =>
         {
             end_in_progress_turn(app, &view_context.session_id).await;
+
+            return Some(false);
+        }
+        KeyCode::Char('s')
+            if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && view_session_snapshot.can_steer_queued_messages() =>
+        {
+            app.steer_queued_messages(&view_context.session_id);
 
             return Some(false);
         }
@@ -914,6 +929,7 @@ fn open_view_help_overlay(
             can_merge_session_branch: view_session_snapshot.can_merge_session_branch(),
             can_open_worktree: view_session_snapshot.can_open_worktree(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
+            can_steer_queued_messages: view_session_snapshot.can_steer_queued_messages(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
             review_watch_toggle: view_session_snapshot.review_watch_toggle,

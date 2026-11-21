@@ -1637,11 +1637,13 @@ impl SessionManager {
             ));
         }
 
-        if self.session_or_err(session_id)?.status.is_read_only() {
+        let session = self.session_or_err(session_id)?;
+        if session.status.is_read_only() {
             return Err(SessionError::Workflow(
                 "Merged sessions cannot queue chat messages".to_string(),
             ));
         }
+        let harness_steers = ag_worker::supports_turn_steering(session.agent.kind());
 
         let handles = self.session_handles_or_err(session_id)?;
 
@@ -1652,7 +1654,7 @@ impl SessionManager {
         if let Ok(mut guard) = queued_messages.lock() {
             self.worker_service_mut()
                 .trace_queued_message(session_id, order);
-            guard.push_back(QueuedMessage::new(order, prompt));
+            guard.push_back(QueuedMessage::new(order, prompt).with_steering(harness_steers));
         }
         self.wake_queued_message_worker(services, session_id)?;
 
@@ -1665,6 +1667,51 @@ impl SessionManager {
         );
 
         Ok(())
+    }
+
+    /// Sends the oldest queued chat prompts into the running turn now instead
+    /// of after it ends, for harnesses that accept mid-turn input.
+    ///
+    /// Takes queued prompts in submission order up to the first one that must
+    /// wait, such as a prompt with images, so the worker cannot also start
+    /// them as a follow-up turn. A background task then steers them through
+    /// the session worker's runtime, after any earlier delivery for the same
+    /// session; any prompt the agent does not accept returns to the queue
+    /// with a transcript notice, unless the user stopped the turn. The worker
+    /// starts nothing else until that task ends, so the prompts can only
+    /// join the turn that was running when they were taken. Nothing
+    /// is taken while the worker runs anything but a chat turn, such as an
+    /// agent-task or graph turn in its own conversation, or while the
+    /// session's turn token is cancelled. Returns whether any prompt was
+    /// taken.
+    pub(crate) fn steer_queued_messages(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> bool {
+        let Some(handles) = self.session_handles().get(session_id) else {
+            return false;
+        };
+        let Some(steering) = self
+            .worker_service
+            .queued_message_steering(services, session_id, handles)
+        else {
+            return false;
+        };
+        let messages = steering.take_steerable_messages();
+        if messages.is_empty() {
+            return false;
+        }
+
+        spawn::spawn_traced(steering.run(messages));
+        self.state.sync_session_from_handle(session_id);
+        SessionTaskService::emit_session_updated(
+            &services.event_sender(),
+            &services.session_update_versions(),
+            session_id,
+        );
+
+        true
     }
 
     /// Retracts the newest queued prompt and immediately releases its trace.

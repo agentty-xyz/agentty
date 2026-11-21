@@ -111,7 +111,9 @@ State-specific differences:
 - **Watching**: Same as **Review**; `W` stops watching. See
   [Watching a Review Request](@/docs/usage/workflow.md#usage-review-request-watch).
 - **InProgress**: `Enter`, `r`, and `p` queue a message, sync, or publishing. `Ctrl+C`
-  retracts the newest queued message, then stops the turn.
+  retracts the newest queued message, then stops the turn. `Ctrl+s` sends queued chat
+  into the running turn when the harness supports it; see
+  [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **InProgress / Rebasing**: Slash commands offer only settings; see
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.

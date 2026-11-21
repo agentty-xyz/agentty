@@ -24,6 +24,7 @@ mod prompt_context;
 pub(super) mod published_branch;
 pub(super) mod refresh;
 pub(super) mod review;
+mod steering;
 pub(super) mod task;
 mod task_turn;
 pub(super) mod turn;

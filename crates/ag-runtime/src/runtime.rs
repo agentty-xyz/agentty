@@ -8,6 +8,7 @@ use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, OneShotClient, OneShotError, OneShotRequest,
     OneShotSubmission, TurnEvent, TurnRequest, TurnResult,
 };
+use ag_protocol::TurnPrompt;
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -70,6 +71,16 @@ impl SessionRuntime {
         events: mpsc::UnboundedSender<TurnEvent>,
     ) -> AgentFuture<Result<TurnResult, AgentError>> {
         self.channel.run_turn(id, request, events)
+    }
+
+    /// Delivers one user prompt into the selected harness's running session
+    /// turn; errors leave the prompt undelivered.
+    pub fn steer_turn(
+        &self,
+        id: String,
+        prompt: TurnPrompt,
+    ) -> AgentFuture<Result<(), AgentError>> {
+        self.channel.steer_turn(id, prompt)
     }
 
     /// Releases resources belonging to the selected harness session.

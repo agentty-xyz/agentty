@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use super::support::{make_turn_request, stdin_capture_command};
 use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver, CliStdoutPayload};
 use crate::agent::{MockAgentBackend, create_backend};
+use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{
     CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
 };
@@ -120,6 +121,7 @@ async fn test_run_turn_spawn_failure_returns_err_without_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());
@@ -158,6 +160,7 @@ async fn test_run_turn_kill_signal_returns_err_without_stopped_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());
@@ -202,6 +205,7 @@ async fn test_run_turn_clean_exit_returns_ok_result_without_context_reset() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());
@@ -224,7 +228,7 @@ async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
     mock_backend.expect_build_command().returning(|_| {
         let mut command = std::process::Command::new("sh");
         command.arg("-c").arg(
-            "printf 'warming up\\n' >&2; sleep 0.1; cat >/dev/null; printf '%s' \
+            "printf 'warming up\\n' >&2; sleep 0.1; head -n 1 >/dev/null; printf '%s' \
              '{\"answer\":\"ok\",\"questions\":[]}'",
         );
 
@@ -234,6 +238,7 @@ async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let mut req = make_turn_request(dir.path().to_path_buf());
@@ -271,6 +276,7 @@ async fn test_run_turn_writes_prompt_to_stdin_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let mut req = make_turn_request(dir.path().to_path_buf());
@@ -317,6 +323,7 @@ async fn resumed_claude_turn_delivers_legacy_instruction_withdrawal_over_stdin()
         active: Arc::default(),
         backend: Arc::new(backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let mut request = make_turn_request(directory.path().to_path_buf());
     request.request_kind = AgentRequestKind::SessionResume;
@@ -355,6 +362,7 @@ async fn test_run_turn_preserves_child_error_after_broken_pipe() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let mut req = make_turn_request(dir.path().to_path_buf());
@@ -417,6 +425,7 @@ async fn test_run_turn_returns_claude_auth_guidance_for_expired_token() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());
@@ -453,6 +462,7 @@ async fn test_run_turn_returns_exit_error_for_non_zero_status() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());
@@ -490,6 +500,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let req = make_turn_request(dir.path().to_path_buf());

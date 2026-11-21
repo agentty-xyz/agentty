@@ -4,5 +4,7 @@
 mod payload;
 #[path = "lifecycle_test/runtime_test.rs"]
 mod runtime;
+#[path = "lifecycle_test/steering_test.rs"]
+mod steering;
 #[path = "lifecycle_test/support_test.rs"]
 mod support;

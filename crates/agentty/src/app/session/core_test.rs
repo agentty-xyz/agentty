@@ -27,6 +27,9 @@ mod review;
 #[path = "core_test/state_test.rs"]
 mod state;
 
+#[path = "core_test/steering_test.rs"]
+mod steering;
+
 #[path = "core_test/synchronization_test.rs"]
 mod synchronization;
 

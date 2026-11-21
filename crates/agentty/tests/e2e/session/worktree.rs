@@ -76,7 +76,7 @@ async fn install_bare_layout_success_claude_stub(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{{\\"answer\\":\\"{BARE_LAYOUT_ANSWER_TEXT}\\",\\"questions\\":[]}}"}}]}}}}\n'
 printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAYOUT_ANSWER_TEXT}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n'

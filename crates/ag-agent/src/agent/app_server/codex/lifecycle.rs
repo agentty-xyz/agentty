@@ -1,5 +1,6 @@
 //! Codex app-server lifecycle and turn orchestration.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -16,9 +17,16 @@ use tokio::sync::mpsc;
 use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::agent;
-use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
+use crate::app_server::{
+    AppServerError, AppServerStreamEvent, AppServerTurnRequest, TurnSteer, TurnSteeringInbox,
+    steering,
+};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::{reasoning, session};
+
+/// Maximum time a completed turn waits for answers to its pending
+/// `turn/steer` requests.
+const PENDING_STEER_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Host cause attached to an explicit compaction request.
 #[derive(Clone)]
@@ -373,17 +381,41 @@ pub(super) fn build_thread_resume_payload(
     })
 }
 
+/// Per-turn request settings for one Codex turn.
+#[derive(Clone, Copy)]
+pub(super) struct CodexTurnOptions<'a> {
+    /// Structured response contract enforced for this turn.
+    pub(super) protocol_profile: ProtocolRequestProfile,
+    /// Reasoning level sent to the runtime.
+    pub(super) reasoning_level: ReasoningLevel,
+    /// Response-speed preference sent to Codex.
+    pub(super) speed_mode: SpeedMode,
+    /// Inbox of user prompts delivered through `turn/steer`, when the turn
+    /// accepts them.
+    pub(super) steering: Option<&'a TurnSteeringInbox>,
+}
+
 /// Sends one turn prompt and waits for terminal completion notification.
 pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     state: &mut CodexRuntimeState,
     prompt: impl Into<TurnPrompt>,
-    protocol_profile: ProtocolRequestProfile,
-    reasoning_level: ReasoningLevel,
-    speed_mode: SpeedMode,
+    options: CodexTurnOptions<'_>,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
 ) -> Result<(String, u64, u64), AppServerError> {
+    let CodexTurnOptions {
+        protocol_profile,
+        reasoning_level,
+        speed_mode,
+        steering,
+    } = options;
     let prompt = prompt.into();
+    // An attempt that starts over resends the steering prompts earlier
+    // attempts of the same request accepted.
+    let attempt_prompt = || match steering {
+        Some(inbox) => inbox.prompt_with_accepted(&prompt),
+        None => prompt.clone(),
+    };
     let auto_compact_threshold = policy::auto_compact_input_token_threshold(&state.model);
 
     if state.latest_input_tokens >= auto_compact_threshold {
@@ -402,10 +434,11 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             folder: &state.folder,
             model: &state.model,
             permission_mode: state.permission_mode,
-            prompt: prompt.clone(),
+            prompt: attempt_prompt(),
             protocol_profile,
             reasoning_level,
             speed_mode,
+            steering,
             stream_tx: stream_tx.clone(),
             thread_id: &state.thread_id,
             turn_timeout: app_server_transport::TURN_TIMEOUT,
@@ -435,10 +468,11 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                     folder: &state.folder,
                     model: &state.model,
                     permission_mode: state.permission_mode,
-                    prompt,
+                    prompt: attempt_prompt(),
                     protocol_profile,
                     reasoning_level,
                     speed_mode,
+                    steering,
                     stream_tx,
                     thread_id: &state.thread_id,
                     turn_timeout: app_server_transport::TURN_TIMEOUT,
@@ -562,6 +596,9 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     pub(super) reasoning_level: ReasoningLevel,
     /// Response-speed preference sent to Codex.
     pub(super) speed_mode: SpeedMode,
+    /// Inbox of user prompts delivered through `turn/steer`, when the turn
+    /// accepts them.
+    pub(super) steering: Option<&'a TurnSteeringInbox>,
     /// Stream sender that receives progress and assistant chunks.
     pub(super) stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     /// Runtime thread id for the active provider conversation.
@@ -587,9 +624,23 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
     state.usage = input.usage_state.clone();
     state.usage.begin_turn();
 
+    let steering = input.steering;
     let result = tokio::time::timeout(turn_timeout, async {
         loop {
-            let Some(response_value) = read_turn_response_value(transport).await? else {
+            let response = match steering {
+                Some(inbox) => tokio::select! {
+                    biased;
+                    response = read_turn_response_value(transport) => response?,
+                    steer = inbox.next() => {
+                        state.deliver_steer(transport, steer).await?;
+
+                        continue;
+                    }
+                },
+                None => read_turn_response_value(transport).await?,
+            };
+            // Blank and non-JSON lines carry no event.
+            let Some(response_value) = response else {
                 continue;
             };
 
@@ -603,6 +654,8 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
                 )
                 .await?
             {
+                state.settle_pending_steers(transport).await;
+
                 return Ok(turn_completion);
             }
         }
@@ -623,6 +676,8 @@ struct CodexTurnEventLoopState {
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
     operation_trace: agent::trace::OperationTrace,
+    /// Prompts awaiting `turn/steer` responses, keyed by request id.
+    pending_steers: HashMap<String, TurnSteer>,
     protocol_profile: ProtocolRequestProfile,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     thread_id: String,
@@ -650,6 +705,7 @@ impl CodexTurnEventLoopState {
             completed_turn_usage: None,
             latest_stream_usage: None,
             operation_trace: agent::trace::OperationTrace::new(),
+            pending_steers: HashMap::new(),
             protocol_profile,
             stream_tx,
             thread_id: thread_id.to_string(),
@@ -674,6 +730,12 @@ impl CodexTurnEventLoopState {
             return Ok(None);
         }
 
+        if let Some(steer) = self.take_pending_steer(&response_value) {
+            steer.acknowledge(steer_response_result(&response_value));
+
+            return Ok(None);
+        }
+
         if let Some(server_request_response) =
             policy::build_server_request_response(&response_value, permission_mode, folder)
         {
@@ -683,6 +745,68 @@ impl CodexTurnEventLoopState {
         }
 
         self.process_stream_response(&response_value)
+    }
+
+    /// Sends one `turn/steer` request into the active turn.
+    ///
+    /// Before Codex reports the turn id there is nothing to steer, so the
+    /// prompt is rejected and stays with its caller.
+    async fn deliver_steer<Transport: AppServerRuntimeTransport>(
+        &mut self,
+        transport: &mut Transport,
+        steer: TurnSteer,
+    ) -> Result<(), AppServerError> {
+        let Some(turn_id) = self.active_turn_id.as_deref() else {
+            steer.acknowledge(Err(steering::turn_not_steerable_error()));
+
+            return Ok(());
+        };
+        let request_id = format!("turn-steer-{}", uuid::Uuid::new_v4());
+        let payload =
+            build_turn_steer_payload(&request_id, &self.thread_id, turn_id, &steer.prompt);
+        transport.write_json_line(payload).await?;
+        self.pending_steers.insert(request_id, steer);
+
+        Ok(())
+    }
+
+    /// Reads the answers to `turn/steer` requests still pending when the
+    /// turn completed.
+    ///
+    /// Codex may report `turn/completed` before answering a steer it already
+    /// applied to that turn. Dropping the prompt unanswered would report it as
+    /// rejected, and its caller would send it again as a new turn. Prompts
+    /// still unanswered after [`PENDING_STEER_SETTLE_TIMEOUT`] stay rejected,
+    /// because they cannot be confirmed as delivered.
+    async fn settle_pending_steers<Transport: AppServerRuntimeTransport>(
+        &mut self,
+        transport: &mut Transport,
+    ) {
+        let _ = tokio::time::timeout(PENDING_STEER_SETTLE_TIMEOUT, async {
+            while !self.pending_steers.is_empty() {
+                match read_turn_response_value(transport).await {
+                    Ok(Some(response_value)) => {
+                        if let Some(steer) = self.take_pending_steer(&response_value) {
+                            steer.acknowledge(steer_response_result(&response_value));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(_) => return,
+                }
+            }
+        })
+        .await;
+    }
+
+    /// Removes the prompt answered by one `turn/steer` response.
+    fn take_pending_steer(&mut self, response_value: &Value) -> Option<TurnSteer> {
+        if response_value.get("method").is_some() {
+            return None;
+        }
+
+        let request_id = response_value.get("id").and_then(Value::as_str)?;
+
+        self.pending_steers.remove(request_id)
     }
 
     /// Updates state from the original `turn/start` response.
@@ -899,6 +1023,39 @@ pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -
             )
         }
     })
+}
+
+/// Builds one `turn/steer` request appending user input to the active turn.
+///
+/// `expectedTurnId` makes Codex reject the input when that turn already
+/// ended, instead of starting another turn with it.
+pub(super) fn build_turn_steer_payload(
+    request_id: &str,
+    thread_id: &str,
+    turn_id: &str,
+    prompt: &TurnPrompt,
+) -> Value {
+    serde_json::json!({
+        "method": "turn/steer",
+        "id": request_id,
+        "params": {
+            "threadId": thread_id,
+            "input": build_turn_input_items(prompt),
+            "expectedTurnId": turn_id
+        }
+    })
+}
+
+/// Maps one `turn/steer` response to the steering acknowledgement.
+fn steer_response_result(response_value: &Value) -> Result<(), AppServerError> {
+    if response_value.get("error").is_none() {
+        return Ok(());
+    }
+
+    Err(AppServerError::Provider(
+        extract_json_error_message(response_value)
+            .unwrap_or_else(|| "Codex rejected the message for the running turn".to_string()),
+    ))
 }
 
 /// Builds ordered Codex `turn/start` input items from one structured prompt

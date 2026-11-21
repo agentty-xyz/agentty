@@ -37,6 +37,7 @@ fn test_handle_quit_key_restores_view_mode() {
             can_merge_session_branch: true,
             can_open_worktree: true,
             can_start_staged_session: false,
+            can_steer_queued_messages: false,
             can_view_review_comments: false,
             publish_pull_request_action: None,
             review_watch_toggle: None,

@@ -99,7 +99,7 @@ async fn seed_claude_auto_edit_policy_project(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 answer='Claude policy test title.'
 case "$prompt" in
   *'Generate a concise, commit-style title'*)

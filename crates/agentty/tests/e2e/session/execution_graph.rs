@@ -590,7 +590,7 @@ async fn graph_draft_survives_a_background_session_question() -> E2eResult {
                 let script = format!(r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 {hold_turn}
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Background turn settled.\",\"questions\":[{{\"text\":\"Background session clarification?\",\"options\":[\"Yes\",\"No\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
@@ -672,7 +672,7 @@ async fn restored_graph_resumes_from_recorded_spending_after_an_answer() -> E2eR
                 let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Remote target inspected.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;

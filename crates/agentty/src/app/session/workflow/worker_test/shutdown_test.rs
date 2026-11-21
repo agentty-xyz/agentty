@@ -34,8 +34,7 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
             .build(),
     );
     let (app, _app_directory) = crate::test_support::new_test_app().await;
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
+    let (started, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let channel = interrupted_channel(Arc::clone(&started), Arc::clone(&release));
     let (context, db, queue, _directory) =
         queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
@@ -55,11 +54,12 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
             context,
             message_traces: Arc::clone(&message_traces),
             run_client: auto_commit_run_client(),
+            steerable_turn: Arc::default(),
+            steering_deliveries: Arc::default(),
         },
         Arc::default(),
     );
-    let task = worker.task();
-    app.services.track_session_worker("sess1", task.clone());
+    app.services.track_session_worker("sess1", worker.task());
     assert!(
         worker
             .submit(ScheduledSessionCommand::immediate(command))
@@ -96,7 +96,7 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
     cleanup.await;
 
     // Assert
-    assert!(task.is_finished());
+    assert!(worker.task().is_finished());
     assert!(message_traces.lock().expect("traces").is_empty());
     let spans = exporter.get_finished_spans().expect("spans");
     for operation_id in ["shutdown-active-operation", "shutdown-queued-operation"] {
@@ -159,6 +159,8 @@ async fn forcing_a_paused_worker_releases_its_shared_message_traces() {
             context,
             message_traces: Arc::clone(&message_traces),
             run_client: auto_commit_run_client(),
+            steerable_turn: Arc::default(),
+            steering_deliveries: Arc::default(),
         },
         Arc::default(),
     );
@@ -207,6 +209,8 @@ async fn shutdown_releases_only_the_stopped_sessions_queued_traces() {
         context,
         message_traces: Arc::clone(&message_traces),
         run_client: auto_commit_run_client(),
+        steerable_turn: Arc::default(),
+        steering_deliveries: Arc::default(),
     };
 
     // Act
@@ -280,6 +284,8 @@ async fn closed_worker_settles_paused_operations_and_notifies_callers() {
             message_traces: Arc::default(),
             context,
             run_client: auto_commit_run_client(),
+            steerable_turn: Arc::default(),
+            steering_deliveries: Arc::default(),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
         assert!(

@@ -7,7 +7,7 @@ use ag_worker::{RunInfo, RunRepository, RunState};
 
 pub(crate) use super::core::test_support::AppClients;
 pub(crate) use super::review::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
-pub(crate) use super::service::test_support::TestSessionRunFactory;
+pub(crate) use super::service::test_support::{SteerableSessionChannel, TestSessionRunFactory};
 pub(crate) use super::session::{SyncMainOutcome, SyncSessionStartError};
 pub(crate) use super::sync::{MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion};
 

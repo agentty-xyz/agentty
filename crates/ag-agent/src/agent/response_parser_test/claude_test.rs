@@ -84,6 +84,27 @@ fn test_claude_parse_response_reads_usage_when_result_is_missing() {
 }
 
 #[test]
+fn test_claude_parse_response_keeps_follow_up_turn_results_and_sums_usage() {
+    // Arrange
+    let stdout = concat!(
+        r#"{"type":"result","result":"First answer","usage":{"input_tokens":11,"output_tokens":7}}"#,
+        "\n",
+        r#"{"type":"result","subtype":"error_during_execution","usage":{"input_tokens":2,"output_tokens":1}}"#,
+        "\n",
+        r#"{"type":"result","result":"Steer answer","usage":{"input_tokens":5,"output_tokens":3}}"#
+    );
+
+    // Act
+    let parsed = parse_claude_response_with_fallback(stdout, "");
+
+    // Assert
+    assert_eq!(parsed.content, "First answer");
+    assert_eq!(parsed.follow_up_contents, vec!["Steer answer".to_string()]);
+    assert_eq!(parsed.stats.input_tokens, 18);
+    assert_eq!(parsed.stats.output_tokens, 11);
+}
+
+#[test]
 fn test_claude_parse_response_reads_result_from_json_array_payload() {
     // Arrange
     let stdout = r#"[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","result":"{\"answer\":\"Recovered payload\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3}}]"#;

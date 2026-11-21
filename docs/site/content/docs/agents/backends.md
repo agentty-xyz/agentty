@@ -23,13 +23,16 @@ Agentty fails at startup with an install hint when none is found.
   `agy` and follow its sign-in flow.
 
 All CLI backends run their turns non-interactively inside the session worktree and
-accept pasted prompt images.
+accept pasted prompt images. Claude and Codex accept chat sent into a running turn;
+other backends read queued chat on their next turn. See
+[Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 
 Agentty uses each provider's official non-interactive CLI or app-server surface
-(`claude -p`, `agy --input-format stream-json`, or `codex app-server`) after you
-authenticate with that provider's CLI. It does not implement OAuth flows, read provider
-OAuth tokens directly, or call private provider APIs. You are responsible for choosing
-an authentication method permitted for your account, plan, and usage pattern.
+(`claude -p --input-format stream-json`, `agy --input-format stream-json`, or
+`codex app-server`) after you authenticate with that provider's CLI. It does not
+implement OAuth flows, read provider OAuth tokens directly, or call private provider
+APIs. You are responsible for choosing an authentication method permitted for your
+account, plan, and usage pattern.
 
 ### Permissions
 

@@ -4,13 +4,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_contracts::{AgentChannel, ReasoningLevel, StartSessionRequest, TurnEvent};
+use ag_contracts::{AgentChannel, AgentError, ReasoningLevel, StartSessionRequest, TurnEvent};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use super::support::{collect_pid_updates, make_ok_response, make_turn_request};
-use crate::app_server::{AppServerStreamEvent, AppServerTurnResponse, MockAppServerClient};
+use crate::app_server::{
+    AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
+    AppServerTurnResponse, MockAppServerClient,
+};
 use crate::channel::app_server::AppServerAgentChannel;
 
 #[tokio::test]
@@ -38,6 +41,71 @@ async fn session_start_is_lazy_and_shutdown_releases_the_client_session() {
     // Assert
     assert_eq!(session.session_id, "session");
     assert!(shutdown.is_ok());
+}
+
+#[tokio::test]
+async fn steering_forwards_prompts_and_reports_client_rejections() {
+    // Arrange
+    let mut client = MockAppServerClient::new();
+    client
+        .expect_steer_turn()
+        .withf(|session_id, prompt| session_id == "session" && prompt.text == "accepted")
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    client
+        .expect_steer_turn()
+        .withf(|_, prompt| prompt.text == "rejected")
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Err(AppServerError::Provider("turn ended".to_string())) })
+        });
+    let channel = AppServerAgentChannel::new(Arc::new(client), AgentKind::Codex);
+
+    // Act
+    let accepted = channel
+        .steer_turn("session".to_string(), "accepted".into())
+        .await;
+    let rejected = channel
+        .steer_turn("session".to_string(), "rejected".into())
+        .await;
+
+    // Assert
+    assert!(accepted.is_ok());
+    assert!(matches!(
+        rejected,
+        Err(AgentError::Runtime(message)) if message == "turn ended"
+    ));
+}
+
+#[tokio::test]
+async fn default_client_steering_rejects_every_prompt() {
+    // Arrange
+    struct UnsteerableClient;
+
+    impl AppServerClient for UnsteerableClient {
+        fn run_turn(
+            &self,
+            _request: AppServerTurnRequest,
+            _stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
+            Box::pin(async { Err(AppServerError::Provider("unused".to_string())) })
+        }
+
+        fn shutdown_session(&self, _session_id: String) -> AppServerFuture<()> {
+            Box::pin(async {})
+        }
+    }
+
+    // Act
+    let result = UnsteerableClient
+        .steer_turn("session".to_string(), "hello".into())
+        .await;
+
+    // Assert
+    assert_eq!(
+        result.expect_err("unsupported").to_string(),
+        "No running turn can receive this message"
+    );
 }
 
 #[tokio::test]

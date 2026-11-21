@@ -202,6 +202,21 @@ impl AgentChannel for AppServerAgentChannel {
         })
     }
 
+    /// Delivers one prompt into the session's running app-server turn.
+    fn steer_turn(
+        &self,
+        session_id: String,
+        prompt: ag_protocol::TurnPrompt,
+    ) -> AgentFuture<Result<(), AgentError>> {
+        let steer = self.client.steer_turn(session_id, prompt);
+
+        Box::pin(async move {
+            steer
+                .await
+                .map_err(|error| AgentError::Runtime(error.to_string()))
+        })
+    }
+
     /// Shuts down the underlying app-server session.
     fn shutdown_session(&self, session_id: String) -> AgentFuture<Result<(), AgentError>> {
         let client = Arc::clone(&self.client);

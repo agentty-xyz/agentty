@@ -115,14 +115,14 @@ pub(super) async fn seed_session_title_candidate_project(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"Generate a concise, commit-style title"*)
     case "$prompt" in
-      *'Latest request (JSON string): "Improve session title generation."'*)
+      *'Latest request (JSON string): \"Improve session title generation.\"'*)
         answer=''
         ;;
-      *'Original request (JSON string): "Improve session title generation."'*'Latest request (JSON string): "Also reject punctuation-only copies."'*)
+      *'Original request (JSON string): \"Improve session title generation.\"'*'Latest request (JSON string): \"Also reject punctuation-only copies.\"'*)
         answer='Stabilize session title generation'
         ;;
       *)
@@ -195,7 +195,7 @@ pub(super) async fn seed_review_with_resolved_decision(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 case "$prompt" in
   *"{REVIEW_DECISION_CONTEXT_PROMPT_MARKER}"*)
     case "$prompt" in
@@ -364,7 +364,7 @@ pub(super) async fn seed_claude_structured_output_project(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+IFS= read -r prompt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","name":"StructuredOutput","input":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}}}}]}}}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'

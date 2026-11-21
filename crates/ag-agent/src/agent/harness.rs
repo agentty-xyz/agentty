@@ -40,6 +40,7 @@ impl AgentBackend for HarnessBackend {
 pub(super) fn parse_response(_stdout: &str, _stderr: &str) -> ParsedResponse {
     ParsedResponse {
         content: String::new(),
+        follow_up_contents: Vec::new(),
         stats: SessionStats::default(),
     }
 }

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use ag_contracts::{
@@ -23,6 +23,7 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
+use super::steering::{QueuedMessageSteering, SteeringDeliveries};
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, graph_turn, isolation, session_folder, task_turn, turn};
 use crate::analytics::{TurnOutcome, TurnSelection};
@@ -36,7 +37,8 @@ use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{
-    PublishBranchAction, QueuedMessage, ReviewRequest, SessionId, SessionStats, Status,
+    PublishBranchAction, QueuedMessage, ReviewRequest, SessionHandles, SessionId, SessionStats,
+    Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -365,6 +367,74 @@ struct SessionWorkerHost {
     run_client: Arc<dyn RunClient>,
     graph_resources: Arc<ag_worker::GraphResources>,
     graph_wake: tokio::sync::watch::Sender<u64>,
+    /// Shared with [`SessionHandles::steerable_turn`]; set while this worker
+    /// runs a chat turn.
+    steerable_turn: Arc<AtomicBool>,
+    /// Deliveries of queued prompts into this worker's chat turns, settled
+    /// before the worker selects more work.
+    steering_deliveries: Arc<SteeringDeliveries>,
+}
+
+impl SessionWorkerHost {
+    /// Returns whether `work` is a chat turn on the session's own
+    /// conversation, the only turn queued prompts can be steered into.
+    fn is_chat_turn(work: &ScheduledSessionWork) -> bool {
+        matches!(
+            work,
+            ScheduledSessionWork::Message(_)
+                | ScheduledSessionWork::Command(ScheduledSessionCommand {
+                    command: SessionCommand::Run {
+                        request_kind: AgentRequestKind::SessionStart
+                            | AgentRequestKind::SessionResume,
+                        ..
+                    },
+                    ..
+                })
+        )
+    }
+
+    /// Ends the traces of this session's prompts that left the queue.
+    fn release_unqueued_message_traces(&self) {
+        let queued_messages = self
+            .context
+            .queued_messages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orders: HashSet<_> = queued_messages.iter().map(QueuedMessage::order).collect();
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(session_id, order), _| {
+                session_id != &self.context.session_id || orders.contains(order)
+            });
+    }
+}
+
+/// Marks the worker's chat turn as running until dropped, including when the
+/// worker is torn down mid-turn.
+struct SteerableTurn<'a> {
+    context: &'a SessionWorkerContext,
+    is_running: &'a AtomicBool,
+}
+
+impl<'a> SteerableTurn<'a> {
+    /// Publishes that queued prompts can now join the running turn.
+    fn begin(context: &'a SessionWorkerContext, is_running: &'a AtomicBool) -> Self {
+        is_running.store(true, Ordering::Release);
+        SessionWorkerService::emit_queue_session_updated(context);
+
+        Self {
+            context,
+            is_running,
+        }
+    }
+}
+
+impl Drop for SteerableTurn<'_> {
+    fn drop(&mut self) {
+        self.is_running.store(false, Ordering::Release);
+        SessionWorkerService::emit_queue_session_updated(self.context);
+    }
 }
 
 impl Drop for SessionWorkerHost {
@@ -428,6 +498,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                     ..
                 })
         );
+        let is_chat_turn = Self::is_chat_turn(&work);
         let (trace, operation, _reservation): (
             QueuedTrace,
             SessionWorkFuture<'_>,
@@ -468,9 +539,15 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                 )
             }
         };
+        let steerable_turn =
+            is_chat_turn.then(|| SteerableTurn::begin(&self.context, self.steerable_turn.as_ref()));
         let mut span = trace.selected();
         span.identify("agentty.session.id", self.context.session_id.to_string());
         let result = operation.with_context(span.context()).await;
+        drop(steerable_turn);
+        // A delivery taken for this turn settles here, so it cannot join the
+        // next turn, and a prompt it returns keeps its place in the queue.
+        self.steering_deliveries.settled().await;
         let interrupted = is_turn
             && self
                 .context
@@ -485,19 +562,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
         };
         span.finish(outcome);
         SessionWorkerService::clear_queued_messages_after_stop(&self.context, result.as_ref());
-        let queued_messages = self
-            .context
-            .queued_messages
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let orders: HashSet<_> = queued_messages.iter().map(QueuedMessage::order).collect();
-        self.message_traces
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|(session_id, order), _| {
-                session_id != &self.context.session_id || orders.contains(order)
-            });
-        drop(queued_messages);
+        self.release_unqueued_message_traces();
     }
 
     async fn abandon(&self, work: ScheduledSessionWork) {
@@ -908,13 +973,25 @@ pub(super) struct SessionWorkerRuntime {
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
     status: Arc<Mutex<Status>>,
+    /// Shared with [`SessionHandles::steerable_turn`].
+    steerable_turn: Arc<AtomicBool>,
     transcript: Arc<Mutex<SessionTranscript>>,
+}
+
+/// Foreground access to the running turns of one live session worker.
+struct LiveSessionRun {
+    session_run: SessionRunClient,
+    /// Shared with the worker host, which settles deliveries after each turn.
+    steering_deliveries: Arc<SteeringDeliveries>,
 }
 
 /// Owns per-session worker queue senders and preparation reservations.
 pub(crate) struct SessionWorkerService {
     message_traces: Arc<Mutex<HashMap<(SessionId, u64), QueuedTrace>>>,
     preparation_reservations: HashMap<SessionId, Weak<()>>,
+    /// Execution handles owned by each worker in [`Self::workers`], retained
+    /// so the foreground can steer their running turns.
+    session_runs: HashMap<SessionId, LiveSessionRun>,
     task_cancellations: HashMap<String, (SessionId, Weak<CancellationToken>)>,
     workers: HashMap<SessionId, SessionWorkerHandle>,
 }
@@ -925,6 +1002,7 @@ impl SessionWorkerService {
         Self {
             message_traces: Arc::new(Mutex::new(HashMap::new())),
             preparation_reservations: HashMap::new(),
+            session_runs: HashMap::new(),
             task_cancellations: HashMap::new(),
             workers: HashMap::new(),
         }
@@ -1257,6 +1335,58 @@ impl SessionWorkerService {
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.workers.remove(session_id);
+        self.session_runs.remove(session_id);
+    }
+
+    /// Prepares delivery of queued prompts into the session's running turn
+    /// through the worker's own runtime, or returns `None` without a live
+    /// worker or while the worker runs anything but a chat turn.
+    ///
+    /// The delivery begins before the chat-turn check. The worker waits for
+    /// begun deliveries after it ends a chat turn, so the turn that check
+    /// observes is the only one the prompts can join.
+    ///
+    /// Also returns `None` while the session's current-turn token is
+    /// cancelled, so the prompts stay queued. Either the user stopped the
+    /// running turn, whose queue the worker clears, or they stopped an
+    /// earlier turn and the running one has not installed its own token yet.
+    /// A delivery holding that stale token would discard a rejected prompt
+    /// as stopped.
+    pub(super) fn queued_message_steering(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+        handles: &SessionHandles,
+    ) -> Option<QueuedMessageSteering> {
+        let worker = self.workers.get(session_id)?.clone();
+        let live_run = self.session_runs.get(session_id)?;
+        let delivery = live_run.steering_deliveries.begin();
+        if !handles.has_steerable_turn() {
+            return None;
+        }
+        let turn_cancel_token = handles
+            .cancel_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if turn_cancel_token.is_cancelled() {
+            return None;
+        }
+
+        Some(QueuedMessageSteering {
+            app_event_tx: services.event_sender(),
+            cancel_token: Arc::clone(&handles.cancel_token),
+            db: services.db().clone(),
+            delivery,
+            message_traces: Arc::clone(&self.message_traces),
+            queued_messages: Arc::clone(&handles.queued_messages),
+            session_id: SessionId::from(session_id),
+            session_run: live_run.session_run.clone(),
+            session_update_versions: services.session_update_versions(),
+            transcript: Arc::clone(&handles.transcript),
+            turn_cancel_token,
+            wake_worker: Box::new(move || worker.wake()),
+        })
     }
 
     /// Holds scheduling while the host attempts a reversible model update.
@@ -1298,7 +1428,7 @@ impl SessionWorkerService {
         scheduled_command.ready_rx = Some(ready_rx);
         self.reserve_preparation_command(&runtime.session_id, &mut scheduled_command);
         if worker.submit(scheduled_command).is_err() {
-            self.workers.remove(&runtime.session_id);
+            self.clear_session_worker(&runtime.session_id);
 
             return Err(SessionError::Workflow(
                 "Session worker is not available".to_string(),
@@ -1324,6 +1454,14 @@ impl SessionWorkerService {
         }
 
         let session_run = services.session_run(&runtime.session_id, runtime.session_agent.kind());
+        let steering_deliveries = Arc::<SteeringDeliveries>::default();
+        self.session_runs.insert(
+            runtime.session_id.clone(),
+            LiveSessionRun {
+                session_run: session_run.clone(),
+                steering_deliveries: Arc::clone(&steering_deliveries),
+            },
+        );
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
@@ -1354,6 +1492,8 @@ impl SessionWorkerService {
                 context,
                 message_traces: Arc::clone(&self.message_traces),
                 run_client: services.session_run_client(&runtime.session_id),
+                steerable_turn: Arc::clone(&runtime.steerable_turn),
+                steering_deliveries,
             },
             Arc::clone(&runtime.queued_work_sequence),
         );
@@ -1402,7 +1542,7 @@ impl SessionWorkerService {
 
         let operation_id = scheduled_command.command.operation_id().to_string();
         if worker.submit(scheduled_command).is_err() {
-            self.workers.remove(session_id);
+            self.clear_session_worker(session_id);
             // Best-effort: operation tracking metadata is non-critical.
             let _ = operations
                 .mark_session_operation_failed(&operation_id, "Session worker is not available")
@@ -2608,6 +2748,7 @@ impl SessionManager {
             session_id: session.id.clone(),
             session_agent: session.agent,
             status: Arc::clone(&handles.status),
+            steerable_turn: Arc::clone(&handles.steerable_turn),
             transcript: Arc::clone(&handles.transcript),
         })
     }
