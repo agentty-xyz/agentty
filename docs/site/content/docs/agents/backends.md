@@ -132,8 +132,8 @@ Session overrides take precedence, and changing defaults does not alter existing
 sessions. `Default Response Style` starts new sessions as `Concise`, `Balanced`, or
 `Detailed`.
 
-Antigravity maps `xhigh` and `max` reasoning to `high`, except `gemini-4-hydrogen`,
-which uses `xhigh`; `gpt-oss-120b` always uses `medium`, and
+Antigravity maps `xhigh` and `max` reasoning to `high`, except `gemini-4-neon` and
+`gemini-4-hydrogen`, which use `xhigh`; `gpt-oss-120b` always uses `medium`, and
 `gemini-pro-orchestrator-g1-pro` ignores the level. Claude maps both to `max`, which
 `claude-opus-5-5` supports. Codex supports a distinct `max` effort.
 
@@ -157,7 +157,8 @@ finished sessions keep their historical model.
 
 ### Antigravity Models
 
-- `gemini-4-argon` (default): Gemini 4 Argon model.
+- `gemini-4-neon` (default): Gemini 4 Neon model with extra-high reasoning effort.
+- `gemini-4-argon`: Gemini 4 Argon model.
 - `gemini-4-hydrogen`: Gemini 4 Hydrogen model with extra-high reasoning effort.
 - `gemini-pro-orchestrator-g1-pro`: Orchestrator (Argon) model that coordinates
   subagents.

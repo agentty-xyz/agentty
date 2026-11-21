@@ -45,6 +45,16 @@ fn test_reasoning_level_antigravity_maps_all_levels_per_model() {
             ],
         ),
         (
+            AgentModel::Gemini4Neon,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("xhigh"),
+                Some("xhigh"),
+            ],
+        ),
+        (
             AgentModel::Gemini4Hydrogen,
             [
                 Some("low"),

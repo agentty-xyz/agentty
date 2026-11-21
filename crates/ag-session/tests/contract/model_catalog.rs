@@ -11,6 +11,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
         (
             AgentKind::Antigravity,
             vec![
+                "gemini-4-neon",
                 "gemini-4-argon",
                 "gemini-4-hydrogen",
                 "gemini-pro-orchestrator-g1-pro",
@@ -19,7 +20,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
                 "claude-sonnet-5-5",
                 "gpt-oss-120b",
             ],
-            "gemini-4-argon",
+            "gemini-4-neon",
         ),
         (
             AgentKind::Claude,

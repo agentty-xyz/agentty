@@ -262,7 +262,7 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
             Some("unknown"),
             "unknown-model",
             AgentKind::Antigravity,
-            AgentModel::Gemini4Argon,
+            AgentModel::Gemini4Neon,
         ),
         (
             Some(" "),

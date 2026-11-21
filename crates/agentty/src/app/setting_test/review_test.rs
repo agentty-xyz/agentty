@@ -85,7 +85,7 @@ async fn load_default_review_agent_setting_uses_inactive_project_baseline() {
     // Assert
     assert_eq!(
         selection,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Neon)
     );
     assert_eq!(reasoning_level, ReasoningLevel::default());
     assert_eq!(speed_mode, SpeedMode::default());

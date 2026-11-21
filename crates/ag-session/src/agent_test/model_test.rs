@@ -105,6 +105,7 @@ fn test_retired_gemini_provider_name_parses_as_antigravity() {
 fn test_current_gemini_models_have_current_descriptions() {
     // Arrange
     let models = [
+        AgentModel::Gemini4Neon,
         AgentModel::Gemini4Argon,
         AgentModel::Gemini4Hydrogen,
         AgentModel::GeminiProOrchestrator,
@@ -118,6 +119,7 @@ fn test_current_gemini_models_have_current_descriptions() {
     assert_eq!(
         descriptions,
         [
+            "Gemini 4 Neon model with extra-high reasoning effort.",
             "Gemini 4 Argon model.",
             "Gemini 4 Hydrogen model with extra-high reasoning effort.",
             "Orchestrator (Argon) model that coordinates subagents.",
@@ -241,6 +243,7 @@ fn test_claude_models_are_supported_by_claude() {
 fn test_gemini_models_are_supported_by_antigravity() {
     // Arrange
     let models = [
+        AgentModel::Gemini4Neon,
         AgentModel::Gemini4Argon,
         AgentModel::Gemini4Hydrogen,
         AgentModel::GeminiProOrchestrator,
@@ -256,10 +259,10 @@ fn test_gemini_models_are_supported_by_antigravity() {
 
     // Assert
     assert_eq!(AgentKind::Antigravity.declared_models(), models);
-    assert_eq!(antigravity_supported, [true; 5]);
-    assert_eq!(owners, [AgentKind::Antigravity; 5]);
-    assert_eq!(codex_supported, [false; 5]);
-    assert_eq!(harness_supported, [false; 5]);
+    assert_eq!(antigravity_supported, [true; 6]);
+    assert_eq!(owners, [AgentKind::Antigravity; 6]);
+    assert_eq!(codex_supported, [false; 6]);
+    assert_eq!(harness_supported, [false; 6]);
 }
 
 #[test]

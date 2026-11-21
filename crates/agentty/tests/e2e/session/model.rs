@@ -284,11 +284,13 @@ async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "gemini-4-argon", &full);
+                    assertion::assert_text_in_region(frame, "gemini-4-neon", &full);
                     assertion::assert_match_count(frame, "gemini-3.1-pro-preview", 0);
                     assertion::assert_match_count(frame, "gemini-3.5-flash-lite", 0);
                     let text = frame.all_text();
                     let positions = [
+                        "gemini-4-neon",
+                        "gemini-4-argon",
                         "gemini-4-hydrogen",
                         "gemini-pro-orchestrator-g1-pro",
                         "gemini-3.8-flash",

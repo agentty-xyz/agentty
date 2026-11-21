@@ -112,6 +112,12 @@ macro_rules! define_model_catalog {
 
 define_model_catalog! {
     Antigravity {
+        /// Gemini Neon model backed by `gemini-4-neon`.
+        Gemini4Neon = 33 => {
+            id: "gemini-4-neon",
+            description: "Gemini 4 Neon model with extra-high reasoning effort.",
+            fast: false,
+        },
         /// Gemini Argon model backed by `gemini-4-argon`.
         Gemini4Argon = 17 => {
             id: "gemini-4-argon",
@@ -311,6 +317,7 @@ define_model_catalog! {
 /// own catalog models with the Claude models it shares with
 /// [`AgentKind::Claude`] placed before GPT-OSS.
 const ANTIGRAVITY_MODELS: &[AgentModel] = &[
+    AgentModel::Gemini4Neon,
     AgentModel::Gemini4Argon,
     AgentModel::Gemini4Hydrogen,
     AgentModel::GeminiProOrchestrator,
@@ -832,7 +839,7 @@ impl AgentKind {
     /// Returns the default model for this agent kind.
     pub fn default_model(self) -> AgentModel {
         match self {
-            Self::Antigravity => AgentModel::Gemini4Argon,
+            Self::Antigravity => AgentModel::Gemini4Neon,
             Self::Claude => AgentModel::ClaudeFable52,
             Self::Codex => AgentModel::Gpt61Sol,
             Self::Harness => AgentModel::MuseSpark13,
