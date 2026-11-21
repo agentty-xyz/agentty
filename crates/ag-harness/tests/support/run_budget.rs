@@ -4,7 +4,8 @@
 //! limit stops, per-run ledgers override the harness's, sent requests that
 //! report no usage are charged their estimate, queued requests hold no
 //! budget, and a catalog concurrency cap bounds in-flight requests across
-//! harnesses and releases its permits when a request is dropped.
+//! harnesses, including ones built from a registration of the entry, and
+//! releases its permits when a request is dropped.
 
 use std::error::Error;
 use std::future::{IntoFuture, pending, poll_fn};
@@ -15,9 +16,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ag_harness::catalog::{ModelSpec, Pricing};
+use ag_harness::catalog::{ModelSelector, ModelSpec, Pricing};
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelRegistry,
+    ModelRequest, ModelResponse,
 };
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolCall;
@@ -512,7 +514,10 @@ async fn a_catalog_concurrency_cap_bounds_requests_in_flight_across_harnesses()
     let model = Arc::new(BudgetModel::default());
     let catalog = catalog(&model, Some(2))?;
     let first = Harness::builder().catalog(Arc::clone(&catalog)).build()?;
-    let second = Harness::builder().catalog(catalog).build()?;
+    // A registration of the same entry shares its cap with catalog harnesses.
+    let mut registry = ModelRegistry::new();
+    registry.register_catalog_entry(&catalog.resolve(&ModelSelector::Id(MODEL.into()))?, "1")?;
+    let second = Harness::from_registry(&registry, MODEL)?;
 
     // Act
     let (first, second) = tokio::join!(

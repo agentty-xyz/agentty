@@ -841,6 +841,37 @@ unpriced model reports no cost, so a selected summary model without prices leave
 runs it summarizes in unpriced. Each `ModelRequestCompleted` event and
 `ModelRequestActivity` names the cataloged model that answered it, with its own cost.
 
+A harness built from a catalog records no model registration, so its durable sessions
+resume only on harnesses that record none, never through `Harness::from_registry`. Give
+it `registration_revision` to record the selected entry as a registration keyed by its
+`ModelId`, and register the entries a host resumes or switches sessions to with
+`ModelRegistry::register_catalog_entry` under the same revision. Entries without a
+context profile cannot be registered, so the example skips them:
+
+```rust
+use ag_harness::catalog::ModelSelector;
+use ag_harness::model::ModelRegistry;
+
+let catalog = Arc::new(ModelCatalog::from_environment()?);
+let harness = Harness::builder()
+    .catalog(Arc::clone(&catalog))
+    .registration_revision("config-v1")
+    .sqlite("harness.db")
+    .build()?;
+let mut models = ModelRegistry::new();
+for spec in catalog.specs().filter(|spec| spec.profile().is_some()) {
+    let entry = catalog.resolve(&ModelSelector::Id(spec.id().clone()))?;
+    models.register_catalog_entry(&entry, "config-v1")?;
+}
+```
+
+Both record the key and revision a manual `register` with an equal `ExecutionIdentity`
+records, and the tool calls, image input, and profile of the entry, so sessions recorded
+on either resume on the other, and `Harness::from_registry` over a catalog registration
+resumes sessions created by the catalog harness. A catalog registration also keeps its
+entry's prices, `max_concurrency`, and output limit through `from_registry` and
+`switch_model`. A harness given an explicit `model` cannot record one.
+
 Built-in and specification-defined clients call `ag-router` for provider transport and
 schema validation. Hosts can also use `ag-router` directly for structured chat calls
 without a harness. Implement the `model::Model` trait to bring a provider whose wire
@@ -887,7 +918,7 @@ let harness = Harness::from_registry(&models, "review-model")?;
   other than the session or summary model starts that model's calibration afresh on
   every call, so its sources are sized by its raw estimator. The checkpoint records the
   model that wrote it. A switched session compacts and summarizes on its registered
-  model.
+  model, and runs unpriced unless that model was registered from a catalog entry.
 - `context_policy(ContextPolicy::auto_compact())` compacts automatically. By default
   (`ContextPolicy::Evict`) history that outgrows the weight left for it is re-projected
   and its oldest turns are evicted. With `auto_compact()` (90 percent) or

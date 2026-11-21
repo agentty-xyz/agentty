@@ -19,6 +19,7 @@ dependencies = [
  "ag-telemetry",
  "askama",
  "async-trait",
+ "futures-core",
  "mockall",
  "opentelemetry",
  "opentelemetry_sdk",

@@ -10,20 +10,19 @@ use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
-use ag_harness::catalog::Capabilities;
+use ag_harness::catalog::{Capabilities, ModelCatalog, ModelId, ModelSelector, ModelSpec};
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
-    ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
-    ModelRequest, ReasoningEffort,
+    ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
+    ReasoningEffort,
 };
 use ag_harness::provider::{
     ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider,
     chatgpt_auth_file_in,
 };
-use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, ToolSet, TurnInput,
-    TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, RunRequest, ToolSet,
+    TurnInput,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -622,29 +621,37 @@ impl ModelSelection {
         self.harness_from(&registry, context, observer)
     }
 
-    /// Registers `model` under this selection's key with `profile` and the
-    /// tool calls and image input the harness provider catalog declares for
-    /// the model. A selection only holds a cataloged model or one an
-    /// OpenAI-compatible server serves, both of which the catalog describes.
+    /// Registers `model` as the catalog entry of this selection's key, with
+    /// `profile` and the capabilities the harness provider catalog declares
+    /// for the model, under [`REGISTRATION_REVISION`]. A selection only holds
+    /// a cataloged model or one an OpenAI-compatible server serves, both of
+    /// which the catalog describes.
+    ///
+    /// The entry carries no prices or output limit, so runs stay unpriced
+    /// and unmetered as before, and the harness derives the same key,
+    /// revision, and capabilities recorded sessions hold.
     fn register(
         &self,
         model: Arc<dyn Model>,
         profile: ModelProfile,
     ) -> Result<ModelRegistry, String> {
-        let identity = ExecutionIdentity::new(self.key(), REGISTRATION_REVISION)
-            .map_err(failure("Invalid harness model registration"))?;
+        let id = ModelId::cataloged(self.provider, &self.model);
         let declared = self
             .provider
             .capabilities(&self.model)
             .unwrap_or(Capabilities::NONE);
-        let capabilities = ModelCapabilities {
-            image_input: declared.image_input(),
-            tool_calls: declared.tool_calls(),
-            ..ModelCapabilities::new(profile)
-        };
+        let spec = ModelSpec::new(id.clone())
+            .with_provider(self.provider)
+            .with_capabilities(declared)
+            .with_profile(profile);
+        let handle = ModelCatalog::builder()
+            .model(spec, model)
+            .build()
+            .and_then(|catalog| catalog.resolve(&ModelSelector::Id(id)))
+            .map_err(failure("Invalid harness model registration"))?;
         let mut registry = ModelRegistry::new();
         registry
-            .register_shared(identity, model, capabilities)
+            .register_catalog_entry(&handle, REGISTRATION_REVISION)
             .map_err(failure("Invalid harness model registration"))?;
 
         Ok(registry)
@@ -731,24 +738,49 @@ pub(crate) fn output_schema(profile: ProtocolRequestProfile) -> Result<OutputSch
     .map_err(failure("The harness rejected the protocol schema"))
 }
 
-/// Builds explicit options for one turn: `read` always, plus `write` and
-/// unsandboxed `bash` outside read-only mode.
-///
-/// # Errors
-/// Returns an error when the schema or `bash` policy is rejected.
-pub(crate) fn turn_options(
-    profile: ProtocolRequestProfile,
-    permission_mode: PermissionMode,
-    environment: &BTreeMap<String, String>,
-) -> Result<TurnOptions, String> {
-    let options = TurnOptions::from_output(output_schema(profile)?);
-    if permission_mode == PermissionMode::ReadOnly {
-        return Ok(options.with_tools(ToolSet::empty().with_read()));
+/// Explicit output schema and tools of one harness turn or run.
+pub(crate) struct RunOptions {
+    bash: Option<BashConfig>,
+    output: OutputSchema,
+    tools: ToolSet,
+}
+
+impl RunOptions {
+    /// Builds the options for one turn: `read` always, plus `write` and
+    /// unsandboxed `bash` outside read-only mode.
+    ///
+    /// # Errors
+    /// Returns an error when the schema or `bash` policy is rejected.
+    pub(crate) fn new(
+        profile: ProtocolRequestProfile,
+        permission_mode: PermissionMode,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let output = output_schema(profile)?;
+        if permission_mode == PermissionMode::ReadOnly {
+            return Ok(Self {
+                bash: None,
+                output,
+                tools: ToolSet::empty().with_read(),
+            });
+        }
+
+        Ok(Self {
+            bash: Some(bash_config(environment)?),
+            output,
+            tools: ToolSet::builtins(),
+        })
     }
 
-    Ok(options
-        .with_tools(ToolSet::builtins())
-        .with_bash(bash_config(environment)?))
+    /// Returns a run request for `input` with these options.
+    pub(crate) fn request(self, input: String) -> RunRequest {
+        let request = RunRequest::new(input).output(self.output).tools(self.tools);
+
+        match self.bash {
+            Some(bash) => request.bash(bash),
+            None => request,
+        }
+    }
 }
 
 /// Configures unsandboxed `bash` with the host environment minus provider

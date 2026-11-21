@@ -187,6 +187,13 @@ pub(crate) enum AppEvent {
         activity: Option<String>,
         session_id: SessionId,
     },
+    /// Signals streamed model output awaiting foreground formatting.
+    SessionOutputReady {
+        output: crate::app::session::LiveOutput,
+        session_id: SessionId,
+    },
+    /// Removes a session turn's streamed output once its result is shown.
+    SessionOutputCleared { session_id: SessionId },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -434,6 +441,8 @@ pub(super) struct AppEventBatch {
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
+    /// Latest streamed-output handle per session, or `None` once cleared.
+    pub(super) session_output_updates: HashMap<SessionId, Option<crate::app::session::LiveOutput>>,
     pub(super) session_permission_mode_updates:
         HashMap<SessionId, crate::domain::permission::PermissionMode>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
@@ -517,6 +526,7 @@ impl AppEventBatch {
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_activity_updates.is_empty()
+            || !self.session_output_updates.is_empty()
             || !self.session_generated_turn_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_rebase_review_invalidated_ids.is_empty()
@@ -679,7 +689,9 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_session_diff_loaded(request_id, result, session_id),
             event @ (AppEvent::SessionActivityReady { .. }
-            | AppEvent::SessionActivityUpdated { .. }) => self.collect_activity_event(event),
+            | AppEvent::SessionActivityUpdated { .. }
+            | AppEvent::SessionOutputReady { .. }
+            | AppEvent::SessionOutputCleared { .. }) => self.collect_activity_event(event),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
             }
@@ -756,8 +768,16 @@ impl AppEventBatch {
     }
 
     /// Formats deferred activity only after dequeuing, preserving clear order.
+    /// Streamed output keeps its handle, which the foreground formats when it
+    /// applies the batch and again on later frames.
     fn collect_activity_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::SessionOutputReady { output, session_id } => {
+                self.session_output_updates.insert(session_id, Some(output));
+            }
+            AppEvent::SessionOutputCleared { session_id } => {
+                self.session_output_updates.insert(session_id, None);
+            }
             AppEvent::SessionActivityReady {
                 activity,
                 session_id,
@@ -1130,8 +1150,13 @@ impl App {
     ///
     /// The foreground runtime calls this before draw so queued
     /// `SessionUpdated` events can synchronize only the touched sessions into
-    /// render snapshots without polling every live handle each frame.
+    /// render snapshots without polling every live handle each frame. It
+    /// first applies streamed output that changed since the previous frame,
+    /// which is how a fast stream redraws once per frame.
     pub(crate) async fn process_pending_app_events(&mut self) {
+        if self.sessions.refresh_live_outputs() {
+            self.mark_dirty();
+        }
         let Ok(first_event) = self.event_rx.try_recv() else {
             return;
         };
@@ -1272,6 +1297,9 @@ impl App {
     fn apply_session_transient_updates(&mut self, event_batch: &mut AppEventBatch) {
         for (session_id, activity) in std::mem::take(&mut event_batch.session_activity_updates) {
             self.sessions.update_live_activity(&session_id, activity);
+        }
+        for (session_id, output) in std::mem::take(&mut event_batch.session_output_updates) {
+            self.sessions.track_live_output(session_id, output);
         }
         for (session_id, update) in std::mem::take(&mut event_batch.session_generated_turn_updates)
         {

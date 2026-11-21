@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
+use super::workflow::output::LiveOutput;
 pub(crate) use super::workflow::task::{
     RunAgentAssistTaskInput, SessionTaskService, StatusTransition,
 };
@@ -144,6 +145,9 @@ pub struct SessionManager {
     pub(super) active_prompt_outputs: HashMap<SessionId, String>,
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
+    /// Streamed-output handles whose notification the foreground keeps
+    /// armed while their output still changes each frame.
+    pub(super) live_outputs: HashMap<SessionId, LiveOutput>,
     pub(super) merge_service: SessionMergeService,
     pub(super) resources: super::resource::ResourceMonitor,
     pub(super) state: SessionState,
@@ -175,6 +179,7 @@ impl SessionManager {
             at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
             git_client,
+            live_outputs: HashMap::new(),
             merge_service: SessionMergeService,
             state,
             stats_activity,
@@ -920,6 +925,10 @@ impl SessionManager {
             return;
         };
         if let Some(activity) = activity {
+            let is_new = session
+                .transient_messages
+                .get(TransientMessageSlot::Activity)
+                .is_none();
             session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::AfterActiveTurn,
                 body: TransientMessageBody::Plain(activity),
@@ -927,10 +936,79 @@ impl SessionManager {
                 slot: TransientMessageSlot::Activity,
                 turn_position: session.latest_user_prompt_position(),
             });
+            // Streamed output stays below the rows, beside the loader.
+            if is_new
+                && let Some(output) = session
+                    .transient_messages
+                    .retract(TransientMessageSlot::StreamedOutput)
+            {
+                session.transient_messages.upsert(output);
+            }
         } else {
             session
                 .transient_messages
                 .retract(TransientMessageSlot::Activity);
+        }
+    }
+
+    /// Shows the latest snapshot of a session turn's streamed output and
+    /// keeps its handle for per-frame refreshes, or removes the output when
+    /// `output` is `None`. Like live activity, it is never persisted or
+    /// replayed to the provider.
+    pub(crate) fn track_live_output(&mut self, session_id: SessionId, output: Option<LiveOutput>) {
+        if let Some(output) = output {
+            self.show_live_output(&session_id, Some(output.snapshot()));
+            self.live_outputs.insert(session_id, output);
+        } else {
+            self.show_live_output(&session_id, None);
+            self.live_outputs.remove(&session_id);
+        }
+    }
+
+    /// Applies streamed output that changed since the previous frame and
+    /// releases handles that did not change. Returns whether any output
+    /// changed.
+    pub(crate) fn refresh_live_outputs(&mut self) -> bool {
+        let mut live_outputs = std::mem::take(&mut self.live_outputs);
+        let mut changed = false;
+        live_outputs.retain(|session_id, output| {
+            let Some(markdown) = output.refresh() else {
+                return false;
+            };
+            self.show_live_output(session_id, Some(markdown));
+            changed = true;
+
+            true
+        });
+        self.live_outputs = live_outputs;
+
+        changed
+    }
+
+    /// Replaces or removes a session's streamed-output message; an empty
+    /// snapshot removes it.
+    fn show_live_output(&mut self, session_id: &str, markdown: Option<String>) {
+        let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        match markdown.filter(|markdown| !markdown.is_empty()) {
+            Some(markdown) => session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterActiveTurn,
+                body: TransientMessageBody::Markdown(markdown),
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::StreamedOutput,
+                turn_position: session.latest_user_prompt_position(),
+            }),
+            None => {
+                session
+                    .transient_messages
+                    .retract(TransientMessageSlot::StreamedOutput);
+            }
         }
     }
 

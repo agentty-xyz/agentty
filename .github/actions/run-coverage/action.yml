@@ -71,7 +71,7 @@ runs:
     - name: Upload coverage test results to Trunk
       if: ${{ !cancelled() && inputs.trunk-token != '' }}
       continue-on-error: true
-      uses: trunk-io/analytics-uploader@39e806ceaad33705d78c996bcc8510a600e82e21 # v2.1.7
+      uses: trunk-io/analytics-uploader@9886de74a788c450c793109577a4d97bfb3e799f # v2.1.8
       env:
         TRUNK_API_TOKEN: ${{ inputs.trunk-token }}
       with:
@@ -96,7 +96,7 @@ runs:
     - name: SonarQube Scan
       id: sonar-scan
       if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+      uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
       env:
         SONAR_TOKEN: ${{ inputs.sonar-token }}
       with:

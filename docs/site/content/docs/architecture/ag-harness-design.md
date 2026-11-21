@@ -86,7 +86,11 @@ transport either way.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys; each registration's `ModelProfile` declares its
   context window and estimator parameters. Hosts own per-model values; the harness holds
-  none.
+  none. A `ModelCatalog` entry becomes a registration keyed by its `ModelId` under a
+  host revision, through `ModelRegistry::register_catalog_entry` or
+  `HarnessBuilder::registration_revision`; it records the same identity as an equal
+  manual registration, so durable sessions resume across both, and it keeps the entry's
+  prices and concurrency cap.
 - `SessionStore` (persistence) and `BashExecutor` (command execution) accept host
   implementations. Stores expose atomic record operations; the harness applies admission
   rules.
