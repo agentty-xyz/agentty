@@ -125,7 +125,9 @@ for acceptance of a predecessor's output, the message is a reply to that exact e
 or output version. A reply to an output of the session's newest working graph first
 resumes that graph through the command gateway when it is paused, so the work stays
 inside it. A read-only utility run on the Run Worker classifies replies that need a
-decision, and the resulting action enters the shared command gateway. Pending graph
+decision, and the resulting action enters the shared command gateway. Proposal and
+output replies are saved with their first decision, so recovery after a restart or
+project switch decides or applies a reply whose action was not attempted. Pending graph
 questions open the ordinary question panel bound to the exact asking version or
 execution, so a reply never reaches work that asked later.
 

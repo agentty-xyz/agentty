@@ -86,6 +86,7 @@ impl App {
         ))
         .await?;
         app.recover_graph_proposal_replies().await;
+        app.recover_graph_output_replies().await;
 
         Ok(app)
     }

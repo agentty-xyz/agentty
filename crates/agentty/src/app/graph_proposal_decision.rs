@@ -14,9 +14,6 @@ use tracing::warn;
 use crate::app::graph_reply_decision;
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
 
-/// Provider calls one decision may spend, including transport retries.
-const DECISION_PROVIDER_CALLS: usize = 3;
-
 /// Askama view model whose inputs are already JSON-encoded strings.
 #[derive(Template)]
 #[template(path = "graph_proposal_reply_decision_prompt.md", escape = "none")]
@@ -74,7 +71,7 @@ impl GraphProposalReplyDecision {
                 permission_mode: ag_contracts::PermissionMode::ReadOnly,
                 prompt: self.prompt(),
                 provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(
-                    DECISION_PROVIDER_CALLS,
+                    graph_reply_decision::DECISION_PROVIDER_CALLS,
                 )),
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,

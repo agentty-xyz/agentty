@@ -13,10 +13,10 @@ use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNode,
-    GraphNodeContinuation, GraphNodeStatus, GraphPostProcessing, GraphWorkspaceAccess,
-    StartExecutionGraphRequest,
+    GraphNodeContinuation, GraphNodeStatus, GraphOutputReplyOutcome, GraphPostProcessing,
+    GraphWorkspaceAccess, StartExecutionGraphRequest,
 };
-use ag_store::{DbError, MockGraphRepository, StoredGraphResult};
+use ag_store::{DbError, GraphOutputReplyRecord, MockGraphRepository, StoredGraphResult};
 use ag_worker::{
     GraphExecutor, GraphNodeRunner, GraphRunRequest, MockRunClient, RunClient, SessionRunClient,
 };
@@ -25,12 +25,12 @@ use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::OutputReplyDecision;
 use crate::app::App;
 use crate::app::execution_graph::GraphDriverRegistration;
 use crate::app::execution_graph::tests::{graph, seed_session};
 use crate::app::graph_node_reply::tests::{app_with, messages, screenshot};
 use crate::app::graph_proposal_reply::tests::{apply_next_command, wait_for_message};
+use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
 use crate::domain::session::{SessionId, Status};
@@ -38,6 +38,12 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::fs::MockFsClient;
 use crate::presentation::execution_graph::tests::{acceptance_gated_view, consumed_gated_view};
 use crate::test_support::{new_test_app_with_clients, test_app_clients};
+
+/// Identity of a reply an interrupted run left recorded.
+const REPLY_ID: &str = "5b0f9a0e-6c1d-4f4e-9f0a-3d2c1b0a9e8f";
+
+/// Lets a recovered reply reach its wait for the session runtime.
+const RUNTIME_WAIT_GRACE: Duration = Duration::from_millis(50);
 
 #[tokio::test]
 async fn start_implementing_in_chat_accepts_the_awaited_output_and_continues_the_graph() {
@@ -141,6 +147,7 @@ async fn revise_reply_reports_a_producer_that_cannot_take_guidance() {
     let (mut graph, progress) = gated();
     graph.nodes[0].execution.context = GraphContext::Fresh;
     let (mut app, _directory, _driver) = decided_app(listing(graph, progress), "revise").await;
+    let _consumer = app.sessions.foreground_consumer();
 
     // Act
     app.submit_graph_output_reply(
@@ -252,7 +259,7 @@ async fn reply_with_attachments_revises_without_deciding() {
                     }
         })
         .returning(|_| Ok(true));
-    let (mut app, _directory) = app_with(repository).await;
+    let (mut app, _directory) = app_with(settling(repository)).await;
     let _driver = live_driver(&app);
     let mut client = MockRunClient::new();
     client.expect_submit().never();
@@ -310,7 +317,12 @@ async fn accept_reply_reports_a_stale_output_instead_of_retargeting_it() {
 async fn stopping_the_session_abandons_an_undecided_output_reply() {
     // Arrange
     let (graph, progress) = gated();
-    let (mut app, _directory) = app_with(listing(graph, progress)).await;
+    let mut repository = deciding(listing(graph, progress));
+    repository
+        .expect_settle_output_reply()
+        .once()
+        .returning(|_| Ok(()));
+    let (mut app, _directory) = app_with(repository).await;
     let _driver = live_driver(&app);
     let gate = Arc::new(Semaphore::new(0));
     app.services
@@ -363,17 +375,7 @@ async fn reply_while_the_previous_one_is_decided_keeps_the_composer() {
     // Arrange
     let (graph, progress) = gated();
     let (mut app, _directory, _driver) = decided_app(listing(graph, progress), "accept").await;
-    app.services
-        .output_reply_decisions
-        .lock()
-        .expect("decision lock")
-        .insert(
-            "result".into(),
-            OutputReplyDecision {
-                cancellation: CancellationToken::new(),
-                session_id: SessionId::from("sess"),
-            },
-        );
+    mark_deciding(&app);
 
     // Act
     let outcome = app
@@ -460,35 +462,7 @@ async fn reply_to_a_paused_graph_resumes_it_and_continues_inside_the_graph() {
     // Arrange
     let (mut app, _directory, mut observed_rx) = reader_graph_app().await;
     let _consumer = app.sessions.foreground_consumer();
-    let service = app.session_service();
-    let request = StartExecutionGraphRequest {
-        graph: reader_graph(),
-        provider_call_limits: BTreeMap::from([("calls".into(), 2)]),
-    };
-    app.drive_session_request(service.start_execution_graph(request))
-        .await
-        .expect("start");
-    app.drive_session_request(async { observed_rx.recv().await.expect("first turn") })
-        .await;
-    wait_for_node(&mut app, 0, GraphNodeStatus::Succeeded).await;
-    // A restart or a stopped session leaves the graph without a driver.
-    app.services.stop_graph_drivers(None);
-    let budget_writers = app.services.graph_budget_writers.clone();
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        app.drive_session_request(async move {
-            while budget_writers.has_unrecorded_spending("graph") {
-                tokio::task::yield_now().await;
-            }
-        }),
-    )
-    .await
-    .expect("stopped driver records its spending");
-    let paused = app
-        .drive_session_request(service.get_execution_graph("graph"))
-        .await
-        .expect("progress")
-        .expect("graph");
+    let paused = pause_after_first_node(&mut app, &mut observed_rx).await;
 
     // Act
     let outcome = app.submit_prompt(submission("Start implementing")).await;
@@ -624,6 +598,331 @@ async fn failed_reads_report_the_error_and_keep_the_composer() {
     }
 }
 
+#[tokio::test]
+async fn failed_reply_persistence_keeps_the_composer_or_reports_the_error() {
+    for failure in ["record", "decide", "settle"] {
+        // Arrange: only a failed settlement lets the accepted action through.
+        let (graph, progress) = gated();
+        let stored = graph.clone();
+        let mut repository = listing(graph, progress);
+        repository
+            .expect_record_output_reply()
+            .return_once(move |_| match failure {
+                "record" => Err(unavailable()),
+                _ => Ok(true),
+            });
+        repository
+            .expect_decide_output_reply()
+            .returning(move |_, outcome| match failure {
+                "decide" => Err(unavailable()),
+                _ => Ok(outcome),
+            });
+        repository
+            .expect_load_graph()
+            .returning(move |_, _| Ok(Some(stored.clone())));
+        repository.expect_accept_result().returning(|_, _| Ok(true));
+        repository
+            .expect_settle_output_reply()
+            .returning(|_| Err(unavailable()));
+        let (mut app, _directory) = app_with(repository).await;
+        let _driver = live_driver(&app);
+        app.services
+            .set_run_client(Arc::new(GatedAcceptance(Arc::new(Semaphore::new(1)))));
+        let _consumer = app.sessions.foreground_consumer();
+
+        // Act
+        let outcome = app
+            .submit_graph_output_reply(
+                &SessionId::from("sess"),
+                &TurnPrompt::from_text("Go ahead".into()),
+            )
+            .await;
+        if failure == "settle" {
+            apply_next_command(&mut app).await;
+        }
+
+        // Assert
+        if failure == "record" {
+            assert_eq!(
+                outcome,
+                Some(PromptWorkflowOutcome::KeepPrompt),
+                "{failure}"
+            );
+            let messages = messages(&app).await;
+            assert_eq!(messages.len(), 1, "{failure}: {messages:?}");
+            assert!(messages[0].1.contains("Read failed"), "{messages:?}");
+        } else {
+            let notice = wait_for_message(&app, "Graph output:").await;
+            assert!(notice.contains("Read failed"), "{failure}: {notice}");
+        }
+        wait_for_idle_decisions(&app).await;
+    }
+}
+
+#[tokio::test]
+async fn restart_recovery_resumes_the_paused_graph_and_decides_an_undecided_reply() {
+    // Arrange
+    let (mut app, _directory, mut observed_rx) = reader_graph_app().await;
+    let _consumer = app.sessions.foreground_consumer();
+    let paused = pause_after_first_node(&mut app, &mut observed_rx).await;
+    let reply = GraphOutputReplyRecord {
+        attachments: Vec::new(),
+        execution: paused.nodes[0].executions[0].clone(),
+        id: REPLY_ID.into(),
+        message: "Start implementing".into(),
+        outcome: None,
+        reference: paused.nodes[0].results[0].reference.clone(),
+    };
+    app.services
+        .db()
+        .graphs()
+        .record_output_reply(&reply)
+        .await
+        .expect("record reply");
+
+    // Act
+    app.recover_graph_output_replies().await;
+    let second = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async { observed_rx.recv().await.expect("second turn") }),
+    )
+    .await
+    .expect("the recovered reply resumes the graph and dispatches the waiting node");
+    let completed = wait_for_node(&mut app, 1, GraphNodeStatus::Succeeded).await;
+    let notice = wait_for_message(&app, "Accepted").await;
+    wait_for_idle_decisions(&app).await;
+    let unsettled = app
+        .services
+        .db()
+        .graphs()
+        .unsettled_output_replies("sess")
+        .await
+        .expect("unsettled replies");
+
+    // Assert
+    assert_eq!(paused.status, ExecutionGraphStatus::Paused);
+    assert!(second.prompt.agent_text().contains("Plan ready"));
+    assert_eq!(completed.status, ExecutionGraphStatus::Completed);
+    assert_eq!(notice, "Accepted `response` from `first` · continuing");
+    assert_eq!(unsettled, []);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn restart_recovery_reapplies_a_recorded_decision_without_deciding_again() {
+    // Arrange
+    let (graph, progress) = gated();
+    let stored = graph.clone();
+    let mut repository = recovering(graph, progress, Some(GraphOutputReplyOutcome::Accept));
+    repository
+        .expect_load_graph()
+        .returning(move |_, _| Ok(Some(stored.clone())));
+    repository
+        .expect_accept_result()
+        .once()
+        .withf(|reference, _| reference.id == "result")
+        .returning(|_, _| Ok(true));
+    let (mut app, _directory) = app_with(settling(repository)).await;
+    let _driver = live_driver(&app);
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    app.services.set_run_client(Arc::new(client));
+    let _consumer = app.sessions.foreground_consumer();
+
+    // Act
+    app.recover_graph_output_replies().await;
+    apply_next_command(&mut app).await;
+    let notice = wait_for_message(&app, "Accepted").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert_eq!(notice, "Accepted `response` from `first` · continuing");
+}
+
+#[tokio::test]
+async fn recovery_skips_a_reply_being_decided_or_whose_graph_cannot_be_read() {
+    for case in ["deciding", "lost"] {
+        // Arrange: a reply being decided is skipped before its graph is read.
+        // Recording or deciding the reply is not mocked.
+        let (graph, progress) = gated();
+        let mut repository = recovering(graph, progress, None);
+        repository
+            .expect_load_graph()
+            .times(usize::from(case == "lost"))
+            .returning(|_, _| Ok(None));
+        let (mut app, _directory) = app_with(repository).await;
+        if case == "deciding" {
+            mark_deciding(&app);
+        }
+
+        // Act
+        app.recover_graph_output_replies().await;
+
+        // Assert
+        assert_eq!(deciding_count(&app), usize::from(case == "deciding"));
+        assert_eq!(messages(&app).await, Vec::new(), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn recorded_decision_stays_unsettled_when_the_runtime_stops_before_answering() {
+    for stops in ["before-start", "mid-resume", "mid-action"] {
+        // Arrange: only a paused graph is resumed before the action.
+        let (graph, progress) = gated();
+        let stored = graph.clone();
+        let mut repository = deciding(recovering(
+            graph,
+            progress,
+            Some(GraphOutputReplyOutcome::Accept),
+        ));
+        repository
+            .expect_load_graph()
+            .returning(move |_, _| Ok(Some(stored.clone())));
+        repository.expect_settle_output_reply().never();
+        let (mut app, _directory) = app_with(repository).await;
+        let _driver = (stops != "mid-resume").then(|| live_driver(&app));
+        let consumer = (stops != "before-start").then(|| app.sessions.foreground_consumer());
+
+        // Act
+        app.recover_graph_output_replies().await;
+        if consumer.is_some() {
+            // The runtime takes the command and stops without answering it.
+            let _unanswered = app.sessions.next_command().await;
+            drop(consumer);
+            wait_for_idle_decisions(&app).await;
+        } else {
+            tokio::time::sleep(RUNTIME_WAIT_GRACE).await;
+        }
+        app.services.wait_for_cleanup_tasks(None).await;
+
+        // Assert
+        assert_eq!(deciding_count(&app), 0, "{stops}");
+        assert_eq!(messages(&app).await, Vec::new(), "{stops}");
+    }
+}
+
+#[tokio::test]
+async fn stopping_the_session_abandons_a_decided_reply_whose_action_was_not_attempted() {
+    for stops in ["waiting-for-runtime", "mid-action"] {
+        // Arrange: the recorded decision is written again before the action.
+        let (graph, progress) = gated();
+        let stored = graph.clone();
+        let mut repository = recovering(graph, progress, Some(GraphOutputReplyOutcome::Accept));
+        repository
+            .expect_load_graph()
+            .returning(move |_, _| Ok(Some(stored.clone())));
+        let decided = Arc::new(Semaphore::new(0));
+        repository.expect_decide_output_reply().returning({
+            let decided = Arc::clone(&decided);
+
+            move |_, outcome| {
+                decided.add_permits(1);
+
+                Ok(outcome)
+            }
+        });
+        repository
+            .expect_settle_output_reply()
+            .once()
+            .withf(|reply_id| reply_id == REPLY_ID)
+            .returning(|_| Ok(()));
+        let (mut app, _directory) = app_with(repository).await;
+        let _driver = live_driver(&app);
+        let consumer = (stops == "mid-action").then(|| app.sessions.foreground_consumer());
+
+        // Act
+        app.recover_graph_output_replies().await;
+        if consumer.is_some() {
+            // The runtime takes the command and stops without answering it.
+            let _unanswered = app.sessions.next_command().await;
+            app.services.stop_graph_activity("sess").await;
+            drop(consumer);
+        } else {
+            // The reply waits for a runtime that never accepts commands.
+            let _decided = decided.acquire().await.expect("decision recorded");
+            app.services.stop_graph_activity("sess").await;
+        }
+        let notice = wait_for_message(&app, "was canceled").await;
+        app.services.wait_for_cleanup_tasks(None).await;
+
+        // Assert
+        assert_eq!(
+            notice,
+            TranscriptNotice::ReplyError.format(
+                "Graph output: the reply decision for `first` was canceled. Reply again to act on \
+                 its output."
+            ),
+            "{stops}"
+        );
+        assert_eq!(deciding_count(&app), 0, "{stops}");
+    }
+}
+
+#[tokio::test]
+async fn recovered_reply_reports_a_paused_graph_that_cannot_resume() {
+    // Arrange: the graph is read for the reply, then lost before the resume.
+    let (graph, progress) = gated();
+    let stored = graph.clone();
+    let mut repository = recovering(graph, progress, Some(GraphOutputReplyOutcome::Accept));
+    let mut reads = 0;
+    repository.expect_load_graph().returning(move |_, _| {
+        reads += 1;
+
+        Ok((reads == 1).then(|| stored.clone()))
+    });
+    let (mut app, _directory) = app_with(settling(repository)).await;
+    let _consumer = app.sessions.foreground_consumer();
+
+    // Act
+    app.recover_graph_output_replies().await;
+    apply_next_command(&mut app).await;
+    let notice = wait_for_message(&app, "Graph output:").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert!(
+        notice.contains(
+            "the paused graph could not resume to act on `first`: Missing or stale graph. Resume \
+             it from `w`, then reply again."
+        ),
+        "{notice}"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_leaves_an_undecided_output_reply_for_restart_recovery() {
+    // Arrange
+    let (graph, progress) = gated();
+    let mut repository = deciding(listing(graph, progress));
+    repository.expect_settle_output_reply().never();
+    let (mut app, _directory) = app_with(repository).await;
+    let _driver = live_driver(&app);
+    let gate = Arc::new(Semaphore::new(0));
+    app.services
+        .set_run_client(Arc::new(GatedAcceptance(Arc::clone(&gate))));
+
+    // Act
+    let outcome = app
+        .submit_graph_output_reply(
+            &SessionId::from("sess"),
+            &TurnPrompt::from_text("Looks good".into()),
+        )
+        .await;
+    app.services.cancel_graph_reply_decisions(None);
+    gate.add_permits(1);
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert_eq!(
+        outcome,
+        Some(PromptWorkflowOutcome::ShowSession {
+            session_id: "sess".into()
+        })
+    );
+    assert_eq!(deciding_count(&app), 0);
+    assert_eq!(messages(&app).await, Vec::new());
+}
+
 /// Blocked graph whose `second` node waits for acceptance of `first`'s
 /// validated `response` output.
 fn gated() -> (ExecutionGraph, ExecutionGraphProgress) {
@@ -669,6 +968,87 @@ fn listing_before(
     repository
 }
 
+/// Lets `repository` record replies and keep the decision it is given.
+fn deciding(mut repository: MockGraphRepository) -> MockGraphRepository {
+    repository
+        .expect_record_output_reply()
+        .returning(|_| Ok(true));
+    repository
+        .expect_decide_output_reply()
+        .returning(|_, outcome| Ok(outcome));
+
+    repository
+}
+
+/// [`deciding`] repository that also settles replies.
+fn settling(repository: MockGraphRepository) -> MockGraphRepository {
+    let mut repository = deciding(repository);
+    repository
+        .expect_settle_output_reply()
+        .returning(|_| Ok(()));
+
+    repository
+}
+
+/// [`listing`] repository whose session has one unsettled reply to the gated
+/// output, as an interrupted run left it, with its first decision when
+/// `outcome` is set.
+fn recovering(
+    graph: ExecutionGraph,
+    progress: ExecutionGraphProgress,
+    outcome: Option<GraphOutputReplyOutcome>,
+) -> MockGraphRepository {
+    let reply = GraphOutputReplyRecord {
+        attachments: Vec::new(),
+        execution: progress.nodes[0].executions[0].clone(),
+        id: REPLY_ID.into(),
+        message: "Start implementing".into(),
+        outcome,
+        reference: progress.nodes[0].results[0].reference.clone(),
+    };
+    let mut repository = listing(graph, progress);
+    repository
+        .expect_unsettled_output_replies()
+        .returning(move |_| Ok(vec![reply.clone()]));
+
+    repository
+}
+
+/// Marks the gated output as having a reply decision in flight.
+fn mark_deciding(app: &App) {
+    app.services
+        .output_reply_decisions
+        .lock()
+        .expect("decision lock")
+        .insert(
+            "result".into(),
+            ReplyDecision {
+                cancellation: CancellationToken::new(),
+                is_abandoned: Arc::default(),
+                session_id: SessionId::from("sess"),
+            },
+        );
+}
+
+/// Counts the outputs whose reply decision is in flight.
+fn deciding_count(app: &App) -> usize {
+    app.services
+        .output_reply_decisions
+        .lock()
+        .expect("decision lock")
+        .len()
+}
+
+async fn wait_for_idle_decisions(app: &App) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while deciding_count(app) > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("decision settles");
+}
+
 /// App over `repository` with a live gated-graph driver whose reply decision
 /// answers `decision` after checking that the prompt carries the decoded
 /// output.
@@ -676,7 +1056,7 @@ async fn decided_app(
     repository: MockGraphRepository,
     decision: &'static str,
 ) -> (App, TempDir, GraphDriverRegistration) {
-    let (mut app, directory) = app_with(repository).await;
+    let (mut app, directory) = app_with(settling(repository)).await;
     let driver = live_driver(&app);
     let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
@@ -800,6 +1180,42 @@ async fn reader_graph_app() -> (App, TempDir, mpsc::UnboundedReceiver<TurnReques
     app.services.set_run_client(Arc::new(client));
 
     (app, directory, observed_rx)
+}
+
+/// Starts the reader graph and runs its first node, then drops the driver as
+/// a restart or a stopped session does, and returns the paused progress.
+async fn pause_after_first_node(
+    app: &mut App,
+    observed_rx: &mut mpsc::UnboundedReceiver<TurnRequest>,
+) -> ExecutionGraphProgress {
+    let service = app.session_service();
+    let request = StartExecutionGraphRequest {
+        graph: reader_graph(),
+        provider_call_limits: BTreeMap::from([("calls".into(), 2)]),
+    };
+    app.drive_session_request(service.start_execution_graph(request))
+        .await
+        .expect("start");
+    app.drive_session_request(async { observed_rx.recv().await.expect("first turn") })
+        .await;
+    wait_for_node(app, 0, GraphNodeStatus::Succeeded).await;
+    app.services.stop_graph_drivers(None);
+    let budget_writers = app.services.graph_budget_writers.clone();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async move {
+            while budget_writers.has_unrecorded_spending("graph") {
+                tokio::task::yield_now().await;
+            }
+        }),
+    )
+    .await
+    .expect("stopped driver records its spending");
+
+    app.drive_session_request(service.get_execution_graph("graph"))
+        .await
+        .expect("progress")
+        .expect("graph")
 }
 
 /// Drives foreground commands until node `index` reaches `status`.

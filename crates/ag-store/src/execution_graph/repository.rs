@@ -4,11 +4,14 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use ag_session::{ExecutionGraph, GraphExecutionRef, GraphResultRef};
+use ag_session::{ExecutionGraph, GraphExecutionRef, GraphOutputReplyOutcome, GraphResultRef};
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::{GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphResult};
+use super::{
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
+    StoredGraphResult,
+};
 use crate::{DbError, TimestampSource};
 
 /// Persistence only: no dispatch, capacity allocation, or automatic replay.
@@ -167,6 +170,31 @@ pub trait GraphRepository: Send + Sync {
         reference: &GraphResultRef,
         evidence: &GraphEvidence,
     ) -> Result<bool, DbError>;
+
+    /// Records a chat reply to an exact output version that is not accepted,
+    /// together with its visible prompt. Identical redelivery returns false;
+    /// a reused identity with different inputs fails.
+    async fn record_output_reply(&self, reply: &GraphOutputReplyRecord) -> Result<bool, DbError>;
+
+    /// Records the first decision for an output reply and returns the stored
+    /// one; a later decision never replaces it.
+    async fn decide_output_reply(
+        &self,
+        reply_id: &str,
+        outcome: GraphOutputReplyOutcome,
+    ) -> Result<GraphOutputReplyOutcome, DbError>;
+
+    /// Marks that an output reply's decided action was attempted, or that the
+    /// reply was abandoned.
+    async fn settle_output_reply(&self, reply_id: &str) -> Result<(), DbError>;
+
+    /// Lists a session's unsettled output replies in reply order, leaving out
+    /// replies to canceled graphs and to output versions that were accepted or
+    /// replaced by a newer version. Never decides or applies them.
+    async fn unsettled_output_replies(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<GraphOutputReplyRecord>, DbError>;
 }
 
 pub(crate) struct SqliteGraphRepository {
@@ -533,6 +561,29 @@ impl GraphRepository for SqliteGraphRepository {
         evidence: &GraphEvidence,
     ) -> Result<bool, DbError> {
         self.attest(reference, evidence, "acceptance").await
+    }
+
+    async fn record_output_reply(&self, reply: &GraphOutputReplyRecord) -> Result<bool, DbError> {
+        self.save_output_reply(reply).await
+    }
+
+    async fn decide_output_reply(
+        &self,
+        reply_id: &str,
+        outcome: GraphOutputReplyOutcome,
+    ) -> Result<GraphOutputReplyOutcome, DbError> {
+        self.save_output_reply_decision(reply_id, outcome).await
+    }
+
+    async fn settle_output_reply(&self, reply_id: &str) -> Result<(), DbError> {
+        self.mark_output_reply_settled(reply_id).await
+    }
+
+    async fn unsettled_output_replies(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<GraphOutputReplyRecord>, DbError> {
+        self.pending_output_replies(session_id).await
     }
 }
 

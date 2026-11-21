@@ -174,3 +174,10 @@ Startup restores records without dispatching them. `resume_execution_graph` expl
 restarts dispatch for the saved revision, starting from the limits fixed at first launch
 minus recorded spending. Recording continuation intent alone never recreates a driver or
 replenishes budgets.
+
+A chat reply to an output awaiting acceptance is saved with the exact output version and
+execution it answered, and a read-only decision run classifies it once. A reply that a
+restart left unapplied is applied at startup and resumes its graph, as the user's
+explicit request to continue; revision guidance keeps the reply's identity, so
+redelivery never continues the node twice. A reply is not recovered once its output
+version was accepted or replaced by a newer version.

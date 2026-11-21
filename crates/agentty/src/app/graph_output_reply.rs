@@ -3,25 +3,29 @@
 //! While a pending node of a live or paused graph waits for a predecessor's
 //! output to be accepted, a composer message is a reply to that output. A
 //! paused graph is resumed first, so the reply never runs as an ordinary turn
-//! outside the graph. The reply is shown in chat, a read-only utility run on
-//! the Run Worker decides whether it accepts the output or asks for a
-//! revision, and the decided action is admitted through the command gateway
-//! for the exact inspected output version and execution. Only one reply per
-//! output is decided at a time.
+//! outside the graph. The reply is recorded once with its visible prompt,
+//! bound to the exact inspected output version and execution. A read-only
+//! utility run on the Run Worker decides whether it accepts the output or asks
+//! for a revision; the first decision is durable, and its action is admitted
+//! through the command gateway. Recovery after a restart or a project switch
+//! decides or applies every reply whose action was not attempted, resuming its
+//! paused graph first. Only one reply per output is decided at a time.
 //!
 //! Acceptance cannot carry images, so a reply with attachments always
 //! revises without a decision run. A producer without a task conversation, or
 //! whose output already reached a started dependent, cannot take revision
 //! guidance: chat can only accept its output, and a reply with attachments is
-//! rejected before echoing and keeps the draft.
+//! rejected before it is recorded and keeps the draft.
 
-use std::collections::hash_map::Entry;
-use std::num::NonZeroU64;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ag_session::{
-    ContinueGraphNodeRequest, ExecutionGraphStatus, GraphControlRequest, GraphExecutionRef,
-    GraphNode, GraphNodeContinuation, GraphResultRef, ResumeExecutionGraphRequest, SessionError,
+    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
+    GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation,
+    GraphOutputReplyOutcome, GraphResult, GraphResultRef, ResumeExecutionGraphRequest,
+    SessionError, SessionMessageKind,
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -29,14 +33,16 @@ use uuid::Uuid;
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
-use crate::app::graph_output_decision::{GraphOutputReply, GraphOutputReplyDecision};
+use crate::app::graph_output_decision::GraphOutputReplyDecision;
+use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
-use crate::app::{App, spawn};
+use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::SessionId;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::infra::db::GraphOutputReplyRecord;
 use crate::presentation::execution_graph::{
     GraphViewOutput, is_focused_review_graph, outputs_awaiting_acceptance, takes_revision_guidance,
 };
@@ -44,20 +50,12 @@ use crate::presentation::execution_graph::{
 /// Run purpose recorded for the reply decision.
 const DECISION_RUN_PURPOSE: &str = "graph output reply decision";
 
-/// A background output decision, canceled when its session stops.
-pub(super) struct OutputReplyDecision {
-    pub(super) cancellation: CancellationToken,
-    pub(super) session_id: SessionId,
-}
-
-/// Validated output a pending dependent waits to see accepted.
+/// Validated output a chat reply acts on, as inspected with that reply.
 struct AwaitingOutput {
     /// Display text of the exact output version.
     body: String,
-    /// Producer's latest execution, the target of revision guidance.
+    /// Producer execution that revision guidance targets.
     execution: GraphExecutionRef,
-    /// Graph revision the inspected snapshot belongs to.
-    graph_revision: NonZeroU64,
     /// No live driver dispatches the graph, so acting on the output needs a
     /// resume first.
     is_paused: bool,
@@ -68,6 +66,35 @@ struct AwaitingOutput {
     /// Whether the producer can still take revision guidance, with the same
     /// restrictions as the inspector's reply action.
     takes_revision_guidance: bool,
+}
+
+impl AwaitingOutput {
+    /// Captures one output version of `node` from a graph snapshot.
+    fn new(
+        graph: &ExecutionGraph,
+        progress: &ExecutionGraphProgress,
+        node: &GraphNode,
+        execution: GraphExecutionRef,
+        result: GraphResult,
+        body: String,
+    ) -> Self {
+        Self {
+            execution,
+            is_paused: progress.status == ExecutionGraphStatus::Paused,
+            node: node.clone(),
+            reference: result.reference.clone(),
+            takes_revision_guidance: takes_revision_guidance(&graph.nodes, progress, &node.id),
+            body: GraphViewOutput::new(result, body).display().to_string(),
+        }
+    }
+
+    /// Addresses the graph that owns the output at its inspected revision.
+    fn graph_control(&self) -> GraphControlRequest {
+        GraphControlRequest {
+            graph_id: self.reference.graph_id.clone(),
+            revision: self.reference.graph_revision,
+        }
+    }
 }
 
 impl App {
@@ -90,6 +117,53 @@ impl App {
         };
 
         Some(self.reply_to_graph_output(session_id, output, prompt).await)
+    }
+
+    /// Decides or applies the unsettled output replies of loaded sessions
+    /// after a restart or a project switch, at most one per output. A decided
+    /// reply reapplies its recorded decision instead of deciding again.
+    pub(crate) async fn recover_graph_output_replies(&mut self) {
+        let session_ids: Vec<SessionId> = self
+            .sessions
+            .sessions()
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        for session_id in session_ids {
+            // A failed read leaves the replies unsettled for the next start.
+            let replies = self
+                .services
+                .db()
+                .graphs()
+                .unsettled_output_replies(session_id.as_str())
+                .await
+                .unwrap_or_default();
+            for reply in replies {
+                if self.is_deciding_graph_output_reply(&reply.reference.id) {
+                    continue;
+                }
+                if let Some(output) = self.replied_graph_output(&reply).await
+                    && let Some((folder, transcript)) = self.reply_session_handles(&session_id)
+                {
+                    self.spawn_graph_output_reply_decision(
+                        &session_id,
+                        reply,
+                        output,
+                        folder,
+                        transcript,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Returns whether an earlier reply to the output is still being decided.
+    fn is_deciding_graph_output_reply(&self, result_id: &str) -> bool {
+        self.services
+            .output_reply_decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(result_id)
     }
 
     /// Finds the first awaited output, in declaration order, of the most
@@ -142,115 +216,117 @@ impl App {
                 .map_err(|error| error.to_string())?
                 .map_or_default(|stored| stored.body);
 
-            return Ok(Some(AwaitingOutput {
-                body: GraphViewOutput::new(result.clone(), body)
-                    .display()
-                    .to_string(),
-                execution: execution.clone(),
-                graph_revision: graph.revision,
-                is_paused: progress.status == ExecutionGraphStatus::Paused,
-                node: node.clone(),
-                reference: result.reference.clone(),
-                takes_revision_guidance: takes_revision_guidance(&graph.nodes, &progress, &node.id),
-            }));
+            return Ok(Some(AwaitingOutput::new(
+                graph,
+                &progress,
+                node,
+                execution.clone(),
+                result.clone(),
+                body,
+            )));
         }
 
         Ok(None)
     }
 
-    /// Echoes one reply in chat and decides it in the background. A reply
-    /// with attachments to a producer that cannot take revision guidance is
-    /// rejected up front and keeps the composer open, as is a reply to a
-    /// paused graph that cannot be resumed.
+    /// Reads the output a recorded reply answered, with the execution its
+    /// revision guidance was bound to. A failed or empty read leaves the reply
+    /// unsettled for the next recovery.
+    async fn replied_graph_output(&self, reply: &GraphOutputReplyRecord) -> Option<AwaitingOutput> {
+        let repository = self.services.db().graphs();
+        let graph = repository
+            .load_graph(&reply.reference.graph_id, None)
+            .await
+            .ok()??;
+        let progress = self.execution_graph_progress(&graph.id).await.ok()??;
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == reply.reference.node_id)?;
+        let stored = repository.load_result(&reply.reference.id).await.ok()??;
+
+        Some(AwaitingOutput::new(
+            &graph,
+            &progress,
+            node,
+            reply.execution.clone(),
+            stored.result,
+            stored.body,
+        ))
+    }
+
+    /// Records one reply with its visible prompt and decides it in the
+    /// background. A reply with attachments to a producer that cannot take
+    /// revision guidance is rejected up front and keeps the composer open, as
+    /// is a reply to a paused graph that cannot be resumed.
     async fn reply_to_graph_output(
         &mut self,
         session_id: &SessionId,
-        output: AwaitingOutput,
+        mut output: AwaitingOutput,
         prompt: &TurnPrompt,
     ) -> PromptWorkflowOutcome {
-        let Some((folder, transcript)) = self
-            .sessions
-            .session_and_handles_or_err(session_id)
-            .ok()
-            .map(|(session, handles)| (session.folder.clone(), Arc::clone(&handles.transcript)))
-        else {
+        let Some((folder, transcript)) = self.reply_session_handles(session_id) else {
             return PromptWorkflowOutcome::KeepPrompt;
         };
+        let node_id = output.node.id.clone();
         if !prompt.attachments.is_empty() && !output.takes_revision_guidance {
             return self
                 .reject_graph_output_reply(
                     session_id,
                     &format!(
-                        "`{}` cannot take images as revision guidance. Remove them to accept its \
-                         output in chat, or use `w`.",
-                        output.node.id
+                        "`{node_id}` cannot take images as revision guidance. Remove them to \
+                         accept its output in chat, or use `w`."
                     ),
                 )
                 .await;
         }
-        if output.is_paused
-            && let Err(error) = self.resume_paused_graph(&output).await
-        {
+        if self.is_deciding_graph_output_reply(&output.reference.id) {
             return self
                 .reject_graph_output_reply(
                     session_id,
                     &format!(
-                        "the paused graph could not resume to act on `{}`: {error}. Resume it \
-                         from `w`, then reply again.",
-                        output.node.id
+                        "Still deciding on your previous reply to `{node_id}`. Wait for it to \
+                         finish."
                     ),
                 )
                 .await;
         }
-        let cancellation = CancellationToken::new();
-        if let Entry::Vacant(entry) = self
+        if output.is_paused {
+            if let Err(error) = self.resume_paused_graph(&output).await {
+                return self
+                    .reject_graph_output_reply(session_id, &resume_failure(&node_id, &error))
+                    .await;
+            }
+            output.is_paused = false;
+        }
+        let reply = GraphOutputReplyRecord {
+            attachments: prompt.attachments.clone(),
+            execution: output.execution.clone(),
+            id: Uuid::new_v4().to_string(),
+            message: prompt.text.clone(),
+            outcome: None,
+            reference: output.reference.clone(),
+        };
+        if let Err(error) = self
             .services
-            .output_reply_decisions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(output.reference.id.clone())
+            .db()
+            .graphs()
+            .record_output_reply(&reply)
+            .await
         {
-            entry.insert(OutputReplyDecision {
-                cancellation: cancellation.clone(),
-                session_id: session_id.clone(),
-            });
-        } else {
             return self
-                .reject_graph_output_reply(
-                    session_id,
-                    &format!(
-                        "Still deciding on your previous reply to `{}`. Wait for it to finish.",
-                        output.node.id
-                    ),
-                )
+                .reject_graph_output_reply(session_id, &error.to_string())
                 .await;
         }
-        SessionTaskService::append_user_prompt(
+        SessionTaskService::mirror_session_transcript_message(
             &transcript,
-            self.services.db(),
             &self.services.event_sender(),
             &self.services.session_update_versions(),
             session_id,
+            SessionMessageKind::UserPrompt,
             &prompt.transcript_text(),
-        )
-        .await;
-        let decision = GraphOutputReplyDecision {
-            agent: output.node.agent,
-            folder,
-            output: format!(
-                "Node `{}` ({}) produced output `{}`:\n\n{}",
-                output.node.id, output.node.objective, output.reference.output_name, output.body
-            ),
-            reply: prompt.text.clone(),
-        };
-        self.spawn_graph_output_reply_decision(
-            session_id,
-            decision,
-            output,
-            prompt,
-            transcript,
-            cancellation,
         );
+        self.spawn_graph_output_reply_decision(session_id, reply, output, folder, transcript);
 
         PromptWorkflowOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -267,10 +343,7 @@ impl App {
             CommandDelivery::Admission {
                 request: SessionMutation::ResumeExecutionGraph {
                     request: ResumeExecutionGraphRequest {
-                        graph: GraphControlRequest {
-                            graph_id: output.reference.graph_id.clone(),
-                            revision: output.graph_revision,
-                        },
+                        graph: output.graph_control(),
                     },
                 },
                 response_tx: None,
@@ -279,20 +352,43 @@ impl App {
         .await
     }
 
-    /// Decides with the producer's captured selection, then admits the
-    /// action for the exact inspected output and execution. An output or
-    /// execution that changed meanwhile rejects the action instead of
-    /// retargeting it. Stopping the session abandons the reply without
-    /// acting on it.
+    /// Decides with the producer's captured selection, session ownership, and
+    /// a bounded provider budget, then admits the action for the exact
+    /// replied-to output and execution. An output or execution that changed
+    /// meanwhile rejects the action instead of retargeting it. Stopping the
+    /// session abandons a reply whose action was not attempted, decided or
+    /// not; shutdown leaves it for restart recovery.
     fn spawn_graph_output_reply_decision(
         &self,
         session_id: &SessionId,
-        decision: GraphOutputReplyDecision,
+        reply: GraphOutputReplyRecord,
         output: AwaitingOutput,
-        prompt: &TurnPrompt,
+        folder: PathBuf,
         transcript: Arc<Mutex<SessionTranscript>>,
-        cancellation: CancellationToken,
     ) {
+        let cancellation = CancellationToken::new();
+        let is_abandoned = Arc::new(AtomicBool::new(false));
+        self.services
+            .output_reply_decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                reply.reference.id.clone(),
+                ReplyDecision {
+                    cancellation: cancellation.clone(),
+                    is_abandoned: Arc::clone(&is_abandoned),
+                    session_id: session_id.clone(),
+                },
+            );
+        let decision = GraphOutputReplyDecision {
+            agent: output.node.agent,
+            folder,
+            output: format!(
+                "Node `{}` ({}) produced output `{}`:\n\n{}",
+                output.node.id, output.node.objective, output.reference.output_name, output.body
+            ),
+            reply: reply.message.clone(),
+        };
         let run_client = ag_worker::scoped_client(
             self.services.run_client(),
             ag_worker::RunScope {
@@ -310,70 +406,59 @@ impl App {
             .session_handles_or_err(&session_id)
             .ok()
             .map(|handles| Arc::clone(&handles.status));
-        let attachments = prompt.attachments.clone();
         let activity = services.begin_graph_activity(&session_id, status);
-        spawn::spawn_detached(async move {
-            activity.record(&services).await;
-            let node_id = output.node.id.clone();
-            let reply = if attachments.is_empty() {
-                decision.decide(run_client.as_ref()).await
-            } else {
-                GraphOutputReply::Revise
-            };
-            let result = match reply {
-                _ if cancellation.is_cancelled() => Err(SessionError::Operation(format!(
-                    "the reply decision for `{node_id}` was canceled. Reply again to act on its \
-                     output."
-                ))),
-                GraphOutputReply::Accept => handle
-                    .accept_execution_graph_result(output.reference.clone())
-                    .await
-                    .map(|()| {
-                        format!(
-                            "Accepted `{}` from `{node_id}` · continuing",
-                            output.reference.output_name
-                        )
-                    }),
-                GraphOutputReply::Revise if !output.takes_revision_guidance => {
-                    Err(SessionError::Operation(format!(
-                        "`{node_id}` cannot take revision guidance. Reply with clear acceptance, \
-                         or accept or cancel it from `w`."
-                    )))
+        self.services
+            .track_cleanup_task(spawn::spawn_detached(async move {
+                activity.record(&services).await;
+                let outcome = match reply.outcome {
+                    Some(outcome) => outcome,
+                    None if reply.attachments.is_empty() => {
+                        decision.decide(run_client.as_ref()).await
+                    }
+                    None => GraphOutputReplyOutcome::Revise,
+                };
+                let notice = if cancellation.is_cancelled() {
+                    None
+                } else {
+                    services
+                        .apply_output_reply(&handle, &cancellation, &reply, &output, outcome)
+                        .await
+                };
+                let notice = match notice {
+                    // The action was not attempted and the session was
+                    // stopped, whether or not a decision was recorded.
+                    None if is_abandoned.load(Ordering::Acquire) => {
+                        // A failed write leaves the reply for restart recovery.
+                        let _ = services.db().graphs().settle_output_reply(&reply.id).await;
+
+                        Some(reply_failure(&format!(
+                            "the reply decision for `{}` was canceled. Reply again to act on its \
+                             output.",
+                            output.node.id
+                        )))
+                    }
+                    notice => notice,
+                };
+                services
+                    .output_reply_decisions
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&reply.reference.id);
+                // A reply left for recovery reports once its action is
+                // attempted.
+                if let Some(notice) = notice {
+                    SessionTaskService::append_workflow_notice(
+                        &transcript,
+                        services.db(),
+                        &services.event_sender(),
+                        &services.session_update_versions(),
+                        &session_id,
+                        &notice,
+                    )
+                    .await;
                 }
-                GraphOutputReply::Revise => handle
-                    .continue_execution_graph_node(ContinueGraphNodeRequest {
-                        action_id: Uuid::new_v4().to_string(),
-                        execution: output.execution.clone(),
-                        graph_id: output.reference.graph_id.clone(),
-                        kind: GraphNodeContinuation::Reply {
-                            attachments,
-                            message: decision.reply.clone(),
-                        },
-                        node_id: node_id.clone(),
-                        revision: output.graph_revision,
-                    })
-                    .await
-                    .map(|()| format!("Revision guidance sent to `{node_id}` · continuing")),
-            };
-            services
-                .output_reply_decisions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&output.reference.id);
-            let notice = result.unwrap_or_else(|error| {
-                TranscriptNotice::ReplyError.format(format!("Graph output: {error}"))
-            });
-            SessionTaskService::append_workflow_notice(
-                &transcript,
-                services.db(),
-                &services.event_sender(),
-                &services.session_update_versions(),
-                &session_id,
-                &notice,
-            )
-            .await;
-            activity.finish(&services).await;
-        });
+                activity.finish(&services).await;
+            }));
     }
 
     /// Reports a rejected reply and keeps the composer open.
@@ -391,6 +476,130 @@ impl App {
 
         PromptWorkflowOutcome::KeepPrompt
     }
+}
+
+impl AppServices {
+    /// Records the first decision and admits its action for the replied-to
+    /// output, then settles the reply whether or not the attempted action
+    /// succeeded, and returns the notice to show.
+    ///
+    /// The session runtime can stop before it answers. The action then was
+    /// not attempted, so the reply stays unsettled and `None` is returned:
+    /// recovery applies the recorded decision unless the caller abandons the
+    /// reply with its stopped session. A reply recovered at startup waits for
+    /// the runtime to accept commands; cancellation ends that wait.
+    async fn apply_output_reply(
+        &self,
+        handle: &SessionRuntimeHandle,
+        cancellation: &CancellationToken,
+        reply: &GraphOutputReplyRecord,
+        output: &AwaitingOutput,
+        outcome: GraphOutputReplyOutcome,
+    ) -> Option<String> {
+        let graphs = self.db().graphs();
+        // An earlier recorded decision wins over this one.
+        let outcome = match graphs.decide_output_reply(&reply.id, outcome).await {
+            Ok(recorded) => recorded,
+            Err(error) => return Some(reply_failure(&error.to_string())),
+        };
+        tokio::select! {
+            biased;
+            () = handle.wait_until_available() => {}
+            () = cancellation.cancelled() => return None,
+        }
+        let result = Self::act_on_graph_output(handle, reply, output, outcome).await;
+        if result
+            .as_ref()
+            .is_err_and(SessionRuntimeHandle::is_unavailable)
+        {
+            return None;
+        }
+        let settled = graphs
+            .settle_output_reply(&reply.id)
+            .await
+            .map_err(|error| error.to_string());
+
+        Some(
+            result
+                .map_err(|error| error.to_string())
+                .and_then(|success| settled.map(|()| success))
+                .unwrap_or_else(|error| reply_failure(&error)),
+        )
+    }
+
+    /// Admits the decided action for the exact replied-to output and
+    /// execution, resuming a recovered reply's paused graph first, and
+    /// returns the success notice.
+    ///
+    /// Revision guidance reuses the reply identity as its action identity,
+    /// so redelivery after an interrupted settlement does not continue the
+    /// node twice.
+    async fn act_on_graph_output(
+        handle: &SessionRuntimeHandle,
+        reply: &GraphOutputReplyRecord,
+        output: &AwaitingOutput,
+        outcome: GraphOutputReplyOutcome,
+    ) -> Result<String, SessionError> {
+        let node_id = &output.node.id;
+        if outcome == GraphOutputReplyOutcome::Revise && !output.takes_revision_guidance {
+            return Err(SessionError::Operation(format!(
+                "`{node_id}` cannot take revision guidance. Reply with clear acceptance, or \
+                 accept or cancel it from `w`."
+            )));
+        }
+        if output.is_paused {
+            handle
+                .resume_execution_graph(ResumeExecutionGraphRequest {
+                    graph: output.graph_control(),
+                })
+                .await
+                .map_err(|error| {
+                    if SessionRuntimeHandle::is_unavailable(&error) {
+                        error
+                    } else {
+                        SessionError::Operation(resume_failure(node_id, &error))
+                    }
+                })?;
+        }
+        match outcome {
+            GraphOutputReplyOutcome::Accept => handle
+                .accept_execution_graph_result(output.reference.clone())
+                .await
+                .map(|()| {
+                    format!(
+                        "Accepted `{}` from `{node_id}` · continuing",
+                        output.reference.output_name
+                    )
+                }),
+            GraphOutputReplyOutcome::Revise => handle
+                .continue_execution_graph_node(ContinueGraphNodeRequest {
+                    action_id: reply.id.clone(),
+                    execution: reply.execution.clone(),
+                    graph_id: reply.reference.graph_id.clone(),
+                    kind: GraphNodeContinuation::Reply {
+                        attachments: reply.attachments.clone(),
+                        message: reply.message.clone(),
+                    },
+                    node_id: node_id.clone(),
+                    revision: reply.reference.graph_revision,
+                })
+                .await
+                .map(|()| format!("Revision guidance sent to `{node_id}` · continuing")),
+        }
+    }
+}
+
+/// Describes a paused graph that could not resume for a reply.
+fn resume_failure(node_id: &str, error: &SessionError) -> String {
+    format!(
+        "the paused graph could not resume to act on `{node_id}`: {error}. Resume it from `w`, \
+         then reply again."
+    )
+}
+
+/// Describes a reply whose action was not applied.
+fn reply_failure(error: &str) -> String {
+    TranscriptNotice::ReplyError.format(format!("Graph output: {error}"))
 }
 
 #[cfg(test)]

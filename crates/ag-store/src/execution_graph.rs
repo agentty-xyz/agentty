@@ -6,6 +6,7 @@ mod dispatch;
 mod execution;
 mod lifecycle;
 mod model;
+mod output_reply;
 mod progress;
 mod proposal;
 mod proposal_reply;
@@ -14,8 +15,8 @@ mod result;
 mod task_turn;
 
 pub use model::{
-    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphProposalReplyRecord,
-    StoredGraphEvidence, StoredGraphResult,
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
+    GraphProposalReplyRecord, StoredGraphEvidence, StoredGraphResult,
 };
 pub use proposal::GraphProposalRepository;
 #[cfg(any(test, feature = "test-utils"))]
