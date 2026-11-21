@@ -409,9 +409,10 @@ tracking queries fail their phase while the best-effort snapshot is still emitte
 superseded passes end canceled. A failed `git.fetch` records a content-free `error.type`
 of `auth`, `network`, `timeout`, or `other` with its consecutive failure count, and
 further fetches for that project back off exponentially; a pass that skips its fetch
-records `agentty.sync.fetch_backed_off` instead of a `git.fetch` phase. Manual sync runs
-under `project.sync_main`, which parents its review refresh and conflict-assistance
-utilities. The foreground loop measures busy time from each wake-up through the
-following draw with the injected clock and exports `ui.slow_cycle` only when it reaches
-50 ms, recording per-phase milliseconds, the handled event count, and the dominant
-`agentty.ui.phase`.
+records `agentty.sync.fetch_backed_off` instead of a `git.fetch` phase.
+`sync.branch_status` reuses a session's ahead/behind and conflict comparison while its
+branch and base tips are unchanged. Manual sync runs under `project.sync_main`, which
+parents its review refresh and conflict-assistance utilities. The foreground loop
+measures busy time from each wake-up through the following draw with the injected clock
+and exports `ui.slow_cycle` only when it reaches 50 ms, recording per-phase
+milliseconds, the handled event count, and the dominant `agentty.ui.phase`.

@@ -473,11 +473,12 @@ pub trait GitClient: Send + Sync {
         target_branch: String,
     ) -> GitFuture<Result<bool, GitError>>;
 
-    /// Reads ahead/behind snapshots for all local branches that track an
-    /// upstream.
+    /// Reads the tip commit and upstream ahead/behind snapshot of every local
+    /// branch in one query.
     ///
-    /// The returned map is keyed by local branch name and stores `None` when
-    /// a branch has no tracked upstream or its upstream is gone.
+    /// The returned map is keyed by unambiguous short branch name. Its
+    /// upstream status is `None` when a branch has no tracked upstream or its
+    /// upstream is gone.
     ///
     /// # Errors
     /// Returns an error when branch tracking information cannot be queried.

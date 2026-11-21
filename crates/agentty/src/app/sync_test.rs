@@ -7,18 +7,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_forge::{ForgeKind, MockReviewRequestClient, ReviewRequestSummary};
-use ag_git::{GitClient, GitError, MockGitClient};
+use ag_git::{BranchTrackingStatus, GitClient, GitError, MockGitClient};
 use ag_telemetry::KeyValue;
+use mockall::Sequence;
 use opentelemetry::global;
 use opentelemetry::trace::SpanId;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext, ProjectSyncPhase,
-    ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewPass, ReviewRequestPassUpdate,
-    ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext, SyncHandle, SyncMainCompletion,
-    SyncMainRequest, SyncOrchestrator, review_request_repo_url, session_git_statuses,
+    BaseComparisonCache, CommitPair, FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext,
+    ProjectSyncPhase, ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewPass,
+    ReviewRequestPassUpdate, ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext,
+    SyncHandle, SyncMainCompletion, SyncMainRequest, SyncOrchestrator, review_request_repo_url,
     sync_review_request_status, sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
@@ -78,6 +79,31 @@ fn review_request_sync_target(
         is_watched: false,
         linked_review_request: linked,
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        session_id: session_id.into(),
+    }
+}
+
+/// Builds one branch-tracking entry for `branch_name` pointing at
+/// `commit_hash`.
+fn tracked_branch(
+    branch_name: &str,
+    commit_hash: &str,
+    upstream_status: Option<(u32, u32)>,
+) -> (String, BranchTrackingStatus) {
+    (
+        branch_name.to_string(),
+        BranchTrackingStatus {
+            commit_hash: commit_hash.to_string(),
+            upstream_status,
+        },
+    )
+}
+
+/// Builds one git-status target comparing `wt/<session_id>` with `main`.
+fn session_git_status_target(session_id: &str) -> SessionGitStatusTarget {
+    SessionGitStatusTarget {
+        base_branch: "main".to_string(),
+        branch_name: format!("wt/{session_id}"),
         session_id: session_id.into(),
     }
 }
@@ -168,6 +194,7 @@ fn orchestrator_for(
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),
@@ -693,6 +720,7 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),
@@ -853,6 +881,7 @@ async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let mut orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),
@@ -901,6 +930,7 @@ async fn record_review_sync_outcome_success_resets_backoff() {
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let mut orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),
@@ -1091,13 +1121,13 @@ async fn collect_review_request_updates_skips_idle_targets_unless_forced() {
 
 #[tokio::test]
 /// Verifies session git-status selection maps branch comparisons back to
-/// session ids.
+/// session ids, comparing by name when the base is not a local branch.
 async fn session_git_statuses_collects_all_target_statuses() {
     // Arrange
     let repo_root = Path::new("/tmp/sync-session-statuses");
     let branch_tracking_statuses = HashMap::from([
-        ("wt/session-a".to_string(), Some((7, 0))),
-        ("wt/session-b".to_string(), Some((0, 4))),
+        tracked_branch("wt/session-a", "a1", Some((7, 0))),
+        tracked_branch("wt/session-b", "b1", Some((0, 4))),
     ]);
     let session_git_status_targets = vec![
         SessionGitStatusTarget {
@@ -1135,13 +1165,14 @@ async fn session_git_statuses_collects_all_target_statuses() {
         .returning(|_, _, _| Box::pin(async { Ok(true) }));
 
     // Act
-    let statuses = session_git_statuses(
-        &branch_tracking_statuses,
-        repo_root,
-        &session_git_status_targets,
-        &mock_git_client,
-    )
-    .await;
+    let statuses = BaseComparisonCache::default()
+        .session_git_statuses(
+            &branch_tracking_statuses,
+            repo_root,
+            &session_git_status_targets,
+            &mock_git_client,
+        )
+        .await;
 
     // Assert
     assert_eq!(
@@ -1187,13 +1218,14 @@ async fn session_git_statuses_keeps_failed_targets_as_none() {
         });
 
     // Act
-    let statuses = session_git_statuses(
-        &branch_tracking_statuses,
-        repo_root,
-        &session_git_status_targets,
-        &mock_git_client,
-    )
-    .await;
+    let statuses = BaseComparisonCache::default()
+        .session_git_statuses(
+            &branch_tracking_statuses,
+            repo_root,
+            &session_git_status_targets,
+            &mock_git_client,
+        )
+        .await;
 
     // Assert
     assert_eq!(
@@ -1208,23 +1240,24 @@ async fn session_git_statuses_keeps_failed_targets_as_none() {
 
 #[tokio::test]
 /// Verifies a failed conflict probe stays unknown without dropping valid
-/// ahead/behind information.
+/// ahead/behind information, and is retried on the next pass instead of
+/// being reused.
 async fn session_git_statuses_keeps_failed_conflict_probe_unknown() {
     // Arrange
     let repo_root = Path::new("/tmp/sync-session-conflict-error");
-    let session_git_status_targets = vec![SessionGitStatusTarget {
-        base_branch: "main".to_string(),
-        branch_name: "wt/session-a".to_string(),
-        session_id: "session-a".into(),
-    }];
+    let branch_tracking_statuses = HashMap::from([
+        tracked_branch("main", "m1", None),
+        tracked_branch("wt/session-a", "a1", None),
+    ]);
+    let session_git_status_targets = vec![session_git_status_target("session-a")];
     let mut mock_git_client = MockGitClient::new();
     mock_git_client
         .expect_get_ref_ahead_behind()
-        .once()
+        .times(2)
         .returning(|_, _, _| Box::pin(async { Ok((1, 2)) }));
     mock_git_client
         .expect_has_merge_conflicts()
-        .once()
+        .times(2)
         .returning(|_, _, _| {
             Box::pin(async {
                 Err(GitError::OutputParse(
@@ -1232,24 +1265,156 @@ async fn session_git_statuses_keeps_failed_conflict_probe_unknown() {
                 ))
             })
         });
+    let mut base_comparison_cache = BaseComparisonCache::default();
 
     // Act
-    let statuses = session_git_statuses(
-        &HashMap::new(),
-        repo_root,
-        &session_git_status_targets,
-        &mock_git_client,
-    )
-    .await;
+    for _ in 0..2 {
+        let statuses = base_comparison_cache
+            .session_git_statuses(
+                &branch_tracking_statuses,
+                repo_root,
+                &session_git_status_targets,
+                &mock_git_client,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(
+            statuses.get("session-a"),
+            Some(&SessionGitStatus {
+                base_status: Some((1, 2)),
+                has_merge_conflict: None,
+                remote_status: None,
+            })
+        );
+    }
+    assert!(base_comparison_cache.comparisons.is_empty());
+}
+
+#[tokio::test]
+/// Verifies unchanged commit pairs are compared once across passes and
+/// shared between sessions, and branches at their base tip skip Git.
+async fn session_git_statuses_reuses_unchanged_commit_comparisons() {
+    // Arrange
+    let repo_root = Path::new("/tmp/sync-session-cache");
+    let branch_tracking_statuses = HashMap::from([
+        tracked_branch("main", "m1", None),
+        tracked_branch("wt/session-a", "a1", Some((1, 0))),
+        tracked_branch("wt/session-b", "a1", None),
+        tracked_branch("wt/session-c", "m1", None),
+    ]);
+    let session_git_status_targets = vec![
+        session_git_status_target("session-a"),
+        session_git_status_target("session-b"),
+        session_git_status_target("session-c"),
+    ];
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_get_ref_ahead_behind()
+        .once()
+        .withf(|repo_path, left_ref, right_ref| {
+            repo_path == Path::new("/tmp/sync-session-cache")
+                && left_ref == "a1"
+                && right_ref == "m1"
+        })
+        .returning(|_, _, _| Box::pin(async { Ok((2, 1)) }));
+    mock_git_client
+        .expect_has_merge_conflicts()
+        .once()
+        .withf(|_, source_branch, target_branch| source_branch == "a1" && target_branch == "m1")
+        .returning(|_, _, _| Box::pin(async { Ok(true) }));
+    let mut base_comparison_cache = BaseComparisonCache::default();
+    let diverged = SessionGitStatus {
+        base_status: Some((2, 1)),
+        has_merge_conflict: Some(true),
+        remote_status: None,
+    };
+
+    // Act
+    for _ in 0..2 {
+        let statuses = base_comparison_cache
+            .session_git_statuses(
+                &branch_tracking_statuses,
+                repo_root,
+                &session_git_status_targets,
+                &mock_git_client,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(
+            statuses.get("session-a"),
+            Some(&SessionGitStatus {
+                remote_status: Some((1, 0)),
+                ..diverged
+            })
+        );
+        assert_eq!(statuses.get("session-b"), Some(&diverged));
+        assert_eq!(
+            statuses.get("session-c"),
+            Some(&SessionGitStatus {
+                base_status: Some((0, 0)),
+                has_merge_conflict: Some(false),
+                remote_status: None,
+            })
+        );
+    }
+}
+
+#[tokio::test]
+/// Verifies moved commits and a different repository are compared again,
+/// and only the latest pass's commit pairs stay cached.
+async fn session_git_statuses_recompares_moved_commits_and_other_repositories() {
+    // Arrange
+    let session_git_status_targets = vec![session_git_status_target("session-a")];
+    let mut mock_git_client = MockGitClient::new();
+    let mut sequence = Sequence::new();
+    for (repo_root, head_commit, ahead) in [
+        ("/tmp/sync-repo-a", "a1", 1),
+        ("/tmp/sync-repo-a", "a2", 2),
+        ("/tmp/sync-repo-b", "a2", 3),
+    ] {
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(move |repo_path, left_ref, right_ref| {
+                repo_path == Path::new(repo_root) && left_ref == head_commit && right_ref == "m1"
+            })
+            .returning(move |_, _, _| Box::pin(async move { Ok((ahead, 0)) }));
+    }
+    let mut base_comparison_cache = BaseComparisonCache::default();
+    let mut base_statuses = Vec::new();
+
+    // Act
+    for (repo_root, head_commit) in [
+        ("/tmp/sync-repo-a", "a1"),
+        ("/tmp/sync-repo-a", "a2"),
+        ("/tmp/sync-repo-b", "a2"),
+    ] {
+        let branch_tracking_statuses = HashMap::from([
+            tracked_branch("main", "m1", None),
+            tracked_branch("wt/session-a", head_commit, None),
+        ]);
+        let statuses = base_comparison_cache
+            .session_git_statuses(
+                &branch_tracking_statuses,
+                Path::new(repo_root),
+                &session_git_status_targets,
+                &mock_git_client,
+            )
+            .await;
+        base_statuses.push(statuses["session-a"].base_status);
+    }
 
     // Assert
+    assert_eq!(base_statuses, [Some((1, 0)), Some((2, 0)), Some((3, 0))]);
     assert_eq!(
-        statuses.get("session-a"),
-        Some(&SessionGitStatus {
-            base_status: Some((1, 2)),
-            has_merge_conflict: None,
-            remote_status: None,
-        })
+        base_comparison_cache.comparisons.keys().collect::<Vec<_>>(),
+        [&CommitPair {
+            base_commit: "m1".to_string(),
+            head_commit: "a2".to_string(),
+        }]
     );
 }
 
@@ -1663,6 +1828,7 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let mut orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),
@@ -1734,7 +1900,9 @@ async fn refresh_pass_emits_review_updates_only_when_requested() {
     mock_git_client
         .expect_branch_tracking_statuses()
         .times(2)
-        .returning(|_| Box::pin(async { Ok(HashMap::from([("main".to_string(), Some((1, 0)))])) }));
+        .returning(|_| {
+            Box::pin(async { Ok(HashMap::from([tracked_branch("main", "m1", Some((1, 0)))])) })
+        });
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async {
             Err(GitError::CommandFailed {
@@ -1747,20 +1915,8 @@ async fn refresh_pass_emits_review_updates_only_when_requested() {
         git_client: Arc::new(mock_git_client),
         ..sync_context_fixture(3, vec![review_request_sync_target("session-1", None)])
     };
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(context);
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx,
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        tick_index: 0,
-    };
+    let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
     crate::test_support::enable_tracing_log_fallback();
 
     // Act
@@ -2048,6 +2204,7 @@ async fn collect_review_request_pass_updates_loads_configuration_only_for_watche
     let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
     let mut orchestrator = SyncOrchestrator {
         app_event_tx,
+        base_comparison_cache: BaseComparisonCache::default(),
         command_rx,
         context_rx,
         fetch_failures: HashMap::new(),

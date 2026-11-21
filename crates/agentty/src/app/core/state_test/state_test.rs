@@ -574,7 +574,15 @@ async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
         .expect_branch_tracking_statuses()
         .times(1)
         .returning(|_| {
-            Box::pin(async { Ok(HashMap::from([("main".to_string(), Some((2_u32, 1_u32)))])) })
+            Box::pin(async {
+                Ok(HashMap::from([(
+                    "main".to_string(),
+                    ag_git::BranchTrackingStatus {
+                        commit_hash: "main-tip".to_string(),
+                        upstream_status: Some((2, 1)),
+                    },
+                )]))
+            })
         });
     install_mock_git_client(&mut app, mock_git_client);
 
