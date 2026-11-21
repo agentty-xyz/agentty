@@ -518,6 +518,10 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
     for path in hidden_directories {
         command.arg("--remount-ro").arg(path);
     }
+    eprintln!(
+        "DIAGNOSTIC hidden={:?} files={hidden_files:?}",
+        configuration.hidden_paths
+    );
     for path in hidden_files {
         command.arg("--ro-bind").arg("/dev/null").arg(path);
     }
