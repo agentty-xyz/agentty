@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use mockall::Sequence;
 use mockall::predicate::eq;
 use tokio::sync::mpsc;
@@ -127,6 +129,58 @@ async fn test_spawn_event_reader_with_source_forwards_event_to_channel() {
 
     // Assert
     assert!(matches!(received_event, Event::Key(_)));
+}
+
+/// Verifies the reader forwards wheel reports as arrow keys and drops other
+/// mouse reports.
+#[test]
+fn test_spawn_event_reader_with_source_maps_wheel_to_arrow_keys() {
+    // Arrange
+    let mut mock_source = MockEventSource::new();
+    let mut sequence = Sequence::new();
+    for kind in [
+        MouseEventKind::ScrollUp,
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::ScrollDown,
+    ] {
+        mock_source
+            .expect_poll()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(true));
+        mock_source
+            .expect_read()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move || {
+                Ok(Event::Mouse(MouseEvent {
+                    column: 4,
+                    kind,
+                    modifiers: KeyModifiers::NONE,
+                    row: 2,
+                }))
+            });
+    }
+    mock_source
+        .expect_poll()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| Err(io::Error::new(ErrorKind::BrokenPipe, "stop")));
+    let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Act
+    spawn_event_reader_with_source(event_source, event_tx, shutdown)
+        .join()
+        .expect("failed to join event reader thread");
+    let mut key_codes = Vec::new();
+    while let Ok(Ok(Event::Key(key))) = event_rx.try_recv() {
+        key_codes.push(key.code);
+    }
+
+    // Assert
+    assert_eq!(key_codes, vec![KeyCode::Up, KeyCode::Down]);
 }
 
 /// Verifies the reader exits cleanly when the event receiver is already

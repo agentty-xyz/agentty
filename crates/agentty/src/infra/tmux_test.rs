@@ -11,13 +11,24 @@ use mockall::predicate::eq;
 use tempfile::tempdir;
 
 use super::{
-    MockTmuxCommandRunner, ProcessTmuxCommandRunner, RealTmuxClient, TmuxClient, TmuxCommandOutput,
-    has_tmux_environment,
+    MockTmuxCommandRunner, MockTmuxServerOptionRunner, ProcessTmuxCommandRunner,
+    ProcessTmuxServerOptionRunner, RealTmuxClient, TmuxClient, TmuxCommandOutput, TmuxKeyReporting,
+    has_tmux_environment, prepare_key_reporting, prepare_key_reporting_with_runner,
 };
 
 /// Marks the child test process that runs [`RealTmuxClient`] against a fake
 /// `tmux` on an isolated `PATH`; its value is the session folder to open.
 const REAL_TMUX_CLIENT_CHILD_ENV: &str = "AGENTTY_TEST_REAL_TMUX_CLIENT_CHILD";
+/// Marks the child test process that runs [`prepare_key_reporting`] against a
+/// fake `tmux` on an isolated `PATH`; its value is the expected result.
+const KEY_REPORTING_CHILD_ENV: &str = "AGENTTY_TEST_TMUX_KEY_REPORTING_CHILD";
+
+/// Fake `tmux` that logs its arguments and reports default server options,
+/// or fails every call when `AGENTTY_TEST_TMUX_FAIL` is set.
+const FAKE_SERVER_OPTION_TMUX: &str =
+    "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$AGENTTY_TEST_TMUX_LOG\"\n[ -n \
+     \"$AGENTTY_TEST_TMUX_FAIL\" ] && exit 1\ncase \"$*\" in\n  'show-options -sv extended-keys') \
+     echo off ;;\n  'show-options -sv extended-keys-format') echo xterm ;;\nesac\n";
 
 #[test]
 fn tmux_environment_detects_nonempty_tmux_variable() {
@@ -350,6 +361,229 @@ fn send_enter_key_command_builds_expected_tmux_invocation() {
             "C-m".to_string(),
         ]
     );
+}
+
+#[test]
+fn prepare_key_reporting_switches_default_tmux_options_to_csi_u() {
+    // Arrange
+    let mut runner = MockTmuxServerOptionRunner::new();
+    let mut sequence = Sequence::new();
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys"))
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| Some("off".to_string()));
+    runner
+        .expect_set_server_option()
+        .with(eq("extended-keys"), eq("on"))
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_, _| true);
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys-format"))
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| Some("xterm".to_string()));
+    runner
+        .expect_set_server_option()
+        .with(eq("extended-keys-format"), eq("csi-u"))
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_, _| true);
+
+    // Act
+    let key_reporting = prepare_key_reporting_with_runner(&runner);
+
+    // Assert
+    assert_eq!(key_reporting, TmuxKeyReporting::CsiU);
+}
+
+#[test]
+fn prepare_key_reporting_keeps_configured_csi_u_without_changes() {
+    // Arrange
+    let mut runner = MockTmuxServerOptionRunner::new();
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys"))
+        .once()
+        .returning(|_| Some("always".to_string()));
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys-format"))
+        .once()
+        .returning(|_| Some("csi-u".to_string()));
+    runner.expect_set_server_option().never();
+
+    // Act
+    let key_reporting = prepare_key_reporting_with_runner(&runner);
+
+    // Assert
+    assert_eq!(key_reporting, TmuxKeyReporting::CsiU);
+}
+
+#[test]
+fn prepare_key_reporting_reports_unsupported_when_format_change_fails() {
+    // Arrange
+    let mut runner = MockTmuxServerOptionRunner::new();
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys"))
+        .once()
+        .returning(|_| Some("on".to_string()));
+    runner
+        .expect_show_server_option()
+        .with(eq("extended-keys-format"))
+        .once()
+        .returning(|_| Some("xterm".to_string()));
+    runner
+        .expect_set_server_option()
+        .with(eq("extended-keys-format"), eq("csi-u"))
+        .once()
+        .returning(|_, _| false);
+
+    // Act
+    let key_reporting = prepare_key_reporting_with_runner(&runner);
+
+    // Assert
+    assert_eq!(key_reporting, TmuxKeyReporting::Unsupported);
+}
+
+#[test]
+fn prepare_key_reporting_assumes_csi_u_without_format_option() {
+    // Arrange
+    let mut runner = MockTmuxServerOptionRunner::new();
+    runner
+        .expect_show_server_option()
+        .times(2)
+        .returning(|_| None);
+    runner.expect_set_server_option().never();
+
+    // Act
+    let key_reporting = prepare_key_reporting_with_runner(&runner);
+
+    // Assert
+    assert_eq!(key_reporting, TmuxKeyReporting::CsiU);
+}
+
+#[test]
+fn server_option_commands_build_expected_tmux_invocations() {
+    // Arrange, Act
+    let show_command = ProcessTmuxServerOptionRunner::show_server_option_command("extended-keys");
+    let set_command =
+        ProcessTmuxServerOptionRunner::set_server_option_command("extended-keys-format", "csi-u");
+
+    // Assert
+    assert_eq!(
+        std_command_parts(&show_command),
+        (
+            "tmux".to_string(),
+            vec![
+                "show-options".to_string(),
+                "-sv".to_string(),
+                "extended-keys".to_string(),
+            ]
+        )
+    );
+    assert_eq!(
+        std_command_parts(&set_command),
+        (
+            "tmux".to_string(),
+            vec![
+                "set-option".to_string(),
+                "-s".to_string(),
+                "extended-keys-format".to_string(),
+                "csi-u".to_string(),
+            ]
+        )
+    );
+}
+
+#[test]
+fn prepare_key_reporting_runs_tmux_from_path_only_inside_tmux() {
+    if let Some(expected) = env::var_os(KEY_REPORTING_CHILD_ENV) {
+        // Arrange, Act
+        let key_reporting = prepare_key_reporting();
+
+        // Assert
+        assert_eq!(format!("{key_reporting:?}"), expected.to_string_lossy());
+
+        return;
+    }
+
+    // Arrange
+    let command_dir = tempdir().expect("failed to create fake tmux directory");
+    let tmux_path = command_dir.path().join("tmux");
+    fs::write(&tmux_path, FAKE_SERVER_OPTION_TMUX).expect("failed to write fake tmux command");
+    let mut permissions = fs::metadata(&tmux_path)
+        .expect("failed to load fake tmux metadata")
+        .permissions();
+    permissions.set_mode(0o750);
+    fs::set_permissions(&tmux_path, permissions).expect("failed to make fake tmux executable");
+    let cases = [
+        ("outside", "", None, "Outside", ""),
+        (
+            "default",
+            "/tmp/tmux-501/default,1,0",
+            None,
+            "CsiU",
+            "show-options -sv extended-keys\nset-option -s extended-keys on\nshow-options -sv \
+             extended-keys-format\nset-option -s extended-keys-format csi-u\n",
+        ),
+        (
+            "failing",
+            "/tmp/tmux-501/default,1,0",
+            Some("1"),
+            "CsiU",
+            "show-options -sv extended-keys\nshow-options -sv extended-keys-format\n",
+        ),
+    ];
+
+    for (name, tmux_variable, fail, expected, expected_log) in cases {
+        let invocation_log = command_dir.path().join(format!("{name}.log"));
+        let mut child = std::process::Command::new(
+            env::current_exe().expect("failed to resolve current test binary"),
+        );
+        child
+            .arg("--exact")
+            .arg("infra::tmux::tests::prepare_key_reporting_runs_tmux_from_path_only_inside_tmux")
+            .arg("--nocapture")
+            .env("PATH", command_dir.path())
+            .env("TMUX", tmux_variable)
+            .env("AGENTTY_TEST_TMUX_LOG", &invocation_log)
+            .env(KEY_REPORTING_CHILD_ENV, expected)
+            .env_remove("AGENTTY_TEST_TMUX_FAIL");
+        if let Some(fail) = fail {
+            child.env("AGENTTY_TEST_TMUX_FAIL", fail);
+        }
+
+        // Act
+        let output = child.output().expect("failed to run isolated tmux test");
+
+        // Assert
+        assert!(
+            output.status.success(),
+            "isolated {name} key-reporting test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(&invocation_log).unwrap_or_default(),
+            expected_log,
+            "{name}"
+        );
+    }
+}
+
+/// Extracts one synchronous command executable and arguments.
+fn std_command_parts(command: &std::process::Command) -> (String, Vec<String>) {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let arguments = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+
+    (program, arguments)
 }
 
 /// Extracts one command executable and arguments for exact CLI assertions.

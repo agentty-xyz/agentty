@@ -428,3 +428,38 @@ async fn help_overlay_toggle() -> E2eResult {
 
     Ok(())
 }
+
+/// Mouse-wheel reports move menu selection like the arrow keys they replace,
+/// so `tmux` panes with mouse reporting keep wheel navigation.
+#[tokio::test]
+async fn mouse_wheel_moves_menu_selection() -> E2eResult {
+    // Arrange
+    let wheel_down = "\x1b[<65;10;10M";
+    let wheel_up = "\x1b[<64;10;10M";
+
+    FeatureTest::new("mouse_wheel_menu_selection")
+        .with_git()
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Select session type", 5000)
+                    .write_text(format!("{wheel_down}{wheel_up}{wheel_down}"))
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    // Assert
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}

@@ -511,13 +511,15 @@ async fn prompt_multiline_via_alt_enter() -> E2eResult {
 }
 
 /// Verify macOS editing shortcuts through both enhanced and legacy terminal
-/// encodings, without submitting or canceling the prompt.
+/// encodings, plus the CSI-u `Ctrl+Backspace` and `Shift+Enter` reports that
+/// `tmux` sends, without submitting or canceling the prompt.
 #[tokio::test]
 async fn prompt_macos_editing_shortcuts() -> E2eResult {
     // Arrange
     let cases = [
         ("enhanced", "\x1b[127;3u", "\x1b[13;3u", "\x1b[127;9u"),
         ("legacy", "\x1b\x7f", "\x1b\r", "\x15"),
+        ("control", "\x1b[127;5u", "\x1b[13;2u", "\x15"),
     ];
 
     for (name, word_delete, newline, line_delete) in cases {

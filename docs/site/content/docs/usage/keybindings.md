@@ -221,7 +221,7 @@ keys. Open completion menus and question options take precedence.
 | `Ctrl+A` / `Ctrl+E`                      | Move to start / end of current line |
 | `Backspace` / `Delete`, `Ctrl+D`         | Delete backward / forward           |
 | `Option+Backspace` / `Shift+Backspace`   | Delete previous word                |
-| `Ctrl+W`                                 | Delete previous word                |
+| `Ctrl+Backspace` / `Ctrl+W`              | Delete previous word                |
 | `Cmd+Backspace` / `Ctrl+U`               | Delete current line                 |
 | `Ctrl+K`                                 | Delete to end of current line       |
 | `Ctrl+Z`                                 | Undo                                |
@@ -231,6 +231,12 @@ On macOS, undo uses `Ctrl+Z`; terminals such as Ghostty may consume `Cmd+Z`. `Cm
 `Option`, and modified `Enter` shortcuts need the terminal to forward them. Otherwise
 use `Ctrl+U`, `Ctrl+W`, or `Ctrl+J` for a newline. Single-line inputs keep only the
 first line of pasted text.
+
+Inside `tmux`, Agentty sets the server's `extended-keys-format` to `csi-u` and turns
+`extended-keys` on when it is off, so modified keys such as `Shift+Enter` reach the
+input; an `extended-keys` change applies after reattaching. It also requests mouse wheel
+reports so scrolling works with `tmux` mouse support; hold `Shift` while dragging to
+select text. `tmux` cannot forward `Cmd`, so use the `Ctrl` alternatives there.
 
 ## Publish Popup
 
