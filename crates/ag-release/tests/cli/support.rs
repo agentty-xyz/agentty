@@ -23,12 +23,37 @@ pub(crate) const HOST_TARGET: &str = "aarch64-unknown-linux-gnu";
 pub(crate) const HOST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
 /// Every supported target, in triple order.
-pub(crate) const TARGETS: [&str; 4] = [
+pub(crate) const TARGETS: [&str; 6] = [
     "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
 ];
+
+/// Root manifest of a demo workspace released with `installers` for Linux
+/// targets that mix glibc and musl: x86-64 has both, and 64-bit ARM has musl
+/// only.
+pub(crate) fn mixed_libc_manifest(installers: &str) -> String {
+    format!(
+        r#"[workspace]
+members = ["demo-app"]
+resolver = "2"
+
+[workspace.metadata.release]
+installers = [{installers}]
+min-glibc = "2.17"
+
+[workspace.metadata.release.targets]
+aarch64-unknown-linux-musl = "demo-runner"
+x86_64-unknown-linux-gnu = "demo-runner"
+x86_64-unknown-linux-musl = "demo-runner"
+
+[workspace.metadata.release.apps.demo-app]
+"#
+    )
+}
 
 /// The installers' error suffix naming every supported target.
 pub(crate) const SUPPORTED: &str = "demo-app supports aarch64-apple-darwin, \

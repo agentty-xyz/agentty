@@ -32,20 +32,19 @@ duplicate commit, tag, push, or pull workflow steps here.
 
 1. **Version Bump**
 
-   - Update `[workspace.package].version` and every versioned internal path dependency
-     under `[workspace.dependencies]` in the root `Cargo.toml` to the selected version.
-     Leave unrelated external dependency versions alone.
-   - Update `Cargo.lock` and any generated metadata affected by the bump. Check that no
-     internal workspace dependency still pins the previous version.
+   - Run
+     `cargo run -p ag-release -- prepare X.Y.Z --date "$(TZ=America/Los_Angeles date +%F)"`.
+     It moves `[workspace.package].version` and every versioned internal path dependency
+     to the selected version, refreshes `Cargo.lock`, and adds the
+     `## [vX.Y.Z] - YYYY-MM-DD` changelog heading below `## [Unreleased]`. The Pacific
+     date follows the repository's PST/PDT release calendar.
+   - Update any other generated metadata affected by the bump. Check that no internal
+     workspace dependency still pins the previous version.
 
 1. **Changelog**
 
-   - Update `CHANGELOG.md`.
-   - Resolve the current date in Pacific time before writing the changelog date
-     (`TZ=America/Los_Angeles date +%F`), so late-day release work follows the
-     repository's PST/PDT release calendar.
-   - Ensure there is an entry for the new version with the Pacific date:
-     `## [vX.Y.Z] - YYYY-MM-DD`.
+   - Fill in the new `CHANGELOG.md` entry, moving any notes still under
+     `## [Unreleased]` into it.
    - Ensure content adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
    - Add a `### Contributors` section under the new release entry with a bullet list of
      GitHub usernames (example: `- @minev-dev`).

@@ -22,7 +22,14 @@ const WORKFLOW_KEYS: [&str; 5] = [
 const TOOL_KEYS: [&str; 2] = ["git", "rev"];
 
 /// Keys accepted in `[workspace.metadata.release.workflow.jobs.<id>]`.
-const JOB_KEYS: [&str; 5] = ["permissions", "plan", "prerelease", "stage", "uses"];
+const JOB_KEYS: [&str; 6] = [
+    "permissions",
+    "plan",
+    "prerelease",
+    "secrets",
+    "stage",
+    "uses",
+];
 
 /// Jobs that the generated workflow defines itself.
 pub(crate) const BUILT_IN_JOBS: [&str; 6] = [
@@ -281,6 +288,9 @@ pub(crate) struct CustomJob {
     pub(crate) plan: bool,
     /// Whether a `publish` job also runs for prereleases.
     pub(crate) prerelease: bool,
+    /// Names of the repository secrets passed to the reusable workflow
+    /// under the same names, in configured order.
+    pub(crate) secrets: Vec<String>,
     pub(crate) stage: JobStage,
     /// Reusable workflow reference, copied verbatim.
     pub(crate) uses: String,
@@ -322,9 +332,35 @@ impl CustomJob {
             permissions: Self::parse_permissions(table)?,
             plan: table.optional_bool("plan")?,
             prerelease: table.optional_bool("prerelease")?,
+            secrets: Self::parse_secrets(table)?,
             stage,
             uses: uses.to_string(),
         })
+    }
+
+    /// Accepts secret names as GitHub allows them: letters, digits, and `_`,
+    /// not starting with a digit or the reserved `GITHUB_` prefix.
+    fn parse_secrets(table: &ConfigTable<'_>) -> Result<Vec<String>, String> {
+        table
+            .optional_strings("secrets")?
+            .into_iter()
+            .map(|name| {
+                let valid = !name.starts_with(|character: char| character.is_ascii_digit())
+                    && !name.to_ascii_uppercase().starts_with("GITHUB_")
+                    && name
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '_');
+                if !valid {
+                    return Err(format!(
+                        "`{}` entry `{name}` must be a secret name of letters, digits, and `_` \
+                         that starts with neither a digit nor `GITHUB_`",
+                        table.key("secrets")
+                    ));
+                }
+
+                Ok(name.to_string())
+            })
+            .collect()
     }
 
     /// Accepts a local reference, `./<path>` or `$/<path>`, or a remote

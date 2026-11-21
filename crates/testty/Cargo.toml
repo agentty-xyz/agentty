@@ -17,6 +17,13 @@ include = [
   "README.md",
 ]
 
+# `cargo binstall testty` installs the GitHub release archives; `ag-release`
+# checks that these match the archive names.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [lints]
 workspace = true
 

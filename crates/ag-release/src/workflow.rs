@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::action_pin::ActionPins;
 use crate::cli::{Host, WorkflowOptions};
 use crate::config::{Installer, TABLE};
-use crate::target::Target;
+use crate::target::{Libc, Target};
 use crate::workflow_config::{CustomJob, JobStage, WorkflowConfig};
 use crate::workspace::{TOOL_PACKAGE, Workspace};
 
@@ -27,8 +27,12 @@ pub(crate) const WORKFLOW_PATH: &str = ".github/workflows/release.yml";
 
 /// Linux targets whose runner can run the `distributions` containers, in
 /// order of preference.
-const DISTRIBUTION_TARGETS: [Target; 2] =
-    [Target::X8664UnknownLinuxGnu, Target::Aarch64UnknownLinuxGnu];
+const DISTRIBUTION_TARGETS: [Target; 4] = [
+    Target::X8664UnknownLinuxGnu,
+    Target::X8664UnknownLinuxMusl,
+    Target::Aarch64UnknownLinuxGnu,
+    Target::Aarch64UnknownLinuxMusl,
+];
 
 /// Writes the generated workflow, or with `options.check` fails unless the
 /// committed workflow matches it.
@@ -86,12 +90,14 @@ struct ReleaseWorkflow<'config> {
     /// configured images.
     distribution_runner: Option<String>,
     distributions: Vec<QuotedDistribution>,
+    /// Whether a musl target is configured, whose build needs musl tools.
+    musl: bool,
     /// YAML scalar of the Node.js version `smoke` sets up.
     node_version: Option<String>,
-    npm: bool,
     /// Custom jobs that run after the GitHub release.
     publish_jobs: Vec<&'config CustomJob>,
-    shell: bool,
+    /// Installers that `smoke` installs through.
+    smoke: SmokeInstallers,
     /// Shell words of the paths whose change runs `smoke`.
     smoke_paths: Vec<String>,
     /// YAML flow sequence of the distinct runner labels.
@@ -135,10 +141,17 @@ impl<'config> ReleaseWorkflow<'config> {
                     image: Self::quoted(&distribution.image),
                 })
                 .collect(),
+            musl: config
+                .targets
+                .keys()
+                .any(|target| target.libc() == Libc::Musl),
             node_version: workflow_config.node_version.as_deref().map(Self::quoted),
-            npm: config.installers.contains(&Installer::Npm),
             publish_jobs: jobs(JobStage::Publish),
-            shell,
+            smoke: SmokeInstallers {
+                homebrew: config.installers.contains(&Installer::Homebrew),
+                npm: config.installers.contains(&Installer::Npm),
+                shell,
+            },
             smoke_paths: Self::smoke_paths(workspace)?,
             smoke_runners: format!(
                 "[{}]",
@@ -253,6 +266,13 @@ impl<'config> ReleaseWorkflow<'config> {
 
         format!("'{}'", text.replace('\'', r"'\''"))
     }
+}
+
+/// The configured installers that `smoke` installs the host target through.
+struct SmokeInstallers {
+    homebrew: bool,
+    npm: bool,
+    shell: bool,
 }
 
 /// One `distributions` matrix entry as YAML scalars.

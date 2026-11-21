@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use crate::config::{AppConfig, GlibcVersion, Installer, ReleaseConfig};
+use crate::config::{AppConfig, GlibcVersion, HomebrewTap, Installer, ReleaseConfig};
 use crate::target::Target;
 use crate::workflow_config::WorkflowConfig;
 
@@ -21,10 +21,11 @@ fn full_metadata() -> Value {
         "release": {
             "apps": {
                 "demo-app": {},
-                "demo-tool": {"npm-scope": "@demo-org"},
+                "demo-tool": {"homebrew-description": "Demo tool", "npm-scope": "@demo-org"},
             },
+            "homebrew-tap": "demo-org/tap",
             "include": ["README.md", "docs/LICENSE"],
-            "installers": ["npm", "shell"],
+            "installers": ["npm", "binstall", "homebrew", "shell"],
             "min-glibc": "2.35",
             "profile": "dist",
             "targets": {
@@ -85,12 +86,17 @@ fn parse_reads_every_release_key() {
                 (
                     "demo-tool".to_string(),
                     AppConfig {
+                        homebrew_description: Some("Demo tool".to_string()),
                         npm_scope: Some("@demo-org".to_string()),
                     },
                 ),
             ]),
+            homebrew_tap: Some(HomebrewTap {
+                name: "demo-org/tap".to_string(),
+                repository: "demo-org/homebrew-tap".to_string(),
+            }),
             include: vec!["README.md".to_string(), "docs/LICENSE".to_string()],
-            installers: BTreeSet::from([Installer::Shell, Installer::Npm]),
+            installers: BTreeSet::from(Installer::ALL),
             min_glibc: Some(GlibcVersion {
                 major: 2,
                 minor: 35,
@@ -122,6 +128,7 @@ fn parse_applies_defaults_for_optional_keys() {
     let config = ReleaseConfig::parse(Some(&metadata)).expect("minimal configuration");
 
     // Assert
+    assert_eq!(config.homebrew_tap, None);
     assert_eq!(config.include, Vec::<String>::new());
     assert_eq!(config.installers, BTreeSet::new());
     assert_eq!(config.min_glibc, None);
@@ -137,8 +144,8 @@ fn parse_rejects_unknown_keys_and_invalid_tables() {
         (
             "/unknown",
             Some(json!(1)),
-            "unknown key `$.unknown`; expected one of: apps, include, installers, min-glibc, \
-             profile, targets, workflow",
+            "unknown key `$.unknown`; expected one of: apps, homebrew-tap, include, installers, \
+             min-glibc, profile, targets, workflow",
         ),
         (
             "/workflow",
@@ -154,7 +161,8 @@ fn parse_rejects_unknown_keys_and_invalid_tables() {
         (
             "/apps/demo-app/npm_scope",
             Some(json!("@demo-org")),
-            "unknown key `$.apps.demo-app.npm_scope`; expected one of: npm-scope",
+            "unknown key `$.apps.demo-app.npm_scope`; expected one of: homebrew-description, \
+             npm-scope",
         ),
         ("/apps", None, "missing `[$.apps]`; name at least one app"),
         (
@@ -181,8 +189,8 @@ fn parse_rejects_unknown_keys_and_invalid_tables() {
             "/targets/x86_64-pc-windows-msvc",
             Some(json!("windows-latest")),
             "`$.targets.x86_64-pc-windows-msvc` is not a supported target; supported targets: \
-             aarch64-apple-darwin, aarch64-unknown-linux-gnu, x86_64-apple-darwin, \
-             x86_64-unknown-linux-gnu",
+             aarch64-apple-darwin, aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, \
+             x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl",
         ),
         (
             "/targets/aarch64-apple-darwin",
@@ -252,7 +260,23 @@ fn parse_rejects_invalid_values_naming_the_key() {
             "/installers",
             Some(json!(["shell", "msi"])),
             "`$.installers` entry `msi` is not a supported installer; supported installers: \
-             shell, npm",
+             shell, homebrew, npm, binstall",
+        ),
+        (
+            "/installers",
+            Some(json!(["shell"])),
+            "`$.homebrew-tap` is set, but `$.installers` does not list `homebrew`",
+        ),
+        (
+            "/homebrew-tap",
+            None,
+            "the `homebrew` installer needs `$.homebrew-tap`, the `<owner>/<name>` of the tap \
+             that the formulas are published to",
+        ),
+        (
+            "/homebrew-tap",
+            Some(json!(1)),
+            "`$.homebrew-tap` must be a nonempty string",
         ),
         (
             "/min-glibc",
@@ -267,6 +291,19 @@ fn parse_rejects_invalid_values_naming_the_key() {
     ];
     let glibc_cases = ["2", "2.35.1", "+2.35", "2."]
         .map(|version| (json!(version), format!("{glibc_error} `{version}`")));
+    let tap_error = "`$.homebrew-tap` must be a Homebrew tap such as `example/tap`: a GitHub \
+                     owner and a lowercase name without the `homebrew-` repository prefix, found";
+    let tap_cases = [
+        "demo-org",
+        "/tap",
+        "-demo/tap",
+        "demo_org/tap",
+        "demo-org/Tap",
+        "demo-org/homebrew-tap",
+        "demo-org/1tap",
+        "demo-org/tap/extra",
+    ]
+    .map(|tap| (json!(tap), format!("{tap_error} `{tap}`")));
 
     // Act & Assert
     assert_rejected(cases);
@@ -275,6 +312,11 @@ fn parse_rejects_invalid_values_naming_the_key() {
         .map(|(version, expected)| ("/min-glibc", Some(version.clone()), expected.as_str()))
         .collect();
     assert_rejected(glibc_cases);
+    let tap_cases = tap_cases
+        .iter()
+        .map(|(tap, expected)| ("/homebrew-tap", Some(tap.clone()), expected.as_str()))
+        .collect();
+    assert_rejected(tap_cases);
 }
 
 #[test]
@@ -346,5 +388,8 @@ fn release_values_serialize_as_configuration_spellings() {
     let serialized = serde_json::to_value(values).expect("serialize values");
 
     // Assert
-    assert_eq!(serialized, json!([["shell", "npm"], "2.17"]));
+    assert_eq!(
+        serialized,
+        json!([["shell", "homebrew", "npm", "binstall"], "2.17"])
+    );
 }

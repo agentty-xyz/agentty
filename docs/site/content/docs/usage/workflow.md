@@ -756,10 +756,10 @@ running binary and its version or a newer one, such as after an earlier update t
 still awaits a restart: Agentty downloads the latest installer and reruns it for the
 recorded install directory without changing `PATH`. The status bar shows progress and
 asks you to restart. Otherwise, or if the update fails, rerun your original installation
-command. Cargo, local, and `npx` installs always update manually. Shell installs of
-`v0.19.5` or earlier used an older installer: rerun the shell installer once to enable
-automatic updates. See [Installation](@/docs/getting-started/installation.md) for update
-commands.
+command. Homebrew, Cargo, `cargo-binstall`, local, and `npx` installs always update
+manually. Shell installs of `v0.19.5` or earlier used an older installer: rerun the
+shell installer once to enable automatic updates. See
+[Installation](@/docs/getting-started/installation.md) for update commands.
 
 ```bash
 agentty --no-update

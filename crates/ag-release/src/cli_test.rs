@@ -8,7 +8,8 @@ use clap::Parser;
 use serde_json::Value;
 
 use crate::cli::{
-    AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions, WorkflowOptions,
+    AssembleOptions, BuildOptions, Cli, Command, Host, NotesOptions, PlanOptions, PrepareOptions,
+    WorkflowOptions,
 };
 use crate::file_system::MockFileSystem;
 use crate::process::MockProcessRunner;
@@ -127,6 +128,7 @@ fn cli_parses_every_command() {
         vec!["ag-release", "notes", "--tag", "v1.2.3", "--title"],
         vec!["ag-release", "workflow"],
         vec!["ag-release", "workflow", "--check"],
+        vec!["ag-release", "prepare", "v1.3.0", "--date", "2026-02-03"],
     ];
 
     // Act
@@ -144,6 +146,7 @@ fn cli_parses_every_command() {
         }) => format!("assemble {tag} {} {targets:?}", artifacts_dir.display()),
         Command::Notes(NotesOptions { tag, title }) => format!("notes {tag} {title}"),
         Command::Workflow(WorkflowOptions { check }) => format!("workflow {check}"),
+        Command::Prepare(PrepareOptions { date, version }) => format!("prepare {version} {date}"),
     });
 
     // Assert
@@ -161,6 +164,7 @@ fn cli_parses_every_command() {
             "notes v1.2.3 true",
             "workflow false",
             "workflow true",
+            "prepare v1.3.0 2026-02-03",
         ]
     );
 }

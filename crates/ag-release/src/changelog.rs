@@ -6,6 +6,9 @@
 
 use semver::Version;
 
+/// The changelog's file name in the workspace root.
+pub(crate) const FILE: &str = "CHANGELOG.md";
+
 /// The changelog entry of one release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChangelogEntry {
@@ -54,6 +57,86 @@ impl ChangelogEntry {
         }
 
         entry.map(|(date, notes_start)| Self::new(date, &changelog[notes_start..]))
+    }
+
+    /// Returns `changelog` with a `<version> - <date>` level-2 heading added,
+    /// or `None` when it already has an entry for `version`.
+    ///
+    /// The heading goes directly below an `## Unreleased` heading, so the
+    /// unreleased notes become the release's, else above the first level-2
+    /// heading, else at the end. It spells the version like the newest
+    /// release heading, with or without brackets and the `v` prefix, and as
+    /// `[v<version>]` when there is none.
+    pub(crate) fn insert_heading(changelog: &str, version: &Version, date: &str) -> Option<String> {
+        if Self::find(changelog, version).is_some() {
+            return None;
+        }
+        let mut fence: Option<Fence> = None;
+        let mut unreleased_end = None;
+        let mut first_heading = None;
+        let mut style = None;
+        let mut offset = 0;
+        for line in changelog.split_inclusive('\n') {
+            let line_start = offset;
+            offset += line.len();
+            let text = line.trim_end_matches(['\n', '\r']);
+            if let Some(open) = &fence {
+                if open.is_closed_by(text) {
+                    fence = None;
+                }
+                continue;
+            }
+            fence = Fence::open(text);
+            let Some((2, heading)) = Self::heading(text) else {
+                continue;
+            };
+            first_heading.get_or_insert(line_start);
+            let label = heading.split(" - ").next().unwrap_or_default();
+            let bracketed = label.starts_with('[') && label.ends_with(']');
+            let label = label.trim_start_matches('[').trim_end_matches(']');
+            if label.eq_ignore_ascii_case("unreleased") {
+                unreleased_end.get_or_insert(offset);
+            } else if style.is_none() {
+                let prefixed = label.starts_with('v');
+                if Version::parse(label.trim_start_matches('v')).is_ok() {
+                    style = Some((bracketed, prefixed));
+                }
+            }
+        }
+        let (bracketed, prefixed) = style.unwrap_or((true, true));
+        let label = format!("{}{version}", if prefixed { "v" } else { "" });
+        let label = if bracketed {
+            format!("[{label}]")
+        } else {
+            label
+        };
+        let heading = format!("## {label} - {date}\n");
+
+        Some(match (unreleased_end, first_heading) {
+            (Some(end), _) => {
+                let separator = if changelog[..end].ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                format!(
+                    "{}{separator}{heading}{}",
+                    &changelog[..end],
+                    &changelog[end..]
+                )
+            }
+            (None, Some(start)) => {
+                format!("{}{heading}\n{}", &changelog[..start], &changelog[start..])
+            }
+            (None, None) => {
+                let separator = match changelog {
+                    "" => "",
+                    text if text.ends_with('\n') => "\n",
+                    _ => "\n\n",
+                };
+                format!("{changelog}{separator}{heading}")
+            }
+        })
     }
 
     /// Returns the level and text of a level-1 or level-2 ATX heading.

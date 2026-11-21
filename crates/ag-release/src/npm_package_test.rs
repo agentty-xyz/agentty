@@ -161,12 +161,12 @@ fn binary_script_bakes_in_every_release_value() {
         .expect("release values");
     let (release, _) = release.split_once(";\n").expect("release values");
     let release: Value = serde_json::from_str(release).expect("release JSON");
-    let target = |target: &str, platform: &str, arch: &str, glibc: bool| {
+    let target = |target: &str, platform: &str, arch: &str, libc: &str| {
         json!({
             "arch": arch,
             "archive": format!("demo-tool-{target}.tar.gz"),
             "directory": format!("demo-tool-{target}"),
-            "glibc": glibc,
+            "libc": libc,
             "platform": platform,
             "sha256": target.repeat(2),
             "target": target,
@@ -181,8 +181,8 @@ fn binary_script_bakes_in_every_release_value() {
             "downloadUrlVariable": "DEMO_TOOL_DOWNLOAD_URL",
             "minGlibc": "2.35",
             "targets": [
-                target("aarch64-apple-darwin", "darwin", "arm64", false),
-                target("x86_64-unknown-linux-gnu", "linux", "x64", true),
+                target("aarch64-apple-darwin", "darwin", "arm64", "none"),
+                target("x86_64-unknown-linux-gnu", "linux", "x64", "gnu"),
             ],
             "version": "1.2.3",
         })

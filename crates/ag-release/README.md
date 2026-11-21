@@ -1,11 +1,12 @@
 # ag-release
 
 `ag-release` plans and packages GitHub releases of the binaries in a Cargo workspace. It
-reads its configuration from `Cargo.toml`, prints a release plan (a JSON document that
-release workflows consume), builds deterministic archives, assembles the release-wide
-checksums and manifest, writes the GitHub release notes from `CHANGELOG.md`, and
-generates the GitHub Actions workflow that runs these steps. It is a small,
-project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml` setup.
+reads its configuration from `Cargo.toml`, bumps the release version, prints a release
+plan (a JSON document that release workflows consume), builds deterministic archives,
+assembles the installers, release-wide checksums, and manifest, writes the GitHub
+release notes from `CHANGELOG.md`, and generates the GitHub Actions workflow that runs
+these steps. It is a small, project-agnostic replacement for a `dist` (`cargo-dist`)
+`dist-workspace.toml` setup.
 
 ## Quick Start
 
@@ -19,6 +20,9 @@ project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml` s
 1. Set `[workspace.metadata.release.workflow]` `tool` to the same repository and commit,
    so the release jobs install the version you run locally.
 1. Run `ag-release plan` from anywhere in the workspace to validate the configuration.
+1. For each release, run `ag-release prepare <version> --date <YYYY-MM-DD>` (see
+   [`prepare`](#prepare-version---date-yyyy-mm-dd)), fill in the changelog entry, and
+   tag the merged commit.
 1. Run `ag-release workflow` and commit `.github/workflows/release.yml` (see
    [Release Workflow](#release-workflow)).
 
@@ -28,30 +32,45 @@ project-agnostic replacement for a `dist` (`cargo-dist`) `dist-workspace.toml` s
 [workspace.metadata.release]
 profile = "dist"                     # Cargo profile for release builds
 min-glibc = "2.35"                   # minimum glibc on *-linux-gnu targets
-installers = ["shell", "npm"]        # installers to publish
+installers = ["shell", "homebrew", "npm", "binstall"]  # installers to publish
+homebrew-tap = "my-org/tap"          # tap of the Homebrew formulas
 include = ["README.md", "LICENSE"]   # files added to every archive
 
 [workspace.metadata.release.targets] # target triple -> GitHub Actions runner label
 aarch64-apple-darwin = "macos-latest"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
+x86_64-unknown-linux-musl = "ubuntu-22.04"
 
 [workspace.metadata.release.apps.my-app]   # key = workspace package name
 [workspace.metadata.release.apps.my-tool]
 npm-scope = "@my-org"                      # optional npm scope
+homebrew-description = "Tool that does it"  # optional Homebrew `desc`
 ```
 
-| Key          | Required | Default     | Value                                                   |
-| ------------ | -------- | ----------- | ------------------------------------------------------- |
-| `profile`    | no       | `"release"` | Cargo profile name                                      |
-| `min-glibc`  | no       | none        | `"MAJOR.MINOR"`                                         |
-| `installers` | no       | `[]`        | Unique entries from `"shell"` and `"npm"`               |
-| `include`    | no       | `[]`        | Unique relative paths to files                          |
-| `targets`    | yes      |             | At least one supported target, each with a runner label |
-| `apps`       | yes      |             | At least one workspace package with a `bin` target      |
-| `npm-scope`  | no       | none        | Per app: `@` and a lowercase npm scope name             |
+| Key                    | Required        | Default             | Value                                                                  |
+| ---------------------- | --------------- | ------------------- | ---------------------------------------------------------------------- |
+| `profile`              | no              | `"release"`         | Cargo profile name                                                     |
+| `min-glibc`            | no              | none                | `"MAJOR.MINOR"`                                                        |
+| `installers`           | no              | `[]`                | Unique entries from `"shell"`, `"homebrew"`, `"npm"`, and `"binstall"` |
+| `homebrew-tap`         | with `homebrew` | none                | `<owner>/<name>` of the tap repository `<owner>/homebrew-<name>`       |
+| `include`              | no              | `[]`                | Unique relative paths to files                                         |
+| `targets`              | yes             |                     | At least one supported target, each with a runner label                |
+| `apps`                 | yes             |                     | At least one workspace package with a `bin` target                     |
+| `npm-scope`            | no              | none                | Per app: `@` and a lowercase npm scope name                            |
+| `homebrew-description` | no              | package description | Per app: the Homebrew formula's `desc`                                 |
 
 Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-`aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`.
+`aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`,
+and `x86_64-unknown-linux-musl`. The `*-linux-musl` targets link statically and run on
+any Linux of their architecture, so installers fall back to them on systems whose glibc
+is missing or older than `min-glibc`; they build on Linux runners of their architecture
+with `musl-gcc` (see [Release Workflow](#release-workflow)).
+
+The `homebrew` installer requires `homebrew-tap`, which is the `<owner>/<name>` that
+`brew install <owner>/<name>/<app>` takes, without the `homebrew-` repository prefix;
+`homebrew-tap` without the installer is an error. The `binstall` installer requires each
+app's `Cargo.toml` to point `cargo binstall` at the release archives, and `plan` fails
+with the table to add otherwise (see [cargo-binstall](#cargo-binstall)).
 
 Each app takes an `include` path from its package directory, the one holding its
 `Cargo.toml`, when the file exists there, else from the workspace root; either way the
@@ -82,6 +101,12 @@ stage = "publish"
 uses = "./.github/workflows/publish-npm.yml"
 permissions = { contents = "read", id-token = "write" }
 plan = true
+
+[workspace.metadata.release.workflow.jobs.publish-homebrew]
+stage = "publish"
+uses = "./.github/workflows/publish-homebrew.yml"
+plan = true
+secrets = ["HOMEBREW_TAP_DEPLOY_KEY"]
 ```
 
 | Key                     | Default                  | Value                                                                                                   |
@@ -95,13 +120,39 @@ plan = true
 | `jobs.<id>.permissions` | `{}`                     | `GITHUB_TOKEN` permission names to `read`, `write`, or `none`, as GitHub documents them                 |
 | `jobs.<id>.plan`        | `false`                  | Pass the plan JSON as the reusable workflow's `plan` input                                              |
 | `jobs.<id>.prerelease`  | `false`                  | Run a `publish` job for prereleases too                                                                 |
+| `jobs.<id>.secrets`     | `[]`                     | Unique repository secret names passed to the reusable workflow under the same names                     |
 
 `tool` is required unless `ag-release` is a package of the workspace. Job ids must be
 valid GitHub job ids that differ, ignoring case, from each other and from the built-in
 `plan`, `smoke`, `build`, `assemble`, `distributions`, and `host`. Values the workflow
-embeds may not contain line breaks, other control characters, or `${{`.
+embeds may not contain line breaks, other control characters, or `${{`. Secret names are
+letters, digits, and `_`, and start with neither a digit nor `GITHUB_`; each one is
+passed explicitly, never with `secrets: inherit`.
 
 ## Commands
+
+### `prepare <version> --date <YYYY-MM-DD>`
+
+Bumps the workspace to `<version>`, `<semver>` or `v<semver>`, which must be newer than
+the apps' version, and prints the paths it wrote:
+
+1. Every workspace member at the apps' version moves to `<version>`: its own `[package]`
+   `version`, or the root `[workspace.package]` `version` it inherits.
+1. Each `version` requirement of a path dependency on one of those members, in the root
+   `[workspace.dependencies]` or a member's `[dependencies]`, `[dev-dependencies]`,
+   `[build-dependencies]`, or their `[target.<cfg>]` tables, moves to `<version>` when
+   it names the old version, keeping a `=`, `^`, or `~` operator. Other requirements,
+   such as `"1.2"`, stay as they are.
+1. `cargo update --workspace` refreshes `Cargo.lock`.
+1. Unless `CHANGELOG.md` in the workspace root is missing or already has an entry for
+   `<version>`, it gains the heading `## <label> - <date>`: directly below an
+   `## [Unreleased]` heading, so the unreleased notes become the release's, else above
+   the first level-2 heading. `<label>` is spelled like the newest release heading, with
+   or without brackets and the `v` prefix, and `[v<version>]` without one.
+
+Manifests are edited at the version strings only, so formatting and comments survive,
+and none is written unless every manifest parses. Commit the result as the release
+change, then tag its commit.
 
 ### `plan [--tag <tag>] [--target <triple>]...`
 
@@ -119,13 +170,16 @@ status.
 | `repository`            | `owner`, `name`, and canonical `url`                                                  |
 | `profile`, `min_glibc`  | Configured values; `min_glibc` is `null` when unset                                   |
 | `installers`, `include` | Configured lists                                                                      |
+| `homebrew_tap`          | `name` (`<owner>/<name>`) and `repository` (`<owner>/homebrew-<name>`), or `null`     |
 | `matrix`                | GitHub Actions matrix: `{"include": [{"runner", "target"}]}`                          |
 | `artifacts`             | Release-wide file names: `checksums`, `manifest`, `source_archive`, `source_checksum` |
 | `apps[]`                | Per app, in name order; see below                                                     |
 
 Each `apps[]` entry has `name`, `binaries`, `description`, `license`, `authors`,
 `archives[]` (`target`, `name`, `checksum`, `directory`), and `shell_installer`,
-`npm_package`, and `npm_tarball`, which are `null` unless that installer is enabled.
+`homebrew_formula`, `homebrew_description`, `npm_package`, and `npm_tarball`, which are
+`null` unless that installer is enabled (`homebrew_description` also when neither
+`homebrew-description` nor a package description is set).
 
 ### `build --target <triple> [--out-dir <dir>] [--profile <name>]`
 
@@ -145,16 +199,17 @@ matches it, and fails with a list of every missing or mismatched file otherwise.
 `--target`, the plan, and so the archives, installers, and manifest, covers only the
 named configured targets, so one machine can test what it built. Then writes each app's
 `<app>-installer.sh` when the `shell` installer is configured (see
-[Shell Installer](#shell-installer)), its `<app>-npm-package.tar.gz` when the `npm`
-installer is configured (see [npm Package](#npm-package)), `source.tar.gz` and its
-`.sha256`, `sha256.sum`, and `release-manifest.json` into `<dir>` and prints their
-paths. The source archive is `git archive HEAD` of the workspace root below a
-`<repository name>-<version>/` directory, so run `assemble` on a checkout of the tagged
-commit. Other files in `<dir>` are ignored.
+[Shell Installer](#shell-installer)), its `<app>.rb` when the `homebrew` installer is
+configured (see [Homebrew Formula](#homebrew-formula)), its `<app>-npm-package.tar.gz`
+when the `npm` installer is configured (see [npm Package](#npm-package)),
+`source.tar.gz` and its `.sha256`, `sha256.sum`, and `release-manifest.json` into
+`<dir>` and prints their paths. The source archive is `git archive HEAD` of the
+workspace root below a `<repository name>-<version>/` directory, so run `assemble` on a
+checkout of the tagged commit. Other files in `<dir>` are ignored.
 
-`sha256.sum` lists every archive, installer, npm package, and the source archive, sorted
-by file name. `release-manifest.json` holds the release plan for the tag and the SHA-256
-of each file that `sha256.sum` lists:
+`sha256.sum` lists every archive, installer, formula, npm package, and the source
+archive, sorted by file name. `release-manifest.json` holds the release plan for the tag
+and the SHA-256 of each file that `sha256.sum` lists:
 
 ```json
 {
@@ -217,7 +272,7 @@ install, and keep the workspace root at the repository root.
 | --------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | `plan`          | Every pull request, merge-queue check, tag push, and dry run | `plan` (with the pushed tag), `workflow --check`, and detection of release tooling changes               |
 | `smoke`         | Pull requests that change release tooling                    | On each runner label of `targets`: builds, assembles, and installs the host target, and runs each binary |
-| `build`         | Tag pushes and dry runs                                      | `rustup target add` and `build` for each `matrix` entry, on its runner                                   |
+| `build`         | Tag pushes and dry runs                                      | `rustup target add` and `build` for each `matrix` entry, on its runner; `musl-tools` for musl targets    |
 | `assemble`      | After every build                                            | `assemble`, `notes`, and `notes --title`                                                                 |
 | `distributions` | Dry runs, when configured                                    | Runs the shell installer in each image and checks its success or error                                   |
 | `host`          | Tag pushes, after every `check` job and build                | Attests the files, uploads them to a draft GitHub release, and then publishes it                         |
@@ -227,7 +282,10 @@ Release tooling is the workflow file, the `[workspace.metadata.release` tables, 
 `workflow_dispatch` run is a dry run: it builds every target with the configured profile
 and keeps the files as workflow artifacts, but publishes nothing. Each job gets only the
 token permissions it needs and checks out without persisted credentials. Jobs install
-the toolchain that a `rust-toolchain.toml` pins, or use the runner's.
+the toolchain that a `rust-toolchain.toml` pins, or use the runner's. With a musl target
+configured, `build` installs `musl-tools` with `apt-get` on that target's runner, which
+must be an Ubuntu runner of the target's architecture, and compiles C dependencies with
+`musl-gcc` through `CC_<target>`.
 
 Configured `jobs` call reusable workflows at one of two stages:
 
@@ -245,15 +303,16 @@ artifacts directory with `<APP>_DOWNLOAD_URL=file://<dir>`.
 
 The plan names every file a release publishes:
 
-| File                           | Contents                                                                                       |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `<app>-<target>.tar.gz`        | The app's binaries and `include` files in `<app>-<target>/`                                    |
-| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum: `<hex>  <file name>`                                          |
-| `<app>-installer.sh`           | POSIX `sh` installer of the app's binaries                                                     |
-| `<app>-npm-package.tar.gz`     | npm package tarball, files below `package/`, that installs the app's binaries                  |
-| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit                                                            |
-| `sha256.sum`                   | `sha256sum`-compatible checksums of the archives, installers, npm packages, and source archive |
-| `release-manifest.json`        | The plan and the SHA-256 of every file in `sha256.sum`                                         |
+| File                           | Contents                                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `<app>-<target>.tar.gz`        | The app's binaries and `include` files in `<app>-<target>/`                            |
+| `<app>-<target>.tar.gz.sha256` | `sha256sum`-compatible checksum: `<hex>  <file name>`                                  |
+| `<app>-installer.sh`           | POSIX `sh` installer of the app's binaries                                             |
+| `<app>.rb`                     | Homebrew formula that installs the app's archive                                       |
+| `<app>-npm-package.tar.gz`     | npm package tarball, files below `package/`, that installs the app's binaries          |
+| `source.tar.gz` and `.sha256`  | Source archive of the tagged commit                                                    |
+| `sha256.sum`                   | `sha256sum`-compatible checksums of every file above but the archives' `.sha256` files |
+| `release-manifest.json`        | The plan and the SHA-256 of every file in `sha256.sum`                                 |
 
 Archives and npm packages are reproducible: the same inputs give byte-identical
 `.tar.gz` files. Entries are sorted, owned by uid and gid 0 without user or group names,
@@ -278,10 +337,13 @@ environment variables without installing; any other argument fails before anythi
 downloaded or written. It:
 
 1. Maps `uname -s` and `uname -m` to a configured target, preferring
-   `aarch64-apple-darwin` under Rosetta 2. On Linux it rejects a 32-bit userland (read
-   from the ELF header of `/proc/self/exe`, else `/bin/sh`, and assumed 64-bit when
-   neither is readable), musl, and, when `min-glibc` is set, a glibc older than that
-   (read from `ldd --version`). Other platforms fail with the list of supported targets.
+   `aarch64-apple-darwin` under Rosetta 2. On Linux it prefers the `*-linux-gnu` target
+   when the system has glibc, at least `min-glibc` when that is set (read from
+   `ldd --version`), and otherwise takes the `*-linux-musl` target, which also serves
+   musl systems such as Alpine. Without a musl target, musl and an old or unreadable
+   glibc fail with the reason. It rejects a 32-bit userland (read from the ELF header of
+   `/proc/self/exe`, else `/bin/sh`, and assumed 64-bit when neither is readable). Other
+   platforms fail with the list of supported targets.
 1. Downloads `<app>-<target>.tar.gz` with `curl`, or `wget` without `curl` or when
    `curl` is a snap (whose private `/tmp` it cannot use; it fails when `wget` is absent
    too), and fails unless the archive's SHA-256, recorded by `assemble`, matches by
@@ -350,15 +412,15 @@ package holds `package.json`, `binary.js`, `install.js`, one `run-<binary>.js` p
 binary, and `README.md`, `LICENSE`, and `CHANGELOG.md` when they exist, each taken from
 the app's package directory before the workspace root as `include` paths are.
 
-`install.js`, the `postinstall` script, picks the target and checks glibc as the
-[shell installer](#shell-installer) does, downloads `<app>-<target>.tar.gz`, fails
-unless its SHA-256 matches the one `assemble` recorded, and extracts it with the system
-`tar`. It installs the binaries into `<package>/node_modules/.bin_real/`, renaming each
-into place. This location is stable: an app can recognize an npm, Bun, or pnpm global
-install by its executable path ending in `<package>/node_modules/.bin_real/<binary>`.
-When install scripts did not run, as with `npm install --ignore-scripts` or a package
-manager that blocks dependency scripts, the first run of a command installs the binaries
-first.
+`install.js`, the `postinstall` script, picks the target as the
+[shell installer](#shell-installer) does, reading glibc from Node's process report
+instead of `ldd`, downloads `<app>-<target>.tar.gz`, fails unless its SHA-256 matches
+the one `assemble` recorded, and extracts it with the system `tar`. It installs the
+binaries into `<package>/node_modules/.bin_real/`, renaming each into place. This
+location is stable: an app can recognize an npm, Bun, or pnpm global install by its
+executable path ending in `<package>/node_modules/.bin_real/<binary>`. When install
+scripts did not run, as with `npm install --ignore-scripts` or a package manager that
+blocks dependency scripts, the first run of a command installs the binaries first.
 
 Each command runs its binary with the same arguments, standard streams, and exit status,
 and ends by the binary's signal when the binary is killed. It ignores `SIGINT` and
@@ -379,6 +441,53 @@ as these `npm_config_*` variables.
 npm, Bun, and pnpm installs update through their package manager, for example
 `npm install --global <package>@latest`.
 
+## Homebrew Formula
+
+`<app>.rb` is a formula for the tap that `homebrew-tap` names, `<owner>/<name>`, whose
+repository is `github.com/<owner>/homebrew-<name>`. Copy it to the tap's `Formula/`
+directory, for example from a `publish` job, and the app installs with:
+
+```sh
+brew install <owner>/<name>/<app>
+```
+
+Installing by this full name also trusts just that formula, which Homebrew requires of
+formulas from other taps. The formula's `desc` is the app's `homebrew-description`, else
+its package description, without a trailing full stop; Homebrew wants it under 80
+characters and not starting with the formula name. It takes `license` and `version` from
+Cargo metadata and the repository URL as its `homepage`. It has an `on_macos` and an
+`on_linux` block with an `on_arm` and an `on_intel` block for each configured
+architecture, each downloading the release archive and checking the SHA-256 that
+`assemble` recorded; Linux takes the `*-linux-gnu` archive of an architecture when one
+is configured and the `*-linux-musl` archive otherwise. `install` copies the binaries
+into the formula's `bin`. A Cargo `license` becomes `license` when it is one SPDX
+identifier or identifiers joined only by `OR` (`any_of:`) or only by `AND` (`all_of:`),
+and is left out otherwise. Its `test` block, which `brew test` runs, runs each binary
+with `--version`. Homebrew updates the formula with `brew upgrade` once the tap holds a
+newer one.
+
+On runners that have Homebrew, `smoke` installs each formula from a local tap with its
+archive URLs pointed at the local artifacts, and runs each installed binary.
+
+## cargo-binstall
+
+The `binstall` installer adds `cargo binstall <app>@<version>` to the release notes and
+checks that each app's `Cargo.toml` points
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) at the release
+archives, so it installs them instead of building from crates.io:
+
+```toml
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+```
+
+Drop the `v` from `pkg-url` when release tags have none. `cargo-binstall` picks the
+target, including a `*-linux-musl` one on musl or old glibc, and falls back to
+`cargo install` when no archive fits. The app must be published to crates.io, where
+`cargo-binstall` reads the metadata.
+
 ## Updates
 
 `ag-release` publishes no updater binaries: the shell installer is the update path for
@@ -397,8 +506,9 @@ installer updates itself in three steps:
 ## Limitations
 
 - GitHub-hosted repositories only.
-- macOS and glibc Linux targets only: no Windows or musl.
-- No Homebrew, MSI, or PowerShell installers or updater binaries.
+- 64-bit macOS and Linux targets only: no Windows, 32-bit, or other architectures.
+- No MSI or PowerShell installers or updater binaries. `ag-release` writes Homebrew
+  formulas but does not push them to the tap; a `publish` job does.
 - The generated workflow is for GitHub Actions only and supports custom jobs only as
   reusable workflows at the `check` and `publish` stages.
 - The shell installer needs `curl` (not a snap) or `wget`, `tar` with gzip support, and

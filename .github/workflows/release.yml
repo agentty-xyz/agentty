@@ -18,7 +18,7 @@
 #   GitHub release.
 #   It first requires the `check` jobs: `release-checks`.
 #   Then it runs the `publish` jobs, which skip prereleases unless configured
-#   otherwise: `publish-npm`, `publish-crates-io`.
+#   otherwise: `publish-npm`, `publish-crates-io`, `publish-homebrew`.
 
 name: Release
 
@@ -212,6 +212,39 @@ jobs:
             done
           done < "$RUNNER_TEMP/apps.tsv"
 
+      # Installs every app's formula from a local tap, with its archive URLs
+      # pointed at the local artifacts, and runs each installed binary.
+      # Runners without Homebrew skip this step.
+      - name: Install through Homebrew
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          brew="$(command -v brew || true)"
+          if [ -z "$brew" ] && [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+            brew=/home/linuxbrew/.linuxbrew/bin/brew
+          fi
+          if [ -z "$brew" ]; then
+            echo "::notice::Homebrew is not installed on this runner"
+            exit 0
+          fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+          artifacts="$RUNNER_TEMP/artifacts"
+          plan="$RUNNER_TEMP/plan.json"
+          tap=ag-release/smoke
+          "$brew" tap-new --no-git "$tap" > /dev/null
+          formulas="$("$brew" --repository "$tap")/Formula"
+          download_url="$(jq --raw-output .repository.url "$plan")/releases/download/$TAG"
+          jq --raw-output '.apps[] | [.name, .homebrew_formula, (.binaries | join(" "))] | @tsv' \
+            "$plan" > "$RUNNER_TEMP/formulas.tsv"
+          while IFS=$'\t' read -r app formula binaries; do
+            sed "s|\"$download_url/|\"file://$artifacts/|" "$artifacts/$formula" > "$formulas/$formula"
+            # `brew` reads standard input, which would consume the app list.
+            "$brew" install "$tap/$app" < /dev/null
+            for binary in $binaries; do
+              "$("$brew" --prefix "$tap/$app")/bin/$binary" --version
+            done
+          done < "$RUNNER_TEMP/formulas.tsv"
+
   # A `check` job from `[workspace.metadata.release.workflow.jobs]`: tag
   # pushes only, and `host` requires it.
   release-checks:
@@ -254,9 +287,19 @@ jobs:
           target_dir="$(cargo metadata --format-version 1 --no-deps | jq --raw-output .target_directory)"
           cp "$target_dir/debug/ag-release" "$(dirname "$(command -v cargo)")/"
 
+      # musl targets link statically, and their C dependencies compile with
+      # musl-gcc, which builds for the runner's own architecture.
+      - name: Install musl tools
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+
       - name: Build archives
         env:
           TARGET: ${{ matrix.target }}
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: |
           rustup target add "$TARGET"
           ag-release build --target "$TARGET" --out-dir "$RUNNER_TEMP/artifacts"
@@ -344,8 +387,9 @@ jobs:
           - { image: "ubuntu:22.04", error: "" }
           - { image: "debian:stable-slim", error: "" }
           - { image: "fedora:45", error: "" }
-          - { image: "ubuntu:20.04", error: "needs glibc" }
-          - { image: "alpine:3.24", error: "with musl libc" }
+          - { image: "ubuntu:20.04", error: "" }
+          - { image: "alpine:3.24", error: "" }
+          - { image: "i386/alpine:3.24", error: "with a 32-bit userland" }
     runs-on: ubuntu-22.04
     permissions: {}
     env:
@@ -477,3 +521,16 @@ jobs:
       contents: read
       id-token: write
     uses: $/.github/workflows/publish-crates-io.yml
+
+  # A `publish` job from `[workspace.metadata.release.workflow.jobs]`: runs
+  # after the GitHub release is published, except for prereleases.
+  publish-homebrew:
+    needs: [plan, host]
+    if: ${{ github.event_name == 'push' && !fromJson(needs.plan.outputs.plan).prerelease }}
+    permissions:
+      contents: read
+    uses: $/.github/workflows/publish-homebrew.yml
+    with:
+      plan: ${{ needs.plan.outputs.plan }}
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

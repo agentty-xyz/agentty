@@ -20,8 +20,9 @@ pub(crate) const TABLE: &str = "workspace.metadata.release";
 const DEFAULT_PROFILE: &str = "release";
 
 /// Keys accepted in `[workspace.metadata.release]`.
-const RELEASE_KEYS: [&str; 7] = [
+const RELEASE_KEYS: [&str; 8] = [
     "apps",
+    "homebrew-tap",
     "include",
     "installers",
     "min-glibc",
@@ -31,13 +32,16 @@ const RELEASE_KEYS: [&str; 7] = [
 ];
 
 /// Keys accepted in `[workspace.metadata.release.apps.<app>]`.
-const APP_KEYS: [&str; 1] = ["npm-scope"];
+const APP_KEYS: [&str; 2] = ["homebrew-description", "npm-scope"];
 
 /// Validated release configuration of one workspace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReleaseConfig {
     /// Released workspace packages by package name.
     pub(crate) apps: BTreeMap<String, AppConfig>,
+    /// Homebrew tap the formulas are published to; set exactly when the
+    /// `homebrew` installer is.
+    pub(crate) homebrew_tap: Option<HomebrewTap>,
     /// Relative paths of the files added to every archive, in configured
     /// order. Each app's package directory takes precedence over the
     /// workspace root as the source of each file.
@@ -66,11 +70,13 @@ impl ReleaseConfig {
             .ok_or_else(|| format!("missing `[{TABLE}]` in the workspace `Cargo.toml`"))?;
         let table = ConfigTable::new(release, TABLE.to_string())?;
         table.reject_unknown(&RELEASE_KEYS)?;
+        let installers = Self::parse_installers(&table)?;
 
         Ok(Self {
             apps: Self::parse_apps(&table)?,
+            homebrew_tap: Self::parse_homebrew_tap(&table, &installers)?,
             include: table.relative_paths("include")?,
-            installers: Self::parse_installers(&table)?,
+            installers,
             min_glibc: table
                 .optional_string("min-glibc")?
                 .map(|version| GlibcVersion::parse(version, &table.key("min-glibc")))
@@ -156,6 +162,31 @@ impl ReleaseConfig {
             .collect()
     }
 
+    /// Returns the `homebrew-tap`, which the `homebrew` installer requires
+    /// and other configurations reject.
+    fn parse_homebrew_tap(
+        table: &ConfigTable<'_>,
+        installers: &BTreeSet<Installer>,
+    ) -> Result<Option<HomebrewTap>, String> {
+        let key = table.key("homebrew-tap");
+        let tap = table
+            .optional_string("homebrew-tap")?
+            .map(|tap| HomebrewTap::parse(tap, &key))
+            .transpose()?;
+        let homebrew = installers.contains(&Installer::Homebrew);
+        match (&tap, homebrew) {
+            (None, true) => Err(format!(
+                "the `homebrew` installer needs `{key}`, the `<owner>/<name>` of the tap that the \
+                 formulas are published to"
+            )),
+            (Some(_), false) => Err(format!(
+                "`{key}` is set, but `{}` does not list `homebrew`",
+                table.key("installers")
+            )),
+            _ => Ok(tap),
+        }
+    }
+
     fn parse_profile(table: &ConfigTable<'_>) -> Result<String, String> {
         let Some(profile) = table.optional_string("profile")? else {
             return Ok(DEFAULT_PROFILE.to_string());
@@ -201,6 +232,8 @@ impl ReleaseConfig {
 /// Validated `[workspace.metadata.release.apps.<app>]` settings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AppConfig {
+    /// Homebrew formula `desc` in place of the package description.
+    pub(crate) homebrew_description: Option<String>,
     /// npm scope, such as `@example`, for the app's npm package name.
     pub(crate) npm_scope: Option<String>,
 }
@@ -213,7 +246,12 @@ impl AppConfig {
             .map(|scope| Self::parse_npm_scope(scope, &table.key("npm-scope")))
             .transpose()?;
 
-        Ok(Self { npm_scope })
+        Ok(Self {
+            homebrew_description: table
+                .optional_string("homebrew-description")?
+                .map(ToString::to_string),
+            npm_scope,
+        })
     }
 
     /// Accepts `@` followed by a lowercase, URL-safe npm scope name.
@@ -237,24 +275,31 @@ impl AppConfig {
     }
 }
 
-/// An installer kind that `assemble` can emit.
+/// An installer kind that a release supports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Installer {
     /// POSIX `sh` installer script.
     Shell,
+    /// Homebrew formula that installs the archives.
+    Homebrew,
     /// npm package that downloads the binaries on install.
     Npm,
+    /// `cargo binstall`, which finds the archives through each app's
+    /// `[package.metadata.binstall]`.
+    Binstall,
 }
 
 impl Installer {
     /// Every installer kind, in emission order.
-    pub(crate) const ALL: [Self; 2] = [Self::Shell, Self::Npm];
+    pub(crate) const ALL: [Self; 4] = [Self::Shell, Self::Homebrew, Self::Npm, Self::Binstall];
 
     /// Returns the configuration name.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Shell => "shell",
+            Self::Homebrew => "homebrew",
             Self::Npm => "npm",
+            Self::Binstall => "binstall",
         }
     }
 
@@ -269,6 +314,50 @@ impl Installer {
 impl Serialize for Installer {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.name())
+    }
+}
+
+/// A Homebrew tap, `<owner>/<name>`, which Homebrew clones from the GitHub
+/// repository `<owner>/homebrew-<name>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct HomebrewTap {
+    /// The tap name `brew install <tap>/<formula>` takes, `<owner>/<name>`.
+    pub(crate) name: String,
+    /// The tap's GitHub repository, `<owner>/homebrew-<name>`.
+    pub(crate) repository: String,
+}
+
+impl HomebrewTap {
+    /// Accepts `<owner>/<name>` with a GitHub owner name and a lowercase tap
+    /// name without the `homebrew-` repository prefix.
+    fn parse(tap: &str, key: &str) -> Result<Self, String> {
+        let invalid = || {
+            format!(
+                "`{key}` must be a Homebrew tap such as `example/tap`: a GitHub owner and a \
+                 lowercase name without the `homebrew-` repository prefix, found `{tap}`"
+            )
+        };
+        let (owner, name) = tap.split_once('/').ok_or_else(invalid)?;
+        let owner_valid = !owner.is_empty()
+            && !owner.starts_with('-')
+            && owner
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-');
+        let name_valid = name.starts_with(|character: char| character.is_ascii_lowercase())
+            && !name.starts_with("homebrew-")
+            && name.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || "-_".contains(character)
+            });
+        if !owner_valid || !name_valid {
+            return Err(invalid());
+        }
+
+        Ok(Self {
+            name: tap.to_string(),
+            repository: format!("{owner}/homebrew-{name}"),
+        })
     }
 }
 

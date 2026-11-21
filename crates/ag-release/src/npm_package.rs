@@ -147,7 +147,7 @@ impl NpmPackage<'_> {
                     "arch": archive.target.node_arch(),
                     "archive": archive.name,
                     "directory": archive.directory,
-                    "glibc": archive.target.is_glibc(),
+                    "libc": archive.target.libc().name(),
                     "platform": archive.target.node_platform(),
                     "sha256": digest,
                     "target": archive.target,

@@ -8,7 +8,8 @@ use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config::ReleaseConfig;
+use crate::artifact;
+use crate::config::{AppConfig, Installer, ReleaseConfig};
 use crate::process::{ProcessCommand, ProcessRunner};
 use crate::repository::GitHubRepository;
 
@@ -21,6 +22,8 @@ pub(crate) struct Workspace {
     /// Configured apps in name order.
     pub(crate) apps: Vec<App>,
     pub(crate) config: ReleaseConfig,
+    /// Every workspace member package, in `cargo metadata` order.
+    pub(crate) members: Vec<Member>,
     /// GitHub repository every app names in its `repository` field.
     pub(crate) repository: GitHubRepository,
     /// Absolute workspace root directory.
@@ -80,7 +83,11 @@ impl Workspace {
                         )
                     })?;
 
-                App::from_package(package, app.npm_scope.clone())
+                if config.installers.contains(&Installer::Binstall) {
+                    App::check_binstall(package)?;
+                }
+
+                App::from_package(package, app)
             })
             .collect::<Result<Vec<_>, String>>()?;
         let (repository, version) = Self::shared_identity(&apps)?;
@@ -90,9 +97,19 @@ impl Workspace {
             .and_then(|package| package.manifest_path.parent())
             .map(Path::to_path_buf);
 
+        let members = packages
+            .iter()
+            .map(|package| Member {
+                manifest_path: package.manifest_path.clone(),
+                name: package.name.clone(),
+                version: package.version.clone(),
+            })
+            .collect();
+
         Ok(Self {
             apps,
             config,
+            members,
             repository,
             root: workspace_root,
             target_directory,
@@ -124,6 +141,16 @@ impl Workspace {
     }
 }
 
+/// One workspace member package, released or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Member {
+    /// Absolute path of the package's `Cargo.toml`.
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) name: String,
+    /// The package's version as `cargo metadata` reports it.
+    pub(crate) version: String,
+}
+
 /// One released workspace package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct App {
@@ -131,6 +158,8 @@ pub(crate) struct App {
     /// Names of the package's `bin` targets, sorted.
     pub(crate) binaries: Vec<String>,
     pub(crate) description: Option<String>,
+    /// Configured Homebrew formula description, if any.
+    pub(crate) homebrew_description: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) name: String,
     pub(crate) npm_scope: Option<String>,
@@ -141,7 +170,7 @@ pub(crate) struct App {
 }
 
 impl App {
-    fn from_package(package: &MetadataPackage, npm_scope: Option<String>) -> Result<Self, String> {
+    fn from_package(package: &MetadataPackage, config: &AppConfig) -> Result<Self, String> {
         let name = &package.name;
         let mut binaries = package
             .targets
@@ -171,13 +200,55 @@ impl App {
             authors: package.authors.clone(),
             binaries,
             description: package.description.clone(),
+            homebrew_description: config.homebrew_description.clone(),
             license: package.license.clone(),
             name: name.clone(),
-            npm_scope,
+            npm_scope: config.npm_scope.clone(),
             package_directory: package_directory.to_path_buf(),
             repository,
             version,
         })
+    }
+
+    /// Checks that the package's `[package.metadata.binstall]` points
+    /// `cargo binstall` at the release archives.
+    ///
+    /// # Errors
+    /// Returns an error showing the table to add when a key is missing or
+    /// names other files.
+    fn check_binstall(package: &MetadataPackage) -> Result<(), String> {
+        let binstall = package
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("binstall"));
+        let value = |key: &str| {
+            binstall
+                .and_then(|binstall| binstall.get(key))
+                .and_then(Value::as_str)
+        };
+        let pkg_url_matches = value("pkg-url").is_some_and(|url| {
+            [
+                artifact::BINSTALL_PKG_URL,
+                artifact::BINSTALL_UNPREFIXED_PKG_URL,
+            ]
+            .contains(&url)
+        });
+        if pkg_url_matches
+            && value("bin-dir") == Some(artifact::BINSTALL_BIN_DIR)
+            && value("pkg-fmt") == Some(artifact::BINSTALL_PKG_FMT)
+        {
+            return Ok(());
+        }
+
+        Err(format!(
+            "the `binstall` installer needs these keys in `{}`, with `v` removed from `pkg-url` \
+             for release tags without it:\n\n[package.metadata.binstall]\npkg-url = \
+             \"{}\"\nbin-dir = \"{}\"\npkg-fmt = \"{}\"",
+            package.manifest_path.display(),
+            artifact::BINSTALL_PKG_URL,
+            artifact::BINSTALL_BIN_DIR,
+            artifact::BINSTALL_PKG_FMT
+        ))
     }
 }
 
@@ -200,6 +271,9 @@ struct MetadataPackage {
     license: Option<String>,
     /// Absolute path of the package's `Cargo.toml`.
     manifest_path: PathBuf,
+    /// The `[package.metadata]` table, or `null` when it is absent.
+    #[serde(default)]
+    metadata: Option<Value>,
     name: String,
     repository: Option<String>,
     targets: Vec<MetadataTarget>,

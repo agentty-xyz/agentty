@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::cli::{AssembleOptions, Host};
+use crate::homebrew_formula::HomebrewFormula;
 use crate::npm_package::{self, NpmPackage};
 use crate::plan::ReleasePlan;
 use crate::process::ProcessCommand;
@@ -47,6 +48,10 @@ pub(crate) fn run(
         if let Some(name) = &app.shell_installer {
             let script = ShellInstaller::render(&plan, app, &tag.name, &assembly.sha256)?;
             assembly.publish(name, script.as_bytes())?;
+        }
+        if let Some(name) = &app.homebrew_formula {
+            let formula = HomebrewFormula::render(&plan, app, &tag.name, &assembly.sha256)?;
+            assembly.publish(name, formula.as_bytes())?;
         }
         if let (Some(tarball), Some(name)) = (&app.npm_tarball, &app.npm_package) {
             let package = NpmPackage {

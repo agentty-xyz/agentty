@@ -158,19 +158,19 @@ jobs:
           ag-release build --target "$target" --profile dev --out-dir "$RUNNER_TEMP/artifacts"
           ag-release assemble --tag "$TAG" --artifacts-dir "$RUNNER_TEMP/artifacts" --target "$target"
           ag-release notes --tag "$TAG"
-[%- if shell || npm %]
+[%- if smoke.shell || smoke.npm %]
 
       # Installs every app from the local artifacts into an isolated home
       # directory, then runs each installed binary.
-[%- if npm %] The npm packages under
+[%- if smoke.npm %] The npm packages under
       # test are the tarballs just assembled, so no lockfile applies.
 [%- endif %]
       - name: Install through
-[%- if shell %] the shell installer[% endif %]
-[%- if shell && npm %] and[% endif %]
-[%- if npm %] npm[% endif %]
+[%- if smoke.shell %] the shell installer[% endif %]
+[%- if smoke.shell && smoke.npm %] and[% endif %]
+[%- if smoke.npm %] npm[% endif %]
         run: |
-[%- if npm %] # zizmor: ignore[adhoc-packages][% endif %]
+[%- if smoke.npm %] # zizmor: ignore[adhoc-packages][% endif %]
           artifacts="$RUNNER_TEMP/artifacts"
           export HOME="$RUNNER_TEMP/home"
           mkdir -p "$HOME"
@@ -179,18 +179,18 @@ jobs:
             "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/apps.tsv"
           while IFS=$'\t' read -r app installer tarball binaries; do
             variable="$(printf '%s' "$app" | tr 'a-z-' 'A-Z_')"
-[%- if shell %]
+[%- if smoke.shell %]
             sh_prefix="$RUNNER_TEMP/sh/$app"
 [%- endif %]
-[%- if npm %]
+[%- if smoke.npm %]
             npm_prefix="$RUNNER_TEMP/npm/$app"
 [%- endif %]
             export "${variable}_DOWNLOAD_URL=file://$artifacts"
-[%- if shell %]
+[%- if smoke.shell %]
             env "${variable}_INSTALL_DIR=$sh_prefix" sh "$artifacts/$installer"
             test -f "$HOME/.config/$app/$app-receipt.json"
 [%- endif %]
-[%- if npm %]
+[%- if smoke.npm %]
             npm install --global --prefix "$npm_prefix" "$artifacts/$tarball"
             # The dry run validates the package first and then fails when the
             # version is already published, as it usually is on a pull request.
@@ -200,14 +200,49 @@ jobs:
             fi
 [%- endif %]
             for binary in $binaries; do
-[%- if shell %]
+[%- if smoke.shell %]
               "$sh_prefix/bin/$binary" --version
 [%- endif %]
-[%- if npm %]
+[%- if smoke.npm %]
               "$npm_prefix/bin/$binary" --version
 [%- endif %]
             done
           done < "$RUNNER_TEMP/apps.tsv"
+[%- endif %]
+[%- if smoke.homebrew %]
+
+      # Installs every app's formula from a local tap, with its archive URLs
+      # pointed at the local artifacts, and runs each installed binary.
+      # Runners without Homebrew skip this step.
+      - name: Install through Homebrew
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          brew="$(command -v brew || true)"
+          if [ -z "$brew" ] && [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+            brew=/home/linuxbrew/.linuxbrew/bin/brew
+          fi
+          if [ -z "$brew" ]; then
+            echo "::notice::Homebrew is not installed on this runner"
+            exit 0
+          fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+          artifacts="$RUNNER_TEMP/artifacts"
+          plan="$RUNNER_TEMP/plan.json"
+          tap=ag-release/smoke
+          "$brew" tap-new --no-git "$tap" > /dev/null
+          formulas="$("$brew" --repository "$tap")/Formula"
+          download_url="$(jq --raw-output .repository.url "$plan")/releases/download/$TAG"
+          jq --raw-output '.apps[] | [.name, .homebrew_formula, (.binaries | join(" "))] | @tsv' \
+            "$plan" > "$RUNNER_TEMP/formulas.tsv"
+          while IFS=$'\t' read -r app formula binaries; do
+            sed "s|\"$download_url/|\"file://$artifacts/|" "$artifacts/$formula" > "$formulas/$formula"
+            # `brew` reads standard input, which would consume the app list.
+            "$brew" install "$tap/$app" < /dev/null
+            for binary in $binaries; do
+              "$("$brew" --prefix "$tap/$app")/bin/$binary" --version
+            done
+          done < "$RUNNER_TEMP/formulas.tsv"
 [%- endif %]
 [%- for job in check_jobs %]
 
@@ -237,10 +272,24 @@ jobs:
         with:
           persist-credentials: false
 [% include "release_workflow_tool.yml.j2" %]
+[%- if musl %]
+
+      # musl targets link statically, and their C dependencies compile with
+      # musl-gcc, which builds for the runner's own architecture.
+      - name: Install musl tools
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+[%- endif %]
 
       - name: Build archives
         env:
           TARGET: ${{ matrix.target }}
+[%- if musl %]
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
+[%- endif %]
         run: |
           rustup target add "$TARGET"
           ag-release build --target "$TARGET" --out-dir "$RUNNER_TEMP/artifacts"

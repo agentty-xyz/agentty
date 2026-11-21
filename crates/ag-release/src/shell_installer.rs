@@ -71,7 +71,6 @@ impl<'plan> ShellInstaller<'plan> {
                 Ok(TargetArm {
                     archive: Self::quote(&archive.name),
                     directory: Self::quote(&archive.directory),
-                    glibc: archive.target.is_glibc(),
                     patterns: Self::patterns(archive.target),
                     sha256: Self::quote(digest),
                     target: archive.target.triple(),
@@ -123,13 +122,20 @@ impl<'plan> ShellInstaller<'plan> {
         Ok(format!("{installer}\n"))
     }
 
-    /// Returns the `case` patterns that match `"<uname -s> <uname -m>"` on
-    /// `target`.
+    /// Returns the `case` patterns that match
+    /// `"<uname -s> <uname -m> <libc>"` on `target`, where `<libc>` is
+    /// [`Libc::name`](crate::target::Libc::name).
     fn patterns(target: Target) -> String {
         target
             .uname_machines()
             .iter()
-            .map(|machine| Self::quote(&format!("{} {machine}", target.uname_system())))
+            .map(|machine| {
+                Self::quote(&format!(
+                    "{} {machine} {}",
+                    target.uname_system(),
+                    target.libc().name()
+                ))
+            })
             .collect::<Vec<_>>()
             .join(" | ")
     }
@@ -146,8 +152,6 @@ struct TargetArm {
     archive: String,
     /// Shell word of the archive's top-level directory.
     directory: String,
-    /// Whether the installer checks the glibc version on this target.
-    glibc: bool,
     /// `case` patterns that select this target.
     patterns: String,
     /// Shell word of the archive's SHA-256.

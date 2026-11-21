@@ -56,6 +56,7 @@ fn parse_reads_every_workflow_key_in_configured_order() {
                 "uses": "demo-org/demo-ci/.github/workflows/publish.yml@v1.2",
                 "permissions": {"id-token": "write", "contents": "read"},
                 "prerelease": true,
+                "secrets": ["REGISTRY_TOKEN", "_signing_key2"],
             },
             "publish-docs": {"stage": "publish", "uses": "$/.github/workflows/docs.yml"},
         },
@@ -73,6 +74,7 @@ fn parse_reads_every_workflow_key_in_configured_order() {
         permissions: BTreeMap::new(),
         plan: false,
         prerelease: false,
+        secrets: Vec::new(),
         stage,
         uses: uses.to_string(),
     };
@@ -102,6 +104,7 @@ fn parse_reads_every_workflow_key_in_configured_order() {
                 CustomJob {
                     permissions: BTreeMap::from([("contents", "read"), ("id-token", "write")]),
                     prerelease: true,
+                    secrets: vec!["REGISTRY_TOKEN".to_string(), "_signing_key2".to_string()],
                     ..custom_job(
                         "_publish_registry",
                         JobStage::Publish,
@@ -321,7 +324,7 @@ fn parse_rejects_invalid_job_settings() {
         (
             check(json!({"needs": "plan"})),
             "unknown key `~.jobs.release-gate.needs`; expected one of: permissions, plan, \
-             prerelease, stage, uses"
+             prerelease, secrets, stage, uses"
                 .to_string(),
         ),
         (
@@ -388,6 +391,46 @@ fn parse_rejects_invalid_job_settings() {
         cases.push((
             check(json!({"uses": uses})),
             format!("{uses_error} `{uses}`"),
+        ));
+    }
+    let cases = cases
+        .iter()
+        .map(|(workflow, expected)| (workflow.clone(), expected.as_str()))
+        .collect::<Vec<_>>();
+
+    // Act & Assert
+    assert_rejected(&cases);
+}
+
+#[test]
+fn parse_rejects_invalid_job_secrets() {
+    // Arrange
+    let secrets = |secrets: Value| {
+        job(&json!({"stage": "publish", "uses": "./publish.yml", "secrets": secrets}))
+    };
+    let mut cases = vec![
+        (
+            secrets(json!("inherit")),
+            "`~.jobs.release-gate.secrets` must be a list of nonempty strings".to_string(),
+        ),
+        (
+            secrets(json!(["TOKEN", "TOKEN"])),
+            "`~.jobs.release-gate.secrets` lists `TOKEN` more than once".to_string(),
+        ),
+    ];
+    for secret in [
+        "1TOKEN",
+        "github_token",
+        "GITHUB_TOKEN",
+        "TAP-KEY",
+        "KEY }}",
+    ] {
+        cases.push((
+            secrets(json!([secret])),
+            format!(
+                "`~.jobs.release-gate.secrets` entry `{secret}` must be a secret name of letters, \
+                 digits, and `_` that starts with neither a digit nor `GITHUB_`"
+            ),
         ));
     }
     let cases = cases

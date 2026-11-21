@@ -11,14 +11,12 @@ use std::path::Path;
 use askama::Template;
 use semver::Version;
 
-use crate::changelog::ChangelogEntry;
+use crate::changelog::{self, ChangelogEntry};
 use crate::cli::{Host, NotesOptions};
+use crate::config::Installer;
 use crate::plan::{AppPlan, ReleasePlan};
 use crate::tag::ReleaseTag;
 use crate::workspace::Workspace;
-
-/// Changelog read from the workspace root.
-const CHANGELOG: &str = "CHANGELOG.md";
 
 /// Prints the release notes of `options.tag`, or only their title with
 /// `options.title`.
@@ -59,7 +57,7 @@ fn changelog_entry(
     root: &Path,
     version: &Version,
 ) -> Result<Option<ChangelogEntry>, String> {
-    let path = root.join(CHANGELOG);
+    let path = root.join(changelog::FILE);
     if !host.is_file(&path)? {
         return Ok(None);
     }
@@ -111,10 +109,14 @@ impl ReleaseNote<'_> {
 #[derive(Template)]
 #[template(path = "release_note.md.j2", escape = "none")]
 struct AppNote {
+    /// `cargo binstall` command when the binstall installer is enabled.
+    binstall_command: Option<String>,
     /// Download table rows, macOS before Linux.
     downloads: Vec<Download>,
     /// `<app> <version>`.
     heading: String,
+    /// Homebrew install command when the Homebrew installer is enabled.
+    homebrew_command: Option<String>,
     /// npm install command when the npm installer is enabled.
     npm_command: Option<String>,
     /// `<owner>/<name>` of the GitHub repository.
@@ -133,6 +135,10 @@ impl AppNote {
         let repository = &plan.repository;
 
         Self {
+            binstall_command: plan
+                .installers
+                .contains(&Installer::Binstall)
+                .then(|| format!("cargo binstall {}@{}", app.name, plan.version)),
             downloads: archives
                 .into_iter()
                 .map(|archive| Download {
@@ -143,6 +149,11 @@ impl AppNote {
                 })
                 .collect(),
             heading: format!("{} {}", app.name, plan.version),
+            homebrew_command: plan
+                .homebrew_tap
+                .as_ref()
+                .filter(|_| app.homebrew_formula.is_some())
+                .map(|tap| format!("brew install {}/{}", tap.name, app.name)),
             npm_command: app
                 .npm_package
                 .as_ref()

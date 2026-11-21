@@ -182,6 +182,7 @@ dependencies = [
  "sha2 0.11.1",
  "tar",
  "tempfile",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]

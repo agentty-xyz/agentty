@@ -52,7 +52,13 @@ fn artifact_path(name: &str) -> PathBuf {
 /// Returns a process runner for the demo workspace whose `git archive`
 /// answers `result`.
 fn git_process(result: Result<Vec<u8>, String>) -> MockProcessRunner {
-    let mut process = metadata_process(&demo_metadata());
+    git_process_for(&demo_metadata(), result)
+}
+
+/// Returns a process runner for the workspace of `metadata` whose
+/// `git archive` answers `result`.
+fn git_process_for(metadata: &Value, result: Result<Vec<u8>, String>) -> MockProcessRunner {
+    let mut process = metadata_process(metadata);
     let expected = ProcessCommand {
         args: [
             "archive",
@@ -207,6 +213,38 @@ fn assemble_writes_installers_the_source_archive_checksum_list_and_manifest() {
         .map(|name| (name.to_string(), json!(digest(name))))
         .collect::<Map<_, _>>();
     assert_eq!(manifest["sha256"], Value::Object(expected_sha256));
+}
+
+#[test]
+fn assemble_writes_homebrew_formulas_with_the_archive_digests() {
+    // Arrange
+    let mut metadata = demo_metadata();
+    metadata["metadata"]["release"]["installers"] = json!(["homebrew"]);
+    metadata["metadata"]["release"]["homebrew-tap"] = json!("demo-org/tap");
+    let process = git_process_for(&metadata, Ok(SOURCE_TAR.to_vec()));
+    let files = demo_artifacts();
+    let file_system = memory_file_system(&files);
+
+    // Act
+    let (result, stdout) = run("v1.2.3", &process, &file_system);
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert!(
+        stdout.starts_with("artifacts/demo-app.rb\nartifacts/demo-tool.rb\n"),
+        "{stdout}"
+    );
+    let files = lock(&files);
+    let read = |name: &str| files[&artifact_path(name)].clone();
+    let formula = String::from_utf8(read("demo-tool.rb")).expect("UTF-8 formula");
+    let digest = checksum::sha256(&read("demo-tool-x86_64-unknown-linux-gnu.tar.gz"));
+    assert!(formula.contains("class DemoTool < Formula\n"), "{formula}");
+    assert!(
+        formula.contains(&format!("sha256 \"{digest}\"\n")),
+        "{formula}"
+    );
+    let checksums = String::from_utf8(read("sha256.sum")).expect("UTF-8 checksum list");
+    assert!(checksums.contains("  demo-tool.rb\n"), "{checksums}");
 }
 
 #[test]

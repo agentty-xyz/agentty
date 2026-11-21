@@ -138,33 +138,53 @@ detect_target() {
         [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
         _machines="arm64 x86_64"
     fi
-    _target=
-    for _candidate in $_machines; do
-        case "$_system $_candidate" in
-{%- for arm in targets %}
-            {{ arm.patterns }})
-                _target={{ arm.target }}
-                _archive={{ arm.archive }}
-                _directory={{ arm.directory }}
-                _sha256={{ arm.sha256 }}
-                _glibc={{ arm.glibc }}
-                ;;
-{%- endfor %}
-            *)
-                continue
-                ;;
-        esac
-        break
-    done
+    _libcs=none
+    _libc_problem=
+    if [ "$_system" = Linux ]; then
+        detect_libc
+    fi
+    match_target "$_libcs"
+    # A platform whose only targets need a glibc this system lacks fails
+    # with the reason.
+    if [ -z "$_target" ] && [ -n "$_libc_problem" ]; then
+        match_target gnu
+        if [ -n "$_target" ]; then
+            fail "$_libc_problem"
+        fi
+    fi
     if [ -z "$_target" ]; then
         fail "unsupported platform $_system $_machine; $APP_NAME supports $SUPPORTED_TARGETS"
     fi
     if [ "$_system" = Linux ]; then
         check_userland
     fi
-    if [ "$_glibc" = true ]; then
-        check_libc
-    fi
+}
+
+# Sets _target and its _archive, _directory, and _sha256 to the first target
+# for one of _machines and one of the C libraries in the first argument,
+# trying them in order, or _target to empty when none is configured.
+match_target() {
+    local _wanted_libcs="$1"
+    _target=
+    for _candidate in $_machines; do
+        for _libc in $_wanted_libcs; do
+            case "$_system $_candidate $_libc" in
+{%- for arm in targets %}
+                {{ arm.patterns }})
+                    _target={{ arm.target }}
+                    _archive={{ arm.archive }}
+                    _directory={{ arm.directory }}
+                    _sha256={{ arm.sha256 }}
+                    ;;
+{%- endfor %}
+                *)
+                    continue
+                    ;;
+            esac
+
+            return 0
+        done
+    done
 }
 
 # Fails on a 32-bit userland, such as 32-bit Raspberry Pi OS on a 64-bit
@@ -182,14 +202,22 @@ check_userland() {
     fi
 }
 
-check_libc() {
+# Sets _libcs to the C libraries whose targets run on this Linux system, in
+# order of preference: glibc targets when the system has a new enough glibc,
+# and statically linked musl targets anywhere. Sets _libc_problem to why
+# glibc targets do not run when they do not.
+detect_libc() {
     _ldd=$(ldd --version 2>&1)
     case "$_ldd" in
         *musl*)
-            fail "unsupported platform $_system $_machine with musl libc;" \
-                "$APP_NAME supports $SUPPORTED_TARGETS"
+            _libcs=musl
+            _libc_problem="unsupported platform $_system $_machine with musl libc;"
+            _libc_problem="$_libc_problem $APP_NAME supports $SUPPORTED_TARGETS"
+
+            return 0
             ;;
     esac
+    _libcs="gnu musl"
     if [ -z "$MIN_GLIBC" ]; then
         return 0
     fi
@@ -203,12 +231,15 @@ check_libc() {
         *) _glibc_major= ;;
     esac
     if ! is_number "$_glibc_major" || ! is_number "$_glibc_minor"; then
-        fail "cannot determine the glibc version; $APP_NAME needs glibc $MIN_GLIBC or newer"
-    fi
-    if [ "$_glibc_major" -lt "$MIN_GLIBC_MAJOR" ] || {
+        _libcs=musl
+        _libc_problem="cannot determine the glibc version;"
+        _libc_problem="$_libc_problem $APP_NAME needs glibc $MIN_GLIBC or newer"
+    elif [ "$_glibc_major" -lt "$MIN_GLIBC_MAJOR" ] || {
         [ "$_glibc_major" -eq "$MIN_GLIBC_MAJOR" ] && [ "$_glibc_minor" -lt "$MIN_GLIBC_MINOR" ]
     }; then
-        fail "$APP_NAME needs glibc $MIN_GLIBC or newer, but this system has glibc $_glibc_version"
+        _libcs=musl
+        _libc_problem="$APP_NAME needs glibc $MIN_GLIBC or newer,"
+        _libc_problem="$_libc_problem but this system has glibc $_glibc_version"
     fi
 }
 

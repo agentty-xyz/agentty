@@ -114,3 +114,69 @@ fn find_returns_an_empty_entry_and_stops_at_an_unclosed_fence() {
         ]
     );
 }
+
+#[test]
+fn insert_heading_moves_unreleased_notes_into_the_release() {
+    // Arrange
+    let cases = [
+        (
+            "# Changelog\n\n## [Unreleased]\n\n- Next.\n\n## [v1.2.2] - 2026-01-01\n",
+            "# Changelog\n\n## [Unreleased]\n\n## [v1.2.3] - 2026-02-03\n\n- Next.\n\n## [v1.2.2] \
+             - 2026-01-01\n",
+        ),
+        (
+            "## unreleased",
+            "## unreleased\n\n## [v1.2.3] - 2026-02-03\n",
+        ),
+    ];
+
+    for (changelog, expected) in cases {
+        // Act
+        let inserted =
+            ChangelogEntry::insert_heading(changelog, &Version::new(1, 2, 3), "2026-02-03");
+
+        // Assert
+        assert_eq!(inserted.as_deref(), Some(expected), "{changelog}");
+    }
+}
+
+#[test]
+fn insert_heading_follows_the_newest_release_heading_style() {
+    // Arrange
+    let cases = [
+        (
+            "# Changelog\n\n```md\n## [v0.1.0]\n```\n\n## 1.2.2 - 2026-01-01\n\n## [v1.2.1]\n",
+            "# Changelog\n\n```md\n## [v0.1.0]\n```\n\n## 1.2.3 - 2026-02-03\n\n## 1.2.2 - \
+             2026-01-01\n\n## [v1.2.1]\n",
+        ),
+        ("## [1.2.2]\n", "## [1.2.3] - 2026-02-03\n\n## [1.2.2]\n"),
+        (
+            "## Notes\n\n## v1.2.2 - 2026-01-01\n",
+            "## v1.2.3 - 2026-02-03\n\n## Notes\n\n## v1.2.2 - 2026-01-01\n",
+        ),
+        ("", "## [v1.2.3] - 2026-02-03\n"),
+        ("# Changelog\n", "# Changelog\n\n## [v1.2.3] - 2026-02-03\n"),
+        ("# Changelog", "# Changelog\n\n## [v1.2.3] - 2026-02-03\n"),
+    ];
+
+    for (changelog, expected) in cases {
+        // Act
+        let inserted =
+            ChangelogEntry::insert_heading(changelog, &Version::new(1, 2, 3), "2026-02-03");
+
+        // Assert
+        assert_eq!(inserted.as_deref(), Some(expected), "{changelog}");
+    }
+}
+
+#[test]
+fn insert_heading_leaves_a_changelog_with_the_release_entry_alone() {
+    // Arrange
+    let changelog = "## [Unreleased]\n\n## v1.2.3\n";
+
+    // Act
+    let inserted = ChangelogEntry::insert_heading(changelog, &Version::new(1, 2, 3), "2026-02-03");
+
+    // Assert
+    assert_eq!(inserted, None);
+}

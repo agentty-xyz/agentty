@@ -34,6 +34,9 @@ artifacts. Install it with:
 cargo install testty
 ```
 
+Prebuilt binaries install with `cargo binstall testty`,
+`brew install agentty-xyz/tap/testty`, or `npm install --global @agentty-xyz/testty`.
+
 ```text
 testty run <scenario.yaml> [--bin <BIN>] [--proof <DIR>]
 testty schema

@@ -25,7 +25,9 @@ fn plan_json(metadata: &Value, tag: Option<&ReleaseTag>) -> Value {
 #[test]
 fn plan_serializes_the_documented_contract() {
     // Arrange
-    let metadata = demo_metadata();
+    let mut metadata = demo_metadata();
+    metadata["metadata"]["release"]["installers"] = json!(["npm", "shell", "homebrew"]);
+    metadata["metadata"]["release"]["homebrew-tap"] = json!("demo-org/tap");
     let tag = tag("v1.2.3");
 
     // Act
@@ -49,6 +51,8 @@ fn plan_serializes_the_documented_contract() {
             "authors": ["Demo Author <demo@example.com>"],
             "binaries": binaries,
             "description": "Demo package",
+            "homebrew_description": "Demo package",
+            "homebrew_formula": format!("{name}.rb"),
             "license": "Apache-2.0",
             "name": name,
             "npm_package": npm_package,
@@ -69,8 +73,9 @@ fn plan_serializes_the_documented_contract() {
                 "source_archive": "source.tar.gz",
                 "source_checksum": "source.tar.gz.sha256",
             },
+            "homebrew_tap": {"name": "demo-org/tap", "repository": "demo-org/homebrew-tap"},
             "include": ["README.md", "LICENSE"],
-            "installers": ["shell", "npm"],
+            "installers": ["shell", "homebrew", "npm"],
             "matrix": {
                 "include": [
                     {"runner": "macos-latest", "target": "aarch64-apple-darwin"},
@@ -109,7 +114,10 @@ fn plan_without_tag_or_installers_omits_installer_artifacts() {
     assert_eq!(plan["tag"], Value::Null);
     assert_eq!(plan["min_glibc"], Value::Null);
     assert_eq!(plan["installers"], json!([]));
+    assert_eq!(plan["homebrew_tap"], Value::Null);
     for app in plan["apps"].as_array().expect("apps") {
+        assert_eq!(app["homebrew_description"], Value::Null);
+        assert_eq!(app["homebrew_formula"], Value::Null);
         assert_eq!(app["npm_package"], Value::Null);
         assert_eq!(app["npm_tarball"], Value::Null);
         assert_eq!(app["shell_installer"], Value::Null);
