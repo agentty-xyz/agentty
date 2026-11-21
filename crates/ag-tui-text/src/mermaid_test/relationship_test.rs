@@ -72,6 +72,39 @@ fn test_render_mermaid_draws_er_diagram_with_cardinality_markers() {
 }
 
 #[test]
+fn test_render_mermaid_er_shares_one_marker_cell_on_narrow_entity() {
+    // Arrange
+    let source = "erDiagram\n    A ||--o{ B\n    A ||--o{ C\n    A ||--o{ D";
+
+    // Act
+    let diagram = render_mermaid(source).expect("er diagram should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert_eq!(text.matches('1').count(), 1);
+    assert_eq!(text.matches('*').count(), 3);
+    assert!(text.contains("┌───────┼───────┐"));
+}
+
+#[test]
+fn test_render_mermaid_er_writes_label_beside_source_when_target_side_is_taken() {
+    // Arrange
+    let source = concat!(
+        "erDiagram\n",
+        "    CUSTOMER ||--o{ ORDER : places\n",
+        "    CUSTOMER ||--|| ACCOUNT : holds\n",
+    );
+
+    // Act
+    let diagram = render_mermaid(source).expect("er diagram should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert!(text.contains("1   1 holds"));
+    assert!(text.contains("* places     1"));
+}
+
+#[test]
 fn test_render_mermaid_er_omits_attribute_blocks() {
     // Arrange
     let source = concat!(

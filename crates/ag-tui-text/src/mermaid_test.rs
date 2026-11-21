@@ -8,6 +8,8 @@ mod canvas;
 mod cycle;
 #[path = "mermaid_test/flow_test.rs"]
 mod flow;
+#[path = "mermaid_test/layout_test.rs"]
+mod layout;
 #[path = "mermaid_test/limit_test.rs"]
 mod limit;
 #[path = "mermaid_test/relationship_test.rs"]

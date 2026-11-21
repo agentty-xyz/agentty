@@ -6,6 +6,7 @@ pub mod html;
 pub mod markdown;
 /// Bounded Mermaid parsing and terminal diagram rendering.
 pub mod mermaid;
+mod mermaid_layout;
 mod style;
 /// Terminal-width wrapping, truncation, borrowing, and compact formatting.
 pub mod text_util;
