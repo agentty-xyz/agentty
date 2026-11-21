@@ -579,6 +579,11 @@ too:
 | `with_temporary_directory` | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
 | `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, submodule metadata, and rebase and cherry-pick state      |
 | `with_network`             | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
+| `with_full_disk_read`      | Reads everything except hidden paths, as Claude Code and Codex do; always hides the keychain and other credential stores                                                       |
+| `with_hidden_path`         | Hides one path, such as a project's `.env`, from reads and writes; refused inside a writable directory                                                                         |
+| `with_writable_root`       | Reads and writes one cache directory outside the workspace, such as `~/.cargo/registry` or `~/.npm/_cacache`                                                                   |
+| `with_unix_socket`         | Allows connecting to one Unix-domain socket, such as `ssh-agent`'s, pinned when configured; macOS only, Linux warns                                                            |
+| `with_excluded_command`    | Runs approved simple commands of one program, by absolute path, outside the sandbox                                                                                            |
 | `with_environment`         | Passes one environment value                                                                                                                                                   |
 | `with_host_information`    | Exposes host details such as `uname`; required                                                                                                                                 |
 
@@ -592,10 +597,34 @@ write grant containing a Git directory, and only the repository's own Git metada
 repository at the top of each write grant stay read-only; macOS protects every `.git`
 name. A command the sandbox refuses to start, for example because a granted directory is
 missing, comes back to the model as a rejected tool call, and the turn continues.
-Enforcing a grant or a denial is the selected executor's job. Long output keeps each
-stream's start and end within the capture budget (`capture_bytes`, up to
-`BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
-`BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
+
+Coding sessions follow the sandboxes of Claude Code and Codex:
+
+- `with_full_disk_read` always hides `~/Library/Keychains`, `~/.ssh`, `~/.aws`,
+  `~/.gnupg`, `~/.config/gh/hosts.yml`, `~/.netrc`, `~/.docker/config.json`,
+  `~/.config/gcloud`, `~/.kube/config`, `/run/secrets`, and other sessions' temporary
+  directories beside a dedicated one, and the network grant never reaches the keychain
+  service. Pass tools a credential such as `GH_TOKEN` with `with_environment`; never
+  grant the keychain.
+- Writable roots accept only caches whose contents host tools do not run, because a
+  command could plant code there; see the `with_writable_root` docs for the list.
+- An excluded program runs unsandboxed only for calls the `ApprovalHandler` approves as
+  `ToolEffects::ExecutesUnsandboxed`; otherwise its commands stay sandboxed. Excluding a
+  program trusts it fully, since it runs whatever its arguments name, so show the user
+  the exact command. The model-facing `bash` description names excluded programs.
+- A sandboxed command that fails with an operating-system denial on stderr, such as
+  `Operation not permitted`, gets a hedged `sandbox` note in its result, and its
+  `ToolCallItem` sets `likely_sandbox_denial`. The guess is advisory and the command's
+  own output can trigger it: never rerun a command outside the sandbox automatically.
+- Host executors receive hidden paths only by declaring
+  `BashExecutor::supports_hidden_paths`.
+
+Upgrading `ag-harness` can change what the native sandbox enforces, as this release does
+for the macOS network grant (TLS trust evaluation added, the keychain service removed):
+change your policy revision when you upgrade. Enforcing a grant or a denial is the
+selected executor's job. Long output keeps each stream's start and end within the
+capture budget (`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually
+pass `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
 results are not deferred by the per-round result share, so a larger budget spends more
 of the context window per command. The omitted byte counts are on the `CommandOutcome`.
 Command intents are recorded before spawning; await `settled()` (and

@@ -65,6 +65,7 @@ mod linux {
     use rustix::fs::{Mode, OFlags};
 
     use super::super::{GRANT_ACCESS, abi, add_rule, confine, enforceable, restrict, ruleset};
+    use crate::execution::contract::ReadScope;
     use crate::execution::wire::Launch;
 
     fn launch(workspace: &std::path::Path) -> Launch {
@@ -76,11 +77,14 @@ mod linux {
             external_reads: vec![],
             git_metadata: vec![workspace.join(".git")],
             git_writes: None,
+            hidden_paths: vec![],
             host_information: true,
             launcher: "/trusted/launcher".into(),
             linux_bubblewrap: None,
             network: false,
+            read_scope: ReadScope::Granted,
             system: false,
+            unix_sockets: vec![],
             workspace: workspace.to_path_buf(),
             write_nodes: vec![],
             writes: vec![],

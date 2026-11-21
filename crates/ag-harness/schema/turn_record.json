@@ -490,6 +490,10 @@
           "description": "Provider identifier of the call.",
           "type": "string"
         },
+        "likely_sandbox_denial": {
+          "description": "Whether a `bash` call ran inside the sandbox and failed with an\noperating-system denial the sandbox may have caused, as\n[`ToolActivity::BashLikelySandboxDenial`] reports; the result told\nthe model. It is advisory, and the command's own output can set it:\nnever rerun a command outside the sandbox automatically; route any\nsuch rerun through the user's approval with the exact command.\n`false` in a [`crate::TurnRecord`], since sessions do not store it.",
+          "type": "boolean"
+        },
         "name": {
           "description": "Function name the model called.",
           "type": "string"

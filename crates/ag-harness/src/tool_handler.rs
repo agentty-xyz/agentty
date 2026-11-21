@@ -43,6 +43,17 @@ pub trait ToolHandler: Send + Sync {
     /// that is not [`ToolEffects::ReadOnly`] waits for its decision.
     fn effects(&self) -> ToolEffects;
 
+    /// Returns what the call with the model's JSON `arguments` may change,
+    /// which the approval handler sees and decides on; [`Self::effects`]
+    /// unless the handler tells calls apart, as the built-in `bash` marks
+    /// commands that run outside the sandbox
+    /// [`ToolEffects::ExecutesUnsandboxed`].
+    fn call_effects(&self, arguments: &Value) -> ToolEffects {
+        let _ = arguments;
+
+        self.effects()
+    }
+
     /// Runs one call with the model's JSON `arguments`, which the harness
     /// does not validate against the definition's parameters, or with the
     /// validated ones a [`crate::approval::Decision::AllowWith`] gave.
@@ -73,12 +84,21 @@ pub enum ToolEffects {
     /// Runs commands or other actions whose effects the harness cannot
     /// bound, like the built-in `bash`.
     Executes,
+    /// Runs a command outside the sandbox with the harness process's full
+    /// access, like a `bash` call of a program
+    /// `BashConfig::with_excluded_command` excludes. It runs unsandboxed
+    /// only once the approval handler allows it; show the user the exact
+    /// command, since the program can run any code its arguments name.
+    ExecutesUnsandboxed,
 }
 
 /// Facts about one tool call, given to its [`ToolHandler`].
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ToolContext {
+    /// Effects the approval handler allowed the call with, when one
+    /// decided on it.
+    pub(crate) approved: Option<ToolEffects>,
     pub(crate) call_id: String,
     pub(crate) control: Option<TurnControl>,
     /// Bounds a built-in `read` result to its share of the context budget.
@@ -93,6 +113,7 @@ impl ToolContext {
     /// one a host makes to test its handler.
     pub fn new(call_id: impl Into<String>) -> Self {
         Self {
+            approved: None,
             call_id: call_id.into(),
             control: None,
             fits: None,

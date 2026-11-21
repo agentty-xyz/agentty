@@ -4,6 +4,7 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -101,29 +102,93 @@ impl ToolHandler for BashHandler {
         ToolEffects::Executes
     }
 
+    /// Marks a command that runs outside the sandbox once approved.
+    fn call_effects(&self, arguments: &Value) -> ToolEffects {
+        match BashArguments::deserialize(arguments) {
+            // Arguments that do not decode are rejected without running.
+            Ok(arguments) if self.tool.excludes(&arguments) => ToolEffects::ExecutesUnsandboxed,
+            _ => ToolEffects::Executes,
+        }
+    }
+
     async fn call(
         &self,
         arguments: Value,
         tool_context: ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let arguments: BashArguments = decode(arguments)?;
+        let unsandboxed = tool_context.approved == Some(ToolEffects::ExecutesUnsandboxed);
         let started_at = Instant::now();
-        let outcome = match self.tool.execute(&arguments, tool_context.call_id()).await {
+        let outcome = match self
+            .tool
+            .execute(&arguments, tool_context.call_id(), unsandboxed)
+            .await
+        {
             Ok(outcome) => outcome,
             Err(TurnError::CommandFailed { outcome }) if refused(&outcome) => {
                 return Err(ToolError::rejected(SANDBOX_REFUSED));
             }
             Err(error) => return Err(ToolError::turn(error)),
         };
-        let result = serde_json::to_string(&outcome).map_err(unencodable_outcome)?;
+        let mut result = serde_json::to_value(&outcome).map_err(unencodable_outcome)?;
+        let duration = started_at.elapsed();
+        let activity = if self.tool.enforces(&arguments, unsandboxed) && likely_denied(&outcome) {
+            result["sandbox"] = Value::from(LIKELY_SANDBOX_DENIAL);
 
-        Ok(ToolOutput::builtin(
-            result,
-            ToolActivity::Bash {
-                duration: started_at.elapsed(),
-            },
-        ))
+            ToolActivity::BashLikelySandboxDenial { duration }
+        } else {
+            ToolActivity::Bash { duration }
+        };
+
+        Ok(ToolOutput::builtin(result.to_string(), activity))
     }
+}
+
+/// Note added as the `sandbox` field of a `bash` result whose command may
+/// have been blocked by the sandbox.
+const LIKELY_SANDBOX_DENIAL: &str =
+    "The command failed with an error the sandbox also produces when it blocks an operation, such \
+     as a write outside the writable directories. If the sandbox caused it, do not try to work \
+     around it: tell the user what was blocked so they can decide whether to allow it. If the \
+     error has another cause, such as file permissions or SSH authentication, handle it as usual.";
+
+/// Lowercase operating-system error messages the sandboxes cause:
+/// `EPERM` from Seatbelt and seccomp, `EACCES` from Landlock, and `EROFS`
+/// from Linux's read-only mounts.
+const SANDBOX_DENIAL_ERRORS: [&str; 3] = [
+    "operation not permitted",
+    "permission denied",
+    "read-only file system",
+];
+
+/// `SIGSYS`, which a Linux seccomp filter kills a process with.
+const LINUX_SIGSYS: i32 = 31;
+
+/// Returns whether `outcome`, of a command that ran inside the sandbox,
+/// failed in a way the sandbox may have caused, after the heuristic Codex
+/// uses to offer an unsandboxed retry: a non-zero exit with an
+/// operating-system denial on standard error, or, on Linux, a seccomp
+/// kill. The operating system reports a denial as an ordinary error, so
+/// file permissions and SSH authentication read the same, a blocked network
+/// connection reads as a resolution failure that is not detected, and the
+/// command controls its own output: the signal is advisory and
+/// model-influenceable.
+fn likely_denied(outcome: &CommandOutcome) -> bool {
+    let sigsys =
+        outcome.signal == Some(LINUX_SIGSYS) || outcome.exit_code == Some(128 + LINUX_SIGSYS);
+    let seccomp_kill = cfg!(target_os = "linux") && sigsys;
+    let denial_error = outcome.exit_code.is_some_and(|code| code != 0)
+        && [&outcome.stderr, &outcome.stderr_tail]
+            .into_iter()
+            .any(|text| {
+                let text = text.to_ascii_lowercase();
+
+                SANDBOX_DENIAL_ERRORS
+                    .iter()
+                    .any(|error| text.contains(error))
+            });
+
+    seccomp_kill || denial_error
 }
 
 /// Feedback for a `bash` call whose command the sandbox refused to start.

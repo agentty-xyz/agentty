@@ -16,13 +16,14 @@ use tokio::net::UnixStream;
 
 use super::{
     Access, GitDirectories, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess,
-    bounded_bytes, git_directories, pointer, probe, resolve_access, validate_executable,
+    bounded_bytes, cache_root, git_directories, pointer, probe, resolve_access, resolve_hidden,
+    validate_executable,
 };
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    Grants, MainExit, ProcessEvent,
+    Grants, MainExit, ProcessEvent, ReadScope,
 };
 use crate::execution::wire::{GitWrites, Notice};
 use crate::sandbox::SandboxUnavailableReason;
@@ -37,6 +38,7 @@ fn native_executor_states_identity_enforcement_and_platform_cleanup_scope() {
     // Act / Assert
     assert_eq!(native.identity(), "native");
     assert_eq!(native.enforcement(), Enforcement::FileSystemAndNetwork);
+    assert!(native.supports_hidden_paths());
     #[cfg(target_os = "linux")]
     assert_eq!(native.cleanup_scope(), CommandCleanupScope::PidNamespace);
     #[cfg(not(target_os = "linux"))]
@@ -610,6 +612,259 @@ impl Inspection for FailingInspection {
         self.check("exists")?;
         LocalInspection.try_exists(path).await
     }
+
+    async fn home(&self) -> Option<PathBuf> {
+        LocalInspection.home().await
+    }
+}
+
+/// Local inspection with another home directory.
+struct HomeInspection(PathBuf);
+
+#[async_trait]
+impl Inspection for HomeInspection {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        LocalInspection.canonicalize(path).await
+    }
+
+    async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        LocalInspection.metadata(path).await
+    }
+
+    async fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        LocalInspection.try_exists(path).await
+    }
+
+    async fn home(&self) -> Option<PathBuf> {
+        Some(self.0.clone())
+    }
+}
+
+#[tokio::test]
+async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    let registry = home.join(".cargo/registry");
+    let sessions = fixture.outside.join("sessions");
+    let secret = fixture.outside.join("secret");
+    for directory in [&registry, &sessions.join("own"), &sessions.join("other")] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+    std::fs::write(&secret, "secret").expect("secret");
+    symlink(&secret, fixture.outside.join("secret-alias")).expect("secret alias");
+    let socket = fixture.outside.join("agent.sock");
+    let policy = fixture.policy(Grants {
+        hidden_paths: vec![
+            fixture.outside.join("secret-alias"),
+            fixture.outside.join("missing/key"),
+        ],
+        read_scope: ReadScope::FullDisk,
+        temporary_directory: Some(sessions.join("own")),
+        unix_sockets: vec![socket.clone()],
+        writable_roots: vec![registry.clone()],
+        ..Grants::default()
+    });
+
+    // Act
+    let access = resolve_access(&HomeInspection(home.clone()), &policy)
+        .await
+        .expect("access");
+
+    // Assert
+    assert_eq!(access.writes, [sessions.join("own"), registry]);
+    assert_eq!(access.write_nodes.len(), 2);
+    // Links resolve, and a missing path keeps its name beneath its nearest
+    // existing ancestor; full-disk reads add the credential stores and the
+    // other sessions' directories.
+    let mut expected = vec![secret, fixture.outside.join("missing/key")];
+    expected.extend(
+        [
+            "Library/Keychains",
+            ".ssh",
+            ".aws",
+            ".gnupg",
+            ".config/gh/hosts.yml",
+            ".netrc",
+            ".docker/config.json",
+            ".config/gcloud",
+            ".kube/config",
+        ]
+        .map(|path| home.join(path)),
+    );
+    expected.push(resolve_hidden(&LocalInspection, Path::new("/run/secrets")).await);
+    expected.push(sessions);
+    assert_eq!(access.hidden_paths, expected);
+    assert_eq!(access.unix_sockets, [socket]);
+}
+
+#[tokio::test]
+async fn full_disk_reads_keep_shared_temporary_parents_visible() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    std::fs::create_dir_all(home.join("session")).expect("home session");
+    let system = std::env::temp_dir()
+        .canonicalize()
+        .expect("system temporary");
+    let own = tempfile::tempdir_in(&system).expect("system session");
+
+    // Act / Assert
+    // Directly in the system temporary directory, in the home directory,
+    // or beside the workspace, the parent's other entries stay visible.
+    for temporary in [
+        own.path().to_path_buf(),
+        home.join("session"),
+        fixture.temporary.clone(),
+    ] {
+        let policy = fixture.policy(Grants {
+            read_scope: ReadScope::FullDisk,
+            temporary_directory: Some(temporary.clone()),
+            ..Grants::default()
+        });
+        let access = resolve_access(&HomeInspection(home.clone()), &policy)
+            .await
+            .expect("access");
+        let parent = temporary
+            .canonicalize()
+            .expect("canonical temporary")
+            .parent()
+            .expect("parent")
+            .to_path_buf();
+        assert!(!access.hidden_paths.contains(&parent), "{temporary:?}");
+    }
+}
+
+#[tokio::test]
+async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    let tool_cache = home.join(".cache/tool");
+    for directory in [&tool_cache, &home.join(".cargo"), &home.join(".cache/prek")] {
+        std::fs::create_dir_all(directory).expect("home directory");
+    }
+    std::fs::write(fixture.outside.join("file"), "file").expect("file");
+    symlink(&fixture.workspace, fixture.outside.join("workspace-alias")).expect("alias");
+    symlink(&fixture.admin, fixture.outside.join("metadata-alias")).expect("metadata alias");
+    symlink(&tool_cache, fixture.outside.join("cache-alias")).expect("cache alias");
+    let in_cache = |grants: Grants| Grants {
+        writable_roots: vec![tool_cache.clone()],
+        ..grants
+    };
+    let cases = [
+        // Writable roots that host tools execute from, or that are not
+        // cache locations.
+        Grants {
+            writable_roots: vec![home.clone()],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.clone()],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![home.join(".cargo")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![home.join(".cache")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![home.join(".cache/prek")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("file")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("workspace-alias")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("metadata-alias")],
+            ..Grants::default()
+        },
+        // A hidden path containing the workspace, or inside a writable
+        // directory once resolved, where renaming a parent would reveal it.
+        Grants {
+            hidden_paths: vec![fixture.outside.join("workspace-alias")],
+            ..Grants::default()
+        },
+        in_cache(Grants {
+            hidden_paths: vec![fixture.outside.join("cache-alias/secret")],
+            ..Grants::default()
+        }),
+        // A socket a command could replace.
+        in_cache(Grants {
+            unix_sockets: vec![tool_cache.join("agent.sock")],
+            ..Grants::default()
+        }),
+        Grants {
+            unix_sockets: vec![fixture.workspace.join("agent.sock")],
+            ..Grants::default()
+        },
+    ];
+
+    // Act / Assert
+    for grants in cases {
+        assert_eq!(
+            resolve_access(&HomeInspection(home.clone()), &fixture.policy(grants))
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    let policy = fixture.policy(in_cache(Grants::default()));
+    assert!(
+        resolve_access(&HomeInspection(home.clone()), &policy)
+            .await
+            .is_ok()
+    );
+}
+
+#[test]
+fn writable_roots_must_be_caches_host_tools_do_not_execute() {
+    // Arrange
+    let home = Path::new("/home/user");
+    let cases = [
+        ("/home/user/.cargo/registry", true),
+        ("/home/user/.cargo/git/db", true),
+        ("/home/user/.npm/_cacache", true),
+        ("/home/user/go/pkg/mod", true),
+        ("/home/user/.cache/sccache", true),
+        ("/home/user/Library/Caches/Homebrew", true),
+        ("/private/var/folders/x/T/session-cache", true),
+        ("/home/user", false),
+        ("/home/user/.cargo", false),
+        ("/home/user/.cargo/bin", false),
+        ("/home/user/go", false),
+        ("/home/user/go/bin", false),
+        ("/home/user/.config", false),
+        ("/home/user/.local/bin", false),
+        ("/home/user/.npm", false),
+        ("/home/user/.cache", false),
+        ("/home/user/.cache/prek", false),
+        ("/home/user/.cache/pre-commit/repo", false),
+        ("/home/user/Library/Caches/ms-playwright", false),
+        ("/home", false),
+        ("/", false),
+        ("/opt/homebrew", false),
+        ("/usr/local", false),
+        ("/etc", false),
+        ("/Library/Caches", false),
+        ("/var", false),
+    ];
+
+    // Act / Assert
+    for (root, expected) in cases {
+        assert_eq!(cache_root(Path::new(root), Some(home)), expected, "{root}");
+    }
+    // Without a known home directory, only system directories are refused.
+    assert!(cache_root(Path::new("/home/user/.cargo"), None));
+    assert!(!cache_root(Path::new("/usr/local"), None));
 }
 
 #[tokio::test]
