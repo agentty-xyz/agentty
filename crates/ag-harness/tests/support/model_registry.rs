@@ -403,8 +403,7 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
             .expect("credentials");
         }
         let (endpoint, response) = if *provider == ModelProvider::Anthropic {
-            // The base URL is the API origin; the client appends `/v1`.
-            ("/v1/messages", anthropic_answer(model))
+            ("/messages", anthropic_answer(model))
         } else if matches!(provider, ModelProvider::OpenAi | ModelProvider::ChatGpt) {
             let completed = json!({"type":"response.completed","response":{
                 "id":"response", "model":model, "status":"completed",

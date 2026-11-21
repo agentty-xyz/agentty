@@ -25,6 +25,9 @@ const TOKENS_PER_MTOK: u128 = 1_000_000;
 ///   fall back to the input price when the pricing declares no cache price, as
 ///   built-in prices do not yet.
 /// - Output tokens, reasoning included, bill at the output price.
+/// - A usage whose `input` exceeds a declared long-context threshold bills at
+///   the long-context prices ([`Pricing::for_prompt`]), so price one request at
+///   a time.
 ///
 /// The exact sum is rounded once to the nearest micro-USD, halves up, so a
 /// run's cost, the sum of its requests' costs, can differ from pricing its
@@ -48,6 +51,7 @@ pub struct Cost {
 impl Cost {
     /// Prices `usage` with `pricing`, as the type documentation describes.
     pub fn of(usage: &Usage, pricing: Pricing) -> Self {
+        let pricing = pricing.for_prompt(usage.input);
         let cache_write = usage.cache_write.unwrap_or(0);
         let uncached_input = usage
             .input

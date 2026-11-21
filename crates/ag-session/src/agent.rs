@@ -338,7 +338,10 @@ const ANTIGRAVITY_MODELS: &[AgentModel] = &[
 /// harness library also catalogs the deprecated `gpt-5.3-codex`, which
 /// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it. Cheap
 /// tiers follow their provider's other models, so adding one never changes
-/// which configured model a new session starts on.
+/// which configured model a new session starts on, and a provider's
+/// standard-priced model leads its premium ones, so a key that leaves it
+/// the first ready model starts sessions on `claude-sonnet-5-5` rather than
+/// `claude-opus-5-5`.
 const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::MuseSpark13,
     AgentModel::MuseSpark13Contributor,
@@ -360,9 +363,9 @@ const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::Gpt6Astra,
     AgentModel::Gpt6Luna,
     AgentModel::Gpt56Terra,
+    AgentModel::ClaudeSonnet55,
     AgentModel::ClaudeOpus55,
     AgentModel::ClaudeFable52,
-    AgentModel::ClaudeSonnet55,
     AgentModel::ClaudeHaiku55,
 ];
 

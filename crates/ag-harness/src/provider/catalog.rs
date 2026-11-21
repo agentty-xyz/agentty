@@ -15,7 +15,7 @@ use thiserror::Error;
 #[cfg(feature = "providers-anthropic")]
 use super::{AnthropicConfig, ProviderSpec};
 use super::{ProviderSpecError, chatgpt, claude, kimi, muse, openai, openai_compatible, qwen};
-use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing};
+use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
@@ -278,10 +278,11 @@ impl ModelProvider {
 
     /// Returns the environment variable containing the provider base URL.
     ///
-    /// [`Self::Anthropic`] reads `ANTHROPIC_BASE_URL` as Anthropic's SDKs
-    /// do, as the API origin without the `/v1` version path, which the
-    /// client appends; an explicit [`ModelConfiguration::base_url`] takes
-    /// the same form.
+    /// Every base URL ends in the provider's version path, such as
+    /// `https://api.anthropic.com/v1`, except `ANTHROPIC_BASE_URL`, which
+    /// names the API origin as Anthropic's SDKs read it; configuration
+    /// appends `/v1` to it. An explicit [`ModelConfiguration::base_url`] and
+    /// [`Self::default_base_url`] keep the versioned form.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
             Self::Anthropic => claude::ANTHROPIC_BASE_URL_ENV,
@@ -296,7 +297,7 @@ impl ModelProvider {
 
     /// Returns the built-in base URL used when the environment has no
     /// override: Moonshot AI's international `https://api.moonshot.ai/v1`
-    /// for [`Self::Kimi`], the `https://api.anthropic.com` origin for
+    /// for [`Self::Kimi`], `https://api.anthropic.com/v1` for
     /// [`Self::Anthropic`], and Ollama's local endpoint for
     /// [`Self::OpenAiCompatible`]. [`Self::Qwen`] has none, since Model
     /// Studio serves each region from its own endpoint.
@@ -421,48 +422,50 @@ impl ModelProvider {
             #[cfg(feature = "providers-openai")]
             Credential::SignIn(auth_file) => (None, Some(auth_file)),
         };
-        let client = match self {
-            // The specification rejects a blank key, so it counts as missing;
-            // the base URL is the API origin, as `ANTHROPIC_BASE_URL` names it.
+        match self {
             #[cfg(feature = "providers-anthropic")]
             Self::Anthropic => {
-                let api_key = api_key.filter(|key| !key.trim().is_empty()).ok_or(
-                    ModelConfigurationError::ApiKey {
-                        name: claude::ANTHROPIC_API_KEY_ENV,
-                    },
-                )?;
+                let fallback_max_tokens = claude::fallback_max_tokens(&model);
                 let spec = ProviderSpec::anthropic(AnthropicConfig {
-                    api_key,
-                    base_url: format!("{}/v1", base_url.trim_end_matches('/')),
+                    api_key: api_key.unwrap_or_default(),
+                    base_url,
                     model,
                 });
+                let spec = match fallback_max_tokens {
+                    Some(max_tokens) => spec.with_fallback_max_tokens(max_tokens),
+                    None => spec,
+                };
 
-                return ModelClient::from_spec(spec).map_err(ModelConfigurationError::from);
+                ModelClient::from_spec(spec).map_err(ModelConfigurationError::from)
             }
             #[cfg(feature = "providers-openai")]
             Self::ChatGpt => ModelClient::chatgpt(chatgpt::ChatGptConfig {
                 auth_file: auth_file.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::Kimi => ModelClient::kimi(kimi::KimiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::Muse => ModelClient::muse(muse::MuseConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-openai")]
             Self::OpenAi => ModelClient::openai(openai::OpenAiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::OpenAiCompatible => {
                 ModelClient::openai_compatible(openai_compatible::OpenAiCompatibleConfig {
@@ -470,13 +473,15 @@ impl ModelProvider {
                     base_url,
                     model,
                 })
+                .map_err(ModelConfigurationError::from)
             }
             #[cfg(feature = "providers-compat")]
             Self::Qwen => ModelClient::qwen(qwen::QwenConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             // `client_from_environment` rejects a disabled family first; its
             // credential and endpoint go unused here.
             #[cfg(not(all(
@@ -487,11 +492,9 @@ impl ModelProvider {
             provider => {
                 drop((api_key, auth_file, base_url, model));
 
-                return Err(ModelConfigurationError::ProviderDisabled { provider });
+                Err(ModelConfigurationError::ProviderDisabled { provider })
             }
-        };
-
-        client.map_err(ModelConfigurationError::from)
+        }
     }
 
     /// Returns the context profile and output limit this catalog declares
@@ -588,7 +591,7 @@ impl ModelConfiguration {
 
     /// Constructs the configured client through an injected environment lookup.
     /// A provider whose key is optional sends no key when its variable is
-    /// unset or blank.
+    /// unset or blank; a blank required key counts as missing.
     ///
     /// # Errors
     ///
@@ -631,10 +634,9 @@ impl ModelConfiguration {
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Credential, ModelConfigurationError> {
         let api_key_environment = self.provider.api_key_environment();
+        // A blank key counts as unset, required or not.
         match environment(api_key_environment) {
-            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
-                Ok(Credential::ApiKey(Some(api_key)))
-            }
+            Ok(api_key) if !api_key.trim().is_empty() => Ok(Credential::ApiKey(Some(api_key))),
             Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
                 Ok(Credential::ApiKey(None))
             }
@@ -656,6 +658,13 @@ impl ModelConfiguration {
         let base_url_environment = self.provider.base_url_environment();
 
         match environment(base_url_environment) {
+            // `ANTHROPIC_BASE_URL` names the API origin, as Anthropic's SDKs
+            // read it, while every base URL here ends in the version path.
+            Ok(base_url)
+                if !base_url.trim().is_empty() && self.provider == ModelProvider::Anthropic =>
+            {
+                Ok(format!("{}/v1", base_url.trim_end_matches('/')))
+            }
             Ok(base_url) if !base_url.trim().is_empty() => Ok(base_url),
             // A blank variable counts as unset, so it falls back to the
             // default like a missing one instead of failing validation.
@@ -819,7 +828,10 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 /// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
 /// `OpenAI`'s API pricing, and on 2026-11-21 by Anthropic's Claude API
-/// pricing. Cache discounts that some of these providers publish are not
+/// pricing. Only Claude Haiku 5.5, five times dearer above its 100,000-token
+/// prompt threshold, also declares its long-prompt prices; other tiers,
+/// such as `OpenAI`'s doubled input price above 272,000 tokens, are not
+/// modeled. Cache discounts that some of these providers publish are not
 /// modeled yet, so cached input falls back to the input price. `ChatGPT`
 /// plan models carry no per-token price.
 const CATALOGED_MODELS: &[CatalogedModel] = &[
@@ -923,10 +935,15 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
     },
-    // Prompts of up to 100,000 tokens.
+    // Five times the price for a prompt over 100,000 tokens, cache reads and
+    // writes included.
     CatalogedModel {
         model: claude::CLAUDE_HAIKU_5_5,
-        pricing: Some(Pricing::built_in(100_000, 500_000)),
+        pricing: Some(
+            Pricing::built_in(100_000, 500_000)
+                .with_long_context(100_000, 500_000, 2_500_000)
+                .with_source(PricingSource::BuiltIn),
+        ),
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
     },

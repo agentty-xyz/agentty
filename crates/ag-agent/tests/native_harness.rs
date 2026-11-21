@@ -1329,91 +1329,138 @@ fn anthropic_environment(server: &MockServer) -> BTreeMap<String, String> {
     ])
 }
 
+/// Returns the streamed call of `read` on `notes.txt` after a signed,
+/// display-omitted thinking block, with the call's input sent as
+/// `input_json_delta` fragments, as the Messages API streams it.
+fn thinking_then_read_call() -> ResponseTemplate {
+    let events = [
+        json!({
+            "type": "message_start",
+            "message": {"id": "msg_call", "usage": {"input_tokens": 40, "output_tokens": 1}}
+        }),
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "thinking", "thinking": "", "signature": "sig-notes"
+        }}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "content_block_start", "index": 1, "content_block": {
+            "type": "tool_use", "id": "toolu_notes", "name": "read", "input": {}
+        }}),
+        json!({"type": "content_block_delta", "index": 1, "delta": {
+            "type": "input_json_delta", "partial_json": "{\"path\":"
+        }}),
+        json!({"type": "content_block_delta", "index": 1, "delta": {
+            "type": "input_json_delta", "partial_json": "\"notes.txt\"}"
+        }}),
+        json!({"type": "content_block_stop", "index": 1}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 8}
+        }),
+        json!({"type": "message_stop"}),
+    ];
+    let body = events.iter().fold(String::new(), |mut body, event| {
+        let _ = write!(body, "data: {event}\n\n");
+
+        body
+    });
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
 #[tokio::test]
-async fn claude_turn_streams_messages_and_returns_tool_results_for_every_cataloged_model() {
-    for model in [
-        "claude-opus-5-5",
-        "claude-fable-5-2",
-        "claude-sonnet-5-5",
-        "claude-haiku-5-5",
-    ] {
-        // Arrange
-        let server = MockServer::start().await;
-        respond_messages(
-            &server,
-            r#""type":"tool_result""#,
-            &[json!({
-                "type": "text",
-                "text": json!({"answer": "Notes read", "questions": []}).to_string()
-            })],
-            "end_turn",
-            1,
-        )
+async fn claude_turn_replays_signed_thinking_beside_its_streamed_tool_result() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond_messages(
+        &server,
+        r#""type":"tool_result""#,
+        &[json!({
+            "type": "text",
+            "text": json!({"answer": "Notes read", "questions": []}).to_string()
+        })],
+        "end_turn",
+        1,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_string_contains("Read the notes"))
+        .respond_with(thinking_then_read_call())
+        .with_priority(2)
+        .mount(&server)
         .await;
-        respond_messages(
-            &server,
-            "Read the notes",
-            &[json!({
-                "type": "tool_use",
-                "id": "toolu_notes",
-                "name": "read",
-                "input": {"path": "notes.txt"}
-            })],
-            "tool_use",
-            2,
-        )
-        .await;
-        let data_root = tempfile::tempdir().expect("data root");
-        let worktree = tempfile::tempdir().expect("worktree");
-        std::fs::write(worktree.path().join("notes.txt"), "claude notes\n").expect("notes");
-        let channel = create_agent_channel(
-            AgentKind::Harness,
-            None,
-            Some(&config(data_root.path(), anthropic_environment(&server))),
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "claude notes\n").expect("notes");
+    let mut environment = anthropic_environment(&server);
+    // A trailing slash on the origin still reaches `/v1/messages`.
+    environment.insert(
+        "ANTHROPIC_BASE_URL".to_string(),
+        format!("{}/", server.uri()),
+    );
+    let channel = create_agent_channel(
+        AgentKind::Harness,
+        None,
+        Some(&config(data_root.path(), environment)),
+    );
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-claude",
+        turn_request(worktree.path(), "claude-sonnet-5-5", "Read the notes"),
+    )
+    .await;
+
+    // Assert
+    let result = result.expect("Claude turn should succeed");
+    assert_eq!(result.assistant_message.answer, "Notes read");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("x-api-key")
+            .is_some_and(|value| value == "sk-ant-turn")
+            && !request.headers.contains_key("authorization")
+    }));
+    let bodies = requests
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).expect("JSON body"))
+        .collect::<Vec<_>>();
+    for body in &bodies {
+        assert_eq!(body["model"], "claude-sonnet-5-5");
+        assert_eq!(body["max_tokens"], 64_000);
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(
+            body["thinking"]["block_binding"]["prefix_mismatch_behavior"],
+            "drop_block"
         );
-
-        // Act
-        let (result, _) = run_turn(
-            &channel,
-            "session-claude",
-            turn_request(worktree.path(), model, "Read the notes"),
-        )
-        .await;
-
-        // Assert
-        assert!(result.is_ok(), "{model} turn failed: {result:?}");
-        let result = result.expect("Claude turn should succeed");
-        assert_eq!(result.assistant_message.answer, "Notes read", "{model}");
-        let requests = server.received_requests().await.unwrap_or_default();
-        assert_eq!(requests.len(), 2, "{model}");
-        assert!(requests.iter().all(|request| {
-            request
-                .headers
-                .get("x-api-key")
-                .is_some_and(|value| value == "sk-ant-turn")
-                && !request.headers.contains_key("authorization")
-        }));
-        let bodies = requests
-            .iter()
-            .map(|request| serde_json::from_slice::<Value>(&request.body).expect("JSON body"))
-            .collect::<Vec<_>>();
-        for body in &bodies {
-            assert_eq!(body["model"], model);
-            assert_eq!(body["stream"], true);
-            assert_eq!(body["output_config"]["effort"], "low", "{model}");
-            assert_eq!(body["output_config"]["format"]["type"], "json_schema");
-            assert_eq!(body["thinking"]["type"], "adaptive", "{model}");
-        }
-        let tool_result = bodies[1]["messages"]
-            .as_array()
-            .expect("messages")
-            .iter()
-            .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
-            .find(|block| block["type"] == "tool_result")
-            .expect("the read result should be sent back");
-        assert_eq!(tool_result["tool_use_id"], "toolu_notes");
-        assert!(tool_result.to_string().contains("claude notes"), "{model}");
     }
+    // The signed thinking returns unchanged, before the call it led to,
+    // beside the call's result.
+    let messages = bodies[1]["messages"].as_array().expect("messages");
+    let replayed = messages
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .expect("the call should be replayed");
+    assert_eq!(
+        replayed["content"][0],
+        json!({"type": "thinking", "thinking": "", "signature": "sig-notes"})
+    );
+    assert_eq!(replayed["content"][1]["type"], "tool_use");
+    assert_eq!(
+        replayed["content"][1]["input"],
+        json!({"path": "notes.txt"})
+    );
+    let tool_result = messages
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .find(|block| block["type"] == "tool_result")
+        .expect("the read result should be sent back");
+    assert_eq!(tool_result["tool_use_id"], "toolu_notes");
+    assert!(tool_result.to_string().contains("claude notes"));
 }
 
 #[tokio::test]

@@ -3,9 +3,8 @@
 
 use crate::model::{HeuristicContextEstimator, ModelProfile};
 
-/// Origin of the Anthropic API, without the version path, as
-/// `ANTHROPIC_BASE_URL` names it for Anthropic's SDKs.
-pub(crate) const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+/// Base URL of the Anthropic API, ending in its version path.
+pub(crate) const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 pub(crate) const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub(crate) const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 
@@ -51,6 +50,19 @@ pub(crate) fn profile(model: &str) -> Option<ModelProfile> {
 /// `None` for a model this catalog does not list.
 pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
     profile(model).map(|_| MAX_OUTPUT_TOKENS)
+}
+
+/// Returns the `max_tokens` a request to a cataloged Claude model sends
+/// when it sets no output bound, or `None` for a model this catalog does not
+/// list, which keeps the preset's 16,000.
+///
+/// Thinking counts toward `max_tokens`, so 16,000 can cut off an answer at
+/// a high effort. Requests stream, so 64,000, the bound Anthropic suggests
+/// for streamed requests, stays half of the documented 128,000-token
+/// limit while leaving room for long reasoning.
+#[cfg(feature = "providers-anthropic")]
+pub(crate) fn fallback_max_tokens(model: &str) -> Option<std::num::NonZeroU32> {
+    profile(model).map(|_| std::num::NonZeroU32::MIN.saturating_add(63_999))
 }
 
 #[cfg(test)]

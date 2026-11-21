@@ -759,10 +759,14 @@ protocol's `anthropic-version: 2023-06-01` header, which `ProviderSpec::with_hea
 replace. Serve it with `ModelClient::from_spec`, which declares no context profile:
 `ModelProvider::Anthropic` catalogs `claude-opus-5-5`, `claude-fable-5-2`,
 `claude-sonnet-5-5`, and `claude-haiku-5-5` with their documented 1M-token window,
-128K-token output limit, and list prices, for a `ModelRegistry` registration (see "Model
-catalog" below). `ModelConfiguration` builds the same client from `ANTHROPIC_API_KEY`
-and an optional `ANTHROPIC_BASE_URL`, read as Anthropic's SDKs read it: the API origin
-without the `/v1` version path (default `https://api.anthropic.com`). Built directly:
+128K-token output limit, and list prices (Claude Haiku 5.5's with its fivefold price
+above a 100,000-token prompt, `Pricing::with_long_context`), for a `ModelRegistry`
+registration (see "Model catalog" below). `ModelConfiguration` builds the same client
+from `ANTHROPIC_API_KEY` and an optional `ANTHROPIC_BASE_URL`, which names the API
+origin as Anthropic's SDKs read it; configuration appends `/v1`, while an explicit
+`ModelConfiguration::base_url` and the default, `DEFAULT_ANTHROPIC_BASE_URL`, keep the
+versioned form every base URL takes. A cataloged model it configures sends `max_tokens`
+64,000 when a request sets no bound. Built directly:
 
 ```rust
 use ag_harness::model::ModelClient;
@@ -788,9 +792,12 @@ effort turns on summarized adaptive thinking for the models that take one. Signe
 original place on later requests, and earlier turns replay with their turn instructions
 as first sent (`Model::replays_turn_instructions`), because the newest Claude models
 drop or reject signed thinking after an edited earlier message. Context reductions that
-clear or elide earlier rounds still edit history, so long sessions on those models can
-lose earlier thinking. Every Claude model shares one reasoning family, and a switch to
-another provider carries that reasoning as a short note. A request without an output
+clear or elide earlier rounds still edit history, so every request that sends thinking
+sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
+`thinking-binding-controls-2026-08-01` beta: the API drops the invalidated thinking for
+that request instead of rejecting it with a `400`, and long sessions on those models
+lose that earlier thinking. Every Claude model shares one reasoning family, and a switch
+to another provider carries that reasoning as a short note. A request without an output
 bound sends `max_tokens` 16,000 (`ProviderSpec::with_fallback_max_tokens`), since the
 API requires one. Usage counts cache reads and cache writes as input, and
 `Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop fails as an
@@ -1038,16 +1045,16 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
-with `ModelClient::from_spec` for every wire protocol; `providers-openai` or
-`providers-compat` also builds `ModelCatalog::from_environment` with every cataloged
-provider's entries. Each `ProviderSpec` preset needs its family's feature.
-`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
-client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
-any credential is read, and `ModelCatalog::from_environment` skips it. Without
-`native-sandbox`, `BashConfig::new`, `BashConfig::native`, `HarnessBuilder::sandbox`,
-and `sandbox::dispatch` are absent and Bash requires `BashConfig::for_executor`. Without
-`sqlite`, durable sessions require `Harness::store`. Features are additive: error enums
-whose variants depend on them are `#[non_exhaustive]`.
+with `ModelClient::from_spec` for every wire protocol, and
+`ModelCatalog::from_environment` with every cataloged provider's entries. Each
+`ProviderSpec` preset needs its family's feature. `ModelProvider::is_enabled` reports
+whether the build includes a provider's family; a client whose family is off fails with
+`ModelConfigurationError::ProviderDisabled` before any credential is read, and
+`ModelCatalog::from_environment` skips it. Without `native-sandbox`, `BashConfig::new`,
+`BashConfig::native`, `HarnessBuilder::sandbox`, and `sandbox::dispatch` are absent and
+Bash requires `BashConfig::for_executor`. Without `sqlite`, durable sessions require
+`Harness::store`. Features are additive: error enums whose variants depend on them are
+`#[non_exhaustive]`.
 
 ## Where things live
 

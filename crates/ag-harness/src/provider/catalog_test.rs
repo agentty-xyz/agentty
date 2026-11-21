@@ -774,6 +774,30 @@ fn configuration_reports_missing_api_key() {
 }
 
 #[test]
+fn configuration_treats_a_blank_required_key_as_missing() {
+    for provider in ModelProvider::all()
+        .iter()
+        .filter(|provider| provider.requires_api_key())
+    {
+        // Arrange
+        let model = provider.known_models()[0];
+
+        // Act
+        let error = ModelConfiguration::new(*provider, model)
+            .base_url("https://provider.example/v1")
+            .client_from_environment(|_| Ok("  ".to_string()))
+            .err()
+            .expect("a blank required key should be rejected");
+
+        // Assert
+        assert!(
+            matches!(error, ModelConfigurationError::ApiKey { name } if name == provider.api_key_environment()),
+            "{provider}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn configuration_rejects_an_empty_model() {
     // Arrange
     let configuration =
@@ -1043,11 +1067,30 @@ fn anthropic_catalogs_claude_models_with_their_list_prices_and_environment() {
     assert_eq!(provider.base_url_environment(), "ANTHROPIC_BASE_URL");
     assert_eq!(
         provider.default_base_url(),
-        Some("https://api.anthropic.com")
+        Some(crate::provider::DEFAULT_ANTHROPIC_BASE_URL)
+    );
+    assert_eq!(
+        provider.default_base_url(),
+        Some("https://api.anthropic.com/v1")
     );
     assert!(provider.requires_api_key());
     assert!(!provider.requires_sign_in());
     assert_eq!(provider.pricing("claude-unlisted"), None);
+    // Haiku costs five times as much once one prompt exceeds 100,000 tokens.
+    let haiku = provider
+        .pricing(claude::CLAUDE_HAIKU_5_5)
+        .expect("Haiku is priced");
+    let long = haiku.for_prompt(100_001);
+    assert_eq!(haiku.for_prompt(100_000), haiku.for_prompt(0));
+    assert_eq!(
+        (
+            long.input_per_mtok_micro_usd(),
+            long.output_per_mtok_micro_usd(),
+            long.source()
+        ),
+        (500_000, 2_500_000, PricingSource::BuiltIn)
+    );
+    assert_eq!(haiku.cost_tier(), CostTier::Cheap);
     assert_eq!(
         provider
             .declared_profile(claude::CLAUDE_OPUS_5_5, missing_environment)
@@ -1082,6 +1125,10 @@ fn anthropic_serves_claude_with_a_nonblank_key_and_a_valid_origin() {
         .client_from_environment(environment("sk-ant-test", "not a url"))
         .err()
         .expect("an origin that is not a URL should be rejected");
+    // An uncataloged model keeps the preset's output bound.
+    let uncataloged = ModelConfiguration::new(ModelProvider::Anthropic, "claude-haiku-4-5")
+        .client_from_environment(environment("sk-ant-test", ""))
+        .expect("an uncataloged Claude model should configure a client");
     let spec = ModelProvider::Anthropic
         .model_spec(claude::CLAUDE_HAIKU_5_5)
         .expect("cataloged model has a spec");
@@ -1089,6 +1136,7 @@ fn anthropic_serves_claude_with_a_nonblank_key_and_a_valid_origin() {
     // Assert
     assert_eq!(served.metadata().provider(), "anthropic");
     assert_eq!(served.metadata().model(), claude::CLAUDE_OPUS_5_5);
+    assert_eq!(uncataloged.metadata().model(), "claude-haiku-4-5");
     assert!(matches!(
         blank_key,
         ModelConfigurationError::ApiKey {

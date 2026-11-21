@@ -214,14 +214,18 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
             (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
             (AgentModel::Gpt56Terra, ModelCost::Standard, openai),
+            (AgentModel::ClaudeSonnet55, ModelCost::Standard, ready),
             (AgentModel::ClaudeOpus55, ModelCost::Premium, ready),
             (AgentModel::ClaudeFable52, ModelCost::Premium, ready),
-            (AgentModel::ClaudeSonnet55, ModelCost::Standard, ready),
             (AgentModel::ClaudeHaiku55, ModelCost::Cheap, ready),
         ]
     );
-    assert_eq!(options[21].provider, "Anthropic");
-    assert_eq!(options[21].context_window, Some(1_000_000));
+    let opus = options
+        .iter()
+        .find(|option| option.model == AgentModel::ClaudeOpus55)
+        .expect("Claude Opus is listed");
+    assert_eq!(opus.provider, "Anthropic");
+    assert_eq!(opus.context_window, Some(1_000_000));
     assert_eq!(options[0].provider, "OpenAI-compatible server");
     assert_eq!(options[1].provider, "Muse");
     assert_eq!(options[3].provider, "Kimi");
