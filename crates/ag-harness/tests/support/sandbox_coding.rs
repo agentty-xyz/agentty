@@ -167,20 +167,21 @@ async fn native_full_disk_read_hides_hidden_paths_and_writes_only_writable_roots
     assert!(!outside.path("elsewhere/escaped").exists());
     // The control read works in the same command; the hidden directory
     // reads as missing on macOS and as empty on Linux, its key cannot be
-    // read, nothing can be written into it, and the hidden file reads as
-    // empty at most.
+    // read, nothing can be written into it, and the hidden file cannot be
+    // read.
     let stdout = hidden["stdout"].as_str().expect("stdout");
     assert!(stdout.starts_with("readable-value\n"), "{hidden}");
     assert!(!stdout.contains("secret-value"), "{hidden}");
     assert!(stdout.contains("key=1"), "{hidden}");
     assert!(stdout.contains("write=1"), "{hidden}");
-    if cfg!(target_os = "macos") {
-        assert!(stdout.contains("file=1"), "{hidden}");
-        assert!(stdout.contains("list=1"), "{hidden}");
+    // Linux mounts the empty device without device access over the file.
+    assert!(stdout.contains("file=1"), "{hidden}");
+    let listed = if cfg!(target_os = "macos") {
+        "list=1"
     } else {
-        assert!(stdout.contains("file=0"), "{hidden}");
-        assert!(stdout.contains("list=0"), "{hidden}");
-    }
+        "list=0"
+    };
+    assert!(stdout.contains(listed), "{hidden}");
     assert!(!outside.path("secret/new").exists());
     assert!(
         !later["stdout"]
