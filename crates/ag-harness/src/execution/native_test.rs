@@ -669,7 +669,7 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     let host_home = fixture.outside.join("host-home");
     let registry = home.join(".cargo/registry/cache");
     let sessions = fixture.outside.join("sessions");
-    let secret = fixture.outside.join("secret");
+    let hidden_file = fixture.outside.join("hidden");
     for directory in [
         &registry,
         &host_home,
@@ -678,8 +678,8 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     ] {
         std::fs::create_dir_all(directory).expect("fixture directory");
     }
-    std::fs::write(&secret, "secret").expect("secret");
-    symlink(&secret, fixture.outside.join("secret-alias")).expect("secret alias");
+    std::fs::write(&hidden_file, "hidden").expect("hidden file");
+    symlink(&hidden_file, fixture.outside.join("hidden-alias")).expect("hidden alias");
     let socket = fixture.outside.join("agent.sock");
     let policy = fixture.policy(Grants {
         environment: vec![
@@ -687,7 +687,7 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
             ("HOME".into(), sessions.join("own/home").into_os_string()),
         ],
         hidden_paths: vec![
-            fixture.outside.join("secret-alias"),
+            fixture.outside.join("hidden-alias"),
             fixture.outside.join("missing/key"),
         ],
         read_scope: ReadScope::FullDisk,
@@ -712,11 +712,11 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     // the account home and the different `HOME`, and the other sessions'
     // directories.
     for path in [
-        secret,
+        hidden_file,
         fixture.outside.join("missing/key"),
         sessions.clone(),
     ] {
-        assert!(access.hidden_paths.contains(&path), "{path:?}");
+        assert!(access.hidden_paths.contains(&path), "{}", path.display());
     }
     for store in [
         "Library/Keychains",
