@@ -273,12 +273,18 @@ async fn paused_graph_drivers_resume_or_cancel_without_dispatching_early() {
         }
         let mut reads = 0;
         let session = driver_session();
-        let driver =
-            app.services
-                .drive_graph(&snapshot, &cancellation, &executor, &session, || {
-                    reads += 1;
-                    future::ready((reads > 1).then_some(PermissionMode::ReadOnly))
-                });
+        let dispatching = Arc::default();
+        let driver = app.services.drive_graph(
+            &snapshot,
+            &cancellation,
+            &executor,
+            &dispatching,
+            &session,
+            || {
+                reads += 1;
+                future::ready((reads > 1).then_some(PermissionMode::ReadOnly))
+            },
+        );
         tokio::pin!(driver);
 
         // Act
