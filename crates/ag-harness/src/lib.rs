@@ -233,3 +233,8 @@ pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
 pub use usage::{Cost, UsageTotals};
 pub use write_journal::WriteStatus;
+
+/// Compiles the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

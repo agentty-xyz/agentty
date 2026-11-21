@@ -48,3 +48,8 @@ pub use schema::{
 };
 pub use stream::{DeltaObserver, ResponseDelta};
 pub use tool::{ToolCall, ToolDefinition, is_valid_function_name, replayable_function_name};
+
+/// Compiles the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

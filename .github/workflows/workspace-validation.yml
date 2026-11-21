@@ -65,6 +65,10 @@ jobs:
           AGENTTY_MIGRATION_BASE: HEAD^1
         run: prek run --all-files
 
+      # Nextest runs no doctests, so rustdoc and README examples run here.
+      - name: Documentation examples
+        run: prek run test-doc --all-files --hook-stage manual
+
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}
         run: prek run cargo-audit --all-files --hook-stage manual

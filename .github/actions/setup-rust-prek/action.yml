@@ -14,6 +14,10 @@ inputs:
     description: Install `cargo-machete` for unused dependency checks.
     required: false
     default: "false"
+  cargo-semver-checks:
+    description: Install `cargo-semver-checks` for published API compatibility checks.
+    required: false
+    default: "false"
   llvm-tools-preview:
     description: Install the Rust `llvm-tools-preview` component for coverage-producing jobs.
     required: false
@@ -76,6 +80,14 @@ runs:
       uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
       with:
         tool: cargo-machete
+
+    # Pinned: each release supports a range of rustdoc JSON formats, so a
+    # toolchain bump can require a newer version.
+    - name: Install `cargo-semver-checks`
+      if: ${{ inputs['cargo-semver-checks'] == 'true' }}
+      uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      with:
+        tool: cargo-semver-checks@0.51.0
 
     - name: Install `cargo-nextest`
       uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
