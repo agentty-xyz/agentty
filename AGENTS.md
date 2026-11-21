@@ -126,6 +126,8 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 - Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
   writing guidance: follow them, but never copy them into commit messages or PR
   descriptions.
+- Bring a branch up to date by rebasing it onto `origin/main` and pushing with
+  `--force-with-lease`; never merge `main` into it.
 - Use `skills/bump-version/SKILL.md` for release preparation. Local work stops at the
   ordinary version-bump change; create and publish no release tags locally.
 - After that change lands, create its `v`-prefixed tag for the exact commit in the
