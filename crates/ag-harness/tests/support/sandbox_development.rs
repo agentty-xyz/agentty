@@ -6,7 +6,9 @@
 //! system directories, and a bound on per-command latency.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -93,6 +95,19 @@ impl LinkedWorktree {
         .with_git_writes()
         .with_temporary_directory(self.temporary())
         .expect("temporary directory")
+    }
+
+    /// Creates `name` beside the worktree and returns it with the
+    /// development configuration plus a read grant for it.
+    fn granted_directory(&self, name: &str) -> (PathBuf, BashConfig) {
+        let directory = self.root().join(name);
+        std::fs::create_dir(&directory).expect("granted directory");
+        let configuration = self
+            .configuration()
+            .with_read(directory.clone())
+            .expect("read grant");
+
+        (directory, configuration)
     }
 
     async fn run(&self, command: &str, configuration: BashConfig) -> CommandOutcome {
@@ -191,8 +206,8 @@ async fn native_git_stages_and_commits_in_a_linked_worktree_with_links() {
 async fn native_grants_are_not_inspected() {
     // Arrange
     let fixture = LinkedWorktree::new();
-    let toolchain = fixture.root().join("toolchain");
-    std::fs::create_dir_all(toolchain.join("bin")).expect("toolchain");
+    let (toolchain, configuration) = fixture.granted_directory("toolchain");
+    std::fs::create_dir(toolchain.join("bin")).expect("toolchain");
     std::fs::write(toolchain.join("bin/tool"), "tool-value").expect("toolchain file");
     // Negative controls: any walk of a grant would trip over an entry it
     // cannot read or a FIFO, and the earlier walk refused both.
@@ -207,10 +222,6 @@ async fn native_grants_are_not_inspected() {
             .expect("FIFO");
         assert!(fifo.success());
     }
-    let configuration = fixture
-        .configuration()
-        .with_read(toolchain.clone())
-        .expect("toolchain grant");
 
     // Act
     let result = fixture
@@ -233,38 +244,39 @@ async fn native_grants_are_not_inspected() {
     assert!(fixture.worktree().join("output/written").exists());
 }
 
-/// A command cannot hard-link a file from outside its write grants into
-/// them, whether the file is readable through a grant or not granted at
-/// all, and whether the link would land in the worktree or the temporary
-/// directory. macOS denies every hard link; on Linux the read-only binds and
-/// the missing ungranted paths make each attempt fail. The files sit on the
-/// worktree's filesystem, so the attempt is not refused merely for crossing
-/// devices on the host.
+/// Seatbelt denies every hard link a command tries to create: from a file
+/// readable through a grant or from one not granted at all, into the
+/// worktree or the temporary directory. Each attempt must fail with
+/// Seatbelt's `Operation not permitted`, so a failure for another reason
+/// does not pass. The files sit on the worktree's filesystem, so the
+/// attempts do not fail merely for crossing devices on the host. On Linux
+/// the mount layout is what refuses these links (`EXDEV` across binds,
+/// `ENOENT` for ungranted paths), which
+/// `access::native_linux_denies_writes_links_and_renames_outside_grants`
+/// already covers.
+#[cfg(target_os = "macos")]
 #[tokio::test]
-async fn native_hard_links_cannot_reach_files_outside_the_grants() {
+async fn native_macos_denies_hard_links_to_files_outside_the_grants() {
     // Arrange
     let fixture = LinkedWorktree::new();
-    let secret = fixture.root().join("secret");
-    std::fs::write(&secret, "secret-value").expect("ungranted file");
-    let toolchain = fixture.root().join("toolchain");
-    std::fs::create_dir(&toolchain).expect("read grant");
-    let tool = toolchain.join("tool");
-    std::fs::write(&tool, "tool-value").expect("readable file");
-    let configuration = fixture
-        .configuration()
-        .with_read(toolchain)
-        .expect("toolchain grant");
+    let ungranted = fixture.root().join("ungranted");
+    std::fs::write(&ungranted, "ungranted-value").expect("ungranted file");
+    let (readable, configuration) = fixture.granted_directory("readable");
+    let granted = readable.join("granted");
+    std::fs::write(&granted, "granted-value").expect("granted file");
 
     // Act
     let result = fixture
         .run(
             &format!(
-                "set -e; /bin/cat '{tool}'; if /bin/ln '{tool}' tool-link; then exit 91; fi; if \
-                 /bin/ln '{tool}' \"$TMPDIR/tool-link\"; then exit 92; fi; if /bin/ln '{secret}' \
-                 secret-link; then exit 93; fi; if /bin/ln '{secret}' \"$TMPDIR/secret-link\"; \
-                 then exit 94; fi; /bin/ln -s tracked symbolic; /bin/cat symbolic",
-                tool = tool.display(),
-                secret = secret.display(),
+                "set -e; [ -n \"$TMPDIR\" ] || exit 90; denied() {{ if error=$(/bin/ln \"$1\" \
+                 \"$2\" 2>&1); then exit 91; fi; case \"$error\" in *'Operation not permitted'*) \
+                 ;; *) printf '%s\\n' \"$error\" >&2; exit 92;; esac; }}; /bin/cat '{granted}'; \
+                 denied '{granted}' granted-link; denied '{granted}' \"$TMPDIR/granted-link\"; \
+                 denied '{ungranted}' ungranted-link; denied '{ungranted}' \
+                 \"$TMPDIR/ungranted-link\"; /bin/ln -s tracked symbolic; /bin/cat symbolic",
+                granted = granted.display(),
+                ungranted = ungranted.display(),
             ),
             configuration,
         )
@@ -272,25 +284,26 @@ async fn native_hard_links_cannot_reach_files_outside_the_grants() {
 
     // Assert
     assert_eq!(result.exit_code, Some(0), "{result:?}");
-    assert_eq!(result.stdout, "tool-valuetracked-value", "{result:?}");
-    for (path, contents) in [(&tool, "tool-value"), (&secret, "secret-value")] {
+    assert_eq!(result.stdout, "granted-valuetracked-value", "{result:?}");
+    for (path, contents) in [(&granted, "granted-value"), (&ungranted, "ungranted-value")] {
         assert_eq!(std::fs::metadata(path).expect("outside file").nlink(), 1);
         assert_eq!(
             std::fs::read_to_string(path).expect("outside file"),
             contents
         );
     }
-    for name in ["tool-link", "secret-link"] {
+    for name in ["granted-link", "ungranted-link"] {
         assert!(!fixture.worktree().join(name).exists());
         assert!(!fixture.temporary().join(name).exists());
     }
 }
 
-/// Toolchains installed under the home directory, such as rustup's, lie
-/// outside the system grants and once could not be granted at all, because
-/// the sandbox walked each grant before every command. The toolchain that
-/// builds this suite is present wherever it runs, so the test runs the real
-/// compiler from its read grant.
+/// A dynamically linked compiler installed outside the system directories,
+/// such as rustup's under the home directory, starts from a read grant of
+/// its path, and does not start without it. The suite's own toolchain is
+/// present wherever it runs: CI installs it with rustup under the home
+/// directory. A toolchain under a system directory would make the grant add
+/// nothing, so the test refuses that host instead of passing vacuously.
 #[tokio::test]
 async fn native_runs_a_toolchain_granted_by_path() {
     // Arrange
@@ -300,33 +313,67 @@ async fn native_runs_a_toolchain_granted_by_path() {
         .output()
         .expect("host compiler");
     assert!(sysroot.status.success(), "{sysroot:?}");
-    let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout).expect("sysroot").trim());
+    let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout).expect("sysroot").trim())
+        .canonicalize()
+        .expect("canonical sysroot");
+    let system_root = SYSTEM_READ_ROOTS
+        .iter()
+        .find(|root| sysroot.starts_with(root));
+    assert!(
+        system_root.is_none(),
+        "the toolchain at {} lies under the system read root {system_root:?}, so this test cannot \
+         show its read grant matters; run it with a rustup toolchain outside the system \
+         directories",
+        sysroot.display()
+    );
     let compiler = sysroot.join("bin/rustc");
     let expected = Command::new(&compiler)
         .arg("--version")
         .output()
         .expect("host compiler version");
+    assert!(expected.status.success(), "{expected:?}");
+    let command = format!("'{}' --version", compiler.display());
     let configuration = fixture
         .configuration()
         .with_read(sysroot)
         .expect("toolchain grant");
 
     // Act
-    let result = fixture
-        .run(
-            &format!("'{}' --version", compiler.display()),
-            configuration,
-        )
-        .await;
+    let ungranted = fixture.run(&command, fixture.configuration()).await;
+    let result = fixture.run(&command, configuration).await;
 
     // Assert
+    assert_ne!(ungranted.exit_code, Some(0), "{ungranted:?}");
+    assert_eq!(ungranted.stdout, "", "{ungranted:?}");
     assert_eq!(result.exit_code, Some(0), "{result:?}");
-    assert!(result.stdout.starts_with("rustc "), "{result:?}");
     assert_eq!(
         result.stdout,
-        String::from_utf8(expected.stdout).expect("version")
+        String::from_utf8(expected.stdout).expect("version"),
+        "{result:?}"
     );
+    assert!(result.stdout.starts_with("rustc "), "{result:?}");
 }
+
+/// Roots that cover the directories `BashConfig::with_system_reads` grants.
+#[cfg(target_os = "macos")]
+const SYSTEM_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/System",
+    "/Library/Developer",
+    "/Library/Apple",
+    "/Applications/Xcode.app",
+    "/private/etc",
+    "/private/var/db",
+    "/private/var/select",
+];
+
+/// Roots that cover the directories `BashConfig::with_system_reads` grants.
+#[cfg(target_os = "linux")]
+const SYSTEM_READ_ROOTS: &[&str] = &[
+    "/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
+];
 
 /// An earlier sandbox spent 3.3 to 3.9 s walking its grants before each
 /// `git status` on macOS. The fastest of three runs filters out a loaded
@@ -336,7 +383,7 @@ async fn native_runs_a_toolchain_granted_by_path() {
 async fn native_git_command_latency_stays_bounded() {
     // Arrange
     let fixture = LinkedWorktree::new();
-    let mut fastest = Duration::MAX;
+    let mut durations = Vec::new();
 
     // Act
     for _ in 0..3 {
@@ -345,13 +392,14 @@ async fn native_git_command_latency_stays_bounded() {
             .run("git status --porcelain", fixture.configuration())
             .await;
         assert_eq!(result.exit_code, Some(0), "{result:?}");
-        fastest = fastest.min(started.elapsed());
+        durations.push(started.elapsed());
     }
 
     // Assert
+    let fastest = durations.iter().min().expect("three runs");
     assert!(
-        fastest < Duration::from_millis(1500),
-        "fastest sandboxed git status took {fastest:?}"
+        *fastest < Duration::from_millis(1500),
+        "every sandboxed git status took at least 1.5 s: {durations:?}"
     );
 }
 
