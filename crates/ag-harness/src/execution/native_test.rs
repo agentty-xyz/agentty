@@ -610,6 +610,129 @@ impl Inspection for FailingInspection {
         self.check("exists")?;
         LocalInspection.try_exists(path).await
     }
+
+    async fn home(&self) -> Option<PathBuf> {
+        LocalInspection.home().await
+    }
+}
+
+/// Local inspection with another home directory.
+struct HomeInspection(PathBuf);
+
+#[async_trait]
+impl Inspection for HomeInspection {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        LocalInspection.canonicalize(path).await
+    }
+
+    async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        LocalInspection.metadata(path).await
+    }
+
+    async fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        LocalInspection.try_exists(path).await
+    }
+
+    async fn home(&self) -> Option<PathBuf> {
+        Some(self.0.clone())
+    }
+}
+
+#[tokio::test]
+async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let cache = fixture.outside.join("cache");
+    let secret = fixture.outside.join("secret");
+    std::fs::create_dir(&cache).expect("cache");
+    std::fs::write(&secret, "secret").expect("secret");
+    symlink(&secret, fixture.outside.join("secret-alias")).expect("secret alias");
+    // Socket paths are limited to about 100 bytes, so keep them short.
+    let sockets = tempfile::tempdir_in("/tmp").expect("socket directory");
+    let sockets = sockets.path().canonicalize().expect("canonical sockets");
+    let _listener = std::os::unix::net::UnixListener::bind(sockets.join("agent")).expect("socket");
+    symlink(sockets.join("agent"), sockets.join("alias")).expect("socket alias");
+    let policy = fixture.policy(Grants {
+        read_denials: vec![
+            fixture.outside.join("secret-alias"),
+            fixture.outside.join("missing"),
+        ],
+        unix_sockets: vec![sockets.join("alias"), sockets.join("missing")],
+        writable_roots: vec![cache.clone()],
+        ..Grants::default()
+    });
+
+    // Act
+    let access = resolve_access(&HomeInspection(fixture.workspace.join("home")), &policy)
+        .await
+        .expect("access");
+
+    // Assert
+    assert_eq!(access.writes, [cache]);
+    assert_eq!(access.write_nodes.len(), 1);
+    assert_eq!(access.read_denials, [secret]);
+    assert_eq!(access.unix_sockets, [sockets.join("agent")]);
+}
+
+#[tokio::test]
+async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    std::fs::create_dir_all(home.join("cache")).expect("home");
+    std::fs::write(fixture.outside.join("file"), "file").expect("file");
+    symlink(&fixture.workspace, fixture.outside.join("workspace-alias")).expect("alias");
+    symlink(&fixture.admin, fixture.outside.join("metadata-alias")).expect("metadata alias");
+    let cases = [
+        Grants {
+            writable_roots: vec![home.clone()],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.clone()],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("file")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("workspace-alias")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("metadata-alias")],
+            ..Grants::default()
+        },
+        Grants {
+            read_denials: vec![fixture.outside.join("workspace-alias")],
+            ..Grants::default()
+        },
+        Grants {
+            unix_sockets: vec![fixture.outside.join("file")],
+            ..Grants::default()
+        },
+    ];
+
+    // Act / Assert
+    for grants in cases {
+        assert_eq!(
+            resolve_access(&HomeInspection(home.clone()), &fixture.policy(grants))
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    // A writable root inside the home directory is fine.
+    let policy = fixture.policy(Grants {
+        writable_roots: vec![home.join("cache")],
+        ..Grants::default()
+    });
+    assert!(
+        resolve_access(&HomeInspection(home.clone()), &policy)
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]

@@ -26,6 +26,13 @@ fn bash_activity_exposes_only_its_name_and_duration() {
     assert_eq!(activity.path(), "");
     assert_eq!(activity.duration(), Duration::from_millis(12));
     assert_eq!(activity.to_string(), "bash (12 ms)");
+    let blocked = ToolActivity::BashSandboxDenied {
+        duration: Duration::from_millis(12),
+    };
+    assert_eq!(blocked.name(), "bash");
+    assert_eq!(blocked.path(), "");
+    assert_eq!(blocked.duration(), Duration::from_millis(12));
+    assert_eq!(blocked.to_string(), "bash, blocked by the sandbox (12 ms)");
 }
 
 #[test]

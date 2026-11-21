@@ -466,6 +466,119 @@ fn development_grants_validate_and_record_only_what_they_set() {
 }
 
 #[test]
+fn coding_grants_validate_and_record_only_what_they_set() {
+    // Arrange
+    let valid = configuration();
+    let legacy = valid.fingerprint();
+
+    // Act
+    let granted = valid
+        .clone()
+        .with_full_disk_read()
+        .with_read_denial("/home/.ssh".into())
+        .expect("read denial")
+        .with_writable_root("/home/.cargo".into())
+        .expect("writable root")
+        .with_unix_socket("/run/agent.sock".into())
+        .expect("socket")
+        .with_excluded_command("docker".into())
+        .expect("excluded command");
+
+    // Assert
+    for name in [
+        "capabilities",
+        "excluded_commands",
+        "read_denials",
+        "unix_sockets",
+        "writable_roots",
+    ] {
+        assert!(legacy.get(name).is_none(), "{name}");
+    }
+    let fingerprint = granted.fingerprint();
+    assert_eq!(fingerprint["capabilities"], json!(["full_disk_read"]));
+    assert_eq!(fingerprint["excluded_commands"], json!(["docker"]));
+    assert_eq!(fingerprint["read_denials"], json!(["/home/.ssh"]));
+    assert_eq!(fingerprint["unix_sockets"], json!(["/run/agent.sock"]));
+    assert_eq!(fingerprint["writable_roots"], json!(["/home/.cargo"]));
+    let decoded: BashPolicySnapshot = serde_json::from_value(fingerprint).expect("snapshot");
+    assert_eq!(decoded, granted.snapshot);
+    for rejected in [
+        valid.clone().with_read_denial("relative".into()),
+        valid.clone().with_unix_socket("relative".into()),
+        valid.clone().with_writable_root("relative".into()),
+        valid.clone().with_writable_root("/".into()),
+        valid.clone().with_writable_root("/repo/.git".into()),
+        valid.clone().with_excluded_command(String::new()),
+        valid.clone().with_excluded_command("-rf".into()),
+        valid.clone().with_excluded_command("a b".into()),
+        valid
+            .clone()
+            .with_excluded_command("/usr/bin/docker".into()),
+        valid.with_excluded_command("x".repeat(65)),
+    ] {
+        assert_eq!(rejected, Err(BashError::InvalidPolicy));
+    }
+}
+
+#[test]
+fn coding_grant_limits_reject_the_next_entry() {
+    // Arrange
+    let mut policy = configuration();
+    for index in 0..64 {
+        policy = policy
+            .with_read_denial(format!("/hidden/{index}").into())
+            .expect("denial within limit")
+            .with_writable_root(format!("/cache/{index}").into())
+            .expect("root within limit")
+            .with_unix_socket(format!("/socket/{index}").into())
+            .expect("socket within limit")
+            .with_excluded_command(format!("tool-{index}"))
+            .expect("command within limit");
+    }
+
+    // Act / Assert
+    for rejected in [
+        policy.clone().with_read_denial("/extra".into()),
+        policy.clone().with_writable_root("/extra".into()),
+        policy.clone().with_unix_socket("/extra".into()),
+        policy.with_excluded_command("extra".into()),
+    ] {
+        assert_eq!(rejected, Err(BashError::InvalidPolicy));
+    }
+}
+
+#[test]
+fn only_simple_commands_of_excluded_programs_leave_the_sandbox() {
+    // Arrange
+    let configuration = configuration()
+        .with_excluded_command("docker".into())
+        .expect("excluded command");
+
+    // Act / Assert
+    for command in ["docker ps", "  docker\tbuild -t 'image name' .", "docker"] {
+        assert!(configuration.excludes(command), "{command}");
+    }
+    for command in [
+        "dockerd ps",
+        "/usr/bin/docker ps",
+        "FOO=1 docker ps",
+        "docker ps; rm -rf ~",
+        "docker ps && true",
+        "docker ps | cat",
+        "docker ps > out",
+        "docker run $(id)",
+        "docker run `id`",
+        "docker run \\\n x",
+        "docker ps\nrm x",
+        "docker (ps)",
+        "",
+        "git status",
+    ] {
+        assert!(!configuration.excludes(command), "{command}");
+    }
+}
+
+#[test]
 fn network_grant_never_overstates_the_enforced_isolation() {
     // Arrange
     let unenforced = BashConfig::for_executor(

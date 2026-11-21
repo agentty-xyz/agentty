@@ -132,6 +132,7 @@ async fn journaled_tool(
         configuration: configuration()
             .with_environment("GREETING".into(), "hello".into())
             .expect("environment grant"),
+        excluded: None,
         executor: Arc::new(Finishing { cleanup_failure }),
         external_reads: Vec::new(),
         journal: Some(acquired.guard.write_journal()),
@@ -227,6 +228,7 @@ async fn invalid_policy_and_executor_failure_never_register_effects() {
             cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
             commands: commands.clone(),
             configuration,
+            excluded: None,
             executor: Arc::new(FailingExecutor { panic: false }),
             external_reads: Vec::new(),
             journal: None,
@@ -251,6 +253,7 @@ async fn executor_panic_retains_cleanup_authority_and_unknown_outcome() {
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         commands: commands.clone(),
         configuration: configuration(),
+        excluded: None,
         executor: Arc::new(FailingExecutor { panic: true }),
         external_reads: Vec::new(),
         journal: None,

@@ -475,6 +475,11 @@
           "description": "The turn stopped before the call was answered, as a\n[`crate::TurnRecord`] reports it; the output is empty.",
           "type": "string",
           "const": "unanswered"
+        },
+        {
+          "description": "A `bash` command ran inside the sandbox and failed with output\nsuggesting the sandbox blocked it, as\n[`ToolActivity::BashSandboxDenied`] reports; the result told the\nmodel. A host implementing approval-based escalation can ask the\nuser whether to rerun the command outside the sandbox.",
+          "type": "string",
+          "const": "sandbox_denied"
         }
       ]
     },

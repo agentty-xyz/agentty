@@ -3,7 +3,7 @@
 use std::fs::Metadata;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -154,6 +154,7 @@ pub(crate) async fn probe(
     }
     let snapshot = &configuration.snapshot;
     let writes = !snapshot.workspace_writes.is_empty()
+        || !snapshot.writable_roots.is_empty()
         || snapshot.temporary_directory.is_some()
         || snapshot.grants(Capability::GitWrites);
     if !host.landlock && writes {
@@ -238,6 +239,10 @@ struct Access {
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
     git_writes: Option<GitWrites>,
+    /// Resolved hidden paths present at launch.
+    read_denials: Vec<PathBuf>,
+    /// Resolved Unix-domain sockets present at launch.
+    unix_sockets: Vec<PathBuf>,
     write_nodes: Vec<(u64, u64)>,
     writes: Vec<PathBuf>,
 }
@@ -285,7 +290,10 @@ impl NativeProcess {
                 .ok_or(ExecutionError::Unsupported)?,
             linux_bubblewrap: self.configuration.snapshot.linux_bubblewrap.clone(),
             network: policy.allows_network(),
+            read_denials: access.read_denials,
+            read_scope: policy.read_scope(),
             system: self.configuration.snapshot.grants(Capability::SystemReads),
+            unix_sockets: access.unix_sockets,
             workspace: policy.workspace().to_path_buf(),
             write_nodes: access.write_nodes,
             writes: access.writes,
@@ -302,8 +310,10 @@ impl NativeProcess {
 /// Returns [`ExecutionError::Unsupported`] for a grant the sandbox cannot
 /// honor: a missing path, a read grant overlapping the workspace, a write
 /// grant that is not a directory under its own name, a temporary directory
-/// overlapping the workspace or its Git metadata, or Git writes the
-/// repository cannot confine.
+/// or writable root overlapping the workspace or its Git metadata, a
+/// writable root that is `/` or contains the home directory, a hidden path
+/// containing the workspace, a Unix-socket grant naming something else, or
+/// Git writes the repository cannot confine.
 async fn resolve_access(
     files: &dyn Inspection,
     policy: &ExecutionPolicy,
@@ -367,6 +377,7 @@ async fn resolve_access(
         access.writes.push(canonical);
         access.write_nodes.push(node);
     }
+    resolve_outside_grants(files, policy, &mut access).await?;
     if policy.allows_git_writes() {
         let repository = repository.ok_or(ExecutionError::Unsupported)?;
         let git_writes = repository.writes(files).await?;
@@ -387,6 +398,58 @@ async fn resolve_access(
     }
 
     Ok(access)
+}
+
+/// Resolves the grants outside the workspace that coding sessions add:
+/// writable roots, hidden paths, and Unix-domain sockets.
+async fn resolve_outside_grants(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+    access: &mut Access,
+) -> Result<(), ExecutionError> {
+    let workspace = policy.workspace();
+    let home = files.home().await;
+    for root in policy.writable_roots() {
+        let (canonical, node) = directory_identity(files, root).await?;
+        // Overlapping the workspace also rules out `/`.
+        if home
+            .as_ref()
+            .is_some_and(|home| home.starts_with(&canonical))
+            || overlaps(&canonical, workspace)
+            || access
+                .git_metadata
+                .iter()
+                .any(|git| overlaps(&canonical, git))
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.writes.push(canonical);
+        access.write_nodes.push(node);
+    }
+    // A path that cannot be resolved is missing, or unreachable for the
+    // command as for this process, so there is nothing to hide.
+    for denial in policy.read_denials() {
+        if let Ok(canonical) = files.canonicalize(denial).await {
+            if workspace.starts_with(&canonical) {
+                return Err(ExecutionError::Unsupported);
+            }
+            access.read_denials.push(canonical);
+        }
+    }
+    for socket in policy.unix_sockets() {
+        if let Ok(canonical) = files.canonicalize(socket).await {
+            let is_socket = files
+                .metadata(&canonical)
+                .await
+                .is_ok_and(|metadata| metadata.file_type().is_socket());
+            if !is_socket {
+                return Err(ExecutionError::Unsupported);
+            }
+            access.unix_sockets.push(canonical);
+        }
+    }
+
+    Ok(())
 }
 
 /// Returns whether one of two paths contains the other.
@@ -676,6 +739,8 @@ trait Inspection: Send + Sync {
     async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
     async fn metadata(&self, path: &Path) -> io::Result<Metadata>;
     async fn try_exists(&self, path: &Path) -> io::Result<bool>;
+    /// The resolved home directory of this process's user, if known.
+    async fn home(&self) -> Option<PathBuf>;
 }
 
 struct LocalInspection;
@@ -684,6 +749,12 @@ struct LocalInspection;
 impl Inspection for LocalInspection {
     async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         tokio::fs::canonicalize(path).await
+    }
+
+    async fn home(&self) -> Option<PathBuf> {
+        let home = std::env::home_dir()?;
+
+        Some(tokio::fs::canonicalize(&home).await.unwrap_or(home))
     }
 
     async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
@@ -731,6 +802,7 @@ async fn validate_executable(
 #[cfg(target_os = "linux")]
 fn write_grants(policy: &ExecutionPolicy) -> usize {
     policy.workspace_writes().len()
+        + policy.writable_roots().len()
         + usize::from(policy.temporary_directory().is_some())
         + usize::from(policy.allows_git_writes())
 }

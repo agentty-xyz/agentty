@@ -523,6 +523,12 @@ pub enum ToolCallStatus {
     /// The turn stopped before the call was answered, as a
     /// [`crate::TurnRecord`] reports it; the output is empty.
     Unanswered,
+    /// A `bash` command ran inside the sandbox and failed with output
+    /// suggesting the sandbox blocked it, as
+    /// [`ToolActivity::BashSandboxDenied`] reports; the result told the
+    /// model. A host implementing approval-based escalation can ask the
+    /// user whether to rerun the command outside the sandbox.
+    SandboxDenied,
 }
 
 impl From<&ToolActivity> for ToolCallStatus {
@@ -543,6 +549,7 @@ impl From<&ToolActivity> for ToolCallStatus {
             | ToolActivity::ReadRejected { .. }
             | ToolActivity::WriteRejected { .. } => Self::Rejected,
             ToolActivity::ReadDeferred { .. } | ToolActivity::ReadRepeated { .. } => Self::Skipped,
+            ToolActivity::BashSandboxDenied { .. } => Self::SandboxDenied,
             ToolActivity::Unavailable { .. } => Self::Unavailable,
         }
     }
