@@ -65,6 +65,12 @@ changes first. Sync runs in the background; until it finishes, creating or start
 sessions, merging, and rebasing against that project's base checkout must be retried.
 Progress appears in the top status bar.
 
+Ahead/behind counts come from a background `git fetch` about every 30 seconds. When
+fetches keep failing, for example because the remote is unreachable or rejects your
+credentials, Agentty retries less often, down to about every eight minutes, and keeps
+showing counts from the last successful fetch. A successful fetch or `s` sync restores
+the normal cadence.
+
 A red `[merge conflict]` label means a session's committed branch conflicts with its
 base.
 
