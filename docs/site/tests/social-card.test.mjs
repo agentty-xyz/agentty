@@ -132,7 +132,7 @@ test('buildCardHtml places the hero text, colors, and glyph art on a card-sized 
 
 /** Run the card's readiness script against live boxes and a stubbed `document.fonts.load`. */
 async function runReadyScript(loadFont) {
-  const scripts = [...buildCardHtml(cardInputs()).matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  const scripts = [...buildCardHtml(cardInputs()).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script[^>]*>/gi)];
   const box = { classList: { contains: (name) => name === 'is-live' } };
   const loadedFonts = [];
   const document = {
