@@ -45,6 +45,7 @@ one validation rung covering every touched file and all affected dependents:
 | Markdown                            | `mdformat` and default hooks for touched paths                                                           |
 | Docs site                           | Markdown checks plus `zola-check`; format touched templates with `djlint-reformat`                       |
 | Rust                                | `rustfmt-fix`, `clippy`, `ast-grep`, and unrestricted `test-focused` for changed packages and dependents |
+| Rustdoc or crate README examples    | Add `test-doc`, since nextest runs no doctests                                                           |
 | Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                                |
 | ast-grep rules (`lint/`)            | `ast-grep` and `ast-grep-test`                                                                           |
 

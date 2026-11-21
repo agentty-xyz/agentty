@@ -130,11 +130,14 @@ let scenario = Scenario::new("counter")
 #### Compare against a saved baseline
 
 ```rust
+use testty::frame::TerminalFrame;
 use testty::snapshot::{self, SnapshotConfig};
 
-let config = SnapshotConfig::new("tests/baselines", "tests/artifacts");
-snapshot::assert_frame_snapshot_matches(&config, "startup", &frame.all_text())
-    .expect("snapshot should match");
+fn expect_startup_snapshot(frame: &TerminalFrame) {
+    let config = SnapshotConfig::new("tests/baselines", "tests/artifacts");
+    snapshot::assert_frame_snapshot_matches(&config, "startup", &frame.all_text())
+        .expect("snapshot should match");
+}
 ```
 
 #### Save a shareable report
@@ -144,10 +147,14 @@ use std::path::Path;
 
 use testty::proof::html::HtmlBackend;
 use testty::proof::junit::JunitBackend;
+use testty::scenario::Scenario;
+use testty::session::PtySessionBuilder;
 
-let (_frame, report) = scenario.run_with_proof(builder).expect("failed");
-report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
-report.save(&JunitBackend, Path::new("proof.xml")).unwrap();
+fn save_reports(scenario: &Scenario, builder: PtySessionBuilder) {
+    let (_frame, report) = scenario.run_with_proof(builder).expect("failed");
+    report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
+    report.save(&JunitBackend, Path::new("proof.xml")).unwrap();
+}
 ```
 
 #### Run a scenario from YAML — no Rust required
