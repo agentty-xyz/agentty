@@ -16,6 +16,8 @@ pub mod help_action;
 pub mod project_catalog;
 /// Prompt composer history, attachment, and suggestion state.
 pub mod prompt;
+/// Remote-control listener and paired-device projection.
+pub mod remote_control;
 /// Stable selection projection for grouped review-comment snapshots.
 pub(crate) mod review_comment;
 pub(crate) mod setting;

@@ -13,3 +13,5 @@ sort_by = "weight"
   view, and input mode.
 - [Forge Authentication](@/docs/usage/forge-authentication.md) - GitHub and GitLab CLI
   setup for branch publishing and review-request publishing.
+- [Remote Control](@/docs/usage/remote-control.md) - Follow and steer sessions from a
+  phone or another computer's browser.

@@ -160,6 +160,10 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::get_session(self, session_id).await
     }
 
+    async fn list_sessions(&self) -> Result<Vec<ag_session::SessionSummary>, ApiSessionError> {
+        SessionRuntimeHandle::list_sessions(self).await
+    }
+
     async fn send_message(
         &self,
         session_id: &SessionId,
@@ -325,10 +329,28 @@ impl App {
             } => {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
+            SessionRuntimeCommand::List { response_tx } => {
+                let _ = response_tx.send(Ok(self.list_api_sessions()));
+            }
             SessionRuntimeCommand::Mutation(command) => {
                 let _ = self.admit_session_command(command).await;
+                self.publish_session_change();
             }
         }
+    }
+
+    /// Summarizes the loaded sessions in their display order.
+    fn list_api_sessions(&self) -> Vec<ag_session::SessionSummary> {
+        self.sessions
+            .sessions()
+            .iter()
+            .map(|session| ag_session::SessionSummary {
+                id: session.id.clone(),
+                status: session.status,
+                title: session.title.clone(),
+                updated_at: session.updated_at,
+            })
+            .collect()
     }
 
     /// Projects isolated task history without exposing storage metadata.

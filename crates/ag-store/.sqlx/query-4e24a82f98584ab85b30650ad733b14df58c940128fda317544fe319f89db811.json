@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE remote_device\nSET last_seen_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4e24a82f98584ab85b30650ad733b14df58c940128fda317544fe319f89db811"
+}

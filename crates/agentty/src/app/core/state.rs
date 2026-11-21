@@ -61,6 +61,7 @@ use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::browser::{BrowserClient, RealBrowserClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
+use crate::infra::remote_control::{RealRemoteControlLauncher, RemoteControlLauncher};
 use crate::infra::resource::{RealResourceClient, ResourceClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
@@ -138,6 +139,8 @@ pub(crate) struct AppClients {
     pub(super) agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
+    /// Starts the loopback listener behind `/remote-control`.
+    pub(super) remote_control_launcher: Arc<dyn RemoteControlLauncher>,
     /// Samples the host process table for the tab-bar resource stats.
     pub(super) resource_client: Arc<dyn ResourceClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
@@ -164,6 +167,7 @@ impl AppClients {
             agent_profile_catalog_client: Arc::new(RealAgentCatalogClient),
             project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
+            remote_control_launcher: Arc::new(RealRemoteControlLauncher),
             resource_client: Arc::new(RealResourceClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),
@@ -295,6 +299,8 @@ pub struct App {
     /// `AppMode::View`, or once the panel opens, so a later legitimate
     /// transition reloads again.
     pub(crate) question_reconcile_reload_attempted: Option<SessionId>,
+    /// Owns the `/remote-control` listener and its paired-device view.
+    pub(crate) remote_control: crate::app::remote_control::RemoteControl,
     /// Caches generated focused review text per session so it survives mode
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
@@ -1895,6 +1901,7 @@ impl App {
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
             .await;
         if refreshed {
+            self.publish_session_change();
             app::review::prune_review_cache(
                 &mut self.review_cache,
                 &self.pending_focused_review_persistence,
@@ -1911,6 +1918,7 @@ impl App {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
+        self.publish_session_change();
         app::review::prune_review_cache(
             &mut self.review_cache,
             &self.pending_focused_review_persistence,

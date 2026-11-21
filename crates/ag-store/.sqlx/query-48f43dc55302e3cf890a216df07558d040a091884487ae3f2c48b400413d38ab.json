@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO remote_device (id, name, token_hash, created_at)\nVALUES (?, ?, ?, ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "48f43dc55302e3cf890a216df07558d040a091884487ae3f2c48b400413d38ab"
+}

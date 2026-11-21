@@ -332,6 +332,17 @@ fn transient_overlay_dispatch_cases() -> Vec<DispatchCase> {
             },
         ),
         (
+            AppMode::RemoteControl {
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: None,
+                    session_id: "session-id".into(),
+                },
+                selected_device_index: 0,
+            },
+            KeyCode::Esc,
+            |mode| matches!(mode, AppMode::View { session_id, .. } if session_id.as_str() == "session-id"),
+        ),
+        (
             AppMode::DiffLoading {
                 fallback_view_scroll_offset: None,
                 request_id: 1,

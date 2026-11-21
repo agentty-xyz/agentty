@@ -115,6 +115,21 @@ fn app_event_label_names_chatgpt_sign_in_progress() {
 }
 
 #[test]
+fn app_event_label_names_remote_control_status() {
+    // Arrange
+    let event = AppEvent::RemoteControlStatusUpdated {
+        generation: 1,
+        status: ag_remote::RemoteServerStatus::default(),
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "RemoteControlStatusUpdated");
+}
+
+#[test]
 fn app_event_label_names_diff_preview_loads() {
     // Arrange
     let event = AppEvent::DiffPreviewLoaded {

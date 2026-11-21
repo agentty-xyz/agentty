@@ -22,7 +22,8 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
+    AppMode, ChatFocus, ConfirmationViewMode, DiffRestoreTarget, DiffSidebarFocus,
+    PromptModeSnapshot,
 };
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
@@ -121,6 +122,8 @@ enum PromptEffect {
     },
     /// Starts loading the session diff, restoring `restore` on exit.
     OpenDiff { restore: Option<DiffRestoreTarget> },
+    /// Starts remote control and opens its popup above session view.
+    OpenRemoteControl,
     /// Persists one permission mode and reports failures in the transcript.
     PersistPermissionMode(PermissionMode),
     /// Lists harness models again for the opened `/model` stage.
@@ -411,6 +414,16 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
         } => app.open_chatgpt_sign_in(selected_agent, restore),
         PromptEffect::OpenDiff { restore } => {
             app.start_diff_view_load(session_id, restore, DiffSidebarFocus::Files);
+        }
+        PromptEffect::OpenRemoteControl => {
+            app.open_remote_control().await;
+            app.mode = AppMode::RemoteControl {
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: prompt_context.scroll_offset,
+                    session_id: session_id.clone(),
+                },
+                selected_device_index: 0,
+            };
         }
         PromptEffect::PersistPermissionMode(permission_mode) => {
             persist_prompt_permission_mode(app, session_id, permission_mode).await;
@@ -1054,6 +1067,10 @@ fn reduce_prompt_slash_submit(
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {
             effects.push(PromptEffect::ApplyFocusedReview);
+        }
+        Some(PromptSuggestionSelection::Command("/remote-control")) => {
+            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
+            effects.push(PromptEffect::OpenRemoteControl);
         }
         Some(PromptSuggestionSelection::Command("/mode")) => {
             let selected_index = PermissionMode::ALL

@@ -31,6 +31,7 @@ mod project;
 mod project_catalog;
 pub(crate) mod prompt_intent;
 mod reducer;
+mod remote_control;
 mod review;
 mod review_diff;
 mod review_graph;
@@ -60,6 +61,7 @@ pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub use error::AppError;
 pub use project::ProjectManager;
+pub use remote_control::DEFAULT_REMOTE_CONTROL_PORT;
 pub(crate) use review::ReviewCacheEntry;
 pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};

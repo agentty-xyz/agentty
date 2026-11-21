@@ -425,13 +425,19 @@ fn repeated_durable_submissions_have_distinct_command_ids_and_stable_operation_c
 }
 
 #[tokio::test]
-async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
+async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     let _consumer = app.sessions.foreground_consumer();
+    let remote_service = ag_session::SessionService::new(std::sync::Arc::new(
+        app.sessions
+            .handle()
+            .with_initiator(CommandInitiator::Remote),
+    ));
     let services = [
         (app.session_view_service(), CommandInitiator::SessionView),
         (app.session_service(), CommandInitiator::SessionApi),
+        (remote_service, CommandInitiator::Remote),
     ];
     let mut command_ids = Vec::new();
 
@@ -443,6 +449,7 @@ async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
             SessionRuntimeCommand::Get { .. }
+            | SessionRuntimeCommand::List { .. }
             | SessionRuntimeCommand::GetGraphProposal { .. }
             | SessionRuntimeCommand::GetExecutionGraph { .. }
             | SessionRuntimeCommand::RunGraphNode { .. }

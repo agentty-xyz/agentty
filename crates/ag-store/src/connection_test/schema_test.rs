@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 use crate::connection::Database;
 
 /// Full-table scans that specific checked queries may perform.
-const ALLOWED_SCANS: [AllowedScan; 4] = [
+const ALLOWED_SCANS: [AllowedScan; 5] = [
     AllowedScan {
         query: "DELETE FROM session_activity",
         reason: "clearing activity history deletes every row",
@@ -31,6 +31,11 @@ const ALLOWED_SCANS: [AllowedScan; 4] = [
         query: "FROM project_setting WHERE name = ?",
         reason: "reads one setting for every project; rows are bounded by project count",
         table: "project_setting",
+    },
+    AllowedScan {
+        query: "FROM remote_device ORDER BY created_at, id",
+        reason: "lists every paired device; rows are bounded by the user's paired devices",
+        table: "remote_device",
     },
 ];
 

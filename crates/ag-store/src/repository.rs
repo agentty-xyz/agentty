@@ -5,7 +5,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::timestamp::TimestampSource;
-use crate::{activity, operation, project, review, session, setting, usage};
+use crate::{activity, operation, project, remote_device, review, session, setting, usage};
 
 /// App-layer repository bundle used for selective mock injection.
 #[derive(Clone)]
@@ -43,6 +43,11 @@ impl AppRepositories {
     /// Returns the project repository.
     pub fn projects(&self) -> &dyn project::ProjectRepository {
         self.repositories.project.as_ref()
+    }
+
+    /// Returns the paired remote-control device repository.
+    pub fn remote_devices(&self) -> Arc<dyn remote_device::RemoteDeviceRepository> {
+        Arc::clone(&self.repositories.remote_device)
     }
 
     /// Returns the session review-request repository.
@@ -99,6 +104,10 @@ impl AppRepositories {
                     pool.clone(),
                     Arc::clone(&timestamp_source),
                 )),
+                remote_device: Arc::new(remote_device::SqliteRemoteDeviceRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
                 review: Arc::new(review::SqliteReviewRepository::new(pool.clone())),
                 run: Arc::new(crate::run::SqliteRunRepository::new(
                     pool.clone(),
@@ -128,6 +137,7 @@ struct RepositorySet {
     graph_proposal: Arc<dyn crate::GraphProposalRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     project: Arc<dyn project::ProjectRepository>,
+    remote_device: Arc<dyn remote_device::RemoteDeviceRepository>,
     review: Arc<dyn review::ReviewRepository>,
     run: Arc<dyn ag_worker::RunRepository>,
     session: Arc<dyn session::SessionRepository>,

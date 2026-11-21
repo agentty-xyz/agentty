@@ -16,6 +16,8 @@ use crate::domain::turn_prompt::TurnPrompt;
 pub(crate) enum CommandInitiator {
     SessionView,
     SessionApi,
+    /// A paired device connected through remote control.
+    Remote,
 }
 
 /// One admission attempt. Its identity is not a durable-operation deduplication

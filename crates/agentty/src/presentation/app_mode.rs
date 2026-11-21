@@ -829,6 +829,13 @@ pub enum AppMode {
         /// Highlighted launch-configuration index in `commands`.
         selected_command_index: usize,
     },
+    /// Remote-control popup opened by `/remote-control` above session view.
+    RemoteControl {
+        /// View state restored after the popup closes.
+        restore_view: ConfirmationViewMode,
+        /// Highlighted paired-device row.
+        selected_device_index: usize,
+    },
     /// Session-view popup that collects an optional remote branch name before
     /// publishing or refreshing the current forge review request.
     PublishBranchInput {

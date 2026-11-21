@@ -12,6 +12,7 @@ pub(crate) mod list;
 pub(crate) mod project_catalog;
 pub(crate) mod prompt;
 pub(crate) mod question;
+pub(crate) mod remote_control;
 pub(crate) mod review_comment;
 pub(crate) mod session_output_metric;
 pub(crate) mod session_view;

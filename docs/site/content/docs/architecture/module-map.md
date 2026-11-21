@@ -26,6 +26,7 @@ the module docstrings directly.
 | `ag-harness`     | Native model loop, tools, durable sessions                       |
 | `ag-harness-cli` | Companion harness CLI                                            |
 | `ag-protocol`    | Response schemas, parsing, prompt envelopes                      |
+| `ag-remote`      | Remote-control server, pairing, and embedded web client          |
 | `ag-router`      | Structured chat routing and provider transports                  |
 | `ag-session`     | Session models, policies, catalog, lifecycle API                 |
 | `ag-store`       | Persistence contracts, SQLite adapters, migrations               |

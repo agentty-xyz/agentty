@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport"
+              content="width=device-width, initial-scale=1, viewport-fit=cover">
+        <meta name="color-scheme" content="light dark">
+        <meta name="referrer" content="no-referrer">
+        <title>Agentty Remote</title>
+        <link rel="stylesheet" href="/app.css">
+        <script src="/app.js" defer></script>
+    </head>
+    <body>
+        <header class="bar">
+            <button id="back"
+                    class="icon"
+                    type="button"
+                    aria-label="Back to sessions"
+                    hidden>&larr;</button>
+            <h1 id="heading">Agentty</h1>
+            <span id="connection" class="pill" role="status">Offline</span>
+        </header>
+        <main>
+            <section id="pair-view" class="view" hidden>
+                <h2>Pair this device</h2>
+                <p class="muted">
+                    Run <code>/remote-control</code> in Agentty and enter the code it shows.
+                </p>
+                <form id="pair-form" class="stack" autocomplete="off">
+                    <label>
+                        Pairing code
+                        <input id="pair-code"
+                               name="code"
+                               inputmode="text"
+                               autocapitalize="characters"
+                               spellcheck="false"
+                               placeholder="ABCD-EFGH"
+                               required
+                               maxlength="16">
+                    </label>
+                    <label>
+                        Device name
+                        <input id="pair-name" name="name" maxlength="64">
+                    </label>
+                    <button type="submit" class="primary">Pair</button>
+                </form>
+                <p id="pair-error" class="error" role="alert"></p>
+            </section>
+            <section id="list-view" class="view" hidden>
+                <ul id="sessions" class="sessions">
+                </ul>
+                <p id="sessions-empty" class="muted" hidden>No sessions in the active project.</p>
+                <button id="forget" type="button" class="link">Forget this device</button>
+            </section>
+            <section id="session-view" class="view" hidden>
+                <div class="session-meta">
+                    <span id="session-status" class="pill"></span>
+                    <button id="cancel" type="button" class="danger" hidden>Cancel turn</button>
+                </div>
+                <ol id="transcript" class="transcript">
+                </ol>
+                <ul id="queued" class="queued">
+                </ul>
+                <form id="questions" class="questions stack" hidden>
+                </form>
+                <form id="composer" class="composer">
+                    <textarea id="message" rows="2" placeholder="Message" aria-label="Message"></textarea>
+                    <button type="submit" class="primary">Send</button>
+                </form>
+                <p id="session-error" class="error" role="alert"></p>
+            </section>
+        </main>
+    </body>
+</html>

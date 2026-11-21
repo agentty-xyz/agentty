@@ -205,6 +205,7 @@ async fn repository_parts_support_focused_adapter_injection() {
             graph_proposal: Arc::clone(&baseline.repositories.graph_proposal),
             operation: Arc::new(operation),
             project: Arc::clone(&baseline.repositories.project),
+            remote_device: Arc::clone(&baseline.repositories.remote_device),
             review: Arc::clone(&baseline.repositories.review),
             run: Arc::clone(&baseline.repositories.run),
             session: Arc::clone(&baseline.repositories.session),

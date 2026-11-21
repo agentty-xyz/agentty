@@ -27,6 +27,7 @@ use crate::presentation::app_mode::{
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
@@ -110,6 +111,7 @@ fn render_list_tab(
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &projects,
+        remote_control: &RemoteControlView::default(),
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen,
@@ -151,6 +153,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
+        remote_control: &RemoteControlView::default(),
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen: None,
@@ -564,6 +567,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
+        remote_control: &RemoteControlView::default(),
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen: None,
@@ -1091,6 +1095,26 @@ fn render_mode_overlay_renders_publish_input() {
     // Assert
     assert!(text.contains("Publish Review Request"));
     assert!(text.contains("wt/session-publish"));
+}
+
+#[test]
+fn render_mode_overlay_renders_remote_control_popup() {
+    // Arrange
+    let mode = AppMode::RemoteControl {
+        restore_view: ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: "session-remote".into(),
+        },
+        selected_device_index: 0,
+    };
+
+    // Act
+    let (handled, text) = render_list_backed_mode(&mode);
+
+    // Assert
+    assert!(handled);
+    assert!(text.contains("Remote Control"));
+    assert!(text.contains("s: start | Esc: close"));
 }
 
 #[test]

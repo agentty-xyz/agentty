@@ -26,6 +26,8 @@ pub struct StatusBar {
     latest_available_version: Option<String>,
     project_name: Option<String>,
     project_sync_status: Option<ProjectSyncStatus>,
+    /// Connected device count while remote control listens.
+    remote_control_connections: Option<usize>,
     update_status: Option<UpdateStatus>,
 }
 
@@ -37,8 +39,18 @@ impl StatusBar {
             latest_available_version: None,
             project_name: None,
             project_sync_status: None,
+            remote_control_connections: None,
             update_status: None,
         }
+    }
+
+    /// Shows that remote control is listening, with `connections` devices
+    /// connected; `None` hides the notice.
+    #[must_use]
+    pub fn remote_control_connections(mut self, connections: Option<usize>) -> Self {
+        self.remote_control_connections = connections;
+
+        self
     }
 
     /// Sets the latest available version for update notification.
@@ -215,6 +227,19 @@ impl Component for StatusBar {
             version_spans.push(Span::styled(
                 text,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        if let Some(connections) = self.remote_control_connections {
+            version_spans.push(Span::raw(" | "));
+            version_spans.push(Span::styled(
+                format!(
+                    "Remote control on, {} connected",
+                    count_label(connections, "device")
+                ),
+                Style::default()
+                    .fg(style::palette::success())
+                    .add_modifier(Modifier::BOLD),
             ));
         }
 

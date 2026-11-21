@@ -28,6 +28,8 @@ pub mod project_switcher_overlay;
 pub mod publish_branch_overlay;
 /// Calm pulse for queued-action indicators.
 pub mod queue_pulse;
+/// Remote-control listener, pairing code, and paired-device popup.
+pub mod remote_control_overlay;
 /// New-session action selector popup.
 pub mod session_creation_overlay;
 /// Session transcript, progress, and result rendering.

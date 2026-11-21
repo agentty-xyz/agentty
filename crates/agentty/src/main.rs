@@ -11,7 +11,7 @@ use ag_git::{GitClient, RealGitClient};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
-use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home};
+use agentty::app::{AGENTTY_WT_DIR, App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
 use agentty::infra::db::{
     AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
@@ -39,6 +39,15 @@ struct Cli {
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
+    /// Loopback port that `/remote-control` listens on; `0` picks a free
+    /// port.
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = DEFAULT_REMOTE_CONTROL_PORT,
+        requires = "remote"
+    )]
+    remote_control_port: u16,
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
@@ -50,6 +59,10 @@ struct ExperimentalFeatures {
     /// `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
+    /// Offers `/remote-control`, which lets a paired phone or browser follow
+    /// and reply to sessions through a loopback listener.
+    #[arg(long = "experimental-remote")]
+    remote: bool,
 }
 
 /// Runs the `agentty` application runtime using the configured workspace and
@@ -203,6 +216,9 @@ async fn run_application(
             startup.finish(app.as_ref().map_or(Outcome::Failed, |_| Outcome::Completed));
             let mut app = app?;
             app.set_analytics(analytics.clone());
+            if cli.experimental.remote {
+                app.enable_remote_control(cli.remote_control_port);
+            }
 
             runtime(&mut app).await
         }),

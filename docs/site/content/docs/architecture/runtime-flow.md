@@ -72,9 +72,18 @@ checkouts are validated when opened.
 | Session runtime mailbox | Programmatic lifecycle requests and replies  |
 | `TurnEvent` stream      | Transient progress, output, process identity |
 | Shared session handles  | Live transcript, status, and queued work     |
+| Session-change revision | Coalesced refetch signal for remote clients  |
 
 Workers and handles survive project switches; project reloads replace display snapshots,
 not execution ownership.
+
+<a id="architecture-runtime-flow-remote-control"></a> The
+[remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
+runtime's Tokio executor but owns no application state. It calls the session API through
+the mailbox like any programmatic caller. The reducer advances the session-change
+revision after it applies session updates, reloads, or admitted mutations; connected
+clients then fetch the list and the open session again, so remote views converge on
+durable state instead of replaying events.
 
 ## App Event Reducer
 

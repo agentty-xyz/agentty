@@ -11,6 +11,7 @@ use super::event::AppEvent;
 use super::state::{App, AppClients};
 use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::graph_question::GraphQuestionState;
+use crate::app::remote_control::RemoteControl;
 use crate::app::review_watch::ReviewWatchState;
 use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::{
@@ -187,6 +188,7 @@ impl App {
             sessions: sessions.into(),
             question_progress: std::collections::HashMap::new(),
             question_reconcile_reload_attempted: None,
+            remote_control: RemoteControl::new(clients.remote_control_launcher, &repositories),
             event_rx,
             is_tmux_session: clients.is_tmux_session,
             review_cache,

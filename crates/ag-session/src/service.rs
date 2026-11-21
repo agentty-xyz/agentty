@@ -6,7 +6,7 @@ use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use async_trait::async_trait;
 
 use crate::error::SessionError;
-use crate::model::{ReviewRequest, Session, SessionId};
+use crate::model::{ReviewRequest, Session, SessionId, SessionSummary};
 use crate::{AcceptTaskPlanRequest, CreateTaskRequest, SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
@@ -278,6 +278,14 @@ pub trait SessionBackend: Send + Sync {
 
     /// Loads one complete session aggregate, including settings and messages.
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError>;
+
+    /// Lists the host's loaded sessions in its display order. Older hosts
+    /// may omit listing support.
+    async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support session listing".to_string(),
+        ))
+    }
 
     /// Sends one text message, starting, resuming, or queueing as appropriate.
     async fn send_message(
@@ -612,6 +620,14 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<Option<Session>, SessionError> {
         self.backend.get_session(session_id).await
+    }
+
+    /// Lists the host's loaded sessions in its display order.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot list sessions.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
+        self.backend.list_sessions().await
     }
 
     /// Sends a text message to one session.
