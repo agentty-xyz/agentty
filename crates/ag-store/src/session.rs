@@ -626,8 +626,10 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     /// A `Ready` result with an active generation atomically archives call
     /// records before discarding checkpoints and closing that generation.
     /// Restoring cached `Ready` state without a generation and explicit clear
-    /// (`None`) retain the latest completed audit. Failed persistence leaves
-    /// the prior result, audit, and evidence intact.
+    /// (`None`) retain the latest completed audit. Clearing an unfinished
+    /// (`Pending`) review also discards the diff baseline it claimed, so the
+    /// next turn reviews that diff again. Failed persistence leaves the prior
+    /// result, audit, and evidence intact.
     async fn update_session_focused_review(
         &self,
         id: &str,
@@ -2347,6 +2349,15 @@ WHERE id = ?
         let now = self.now();
         let mut transaction = self.0.begin().await?;
 
+        if status.is_none() {
+            sqlx::query(
+                "UPDATE session SET review_diff_hash = NULL WHERE id = ? AND \
+                 focused_review_status = 'Pending'",
+            )
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        }
         sqlx::query!(
             r"
 UPDATE session
