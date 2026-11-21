@@ -140,7 +140,7 @@ async fn seed_paused_plan_graph(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-prompt=$(cat)
+IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 case "$prompt" in
   *'Output awaiting acceptance'*) printf '%s\n' '{"type":"result","subtype":"success","structured_output":{"answer":"accept"},"usage":{"input_tokens":5,"output_tokens":9}}' ;;
