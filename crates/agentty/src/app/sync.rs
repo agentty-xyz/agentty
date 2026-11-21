@@ -48,6 +48,17 @@ const REVIEW_SYNC_MAX_BACKOFF_PASSES: u64 = 7;
 /// is skipped between retries, so an unreachable remote is retried about
 /// every eight minutes at the periodic cadence.
 const FETCH_MAX_BACKOFF_PASSES: u64 = 15;
+/// Consecutive review passes that must return the previous result again
+/// before a target drops to the idle cadence.
+const REVIEW_SYNC_IDLE_AFTER_UNCHANGED_PASSES: u32 = 3;
+/// Review passes between two polls of an idle target.
+///
+/// Review passes run about once a minute, so an external merge, close, new
+/// review comment, or check result on an idle review request is seen at most
+/// five passes, about five minutes, late. Watched review requests with running
+/// checks keep the full cadence, and explicit refreshes poll idle targets at
+/// once.
+const REVIEW_SYNC_IDLE_INTERVAL_PASSES: u64 = 5;
 
 /// Starts project sync work and emits operation-scoped progress events.
 #[cfg_attr(test, mockall::automock)]
@@ -128,6 +139,7 @@ impl SyncHandle {
             fetch_failures: HashMap::new(),
             fetch_pass_index: 0,
             review_pass_index: 0,
+            review_sync_cadences: HashMap::new(),
             review_sync_failures: HashMap::new(),
             tick_index: 0,
         };
@@ -443,6 +455,7 @@ pub(crate) struct SyncOrchestrator {
     fetch_failures: HashMap<i64, FailureBackoff>,
     fetch_pass_index: u64,
     review_pass_index: u64,
+    review_sync_cadences: HashMap<SessionId, ReviewSyncCadenceState>,
     review_sync_failures: HashMap<SessionId, FailureBackoff>,
     tick_index: u64,
 }
@@ -476,15 +489,15 @@ impl SyncOrchestrator {
                     };
 
                     match command {
-                        SyncCommand::RefreshNow => self.run_refresh_pass(true).await,
+                        SyncCommand::RefreshNow => self.run_refresh_pass(ReviewPass::Forced).await,
                         SyncCommand::SyncMain(request) => self.run_sync_main(*request).await,
                     }
                     tick.reset();
                 }
                 _ = tick.tick() => {
-                    let include_review_pass = self.tick_index.is_multiple_of(REVIEW_REQUEST_PASS_TICKS);
+                    let review_pass = ReviewPass::for_tick(self.tick_index);
                     self.tick_index = self.tick_index.wrapping_add(1);
-                    self.run_refresh_pass(include_review_pass).await;
+                    self.run_refresh_pass(review_pass).await;
                 }
             }
         }
@@ -496,7 +509,7 @@ impl SyncOrchestrator {
     /// Skips entirely, without a trace, when the active project has no git
     /// branch. The trace fails when any phase failed and is canceled when
     /// newer polling targets superseded the pass.
-    async fn run_refresh_pass(&mut self, include_review_pass: bool) {
+    async fn run_refresh_pass(&mut self, review_pass: ReviewPass) {
         let context = self.context_rx.borrow().clone();
         if context.project_branch_name.is_none() {
             return;
@@ -506,7 +519,7 @@ impl SyncOrchestrator {
             "sync.refresh",
             vec![KeyValue::new(
                 "agentty.sync.review_pass",
-                include_review_pass,
+                review_pass != ReviewPass::Skip,
             )],
         );
         let trace = refresh.context();
@@ -514,9 +527,9 @@ impl SyncOrchestrator {
             .run_git_status_pass(&context)
             .with_context(trace.clone())
             .await;
-        if include_review_pass {
+        if review_pass != ReviewPass::Skip {
             let review_outcome = self
-                .run_review_request_pass(&context)
+                .run_review_request_pass(&context, review_pass == ReviewPass::Forced)
                 .with_context(trace)
                 .await;
             outcome = combined_outcome(outcome, review_outcome);
@@ -656,11 +669,16 @@ impl SyncOrchestrator {
     /// Emits one [`AppEvent::ReviewRequestStatusUpdated`] per target so the
     /// reducer can persist refreshed summaries and transition externally
     /// merged or closed sessions. Targets in failure backoff are skipped
-    /// until their retry pass. Returns the outcome of the
+    /// until their retry pass, and idle targets until their next idle poll
+    /// unless `poll_idle_targets` is set. Returns the outcome of the
     /// `sync.review_requests` phase.
-    async fn run_review_request_pass(&mut self, context: &SyncContext) -> Outcome {
+    async fn run_review_request_pass(
+        &mut self,
+        context: &SyncContext,
+        poll_idle_targets: bool,
+    ) -> Outcome {
         let updates = self
-            .collect_review_request_pass_updates(context, true)
+            .collect_review_request_pass_updates(context, true, poll_idle_targets)
             .await;
         let outcome = self.review_request_pass_outcome(context, true, &updates);
 
@@ -679,16 +697,18 @@ impl SyncOrchestrator {
         &mut self,
         context: &SyncContext,
         reject_stale_context: bool,
+        poll_idle_targets: bool,
     ) -> Vec<ReviewRequestPassUpdate> {
         let phase = Span::child("sync.review_requests");
         phase.attribute(
             "agentty.sync.targets",
             attribute_count(context.review_request_sync_targets.len()),
         );
-        let updates = self
-            .collect_review_request_updates(context, reject_stale_context)
+        let (updates, idle_targets) = self
+            .collect_review_request_updates(context, reject_stale_context, poll_idle_targets)
             .with_context(phase.context())
             .await;
+        phase.attribute("agentty.sync.idle_targets", attribute_count(idle_targets));
         phase.attribute(
             "agentty.sync.failures",
             attribute_count(
@@ -722,13 +742,18 @@ impl SyncOrchestrator {
 
     /// Refreshes review-request status for every eligible target, stopping
     /// early when `reject_stale_context` is set and newer targets arrive.
+    ///
+    /// Returns the updates with the number of idle targets left for a later
+    /// pass.
     async fn collect_review_request_updates(
         &mut self,
         context: &SyncContext,
         reject_stale_context: bool,
-    ) -> Vec<ReviewRequestPassUpdate> {
+        poll_idle_targets: bool,
+    ) -> (Vec<ReviewRequestPassUpdate>, usize) {
         let review_pass_index = self.review_pass_index;
         self.review_pass_index = self.review_pass_index.wrapping_add(1);
+        let mut idle_targets = 0;
         let mut updates = Vec::new();
         let review_watch_config = if context
             .review_request_sync_targets
@@ -742,10 +767,17 @@ impl SyncOrchestrator {
 
         for review_request_sync_target in &context.review_request_sync_targets {
             if reject_stale_context && self.context_is_stale(context) {
-                return updates;
+                return (updates, idle_targets);
             }
             if self.is_target_backed_off(&review_request_sync_target.session_id, review_pass_index)
             {
+                continue;
+            }
+            if !poll_idle_targets
+                && self.is_target_idle(review_request_sync_target, review_pass_index)
+            {
+                idle_targets += 1;
+
                 continue;
             }
 
@@ -758,7 +790,7 @@ impl SyncOrchestrator {
             .await;
 
             if reject_stale_context && self.context_is_stale(context) {
-                return updates;
+                return (updates, idle_targets);
             }
 
             self.record_review_sync_outcome(review_request_sync_target, &result, review_pass_index);
@@ -768,9 +800,9 @@ impl SyncOrchestrator {
             });
         }
 
-        self.retain_active_failure_states(&context.review_request_sync_targets);
+        self.retain_active_target_states(&context.review_request_sync_targets);
 
-        updates
+        (updates, idle_targets)
     }
 
     /// Emits previously collected review-request updates.
@@ -813,7 +845,7 @@ impl SyncOrchestrator {
 
         let (review_request_updates, result) = async {
             let review_request_updates = self
-                .collect_review_request_pass_updates(&sync_context, false)
+                .collect_review_request_pass_updates(&sync_context, false, true)
                 .await;
             // Scoping inside the trace parents conflict assistance beneath it.
             let run_client = ag_worker::scoped_client(
@@ -888,12 +920,32 @@ impl SyncOrchestrator {
             .is_some_and(|backoff| backoff.is_backed_off(review_pass_index))
     }
 
-    /// Updates per-target failure tracking after one review-request sync.
+    /// Returns whether one unchanged target waits for its next idle poll.
     ///
-    /// Successes clear the failure state. Failures extend the backoff window
-    /// exponentially and surface one workflow notice when the consecutive
-    /// failure count reaches the notice threshold, instead of retrying at
-    /// full rate forever with no user-visible signal.
+    /// A changed polling key, such as a toggled watch or a newly linked
+    /// review request, polls the target at once.
+    fn is_target_idle(
+        &self,
+        review_request_sync_target: &ReviewRequestSyncTarget,
+        review_pass_index: u64,
+    ) -> bool {
+        self.review_sync_cadences
+            .get(&review_request_sync_target.session_id)
+            .is_some_and(|cadence_state| {
+                review_pass_index < cadence_state.next_poll_pass
+                    && cadence_state.target.polling_key()
+                        == review_request_sync_target.polling_key()
+            })
+    }
+
+    /// Updates per-target failure and cadence tracking after one
+    /// review-request sync.
+    ///
+    /// Successes clear the failure state and update the idle cadence.
+    /// Failures restart the cadence, extend the backoff window exponentially,
+    /// and surface one workflow notice when the consecutive failure count
+    /// reaches the notice threshold, instead of retrying at full rate forever
+    /// with no user-visible signal.
     fn record_review_sync_outcome(
         &mut self,
         review_request_sync_target: &ReviewRequestSyncTarget,
@@ -902,10 +954,16 @@ impl SyncOrchestrator {
     ) {
         let session_id = &review_request_sync_target.session_id;
         match result {
-            Ok(_) => {
+            Ok(task_result) => {
                 self.review_sync_failures.remove(session_id);
+                self.record_review_sync_cadence(
+                    review_request_sync_target,
+                    task_result,
+                    review_pass_index,
+                );
             }
             Err(error) => {
+                self.review_sync_cadences.remove(session_id);
                 let backoff = self
                     .review_sync_failures
                     .entry(session_id.clone())
@@ -935,17 +993,104 @@ impl SyncOrchestrator {
         }
     }
 
-    /// Drops failure tracking for sessions no longer in the target list.
-    fn retain_active_failure_states(
+    /// Updates the idle cadence of one target after a successful sync.
+    ///
+    /// A result equal to the previous one for the same polling key extends
+    /// the unchanged run. After [`REVIEW_SYNC_IDLE_AFTER_UNCHANGED_PASSES`]
+    /// such passes the target is polled once every
+    /// [`REVIEW_SYNC_IDLE_INTERVAL_PASSES`] passes. Any change, or running
+    /// checks on a watched review request, keeps the full cadence.
+    fn record_review_sync_cadence(
+        &mut self,
+        review_request_sync_target: &ReviewRequestSyncTarget,
+        task_result: &SyncReviewRequestTaskResult,
+        review_pass_index: u64,
+    ) {
+        let session_id = &review_request_sync_target.session_id;
+        let unchanged_passes = self
+            .review_sync_cadences
+            .get(session_id)
+            .filter(|cadence_state| {
+                cadence_state.result == *task_result
+                    && cadence_state.target.polling_key()
+                        == review_request_sync_target.polling_key()
+            })
+            .map_or(0, |cadence_state| {
+                cadence_state.unchanged_passes.saturating_add(1)
+            });
+        let skipped_passes = if unchanged_passes >= REVIEW_SYNC_IDLE_AFTER_UNCHANGED_PASSES
+            && !has_running_checks(task_result)
+        {
+            REVIEW_SYNC_IDLE_INTERVAL_PASSES - 1
+        } else {
+            0
+        };
+
+        self.review_sync_cadences.insert(
+            session_id.clone(),
+            ReviewSyncCadenceState {
+                next_poll_pass: review_pass_index
+                    .saturating_add(1)
+                    .saturating_add(skipped_passes),
+                result: task_result.clone(),
+                target: review_request_sync_target.clone(),
+                unchanged_passes,
+            },
+        );
+    }
+
+    /// Drops failure and cadence tracking for sessions no longer in the
+    /// target list.
+    fn retain_active_target_states(
         &mut self,
         review_request_sync_targets: &[ReviewRequestSyncTarget],
     ) {
-        self.review_sync_failures.retain(|session_id, _| {
+        let is_active = |session_id: &SessionId| {
             review_request_sync_targets
                 .iter()
                 .any(|target| &target.session_id == session_id)
-        });
+        };
+        self.review_sync_cadences
+            .retain(|session_id, _| is_active(session_id));
+        self.review_sync_failures
+            .retain(|session_id, _| is_active(session_id));
     }
+}
+
+/// Review-request work included in one read-only refresh pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReviewPass {
+    /// Refreshes git status only.
+    Skip,
+    /// Periodic pass that leaves idle targets until their next idle poll.
+    Scheduled,
+    /// Explicit refresh that also polls idle targets.
+    Forced,
+}
+
+impl ReviewPass {
+    /// Returns the review-request work of periodic tick `tick_index`, which
+    /// polls forge CLIs on every [`REVIEW_REQUEST_PASS_TICKS`]th tick.
+    fn for_tick(tick_index: u64) -> Self {
+        if tick_index.is_multiple_of(REVIEW_REQUEST_PASS_TICKS) {
+            Self::Scheduled
+        } else {
+            Self::Skip
+        }
+    }
+}
+
+/// Per-session unchanged-result tracking used for the idle cadence.
+struct ReviewSyncCadenceState {
+    /// Review-pass index from which the target is polled again.
+    next_poll_pass: u64,
+    /// Latest successful result, compared with the next one.
+    result: SyncReviewRequestTaskResult,
+    /// Target that produced `result`; a different polling key ends the idle
+    /// cadence.
+    target: ReviewRequestSyncTarget,
+    /// Consecutive passes whose result matched the one before.
+    unchanged_passes: u32,
 }
 
 /// Consecutive-failure tracking for one polled target, used to skip passes
@@ -1012,6 +1157,12 @@ fn combined_outcome(first: Outcome, second: Outcome) -> Outcome {
 /// Converts one collection size to an integer span attribute.
 fn attribute_count(count: usize) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// Returns whether a watched review request reported checks that are still
+/// running, whose results review watching acts on once they finish.
+fn has_running_checks(task_result: &SyncReviewRequestTaskResult) -> bool {
+    matches!(&task_result.attention, Some(Ok(attention)) if attention.has_pending_checks)
 }
 
 /// Resolves ahead/behind and merge-conflict snapshots for all tracked session

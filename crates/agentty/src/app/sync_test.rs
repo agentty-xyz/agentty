@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::{
     FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext, ProjectSyncPhase,
-    ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewRequestPassUpdate,
+    ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewPass, ReviewRequestPassUpdate,
     ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext, SyncHandle, SyncMainCompletion,
     SyncMainRequest, SyncOrchestrator, review_request_repo_url, session_git_statuses,
     sync_review_request_status, sync_task_result_from_summary,
@@ -173,6 +173,7 @@ fn orchestrator_for(
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
@@ -220,7 +221,7 @@ async fn refresh_pass_traces_failed_fetch_and_tracking_status() {
     let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
 
     // Act
-    orchestrator.run_refresh_pass(false).await;
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
 
     // Assert
     assert!(matches!(
@@ -298,7 +299,7 @@ async fn superseded_refresh_pass_is_traced_as_canceled() {
     let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_tx.subscribe());
 
     // Act
-    orchestrator.run_refresh_pass(false).await;
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
 
     // Assert
     assert!(app_event_rx.try_recv().is_err());
@@ -372,7 +373,7 @@ async fn refresh_pass_backs_off_failing_fetches_until_one_succeeds() {
 
     // Act
     for _ in 0..5 {
-        orchestrator.run_refresh_pass(false).await;
+        orchestrator.run_refresh_pass(ReviewPass::Skip).await;
     }
 
     // Assert
@@ -697,6 +698,7 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
@@ -856,6 +858,7 @@ async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
@@ -903,6 +906,7 @@ async fn record_review_sync_outcome_success_resets_backoff() {
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
@@ -922,6 +926,167 @@ async fn record_review_sync_outcome_success_resets_backoff() {
     // Assert
     assert!(!orchestrator.is_target_backed_off(&target.session_id, 5));
     assert!(orchestrator.review_sync_failures.is_empty());
+}
+
+#[test]
+/// Every second periodic tick includes a scheduled review-request pass.
+fn review_pass_for_tick_schedules_every_second_tick() {
+    // Arrange / Act / Assert
+    assert_eq!(ReviewPass::for_tick(0), ReviewPass::Scheduled);
+    assert_eq!(ReviewPass::for_tick(1), ReviewPass::Skip);
+    assert_eq!(ReviewPass::for_tick(2), ReviewPass::Scheduled);
+}
+
+#[test]
+/// A target whose result repeats for the idle threshold is polled once per
+/// idle interval, unless its watched checks are still running.
+fn record_review_sync_outcome_idles_unchanged_targets_unless_checks_run() {
+    // Arrange
+    let open_result = sync_task_result_from_summary(
+        test_review_request_summary("#42", ReviewRequestState::Open),
+        None,
+    );
+    let watched_result = |has_pending_checks| SyncReviewRequestTaskResult {
+        attention: Some(Ok(ag_forge::ReviewRequestAttention {
+            has_pending_checks,
+            head_commit: "abc1234".to_string(),
+            ..ag_forge::ReviewRequestAttention::default()
+        })),
+        ..open_result.clone()
+    };
+    let cases = [
+        ("unwatched", open_result.clone(), true),
+        ("watched_checks_settled", watched_result(false), true),
+        ("watched_checks_running", watched_result(true), false),
+    ];
+    let target = review_request_sync_target(
+        "session-1",
+        Some(linked_review_request("#42", ReviewRequestState::Open)),
+    );
+    for (case, task_result, expects_idle) in cases {
+        let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+        let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
+        let result = Ok(task_result);
+
+        // Act
+        for review_pass_index in 0..3 {
+            orchestrator.record_review_sync_outcome(&target, &result, review_pass_index);
+        }
+        let idle_below_threshold = orchestrator.is_target_idle(&target, 3);
+        orchestrator.record_review_sync_outcome(&target, &result, 3);
+
+        // Assert
+        assert!(!idle_below_threshold, "{case}");
+        assert_eq!(
+            orchestrator.is_target_idle(&target, 4),
+            expects_idle,
+            "{case}"
+        );
+        assert_eq!(
+            orchestrator.is_target_idle(&target, 7),
+            expects_idle,
+            "{case}"
+        );
+        assert!(!orchestrator.is_target_idle(&target, 8), "{case}");
+    }
+}
+
+#[test]
+/// A changed polling key, a changed result, or a failure returns an idle
+/// target to the full cadence, while an unchanged idle poll keeps it idle.
+fn idle_review_target_returns_to_full_cadence_on_change() {
+    // Arrange
+    let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
+    let target = review_request_sync_target(
+        "session-1",
+        Some(linked_review_request("#42", ReviewRequestState::Open)),
+    );
+    let mut watched_target = target.clone();
+    watched_target.is_watched = true;
+    let unchanged = Ok(sync_task_result_from_summary(
+        test_review_request_summary("#42", ReviewRequestState::Open),
+        None,
+    ));
+    let changed = Ok(sync_task_result_from_summary(
+        ReviewRequestSummary {
+            status_summary: Some("Approved".to_string()),
+            ..test_review_request_summary("#42", ReviewRequestState::Open)
+        },
+        None,
+    ));
+    let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
+    for review_pass_index in 0..4 {
+        orchestrator.record_review_sync_outcome(&target, &unchanged, review_pass_index);
+    }
+
+    // Act
+    let idle_after_key_change = orchestrator.is_target_idle(&watched_target, 4);
+    orchestrator.record_review_sync_outcome(&target, &unchanged, 8);
+    let idle_after_unchanged_idle_poll = orchestrator.is_target_idle(&target, 12);
+    orchestrator.record_review_sync_outcome(&target, &changed, 13);
+    let idle_after_changed_result = orchestrator.is_target_idle(&target, 14);
+    orchestrator.record_review_sync_outcome(&target, &failure, 14);
+
+    // Assert
+    assert!(!idle_after_key_change);
+    assert!(idle_after_unchanged_idle_poll);
+    assert!(!idle_after_changed_result);
+    assert!(orchestrator.review_sync_cadences.is_empty());
+}
+
+#[tokio::test]
+/// Scheduled passes leave an idle target without forge calls and count it,
+/// while a forced pass polls it at once.
+async fn collect_review_request_updates_skips_idle_targets_unless_forced() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client.expect_repo_url().times(5).returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+    });
+    let mut mock_review_request_client = MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .times(5)
+        .returning(|repo_url| ag_forge::detect_remote(&repo_url));
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .times(5)
+        .returning(|_, _| {
+            Box::pin(async { Ok(test_review_request_summary("#42", ReviewRequestState::Open)) })
+        });
+    let context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        review_request_client: Arc::new(mock_review_request_client),
+        ..sync_context_fixture(
+            0,
+            vec![review_request_sync_target(
+                "session-1",
+                Some(linked_review_request("#42", ReviewRequestState::Open)),
+            )],
+        )
+    };
+    let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
+    for _ in 0..4 {
+        orchestrator
+            .collect_review_request_updates(&context, true, false)
+            .await;
+    }
+
+    // Act
+    let (scheduled_updates, scheduled_idle_targets) = orchestrator
+        .collect_review_request_updates(&context, true, false)
+        .await;
+    let (forced_updates, forced_idle_targets) = orchestrator
+        .collect_review_request_updates(&context, true, true)
+        .await;
+
+    // Assert
+    assert!(scheduled_updates.is_empty());
+    assert_eq!(scheduled_idle_targets, 1);
+    assert_eq!(forced_updates.len(), 1);
+    assert_eq!(forced_idle_targets, 0);
 }
 
 #[tokio::test]
@@ -1503,6 +1668,7 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
@@ -1532,14 +1698,14 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
 
     // Act
     let backed_off_updates = orchestrator
-        .collect_review_request_pass_updates(&backed_off_context, true)
+        .collect_review_request_pass_updates(&backed_off_context, true, false)
         .await;
     orchestrator.review_sync_failures.clear();
     let stale_after_refresh_updates = orchestrator
-        .collect_review_request_pass_updates(&stale_after_refresh_context, true)
+        .collect_review_request_pass_updates(&stale_after_refresh_context, true, false)
         .await;
     let stale_before_refresh_updates = orchestrator
-        .collect_review_request_pass_updates(&stale_before_refresh_context, true)
+        .collect_review_request_pass_updates(&stale_before_refresh_context, true, false)
         .await;
 
     // Assert
@@ -1591,15 +1757,16 @@ async fn refresh_pass_emits_review_updates_only_when_requested() {
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
     crate::test_support::enable_tracing_log_fallback();
 
     // Act
-    orchestrator.run_refresh_pass(false).await;
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
     let git_only_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).count();
-    orchestrator.run_refresh_pass(true).await;
+    orchestrator.run_refresh_pass(ReviewPass::Scheduled).await;
 
     // Assert
     assert_eq!(git_only_events, 1);
@@ -1647,6 +1814,7 @@ async fn refresh_pass_emits_review_updates_only_when_requested() {
         "failed",
         &[
             KeyValue::new("agentty.sync.failures", 1_i64),
+            KeyValue::new("agentty.sync.idle_targets", 0_i64),
             KeyValue::new("agentty.sync.targets", 1_i64),
         ],
     );
@@ -1885,16 +2053,17 @@ async fn collect_review_request_pass_updates_loads_configuration_only_for_watche
         fetch_failures: HashMap::new(),
         fetch_pass_index: 0,
         review_pass_index: 0,
+        review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
         tick_index: 0,
     };
 
     // Act
     let unwatched_updates = orchestrator
-        .collect_review_request_pass_updates(&unwatched_context, true)
+        .collect_review_request_pass_updates(&unwatched_context, true, false)
         .await;
     let watched_updates = orchestrator
-        .collect_review_request_pass_updates(&watched_context, true)
+        .collect_review_request_pass_updates(&watched_context, true, false)
         .await;
 
     // Assert
