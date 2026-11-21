@@ -35,8 +35,14 @@ use crate::usage::{StoredTurnUsage, TurnUsage};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, TurnError, TurnOutcome};
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
-const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a connection waits for another connection's lock before failing
+/// with `database is locked`. Fsyncs of a commit or of the checkpoint a closing
+/// pool runs can stall for many seconds on a loaded disk, so this is generous
+/// while staying well inside the turn lease's renewal slack.
+const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 const TURN_SIZE_PAGE_SIZE: i64 = 64;
 
 struct WriteRecordRow {
@@ -366,7 +372,7 @@ impl Database {
             .await
             .session_context("open persistent session database")?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        migrate(&pool).await?;
         let identity = StoreIdentity::for_path(path).await?;
 
         Ok(Self {
@@ -629,7 +635,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self
             .pool
-            .begin()
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .session_context("recover stale persistent session turns")?;
         recover_stale_turns(&mut transaction, session_id, now).await?;
@@ -1427,7 +1433,7 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
         self.validate_owner(owner)?;
         let mut transaction = self
             .pool
-            .begin()
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .session_context("interrupt persistent session turn")?;
         interrupt_owned_turn(
@@ -1738,6 +1744,25 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
+}
+
+/// Applies pending migrations while holding the database write lock.
+///
+/// `SQLx` does not lock SQLite migrations, so concurrent opens would each list
+/// the same pending migrations and apply them twice. `BEGIN IMMEDIATE`
+/// serializes them: later openers wait out the busy timeout, then find every
+/// migration applied.
+async fn migrate(pool: &SqlitePool) -> Result<(), SessionError> {
+    let operation = "migrate persistent session database";
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .session_context(operation)?;
+    // `Migrator::run` over a borrowed connection trips rust-lang/rust#100013
+    // in `Send` futures; SQLx exposes `run_direct` to avoid that.
+    MIGRATOR.run_direct(None, &mut *transaction, false).await?;
+
+    transaction.commit().await.session_context(operation)
 }
 
 async fn load_request_from(

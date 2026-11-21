@@ -68,12 +68,17 @@ async fn on_disk_database_creates_parent_and_applies_connection_policy() {
         .fetch_one(&database.pool)
         .await
         .expect("synchronous setting should load");
+    let busy_timeout_ms = sqlx::query_scalar::<_, i64>("PRAGMA busy_timeout")
+        .fetch_one(&database.pool)
+        .await
+        .expect("busy timeout should load");
 
     // Assert
     assert!(database_path.exists());
     assert_eq!(journal_mode, "wal");
     assert_eq!(foreign_keys, 1);
     assert_eq!(synchronous, 2);
+    assert_eq!(busy_timeout_ms, 60_000);
 }
 
 #[tokio::test]

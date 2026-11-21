@@ -2,6 +2,8 @@
 
 #[path = "sqlite_store_test/chat_test.rs"]
 mod chat;
+#[path = "sqlite_store_test/contention_test.rs"]
+mod contention;
 #[path = "sqlite_store_test/history_test.rs"]
 mod history;
 #[path = "sqlite_store_test/options_test.rs"]

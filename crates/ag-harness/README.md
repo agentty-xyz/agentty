@@ -42,9 +42,10 @@ keeps no history. For a conversation, use a session.
 
 A `Harness` is a cheap, `Clone + Send + Sync` handle: clones share one configuration and
 one SQLite connection pool, so one harness can serve many concurrent sessions and turns.
-Separate harnesses or processes may share a SQLite file once it exists, but let one of
-them open a new file first: concurrent first opens can race on schema migration.
-`Harness::new` and `Harness::from_registry` remain available.
+Separate harnesses or processes may share a SQLite file, including a new one: opens
+apply schema migrations under the write lock, and every connection waits out another's
+lock for up to a minute before reporting `database is locked`. `Harness::new` and
+`Harness::from_registry` remain available.
 
 ## Embedding
 
