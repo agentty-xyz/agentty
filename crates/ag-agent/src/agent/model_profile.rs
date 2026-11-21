@@ -72,8 +72,9 @@ const QWEN_PLUS_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator
 
 /// Returns the declared context profile of `model`, or `None` when its
 /// provider CLI manages context itself, the `ag-harness` provider catalog
-/// declares it, as for the Kimi, Muse, Qwen flash, and ChatGPT-plan models,
-/// or, for the OpenAI-compatible model, the environment declares it.
+/// declares it, as for the Kimi, Muse, Qwen flash, and ChatGPT-plan models
+/// and the Claude models the harness serves, or, for the OpenAI-compatible
+/// model, the environment declares it.
 pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
     match model {
         AgentModel::Gpt6Astra

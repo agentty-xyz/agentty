@@ -7,7 +7,11 @@ use ag_harness::model::{
     ContextBudgetError, ModelCapabilities, ModelCompletion, ModelMetadata, ModelProfile,
     ModelRegistry, ModelRegistryError, ModelRequest, ModelResponse,
 };
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use ag_harness::provider::{ChatGptCredentials, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 #[cfg(feature = "sqlite")]
@@ -15,9 +19,17 @@ use ag_harness::store::SqliteStore;
 use ag_harness::{Harness, Model, ModelError, SessionError};
 use async_trait::async_trait;
 use serde_json::json;
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
-use wiremock::matchers::{bearer_token, body_partial_json, method, path};
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+use wiremock::matchers::{bearer_token, body_partial_json, header, method, path};
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -335,7 +347,35 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+/// Returns a streamed Anthropic Messages response answering `fixture` from
+/// `model`.
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+fn anthropic_answer(model: &str) -> ResponseTemplate {
+    let body = [
+        json!({"type":"message_start","message":{"id":"response","model":model}}),
+        json!({"type":"content_block_start","index":0,"content_block":{
+            "type":"text","text":"{\"answer\":\"fixture\"}"
+        }}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+        json!({"type":"message_stop"}),
+    ]
+    .iter()
+    .map(|event| format!("data: {event}\n\n"))
+    .collect::<Vec<_>>()
+    .concat();
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[tokio::test]
 async fn registered_builtin_configurations_execute_through_the_selected_client() {
     for provider in ModelProvider::all() {
@@ -362,10 +402,9 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
             .save(&auth_file)
             .expect("credentials");
         }
-        let (endpoint, response) = if matches!(
-            provider,
-            ModelProvider::OpenAi | ModelProvider::ChatGpt
-        ) {
+        let (endpoint, response) = if *provider == ModelProvider::Anthropic {
+            ("/messages", anthropic_answer(model))
+        } else if matches!(provider, ModelProvider::OpenAi | ModelProvider::ChatGpt) {
             let completed = json!({"type":"response.completed","response":{
                 "id":"response", "model":model, "status":"completed",
                 "output":[{"type":"message","role":"assistant","content":[
@@ -394,10 +433,10 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
         let mock = Mock::given(method("POST"))
             .and(path(endpoint))
             .and(body_partial_json(json!({"model":model})));
-        let mock = if *provider == ModelProvider::OpenAiCompatible {
-            mock
-        } else {
-            mock.and(bearer_token(bearer))
+        let mock = match provider {
+            ModelProvider::OpenAiCompatible => mock,
+            ModelProvider::Anthropic => mock.and(header("x-api-key", "fixture-key")),
+            _ => mock.and(bearer_token(bearer)),
         };
         mock.respond_with(response).expect(1).mount(&server).await;
         let auth_file_value = auth_file.to_string_lossy().into_owned();

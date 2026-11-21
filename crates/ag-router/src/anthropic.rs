@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -73,6 +73,19 @@ const ERROR_STATUSES: [(&str, u16); 10] = [
 const REPLAYED_BLOCK_TYPES: [&str; 4] = ["redacted_thinking", "text", "thinking", "tool_use"];
 /// Signed reasoning block types, replayed verbatim.
 const THINKING_BLOCK_TYPES: [&str; 2] = ["redacted_thinking", "thinking"];
+/// Header listing the beta features a request opts into.
+const BETA_HEADER: &str = "anthropic-beta";
+/// Beta that lets a request set `thinking.block_binding`.
+///
+/// Claude models from Claude Fable 5.1 on bind each signed thinking block
+/// to the conversation before it and, where enforced, reject a replay after
+/// an earlier message changed with a `400`. Context fitting edits earlier
+/// messages, so every request that sends thinking asks the API to drop the
+/// invalidated blocks instead (`prefix_mismatch_behavior: "drop_block"`):
+/// the first mismatched block and every later one go, for that request
+/// only, and the turn proceeds without their reasoning. Models that run no
+/// such check accept the same request.
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 /// Structured-output backend for the Anthropic Messages API, applying the
 /// request policy of one [`ProviderSpec`].
@@ -175,6 +188,12 @@ impl<'spec> AnthropicBackend<'spec> {
         if self.policy.cache_breakpoints == CacheBreakpoints::Marked {
             mark_cache_breakpoints(&mut tools, &mut system, &mut messages);
         }
+        let thinking = self.thinking(effort.is_some(), &messages);
+        let headers = if thinking.is_some() {
+            with_beta(self.headers.clone(), THINKING_BINDING_BETA)
+        } else {
+            self.headers.clone()
+        };
         let payload = MessagesPayload {
             max_tokens: request
                 .options
@@ -188,20 +207,14 @@ impl<'spec> AnthropicBackend<'spec> {
                 .then_some(OutputConfig { effort, format }),
             stream: true,
             system,
-            thinking: effort.map(|_| Thinking {
-                display: "summarized",
-                kind: "adaptive",
-            }),
+            thinking,
             tool_choice,
             tools,
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
-        let request_body = ProviderRequest::new(
-            self.headers.clone(),
-            self.policy.endpoint(ENDPOINT_PATH),
-            payload,
-        )
-        .with_retry(self.policy.retry, self.observer.clone());
+        let request_body =
+            ProviderRequest::new(headers, self.policy.endpoint(ENDPOINT_PATH), payload)
+                .with_retry(self.policy.retry, self.observer.clone());
         let response = self
             .create(&request_body, output_tool.is_some())
             .await
@@ -210,6 +223,27 @@ impl<'spec> AnthropicBackend<'spec> {
             })?;
 
         Ok(self.decode(&response, output_tool.is_some()))
+    }
+
+    /// Returns the adaptive thinking a request asks for: with an effort, or
+    /// when `messages` replay signed thinking for a model with an effort
+    /// mapping, since the binding behavior of replayed blocks travels in the
+    /// thinking object. Every such request drops invalidated blocks; see
+    /// [`THINKING_BINDING_BETA`].
+    fn thinking(&self, has_effort: bool, messages: &[MessagePayload]) -> Option<Thinking> {
+        let replays_thinking = matches!(self.policy.reasoning, ReasoningMapping::Effort(_))
+            && messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(is_thinking_block);
+
+        (has_effort || replays_thinking).then_some(Thinking {
+            block_binding: BlockBinding {
+                prefix_mismatch_behavior: "drop_block",
+            },
+            display: "summarized",
+            kind: "adaptive",
+        })
     }
 
     /// Sends `request` and accumulates its streamed message, reporting
@@ -488,6 +522,23 @@ fn mark_cache_breakpoints(
 /// Returns the `cache_control` of a breakpoint with the default lifetime.
 fn ephemeral_cache_control() -> Value {
     json!({"type": "ephemeral"})
+}
+
+/// Returns `headers` with `beta` added to the `anthropic-beta` list, after
+/// any betas the specification already sends.
+fn with_beta(mut headers: HeaderMap, beta: &str) -> HeaderMap {
+    let joined = match headers.remove(BETA_HEADER) {
+        Some(existing) => [existing.as_bytes(), b",", beta.as_bytes()].concat(),
+        None => beta.as_bytes().to_vec(),
+    };
+    // Both parts are valid header bytes, so the joined list is too.
+    headers.extend(
+        HeaderValue::from_bytes(&joined)
+            .ok()
+            .map(|value| (HeaderName::from_static(BETA_HEADER), value)),
+    );
+
+    headers
 }
 
 /// Returns whether `block` is signed thinking, replayed verbatim.
@@ -1041,7 +1092,13 @@ struct OutputFormat<'a> {
 }
 
 #[derive(Serialize)]
+struct BlockBinding {
+    prefix_mismatch_behavior: &'static str,
+}
+
+#[derive(Serialize)]
 struct Thinking {
+    block_binding: BlockBinding,
     display: &'static str,
     #[serde(rename = "type")]
     kind: &'static str,

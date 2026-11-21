@@ -155,6 +155,45 @@ fn host_pricing_falls_back_to_the_input_price_for_cache_tokens() {
 }
 
 #[test]
+fn long_context_prices_apply_only_above_their_threshold() {
+    // Arrange
+    let built_in = Pricing::built_in(100_000, 500_000);
+    let declared_cache = Pricing::new(100_000, 500_000).with_cache_read(10_000);
+
+    // Act
+    let tiered = built_in.with_long_context(100_000, 500_000, 2_500_000);
+    let short = tiered.for_prompt(100_000);
+    let long = tiered.for_prompt(100_001);
+
+    // Assert
+    assert_eq!(tiered.source(), PricingSource::Host);
+    assert_eq!(built_in.for_prompt(u64::MAX), built_in);
+    assert_eq!(
+        (
+            short.input_per_mtok_micro_usd(),
+            short.output_per_mtok_micro_usd()
+        ),
+        (100_000, 500_000)
+    );
+    assert_eq!(
+        (
+            long.input_per_mtok_micro_usd(),
+            long.output_per_mtok_micro_usd()
+        ),
+        (500_000, 2_500_000)
+    );
+    // Undeclared cache prices follow the long-context input price, and the
+    // result declares no further tier.
+    assert_eq!(long.cache_read_per_mtok_micro_usd(), 500_000);
+    assert_eq!(long.for_prompt(0), long);
+    assert_eq!(tiered.cost_tier(), CostTier::Cheap);
+    let declared_long = declared_cache
+        .with_long_context(100_000, 500_000, 2_500_000)
+        .for_prompt(200_000);
+    assert_eq!(declared_long.cache_read_per_mtok_micro_usd(), 10_000);
+}
+
+#[test]
 fn changing_a_built_in_cache_price_marks_the_prices_host_supplied() {
     // Arrange
     let built_in = Pricing::built_in(2_000_000, 8_000_000);

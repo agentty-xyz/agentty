@@ -3,12 +3,20 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use std::env;
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use ag_router::chatgpt::ChatGptAuthError;
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -18,46 +26,73 @@ use super::spec::{Capabilities, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::context::{ContextBudget, ContextBudgetError};
 use crate::model::Model;
 use crate::model_profile::ModelProfile;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::provider::{
-    CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_LUNA, GPT_6_1_SOL, GPT_6_LUNA, KIMI_K2_6, KIMI_K3,
-    MUSE_SPARK_1_3, ModelConfiguration, ModelConfigurationError, ModelProvider, QWEN3_7_FLASH,
-    QWEN3_8_FLASH, QWEN3_8_MAX,
+    CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_LUNA, CLAUDE_HAIKU_5_5, CLAUDE_OPUS_5_5, GPT_6_1_SOL,
+    GPT_6_LUNA, KIMI_K2_6, KIMI_K3, MUSE_SPARK_1_3, ModelConfiguration, ModelConfigurationError,
+    ModelProvider, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX,
 };
 
 /// Built-in models, by provider and model identifier, in preference order.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 type Candidates = &'static [(ModelProvider, &'static str)];
 
 /// Candidates of [`Role::SMART`] and [`Role::VISION`] in the environment
 /// catalog, plan-billed first.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 const SMART_CANDIDATES: Candidates = &[
     (ModelProvider::ChatGpt, CHATGPT_GPT_6_1_SOL),
     (ModelProvider::OpenAi, GPT_6_1_SOL),
     (ModelProvider::Muse, MUSE_SPARK_1_3),
     (ModelProvider::Kimi, KIMI_K3),
     (ModelProvider::Qwen, QWEN3_8_MAX),
+    (ModelProvider::Anthropic, CLAUDE_OPUS_5_5),
 ];
 /// Candidates of [`Role::CHEAP`] in the environment catalog.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 const CHEAP_CANDIDATES: Candidates = &[
     (ModelProvider::ChatGpt, CHATGPT_GPT_6_LUNA),
     (ModelProvider::OpenAi, GPT_6_LUNA),
     (ModelProvider::Qwen, QWEN3_8_FLASH),
     (ModelProvider::Qwen, QWEN3_7_FLASH),
     (ModelProvider::Kimi, KIMI_K2_6),
+    (ModelProvider::Anthropic, CLAUDE_HAIKU_5_5),
 ];
 /// Candidates of [`Role::FAST`] in the environment catalog.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 const FAST_CANDIDATES: Candidates = &[
     (ModelProvider::ChatGpt, CHATGPT_GPT_6_LUNA),
     (ModelProvider::OpenAi, GPT_6_LUNA),
     (ModelProvider::Qwen, QWEN3_8_FLASH),
     (ModelProvider::Qwen, QWEN3_7_FLASH),
+    (ModelProvider::Anthropic, CLAUDE_HAIKU_5_5),
 ];
 /// Default role candidates of the environment catalog, in order.
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 const DEFAULT_ROLES: &[(Role, Candidates)] = &[
     (Role::SMART, SMART_CANDIDATES),
     (Role::CHEAP, CHEAP_CANDIDATES),
@@ -80,12 +115,12 @@ const DEFAULT_ROLES: &[(Role, Candidates)] = &[
 /// built-in model whose provider the build includes and the environment
 /// configures, with these default role candidates:
 ///
-/// | Role             | Candidates, in order                                                                                       |
-/// | ---------------- | ---------------------------------------------------------------------------------------------------------- |
-/// | [`Role::SMART`]  | `chatgpt/gpt-6.1-sol`, `openai/gpt-6.1-sol`, `muse/muse-spark-1.3`, `kimi/kimi-k3`, `qwen/qwen3.8-max`     |
-/// | [`Role::CHEAP`]  | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `kimi/kimi-k2.6`    |
-/// | [`Role::FAST`]   | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`                      |
-/// | [`Role::VISION`] | the [`Role::SMART`] candidates that read images                                                            |
+/// | Role             | Candidates, in order                                                                                                                  |
+/// | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+/// | [`Role::SMART`]  | `chatgpt/gpt-6.1-sol`, `openai/gpt-6.1-sol`, `muse/muse-spark-1.3`, `kimi/kimi-k3`, `qwen/qwen3.8-max`, `anthropic/claude-opus-5-5`   |
+/// | [`Role::CHEAP`]  | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `kimi/kimi-k2.6`, `anthropic/claude-haiku-5-5` |
+/// | [`Role::FAST`]   | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `anthropic/claude-haiku-5-5`                   |
+/// | [`Role::VISION`] | the [`Role::SMART`] candidates that read images                                                                                       |
 ///
 /// A role keeps only the candidates that are cataloged, declare a context
 /// profile, and have the role's required capabilities, so every default
@@ -121,7 +156,11 @@ impl ModelCatalog {
     /// # Errors
     ///
     /// Returns [`CatalogError`] like [`Self::from_environment_with`].
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub fn from_environment() -> Result<Self, CatalogError> {
         Self::from_environment_with(|name| env::var(name))
     }
@@ -147,7 +186,11 @@ impl ModelCatalog {
     /// a host with its own sign-in location passes it to
     /// [`Self::from_environment_with_auth_file`] instead, so its plan-billed
     /// models keep their place ahead of per-token ones.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub fn from_environment_with(
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Self, CatalogError> {
@@ -173,7 +216,11 @@ impl ModelCatalog {
 
     /// Catalogs the configured providers' models, passing `auth_file` to
     /// each `ChatGPT` model's configuration when the host chose one.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     fn catalog_environment(
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
         auth_file: Option<&std::path::Path>,
@@ -283,16 +330,22 @@ impl ModelCatalog {
     }
 
     /// Returns whether `error` means the provider is not configured at all,
-    /// as opposed to configured but broken.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    /// as opposed to configured but broken. A key a provider rejects as
+    /// blank counts as unset.
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     fn is_unconfigured(
         error: &ModelConfigurationError,
         environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> bool {
         match error {
-            ModelConfigurationError::ApiKey { name } => {
-                matches!(environment(name), Err(env::VarError::NotPresent))
-            }
+            ModelConfigurationError::ApiKey { name } => match environment(name) {
+                Ok(api_key) => api_key.trim().is_empty(),
+                Err(error) => error == env::VarError::NotPresent,
+            },
             ModelConfigurationError::AuthFile(_)
             | ModelConfigurationError::BaseUrl { .. }
             | ModelConfigurationError::SignIn(ChatGptAuthError::NotSignedIn { .. }) => true,
@@ -303,7 +356,11 @@ impl ModelCatalog {
     /// Returns a builder of `catalog` assigning each role of `roles` its
     /// candidates that `catalog` holds with a context profile and the
     /// role's required capabilities.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     fn assign_default_roles(catalog: Self, roles: &[(Role, Candidates)]) -> CatalogBuilder {
         let assignments = roles
             .iter()
@@ -555,7 +612,11 @@ impl fmt::Debug for ModelHandle {
 #[non_exhaustive]
 pub enum CatalogError {
     /// A configured built-in provider's environment is invalid.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     #[error("cannot catalog {provider} models")]
     Configuration {
         /// Provider whose configuration failed.

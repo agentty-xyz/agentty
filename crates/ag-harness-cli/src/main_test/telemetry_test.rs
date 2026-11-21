@@ -18,6 +18,17 @@ use crate::{ChatMode, Cli, CliError, execute_with_telemetry};
 /// endpoint must hold this lock for its whole run.
 static EXPORT: Mutex<()> = Mutex::const_new(());
 
+/// Returns a test key for every provider variable but `ANTHROPIC_BASE_URL`,
+/// which Anthropic validates as a URL when the catalog configures it, so no
+/// catalog warning joins the export warnings these tests compare.
+fn environment(name: &str) -> Result<String, std::env::VarError> {
+    if name == "ANTHROPIC_BASE_URL" {
+        return Err(std::env::VarError::NotPresent);
+    }
+
+    Ok("test-key".to_string())
+}
+
 async fn model_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -67,7 +78,7 @@ async fn traced_chat_exports_the_turn_span() {
     // Act
     let result = execute_with_telemetry(
         cli,
-        |_| Ok("test-key".to_string()),
+        environment,
         BufReader::new(&b""[..]),
         &mut output,
         ChatMode::OneShot,
@@ -114,7 +125,7 @@ async fn rejected_export_warns_without_failing_the_chat() {
     // Act
     let result = execute_with_telemetry(
         cli,
-        |_| Ok("test-key".to_string()),
+        environment,
         BufReader::new(&b""[..]),
         &mut output,
         ChatMode::OneShot,
@@ -151,7 +162,7 @@ async fn invalid_endpoint_fails_before_the_chat_starts() {
     // Act
     let result = execute_with_telemetry(
         cli,
-        |_| Ok("test-key".to_string()),
+        environment,
         BufReader::new(&b""[..]),
         &mut output,
         ChatMode::OneShot,

@@ -170,6 +170,7 @@ async fn mount_loaded_window(server: &MockServer, window: u64) {
 async fn harness_models_list_local_then_paid_models_with_their_status() {
     // Arrange
     let environment = environment(&[
+        ("ANTHROPIC_API_KEY", "key"),
         ("KIMI_API_KEY", "key"),
         ("MODEL_API_KEY", "key"),
         ("OPENAI_COMPATIBLE_BASE_URL", &unreachable_base_url()),
@@ -213,8 +214,18 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
             (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
             (AgentModel::Gpt56Terra, ModelCost::Standard, openai),
+            (AgentModel::ClaudeSonnet55, ModelCost::Standard, ready),
+            (AgentModel::ClaudeOpus55, ModelCost::Premium, ready),
+            (AgentModel::ClaudeFable52, ModelCost::Premium, ready),
+            (AgentModel::ClaudeHaiku55, ModelCost::Cheap, ready),
         ]
     );
+    let opus = options
+        .iter()
+        .find(|option| option.model == AgentModel::ClaudeOpus55)
+        .expect("Claude Opus is listed");
+    assert_eq!(opus.provider, "Anthropic");
+    assert_eq!(opus.context_window, Some(1_000_000));
     assert_eq!(options[0].provider, "OpenAI-compatible server");
     assert_eq!(options[1].provider, "Muse");
     assert_eq!(options[3].provider, "Kimi");
@@ -297,6 +308,7 @@ fn providers_have_display_names() {
             "Qwen",
             "OpenAI",
             "ChatGPT plan",
+            "Anthropic",
             "OpenAI-compatible server"
         ]
     );
@@ -594,7 +606,32 @@ fn model_selection_round_trips_registration_keys() {
     assert_eq!(ModelSelection::from_key(&key), Some(selection));
     assert_eq!(ModelSelection::from_key("kimi-k3"), None);
     assert_eq!(ModelSelection::from_key("qwen/kimi-k3"), None);
-    assert!(ModelSelection::resolve("claude-opus-5-5", &environment(&[])).is_err());
+    assert!(ModelSelection::resolve("claude-opus-4-8", &environment(&[])).is_err());
+}
+
+#[test]
+/// Resolves every Claude model the harness shares with the Claude CLI to
+/// the Anthropic provider alone, under an `anthropic/<model>` key.
+fn claude_selections_resolve_only_to_anthropic() {
+    // Arrange
+    let shared = [
+        AgentModel::ClaudeOpus55,
+        AgentModel::ClaudeFable52,
+        AgentModel::ClaudeSonnet55,
+        AgentModel::ClaudeHaiku55,
+    ];
+
+    for model in shared {
+        // Act
+        let selection =
+            ModelSelection::resolve(model.as_str(), &environment(&[])).expect("Claude model");
+
+        // Assert
+        assert_eq!(selection.provider, ModelProvider::Anthropic);
+        assert_eq!(selection.model, model.as_str());
+        assert_eq!(selection.key(), format!("anthropic/{}", model.as_str()));
+        assert_eq!(ModelSelection::from_key(&selection.key()), Some(selection));
+    }
 }
 
 #[test]
@@ -687,6 +724,38 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
 }
 
 #[test]
+/// Resumes a Claude session without `ANTHROPIC_API_KEY`, under the recorded
+/// Anthropic identity.
+fn claude_resume_only_harness_needs_no_api_key() {
+    // Arrange
+    let worktree = tempfile::tempdir().expect("worktree");
+    let real_path = std::env::var("PATH").expect("test PATH should be set");
+    let environment = environment(&[("PATH", &real_path)]);
+    let repository = repository(worktree.path(), &environment).expect("repository");
+    let selection = ModelSelection::resolve("claude-sonnet-5-5", &environment).expect("Claude");
+    let context = HarnessContext {
+        environment: &environment,
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::High,
+        repository: &repository,
+        running_context_window: None,
+    };
+
+    // Act
+    let harness = selection.resume_only_harness(&context, |_: LifecycleEvent| {});
+
+    // Assert
+    let harness = harness.expect("resume-only harness");
+    let registration = harness.model_registration().expect("registration");
+    assert_eq!(registration.identity().key(), "anthropic/claude-sonnet-5-5");
+    assert_eq!(registration.identity().revision(), "agentty-native-2");
+    assert_eq!(
+        registration.capabilities().profile.context_window_tokens(),
+        1_000_000
+    );
+}
+
+#[test]
 /// Registers each served model under the current revision with its declared
 /// context profile: the provider catalog's where it declares one, Agentty's
 /// for the others, and the conservative fallback for uncataloged models.
@@ -702,6 +771,7 @@ fn registrations_declare_revision_profiles_and_capabilities() {
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "key"),
         ("OPENAI_API_KEY", "sk-key"),
+        ("ANTHROPIC_API_KEY", "sk-ant-key"),
         ("CHATGPT_AUTH_FILE", &auth_file),
     ]);
     let models = ModelProvider::all().iter().flat_map(|provider| {
@@ -813,7 +883,11 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
     // Arrange
     let environment = environment(&[
         ("AAA", "first"),
+        ("ANTHROPIC_API_KEY", "secret"),
+        ("ANTHROPIC_AUTH_TOKEN", "secret"),
+        ("ANTHROPIC_BASE_URL", "https://proxy.example"),
         ("CHATGPT_AUTH_FILE", "/home/test/chatgpt.json"),
+        ("CLAUDE_CODE_OAUTH_TOKEN", "secret"),
         ("DASHSCOPE_API_KEY", "secret"),
         ("HOME", "/home/test"),
         ("KIMI_BASE_URL", "http://kimi"),

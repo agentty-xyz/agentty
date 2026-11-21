@@ -1009,7 +1009,11 @@ impl Model for ExternalMetadataModel {
 #[cfg(feature = "otel")]
 fn assert_observer<Observer: ag_harness::lifecycle::LifecycleObserver>(_observer: Observer) {}
 
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[test]
 fn external_consumer_configures_every_catalog_provider() {
     // Arrange and Act

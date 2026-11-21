@@ -1151,6 +1151,7 @@ fn stored_model_identity_parts(
         Some("openai") => ModelProvider::OpenAi,
         Some("openai_chatgpt") => ModelProvider::ChatGpt,
         Some("openai_compatible") => ModelProvider::OpenAiCompatible,
+        Some("anthropic") => ModelProvider::Anthropic,
         _ => return Err(CliError::MissingModelIdentity),
     };
 

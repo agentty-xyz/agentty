@@ -30,6 +30,17 @@ const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
 /// joins a scenario's harness models.
 const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
+/// Starts the scenario `name` with `--experimental-harness` and the
+/// developer's Anthropic key and endpoint blanked, so an exported
+/// `ANTHROPIC_API_KEY` never adds ready Claude rows to a scenario's frames;
+/// a scenario serving Claude sets them again.
+fn harness_test(name: &str) -> FeatureTest {
+    FeatureTest::new(name)
+        .args(["--experimental-harness".to_string()])
+        .env("ANTHROPIC_API_KEY", "")
+        .env("ANTHROPIC_BASE_URL", "")
+}
+
 /// Returns one terminal session answer.
 fn answer(text: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
@@ -128,9 +139,8 @@ async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
     let server = scripted_provider().await;
 
     // Act, Assert
-    FeatureTest::new("harness_session")
+    harness_test("harness_session")
         .with_git()
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
@@ -260,9 +270,8 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
     let server = unavailable_tool_provider().await;
 
     // Act, Assert
-    FeatureTest::new("harness_unavailable_tool")
+    harness_test("harness_unavailable_tool")
         .with_git()
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
@@ -326,9 +335,8 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
         .await;
 
     // Act, Assert
-    FeatureTest::new("harness_temporary_failure")
+    harness_test("harness_temporary_failure")
         .with_git()
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
@@ -379,6 +387,8 @@ async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("harness_hidden")
         .with_git()
+        .env("ANTHROPIC_API_KEY", "")
+        .env("ANTHROPIC_BASE_URL", "")
         .env("MODEL_API_KEY", "test-key")
         .run(
             |scenario| {
@@ -423,11 +433,10 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_only")
+    harness_test("harness_only")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
@@ -484,12 +493,11 @@ async fn session_creation_default_theme_disabled_options() -> E2eResult {
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("session_creation_default_theme_disabled_options")
+    harness_test("session_creation_default_theme_disabled_options")
         .env("NO_COLOR", "")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .run(
@@ -522,11 +530,10 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_local_model")
+    harness_test("harness_local_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "")
         .env("KIMI_API_KEY", "")
         .env("MODEL_API_KEY", "")
@@ -667,11 +674,10 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_openai_model")
+    harness_test("harness_openai_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "")
         .env("KIMI_API_KEY", "")
         .env("MODEL_API_KEY", "")
@@ -730,6 +736,253 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
     assert!(body.contains(r#""store":false"#));
 
     Ok(())
+}
+
+/// Returns one streamed Anthropic Messages response holding `blocks` and
+/// stopping with `stop_reason`. As the API streams them, a `tool_use` block
+/// starts with an empty input that arrives as one `input_json_delta`, and
+/// every other block starts whole.
+fn messages_stream(blocks: &[serde_json::Value], stop_reason: &str) -> ResponseTemplate {
+    let mut events = vec![json!({
+        "type": "message_start",
+        "message": {"id": "msg_e2e", "usage": {"input_tokens": 30, "output_tokens": 1}}
+    })];
+    for (index, block) in blocks.iter().enumerate() {
+        if block["type"] == "tool_use" {
+            let mut started = block.clone();
+            started["input"] = json!({});
+            events.push(
+                json!({"type": "content_block_start", "index": index, "content_block": started}),
+            );
+            events.push(
+                json!({"type": "content_block_delta", "index": index, "delta": {
+                    "type": "input_json_delta", "partial_json": block["input"].to_string()
+                }}),
+            );
+        } else {
+            events.push(
+                json!({"type": "content_block_start", "index": index, "content_block": block}),
+            );
+        }
+        events.push(json!({"type": "content_block_stop", "index": index}));
+    }
+    events.push(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason},
+        "usage": {"output_tokens": 7}
+    }));
+    events.push(json!({"type": "message_stop"}));
+    let body = events.iter().fold(String::new(), |mut body, event| {
+        let _ = write!(body, "data: {event}\n\n");
+
+        body
+    });
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Returns one Messages text block carrying `output` as JSON text.
+fn messages_text(output: &serde_json::Value) -> serde_json::Value {
+    json!({"type": "text", "text": output.to_string()})
+}
+
+/// Scripts an Anthropic Messages server that writes `notes.txt` and answers,
+/// with the commit-message utility, whose prompt repeats the session
+/// request, answered on its own.
+async fn scripted_anthropic_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_string_contains(
+            "Generate the canonical session commit message",
+        ))
+        .respond_with(messages_stream(
+            &[messages_text(&json!({"answer": "Add harness notes"}))],
+            "end_turn",
+        ))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_string_contains(r#""type":"tool_result""#))
+        .respond_with(messages_stream(
+            &[messages_text(
+                &json!({"answer": HARNESS_ANSWER, "questions": []}),
+            )],
+            "end_turn",
+        ))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_string_contains("Create notes"))
+        .respond_with(messages_stream(
+            &[
+                json!({"type": "thinking", "thinking": "", "signature": "sig-e2e"}),
+                json!({
+                    "type": "tool_use",
+                    "id": "toolu_write",
+                    "name": "write",
+                    "input": {
+                        "path": "notes.txt",
+                        "patch": "--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1 @@\n+harness\n"
+                    }
+                }),
+            ],
+            "tool_use",
+        ))
+        .with_priority(3)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+#[tokio::test]
+async fn test_harness_session_runs_on_claude_with_an_anthropic_api_key() -> E2eResult {
+    // Arrange
+    let server = scripted_anthropic_provider().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    harness_test("harness_claude_model")
+        .with_git()
+        .with_stub_only_path()
+        // Tall enough to show every harness model row at once.
+        .with_terminal_size(120, 60)
+        .env("PATH", git_directory.path().to_string_lossy())
+        .env("CHATGPT_AUTH_FILE", "")
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .env("ANTHROPIC_API_KEY", "test-anthropic-key")
+        // Anthropic's SDK convention: the API origin, without `/v1`.
+        .env("ANTHROPIC_BASE_URL", server.uri())
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    // With only the Anthropic key set, sessions start on
+                    // the first Claude row, the standard-priced Sonnet.
+                    .wait_for_text("harness/claude-sonnet-5-5", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("claude-haiku-5-5", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("claude_rows", "Claude rows in the harness model list")
+                    .press_key("Esc")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/claude-sonnet-5-5", &full);
+                    let picker_text = common::frame_from_capture(&report.captures[0])
+                        .all_text()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    for row in [
+                        "[paid] claude-sonnet-5-5 standard · Anthropic",
+                        "[paid] claude-opus-5-5 premium · Anthropic",
+                        "[paid] claude-fable-5-2 premium · Anthropic",
+                        "[paid] claude-haiku-5-5 cheap · Anthropic",
+                    ] {
+                        assert!(picker_text.contains(row), "{row} in {picker_text}");
+                    }
+                    assert!(!picker_text.contains("ANTHROPIC_API_KEY"), "{picker_text}");
+                })
+            },
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let tool_result_request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains(r#""type":"tool_result""#))
+        .ok_or("the write result should reach the Anthropic server")?;
+    let body = String::from_utf8_lossy(&tool_result_request.body);
+    assert_eq!(
+        tool_result_request
+            .headers
+            .get("x-api-key")
+            .map(wiremock::http::HeaderValue::as_bytes),
+        Some(b"test-anthropic-key".as_slice())
+    );
+    assert!(body.contains(r#""model":"claude-sonnet-5-5""#));
+    assert!(body.contains(r#""tool_use_id":"toolu_write""#));
+    assert!(body.contains(r#""signature":"sig-e2e""#));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_harness_fast_model_lists_claude_on_both_backends() -> E2eResult {
+    // Arrange, Act, Assert
+    // The stub agent CLIs stay on `PATH`, so Claude Code offers its models
+    // beside the harness rows the Anthropic key makes ready.
+    harness_test("harness_claude_fast_model")
+        .with_git()
+        .with_stub_only_path()
+        .with_terminal_size(120, 60)
+        .env("CHATGPT_AUTH_FILE", "")
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .env("ANTHROPIC_API_KEY", "test-anthropic-key")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .compose(&open_fast_model_selector())
+                    .wait_for_text("harness/claude-haiku-5-5 · cheap", 3000)
+                    .wait_for_stable_frame(300, 3000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    // Claude Code bills its own login; the harness row bills
+                    // the Anthropic key per token and names its price class.
+                    assertion::assert_text_in_region(frame, "claude/claude-haiku-5-5", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "harness/claude-sonnet-5-5 · standard",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "harness/claude-haiku-5-5 · cheap",
+                        &full,
+                    );
+                })
+            },
+        )
+        .await
 }
 
 /// Serves Ollama's native listing beside the scripted chat endpoint:
@@ -808,11 +1061,10 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_model_picker")
+    harness_test("harness_model_picker")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "")
         .env("CHATGPT_AUTH_FILE", "")
         .env("KIMI_API_KEY", "")
@@ -909,11 +1161,10 @@ async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_kimi_default_endpoint")
+    harness_test("harness_kimi_default_endpoint")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "")
         .env("CHATGPT_AUTH_FILE", "")
         // Kimi has a default endpoint, so a blank base URL needs nothing.
@@ -1008,11 +1259,10 @@ async fn test_harness_fast_model_writes_commit_messages_on_a_cheap_model() -> E2
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    FeatureTest::new("harness_cheap_fast_model")
+    harness_test("harness_cheap_fast_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "test-key")
         .env("DASHSCOPE_BASE_URL", qwen.uri())
         .env("KIMI_API_KEY", "")
@@ -1154,11 +1404,10 @@ async fn test_harness_model_picker_signs_in_with_chatgpt() -> E2eResult {
     let auth_file = auth_directory.path().join("chatgpt.json");
 
     // Act, Assert
-    FeatureTest::new("harness_chatgpt_sign_in")
+    harness_test("harness_chatgpt_sign_in")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
         .env("CHATGPT_AUTH_FILE", auth_file.to_string_lossy())
         .env("CHATGPT_AUTH_URL", auth_server.uri())
         .env("DASHSCOPE_API_KEY", "")
@@ -1336,9 +1585,8 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
     let server = gated_stream_provider(gate.clone())?;
 
     // Act, Assert
-    FeatureTest::new("harness_streaming")
+    harness_test("harness_streaming")
         .with_git()
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server)

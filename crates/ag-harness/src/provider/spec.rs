@@ -481,8 +481,11 @@ impl ProviderSpec {
     /// family, so a switch between Claude models replays signed thinking,
     /// which the API ignores for a model that cannot read it, while a switch
     /// to another provider carries it as a short note. Serve it with
-    /// [`crate::model::ModelClient::from_spec`]; the catalog lists no Claude
-    /// model yet, so the host declares the context profile and prices.
+    /// [`crate::model::ModelClient::from_spec`], which declares no context
+    /// profile; `ModelProvider::Anthropic` catalogs the current Claude
+    /// models, such as `claude-opus-5-5`, with their documented profile,
+    /// output limit, and list prices, for the host to register with the
+    /// client.
     #[cfg(feature = "providers-anthropic")]
     pub fn anthropic(config: AnthropicConfig) -> Self {
         Self::preset(

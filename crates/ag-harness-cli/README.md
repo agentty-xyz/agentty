@@ -31,6 +31,10 @@ cargo run --locked -p ag-harness-cli -- \
 OPENAI_API_KEY=sk-... cargo run --locked -p ag-harness-cli -- \
   run gpt-6.1-sol --provider openai
 
+# Chat with a Claude model (paid Anthropic API key)
+ANTHROPIC_API_KEY=sk-ant-... cargo run --locked -p ag-harness-cli -- \
+  run claude-opus-5-5 --provider anthropic
+
 # Chat on your ChatGPT Plus or Pro plan instead of API credits (sign in once)
 cargo run --locked -p ag-harness-cli -- login chatgpt
 cargo run --locked -p ag-harness-cli -- run gpt-6.1-sol --provider chatgpt

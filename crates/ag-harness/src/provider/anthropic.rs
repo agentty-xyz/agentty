@@ -1,7 +1,8 @@
 //! Anthropic Messages API configuration.
 
-/// Base URL of the Anthropic API, ending in its version path.
-pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+/// Base URL of the Anthropic API, ending in its version path, which
+/// `ModelProvider::Anthropic` also uses by default.
+pub const DEFAULT_ANTHROPIC_BASE_URL: &str = super::claude::DEFAULT_BASE_URL;
 
 /// Configuration for a Claude model served through the Anthropic Messages
 /// API by [`super::ProviderSpec::anthropic`].

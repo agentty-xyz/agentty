@@ -1091,6 +1091,58 @@ async fn load_default_fast_agent_setting_uses_a_ready_harness_fast_default() {
 }
 
 #[tokio::test]
+async fn shared_claude_fast_defaults_keep_the_backend_they_were_saved_on() {
+    // Arrange
+    let (mut services, project_id) =
+        test_services_with_available_agent_kinds(vec![AgentKind::Claude]).await;
+    crate::test_support::set_test_harness_models(
+        &mut services,
+        true,
+        Some(AgentModel::ClaudeHaiku55),
+    );
+    let fallback = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
+    let claude_haiku = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
+    let harness_haiku = AgentSelection::new(AgentKind::Harness, AgentModel::ClaudeHaiku55);
+    services
+        .db()
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultFastAgent,
+                    AgentKind::Claude.name().to_string(),
+                ),
+                (
+                    SettingName::DefaultFastModel,
+                    AgentModel::ClaudeHaiku55.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist Claude fast default");
+    let mut unready = crate::test_support::ready_harness_model(AgentModel::ClaudeHaiku55);
+    unready.status = HarnessModelStatus::MissingConfiguration("ANTHROPIC_API_KEY");
+
+    // Act
+    let saved_on_claude =
+        load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
+    persist_harness_fast_default(&services, project_id, AgentModel::ClaudeHaiku55.as_str()).await;
+    let saved_on_harness =
+        load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
+    services.replace_harness_model_options(vec![unready]);
+    let harness_without_key =
+        load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
+
+    // Assert
+    // A ready `harness/claude-haiku-5-5` never takes over a Claude Code
+    // default of the same model, nor the reverse.
+    assert_eq!(saved_on_claude, claude_haiku);
+    assert_eq!(saved_on_harness, harness_haiku);
+    assert_eq!(harness_without_key, fallback);
+}
+
+#[tokio::test]
 async fn shared_harness_models_report_ready_models_as_the_list_changes() {
     // Arrange
     let (mut services, _project_id) =

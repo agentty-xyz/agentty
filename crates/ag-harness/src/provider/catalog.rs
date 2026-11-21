@@ -12,13 +12,21 @@ use ag_router::chatgpt::ChatGptAuthError;
 use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
-use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
-use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing};
+#[cfg(feature = "providers-anthropic")]
+use super::{AnthropicConfig, ProviderSpec};
+use super::{ProviderSpecError, chatgpt, claude, kimi, muse, openai, openai_compatible, qwen};
+use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
+///
+/// New providers join without a breaking release, so a `match` outside
+/// this crate needs a wildcard arm.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ModelProvider {
+    /// Anthropic's Messages API, serving Claude models billed to an API key.
+    Anthropic,
     /// `OpenAI`'s Responses API billed to the user's `ChatGPT` plan through
     /// "Sign in with `ChatGPT`" instead of API credits.
     ChatGpt,
@@ -36,12 +44,13 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Muse,
         Self::Kimi,
         Self::Qwen,
         Self::OpenAi,
         Self::ChatGpt,
+        Self::Anthropic,
         Self::OpenAiCompatible,
     ];
 
@@ -53,6 +62,7 @@ impl ModelProvider {
     /// Returns the stable identifier for this provider.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Anthropic => "anthropic",
             Self::ChatGpt => "chatgpt",
             Self::Kimi => "kimi",
             Self::Muse => "muse",
@@ -66,6 +76,12 @@ impl ModelProvider {
     /// none for [`Self::OpenAiCompatible`], whose server names its models.
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
+            Self::Anthropic => &[
+                claude::CLAUDE_OPUS_5_5,
+                claude::CLAUDE_FABLE_5_2,
+                claude::CLAUDE_SONNET_5_5,
+                claude::CLAUDE_HAIKU_5_5,
+            ],
             Self::ChatGpt => &[
                 chatgpt::CHATGPT_GPT_6_1_SOL,
                 chatgpt::CHATGPT_GPT_6_1_TERRA,
@@ -112,7 +128,7 @@ impl ModelProvider {
                 .known_models()
                 .contains(&model)
                 .then_some(CostTier::Plan),
-            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
+            Self::Anthropic | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
                 self.pricing(model).map(Pricing::cost_tier)
             }
         }
@@ -141,9 +157,12 @@ impl ModelProvider {
     pub fn cost_tier_at(self, model: &str, base_url: &str) -> Option<CostTier> {
         match self {
             Self::OpenAiCompatible => is_local_endpoint(base_url).then_some(CostTier::Local),
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
-                self.cost_tier(model)
-            }
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => self.cost_tier(model),
         }
     }
 
@@ -170,7 +189,10 @@ impl ModelProvider {
             tools_only
                 .with_image_input(cataloged.supports.image_input())
                 .with_reasoning(cataloged.supports.reasoning())
-                .with_structured_output(matches!(self, Self::ChatGpt | Self::Muse | Self::OpenAi)),
+                .with_structured_output(matches!(
+                    self,
+                    Self::Anthropic | Self::ChatGpt | Self::Muse | Self::OpenAi
+                )),
         )
     }
 
@@ -209,6 +231,7 @@ impl ModelProvider {
     /// for [`Self::ChatGpt`] the optional override of its credential file.
     pub const fn api_key_environment(self) -> &'static str {
         match self {
+            Self::Anthropic => claude::ANTHROPIC_API_KEY_ENV,
             Self::ChatGpt => chatgpt::CHATGPT_AUTH_FILE_ENV,
             Self::Kimi => kimi::KIMI_API_KEY_ENV,
             Self::Muse => muse::MODEL_API_KEY_ENV,
@@ -232,10 +255,12 @@ impl ModelProvider {
     }
 
     /// Returns whether this build includes the provider's client family:
-    /// `providers-openai` for [`Self::OpenAi`] and [`Self::ChatGpt`], and
-    /// `providers-compat` for the Chat Completions providers.
+    /// `providers-openai` for [`Self::OpenAi`] and [`Self::ChatGpt`],
+    /// `providers-anthropic` for [`Self::Anthropic`], and `providers-compat`
+    /// for the Chat Completions providers.
     pub const fn is_enabled(self) -> bool {
         match self {
+            Self::Anthropic => cfg!(feature = "providers-anthropic"),
             Self::ChatGpt | Self::OpenAi => cfg!(feature = "providers-openai"),
             Self::Kimi | Self::Muse | Self::OpenAiCompatible | Self::Qwen => {
                 cfg!(feature = "providers-compat")
@@ -252,8 +277,15 @@ impl ModelProvider {
     }
 
     /// Returns the environment variable containing the provider base URL.
+    ///
+    /// Every base URL ends in the provider's version path, such as
+    /// `https://api.anthropic.com/v1`, except `ANTHROPIC_BASE_URL`, which
+    /// names the API origin as Anthropic's SDKs read it; configuration
+    /// appends `/v1` to it. An explicit [`ModelConfiguration::base_url`] and
+    /// [`Self::default_base_url`] keep the versioned form.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
+            Self::Anthropic => claude::ANTHROPIC_BASE_URL_ENV,
             Self::ChatGpt => chatgpt::CHATGPT_BASE_URL_ENV,
             Self::Kimi => kimi::KIMI_BASE_URL_ENV,
             Self::Muse => muse::MODEL_API_BASE_URL_ENV,
@@ -265,11 +297,13 @@ impl ModelProvider {
 
     /// Returns the built-in base URL used when the environment has no
     /// override: Moonshot AI's international `https://api.moonshot.ai/v1`
-    /// for [`Self::Kimi`], and Ollama's local endpoint for
+    /// for [`Self::Kimi`], `https://api.anthropic.com/v1` for
+    /// [`Self::Anthropic`], and Ollama's local endpoint for
     /// [`Self::OpenAiCompatible`]. [`Self::Qwen`] has none, since Model
     /// Studio serves each region from its own endpoint.
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
+            Self::Anthropic => Some(claude::DEFAULT_BASE_URL),
             Self::ChatGpt => Some(chatgpt::DEFAULT_BASE_URL),
             Self::Kimi => Some(kimi::DEFAULT_BASE_URL),
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
@@ -285,8 +319,9 @@ impl ModelProvider {
     /// [`Self::Kimi`] and [`Self::Muse`] declare the documented window and
     /// output reservation of each cataloged model, weighed by an estimator
     /// fitted to the provider's reported input tokens under a 17% (Kimi) or
-    /// 18% (Muse) margin. [`Self::OpenAi`] declares the documented window
-    /// and output limit of each cataloged model, and [`Self::Qwen`] of its
+    /// 18% (Muse) margin. [`Self::OpenAi`] and [`Self::Anthropic`] declare
+    /// the documented window and output limit of each cataloged model, and
+    /// [`Self::Qwen`] of its
     /// flash models, weighed by the default estimator under a 50% margin,
     /// and `None` for other models. [`Self::OpenAiCompatible`] serves
     /// models the harness cannot know, so its profile comes from
@@ -305,6 +340,7 @@ impl ModelProvider {
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
         match self {
+            Self::Anthropic => Ok(claude::profile(model)),
             Self::ChatGpt => Ok(chatgpt::profile(model)),
             Self::Kimi => Ok(kimi::profile(model)),
             Self::Muse => Ok(muse::profile(model)),
@@ -338,7 +374,12 @@ impl ModelProvider {
             Self::OpenAiCompatible => {
                 openai_compatible::running_profile(environment, running_context_window).map(Some)
             }
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => Ok(None),
         }
     }
 
@@ -359,7 +400,12 @@ impl ModelProvider {
     ) -> Result<Option<LocalServer>, ModelConfigurationError> {
         match self {
             Self::OpenAiCompatible => openai_compatible::local_server(environment).map(Some),
-            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::Anthropic
+            | Self::ChatGpt
+            | Self::Kimi
+            | Self::Muse
+            | Self::OpenAi
+            | Self::Qwen => Ok(None),
         }
     }
 
@@ -376,31 +422,50 @@ impl ModelProvider {
             #[cfg(feature = "providers-openai")]
             Credential::SignIn(auth_file) => (None, Some(auth_file)),
         };
-        let client = match self {
+        match self {
+            #[cfg(feature = "providers-anthropic")]
+            Self::Anthropic => {
+                let fallback_max_tokens = claude::fallback_max_tokens(&model);
+                let spec = ProviderSpec::anthropic(AnthropicConfig {
+                    api_key: api_key.unwrap_or_default(),
+                    base_url,
+                    model,
+                });
+                let spec = match fallback_max_tokens {
+                    Some(max_tokens) => spec.with_fallback_max_tokens(max_tokens),
+                    None => spec,
+                };
+
+                ModelClient::from_spec(spec).map_err(ModelConfigurationError::from)
+            }
             #[cfg(feature = "providers-openai")]
             Self::ChatGpt => ModelClient::chatgpt(chatgpt::ChatGptConfig {
                 auth_file: auth_file.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::Kimi => ModelClient::kimi(kimi::KimiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::Muse => ModelClient::muse(muse::MuseConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-openai")]
             Self::OpenAi => ModelClient::openai(openai::OpenAiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             #[cfg(feature = "providers-compat")]
             Self::OpenAiCompatible => {
                 ModelClient::openai_compatible(openai_compatible::OpenAiCompatibleConfig {
@@ -408,24 +473,28 @@ impl ModelProvider {
                     base_url,
                     model,
                 })
+                .map_err(ModelConfigurationError::from)
             }
             #[cfg(feature = "providers-compat")]
             Self::Qwen => ModelClient::qwen(qwen::QwenConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
-            }),
+            })
+            .map_err(ModelConfigurationError::from),
             // `client_from_environment` rejects a disabled family first; its
             // credential and endpoint go unused here.
-            #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+            #[cfg(not(all(
+                feature = "providers-anthropic",
+                feature = "providers-compat",
+                feature = "providers-openai"
+            )))]
             provider => {
                 drop((api_key, auth_file, base_url, model));
 
-                return Err(ModelConfigurationError::ProviderDisabled { provider });
+                Err(ModelConfigurationError::ProviderDisabled { provider })
             }
-        };
-
-        client.map_err(ModelConfigurationError::from)
+        }
     }
 
     /// Returns the context profile and output limit this catalog declares
@@ -433,6 +502,7 @@ impl ModelProvider {
     /// server declares neither, since its limits come from the server.
     fn declared_limits(self, model: &str) -> (Option<ModelProfile>, Option<u64>) {
         match self {
+            Self::Anthropic => (claude::profile(model), claude::max_output_tokens(model)),
             Self::ChatGpt => (chatgpt::profile(model), chatgpt::max_output_tokens(model)),
             Self::Kimi => (kimi::profile(model), kimi::max_output_tokens(model)),
             Self::Muse => (muse::profile(model), muse::max_output_tokens(model)),
@@ -521,7 +591,7 @@ impl ModelConfiguration {
 
     /// Constructs the configured client through an injected environment lookup.
     /// A provider whose key is optional sends no key when its variable is
-    /// unset or blank.
+    /// unset or blank; a blank required key counts as missing.
     ///
     /// # Errors
     ///
@@ -564,10 +634,9 @@ impl ModelConfiguration {
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Credential, ModelConfigurationError> {
         let api_key_environment = self.provider.api_key_environment();
+        // A blank key counts as unset, required or not.
         match environment(api_key_environment) {
-            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
-                Ok(Credential::ApiKey(Some(api_key)))
-            }
+            Ok(api_key) if !api_key.trim().is_empty() => Ok(Credential::ApiKey(Some(api_key))),
             Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
                 Ok(Credential::ApiKey(None))
             }
@@ -589,6 +658,13 @@ impl ModelConfiguration {
         let base_url_environment = self.provider.base_url_environment();
 
         match environment(base_url_environment) {
+            // `ANTHROPIC_BASE_URL` names the API origin, as Anthropic's SDKs
+            // read it, while every base URL here ends in the version path.
+            Ok(base_url)
+                if !base_url.trim().is_empty() && self.provider == ModelProvider::Anthropic =>
+            {
+                Ok(format!("{}/v1", base_url.trim_end_matches('/')))
+            }
             Ok(base_url) if !base_url.trim().is_empty() => Ok(base_url),
             // A blank variable counts as unset, so it falls back to the
             // default like a missing one instead of failing validation.
@@ -658,6 +734,10 @@ pub enum ModelConfigurationError {
     /// The selected model identifier is invalid.
     #[error(transparent)]
     Metadata(#[from] ModelMetadataError),
+    /// No request can be sent with the provider specification built from
+    /// the configuration, such as for a base URL that is not a URL.
+    #[error(transparent)]
+    Spec(#[from] ProviderSpecError),
     /// The declared response reservation leaves no room for input.
     #[error(
         "the {max_output_tokens}-token output reservation must be smaller than the \
@@ -747,9 +827,13 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 /// input and output tokens at the lowest input tier, are as published on
 /// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
-/// `OpenAI`'s API pricing. Cache discounts that some of these providers
-/// publish are not modeled yet, so cached input falls back to the input
-/// price. `ChatGPT` plan models carry no per-token price.
+/// `OpenAI`'s API pricing, and on 2026-11-21 by Anthropic's Claude API
+/// pricing. Only Claude Haiku 5.5, five times dearer above its 100,000-token
+/// prompt threshold, also declares its long-prompt prices; other tiers,
+/// such as `OpenAI`'s doubled input price above 272,000 tokens, are not
+/// modeled. Cache discounts that some of these providers publish are not
+/// modeled yet, so cached input falls back to the input price. `ChatGPT`
+/// plan models carry no per-token price.
 const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3,
@@ -834,6 +918,36 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
         supports: MULTIMODAL_REASONING,
     },
     CatalogedModel {
+        model: claude::CLAUDE_OPUS_5_5,
+        pricing: Some(Pricing::built_in(4_000_000, 20_000_000)),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: claude::CLAUDE_FABLE_5_2,
+        pricing: Some(Pricing::built_in(8_000_000, 40_000_000)),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: claude::CLAUDE_SONNET_5_5,
+        pricing: Some(Pricing::built_in(2_000_000, 10_000_000)),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Five times the price for a prompt over 100,000 tokens, cache reads and
+    // writes included.
+    CatalogedModel {
+        model: claude::CLAUDE_HAIKU_5_5,
+        pricing: Some(
+            Pricing::built_in(100_000, 500_000)
+                .with_long_context(100_000, 500_000, 2_500_000)
+                .with_source(PricingSource::BuiltIn),
+        ),
+        provider: ModelProvider::Anthropic,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
         model: chatgpt::CHATGPT_GPT_6_1_SOL,
         pricing: None,
         provider: ModelProvider::ChatGpt,
@@ -884,11 +998,19 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
 ];
 
 #[cfg(test)]
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 #[path = "catalog_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+#[cfg(not(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+)))]
 #[path = "catalog_disabled_test.rs"]
 mod disabled_tests;

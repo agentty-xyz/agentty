@@ -56,6 +56,7 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
     assert_eq!(
         AgentKind::Harness.models().len(),
         harness_models.len() + CATALOG_PROFILED.len() + codex_models.len() - 1
+            + AgentKind::Claude.models().len()
     );
     assert!(
         CATALOG_PROFILED
@@ -79,13 +80,14 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 #[test]
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
-    // The harness profiles the shared Codex models and the Kimi, Muse, Qwen
-    // flash, and ChatGPT-plan models from its provider catalog, and served
-    // OpenAI-compatible models from the server or environment.
+    // The harness profiles the shared Codex and Claude models and the Kimi,
+    // Muse, Qwen flash, and ChatGPT-plan models from its provider catalog,
+    // and served OpenAI-compatible models from the server or environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()
         .filter(|model| !AgentKind::Codex.supports_model(**model))
+        .filter(|model| !AgentKind::Claude.supports_model(**model))
         .filter(|model| !CATALOG_PROFILED.contains(*model))
         .collect::<Vec<_>>();
 

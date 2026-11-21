@@ -17,15 +17,23 @@ fn disabled_providers() -> Vec<ModelProvider> {
 #[test]
 fn only_the_compiled_family_is_enabled() {
     // Arrange
-    #[cfg(feature = "providers-openai")]
-    let expected = [
-        ModelProvider::Muse,
-        ModelProvider::Kimi,
-        ModelProvider::Qwen,
-        ModelProvider::OpenAiCompatible,
-    ];
-    #[cfg(feature = "providers-compat")]
-    let expected = [ModelProvider::OpenAi, ModelProvider::ChatGpt];
+    let mut expected = Vec::new();
+    if !cfg!(feature = "providers-compat") {
+        expected.extend([
+            ModelProvider::Muse,
+            ModelProvider::Kimi,
+            ModelProvider::Qwen,
+        ]);
+    }
+    if !cfg!(feature = "providers-openai") {
+        expected.extend([ModelProvider::OpenAi, ModelProvider::ChatGpt]);
+    }
+    if !cfg!(feature = "providers-anthropic") {
+        expected.push(ModelProvider::Anthropic);
+    }
+    if !cfg!(feature = "providers-compat") {
+        expected.push(ModelProvider::OpenAiCompatible);
+    }
 
     // Act
     let disabled = disabled_providers();

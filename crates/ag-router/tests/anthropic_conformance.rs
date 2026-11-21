@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_router::ReasoningEffort::{High, Max, XHigh};
+use ag_router::ReasoningEffort::{High, Low, Max, XHigh};
 use ag_router::{
     Completion, DeltaObserver, ErrorClass, ImageContent, ImageMediaType, InputBlock, ModelError,
     ModelMessage, ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, ResponseDelta,
@@ -85,6 +85,21 @@ async fn presets_send_byte_identical_requests() -> Result<(), Box<dyn Error>> {
             "anthropic/claude-opus-5-5",
             conformance::options(Some(Max), true, Some(512)),
             "anthropic-claude-opus-5-5",
+        ),
+        (
+            "anthropic/claude-fable-5-2",
+            conformance::options(Some(XHigh), false, None),
+            "anthropic-claude-fable-5-2",
+        ),
+        (
+            "anthropic/claude-sonnet-5-5",
+            conformance::options(Some(High), false, Some(128_000)),
+            "anthropic-claude-sonnet-5-5",
+        ),
+        (
+            "anthropic/claude-haiku-5-5",
+            conformance::options(Some(Low), false, None),
+            "anthropic-claude-haiku-5-5",
         ),
         (
             "anthropic/claude-sonnet-4-6",
@@ -270,6 +285,85 @@ async fn replays_a_final_answer_after_its_thinking_and_omits_other_reasoning()
     );
     assert_eq!(body["messages"].as_array().map(Vec::len), Some(5));
     assert_eq!(reasoning_view(&thinking), ReasoningView::Opaque);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reduced_history_replaying_thinking_asks_to_drop_invalidated_blocks()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let thinking = json!([
+        {"type": "thinking", "thinking": "", "signature": "sig-2"},
+        {"type": "text"}
+    ])
+    .to_string();
+    // Context fitting cleared the first answer's reasoning, an edit of an
+    // earlier message, while the later answer keeps its signed thinking.
+    let history = vec![
+        ModelMessage::User("Find the name".to_string()),
+        ModelMessage::Assistant(r#"{"name":"Ada"}"#.to_string()),
+        ModelMessage::User("And again".to_string()),
+        ModelMessage::AssistantReasoning {
+            content: r#"{"name":"Ada"}"#.to_string(),
+            reasoning_content: thinking,
+        },
+        ModelMessage::User("Once more".to_string()),
+    ];
+    let without_effort = server(400, "{}").await;
+    let with_betas = server(400, "{}").await;
+    let without_mapping = server(400, "{}").await;
+    let mut with_effort = structured("anthropic/claude-fable-5-2", history.clone())?;
+    with_effort.options = conformance::options(Some(High), false, None);
+
+    // Act
+    let _ = Router::new([anthropic(&without_effort, "claude-fable-5-2")])
+        .execute(structured("anthropic/claude-fable-5-2", history.clone())?)
+        .await;
+    let _ = Router::new([anthropic(&with_betas, "claude-fable-5-2")
+        .with_header("anthropic-beta", "files-api-2025-04-14")])
+    .execute(with_effort)
+    .await;
+    let _ = Router::new([anthropic(&without_mapping, "claude-haiku-4-5")])
+        .execute(structured("anthropic/claude-haiku-4-5", history)?)
+        .await;
+
+    // Assert
+    let drop_blocks = json!({
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+        "display": "summarized",
+        "type": "adaptive"
+    });
+    let beta = |request: &wiremock::Request| {
+        request
+            .headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    let request = conformance::only_request(&without_effort).await?;
+    let body: Value = serde_json::from_slice(&request.body)?;
+    assert_eq!(body["thinking"], drop_blocks);
+    assert_eq!(body["output_config"].get("effort"), None);
+    assert_eq!(
+        body["messages"][3]["content"][0],
+        json!({"type": "thinking", "thinking": "", "signature": "sig-2"})
+    );
+    assert_eq!(
+        beta(&request).as_deref(),
+        Some("thinking-binding-controls-2026-08-01")
+    );
+    let request = conformance::only_request(&with_betas).await?;
+    let body: Value = serde_json::from_slice(&request.body)?;
+    assert_eq!(body["thinking"], drop_blocks);
+    assert_eq!(
+        beta(&request).as_deref(),
+        Some("files-api-2025-04-14,thinking-binding-controls-2026-08-01")
+    );
+    let request = conformance::only_request(&without_mapping).await?;
+    let body: Value = serde_json::from_slice(&request.body)?;
+    assert_eq!(body.get("thinking"), None);
+    assert_eq!(beta(&request), None);
 
     Ok(())
 }

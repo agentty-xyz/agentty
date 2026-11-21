@@ -223,6 +223,7 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
     let local = stored_model_identity_parts(Some("openai_compatible"), Some("qwen3:latest"));
     let openai = stored_model_identity_parts(Some("openai"), Some("gpt-6.1-sol"));
     let chatgpt = stored_model_identity_parts(Some("openai_chatgpt"), Some("gpt-6.1-sol"));
+    let claude = stored_model_identity_parts(Some("anthropic"), Some("claude-opus-5-5"));
     let unknown = stored_model_identity_parts(Some("unknown"), Some("model"));
     let missing_model = stored_model_identity_parts(Some("meta"), None);
 
@@ -235,6 +236,7 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
     );
     assert!(matches!(openai, Ok((ModelProvider::OpenAi, model)) if model == "gpt-6.1-sol"));
     assert!(matches!(chatgpt, Ok((ModelProvider::ChatGpt, model)) if model == "gpt-6.1-sol"));
+    assert!(matches!(claude, Ok((ModelProvider::Anthropic, model)) if model == "claude-opus-5-5"));
     assert!(matches!(unknown, Err(CliError::MissingModelIdentity)));
     assert!(matches!(missing_model, Err(CliError::MissingModelIdentity)));
 }
