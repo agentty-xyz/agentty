@@ -940,13 +940,18 @@ fn account_home() -> Option<PathBuf> {
         )
     };
 
-    (status == 0 && !found.is_null()).then(|| {
-        // SAFETY: a successful lookup initialized the entry, whose
-        // directory is a NUL-terminated string inside `buffer`, still alive.
-        let directory = unsafe { std::ffi::CStr::from_ptr((*found).pw_dir) };
+    // Only a successful lookup that answers with `entry` initialized it.
+    (status == 0 && std::ptr::eq(found, entry.as_ptr()))
+        // SAFETY: the lookup initialized `entry`, as checked above.
+        .then(|| unsafe { entry.assume_init_ref() }.pw_dir)
+        .filter(|directory| !directory.is_null())
+        .map(|directory| {
+            // SAFETY: a non-null directory of an initialized entry is a
+            // NUL-terminated string inside `buffer`, which is still alive.
+            let directory = unsafe { std::ffi::CStr::from_ptr(directory) };
 
-        PathBuf::from(std::ffi::OsStr::from_bytes(directory.to_bytes()))
-    })
+            PathBuf::from(std::ffi::OsStr::from_bytes(directory.to_bytes()))
+        })
 }
 
 async fn validate_executable(
