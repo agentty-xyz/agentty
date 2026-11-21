@@ -10,7 +10,7 @@ use ag_contracts::{OneShotError, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
     ExecutionGraph, ExecutionGraphStatus, GraphContext, GraphExecutionRef, GraphNode,
-    GraphPostProcessing, StartExecutionGraphRequest,
+    GraphNodeStatus, GraphPostProcessing, StartExecutionGraphRequest,
 };
 use ag_worker::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
@@ -302,11 +302,47 @@ async fn only_live_graphs_doing_session_work_hold_automatic_review() {
 }
 
 #[tokio::test]
-async fn settling_node_holds_automatic_review_until_its_response_is_stored() {
-    // Arrange: the node's run completes, and its settlement waits before
+async fn settling_node_projects_running_until_its_response_is_stored() {
+    // Arrange: the node's run is terminal, and its settlement waits before
     // storing the graph response.
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
+    let release = spawn_settling_graph(&app).await;
+
+    // Act
+    let settling = app
+        .execution_graph_progress("working")
+        .await
+        .expect("progress")
+        .expect("graph");
+    release();
+    let services = app.services.clone();
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        while !services.live_session_work_graphs("sess").is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("finished graph stops its driver");
+    let settled = app
+        .execution_graph_progress("working")
+        .await
+        .expect("progress")
+        .expect("graph");
+
+    // Assert
+    assert_eq!(settling.status, ExecutionGraphStatus::Running);
+    assert_eq!(settling.nodes[0].status, GraphNodeStatus::Running);
+    assert_eq!(settling.nodes[0].last_error, None);
+    assert_eq!(settled.status, ExecutionGraphStatus::Completed);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Starts a live one-node graph that does `sess`'s own work and waits until
+/// its run is terminal while settlement has not stored the response yet.
+/// Calling the returned release lets settlement finish, which completes the
+/// graph.
+pub(in crate::app) async fn spawn_settling_graph(app: &App) -> impl FnOnce() + use<> {
     let snapshot = utility_graph("working", &["fast"]);
     app.services
         .db()
@@ -337,75 +373,7 @@ async fn settling_node_holds_automatic_review_until_its_response_is_stored() {
     );
     settling_rx.recv().await.expect("node settles");
 
-    // Act
-    let settling_status = app
-        .execution_graph_progress("working")
-        .await
-        .expect("progress")
-        .expect("graph")
-        .status;
-    let holds_while_settling = app.graph_holds_automatic_review("sess").await;
-    release.notify_one();
-    let services = app.services.clone();
-    tokio::time::timeout(Duration::from_secs(5), async move {
-        while !services.live_session_work_graphs("sess").is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("finished graph stops its driver");
-    let holds_after_finishing = app.graph_holds_automatic_review("sess").await;
-
-    // Assert: the stored projection reads the settling node as failed, yet
-    // the dispatch pass still holds the review.
-    assert_eq!(settling_status, ExecutionGraphStatus::Failed);
-    assert!(holds_while_settling);
-    assert!(!holds_after_finishing);
-    app.services.wait_for_cleanup_tasks(None).await;
-}
-
-#[tokio::test]
-async fn idle_live_driver_holds_automatic_review_while_its_graph_can_finish() {
-    // Arrange: a question pauses dispatch, so the live driver waits between
-    // passes with its node still admissible.
-    let (mut app, _directory) = crate::test_support::new_test_app().await;
-    seed_session(&mut app.sessions, app.services.db()).await;
-    app.services
-        .db()
-        .sessions()
-        .update_session_status_with_timing_at("sess", "Question", 0)
-        .await
-        .expect("question status");
-    let snapshot = utility_graph("working", &["waiting"]);
-    app.services
-        .db()
-        .graphs()
-        .save_graph(&snapshot, None)
-        .await
-        .expect("save working graph");
-    let (started, _started_rx) = mpsc::unbounded_channel();
-    spawn_driver(
-        &app.services,
-        snapshot,
-        app.services.db().graph_dispatch(),
-        Arc::new(StaggeredRunner {
-            fast_fails: false,
-            fast_release: Notify::new(),
-            runs: app.services.db().runs(),
-            slow_release: Notify::new(),
-            started,
-        }),
-    );
-
-    // Act
-    let is_dispatching = app.services.is_graph_dispatching("working");
-    let holds_while_idle = app.graph_holds_automatic_review("sess").await;
-
-    // Assert
-    assert!(!is_dispatching);
-    assert!(holds_while_idle);
-    app.services.stop_graph_drivers(Some("sess"));
-    app.services.wait_for_cleanup_tasks(None).await;
+    move || release.notify_one()
 }
 
 /// Starts a live one-node graph that does `sess`'s own work, as an approved
