@@ -1,4 +1,5 @@
-//! Stored graph evidence, result, history, and chat-reply records.
+//! Stored graph evidence, result, history, chat-reply records, and the graph
+//! node activity operation kind.
 
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{
@@ -6,6 +7,13 @@ use ag_session::{
     GraphResultRef,
 };
 pub use ag_worker::GraphExecutionRecord;
+
+/// Session operation kind that marks a session held `InProgress` by its
+/// running graph nodes, for restart recovery.
+///
+/// The nodes' own executions already occupy the Env, so these operations
+/// never block graph claims.
+pub const GRAPH_NODE_ACTIVITY_OPERATION_KIND: &str = "graph_node_activity";
 
 /// Trusted host evidence for an exact result, supplied separately from output.
 ///

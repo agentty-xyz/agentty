@@ -19,11 +19,12 @@ use ag_worker::{
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::app::graph_activity::GraphActivity;
 use crate::app::graph_budget::GraphBudgetLedger;
 use crate::app::review_graph::ReviewGraphHost;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::GraphEvidence;
 use crate::presentation::execution_graph::{
@@ -38,6 +39,9 @@ pub(super) struct GraphDriver {
     /// Whether the graph does the session's own work, which automatic review
     /// can wait for. Host-driven graphs, such as the review itself, do not.
     is_session_work: bool,
+    /// Status leases the executor's runner takes, kept so a relaunched
+    /// driver settles them.
+    leases: GraphNodeLeases,
     request: StartExecutionGraphRequest,
     running: Arc<AtomicBool>,
 }
@@ -53,8 +57,73 @@ impl GraphDriver {
 pub(super) struct GraphDriverSession {
     /// Session worktree the graph's nodes run in.
     pub(super) folder: PathBuf,
+    /// Status leases the driver settles after each dispatch pass.
+    pub(super) leases: GraphNodeLeases,
     /// Live session chat that receives the driver's notices.
     pub(super) transcript: Arc<Mutex<SessionTranscript>>,
+}
+
+/// Status leases taken by one driver's running nodes.
+///
+/// The driver finishes them only after a dispatch pass settles every node it
+/// admitted, so a session whose graph still runs nodes stays `InProgress`,
+/// including between a node and the dependent node it unblocks.
+#[derive(Clone, Default)]
+pub(super) struct GraphNodeLeases(Arc<Mutex<Vec<GraphActivity>>>);
+
+impl GraphNodeLeases {
+    fn hold(&self, activity: GraphActivity) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(activity);
+    }
+
+    async fn finish(&self, services: &AppServices) {
+        let leases = std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for lease in leases {
+            lease.finish(services).await;
+        }
+    }
+}
+
+/// Holds the session `InProgress` from the moment one of its graph's nodes
+/// starts until the driver settles the dispatch pass that ran it.
+///
+/// Utility nodes never pass through the session worker, so nothing else
+/// reports their work in the session status.
+struct SessionStatusGraphRunner {
+    leases: GraphNodeLeases,
+    runner: Arc<dyn GraphNodeRunner>,
+    services: AppServices,
+    session_id: SessionId,
+    status: Arc<Mutex<Status>>,
+}
+
+#[async_trait]
+impl GraphNodeRunner for SessionStatusGraphRunner {
+    fn supports(&self, node: &GraphNode) -> bool {
+        self.runner.supports(node)
+    }
+
+    fn manages_environment(&self, node: &GraphNode) -> bool {
+        self.runner.manages_environment(node)
+    }
+
+    async fn run(&self, request: GraphRunRequest) -> Result<String, OneShotError> {
+        let activity = self
+            .services
+            .begin_graph_node_activity(&self.session_id, Some(Arc::clone(&self.status)));
+        activity.record(&self.services).await;
+        self.leases.hold(activity);
+
+        self.runner.run(request).await
+    }
 }
 
 /// Active graph drivers keyed by graph identity, shared with lifecycle
@@ -88,6 +157,7 @@ impl GraphDriverRegistration {
                     cancellation: cancellation.clone(),
                     executor,
                     is_session_work: false,
+                    leases: GraphNodeLeases::default(),
                     request: StartExecutionGraphRequest {
                         graph: graph.clone(),
                         provider_call_limits: std::collections::BTreeMap::new(),
@@ -360,6 +430,7 @@ impl App {
             ));
         }
         let folder = session.folder.clone();
+        let status = Arc::clone(&handles.status);
         let transcript = Arc::clone(&handles.transcript);
         self.services
             .validate_graph_session_permissions(&request.graph.session_id)
@@ -387,37 +458,41 @@ impl App {
                 Some((
                     driver.cancellation.clone(),
                     driver.executor.clone(),
+                    driver.leases.clone(),
                     driver.running.clone(),
                 ))
             } else {
                 None
             }
         };
-        if let Some((cancellation, executor, running)) = previous {
+        if let Some((cancellation, executor, leases, running)) = previous {
             self.services.spawn_graph_driver_task(
                 request.graph,
                 cancellation,
                 executor,
                 running,
-                GraphDriverSession { folder, transcript },
+                GraphDriverSession {
+                    folder,
+                    leases,
+                    transcript,
+                },
             );
 
             return Ok(());
         }
-        let budgets = self.services.launch_graph_budgets(&request).await?;
-        let executor = GraphExecutor::new(
-            self.services.db().graph_dispatch(),
-            Arc::new(self.services.graph_resources.with_budgets(budgets)),
-            runner,
-        );
-        self.services.spawn_graph_driver(
-            request,
-            cancellation,
-            executor,
-            GraphDriverSession { folder, transcript },
-        );
-
-        Ok(())
+        self.services
+            .launch_graph_driver(
+                request,
+                cancellation,
+                runner,
+                status,
+                GraphDriverSession {
+                    folder,
+                    leases: GraphNodeLeases::default(),
+                    transcript,
+                },
+            )
+            .await
     }
 
     /// Acknowledges handoff only after the serial mailbox owns its completion.
@@ -540,6 +615,33 @@ impl AppServices {
             .collect())
     }
 
+    /// Opens a first launch's budgets and starts its driver, whose running
+    /// nodes hold the session `status` in `InProgress`.
+    async fn launch_graph_driver(
+        &self,
+        request: StartExecutionGraphRequest,
+        cancellation: CancellationToken,
+        runner: Arc<dyn GraphNodeRunner>,
+        status: Arc<Mutex<Status>>,
+        session: GraphDriverSession,
+    ) -> Result<(), ag_session::SessionError> {
+        let budgets = self.launch_graph_budgets(&request).await?;
+        let executor = GraphExecutor::new(
+            self.db().graph_dispatch(),
+            Arc::new(self.graph_resources.with_budgets(budgets)),
+            Arc::new(SessionStatusGraphRunner {
+                leases: session.leases.clone(),
+                runner,
+                services: self.clone(),
+                session_id: request.graph.session_id.clone(),
+                status,
+            }),
+        );
+        self.spawn_graph_driver(request, cancellation, executor, session);
+
+        Ok(())
+    }
+
     /// Retains a launch's executor and budgets across dispatch exits. Only an
     /// explicit relaunch restarts a stopped driver.
     fn spawn_graph_driver(
@@ -562,6 +664,7 @@ impl AppServices {
                     cancellation: cancellation.clone(),
                     executor: executor.clone(),
                     is_session_work: true,
+                    leases: session.leases.clone(),
                     request,
                     running: running.clone(),
                 },
@@ -638,6 +741,9 @@ impl AppServices {
                 executor.run_ready(&graph.id, graph.revision, &session.folder, permission),
             )
             .await;
+            // The pass settled every node it admitted; a node that becomes
+            // ready later takes a new lease when it starts.
+            session.leases.finish(self).await;
             match result {
                 Ok(receipts) if !receipts.is_empty() => {
                     self.announce_outputs_awaiting_acceptance(

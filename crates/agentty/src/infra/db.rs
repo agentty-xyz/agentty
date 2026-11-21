@@ -6,13 +6,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use ag_store::{
-    ActivityRepository, AppRepositories, Database, DbError, ForkSessionSnapshot, GraphEvidence,
-    GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord, GraphProposalReplyRecord,
-    GraphProposalRepository, GraphRepository, LEGACY_SESSION_AGENT_CLEAR_MARKER,
-    NewSessionReviewCommentResolution, OperationRepository, PersistedSessionCreation,
-    ProjectListRow, ProjectRepository, ProjectRow, ReviewRepository, SessionAgentModelRow,
-    SessionDetailRow, SessionFocusedReviewRow, SessionListRow, SessionMessageRow,
-    SessionOperationRow, SessionPreparationRepository, SessionPreparationRow,
+    ActivityRepository, AppRepositories, Database, DbError, ForkSessionSnapshot,
+    GRAPH_NODE_ACTIVITY_OPERATION_KIND, GraphEvidence, GraphExecutionRecord, GraphNodeHistory,
+    GraphOutputReplyRecord, GraphProposalReplyRecord, GraphProposalRepository, GraphRepository,
+    LEGACY_SESSION_AGENT_CLEAR_MARKER, NewSessionReviewCommentResolution, OperationRepository,
+    PersistedSessionCreation, ProjectListRow, ProjectRepository, ProjectRow, ReviewRepository,
+    SessionAgentModelRow, SessionDetailRow, SessionFocusedReviewRow, SessionListRow,
+    SessionMessageRow, SessionOperationRow, SessionPreparationRepository, SessionPreparationRow,
     SessionPreparationState, SessionRepository, SessionReviewAuditRow,
     SessionReviewCommentResolutionRow, SessionReviewRequestRow, SessionReviewWatchRow, SessionRow,
     SessionTurnMetadata, SessionUsageRow, SettingRepository, StoredGraphEvidence,

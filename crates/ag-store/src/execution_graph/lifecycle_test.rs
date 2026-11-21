@@ -885,6 +885,41 @@ async fn graph_lifecycle_progress_reports_every_dependency_gate_and_conflicting_
 }
 
 #[tokio::test]
+async fn graph_node_activity_never_blocks_graph_claims() {
+    // Arrange
+    let database = database(false).await;
+    let operations = database.operations();
+    operations
+        .insert_session_operation(
+            "node-activity",
+            "session",
+            crate::GRAPH_NODE_ACTIVITY_OPERATION_KIND,
+        )
+        .await
+        .expect("activity");
+    operations
+        .mark_session_operation_running("node-activity")
+        .await
+        .expect("running activity");
+
+    // Act
+    let progress = database
+        .graphs()
+        .progress("graph")
+        .await
+        .expect("progress")
+        .expect("graph");
+    let dispatch = claim(&database, "first").await;
+
+    // Assert
+    assert_eq!(
+        progress.nodes[0].blocked,
+        [GraphBlockedReason::AwaitingDispatch]
+    );
+    assert_eq!(dispatch.node.id, "first");
+}
+
+#[tokio::test]
 async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_failed() {
     // Arrange
     let database = database(true).await;

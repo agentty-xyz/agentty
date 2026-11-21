@@ -39,7 +39,9 @@ references are currently limited to the owning session's shared local worktree.
 `GraphContext::TaskConversation` reserves a distinct task per node; its attempts keep
 that task's isolated history and use existing task-attempt operations.
 `GraphContext::Fresh` starts an independent utility context per run and uses the
-existing utility-run record. Neither path adds an execution status.
+existing utility-run record. Neither path adds an execution status. Each running node
+holds a session-status lease, so the session shows `InProgress` until the dispatch pass
+that ran it settles; the lease's recovery operation never blocks graph claims.
 
 Workspace access is explicit:
 

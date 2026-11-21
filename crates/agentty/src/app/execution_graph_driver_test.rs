@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
-    ExecutionGraph, ExecutionGraphStatus, GraphContext, GraphExecutionRef, GraphNode,
-    GraphNodeStatus, GraphPostProcessing, StartExecutionGraphRequest,
+    ExecutionGraph, ExecutionGraphStatus, GraphCompletionGate, GraphContext, GraphDependency,
+    GraphExecutionRef, GraphNode, GraphNodeStatus, GraphPostProcessing, StartExecutionGraphRequest,
 };
 use ag_worker::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
@@ -21,8 +21,12 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::{driver_session, graph, seed_session};
-use crate::app::execution_graph::GraphDriverRegistration;
+use crate::app::execution_graph::{
+    GraphDriverRegistration, GraphDriverSession, GraphNodeLeases, SessionStatusGraphRunner,
+};
 use crate::app::{App, AppServices};
+use crate::domain::session::Status;
+use crate::infra::db::GRAPH_NODE_ACTIVITY_OPERATION_KIND;
 
 #[tokio::test]
 async fn explicit_relaunch_preserves_failed_receipts_and_remaining_budget() {
@@ -299,6 +303,118 @@ async fn only_live_graphs_doing_session_work_hold_automatic_review() {
     assert_eq!(holds_while_working, [true, false]);
     assert!(!holds_after_finishing);
     app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn running_graph_nodes_hold_the_session_in_progress_until_the_graph_settles() {
+    // Arrange: `second` waits for `first`, so one dispatch pass runs both.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    let mut snapshot = utility_graph("status", &["first", "second"]);
+    snapshot.nodes[1].dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "first".into(),
+    });
+    app.services
+        .db()
+        .graphs()
+        .save_graph(&snapshot, None)
+        .await
+        .expect("graph");
+    let status = Arc::clone(
+        &app.sessions
+            .session_handles_or_err("sess")
+            .expect("handles")
+            .status,
+    );
+    let (started, mut started_rx) = mpsc::unbounded_channel();
+    let runner = Arc::new(StaggeredRunner {
+        fast_fails: false,
+        fast_release: Notify::new(),
+        runs: app.services.db().runs(),
+        slow_release: Notify::new(),
+        started,
+    });
+    let leases = GraphNodeLeases::default();
+    let executor = GraphExecutor::new(
+        app.services.db().graph_dispatch(),
+        Arc::new(app.services.graph_resources.with_budgets(HashMap::new())),
+        Arc::new(SessionStatusGraphRunner {
+            leases: leases.clone(),
+            runner: runner.clone(),
+            services: app.services.clone(),
+            session_id: "sess".into(),
+            status: Arc::clone(&status),
+        }),
+    );
+
+    // Act
+    app.services.spawn_graph_driver(
+        StartExecutionGraphRequest {
+            graph: snapshot,
+            provider_call_limits: BTreeMap::new(),
+        },
+        CancellationToken::new(),
+        executor,
+        GraphDriverSession {
+            leases,
+            ..driver_session()
+        },
+    );
+    started_rx.recv().await.expect("first node started");
+    let while_first_runs = observe_session(&app, &status).await;
+    runner.slow_release.notify_one();
+    started_rx.recv().await.expect("second node started");
+    let while_second_runs = observe_session(&app, &status).await;
+    runner.slow_release.notify_one();
+    let services = app.services.clone();
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        while !services.live_session_work_graphs("sess").is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("finished graph stops its driver");
+    app.services.wait_for_cleanup_tasks(None).await;
+    let after_graph = observe_session(&app, &status).await;
+
+    // Assert: `first` keeps its lease while `second` runs, so the session
+    // never returns to `Review` between them.
+    assert_eq!(
+        while_first_runs,
+        (Status::InProgress, "InProgress".into(), 1)
+    );
+    assert_eq!(
+        while_second_runs,
+        (Status::InProgress, "InProgress".into(), 2)
+    );
+    assert_eq!(after_graph, (Status::Review, "Review".into(), 0));
+}
+
+/// Returns the session's in-memory and stored status with its unfinished
+/// graph node leases.
+async fn observe_session(app: &App, status: &Mutex<Status>) -> (Status, String, usize) {
+    let stored = app
+        .services
+        .db()
+        .sessions()
+        .load_session("sess")
+        .await
+        .expect("session")
+        .expect("stored session")
+        .status;
+    let leases = app
+        .services
+        .db()
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("operations")
+        .into_iter()
+        .filter(|operation| operation.kind == GRAPH_NODE_ACTIVITY_OPERATION_KIND)
+        .count();
+
+    (*status.lock().expect("status"), stored, leases)
 }
 
 #[tokio::test]

@@ -27,9 +27,9 @@ pub use connection::Database;
 pub use error::DbError;
 pub(crate) use error::DbResultExt;
 pub use execution_graph::{
-    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
-    GraphProposalReplyRecord, GraphProposalRepository, GraphRepository, StoredGraphEvidence,
-    StoredGraphResult,
+    GRAPH_NODE_ACTIVITY_OPERATION_KIND, GraphEvidence, GraphExecutionRecord, GraphNodeHistory,
+    GraphOutputReplyRecord, GraphProposalReplyRecord, GraphProposalRepository, GraphRepository,
+    StoredGraphEvidence, StoredGraphResult,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use execution_graph::{MockGraphProposalRepository, MockGraphRepository};
