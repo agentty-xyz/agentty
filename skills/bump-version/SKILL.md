@@ -29,6 +29,9 @@ duplicate commit, tag, push, or pull workflow steps here.
        releases may still include additive features or removals while the project
        remains below `1.0.0`.
    - When the change is not clearly milestone-sized, select `patch`.
+   - The published library crates share this version and depend on each other with caret
+     requirements, so a patch release must not break their public API. When the
+     `semver-checks` hook below reports a breaking change, select `minor` instead.
 
 1. **Version Bump**
 
@@ -79,5 +82,15 @@ duplicate commit, tag, push, or pull workflow steps here.
      `.pre-commit-config.yaml`:
      - `prek run --all-files`
      - `prek run test-workspace --all-files --hook-stage manual`
+     - `prek run test-doc --all-files --hook-stage manual`
+   - Check the crates.io release after the version bump. Both hooks need network access,
+     and `semver-checks` needs `cargo-semver-checks` at the version
+     `.github/actions/setup-rust-prek/action.yml` pins:
+     - `prek run package-crates --all-files --hook-stage manual` packages every
+       publishable crate and builds it from its tarball, as `cargo publish` would.
+     - `prek run semver-checks --all-files --hook-stage manual` compares each crate's
+       public API with its newest crates.io release.
+   - Pull-request CI runs the same two hooks when a change moves the workspace version,
+     and the release tag runs them again before anything is published.
    - If validation fails, fix the underlying issue and rerun the failing hook before
      handoff.

@@ -41,33 +41,40 @@ use ag_router::{
 };
 use serde_json::json;
 
-let router = Router::new([preset::muse(
-    "https://api.meta.ai/v1",
-    std::env::var("MODEL_API_KEY")?,
-    "muse-spark-1.3",
-)]);
-let format = JsonSchemaFormat::new(
-    "answer",
-    OutputSchema::new(json!({
-        "type": "object",
-        "properties": {"answer": {"type": "string"}},
-        "required": ["answer"],
-        "additionalProperties": false
-    }))?,
-)?;
-let request = ModelRequest::chat(
-    "muse/muse-spark-1.3",
-    vec![ModelMessage::User("What is Rust?".to_string())],
-    vec![],
-    format,
-);
+async fn ask() -> Result<(), Box<dyn std::error::Error>> {
+    let router = Router::new([preset::muse(
+        "https://api.meta.ai/v1",
+        std::env::var("MODEL_API_KEY")?,
+        "muse-spark-1.3",
+    )]);
+    let format = JsonSchemaFormat::new(
+        "answer",
+        OutputSchema::new(json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": false
+        }))?,
+    )?;
+    let request = ModelRequest::chat(
+        "muse/muse-spark-1.3",
+        vec![ModelMessage::User("What is Rust?".to_string())],
+        vec![],
+        format,
+    );
 
-match router.execute(request).await? {
-    Completion::Output { value, .. } => println!("{}", value["answer"]),
-    Completion::ToolCalls { calls, .. } => {
-        // Execute allowed functions in the host, then send their results in the next request.
-        println!("{} function calls", calls.len());
+    match router.execute(request).await? {
+        Completion::Output { value, .. } => println!("{}", value["answer"]),
+        // Only a request without a response format ends in plain text.
+        Completion::Text { text, .. } => println!("{text}"),
+        Completion::ToolCalls { calls, .. } => {
+            // Execute allowed functions in the host, then send their results in the next
+            // request.
+            println!("{} function calls", calls.len());
+        }
     }
+
+    Ok(())
 }
 ```
 

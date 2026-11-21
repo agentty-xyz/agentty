@@ -1,0 +1,36 @@
+name: Published Crates
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Package and semver checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust and `prek`
+        uses: $/.github/actions/setup-rust-prek
+        with:
+          cargo-semver-checks: "true"
+
+      # Builds each crate from its `.crate` tarball, so a file the package
+      # leaves out fails here instead of in `cargo publish`.
+      - name: Package published crates
+        run: prek run package-crates --all-files --hook-stage manual
+
+      # Workspace crates depend on each other with caret requirements, so a
+      # break in any published library can break dependents already released.
+      - name: Check semver against crates.io
+        run: prek run semver-checks --all-files --hook-stage manual
