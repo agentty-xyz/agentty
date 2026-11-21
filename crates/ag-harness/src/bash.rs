@@ -419,7 +419,7 @@ impl BashConfig {
     pub fn with_excluded_command(mut self, executable: PathBuf) -> Result<Self, BashError> {
         let program = executable
             .file_name()
-            .and_then(|name| name.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .filter(|program| {
                 program.len() <= 64
                     && !program.starts_with('-')
