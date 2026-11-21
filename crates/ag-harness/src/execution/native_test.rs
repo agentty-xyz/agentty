@@ -616,10 +616,27 @@ impl Inspection for FailingInspection {
     async fn home(&self) -> Option<PathBuf> {
         LocalInspection.home().await
     }
+
+    async fn host_home(&self) -> Option<PathBuf> {
+        LocalInspection.host_home().await
+    }
 }
 
-/// Local inspection with another home directory.
-struct HomeInspection(PathBuf);
+/// Local inspection with another account home directory and `HOME`.
+struct HomeInspection {
+    account: Option<PathBuf>,
+    host: Option<PathBuf>,
+}
+
+impl HomeInspection {
+    /// Returns an inspection whose account home and `HOME` are `home`.
+    fn at(home: &Path) -> Self {
+        Self {
+            account: Some(home.to_path_buf()),
+            host: Some(home.to_path_buf()),
+        }
+    }
+}
 
 #[async_trait]
 impl Inspection for HomeInspection {
@@ -636,7 +653,11 @@ impl Inspection for HomeInspection {
     }
 
     async fn home(&self) -> Option<PathBuf> {
-        Some(self.0.clone())
+        self.account.clone()
+    }
+
+    async fn host_home(&self) -> Option<PathBuf> {
+        self.host.clone()
     }
 }
 
@@ -645,16 +666,26 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     // Arrange
     let fixture = AccessFixture::new();
     let home = fixture.outside.join("home");
-    let registry = home.join(".cargo/registry");
+    let host_home = fixture.outside.join("host-home");
+    let registry = home.join(".cargo/registry/cache");
     let sessions = fixture.outside.join("sessions");
     let secret = fixture.outside.join("secret");
-    for directory in [&registry, &sessions.join("own"), &sessions.join("other")] {
+    for directory in [
+        &registry,
+        &host_home,
+        &sessions.join("own"),
+        &sessions.join("other"),
+    ] {
         std::fs::create_dir_all(directory).expect("fixture directory");
     }
     std::fs::write(&secret, "secret").expect("secret");
     symlink(&secret, fixture.outside.join("secret-alias")).expect("secret alias");
     let socket = fixture.outside.join("agent.sock");
     let policy = fixture.policy(Grants {
+        environment: vec![
+            // A command `HOME` inside the session belongs to the session.
+            ("HOME".into(), sessions.join("own/home").into_os_string()),
+        ],
         hidden_paths: vec![
             fixture.outside.join("secret-alias"),
             fixture.outside.join("missing/key"),
@@ -665,74 +696,118 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
         writable_roots: vec![registry.clone()],
         ..Grants::default()
     });
+    let files = HomeInspection {
+        account: Some(home.clone()),
+        host: Some(host_home.clone()),
+    };
 
     // Act
-    let access = resolve_access(&HomeInspection(home.clone()), &policy)
-        .await
-        .expect("access");
+    let access = resolve_access(&files, &policy).await.expect("access");
 
     // Assert
     assert_eq!(access.writes, [sessions.join("own"), registry]);
     assert_eq!(access.write_nodes.len(), 2);
     // Links resolve, and a missing path keeps its name beneath its nearest
-    // existing ancestor; full-disk reads add the credential stores and the
-    // other sessions' directories.
-    let mut expected = vec![secret, fixture.outside.join("missing/key")];
-    expected.extend(
-        [
-            "Library/Keychains",
-            ".ssh",
-            ".aws",
-            ".gnupg",
-            ".config/gh/hosts.yml",
-            ".netrc",
-            ".docker/config.json",
-            ".config/gcloud",
-            ".kube/config",
-        ]
-        .map(|path| home.join(path)),
+    // existing ancestor; full-disk reads add the credential stores in both
+    // the account home and the different `HOME`, and the other sessions'
+    // directories.
+    for path in [
+        secret,
+        fixture.outside.join("missing/key"),
+        sessions.clone(),
+    ] {
+        assert!(access.hidden_paths.contains(&path), "{path:?}");
+    }
+    for store in [
+        "Library/Keychains",
+        ".ssh",
+        ".config/gh",
+        ".git-credentials",
+        ".npmrc",
+        ".cargo/credentials.toml",
+        ".pypirc",
+        ".codex/auth.json",
+        ".claude/.credentials.json",
+        ".mozilla/firefox",
+        "Library/Application Support/Google/Chrome",
+    ] {
+        for home in [&home, &host_home] {
+            assert!(access.hidden_paths.contains(&home.join(store)), "{store}");
+        }
+    }
+    assert!(
+        !access
+            .hidden_paths
+            .iter()
+            .any(|path| path.starts_with(sessions.join("own")))
     );
-    expected.push(resolve_hidden(&LocalInspection, Path::new("/run/secrets")).await);
-    expected.push(sessions);
-    assert_eq!(access.hidden_paths, expected);
+    assert!(
+        access
+            .hidden_paths
+            .contains(&resolve_hidden(&LocalInspection, Path::new("/run/secrets")).await)
+    );
     assert_eq!(access.unix_sockets, [socket]);
 }
 
 #[tokio::test]
-async fn full_disk_reads_keep_shared_temporary_parents_visible() {
+async fn full_disk_reads_refuse_temporary_parents_they_cannot_hide() {
     // Arrange
     let fixture = AccessFixture::new();
     let home = fixture.outside.join("home");
     std::fs::create_dir_all(home.join("session")).expect("home session");
-    let system = std::env::temp_dir()
-        .canonicalize()
-        .expect("system temporary");
-    let own = tempfile::tempdir_in(&system).expect("system session");
 
     // Act / Assert
-    // Directly in the system temporary directory, in the home directory,
-    // or beside the workspace, the parent's other entries stay visible.
-    for temporary in [
-        own.path().to_path_buf(),
-        home.join("session"),
-        fixture.temporary.clone(),
-    ] {
+    // Beside the workspace, or in a parent containing the home directory,
+    // the other entries could not be hidden.
+    for temporary in [fixture.temporary.clone(), home.join("session")] {
         let policy = fixture.policy(Grants {
             read_scope: ReadScope::FullDisk,
             temporary_directory: Some(temporary.clone()),
             ..Grants::default()
         });
-        let access = resolve_access(&HomeInspection(home.clone()), &policy)
-            .await
-            .expect("access");
-        let parent = temporary
-            .canonicalize()
-            .expect("canonical temporary")
-            .parent()
-            .expect("parent")
-            .to_path_buf();
-        assert!(!access.hidden_paths.contains(&parent), "{temporary:?}");
+        assert_eq!(
+            resolve_access(&HomeInspection::at(&home), &policy)
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported),
+            "{temporary:?}"
+        );
     }
+}
+
+#[tokio::test]
+async fn an_unknown_account_home_refuses_full_disk_reads_and_writable_roots() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    std::fs::create_dir_all(fixture.outside.join("cache")).expect("cache");
+    let files = HomeInspection {
+        account: None,
+        host: None,
+    };
+
+    // Act / Assert
+    for grants in [
+        Grants {
+            read_scope: ReadScope::FullDisk,
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![fixture.outside.join("cache")],
+            ..Grants::default()
+        },
+    ] {
+        assert_eq!(
+            resolve_access(&files, &fixture.policy(grants))
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    assert!(
+        resolve_access(&files, &fixture.policy(Grants::default()))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -740,8 +815,8 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
     // Arrange
     let fixture = AccessFixture::new();
     let home = fixture.outside.join("home");
-    let tool_cache = home.join(".cache/tool");
-    for directory in [&tool_cache, &home.join(".cargo"), &home.join(".cache/prek")] {
+    let tool_cache = home.join(".npm/_cacache");
+    for directory in [&tool_cache, &home.join(".cargo"), &home.join(".cache/uv")] {
         std::fs::create_dir_all(directory).expect("home directory");
     }
     std::fs::write(fixture.outside.join("file"), "file").expect("file");
@@ -768,11 +843,7 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
             ..Grants::default()
         },
         Grants {
-            writable_roots: vec![home.join(".cache")],
-            ..Grants::default()
-        },
-        Grants {
-            writable_roots: vec![home.join(".cache/prek")],
+            writable_roots: vec![home.join(".cache/uv")],
             ..Grants::default()
         },
         Grants {
@@ -811,7 +882,7 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
     // Act / Assert
     for grants in cases {
         assert_eq!(
-            resolve_access(&HomeInspection(home.clone()), &fixture.policy(grants))
+            resolve_access(&HomeInspection::at(&home), &fixture.policy(grants))
                 .await
                 .map(|_| ()),
             Err(ExecutionError::Unsupported)
@@ -819,7 +890,7 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
     }
     let policy = fixture.policy(in_cache(Grants::default()));
     assert!(
-        resolve_access(&HomeInspection(home.clone()), &policy)
+        resolve_access(&HomeInspection::at(&home), &policy)
             .await
             .is_ok()
     );
@@ -847,30 +918,42 @@ async fn hidden_paths_resolve_to_the_exact_names_the_sandbox_matches() {
 #[test]
 fn writable_roots_must_be_caches_host_tools_do_not_execute() {
     // Arrange
-    let home = Path::new("/home/user");
+    let homes = [PathBuf::from("/home/user"), PathBuf::from("/srv/home")];
     let cases = [
-        ("/home/user/.cargo/registry", true),
+        ("/home/user/.cargo/registry/cache", true),
         ("/home/user/.cargo/git/db", true),
         ("/home/user/.npm/_cacache", true),
-        ("/home/user/go/pkg/mod", true),
-        ("/home/user/.cache/sccache", true),
-        ("/home/user/Library/Caches/Homebrew", true),
+        ("/home/user/go/pkg/mod/cache/download", true),
+        ("/srv/home/.npm/_cacache", true),
         ("/private/var/folders/x/T/session-cache", true),
+        // Extracted sources, indexes, build caches, and installs that host
+        // tools run without verifying them.
+        ("/home/user/.cargo/registry", false),
+        ("/home/user/.cargo/registry/src", false),
+        ("/home/user/.cargo/registry/index", false),
+        ("/home/user/go/pkg/mod", false),
+        ("/home/user/.cache/sccache", false),
+        ("/home/user/.cache/go-build", false),
+        ("/home/user/.cache/bazel", false),
+        ("/home/user/.gradle/caches", false),
+        ("/home/user/.cache/uv", false),
+        ("/home/user/.cache/pypoetry/virtualenvs", false),
+        ("/home/user/.cache/node/corepack", false),
+        ("/home/user/.cache/deno", false),
+        ("/home/user/.cache/puppeteer", false),
+        ("/home/user/.cache/selenium", false),
+        ("/home/user/Library/Caches/Cypress", false),
+        ("/home/user/Library/Caches/Homebrew", false),
         ("/home/user", false),
         ("/home/user/.cargo", false),
         ("/home/user/.cargo/bin", false),
-        ("/home/user/go", false),
-        ("/home/user/go/bin", false),
         ("/home/user/.config", false),
         ("/home/user/.local/bin", false),
-        ("/home/user/.npm", false),
-        ("/home/user/.cache", false),
-        ("/home/user/.cache/prek", false),
-        ("/home/user/.cache/pre-commit/repo", false),
-        ("/home/user/Library/Caches/ms-playwright", false),
-        ("/home", false),
+        ("/srv/home/.config", false),
+        ("/srv", false),
         ("/", false),
         ("/opt/homebrew", false),
+        ("/home/linuxbrew/.linuxbrew", false),
         ("/usr/local", false),
         ("/etc", false),
         ("/Library/Caches", false),
@@ -879,11 +962,8 @@ fn writable_roots_must_be_caches_host_tools_do_not_execute() {
 
     // Act / Assert
     for (root, expected) in cases {
-        assert_eq!(cache_root(Path::new(root), Some(home)), expected, "{root}");
+        assert_eq!(cache_root(Path::new(root), &homes), expected, "{root}");
     }
-    // Without a known home directory, only system directories are refused.
-    assert!(cache_root(Path::new("/home/user/.cargo"), None));
-    assert!(!cache_root(Path::new("/usr/local"), None));
 }
 
 #[tokio::test]

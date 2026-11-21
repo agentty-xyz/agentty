@@ -663,19 +663,31 @@ fn only_simple_commands_of_excluded_programs_leave_the_sandbox() {
         .expect("excluded command");
 
     // Act / Assert
-    for command in ["docker ps", "  docker\tbuild -t 'image name' .", "docker"] {
+    for (command, words) in [
+        ("docker ps", vec!["ps"]),
+        (
+            "  docker\tbuild  -t image:latest --label=a=b .",
+            vec!["build", "-t", "image:latest", "--label=a=b", "."],
+        ),
+        ("docker", vec![]),
+    ] {
         assert_eq!(
             configuration.excluded_program(command),
-            Some(docker.as_path()),
+            Some((
+                docker.as_path(),
+                words.into_iter().map(str::to_owned).collect()
+            )),
             "{command}"
         );
     }
+    // Anything a shell would expand, quote, or interpret stays sandboxed,
+    // so workspace file names can never become arguments.
     for command in [
         "dockerd ps",
         "/usr/bin/docker ps",
         "./docker ps",
         "FOO=1 docker ps",
-        "docker ps; rm -rf ~",
+        "docker ps; rm -rf x",
         "docker ps && true",
         "docker ps | cat",
         "docker ps > out",
@@ -684,6 +696,16 @@ fn only_simple_commands_of_excluded_programs_leave_the_sandbox() {
         "docker run \\\n x",
         "docker ps\nrm x",
         "docker (ps)",
+        "docker fetch *",
+        "docker run ?",
+        "docker run [ab]",
+        "docker run {a,b}",
+        "docker run ~/x",
+        "docker run !1",
+        "docker run # x",
+        "docker run 'image name'",
+        "docker run \"image\"",
+        "docker run\u{7}x",
         "",
         "git status",
     ] {

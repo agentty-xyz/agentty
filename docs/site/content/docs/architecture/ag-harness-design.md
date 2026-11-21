@@ -309,18 +309,21 @@ still describes the call by the model's arguments. A denial answers the model wi
   closed on enforcing executors, and a command the native sandbox refuses to start
   returns to the model as a rejected tool call. For coding sessions the policy follows
   Claude Code's and Codex's sandboxes: optional full-disk reads minus hidden paths,
-  which always include the keychain and other credential stores; writable roots limited
-  to caches host tools do not execute; a per-path Unix-socket allowlist that only macOS
-  enforces (Linux reports it through the sandbox warning); and excluded programs that
-  run unsandboxed only for calls the `ApprovalHandler` approves as
-  `ToolEffects::ExecutesUnsandboxed`. Hidden paths are the policy's only narrowing
-  field, so host executors receive them only by declaring support. A sandboxed command
-  whose failure reads like an operating-system denial gets an advisory
-  `likely_sandbox_denial` flag; it never triggers an unsandboxed rerun by itself. Each
-  executor reports its `Enforcement` (none, filesystem, or filesystem and network), and
-  the model-facing `bash` description states exactly that and names the excluded
-  programs, so an unsandboxed command is never presented as sandboxed. Output is
-  captured within one bounded budget.
+  which always include the keychain, credential stores, browser profiles, and other
+  sessions' temporary directories, and which fail closed without a known home directory;
+  writable roots limited to data-only caches that tools verify before use; a per-path
+  Unix-socket allowlist that only macOS enforces (Linux reports it through the sandbox
+  warning); and excluded programs whose plain-word commands run without a shell, outside
+  the sandbox, only when the `ApprovalHandler` explicitly decides
+  `Decision::AllowUnsandboxed` after seeing the exact argument vector; a plain allow
+  keeps them sandboxed. Hidden paths are the policy's only narrowing field, so host
+  executors receive them only by declaring support. A sandboxed command whose failure
+  reads like an operating-system denial gets an advisory `likely_sandbox_denial` flag;
+  it never triggers an unsandboxed rerun by itself. Each executor reports its
+  `Enforcement` (none, filesystem, or filesystem and network), and the model-facing
+  `bash` description states exactly that and names the excluded programs, so an
+  unsandboxed command is never presented as sandboxed. Output is captured within one
+  bounded budget.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks

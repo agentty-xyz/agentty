@@ -148,7 +148,10 @@ impl ToolHandler for FileTicket {
     }
 }
 
-/// Allows tickets and denies every other state-changing call.
+/// Allows tickets and denies every other state-changing call. A plain
+/// `Decision::Allow` never lets a `bash` command leave the sandbox; only
+/// `Decision::AllowUnsandboxed` does, for a call marked
+/// `ToolEffects::ExecutesUnsandboxed`, after showing `request.command`.
 struct ApproveTickets;
 
 #[async_trait::async_trait]

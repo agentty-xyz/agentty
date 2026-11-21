@@ -69,6 +69,9 @@ async fn built_in_handlers_advertise_their_definitions_and_effects() {
         ToolDefinition::read_with_comparison_base(None)
     );
     assert_eq!(read.effects(), ToolEffects::ReadOnly);
+    // Tools that never leave the sandbox keep the default per-call answers.
+    assert_eq!(read.call_effects(&json!({})), ToolEffects::ReadOnly);
+    assert_eq!(read.unsandboxed_command(&json!({})), None);
     assert_eq!(write.definition(), ToolDefinition::write());
     assert_eq!(write.effects(), ToolEffects::Writes);
     assert_eq!(bash.definition(), ToolDefinition::bash(Enforcement::None));
@@ -273,27 +276,21 @@ impl BashExecutor for ClaimedSandbox {
     }
 }
 
-/// Returns a context for a call the approval handler allowed with
-/// `effects`.
-fn approved(call_id: &str, effects: ToolEffects) -> ToolContext {
+/// Returns a context for a call the approval handler explicitly allowed to
+/// run outside the sandbox.
+fn approved_unsandboxed(call_id: &str) -> ToolContext {
     let mut context = ToolContext::new(call_id);
-    context.approved = Some(effects);
+    context.unsandboxed = true;
 
     context
 }
 
 #[tokio::test]
-async fn excluded_commands_leave_the_sandbox_only_once_approved() {
+async fn excluded_commands_run_their_exact_words_without_a_shell_once_approved() {
     // Arrange
     let root = tempfile::tempdir().expect("workspace");
-    // A program the model planted in the workspace must never run instead.
-    std::fs::write(root.path().join("printf"), "#!/bin/sh\ntouch planted-ran\n")
-        .expect("planted program");
-    std::fs::set_permissions(
-        root.path().join("printf"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .expect("mode");
+    // A file name a shell glob would turn into an option.
+    std::fs::write(root.path().join("--upload-pack=touch PWNED"), "").expect("option file");
     let configuration = BashConfig::for_executor(
         Arc::new(ClaimedSandbox),
         "/bin/bash".into(),
@@ -305,8 +302,12 @@ async fn excluded_commands_leave_the_sandbox_only_once_approved() {
     .with_host_information()
     .with_full_disk_read()
     .expect("full-disk read")
-    .with_excluded_command("/usr/bin/printf".into())
+    .with_excluded_command("/bin/echo".into())
     .expect("excluded command");
+    let echo = std::fs::canonicalize("/bin/echo")
+        .expect("echo")
+        .to_string_lossy()
+        .into_owned();
     let handler = BashHandler {
         definition: ToolDefinition::bash_for(&configuration),
         tool: BashTool::new(
@@ -317,59 +318,60 @@ async fn excluded_commands_leave_the_sandbox_only_once_approved() {
         )
         .expect("bash tool"),
     };
-    // `printf` fails on a non-numeric argument, naming it on stderr.
-    let command = json!({"command": "printf '%d' 'Permission denied'"});
+    let plain = json!({"command": "echo $ fetch"});
+    let words = json!({"command": "echo fetch origin"});
+    let globbed = json!({"command": "echo fetch *"});
 
     // Act
     let unapproved = handler
-        .call(command.clone(), ToolContext::new("bash_1"))
+        .call(words.clone(), ToolContext::new("bash_1"))
         .await
         .expect("unapproved command");
-    let approved_unsandboxed = handler
-        .call(
-            command.clone(),
-            approved("bash_2", ToolEffects::ExecutesUnsandboxed),
-        )
+    let approved = handler
+        .call(words.clone(), approved_unsandboxed("bash_2"))
         .await
         .expect("approved command");
-    let approved_sandboxed = handler
-        .call(command.clone(), approved("bash_3", ToolEffects::Executes))
+    let globbed_output = handler
+        .call(globbed.clone(), approved_unsandboxed("bash_3"))
         .await
-        .expect("approved as sandboxed");
+        .expect("globbed command");
 
     // Assert
     assert_eq!(
-        handler.call_effects(&command),
-        ToolEffects::ExecutesUnsandboxed
+        handler.unsandboxed_command(&words),
+        Some(vec![echo.clone(), "fetch".into(), "origin".into()])
     );
     assert_eq!(
-        handler.call_effects(&json!({"command": "printf x; true"})),
-        ToolEffects::Executes
+        handler.call_effects(&words),
+        ToolEffects::ExecutesUnsandboxed
     );
-    assert_eq!(handler.call_effects(&json!({})), ToolEffects::Executes);
+    // A glob, an expansion, an operator, or arguments that do not decode
+    // keep the command sandboxed even when approved.
+    for command in [
+        &plain,
+        &globbed,
+        &json!({"command": "echo x; true"}),
+        &json!({}),
+    ] {
+        assert_eq!(handler.call_effects(command), ToolEffects::Executes);
+        assert_eq!(handler.unsandboxed_command(command), None);
+    }
     assert!(
         handler
             .definition()
             .description()
-            .contains("Programs excluded from the sandbox: `printf`."),
+            .contains("Programs excluded from the sandbox: `echo`."),
         "{:?}",
         handler.definition()
     );
-    // Unapproved, the command runs sandboxed, where its denial-like error
-    // is flagged; approved, it runs unsandboxed and never is.
-    assert!(matches!(
-        unapproved.into_parts().1,
-        Some(ToolActivity::BashLikelySandboxDenial { .. })
-    ));
-    // GNU and BSD `printf` quote the argument differently.
-    let (content, activity) = approved_unsandboxed.into_parts();
-    assert!(content.contains("Permission"), "{content}");
-    assert!(matches!(activity, Some(ToolActivity::Bash { .. })));
-    assert!(matches!(
-        approved_sandboxed.into_parts().1,
-        Some(ToolActivity::BashLikelySandboxDenial { .. })
-    ));
-    assert!(!root.path().join("planted-ran").exists());
+    for output in [unapproved, approved] {
+        let result: Value = serde_json::from_str(output.content()).expect("JSON result");
+        assert_eq!(result["stdout"], "fetch origin\n");
+    }
+    // The glob ran through the sandboxed shell, never as approved words.
+    let result: Value = serde_json::from_str(globbed_output.content()).expect("JSON result");
+    assert_eq!(result["stdout"], "fetch --upload-pack=touch PWNED\n");
+    assert!(!root.path().join("PWNED").exists());
 }
 
 /// Writes an executable script named `name` in `directory` that prints
@@ -427,10 +429,7 @@ async fn excluded_commands_run_the_configured_executable_never_a_planted_one() {
 
     // Act
     let output = handler
-        .call(
-            json!({"command": "tool"}),
-            approved("bash_1", ToolEffects::ExecutesUnsandboxed),
-        )
+        .call(json!({"command": "tool"}), approved_unsandboxed("bash_1"))
         .await
         .expect("excluded command");
 

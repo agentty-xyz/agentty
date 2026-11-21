@@ -45,6 +45,14 @@ const TEMPORARY_DIRECTORY_VARIABLE: &str = "TMPDIR";
 /// excluded commands.
 const MAX_PATH_GRANTS: usize = 64;
 
+/// Shell syntax that keeps a command from leaving the sandbox: operators,
+/// quotes, escapes, expansions, globs, history, and comments, whose meaning
+/// the harness would have to reproduce to show the exact arguments.
+const EXCLUDED_SYNTAX: [char; 21] = [
+    ';', '&', '|', '<', '>', '(', ')', '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}',
+    '~', '!', '#',
+];
+
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read
 /// grants: [`Self::with_system_reads`] grants the platform's system
@@ -260,16 +268,25 @@ impl BashConfig {
     /// a private `/proc` and a minimal `/dev`. Writes still need grants.
     ///
     /// Besides the paths [`Self::with_hidden_path`] names, it always hides
-    /// these credential stores of the user running the harness, whose home
-    /// comes from the account database rather than `HOME`:
-    /// `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.gnupg`,
-    /// `~/.config/gh/hosts.yml`, `~/.netrc`, `~/.docker/config.json`,
-    /// `~/.config/gcloud`, `~/.kube/config`, and `/run/secrets`; and, when
-    /// [`Self::with_temporary_directory`] names a directory inside a
-    /// dedicated parent (not a system temporary directory), every other
-    /// directory in that parent, such as other sessions' temporary
-    /// directories. Tools that need a credential get it another way, such
-    /// as a token passed with [`Self::with_environment`].
+    /// `/run/secrets` and these credential stores and browser profiles in
+    /// the home directory the account database records, and in `HOME` of
+    /// the harness and of the commands where it differs: the keychains,
+    /// cookies, and Firefox, Chrome, and Chromium profiles; `~/.ssh`,
+    /// `~/.aws`, `~/.azure`, `~/.gnupg`, `~/.config/gh`, `~/.config/hub`,
+    /// `~/.config/gcloud`, Git's stored credentials, `~/.netrc`,
+    /// `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`, Cargo's credentials,
+    /// `~/.docker/config.json`, `~/.kube/config`, Terraform's and Vault's
+    /// tokens, and the Codex and Claude Code credentials. Preparation
+    /// refuses full-disk reads when the account has no home directory.
+    ///
+    /// It also hides every other entry in the parent of the
+    /// [`Self::with_temporary_directory`] directory, such as other
+    /// sessions' temporary directories, so preparation refuses a temporary
+    /// directory whose parent contains the workspace or a home directory:
+    /// give each session its own directory inside a dedicated parent. Read
+    /// grants inside a hidden directory are hidden too. Tools that need a
+    /// credential get it another way, such as a token passed with
+    /// [`Self::with_environment`].
     ///
     /// # Errors
     /// Rejects a host executor that enforces isolation but does not declare
@@ -319,20 +336,20 @@ impl BashConfig {
     /// write allowlist of Claude Code.
     ///
     /// A command can plant code in a writable directory that host tools run
-    /// later, outside the sandbox, so preparation accepts only cache
-    /// locations. Inside the home directory, which comes from the account
-    /// database rather than `HOME`, a root must lie within `~/.cargo/registry`,
-    /// `~/.cargo/git`, `~/.npm/_cacache`, `~/go/pkg/mod`, `~/.gradle/caches`,
-    /// `~/.m2/repository`, or a directory inside `~/.cache` or
-    /// `~/Library/Caches`, except the hook and browser caches that host
-    /// tools execute (`~/.cache/prek`, `~/.cache/pre-commit`, and the
-    /// Playwright browsers). Outside it, a root must not overlap system or
-    /// toolchain directories such as `/usr`, `/opt`, `/etc`, or `/Library`.
-    /// A root must also be a directory that does not overlap the workspace
-    /// (grant those with [`Self::with_write`]) or its Git metadata. Even
-    /// cache contents can feed later host builds, for example extracted
-    /// crate sources under `~/.cargo/registry/src`, so grant only what
-    /// sessions need.
+    /// later, outside the sandbox, so inside a home directory (the account
+    /// database's, or `HOME` of the harness or the commands) preparation
+    /// accepts only data-only caches whose entries tools verify before use:
+    /// `~/.cargo/registry/cache`, `~/.cargo/git/db`, `~/.npm/_cacache`, and
+    /// `~/go/pkg/mod/cache/download`. Everything else is refused, including
+    /// extracted sources (`~/.cargo/registry/src`, `~/go/pkg/mod`), indexes,
+    /// build caches, and tool or browser installs; point such tools at the
+    /// temporary directory through their environment instead. Outside the
+    /// home directories, a root must not contain one or overlap system or
+    /// toolchain directories such as `/usr`, `/opt`, `/etc`, `/Library`, or
+    /// `/home/linuxbrew`. Preparation refuses every writable root when the
+    /// account has no home directory. A root must also be a directory that
+    /// does not overlap the workspace (grant those with
+    /// [`Self::with_write`]) or its Git metadata.
     ///
     /// macOS keeps every `.git` entry inside a root read-only; Linux
     /// protects only the workspace repository's own Git metadata, so a
@@ -392,19 +409,27 @@ impl BashConfig {
     /// Lets simple commands of the program at the absolute path
     /// `executable` run outside the sandbox, with the harness process's own
     /// access, once the host's [`crate::approval::ApprovalHandler`]
-    /// approves each one, like Claude Code's `excludedCommands`, which
-    /// still ask for permission. Without an approval handler, or for calls
-    /// it did not approve as [`crate::ToolEffects::ExecutesUnsandboxed`],
-    /// the commands run inside the sandbox.
+    /// explicitly approves each one with
+    /// [`crate::approval::Decision::AllowUnsandboxed`], like Claude Code's
+    /// `excludedCommands`, which still ask for permission. Such calls are
+    /// marked [`crate::ToolEffects::ExecutesUnsandboxed`] and carry the
+    /// exact argument vector in [`crate::approval::ApprovalRequest::command`].
+    /// Without an approval handler, or with a plain
+    /// [`crate::approval::Decision::Allow`], the commands run inside the
+    /// sandbox.
     ///
     /// Excluding a program trusts it fully: it runs code its arguments and
-    /// the workspace name, such as `git -c alias.x='!sh'`, `gh extension
-    /// install`, or `docker run -v /:/host`, so an approval must show the
-    /// exact command. A command qualifies when its first word is the
-    /// executable's file name and it contains no `;`, `&`, `|`, `<`, `>`,
-    /// `(`, `)`, `$`, backquote, backslash, or line break. The harness then
-    /// runs the executable resolved now, never one found through `PATH`,
-    /// and passes `PATH` without relative entries and without directories
+    /// the workspace name, such as `git -c core.fsmonitor=./x status`, `gh
+    /// extension install`, or `docker run -v /:/host`, so an approval must
+    /// show the exact argument vector. A command qualifies when its first
+    /// word is the executable's file name and it consists only of words
+    /// separated by spaces and tabs, without quotes, escapes, expansions,
+    /// globs, or operators: none of `;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`,
+    /// backquote, backslash, `'`, `"`, `*`, `?`, `[`, `]`, `{`, `}`, `~`,
+    /// `!`, `#`, or a control character. The harness executes the
+    /// executable resolved now directly with those words as arguments, with
+    /// no shell, so workspace file names cannot become arguments, and passes
+    /// `PATH` with only existing absolute directories outside the places
     /// commands can write; it refuses the turn when the executable lies
     /// inside the workspace, the temporary directory, or a writable root.
     /// The excluded command's record names the unsandboxed executor. It
@@ -632,20 +657,24 @@ impl BashConfig {
     }
 
     /// Returns the resolved executable of the program
-    /// [`Self::with_excluded_command`] excludes when `command` is a simple
-    /// command invoking it.
-    pub(crate) fn excluded_program(&self, command: &str) -> Option<&Path> {
-        if command.contains([
-            ';', '&', '|', '<', '>', '(', ')', '$', '`', '\\', '\n', '\r',
-        ]) {
+    /// [`Self::with_excluded_command`] excludes and the arguments to run it
+    /// with, without a shell, when `command` is a simple command invoking
+    /// it: plain words, which need no expansion.
+    pub(crate) fn excluded_program(&self, command: &str) -> Option<(&Path, Vec<String>)> {
+        if command.chars().any(|character| {
+            character.is_control() && character != '\t' || EXCLUDED_SYNTAX.contains(&character)
+        }) {
             return None;
         }
-
-        command
-            .split_ascii_whitespace()
+        let mut words = command
+            .split([' ', '\t'])
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned);
+        let executable = words
             .next()
-            .and_then(|program| self.snapshot.excluded_commands.get(program))
-            .map(PathBuf::as_path)
+            .and_then(|program| self.snapshot.excluded_commands.get(&program))?;
+
+        Some((executable.as_path(), words.collect()))
     }
 
     /// Fails for a host executor that enforces isolation but would ignore

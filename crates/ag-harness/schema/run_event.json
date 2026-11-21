@@ -598,6 +598,16 @@
           "description": "Provider identifier of the call.",
           "type": "string"
         },
+        "command": {
+          "description": "For a call marked [`ToolEffects::ExecutesUnsandboxed`], the exact\nargument vector, executable first, it runs with outside the sandbox\nif [`Decision::AllowUnsandboxed`] approves it, with no shell between;\n`None` for every other call.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "effects": {
           "description": "What the call may change, as its tool declares it for these\narguments; allowing [`ToolEffects::ExecutesUnsandboxed`] lets the\ncommand run outside the sandbox with the host's full access.",
           "$ref": "#/$defs/ToolEffects"
@@ -655,7 +665,7 @@
           "const": "executes"
         },
         {
-          "description": "Runs a command outside the sandbox with the harness process's full\naccess, like a `bash` call of a program\n`BashConfig::with_excluded_command` excludes. It runs unsandboxed\nonly once the approval handler allows it; show the user the exact\ncommand, since the program can run any code its arguments name.",
+          "description": "Runs a command outside the sandbox with the harness process's full\naccess, like a `bash` call of a program\n`BashConfig::with_excluded_command` excludes. It runs unsandboxed\nonly when the approval handler decides\n[`crate::approval::Decision::AllowUnsandboxed`]; a plain allow runs\nit inside the sandbox. Show the user the exact argument vector, since\nthe program can run any code its arguments name.",
           "type": "string",
           "const": "executes_unsandboxed"
         }

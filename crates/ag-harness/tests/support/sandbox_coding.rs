@@ -247,21 +247,55 @@ async fn native_hidden_paths_inside_writable_directories_are_refused() {
     assert!(workspace.path().join("output/secret").exists());
 }
 
-/// Approves every call and records the effects it was asked about.
-#[derive(Default)]
-struct Approver(Mutex<Vec<ToolEffects>>);
+/// Approves every call, with `decision` for calls marked to leave the
+/// sandbox, and records the effects and command it was asked about.
+struct Approver {
+    decision: Decision,
+    requests: Mutex<Vec<(ToolEffects, Option<Vec<String>>)>>,
+}
+
+impl Approver {
+    fn new(decision: Decision) -> Arc<Self> {
+        Arc::new(Self {
+            decision,
+            requests: Mutex::default(),
+        })
+    }
+}
 
 #[async_trait]
 impl ApprovalHandler for Approver {
     async fn decide(&self, request: &ApprovalRequest) -> Decision {
-        self.0.lock().expect("approvals").push(request.effects);
+        self.requests
+            .lock()
+            .expect("approvals")
+            .push((request.effects, request.command.clone()));
 
-        Decision::Allow
+        if request.effects == ToolEffects::ExecutesUnsandboxed {
+            self.decision.clone()
+        } else {
+            Decision::Allow
+        }
     }
 }
 
+/// Returns a harness for `workspace` whose approval handler is `approver`.
+fn approving_harness(workspace: &Workspace, approver: Arc<Approver>) -> Harness {
+    Harness::builder()
+        .model(Arc::new(ShellModel))
+        .context_budget(unbounded_context_budget())
+        .repository(Repository::new(workspace.path(), "/usr/bin/git").expect("repository"))
+        .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
+        .sandbox(Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse,
+        })
+        .approval(approver)
+        .build()
+        .expect("harness")
+}
+
 #[tokio::test]
-async fn native_excluded_commands_run_outside_the_sandbox_once_approved() {
+async fn native_excluded_commands_leave_the_sandbox_only_when_explicitly_approved() {
     // Arrange
     let workspace = Workspace::new();
     let outside = Outside::new();
@@ -270,22 +304,25 @@ async fn native_excluded_commands_run_outside_the_sandbox_once_approved() {
             .with_excluded_command("/usr/bin/touch".into())
             .expect("excluded command")
     });
-    let decisions = Arc::new(Approver::default());
-    let with_approval = Harness::builder()
-        .model(Arc::new(ShellModel))
-        .context_budget(unbounded_context_budget())
-        .repository(Repository::new(workspace.path(), "/usr/bin/git").expect("repository"))
-        .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
-        .sandbox(Sandbox::Native {
-            if_unavailable: IfUnavailable::Refuse,
-        })
-        .approval(decisions.clone())
-        .build()
-        .expect("harness");
-    let touch = |name: &str| format!("touch {}", quoted(&outside.path(name)));
+    let explicit = Approver::new(Decision::AllowUnsandboxed);
+    let plain = Approver::new(Decision::Allow);
+    // Excluded commands are plain words: no quotes, which the temporary
+    // paths do not need.
+    let touch = |name: &str| format!("touch {}", outside.path(name).display());
 
     // Act
-    let approved = run(&with_approval, &touch("elsewhere/approved"), &options).await;
+    let approved = run(
+        &approving_harness(&workspace, explicit.clone()),
+        &touch("elsewhere/approved"),
+        &options,
+    )
+    .await;
+    let allowed = run(
+        &approving_harness(&workspace, plain.clone()),
+        &touch("elsewhere/allowed"),
+        &options,
+    )
+    .await;
     let unapproved = run(
         &workspace.harness(),
         &touch("elsewhere/unapproved"),
@@ -293,7 +330,7 @@ async fn native_excluded_commands_run_outside_the_sandbox_once_approved() {
     )
     .await;
     let compound = run(
-        &with_approval,
+        &approving_harness(&workspace, explicit.clone()),
         &format!("{}; true", touch("elsewhere/compound")),
         &options,
     )
@@ -303,16 +340,77 @@ async fn native_excluded_commands_run_outside_the_sandbox_once_approved() {
     assert_eq!(approved["exit_code"], 0, "{approved}");
     assert!(approved.get("sandbox").is_none(), "{approved}");
     assert!(outside.path("elsewhere/approved").exists());
-    // Without an approval handler, or for a command that is not simple,
-    // the command runs inside the sandbox.
-    assert_ne!(unapproved["exit_code"], 0, "{unapproved}");
-    assert!(unapproved["sandbox"].is_string(), "{unapproved}");
-    assert!(!outside.path("elsewhere/unapproved").exists());
+    // A plain allow, no approval handler, or a command that is not plain
+    // words keeps the command inside the sandbox.
+    for (result, name) in [
+        (&allowed, "elsewhere/allowed"),
+        (&unapproved, "elsewhere/unapproved"),
+    ] {
+        assert_ne!(result["exit_code"], 0, "{result}");
+        assert!(result["sandbox"].is_string(), "{result}");
+        assert!(!outside.path(name).exists());
+    }
     assert!(!outside.path("elsewhere/compound").exists(), "{compound}");
+    let touch_path = std::fs::canonicalize("/usr/bin/touch")
+        .expect("touch")
+        .to_string_lossy()
+        .into_owned();
+    let command = |name: &str| {
+        Some(vec![
+            touch_path.clone(),
+            outside.path(name).display().to_string(),
+        ])
+    };
     assert_eq!(
-        *decisions.0.lock().expect("approvals"),
-        [ToolEffects::ExecutesUnsandboxed, ToolEffects::Executes]
+        *explicit.requests.lock().expect("approvals"),
+        [
+            (
+                ToolEffects::ExecutesUnsandboxed,
+                command("elsewhere/approved")
+            ),
+            (ToolEffects::Executes, None),
+        ]
     );
+    assert_eq!(
+        *plain.requests.lock().expect("approvals"),
+        [(
+            ToolEffects::ExecutesUnsandboxed,
+            command("elsewhere/allowed")
+        )]
+    );
+}
+
+#[tokio::test]
+async fn native_full_disk_read_hides_other_sessions_beside_the_temporary_directory() {
+    // Arrange
+    let workspace = Workspace::new();
+    let outside = Outside::new();
+    std::fs::create_dir_all(outside.path("sessions/own")).expect("own session");
+    std::fs::create_dir_all(outside.path("sessions/other")).expect("other session");
+    std::fs::write(outside.path("sessions/other/secret"), "secret-value").expect("secret");
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_temporary_directory(outside.path("sessions/own"))
+            .expect("temporary directory")
+    });
+
+    // Act
+    let result = run(
+        &workspace.harness(),
+        &format!(
+            "printf mine > \"$TMPDIR/file\" && cat \"$TMPDIR/file\"; echo; cat {}; echo \
+             \"other=$?\"",
+            quoted(&outside.path("sessions/other/secret"))
+        ),
+        &options,
+    )
+    .await;
+
+    // Assert
+    let stdout = result["stdout"].as_str().expect("stdout");
+    assert!(stdout.starts_with("mine\n"), "{result}");
+    assert!(stdout.contains("other=1"), "{result}");
+    assert!(!stdout.contains("secret-value"), "{result}");
 }
 
 /// Starts a listener at `path` that greets its one connection.

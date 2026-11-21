@@ -413,11 +413,11 @@ async fn resolve_outside_grants(
     access: &mut Access,
 ) -> Result<(), ExecutionError> {
     let workspace = policy.workspace();
-    let home = files.home().await;
+    let homes = homes(files, policy).await?;
     for root in policy.writable_roots() {
         let (canonical, node) = directory_identity(files, root).await?;
         // Overlapping the workspace also rules out `/`.
-        if !cache_root(&canonical, home.as_deref())
+        if !cache_root(&canonical, &homes)
             || overlaps(&canonical, workspace)
             || access
                 .git_metadata
@@ -431,7 +431,7 @@ async fn resolve_outside_grants(
     }
     let mut hidden = policy.hidden_paths().to_vec();
     if policy.allows_full_disk_read() {
-        hidden.extend(builtin_hidden_paths(files, policy, home.as_deref()).await);
+        hidden.extend(builtin_hidden_paths(files, policy, &homes).await?);
     }
     // A hidden path inside a writable directory could be read after
     // renaming one of its parents.
@@ -461,57 +461,117 @@ async fn resolve_outside_grants(
     Ok(())
 }
 
-/// Credential stores inside the home directory that full-disk reads always
-/// hide.
-const BUILTIN_HIDDEN_HOME_PATHS: [&str; 9] = [
-    "Library/Keychains",
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    ".config/gh/hosts.yml",
-    ".netrc",
-    ".docker/config.json",
-    ".config/gcloud",
-    ".kube/config",
-];
-
-/// System temporary directories whose other entries full-disk reads keep
-/// visible, since unrelated programs share them.
-const SYSTEM_TEMPORARY_DIRECTORIES: [&str; 5] =
-    ["/", "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"];
-
-/// Returns the paths full-disk reads always hide: the credential stores in
-/// `home`, `/run/secrets`, and the parent of the temporary directory when
-/// it is a dedicated directory, whose other entries belong to other
-/// sessions.
-async fn builtin_hidden_paths(
+/// Returns the home directories commands could find credentials in: the
+/// account database's, which the host's environment cannot change, then
+/// `HOME` of this process and of the commands when they differ.
+///
+/// # Errors
+/// Returns [`ExecutionError::Unsupported`] when the account has no home
+/// directory and the policy grants full-disk reads or writable roots, whose
+/// protections depend on it.
+async fn homes(
     files: &dyn Inspection,
     policy: &ExecutionPolicy,
-    home: Option<&Path>,
-) -> Vec<PathBuf> {
-    let mut paths = home.map_or_else(Vec::new, |home| {
-        BUILTIN_HIDDEN_HOME_PATHS
-            .iter()
-            .map(|path| home.join(path))
-            .collect()
-    });
-    paths.push(PathBuf::from("/run/secrets"));
-    let system_temporary = files.canonicalize(&std::env::temp_dir()).await.ok();
-    if let Some(temporary) = policy.temporary_directory() {
-        let temporary = resolve_hidden(files, temporary).await;
-        if let Some(parent) = temporary.parent().filter(|parent| {
-            !SYSTEM_TEMPORARY_DIRECTORIES
-                .iter()
-                .any(|system| *parent == Path::new(system))
-                && system_temporary.as_deref() != Some(*parent)
-                && !policy.workspace().starts_with(parent)
-                && !home.is_some_and(|home| home.starts_with(parent))
-        }) {
-            paths.push(parent.to_path_buf());
+) -> Result<Vec<PathBuf>, ExecutionError> {
+    let account = files.home().await;
+    if account.is_none() && (policy.allows_full_disk_read() || !policy.writable_roots().is_empty())
+    {
+        return Err(ExecutionError::Unsupported);
+    }
+    let mut homes = account.into_iter().collect::<Vec<_>>();
+    let command_home = policy
+        .environment()
+        .get(std::ffi::OsStr::new("HOME"))
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute());
+    let temporary = match policy.temporary_directory() {
+        Some(temporary) => Some(resolve_hidden(files, temporary).await),
+        None => None,
+    };
+    for home in files.host_home().await.into_iter().chain(command_home) {
+        let home = resolve_hidden(files, &home).await;
+        // A home inside the workspace or the temporary directory belongs
+        // to the session, not to the user.
+        let session_owned = home.starts_with(policy.workspace())
+            || temporary
+                .as_ref()
+                .is_some_and(|temporary| home.starts_with(temporary));
+        if !session_owned && !homes.contains(&home) {
+            homes.push(home);
         }
     }
 
-    paths
+    Ok(homes)
+}
+
+/// Credential stores inside a home directory that full-disk reads always
+/// hide, browser profiles included.
+const BUILTIN_HIDDEN_HOME_PATHS: [&str; 30] = [
+    "Library/Keychains",
+    "Library/Cookies",
+    "Library/Application Support/Firefox",
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/Chromium",
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".gnupg",
+    ".config/gh",
+    ".config/hub",
+    ".config/gcloud",
+    ".config/git/credentials",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".mozilla/firefox",
+    ".git-credentials",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".gem/credentials",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".docker/config.json",
+    ".kube/config",
+    ".terraform.d/credentials.tfrc.json",
+    ".vault-token",
+    ".codex/auth.json",
+    ".claude/.credentials.json",
+    ".claude.json",
+];
+
+/// Returns the paths full-disk reads always hide: the credential stores in
+/// each of `homes`, `/run/secrets`, and the parent of the temporary
+/// directory, whose other entries belong to other sessions; the session's
+/// own directory stays accessible inside it.
+///
+/// # Errors
+/// Returns [`ExecutionError::Unsupported`] when the temporary directory's
+/// parent contains the workspace or a home directory, so the other entries
+/// could not be hidden.
+async fn builtin_hidden_paths(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+    homes: &[PathBuf],
+) -> Result<Vec<PathBuf>, ExecutionError> {
+    let mut paths = homes
+        .iter()
+        .flat_map(|home| BUILTIN_HIDDEN_HOME_PATHS.iter().map(|path| home.join(path)))
+        .collect::<Vec<_>>();
+    paths.push(PathBuf::from("/run/secrets"));
+    if let Some(temporary) = policy.temporary_directory() {
+        let temporary = resolve_hidden(files, temporary).await;
+        // A temporary directory has a parent: it cannot be `/`, which
+        // contains the workspace.
+        let parent = temporary.parent().unwrap_or(&temporary);
+        if policy.workspace().starts_with(parent)
+            || homes.iter().any(|home| home.starts_with(parent))
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        paths.push(parent.to_path_buf());
+    }
+
+    Ok(paths)
 }
 
 /// Returns `path` with links resolved, or, when it is missing, its nearest
@@ -535,32 +595,19 @@ async fn resolve_hidden(files: &dyn Inspection, path: &Path) -> PathBuf {
     resolved
 }
 
-/// Cache directories inside the home directory where writable roots may
-/// lie.
-const HOME_CACHES: [&str; 6] = [
-    ".cargo/registry",
-    ".cargo/git",
+/// Caches inside a home directory where writable roots may lie: data-only
+/// stores whose contents tools verify before use, against a lock file or a
+/// checksum database, so a planted entry is rejected rather than run.
+const HOME_CACHES: [&str; 4] = [
+    ".cargo/registry/cache",
+    ".cargo/git/db",
     ".npm/_cacache",
-    "go/pkg/mod",
-    ".gradle/caches",
-    ".m2/repository",
-];
-
-/// Home directories holding per-tool caches; writable roots may lie inside
-/// them, but not be them.
-const HOME_CACHE_PARENTS: [&str; 2] = [".cache", "Library/Caches"];
-
-/// Caches whose contents host tools execute: Git hook environments and
-/// browsers.
-const HOME_EXECUTED_CACHES: [&str; 4] = [
-    ".cache/prek",
-    ".cache/pre-commit",
-    ".cache/ms-playwright",
-    "Library/Caches/ms-playwright",
+    "go/pkg/mod/cache/download",
 ];
 
 /// System and toolchain directories a writable root must not overlap.
-const SYSTEM_DIRECTORIES: [&str; 16] = [
+const SYSTEM_DIRECTORIES: [&str; 17] = [
+    "/home/linuxbrew",
     "/bin",
     "/sbin",
     "/usr",
@@ -580,22 +627,14 @@ const SYSTEM_DIRECTORIES: [&str; 16] = [
 ];
 
 /// Returns whether the resolved writable root `root` is a cache location
-/// whose contents host tools do not execute: inside `home`, one of the
-/// known caches; outside it, a directory that neither contains `home` nor
-/// overlaps system or toolchain directories.
-fn cache_root(root: &Path, home: Option<&Path>) -> bool {
-    match home.and_then(|home| root.strip_prefix(home).ok()) {
-        Some(relative) => {
-            (HOME_CACHES.iter().any(|cache| relative.starts_with(cache))
-                || HOME_CACHE_PARENTS
-                    .iter()
-                    .any(|parent| relative.starts_with(parent) && relative != Path::new(parent)))
-                && !HOME_EXECUTED_CACHES
-                    .iter()
-                    .any(|executed| overlaps(relative, Path::new(executed)))
-        }
+/// whose contents tools verify before use: inside one of `homes`, within
+/// one of the known caches; outside them, a directory that neither contains
+/// a home nor overlaps system or toolchain directories.
+fn cache_root(root: &Path, homes: &[PathBuf]) -> bool {
+    match homes.iter().find_map(|home| root.strip_prefix(home).ok()) {
+        Some(relative) => HOME_CACHES.iter().any(|cache| relative.starts_with(cache)),
         None => {
-            !home.is_some_and(|home| home.starts_with(root))
+            !homes.iter().any(|home| home.starts_with(root))
                 && !SYSTEM_DIRECTORIES
                     .iter()
                     .any(|system| overlaps(root, Path::new(system)))
@@ -892,6 +931,8 @@ trait Inspection: Send + Sync {
     async fn try_exists(&self, path: &Path) -> io::Result<bool>;
     /// The resolved home directory of this process's user, if known.
     async fn home(&self) -> Option<PathBuf>;
+    /// This process's `HOME`, when it is absolute.
+    async fn host_home(&self) -> Option<PathBuf>;
 }
 
 struct LocalInspection;
@@ -906,6 +947,12 @@ impl Inspection for LocalInspection {
         let home = account_home()?;
 
         Some(tokio::fs::canonicalize(&home).await.unwrap_or(home))
+    }
+
+    async fn host_home(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
     }
 
     async fn metadata(&self, path: &Path) -> io::Result<Metadata> {

@@ -104,19 +104,41 @@ impl BashTool {
         call_id: &str,
         unsandboxed: bool,
     ) -> Result<CommandOutcome, TurnError> {
-        match self.excluded_launch(arguments, unsandboxed) {
-            Some((excluded, arguments)) => excluded.run(&arguments, call_id).await,
-            None => self.run(arguments, call_id).await,
+        if let Some((excluded, executable, words)) = self.excluded_launch(arguments, unsandboxed) {
+            let words = words.into_iter().map(OsString::from).collect();
+
+            return excluded
+                .run(executable.to_path_buf(), words, arguments, call_id)
+                .await;
         }
+        let words = vec![
+            "--noprofile".into(),
+            "--norc".into(),
+            "-c".into(),
+            arguments.command().into(),
+        ];
+
+        self.run(
+            self.configuration.snapshot.bash.clone(),
+            words,
+            arguments,
+            call_id,
+        )
+        .await
     }
 
-    /// Returns whether `arguments` would leave the sandbox once approved.
-    pub(crate) fn excludes(&self, arguments: &BashArguments) -> bool {
-        self.excluded.is_some()
-            && self
-                .configuration
-                .excluded_program(arguments.command())
-                .is_some()
+    /// Returns the exact argument vector `arguments` runs with outside the
+    /// sandbox once approved, the resolved executable first, or `None` when
+    /// they stay inside it.
+    pub(crate) fn excluded_command(&self, arguments: &BashArguments) -> Option<Vec<String>> {
+        self.excluded.as_ref()?;
+        let (executable, words) = self.configuration.excluded_program(arguments.command())?;
+
+        Some(
+            std::iter::once(executable.to_string_lossy().into_owned())
+                .chain(words)
+                .collect(),
+        )
     }
 
     /// Returns whether `arguments` runs under an executor that enforces
@@ -126,22 +148,17 @@ impl BashTool {
             && self.excluded_launch(arguments, unsandboxed).is_none()
     }
 
-    /// Returns the unsandboxed tool and the command naming the resolved
-    /// executable that run `arguments` when they leave the sandbox.
+    /// Returns the unsandboxed tool, the resolved executable, and the words
+    /// it runs with when `arguments` leave the sandbox.
     fn excluded_launch(
         &self,
         arguments: &BashArguments,
         unsandboxed: bool,
-    ) -> Option<(&Self, BashArguments)> {
+    ) -> Option<(&Self, &Path, Vec<String>)> {
         let excluded = self.excluded.as_deref().filter(|_| unsandboxed)?;
-        let executable = self.configuration.excluded_program(arguments.command())?;
-        let command = arguments.command().trim_start();
-        let rest = command.trim_start_matches(|character: char| !character.is_ascii_whitespace());
-        let quoted = executable.to_string_lossy().replace('\'', r"'\''");
+        let (executable, words) = self.configuration.excluded_program(arguments.command())?;
 
-        BashArguments::new(format!("'{quoted}'{rest}"))
-            .ok()
-            .map(|arguments| (excluded, arguments))
+        Some((excluded, executable, words))
     }
 
     /// Returns the configuration excluded commands run with: no isolation,
@@ -178,10 +195,13 @@ impl BashTool {
             .environment
             .get("PATH")
             .map_or(DEFAULT_EXCLUDED_PATH, String::as_str);
+        // A directory that does not exist yet could be created later inside
+        // a writable place, so only existing ones are kept.
         let path = std::env::join_paths(std::env::split_paths(host_path).filter(|directory| {
             directory.is_absolute()
                 && !inside_writable(directory)
-                && !inside_writable(&std::fs::canonicalize(directory).unwrap_or_default())
+                && std::fs::canonicalize(directory)
+                    .is_ok_and(|resolved| resolved.is_dir() && !inside_writable(&resolved))
         }))
         .unwrap_or_default();
         let mut excluded = configuration.unsandboxed();
@@ -193,8 +213,11 @@ impl BashTool {
         Ok(excluded)
     }
 
+    /// Runs `executable` with `words`, recording `arguments`' command.
     async fn run(
         &self,
+        executable: PathBuf,
+        words: Vec<OsString>,
         arguments: &BashArguments,
         call_id: &str,
     ) -> Result<CommandOutcome, TurnError> {
@@ -229,17 +252,8 @@ impl BashTool {
         };
         let policy = ExecutionPolicy::new(self.root.clone(), vec![self.root.join(".git")], grants)
             .map_err(|_| BashError::InvalidPolicy)?;
-        let command = ExecutionCommand::new(
-            configuration.bash.clone(),
-            vec![
-                "--noprofile".into(),
-                "--norc".into(),
-                "-c".into(),
-                arguments.command().into(),
-            ],
-            ".".into(),
-        )
-        .map_err(|_| BashError::InvalidArguments)?;
+        let command = ExecutionCommand::new(executable, words, ".".into())
+            .map_err(|_| BashError::InvalidArguments)?;
         let limits = Limits::new(
             Instant::now(),
             configuration.timeout,

@@ -312,6 +312,27 @@ async fn a_call_that_changes_state_waits_for_approval_and_a_read_only_call_never
 }
 
 #[tokio::test]
+async fn allowing_an_ordinary_call_unsandboxed_runs_it_as_allowed() {
+    // Arrange
+    let deploy = Echo::new("deploy", ToolEffects::Executes);
+    let approver = Approver::deciding(Decision::AllowUnsandboxed);
+    let (model, _requests) = scripted(vec![
+        ModelResponse::ToolCalls(vec![call("deploy_0", "deploy", r#"{"target":"prod"}"#)]),
+        output(),
+    ]);
+    let harness = harness(model, tool_set(vec![deploy.clone()]), approver.clone());
+
+    // Act
+    let outcome = harness.run(request()).into_parts().1.outcome().await;
+
+    // Assert
+    outcome.result.as_ref().expect("run output");
+    assert_eq!(deploy.arguments(), [json!({"target": "prod"})]);
+    // Only calls marked to leave the sandbox show a command.
+    assert_eq!(approver.requests()[0].command, None);
+}
+
+#[tokio::test]
 async fn a_denied_call_returns_the_feedback_to_the_model_and_the_run_continues() {
     // Arrange
     let deploy = Echo::new("deploy", ToolEffects::Writes);

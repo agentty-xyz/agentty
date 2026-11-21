@@ -102,13 +102,22 @@ impl ToolHandler for BashHandler {
         ToolEffects::Executes
     }
 
-    /// Marks a command that runs outside the sandbox once approved.
+    /// Marks a command that runs outside the sandbox once explicitly
+    /// approved.
     fn call_effects(&self, arguments: &Value) -> ToolEffects {
-        match BashArguments::deserialize(arguments) {
-            // Arguments that do not decode are rejected without running.
-            Ok(arguments) if self.tool.excludes(&arguments) => ToolEffects::ExecutesUnsandboxed,
-            _ => ToolEffects::Executes,
+        if self.unsandboxed_command(arguments).is_some() {
+            ToolEffects::ExecutesUnsandboxed
+        } else {
+            ToolEffects::Executes
         }
+    }
+
+    /// Returns the exact argument vector an excluded command runs with.
+    /// Arguments that do not decode are rejected without running.
+    fn unsandboxed_command(&self, arguments: &Value) -> Option<Vec<String>> {
+        BashArguments::deserialize(arguments)
+            .ok()
+            .and_then(|arguments| self.tool.excluded_command(&arguments))
     }
 
     async fn call(
@@ -117,7 +126,7 @@ impl ToolHandler for BashHandler {
         tool_context: ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let arguments: BashArguments = decode(arguments)?;
-        let unsandboxed = tool_context.approved == Some(ToolEffects::ExecutesUnsandboxed);
+        let unsandboxed = tool_context.unsandboxed;
         let started_at = Instant::now();
         let outcome = match self
             .tool

@@ -54,6 +54,17 @@ pub trait ToolHandler: Send + Sync {
         self.effects()
     }
 
+    /// Returns the exact argument vector, executable first, that a call
+    /// [`Self::call_effects`] marks [`ToolEffects::ExecutesUnsandboxed`]
+    /// runs outside the sandbox; the approval handler sees it as
+    /// [`crate::approval::ApprovalRequest::command`]. `None` unless the
+    /// handler runs such calls.
+    fn unsandboxed_command(&self, arguments: &Value) -> Option<Vec<String>> {
+        let _ = arguments;
+
+        None
+    }
+
     /// Runs one call with the model's JSON `arguments`, which the harness
     /// does not validate against the definition's parameters, or with the
     /// validated ones a [`crate::approval::Decision::AllowWith`] gave.
@@ -87,8 +98,10 @@ pub enum ToolEffects {
     /// Runs a command outside the sandbox with the harness process's full
     /// access, like a `bash` call of a program
     /// `BashConfig::with_excluded_command` excludes. It runs unsandboxed
-    /// only once the approval handler allows it; show the user the exact
-    /// command, since the program can run any code its arguments name.
+    /// only when the approval handler decides
+    /// [`crate::approval::Decision::AllowUnsandboxed`]; a plain allow runs
+    /// it inside the sandbox. Show the user the exact argument vector, since
+    /// the program can run any code its arguments name.
     ExecutesUnsandboxed,
 }
 
@@ -96,15 +109,15 @@ pub enum ToolEffects {
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ToolContext {
-    /// Effects the approval handler allowed the call with, when one
-    /// decided on it.
-    pub(crate) approved: Option<ToolEffects>,
     pub(crate) call_id: String,
     pub(crate) control: Option<TurnControl>,
     /// Bounds a built-in `read` result to its share of the context budget.
     pub(crate) fits: Option<SharedResultFits>,
     pub(crate) run: Option<RunId>,
     pub(crate) session: Option<SessionId>,
+    /// Whether the approval handler explicitly allowed the call to run
+    /// outside the sandbox.
+    pub(crate) unsandboxed: bool,
     pub(crate) workspace: Option<PathBuf>,
 }
 
@@ -113,12 +126,12 @@ impl ToolContext {
     /// one a host makes to test its handler.
     pub fn new(call_id: impl Into<String>) -> Self {
         Self {
-            approved: None,
             call_id: call_id.into(),
             control: None,
             fits: None,
             run: None,
             session: None,
+            unsandboxed: false,
             workspace: None,
         }
     }

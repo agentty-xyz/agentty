@@ -1333,12 +1333,12 @@ impl Engine<'_> {
     /// Describes `call` to its handler; `fits` bounds a built-in `read`.
     fn tool_context(&self, call: &ToolCall, fits: Option<SharedResultFits>) -> ToolContext {
         ToolContext {
-            approved: None,
             call_id: call.id().to_string(),
             control: self.control.cloned(),
             fits,
             run: self.control.and_then(TurnControl::run_id).cloned(),
             session: self.session.clone(),
+            unsandboxed: false,
             workspace: self
                 .repository
                 .map(|repository| repository.root().to_path_buf()),
@@ -1984,15 +1984,19 @@ impl ApprovalGate<'_> {
     /// decision on it.
     async fn approve(
         self,
-        (definition, _): &(ToolDefinition, Arc<dyn ToolHandler>),
+        (definition, handler): &(ToolDefinition, Arc<dyn ToolHandler>),
         call: &ToolCall,
         (arguments, effects): (Value, ToolEffects),
         tool_context: &ToolContext,
     ) -> Result<Approved, TurnError> {
+        // A handler shows a command exactly for the calls it marks to leave
+        // the sandbox.
+        let command = handler.unsandboxed_command(&arguments);
         let request = ApprovalRequest {
             effects,
             arguments,
             call_id: call.id().to_string(),
+            command,
             run: tool_context.run.clone(),
             session: tool_context.session.clone(),
             tool: call.name().to_string(),
@@ -2079,14 +2083,18 @@ async fn run_handler(
     let effects = handler.call_effects(&arguments);
     let (arguments, replaced, started_at) = match gate {
         Some(gate) if Approval::requires(effects) => {
-            // The handler sees which effects it approves; the call runs
-            // with those, even with replacement arguments.
-            tool_context.approved = Some(effects);
             match gate
                 .approve(tool, call, (arguments, effects), &tool_context)
                 .await?
             {
                 Approved::Run(arguments) => (arguments, None, Instant::now()),
+                // Only an explicit approval of a call marked to leave the
+                // sandbox lets it; every other approval keeps it inside.
+                Approved::RunUnsandboxed(arguments) => {
+                    tool_context.unsandboxed = effects == ToolEffects::ExecutesUnsandboxed;
+
+                    (arguments, None, Instant::now())
+                }
                 Approved::Replaced(arguments) => {
                     (arguments.clone(), Some(arguments), Instant::now())
                 }

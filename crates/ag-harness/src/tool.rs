@@ -38,10 +38,11 @@ const BASH_FULL_SANDBOX: &str = "Run Bash inside the host sandbox. Workspace rea
 /// Start of the `bash` clause naming programs excluded from the sandbox.
 const BASH_EXCLUDED_PREFIX: &str = "Programs excluded from the sandbox:";
 /// End of the `bash` clause naming programs excluded from the sandbox.
-const BASH_EXCLUDED_SUFFIX: &str = "A command that starts with one of them and contains no `;`, \
-                                    `&`, `|`, `<`, `>`, `(`, `)`, `$`, backquote, or backslash \
-                                    runs outside the sandbox with the host's full access once the \
-                                    user approves it; otherwise it runs inside the sandbox.";
+const BASH_EXCLUDED_SUFFIX: &str = "A command that starts with one of them and consists only of \
+                                    plain words, with no quotes, `$`, globs, `~`, or shell \
+                                    operators, runs without a shell outside the sandbox with the \
+                                    host's full access once the user explicitly approves it; \
+                                    otherwise it runs inside the sandbox.";
 /// `bash` limits that hold for every executor.
 const BASH_LIMITS: &str = "Output and duration are bounded; long output keeps each stream's start \
                            and end. Applied writes are not rolled back.";
