@@ -18,6 +18,7 @@ use crossterm::{Command, execute};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use crate::infra::tmux::{self, TmuxKeyReporting};
 use crate::runtime::TuiTerminal;
 
 /// Abstraction over terminal transitions so setup/restore paths can be tested
@@ -40,11 +41,12 @@ trait TerminalOperation {
     /// terminal will honor keyboard enhancement escape sequences.
     fn is_ssh_session(&self) -> bool;
 
-    /// Returns whether the app is running inside a `tmux` pane.
+    /// Prepares and returns how an enclosing `tmux` pane reports modified
+    /// keys, or [`TmuxKeyReporting::Outside`] when not running in `tmux`.
     ///
     /// `tmux` can hide terminal keyboard capability responses from the pane
     /// while still honoring explicit modified-key reporting requests.
-    fn is_tmux_session(&self) -> bool;
+    fn tmux_key_reporting(&self) -> TmuxKeyReporting;
 
     /// Enters the alternate screen, enables its keyboard enhancement flags
     /// when supported, and enables bracketed paste.
@@ -63,10 +65,11 @@ trait TerminalOperation {
     ) -> io::Result<()>;
 }
 
-/// Terminal keyboard modes enabled for the active TUI session.
+/// Terminal keyboard and mouse modes enabled for the active TUI session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TerminalEnhancement {
     keyboard_enhancement_enabled: bool,
+    mouse_reporting_enabled: bool,
     xterm_modified_keys_enabled: bool,
 }
 
@@ -90,8 +93,8 @@ impl TerminalOperation for CrosstermTerminalOperation {
         has_ssh_environment(|name| env::var_os(name))
     }
 
-    fn is_tmux_session(&self) -> bool {
-        crate::infra::tmux::is_tmux_session()
+    fn tmux_key_reporting(&self) -> TmuxKeyReporting {
+        tmux::prepare_key_reporting()
     }
 
     fn enter_alternate_screen(
@@ -107,10 +110,16 @@ impl TerminalOperation for CrosstermTerminalOperation {
                 EnterAlternateScreen,
                 EnableXtermCsiUModifiedKeys(enhancement),
                 PushKeyboardEnhancementFlags(keyboard_enhancement_flags()),
-                EnableBracketedPaste
+                EnableBracketedPaste,
+                EnableMouseWheelReporting(enhancement)
             )
         } else {
-            execute!(&mut stdout, EnterAlternateScreen, EnableBracketedPaste)
+            execute!(
+                &mut stdout,
+                EnterAlternateScreen,
+                EnableBracketedPaste,
+                EnableMouseWheelReporting(enhancement)
+            )
         }
     }
 
@@ -122,6 +131,7 @@ impl TerminalOperation for CrosstermTerminalOperation {
         if enhancement.keyboard_enhancement_enabled {
             execute!(
                 &mut stdout,
+                DisableMouseWheelReporting(enhancement),
                 PopKeyboardEnhancementFlags,
                 DisableXtermCsiUModifiedKeys(enhancement),
                 DisableBracketedPaste,
@@ -131,6 +141,7 @@ impl TerminalOperation for CrosstermTerminalOperation {
         } else {
             execute!(
                 &mut stdout,
+                DisableMouseWheelReporting(enhancement),
                 DisableBracketedPaste,
                 LeaveAlternateScreen,
                 Show
@@ -142,14 +153,59 @@ impl TerminalOperation for CrosstermTerminalOperation {
 /// Shared production terminal operation implementation.
 static CROSSTERM_TERMINAL_OPERATION: CrosstermTerminalOperation = CrosstermTerminalOperation;
 
+/// Conditionally requests button and wheel mouse reports in SGR encoding.
+///
+/// Only `tmux` panes enable this: with `tmux` mouse support on, wheel input
+/// over an alternate-screen pane is discarded unless the pane requested mouse
+/// reports. Direct terminals keep native text selection and already translate
+/// the wheel into arrow keys. Motion tracking stays off to avoid event floods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableMouseWheelReporting(TerminalEnhancement);
+
+impl Command for EnableMouseWheelReporting {
+    fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
+        if self.0.mouse_reporting_enabled {
+            buffer.write_str("\x1B[?1000h\x1B[?1006h")?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Conditionally disables the mouse reports enabled at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableMouseWheelReporting(TerminalEnhancement);
+
+impl Command for DisableMouseWheelReporting {
+    fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
+        if self.0.mouse_reporting_enabled {
+            buffer.write_str("\x1B[?1006l\x1B[?1000l")?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Conditionally requests xterm/tmux modified-key reporting in CSI-u format.
 ///
 /// `tmux` listens for xterm's `modifyOtherKeys` controls when deciding
 /// whether a pane application asked for extended keys. Crossterm's kitty
 /// keyboard-protocol push is still used for terminals that support the kitty
 /// stack. Direct terminals must not receive this request because their xterm
-/// encoding for shifted punctuation is not understood by Crossterm 0.29;
-/// `tmux` translates the same input to supported CSI-u sequences.
+/// encoding for shifted punctuation is not understood by Crossterm 0.29.
+/// `tmux` sends CSI-u only when its `extended-keys-format` is `csi-u`, so
+/// setup requests this mode only after
+/// [`tmux::prepare_key_reporting`] confirms that format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EnableXtermCsiUModifiedKeys(TerminalEnhancement);
 
@@ -242,6 +298,7 @@ impl TerminalGuard {
         Self {
             enhancement: Cell::new(TerminalEnhancement {
                 keyboard_enhancement_enabled: false,
+                mouse_reporting_enabled: false,
                 xterm_modified_keys_enabled: false,
             }),
         }
@@ -293,15 +350,19 @@ fn prepare_terminal_stdout_with_operation(
     Ok(stdout)
 }
 
-/// Selects the keyboard modes appropriate for the current terminal transport.
+/// Selects the keyboard and mouse modes appropriate for the current terminal
+/// transport.
 fn terminal_enhancement(operation: &dyn TerminalOperation) -> TerminalEnhancement {
-    let is_tmux_session = operation.is_tmux_session();
+    let tmux_key_reporting = operation.tmux_key_reporting();
+    let is_tmux_session = tmux_key_reporting != TmuxKeyReporting::Outside;
     let keyboard_enhancement_enabled =
         should_enable_keyboard_enhancement(operation, is_tmux_session);
 
     TerminalEnhancement {
         keyboard_enhancement_enabled,
-        xterm_modified_keys_enabled: keyboard_enhancement_enabled && is_tmux_session,
+        mouse_reporting_enabled: is_tmux_session,
+        xterm_modified_keys_enabled: keyboard_enhancement_enabled
+            && tmux_key_reporting == TmuxKeyReporting::CsiU,
     }
 }
 

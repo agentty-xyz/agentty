@@ -13,6 +13,7 @@ use super::{
     MockTerminalOperation, TerminalEnhancement, TerminalGuard, TerminalOperation,
     has_ssh_environment, prepare_terminal_stdout_with_operation, restore_terminal_state,
 };
+use crate::infra::tmux::TmuxKeyReporting;
 
 /// Verifies keyboard modes are pushed and popped on the alternate screen,
 /// while the legacy and tmux paths retain their transport-specific sequences.
@@ -20,17 +21,34 @@ use super::{
 fn terminal_keyboard_modes_use_the_alternate_screen() {
     // Arrange
     let operation = CrosstermTerminalOperation;
+    let mouse_on = "\x1b[?1000h\x1b[?1006h";
+    let mouse_off = "\x1b[?1006l\x1b[?1000l";
     let cases = [
-        (enhancement_fixture(false, false), "", ""),
-        (enhancement_fixture(true, false), "\x1b[>5u", "\x1b[<1u"),
+        (enhancement_fixture(false, false, false), "", "", "", ""),
         (
-            enhancement_fixture(true, true),
+            enhancement_fixture(false, true, false),
+            "",
+            "",
+            mouse_on,
+            mouse_off,
+        ),
+        (
+            enhancement_fixture(true, false, false),
+            "\x1b[>5u",
+            "\x1b[<1u",
+            "",
+            "",
+        ),
+        (
+            enhancement_fixture(true, true, true),
             "\x1b[>4;1f\x1b[>4;2m\x1b[>5u",
             "\x1b[<1u\x1b[>4f\x1b[>4m",
+            mouse_on,
+            mouse_off,
         ),
     ];
 
-    for (enhancement, push, pop) in cases {
+    for (enhancement, push, pop, mouse_enable, mouse_disable) in cases {
         let mut startup = Vec::new();
         let mut cleanup = Vec::new();
 
@@ -43,20 +61,59 @@ fn terminal_keyboard_modes_use_the_alternate_screen() {
             .expect("cleanup sequences should render");
 
         // Assert
-        assert_eq!(startup, format!("\x1b[?1049h{push}\x1b[?2004h").as_bytes());
+        assert_eq!(
+            startup,
+            format!("\x1b[?1049h{push}\x1b[?2004h{mouse_enable}").as_bytes()
+        );
         assert_eq!(
             cleanup,
-            format!("{pop}\x1b[?2004l\x1b[?1049l\x1b[?25h").as_bytes()
+            format!("{mouse_disable}{pop}\x1b[?2004l\x1b[?1049l\x1b[?25h").as_bytes()
         );
     }
 }
 
 /// Builds one expected terminal enhancement configuration.
-fn enhancement_fixture(keyboard: bool, xterm: bool) -> TerminalEnhancement {
+fn enhancement_fixture(keyboard: bool, mouse: bool, xterm: bool) -> TerminalEnhancement {
     TerminalEnhancement {
         keyboard_enhancement_enabled: keyboard,
+        mouse_reporting_enabled: mouse,
         xterm_modified_keys_enabled: xterm,
     }
+}
+
+/// Verifies a `tmux` server whose modified-key format cannot be parsed keeps
+/// mouse reporting but skips the modified-key request, so `Ctrl` shortcuts
+/// still arrive as legacy bytes.
+#[test]
+fn setup_terminal_skips_xterm_modified_keys_for_unsupported_tmux_format() {
+    // Arrange
+    let mut operation = MockTerminalOperation::new();
+    let guard = TerminalGuard::new();
+    operation
+        .expect_enable_raw_mode()
+        .once()
+        .returning(|| Ok(()));
+    operation
+        .expect_supports_keyboard_enhancement()
+        .once()
+        .returning(|| Ok(false));
+    operation.expect_is_ssh_session().once().returning(|| false);
+    operation
+        .expect_tmux_key_reporting()
+        .once()
+        .returning(|| TmuxKeyReporting::Unsupported);
+    operation
+        .expect_enter_alternate_screen()
+        .once()
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, false))
+        .returning(|_, _| Ok(()));
+
+    // Act
+    let result = prepare_terminal_stdout_with_operation(&operation, &guard);
+
+    // Assert
+    let _stdout = result.expect("setup should continue with an unsupported tmux key format");
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, true, false));
 }
 
 /// Verifies setup returns raw-mode failures directly.
@@ -96,13 +153,13 @@ fn setup_terminal_returns_error_when_enter_alternate_screen_fails() {
         .returning(|| Ok(false));
     operation.expect_is_ssh_session().once().returning(|| false);
     operation
-        .expect_is_tmux_session()
+        .expect_tmux_key_reporting()
         .once()
-        .returning(|| false);
+        .returning(|| TmuxKeyReporting::Outside);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false, false))
         .returning(|_, _| Err(io::Error::other("enter failed")));
 
     // Act
@@ -130,13 +187,13 @@ fn setup_terminal_omits_xterm_modified_keys_when_supported_directly() {
         .once()
         .returning(|| Ok(true));
     operation
-        .expect_is_tmux_session()
+        .expect_tmux_key_reporting()
         .once()
-        .returning(|| false);
+        .returning(|| TmuxKeyReporting::Outside);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false, false))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -147,7 +204,7 @@ fn setup_terminal_omits_xterm_modified_keys_when_supported_directly() {
 
     // Assert
     let _stdout = result.expect("setup should use Kitty enhancement directly");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, false, false));
     assert_eq!(xterm_startup_sequence, "");
 }
 
@@ -168,13 +225,13 @@ fn setup_terminal_ignores_keyboard_enhancement_query_failures() {
         .returning(|| Err(io::Error::other("unsupported")));
     operation.expect_is_ssh_session().once().returning(|| false);
     operation
-        .expect_is_tmux_session()
+        .expect_tmux_key_reporting()
         .once()
-        .returning(|| false);
+        .returning(|| TmuxKeyReporting::Outside);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false, false))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -182,7 +239,10 @@ fn setup_terminal_ignores_keyboard_enhancement_query_failures() {
 
     // Assert
     let _stdout = result.expect("setup should fall back when support query fails");
-    assert_eq!(guard.enhancement(), enhancement_fixture(false, false));
+    assert_eq!(
+        guard.enhancement(),
+        enhancement_fixture(false, false, false)
+    );
 }
 
 /// Verifies tmux sessions optimistically enable keyboard enhancement when
@@ -201,11 +261,14 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
         .once()
         .returning(|| Err(io::Error::other("timeout")));
     operation.expect_is_ssh_session().once().returning(|| false);
-    operation.expect_is_tmux_session().once().returning(|| true);
+    operation
+        .expect_tmux_key_reporting()
+        .once()
+        .returning(|| TmuxKeyReporting::CsiU);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -213,7 +276,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, true));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, true, true));
 }
 
 /// Verifies tmux sessions optimistically enable keyboard enhancement even
@@ -232,11 +295,14 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
         .once()
         .returning(|| Ok(false));
     operation.expect_is_ssh_session().once().returning(|| false);
-    operation.expect_is_tmux_session().once().returning(|| true);
+    operation
+        .expect_tmux_key_reporting()
+        .once()
+        .returning(|| TmuxKeyReporting::CsiU);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -244,7 +310,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, true));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, true, true));
 }
 
 /// Verifies SSH sessions optimistically enable keyboard enhancement when
@@ -263,14 +329,14 @@ fn setup_terminal_enables_keyboard_enhancement_for_ssh_query_failure() {
         .once()
         .returning(|| Err(io::Error::other("timeout")));
     operation
-        .expect_is_tmux_session()
+        .expect_tmux_key_reporting()
         .once()
-        .returning(|| false);
+        .returning(|| TmuxKeyReporting::Outside);
     operation.expect_is_ssh_session().once().returning(|| true);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false, false))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -278,7 +344,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_ssh_query_failure() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, false, false));
 }
 
 /// Verifies SSH sessions optimistically enable keyboard enhancement even
@@ -297,14 +363,14 @@ fn setup_terminal_enables_keyboard_enhancement_for_ssh_unsupported_query() {
         .once()
         .returning(|| Ok(false));
     operation
-        .expect_is_tmux_session()
+        .expect_tmux_key_reporting()
         .once()
-        .returning(|| false);
+        .returning(|| TmuxKeyReporting::Outside);
     operation.expect_is_ssh_session().once().returning(|| true);
     operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false, false))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -312,7 +378,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_ssh_unsupported_query() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, false, false));
 }
 
 /// Verifies SSH detection accepts the environment variables set by common
@@ -359,16 +425,16 @@ fn xterm_modified_key_commands_request_and_reset_csi_u_reporting() {
     let mut disable_sequence = String::new();
 
     // Act
-    EnableXtermCsiUModifiedKeys(enhancement_fixture(true, false))
+    EnableXtermCsiUModifiedKeys(enhancement_fixture(true, false, false))
         .write_ansi(&mut disabled_enable_sequence)
         .expect("disabled enable sequence should render");
-    DisableXtermCsiUModifiedKeys(enhancement_fixture(true, false))
+    DisableXtermCsiUModifiedKeys(enhancement_fixture(true, false, false))
         .write_ansi(&mut disabled_disable_sequence)
         .expect("disabled disable sequence should render");
-    EnableXtermCsiUModifiedKeys(enhancement_fixture(true, true))
+    EnableXtermCsiUModifiedKeys(enhancement_fixture(true, true, true))
         .write_ansi(&mut enable_sequence)
         .expect("enable sequence should render");
-    DisableXtermCsiUModifiedKeys(enhancement_fixture(true, true))
+    DisableXtermCsiUModifiedKeys(enhancement_fixture(true, true, true))
         .write_ansi(&mut disable_sequence)
         .expect("disable sequence should render");
 
@@ -394,14 +460,14 @@ fn restore_terminal_state_attempts_leave_even_when_disable_fails() {
     operation
         .expect_leave_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
         .returning(move |_, _| {
             leave_calls_for_expectation.fetch_add(1, Ordering::Relaxed);
             Ok(())
         });
 
     // Act
-    restore_terminal_state(&operation, enhancement_fixture(true, true));
+    restore_terminal_state(&operation, enhancement_fixture(true, true, true));
 
     // Assert
     assert_eq!(leave_calls.load(Ordering::Relaxed), 1);

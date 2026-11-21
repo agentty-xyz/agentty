@@ -236,6 +236,18 @@ fn test_is_word_delete_backspace_accepts_alt_modifier() {
 }
 
 #[test]
+fn test_is_word_delete_backspace_accepts_control_modifier() {
+    // Arrange
+    let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::CONTROL);
+
+    // Act
+    let result = is_word_delete_backspace(key);
+
+    // Assert
+    assert!(result);
+}
+
+#[test]
 fn test_is_word_delete_backspace_rejects_plain_backspace() {
     // Arrange
     let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);

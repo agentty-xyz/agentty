@@ -43,12 +43,15 @@ pub(crate) fn is_alt_key(key: KeyEvent) -> bool {
 /// Returns true when backspace should delete the previous word instead of a
 /// single character.
 ///
-/// `Option`+`Backspace` is reported as `Alt` on macOS terminals. `Shift` is
-/// also accepted for compatibility with the existing word-delete shortcut.
+/// `Option`+`Backspace` is reported as `Alt` on macOS terminals, and
+/// `Ctrl`+`Backspace` is the common word-delete shortcut elsewhere; it is
+/// distinguishable only through enhanced key reporting. `Shift` is also
+/// accepted for compatibility with the existing word-delete shortcut.
 /// `Cmd`+`Backspace` is handled separately as a whole-line deletion shortcut.
 pub(crate) fn is_word_delete_backspace(key: KeyEvent) -> bool {
-    key.modifiers
-        .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
+    key.modifiers.intersects(
+        event::KeyModifiers::ALT | event::KeyModifiers::CONTROL | event::KeyModifiers::SHIFT,
+    )
 }
 
 /// Returns true when backspace should delete the current line content.

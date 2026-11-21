@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tokio::sync::mpsc;
@@ -127,7 +127,10 @@ fn forward_next_terminal_event(
     };
 
     match event {
-        Ok(event) => event_tx.send(Ok(event)).is_ok(),
+        Ok(event) => match wheel_as_arrow_key(event) {
+            Some(event) => event_tx.send(Ok(event)).is_ok(),
+            None => true,
+        },
         Err(error) if error.kind() == io::ErrorKind::Interrupted => true,
         Err(error) => {
             let _ = event_tx.send(Err(error));
@@ -135,6 +138,25 @@ fn forward_next_terminal_event(
             false
         }
     }
+}
+
+/// Converts mouse-wheel reports into arrow keys and drops other mouse reports.
+///
+/// Direct terminals already turn the wheel into `Up`/`Down` on the alternate
+/// screen. Mouse reporting is requested only inside `tmux`, whose default
+/// bindings otherwise swallow the wheel, so this mapping keeps scrolling
+/// identical across both transports.
+fn wheel_as_arrow_key(event: Event) -> Option<Event> {
+    let Event::Mouse(mouse) = event else {
+        return Some(event);
+    };
+    let key_code = match mouse.kind {
+        MouseEventKind::ScrollUp => KeyCode::Up,
+        MouseEventKind::ScrollDown => KeyCode::Down,
+        _ => return None,
+    };
+
+    Some(Event::Key(KeyEvent::new(key_code, KeyModifiers::NONE)))
 }
 
 /// Waits for the next terminal/app event or tick and dispatches one runtime
