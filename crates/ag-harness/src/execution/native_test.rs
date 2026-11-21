@@ -825,6 +825,25 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
     );
 }
 
+#[tokio::test]
+async fn hidden_paths_resolve_to_the_exact_names_the_sandbox_matches() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().canonicalize().expect("canonical");
+    std::fs::write(root.join("file"), "secret").expect("file");
+    symlink(root.join("file"), root.join("alias")).expect("alias");
+
+    // Act
+    let existing = resolve_hidden(&LocalInspection, &root.join("alias")).await;
+    let missing = resolve_hidden(&LocalInspection, &root.join("missing/key")).await;
+
+    // Assert
+    // Compared as text: a trailing separator would no longer name the file
+    // for Linux, though paths compare equal by components.
+    assert_eq!(existing.as_os_str(), root.join("file").as_os_str());
+    assert_eq!(missing.as_os_str(), root.join("missing/key").as_os_str());
+}
+
 #[test]
 fn writable_roots_must_be_caches_host_tools_do_not_execute() {
     // Arrange

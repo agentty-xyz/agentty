@@ -521,7 +521,13 @@ async fn resolve_hidden(files: &dyn Inspection, path: &Path) -> PathBuf {
     let mut resolved = path.to_path_buf();
     for ancestor in path.ancestors() {
         if let Ok(base) = files.canonicalize(ancestor).await {
-            resolved = base.join(path.strip_prefix(ancestor).unwrap_or(Path::new("")));
+            // Joining an empty remainder would add a trailing separator,
+            // which no longer names a file.
+            resolved = path
+                .strip_prefix(ancestor)
+                .unwrap_or(Path::new(""))
+                .components()
+                .fold(base, |resolved, part| resolved.join(part));
             break;
         }
     }
