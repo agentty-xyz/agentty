@@ -806,15 +806,16 @@ impl Session {
         } else {
             None
         };
-        let mut result = self
-            .send_turn(
-                input,
-                &options,
-                &mut turn,
-                control.as_ref(),
-                request.as_ref(),
-            )
-            .await;
+        // The turn's state machine is large; keep it on the heap so every
+        // caller's future stays small.
+        let mut result = Box::pin(self.send_turn(
+            input,
+            &options,
+            &mut turn,
+            control.as_ref(),
+            request.as_ref(),
+        ))
+        .await;
         if request.is_none()
             && let Ok(outcome) = &mut result
         {

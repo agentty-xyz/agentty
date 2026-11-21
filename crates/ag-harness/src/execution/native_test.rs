@@ -16,7 +16,7 @@ use tokio::net::UnixStream;
 
 use super::{
     Access, GitDirectories, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess,
-    bounded_bytes, cache_root, git_directories, pointer, probe, resolve_access, resolve_hidden,
+    allowed_root, bounded_bytes, git_directories, pointer, probe, resolve_access, resolve_hidden,
     validate_executable,
 };
 use crate::bash::BashConfig;
@@ -617,15 +617,16 @@ impl Inspection for FailingInspection {
         LocalInspection.home().await
     }
 
-    async fn host_home(&self) -> Option<PathBuf> {
-        LocalInspection.host_home().await
+    async fn host_variable(&self, name: &str) -> Option<std::ffi::OsString> {
+        LocalInspection.host_variable(name).await
     }
 }
 
-/// Local inspection with another account home directory and `HOME`.
+/// Local inspection with another account home directory and process
+/// environment.
 struct HomeInspection {
     account: Option<PathBuf>,
-    host: Option<PathBuf>,
+    host: Vec<(&'static str, PathBuf)>,
 }
 
 impl HomeInspection {
@@ -633,7 +634,7 @@ impl HomeInspection {
     fn at(home: &Path) -> Self {
         Self {
             account: Some(home.to_path_buf()),
-            host: Some(home.to_path_buf()),
+            host: vec![("HOME", home.to_path_buf())],
         }
     }
 }
@@ -656,8 +657,11 @@ impl Inspection for HomeInspection {
         self.account.clone()
     }
 
-    async fn host_home(&self) -> Option<PathBuf> {
-        self.host.clone()
+    async fn host_variable(&self, name: &str) -> Option<std::ffi::OsString> {
+        self.host
+            .iter()
+            .find(|(variable, _)| *variable == name)
+            .map(|(_, value)| value.clone().into_os_string())
     }
 }
 
@@ -667,7 +671,7 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     let fixture = AccessFixture::new();
     let home = fixture.outside.join("home");
     let host_home = fixture.outside.join("host-home");
-    let registry = home.join(".cargo/registry/cache");
+    let registry = fixture.outside.join("shared-cache");
     let sessions = fixture.outside.join("sessions");
     let hidden_file = fixture.outside.join("hidden");
     for directory in [
@@ -698,7 +702,7 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
     });
     let files = HomeInspection {
         account: Some(home.clone()),
-        host: Some(host_home.clone()),
+        host: vec![("HOME", host_home.clone())],
     };
 
     // Act
@@ -730,6 +734,11 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
         ".claude/.credentials.json",
         ".mozilla/firefox",
         "Library/Application Support/Google/Chrome",
+        ".config/BraveSoftware",
+        ".thunderbird",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+        ".zsh_history",
     ] {
         for home in [&home, &host_home] {
             assert!(access.hidden_paths.contains(&home.join(store)), "{store}");
@@ -747,6 +756,79 @@ async fn access_resolves_writable_roots_hidden_paths_and_sockets() {
             .contains(&resolve_hidden(&LocalInspection, Path::new("/run/secrets")).await)
     );
     assert_eq!(access.unix_sockets, [socket]);
+}
+
+#[tokio::test]
+async fn full_disk_reads_hide_stores_the_environment_moves() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    let relocated = fixture.outside.join("relocated");
+    let sessions = fixture.outside.join("sessions");
+    std::fs::create_dir_all(sessions.join("own")).expect("own session");
+    let policy = fixture.policy(Grants {
+        environment: vec![
+            // A store inside the session's own directory belongs to it.
+            (
+                "CARGO_HOME".into(),
+                sessions.join("own/cargo").into_os_string(),
+            ),
+            (
+                "KUBECONFIG".into(),
+                relocated.join("kube-a:").into_os_string(),
+            ),
+        ],
+        read_scope: ReadScope::FullDisk,
+        temporary_directory: Some(sessions.join("own")),
+        ..Grants::default()
+    });
+    let files = HomeInspection {
+        account: Some(home),
+        host: vec![
+            ("XDG_CONFIG_HOME", relocated.join("config")),
+            ("XDG_DATA_HOME", relocated.join("data")),
+            ("CARGO_HOME", relocated.join("cargo")),
+            ("GNUPGHOME", relocated.join("gnupg")),
+            ("CODEX_HOME", relocated.join("codex")),
+            ("HISTFILE", relocated.join("history")),
+        ],
+    };
+
+    // Act
+    let access = resolve_access(&files, &policy).await.expect("access");
+
+    // Assert
+    for store in [
+        "config/gh",
+        "config/git/credentials",
+        "config/BraveSoftware",
+        "data/fish/fish_history",
+        "cargo/credentials.toml",
+        "gnupg",
+        "codex/auth.json",
+        "history",
+        "kube-a",
+    ] {
+        assert!(
+            access.hidden_paths.contains(&relocated.join(store)),
+            "{store}"
+        );
+    }
+    assert!(
+        !access
+            .hidden_paths
+            .iter()
+            .any(|path| path.starts_with(sessions.join("own")))
+    );
+    // A store that contains the workspace could not be hidden.
+    let around_workspace = HomeInspection {
+        account: Some(fixture.outside.join("home")),
+        host: vec![("GNUPGHOME", fixture.workspace.clone())],
+    };
+    assert_eq!(
+        resolve_access(&around_workspace, &policy).await.map(|_| ()),
+        Err(ExecutionError::Unsupported)
+    );
 }
 
 #[tokio::test]
@@ -782,7 +864,7 @@ async fn an_unknown_account_home_refuses_full_disk_reads_and_writable_roots() {
     std::fs::create_dir_all(fixture.outside.join("cache")).expect("cache");
     let files = HomeInspection {
         account: None,
-        host: None,
+        host: Vec::new(),
     };
 
     // Act / Assert
@@ -815,9 +897,14 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
     // Arrange
     let fixture = AccessFixture::new();
     let home = fixture.outside.join("home");
-    let tool_cache = home.join(".npm/_cacache");
-    for directory in [&tool_cache, &home.join(".cargo"), &home.join(".cache/uv")] {
-        std::fs::create_dir_all(directory).expect("home directory");
+    let tool_cache = fixture.outside.join("shared-cache");
+    for directory in [
+        &tool_cache,
+        &home.join(".npm/_cacache"),
+        &home.join(".cargo/registry/cache"),
+        &home.join(".cache/uv"),
+    ] {
+        std::fs::create_dir_all(directory).expect("cache directory");
     }
     std::fs::write(fixture.outside.join("file"), "file").expect("file");
     symlink(&fixture.workspace, fixture.outside.join("workspace-alias")).expect("alias");
@@ -828,8 +915,8 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
         ..grants
     };
     let cases = [
-        // Writable roots that host tools execute from, or that are not
-        // cache locations.
+        // Writable roots overlapping a home directory, even tool caches
+        // host tools use without re-verifying them.
         Grants {
             writable_roots: vec![home.clone()],
             ..Grants::default()
@@ -839,7 +926,11 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
             ..Grants::default()
         },
         Grants {
-            writable_roots: vec![home.join(".cargo")],
+            writable_roots: vec![home.join(".npm/_cacache")],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![home.join(".cargo/registry/cache")],
             ..Grants::default()
         },
         Grants {
@@ -916,18 +1007,19 @@ async fn hidden_paths_resolve_to_the_exact_names_the_sandbox_matches() {
 }
 
 #[test]
-fn writable_roots_must_be_caches_host_tools_do_not_execute() {
+fn writable_roots_stay_outside_home_and_system_directories() {
     // Arrange
     let homes = [PathBuf::from("/home/user"), PathBuf::from("/srv/home")];
     let cases = [
-        ("/home/user/.cargo/registry/cache", true),
-        ("/home/user/.cargo/git/db", true),
-        ("/home/user/.npm/_cacache", true),
-        ("/home/user/go/pkg/mod/cache/download", true),
-        ("/srv/home/.npm/_cacache", true),
         ("/private/var/folders/x/T/session-cache", true),
-        // Extracted sources, indexes, build caches, and installs that host
-        // tools run without verifying them.
+        ("/mnt/build-cache", true),
+        // Anything in a home directory, even caches tools claim to verify:
+        // Cargo, Go, and Git use cached entries without re-verifying them.
+        ("/home/user/.cargo/registry/cache", false),
+        ("/home/user/.cargo/git/db", false),
+        ("/home/user/.npm/_cacache", false),
+        ("/home/user/go/pkg/mod/cache/download", false),
+        ("/srv/home/.npm/_cacache", false),
         ("/home/user/.cargo/registry", false),
         ("/home/user/.cargo/registry/src", false),
         ("/home/user/.cargo/registry/index", false),
@@ -962,7 +1054,7 @@ fn writable_roots_must_be_caches_host_tools_do_not_execute() {
 
     // Act / Assert
     for (root, expected) in cases {
-        assert_eq!(cache_root(Path::new(root), &homes), expected, "{root}");
+        assert_eq!(allowed_root(Path::new(root), &homes), expected, "{root}");
     }
 }
 

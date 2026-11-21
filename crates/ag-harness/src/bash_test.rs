@@ -592,6 +592,47 @@ fn coding_grants_validate_and_record_only_what_they_set() {
 }
 
 #[test]
+fn excluded_environment_values_are_validated_and_recorded_by_name() {
+    // Arrange
+    let valid = hiding_configuration();
+
+    // Act
+    let granted = valid
+        .clone()
+        .with_excluded_environment("GH_TOKEN".into(), "token".into())
+        .expect("excluded value");
+
+    // Assert
+    assert!(
+        valid
+            .fingerprint()
+            .get("excluded_environment_names")
+            .is_none()
+    );
+    assert_eq!(
+        granted.fingerprint()["excluded_environment_names"],
+        json!(["GH_TOKEN"])
+    );
+    assert!(!granted.fingerprint().to_string().contains("token\""));
+    assert_ne!(granted, valid);
+    for rejected in [
+        valid
+            .clone()
+            .with_excluded_environment("PATH".into(), "/bin".into()),
+        valid
+            .clone()
+            .with_excluded_environment(String::new(), "x".into()),
+        valid
+            .clone()
+            .with_excluded_environment("A=B".into(), "x".into()),
+        valid.with_excluded_environment("NAME".into(), "a\0b".into()),
+        granted.with_excluded_environment("GH_TOKEN".into(), "again".into()),
+    ] {
+        assert_eq!(rejected, Err(BashError::InvalidPolicy));
+    }
+}
+
+#[test]
 fn hidden_paths_require_an_executor_that_enforces_them() {
     // Arrange
     let ignoring =
@@ -706,6 +747,16 @@ fn only_simple_commands_of_excluded_programs_leave_the_sandbox() {
         "docker run 'image name'",
         "docker run \"image\"",
         "docker run\u{7}x",
+        // Characters that display differently from the words they form.
+        "docker run\u{a0}x",
+        "docker run\u{3000}x",
+        "docker run\u{200b}x",
+        "docker run\u{feff}x",
+        "docker run\u{202e}x",
+        "docker run\u{2066}x",
+        "docker run\u{2028}x",
+        "docker run\u{2029}x",
+        "docker run caf\u{e9}",
         "",
         "git status",
     ] {

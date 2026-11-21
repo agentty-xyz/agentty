@@ -431,7 +431,7 @@ fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
     std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
         .expect("mode");
     let search = format!(
-        "relative:/usr/bin:/workspace/bin:{}::/bin",
+        "relative:/usr/bin:/workspace/bin:{}::/nonexistent-directory:/bin",
         cache.path().join("bin").display()
     );
     let configuration = BashConfig::for_executor(
@@ -446,7 +446,9 @@ fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
     .with_writable_root(cache.path().to_path_buf())
     .expect("writable root")
     .with_excluded_command(tool)
-    .expect("excluded command");
+    .expect("excluded command")
+    .with_temporary_directory("/private/tmp/session".into())
+    .expect("temporary directory");
     let workspace = std::path::Path::new("/workspace");
 
     // Act
@@ -454,16 +456,61 @@ fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
         &configuration
             .clone()
             .with_environment("PATH".into(), search)
-            .expect("PATH"),
+            .expect("PATH")
+            .with_environment("GIT_CONFIG_GLOBAL".into(), "/workspace/gitconfig".into())
+            .expect("sandbox value")
+            .with_excluded_environment("GH_TOKEN".into(), "token".into())
+            .expect("excluded value"),
         workspace,
     )
     .expect("excluded configuration");
     let default = BashTool::excluded_configuration(&configuration, workspace)
         .expect("excluded configuration");
+    let planted = [
+        "/workspace/config",
+        "/private/tmp/session/home",
+        &format!("/usr/bin:{}", cache.path().join("cargo").display()),
+    ]
+    .map(|value| {
+        BashTool::excluded_configuration(
+            &configuration
+                .clone()
+                .with_excluded_environment("CARGO_HOME".into(), value.into())
+                .expect("excluded value"),
+            workspace,
+        )
+        .map(|_| ())
+    });
 
     // Assert
     assert_eq!(granted.environment["PATH"], "/usr/bin:/bin");
+    assert_eq!(granted.environment["GH_TOKEN"], "token");
+    // Values granted to sandboxed commands and the temporary directory never
+    // reach excluded ones; identity and locale come from the harness process.
+    assert!(!granted.environment.contains_key("GIT_CONFIG_GLOBAL"));
+    assert_eq!(granted.snapshot.temporary_directory, None);
+    assert_eq!(
+        granted.environment.get("HOME").map(String::as_str),
+        std::env::var("HOME").ok().as_deref()
+    );
+    assert!(
+        granted.environment.keys().all(|name| [
+            "PATH", "GH_TOKEN", "HOME", "USER", "LOGNAME", "LANG", "TERM"
+        ]
+        .contains(&name.as_str())
+            || name.starts_with("LC_")),
+        "{:?}",
+        granted.environment.keys()
+    );
     assert_eq!(default.environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin");
-    assert_eq!(default.snapshot.environment_names, ["PATH"]);
+    assert!(
+        default
+            .snapshot
+            .environment_names
+            .iter()
+            .any(|name| name == "PATH")
+    );
     assert_eq!(default.enforcement(), crate::bash::Enforcement::None);
+    // A value naming a place commands can write is refused.
+    assert_eq!(planted, [Err(BashError::InvalidPolicy); 3]);
 }

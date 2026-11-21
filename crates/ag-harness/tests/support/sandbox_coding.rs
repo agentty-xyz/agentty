@@ -381,6 +381,40 @@ async fn native_excluded_commands_leave_the_sandbox_only_when_explicitly_approve
 }
 
 #[tokio::test]
+async fn native_excluded_commands_run_with_only_a_host_controlled_environment() {
+    // Arrange
+    let workspace = Workspace::new();
+    let outside = Outside::new();
+    std::fs::create_dir_all(outside.path("sessions/own")).expect("own session");
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_temporary_directory(outside.path("sessions/own"))
+            .expect("temporary directory")
+            .with_environment("SANDBOX_ONLY".into(), "granted".into())
+            .expect("sandbox value")
+            .with_excluded_environment("EXCLUDED_ONLY".into(), "passed".into())
+            .expect("excluded value")
+            .with_excluded_command("/usr/bin/env".into())
+            .expect("excluded command")
+    });
+
+    // Act
+    let result = run(
+        &approving_harness(&workspace, Approver::new(Decision::AllowUnsandboxed)),
+        "env",
+        &options,
+    )
+    .await;
+
+    // Assert
+    let stdout = result["stdout"].as_str().expect("stdout");
+    assert!(stdout.contains("EXCLUDED_ONLY=passed\n"), "{result}");
+    assert!(stdout.contains("PATH=/usr/bin:/bin\n"), "{result}");
+    assert!(!stdout.contains("SANDBOX_ONLY"), "{result}");
+    assert!(!stdout.contains("TMPDIR"), "{result}");
+}
+
+#[tokio::test]
 async fn native_full_disk_read_hides_other_sessions_beside_the_temporary_directory() {
     // Arrange
     let workspace = Workspace::new();

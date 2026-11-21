@@ -68,6 +68,8 @@ const EXCLUDED_SYNTAX: [char; 21] = [
 pub struct BashConfig {
     pub(crate) enforcement: Enforcement,
     pub(crate) environment: BTreeMap<String, String>,
+    /// [`Self::with_excluded_environment`] values.
+    pub(crate) excluded_environment: BTreeMap<String, String>,
     pub(crate) executor: Option<Arc<dyn BashExecutor>>,
     pub(crate) snapshot: BashPolicySnapshot,
 }
@@ -214,6 +216,7 @@ impl BashConfig {
         Ok(Self {
             enforcement,
             environment: BTreeMap::new(),
+            excluded_environment: BTreeMap::new(),
             executor,
             snapshot: BashPolicySnapshot {
                 bash,
@@ -221,6 +224,7 @@ impl BashConfig {
                 capture_bytes,
                 environment_names: Vec::new(),
                 excluded_commands: BTreeMap::new(),
+                excluded_environment_names: Vec::new(),
                 executor: identity,
                 external_reads: Vec::new(),
                 hidden_paths: Vec::new(),
@@ -271,13 +275,20 @@ impl BashConfig {
     /// `/run/secrets` and these credential stores and browser profiles in
     /// the home directory the account database records, and in `HOME` of
     /// the harness and of the commands where it differs: the keychains,
-    /// cookies, and Firefox, Chrome, and Chromium profiles; `~/.ssh`,
-    /// `~/.aws`, `~/.azure`, `~/.gnupg`, `~/.config/gh`, `~/.config/hub`,
-    /// `~/.config/gcloud`, Git's stored credentials, `~/.netrc`,
-    /// `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`, Cargo's credentials,
-    /// `~/.docker/config.json`, `~/.kube/config`, Terraform's and Vault's
-    /// tokens, and the Codex and Claude Code credentials. Preparation
-    /// refuses full-disk reads when the account has no home directory.
+    /// cookies, Thunderbird, and Firefox, Chrome, Chromium, Brave, and Edge
+    /// profiles; `~/.ssh`, `~/.aws`, `~/.azure`, `~/.gnupg`, `~/.config/gh`,
+    /// `~/.config/hub`, `~/.config/gcloud`, Git's stored credentials,
+    /// `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`, Cargo's
+    /// credentials, Maven's and Gradle's settings, `~/.docker/config.json`,
+    /// `~/.kube/config`, Terraform's and Vault's tokens, the Codex and
+    /// Claude Code credentials, and shell histories. The same stores are
+    /// hidden where `CARGO_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+    /// `GNUPGHOME`, `DOCKER_CONFIG`, `KUBECONFIG`, `GH_CONFIG_DIR`,
+    /// `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, the AWS, Google, and npm
+    /// configuration variables, or `HISTFILE` of the harness or the
+    /// commands move them, unless they lie in the session's own
+    /// directories. Preparation refuses full-disk reads when the account
+    /// has no home directory.
     ///
     /// It also hides every other entry in the parent of the
     /// [`Self::with_temporary_directory`] directory, such as other
@@ -331,25 +342,24 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Grants reads and writes beneath an existing absolute cache directory
-    /// outside the workspace, like the writable roots of Codex and the
-    /// write allowlist of Claude Code.
+    /// Grants reads and writes beneath an existing absolute directory
+    /// outside the workspace and every home directory, like the writable
+    /// roots of Codex and the write allowlist of Claude Code.
     ///
     /// A command can plant code in a writable directory that host tools run
-    /// later, outside the sandbox, so inside a home directory (the account
-    /// database's, or `HOME` of the harness or the commands) preparation
-    /// accepts only data-only caches whose entries tools verify before use:
-    /// `~/.cargo/registry/cache`, `~/.cargo/git/db`, `~/.npm/_cacache`, and
-    /// `~/go/pkg/mod/cache/download`. Everything else is refused, including
-    /// extracted sources (`~/.cargo/registry/src`, `~/go/pkg/mod`), indexes,
-    /// build caches, and tool or browser installs; point such tools at the
-    /// temporary directory through their environment instead. Outside the
-    /// home directories, a root must not contain one or overlap system or
-    /// toolchain directories such as `/usr`, `/opt`, `/etc`, `/Library`, or
-    /// `/home/linuxbrew`. Preparation refuses every writable root when the
-    /// account has no home directory. A root must also be a directory that
-    /// does not overlap the workspace (grant those with
-    /// [`Self::with_write`]) or its Git metadata.
+    /// later, outside the sandbox, so granting a root is equivalent to
+    /// letting commands run code on the host the next time a host tool
+    /// reads it. Even tool caches are not safe: Cargo, Go, and Git use
+    /// cached entries without re-verifying them. Preparation therefore
+    /// refuses a root that overlaps a home directory (the account
+    /// database's, or `HOME` of the harness or the commands), a system or
+    /// toolchain directory such as `/usr`, `/opt`, `/etc`, `/Library`, or
+    /// `/home/linuxbrew`, the workspace (grant those with
+    /// [`Self::with_write`]), or its Git metadata, and refuses every root
+    /// when the account has no home directory. Point tool caches at the
+    /// temporary directory through their environment instead, for example
+    /// `CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`, `GOCACHE`, and
+    /// `PIP_CACHE_DIR`.
     ///
     /// macOS keeps every `.git` entry inside a root read-only; Linux
     /// protects only the workspace repository's own Git metadata, so a
@@ -418,20 +428,30 @@ impl BashConfig {
     /// [`crate::approval::Decision::Allow`], the commands run inside the
     /// sandbox.
     ///
-    /// Excluding a program trusts it fully: it runs code its arguments and
-    /// the workspace name, such as `git -c core.fsmonitor=./x status`, `gh
-    /// extension install`, or `docker run -v /:/host`, so an approval must
-    /// show the exact argument vector. A command qualifies when its first
-    /// word is the executable's file name and it consists only of words
-    /// separated by spaces and tabs, without quotes, escapes, expansions,
-    /// globs, or operators: none of `;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`,
-    /// backquote, backslash, `'`, `"`, `*`, `?`, `[`, `]`, `{`, `}`, `~`,
-    /// `!`, `#`, or a control character. The harness executes the
-    /// executable resolved now directly with those words as arguments, with
-    /// no shell, so workspace file names cannot become arguments, and passes
-    /// `PATH` with only existing absolute directories outside the places
-    /// commands can write; it refuses the turn when the executable lies
-    /// inside the workspace, the temporary directory, or a writable root.
+    /// Excluding a program trusts it fully. It can run any code its
+    /// arguments name, such as `git -c core.fsmonitor=./x status`, `gh
+    /// extension install`, or `docker run -v /:/host`. It also follows
+    /// configuration it finds in the workspace, which commands can write
+    /// and the approval does not show, such as a `compose.yaml`,
+    /// `.cargo/config.toml`, or `.npmrc`. An approval must show the exact
+    /// argument vector and warn about both.
+    ///
+    /// A command qualifies when its first word is the executable's file
+    /// name and it consists only of words of printable ASCII separated by
+    /// spaces and tabs, without quotes, escapes, expansions, globs, or
+    /// operators: none of `;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, backquote,
+    /// backslash, `'`, `"`, `*`, `?`, `[`, `]`, `{`, `}`, `~`, `!`, or `#`.
+    /// The harness executes the executable resolved now directly with those
+    /// words as arguments, with no shell, so workspace file names cannot
+    /// become arguments. It runs in the workspace with a minimal environment
+    /// the host controls: a `PATH` of the existing absolute directories
+    /// outside the places commands can write, `HOME`, `USER`, `LOGNAME`,
+    /// `LANG`, `LC_*`, and `TERM` from the harness process, and the values
+    /// [`Self::with_excluded_environment`] passes; never the values
+    /// [`Self::with_environment`] grants or the temporary directory. The
+    /// harness refuses the turn when the executable or one of those values
+    /// lies inside the workspace, the temporary directory, or a writable
+    /// root.
     /// The excluded command's record names the unsandboxed executor. It
     /// applies only to a configuration whose executor enforces isolation,
     /// and the model-facing `bash` description names the program.
@@ -573,25 +593,38 @@ impl BashConfig {
     /// and `TMPDIR` once [`Self::with_temporary_directory`] set it.
     pub fn with_environment(mut self, name: String, value: String) -> Result<Self, BashError> {
         if (name == TEMPORARY_DIRECTORY_VARIABLE && self.snapshot.temporary_directory.is_some())
-            || name.is_empty()
-            || name.contains(['=', '\0'])
-            || value.contains('\0')
-            || name.len() > 256
-            || self.environment.len() >= 64
-            || self
-                .environment
-                .iter()
-                .map(|(key, value)| key.len() + value.len())
-                .sum::<usize>()
-                .saturating_add(name.len())
-                .saturating_add(value.len())
-                > 65536
-            || self.environment.contains_key(&name)
+            || !valid_variable(&self.environment, &name, &value)
         {
             return Err(BashError::InvalidPolicy);
         }
         self.environment.insert(name, value);
         self.snapshot.environment_names = self.environment.keys().cloned().collect();
+
+        Ok(self)
+    }
+
+    /// Passes one environment value to the commands
+    /// [`Self::with_excluded_command`] runs outside the sandbox, such as a
+    /// `GH_TOKEN` for an excluded `gh`. Excluded commands get none of the
+    /// values [`Self::with_environment`] grants: only these, a sanitized
+    /// `PATH`, and `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_*`, and `TERM`
+    /// from the harness process. The policy revision identifies the value;
+    /// snapshots retain only its name.
+    ///
+    /// # Errors
+    /// Rejects empty, duplicate, NUL-containing, or invalid variable names,
+    /// and `PATH`, which the harness sets.
+    pub fn with_excluded_environment(
+        mut self,
+        name: String,
+        value: String,
+    ) -> Result<Self, BashError> {
+        if name == "PATH" || !valid_variable(&self.excluded_environment, &name, &value) {
+            return Err(BashError::InvalidPolicy);
+        }
+        self.excluded_environment.insert(name, value);
+        self.snapshot.excluded_environment_names =
+            self.excluded_environment.keys().cloned().collect();
 
         Ok(self)
     }
@@ -661,8 +694,12 @@ impl BashConfig {
     /// with, without a shell, when `command` is a simple command invoking
     /// it: plain words, which need no expansion.
     pub(crate) fn excluded_program(&self, command: &str) -> Option<(&Path, Vec<String>)> {
+        // Printable ASCII only, so an approval displays exactly the words
+        // that run: no Unicode spaces, line separators, bidirectional
+        // overrides, or zero-width characters.
         if command.chars().any(|character| {
-            character.is_control() && character != '\t' || EXCLUDED_SYNTAX.contains(&character)
+            !(character.is_ascii_graphic() || character == ' ' || character == '\t')
+                || EXCLUDED_SYNTAX.contains(&character)
         }) {
             return None;
         }
@@ -740,6 +777,7 @@ impl PartialEq for BashConfig {
     fn eq(&self, other: &Self) -> bool {
         self.enforcement == other.enforcement
             && self.environment == other.environment
+            && self.excluded_environment == other.excluded_environment
             && self.snapshot == other.snapshot
     }
 }
@@ -761,6 +799,9 @@ pub(crate) struct BashPolicySnapshot {
     /// resolved executables.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) excluded_commands: BTreeMap<String, PathBuf>,
+    /// [`BashConfig::with_excluded_environment`] names, never values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) excluded_environment_names: Vec<String>,
     /// Selected executor identity. Legacy snapshots predate executor
     /// selection and decode as the native default; the native identity is
     /// skipped on write so their recorded fingerprints stay stable.
@@ -902,6 +943,24 @@ fn valid_path(path: &Path, absolute: bool) -> bool {
         && !path
             .components()
             .any(|part| matches!(part, std::path::Component::ParentDir))
+}
+
+/// Returns whether `environment` accepts `name` set to `value`: a valid,
+/// new name and a value within the shared size bounds.
+fn valid_variable(environment: &BTreeMap<String, String>, name: &str, value: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['=', '\0'])
+        && !value.contains('\0')
+        && name.len() <= 256
+        && environment.len() < 64
+        && environment
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum::<usize>()
+            .saturating_add(name.len())
+            .saturating_add(value.len())
+            <= 65536
+        && !environment.contains_key(name)
 }
 
 fn has_git_component(path: &Path) -> bool {

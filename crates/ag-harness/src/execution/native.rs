@@ -417,7 +417,7 @@ async fn resolve_outside_grants(
     for root in policy.writable_roots() {
         let (canonical, node) = directory_identity(files, root).await?;
         // Overlapping the workspace also rules out `/`.
-        if !cache_root(&canonical, &homes)
+        if !allowed_root(&canonical, &homes)
             || overlaps(&canonical, workspace)
             || access
                 .git_metadata
@@ -429,14 +429,10 @@ async fn resolve_outside_grants(
         access.writes.push(canonical);
         access.write_nodes.push(node);
     }
-    let mut hidden = policy.hidden_paths().to_vec();
-    if policy.allows_full_disk_read() {
-        hidden.extend(builtin_hidden_paths(files, policy, &homes).await?);
-    }
     // A hidden path inside a writable directory could be read after
     // renaming one of its parents.
-    for path in hidden {
-        let resolved = resolve_hidden(files, &path).await;
+    for path in policy.hidden_paths() {
+        let resolved = resolve_hidden(files, path).await;
         if workspace.starts_with(&resolved)
             || access
                 .writes
@@ -446,6 +442,25 @@ async fn resolve_outside_grants(
             return Err(ExecutionError::Unsupported);
         }
         access.hidden_paths.push(resolved);
+    }
+    if policy.allows_full_disk_read() {
+        // A built-in store inside the workspace or a writable directory,
+        // such as a `CARGO_HOME` in the temporary directory, belongs to
+        // the session.
+        for path in builtin_hidden_paths(files, policy, &homes).await? {
+            let resolved = resolve_hidden(files, &path).await;
+            if workspace.starts_with(&resolved) {
+                return Err(ExecutionError::Unsupported);
+            }
+            let session_owned = resolved.starts_with(workspace)
+                || access
+                    .writes
+                    .iter()
+                    .any(|write| resolved.starts_with(write));
+            if !session_owned {
+                access.hidden_paths.push(resolved);
+            }
+        }
     }
     // Sockets were resolved when configured; one a command could replace
     // would widen the grant.
@@ -479,16 +494,11 @@ async fn homes(
         return Err(ExecutionError::Unsupported);
     }
     let mut homes = account.into_iter().collect::<Vec<_>>();
-    let command_home = policy
-        .environment()
-        .get(std::ffi::OsStr::new("HOME"))
-        .map(PathBuf::from)
-        .filter(|home| home.is_absolute());
     let temporary = match policy.temporary_directory() {
         Some(temporary) => Some(resolve_hidden(files, temporary).await),
         None => None,
     };
-    for home in files.host_home().await.into_iter().chain(command_home) {
+    for home in variable_paths(files, policy, "HOME").await {
         let home = resolve_hidden(files, &home).await;
         // A home inside the workspace or the temporary directory belongs
         // to the session, not to the user.
@@ -504,14 +514,99 @@ async fn homes(
     Ok(homes)
 }
 
+/// Returns the absolute paths the variable `name` holds in this process's
+/// environment and in the commands', each split into its `:`-separated
+/// entries.
+async fn variable_paths(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+    name: &str,
+) -> Vec<PathBuf> {
+    let command = policy
+        .environment()
+        .get(std::ffi::OsStr::new(name))
+        .cloned();
+
+    files
+        .host_variable(name)
+        .await
+        .into_iter()
+        .chain(command)
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .filter(|path| path.is_absolute())
+        .collect()
+}
+
+/// Credential stores that variables move out of the home directory: each
+/// variable with the entries it names, or itself when the list is empty.
+const RELOCATED_STORES: [(&str, &[&str]); 15] = [
+    ("CARGO_HOME", &["credentials", "credentials.toml"]),
+    (
+        "XDG_CONFIG_HOME",
+        &[
+            "gh",
+            "hub",
+            "gcloud",
+            "git/credentials",
+            "google-chrome",
+            "chromium",
+            "BraveSoftware",
+            "microsoft-edge",
+        ],
+    ),
+    ("XDG_DATA_HOME", &["fish/fish_history"]),
+    ("GNUPGHOME", &[]),
+    ("DOCKER_CONFIG", &["config.json"]),
+    ("KUBECONFIG", &[]),
+    ("GH_CONFIG_DIR", &[]),
+    ("CODEX_HOME", &["auth.json"]),
+    ("CLAUDE_CONFIG_DIR", &[".credentials.json"]),
+    ("AWS_SHARED_CREDENTIALS_FILE", &[]),
+    ("AWS_CONFIG_FILE", &[]),
+    ("GOOGLE_APPLICATION_CREDENTIALS", &[]),
+    ("NPM_CONFIG_USERCONFIG", &[]),
+    ("npm_config_userconfig", &[]),
+    ("HISTFILE", &[]),
+];
+
+/// Returns the credential stores the variables in [`RELOCATED_STORES`]
+/// name in this process's environment or the commands'.
+async fn relocated_stores(files: &dyn Inspection, policy: &ExecutionPolicy) -> Vec<PathBuf> {
+    let mut stores = Vec::new();
+    for (variable, entries) in RELOCATED_STORES {
+        for base in variable_paths(files, policy, variable).await {
+            if entries.is_empty() {
+                stores.push(base);
+            } else {
+                stores.extend(entries.iter().map(|entry| base.join(entry)));
+            }
+        }
+    }
+
+    stores
+}
+
 /// Credential stores inside a home directory that full-disk reads always
 /// hide, browser profiles included.
-const BUILTIN_HIDDEN_HOME_PATHS: [&str; 30] = [
+const BUILTIN_HIDDEN_HOME_PATHS: [&str; 43] = [
     "Library/Keychains",
     "Library/Cookies",
     "Library/Application Support/Firefox",
     "Library/Application Support/Google/Chrome",
     "Library/Application Support/Chromium",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Thunderbird",
+    ".config/BraveSoftware",
+    ".config/microsoft-edge",
+    ".thunderbird",
+    ".m2/settings.xml",
+    ".m2/settings-security.xml",
+    ".gradle/gradle.properties",
+    ".bash_history",
+    ".zsh_history",
+    ".local/share/fish/fish_history",
+    ".python_history",
     ".ssh",
     ".aws",
     ".azure",
@@ -557,6 +652,7 @@ async fn builtin_hidden_paths(
         .iter()
         .flat_map(|home| BUILTIN_HIDDEN_HOME_PATHS.iter().map(|path| home.join(path)))
         .collect::<Vec<_>>();
+    paths.extend(relocated_stores(files, policy).await);
     paths.push(PathBuf::from("/run/secrets"));
     if let Some(temporary) = policy.temporary_directory() {
         let temporary = resolve_hidden(files, temporary).await;
@@ -595,16 +691,6 @@ async fn resolve_hidden(files: &dyn Inspection, path: &Path) -> PathBuf {
     resolved
 }
 
-/// Caches inside a home directory where writable roots may lie: data-only
-/// stores whose contents tools verify before use, against a lock file or a
-/// checksum database, so a planted entry is rejected rather than run.
-const HOME_CACHES: [&str; 4] = [
-    ".cargo/registry/cache",
-    ".cargo/git/db",
-    ".npm/_cacache",
-    "go/pkg/mod/cache/download",
-];
-
 /// System and toolchain directories a writable root must not overlap.
 const SYSTEM_DIRECTORIES: [&str; 17] = [
     "/home/linuxbrew",
@@ -626,20 +712,15 @@ const SYSTEM_DIRECTORIES: [&str; 17] = [
     "/var/lib",
 ];
 
-/// Returns whether the resolved writable root `root` is a cache location
-/// whose contents tools verify before use: inside one of `homes`, within
-/// one of the known caches; outside them, a directory that neither contains
-/// a home nor overlaps system or toolchain directories.
-fn cache_root(root: &Path, homes: &[PathBuf]) -> bool {
-    match homes.iter().find_map(|home| root.strip_prefix(home).ok()) {
-        Some(relative) => HOME_CACHES.iter().any(|cache| relative.starts_with(cache)),
-        None => {
-            !homes.iter().any(|home| home.starts_with(root))
-                && !SYSTEM_DIRECTORIES
-                    .iter()
-                    .any(|system| overlaps(root, Path::new(system)))
-        }
-    }
+/// Returns whether the resolved writable root `root` may be granted: it
+/// overlaps no home directory, where host tools would later run what a
+/// command planted (even caches they claim to verify), and no system or
+/// toolchain directory.
+fn allowed_root(root: &Path, homes: &[PathBuf]) -> bool {
+    !homes.iter().any(|home| overlaps(root, home))
+        && !SYSTEM_DIRECTORIES
+            .iter()
+            .any(|system| overlaps(root, Path::new(system)))
 }
 
 /// Returns whether one of two paths contains the other.
@@ -809,7 +890,9 @@ impl BashProcess for NativeProcess {
         }
         #[cfg(target_os = "macos")]
         validate_executable(&LocalInspection, Path::new(SEATBELT), policy.workspace()).await?;
-        let access = resolve_access(&LocalInspection, policy).await?;
+        // Resolving every grant awaits many path checks; keep its state off
+        // the stack of the turns that prepare commands.
+        let access = Box::pin(resolve_access(&LocalInspection, policy)).await?;
         let launch = self.launch(command, policy, access)?;
         self.encoded = serde_json::to_vec(&launch).map_err(|_| ExecutionError::Setup)?;
         if self.encoded.len() > 1024 * 1024 {
@@ -931,8 +1014,8 @@ trait Inspection: Send + Sync {
     async fn try_exists(&self, path: &Path) -> io::Result<bool>;
     /// The resolved home directory of this process's user, if known.
     async fn home(&self) -> Option<PathBuf>;
-    /// This process's `HOME`, when it is absolute.
-    async fn host_home(&self) -> Option<PathBuf>;
+    /// The value of this process's environment variable `name`.
+    async fn host_variable(&self, name: &str) -> Option<std::ffi::OsString>;
 }
 
 struct LocalInspection;
@@ -949,10 +1032,8 @@ impl Inspection for LocalInspection {
         Some(tokio::fs::canonicalize(&home).await.unwrap_or(home))
     }
 
-    async fn host_home(&self) -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|home| home.is_absolute())
+    async fn host_variable(&self, name: &str) -> Option<std::ffi::OsString> {
+        std::env::var_os(name)
     }
 
     async fn metadata(&self, path: &Path) -> io::Result<Metadata> {

@@ -27,6 +27,10 @@ use crate::reservation::WriteJournal;
 /// Bash's compiled default, which ends in the working directory.
 const DEFAULT_EXCLUDED_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
+/// Variables of the harness process that excluded commands inherit, besides
+/// `LC_*`: identity, locale, and terminal, which the host controls.
+const EXCLUDED_HOST_VARIABLES: [&str; 5] = ["HOME", "USER", "LOGNAME", "LANG", "TERM"];
+
 pub(crate) struct BashTool {
     cleanup_scope: CommandCleanupScope,
     commands: Commands,
@@ -107,8 +111,7 @@ impl BashTool {
         if let Some((excluded, executable, words)) = self.excluded_launch(arguments, unsandboxed) {
             let words = words.into_iter().map(OsString::from).collect();
 
-            return excluded
-                .run(executable.to_path_buf(), words, arguments, call_id)
+            return Box::pin(excluded.run(executable.to_path_buf(), words, arguments, call_id))
                 .await;
         }
         let words = vec![
@@ -118,12 +121,14 @@ impl BashTool {
             arguments.command().into(),
         ];
 
-        self.run(
+        // Commands are supervised in a boxed future, keeping each turn's
+        // future small.
+        Box::pin(self.run(
             self.configuration.snapshot.bash.clone(),
             words,
             arguments,
             call_id,
-        )
+        ))
         .await
     }
 
@@ -162,13 +167,16 @@ impl BashTool {
     }
 
     /// Returns the configuration excluded commands run with: no isolation,
-    /// and a `PATH` without relative entries or directories commands can
-    /// write.
+    /// no temporary directory, and only a host-controlled environment: a
+    /// `PATH` without relative entries or directories commands can write,
+    /// the identity and locale variables of the harness process, and the
+    /// values passed for excluded commands.
     ///
     /// # Errors
-    /// Returns [`BashError::InvalidPolicy`] when an excluded executable lies
-    /// inside the workspace, the temporary directory, or a writable root,
-    /// where a command could replace it.
+    /// Returns [`BashError::InvalidPolicy`] when an excluded executable or
+    /// an environment value lies inside the workspace, the temporary
+    /// directory, or a writable root, where a command could plant what it
+    /// names.
     fn excluded_configuration(
         configuration: &BashConfig,
         root: &Path,
@@ -204,11 +212,31 @@ impl BashTool {
                     .is_ok_and(|resolved| resolved.is_dir() && !inside_writable(&resolved))
         }))
         .unwrap_or_default();
+        // `std::env::vars` panics on a value that is not Unicode; skip those.
+        let mut environment = std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .filter(|(name, _)| {
+                EXCLUDED_HOST_VARIABLES.contains(&name.as_str()) || name.starts_with("LC_")
+            })
+            .chain(configuration.excluded_environment.clone())
+            .collect::<std::collections::BTreeMap<_, _>>();
+        // A value naming a path commands can write would let them plant
+        // what the unsandboxed program reads.
+        if environment.values().any(|value| {
+            std::env::split_paths(value).any(|entry| {
+                entry.is_absolute()
+                    && (inside_writable(&entry)
+                        || std::fs::canonicalize(&entry)
+                            .is_ok_and(|resolved| inside_writable(&resolved)))
+            })
+        }) {
+            return Err(BashError::InvalidPolicy);
+        }
+        environment.insert("PATH".into(), path.to_string_lossy().into_owned());
         let mut excluded = configuration.unsandboxed();
-        excluded
-            .environment
-            .insert("PATH".into(), path.to_string_lossy().into_owned());
+        excluded.environment = environment;
         excluded.snapshot.environment_names = excluded.environment.keys().cloned().collect();
+        excluded.snapshot.temporary_directory = None;
 
         Ok(excluded)
     }
