@@ -1705,11 +1705,19 @@ async fn otlp_endpoint_exports_content_free_turn_traces_and_metrics() {
                 .map(|span| span.name.clone()),
         );
     }
-    assert!(span_names.contains(&"invoke_agent".to_string()));
-    assert!(span_names.contains(&"chat muse-test".to_string()));
-    assert!(span_names.contains(&"execute_tool read".to_string()));
-    assert!(metric_names.contains(&"gen_ai.client.operation.duration".to_string()));
-    assert!(metric_names.contains(&"gen_ai.client.token.usage".to_string()));
+    assert!(span_names.iter().any(|name| name == "invoke_agent"));
+    assert!(span_names.iter().any(|name| name == "chat muse-test"));
+    assert!(span_names.iter().any(|name| name == "execute_tool read"));
+    assert!(
+        metric_names
+            .iter()
+            .any(|name| name == "gen_ai.client.operation.duration")
+    );
+    assert!(
+        metric_names
+            .iter()
+            .any(|name| name == "gen_ai.client.token.usage")
+    );
 }
 
 #[test]

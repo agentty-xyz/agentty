@@ -79,8 +79,18 @@ fn lookup_command_limits_lookup_to_open_pull_requests() {
     let command = GitHubReviewRequestAdapter::lookup_command(&remote, "feature/forge");
 
     // Assert
-    assert!(command.arguments.contains(&"state=open".to_string()));
-    assert!(!command.arguments.contains(&"state=all".to_string()));
+    assert!(
+        command
+            .arguments
+            .iter()
+            .any(|argument| argument == "state=open")
+    );
+    assert!(
+        !command
+            .arguments
+            .iter()
+            .any(|argument| argument == "state=all")
+    );
 }
 
 #[test]
@@ -114,8 +124,18 @@ fn status_command_requests_compact_readiness_fields() {
     );
     assert!(query.contains("RequiredStatusChecksParameters { requiredStatusChecks { context } }"));
     assert!(query.contains("viewerCanMergeAsAdmin"));
-    assert!(command.arguments.contains(&"number=42".to_string()));
-    assert!(!command.arguments.contains(&"--paginate".to_string()));
+    assert!(
+        command
+            .arguments
+            .iter()
+            .any(|argument| argument == "number=42")
+    );
+    assert!(
+        !command
+            .arguments
+            .iter()
+            .any(|argument| argument == "--paginate")
+    );
 }
 
 #[test]

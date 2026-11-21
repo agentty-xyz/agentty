@@ -178,9 +178,9 @@ fn test_render_markdown_wraps_user_prompt_on_word_boundaries() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert!(rendered_lines.contains(&" › one".to_string()));
-    assert!(rendered_lines.contains(&"   two".to_string()));
-    assert!(rendered_lines.contains(&"   three".to_string()));
+    assert!(rendered_lines.iter().any(|line| line == " › one"));
+    assert!(rendered_lines.iter().any(|line| line == "   two"));
+    assert!(rendered_lines.iter().any(|line| line == "   three"));
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn test_render_markdown_wraps_clarification_answer_on_word_boundaries() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert!(rendered_lines.contains(&"      A: very".to_string()));
+    assert!(rendered_lines.iter().any(|line| line == "      A: very"));
     assert!(
         rendered_lines
             .iter()
@@ -228,9 +228,9 @@ fn test_render_markdown_wraps_long_prompt_word_with_hard_fallback() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert!(rendered_lines.contains(&" › super".to_string()));
-    assert!(rendered_lines.contains(&"   calif".to_string()));
-    assert!(rendered_lines.contains(&"   ragil".to_string()));
+    assert!(rendered_lines.iter().any(|line| line == " › super"));
+    assert!(rendered_lines.iter().any(|line| line == "   calif"));
+    assert!(rendered_lines.iter().any(|line| line == "   ragil"));
 }
 
 #[test]

@@ -106,10 +106,25 @@ fn lookup_command_uses_default_open_merge_request_filter() {
     let command = GitLabReviewRequestAdapter::lookup_command(&remote, "feature/forge");
 
     // Assert
-    assert!(!command.arguments.contains(&"--all".to_string()));
-    assert!(!command.arguments.contains(&"--closed".to_string()));
-    assert!(!command.arguments.contains(&"--merged".to_string()));
-    assert!(command.arguments.contains(&"--source-branch".to_string()));
+    assert!(!command.arguments.iter().any(|argument| argument == "--all"));
+    assert!(
+        !command
+            .arguments
+            .iter()
+            .any(|argument| argument == "--closed")
+    );
+    assert!(
+        !command
+            .arguments
+            .iter()
+            .any(|argument| argument == "--merged")
+    );
+    assert!(
+        command
+            .arguments
+            .iter()
+            .any(|argument| argument == "--source-branch")
+    );
 }
 
 #[tokio::test]

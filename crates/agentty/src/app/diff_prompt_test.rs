@@ -1,5 +1,6 @@
 //! Diff prompt chunking, summary reduction, and summary repair unit tests.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -379,7 +380,7 @@ fn chunks_preserve_unicode_newlines_and_file_attribution() {
             .sum::<usize>(),
         100
     );
-    assert!(chunks("", 128).is_empty());
+    assert_eq!(chunks("", 128), VecDeque::new());
 }
 
 #[tokio::test]

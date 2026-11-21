@@ -809,8 +809,8 @@ async fn uncertain_installations_never_run_an_install_command() {
             .times(3)
             .returning(move |program, args, _, timeout| {
                 assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
-                assert!(args.contains(&"--global".to_string()));
-                assert!(!args.contains(&"agentty@latest".to_string()));
+                assert!(args.iter().any(|arg| arg == "--global"));
+                assert!(!args.iter().any(|arg| arg == "agentty@latest"));
                 if case == "spawn" {
                     return Err(VersionError::CommandSpawn {
                         command: program.to_string(),

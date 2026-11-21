@@ -196,9 +196,18 @@ async fn find_by_source_branch_authenticates_once_before_github_lookup() {
         .withf(|command| {
             command.executable == "gh"
                 && command.arguments[..4] == ["api", "--hostname", "github.com", "graphql"]
-                && command.arguments.contains(&"owner=agentty-xyz".to_string())
-                && command.arguments.contains(&"repo=agentty".to_string())
-                && command.arguments.contains(&"number=42".to_string())
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument == "owner=agentty-xyz")
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument == "repo=agentty")
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument == "number=42")
                 && command
                     .arguments
                     .iter()

@@ -610,7 +610,10 @@ fn sidebar_keeps_full_details_when_they_fit_and_handles_non_node_overflow() {
     // Act / Assert
     let rows = inner_rows(Some(&snapshot), 80, 24);
     assert!(rows.contains(&spread("✓ node-0", "Done", 78)));
-    assert!(rows.contains(&"  Inspect the requested change".to_string()));
+    assert!(
+        rows.iter()
+            .any(|row| row == "  Inspect the requested change")
+    );
     assert_eq!(rows[21], "w: details and actions");
     assert!(!rows.join("\n").contains("compact"));
     snapshot.proposal.version.is_cancelled = true;
