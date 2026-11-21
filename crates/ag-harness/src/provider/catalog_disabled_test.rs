@@ -1,4 +1,4 @@
-//! Provider catalog unit tests for builds that omit one client family.
+//! Provider catalog unit tests for builds that omit a client family.
 
 #[cfg(feature = "providers-openai")]
 use std::path::PathBuf;
@@ -17,15 +17,21 @@ fn disabled_providers() -> Vec<ModelProvider> {
 #[test]
 fn only_the_compiled_family_is_enabled() {
     // Arrange
-    #[cfg(feature = "providers-openai")]
+    let has_anthropic = cfg!(feature = "providers-anthropic");
+    let has_compat = cfg!(feature = "providers-compat");
+    let has_openai = cfg!(feature = "providers-openai");
     let expected = [
-        ModelProvider::Muse,
-        ModelProvider::Kimi,
-        ModelProvider::Qwen,
-        ModelProvider::OpenAiCompatible,
-    ];
-    #[cfg(feature = "providers-compat")]
-    let expected = [ModelProvider::OpenAi, ModelProvider::ChatGpt];
+        (ModelProvider::Muse, has_compat),
+        (ModelProvider::Kimi, has_compat),
+        (ModelProvider::Qwen, has_compat),
+        (ModelProvider::OpenAi, has_openai),
+        (ModelProvider::ChatGpt, has_openai),
+        (ModelProvider::Anthropic, has_anthropic),
+        (ModelProvider::OpenAiCompatible, has_compat),
+    ]
+    .into_iter()
+    .filter_map(|(provider, enabled)| (!enabled).then_some(provider))
+    .collect::<Vec<_>>();
 
     // Act
     let disabled = disabled_providers();

@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+const CLAUDE_MODEL: &str = "claude-opus-5-5";
 const MUSE_MODEL: &str = "muse-spark-1.3";
 const QWEN_MODEL: &str = "qwen-plus";
 /// Locally served model whose declared 128,000-token window is far smaller
@@ -1261,6 +1262,239 @@ async fn openai_turn_streams_responses_and_replays_reasoning_with_tool_results()
         replayed[reasoning_at + 2]["output"]
             .as_str()
             .is_some_and(|output| output.contains("hosted notes"))
+    );
+}
+
+/// Returns one streamed Anthropic Messages response of the whole content
+/// `blocks`, stopped for `stop_reason`.
+fn messages_stream(blocks: &[Value], stop_reason: &str) -> ResponseTemplate {
+    let mut events = vec![json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_turn",
+            "model": CLAUDE_MODEL,
+            "content": [],
+            "usage": {"input_tokens": 8, "cache_read_input_tokens": 32, "output_tokens": 1}
+        }
+    })];
+    for (index, block) in blocks.iter().enumerate() {
+        let (started, deltas) = match block["type"].as_str() {
+            Some("thinking") => (
+                json!({"type": "thinking", "thinking": "", "signature": ""}),
+                vec![
+                    json!({"type": "thinking_delta", "thinking": block["thinking"]}),
+                    json!({"type": "signature_delta", "signature": block["signature"]}),
+                ],
+            ),
+            Some("tool_use") => (
+                json!({"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}),
+                vec![json!({
+                    "type": "input_json_delta",
+                    "partial_json": block["input"].to_string()
+                })],
+            ),
+            _ => (
+                json!({"type": "text", "text": ""}),
+                vec![json!({"type": "text_delta", "text": block["text"]})],
+            ),
+        };
+        events
+            .push(json!({"type": "content_block_start", "index": index, "content_block": started}));
+        events.extend(
+            deltas.into_iter().map(
+                |delta| json!({"type": "content_block_delta", "index": index, "delta": delta}),
+            ),
+        );
+        events.push(json!({"type": "content_block_stop", "index": index}));
+    }
+    events.push(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason},
+        "usage": {"output_tokens": 8}
+    }));
+    events.push(json!({"type": "message_stop"}));
+    let body = events.iter().fold(String::new(), |mut body, event| {
+        let kind = event["type"].as_str().unwrap_or_default();
+        let _ = write!(body, "event: {kind}\ndata: {event}\n\n");
+
+        body
+    });
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Mounts one streamed Anthropic Messages response for requests containing
+/// `marker`.
+async fn respond_with_messages(
+    server: &MockServer,
+    marker: &str,
+    response: ResponseTemplate,
+    priority: u8,
+) {
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_string_contains(marker))
+        .respond_with(response)
+        .with_priority(priority)
+        .mount(server)
+        .await;
+}
+
+/// Scripts a Messages server whose first turn opens with `thinking` and a
+/// `read` of `notes.txt` before answering, and whose follow-up turn answers
+/// directly.
+async fn claude_notes_server(thinking: &Value) -> MockServer {
+    let server = MockServer::start().await;
+    let answer = |text: &str| {
+        messages_stream(
+            &[json!({
+                "type": "text",
+                "text": json!({"answer": text, "questions": []}).to_string()
+            })],
+            "end_turn",
+        )
+    };
+    respond_with_messages(&server, "Summarize them", answer("Notes summarized"), 1).await;
+    respond_with_messages(&server, r#""type":"tool_result""#, answer("Notes read"), 2).await;
+    respond_with_messages(
+        &server,
+        "Read the notes",
+        messages_stream(
+            &[
+                thinking.clone(),
+                json!({
+                    "type": "tool_use",
+                    "id": "toolu_notes",
+                    "name": "read",
+                    "input": {"path": "notes.txt"}
+                }),
+            ],
+            "tool_use",
+        ),
+        3,
+    )
+    .await;
+
+    server
+}
+
+/// Returns an Anthropic key and an endpoint at `server`.
+fn anthropic_environment(server: &MockServer) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("ANTHROPIC_API_KEY".to_string(), "sk-ant-key".to_string()),
+        (
+            "ANTHROPIC_BASE_URL".to_string(),
+            format!("{}/v1", server.uri()),
+        ),
+        ("HOME".to_string(), "/tmp".to_string()),
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+    ])
+}
+
+/// Returns `value` without the `cache_control` breakpoints, which move to
+/// the end of each request.
+fn without_cache_control(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => items.iter().map(without_cache_control).collect(),
+        Value::Object(fields) => fields
+            .iter()
+            .filter(|(name, _)| *name != "cache_control")
+            .map(|(name, field)| (name.clone(), without_cache_control(field)))
+            .collect(),
+        other => other.clone(),
+    }
+}
+
+#[tokio::test]
+async fn claude_turn_streams_messages_and_replays_signed_thinking_with_tool_results() {
+    // Arrange
+    let thinking = json!({
+        "type": "thinking",
+        "thinking": "The notes file holds the answer.",
+        "signature": "sig-turn-thinking"
+    });
+    let server = claude_notes_server(&thinking).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "hosted notes\n").expect("notes");
+    let channel = create_agent_channel(
+        AgentKind::Harness,
+        None,
+        Some(&config(data_root.path(), anthropic_environment(&server))),
+    );
+    // A provider-call budget wraps the client, which must keep replaying
+    // each turn's instructions as Anthropic requires.
+    let budgeted = |prompt: &str, continuation: TurnContinuation| TurnRequest {
+        continuation,
+        provider_call_budget: Some(ProviderCallBudget::new(8)),
+        ..turn_request(worktree.path(), CLAUDE_MODEL, prompt)
+    };
+
+    // Act
+    let (first, _) = run_turn(
+        &channel,
+        "session-claude",
+        budgeted("Read the notes", TurnContinuation::fresh()),
+    )
+    .await;
+    let first = first.expect("Claude turn should succeed");
+    let (second, _) = run_turn(
+        &channel,
+        "session-claude",
+        budgeted(
+            "Summarize them",
+            continuing(first.provider_conversation_id.clone()),
+        ),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(first.assistant_message.answer, "Notes read");
+    let second = second.expect("the follow-up Claude turn should succeed");
+    assert_eq!(second.assistant_message.answer, "Notes summarized");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 3);
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("x-api-key")
+            .is_some_and(|value| value == "sk-ant-key")
+            && request.headers.get("authorization").is_none()
+    }));
+    let bodies = requests
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).expect("JSON body"))
+        .collect::<Vec<_>>();
+    for body in &bodies {
+        assert_eq!(body["model"], CLAUDE_MODEL);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["max_tokens"], 128_000);
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+    }
+    let replayed = bodies[1]["messages"].as_array().expect("messages");
+    let assistant = replayed
+        .iter()
+        .position(|message| message["role"] == "assistant")
+        .expect("the tool call should be replayed");
+    assert_eq!(replayed[assistant]["content"][0], thinking);
+    assert_eq!(replayed[assistant]["content"][1]["type"], "tool_use");
+    assert_eq!(replayed[assistant]["content"][1]["id"], "toolu_notes");
+    let tool_result = &replayed[assistant + 1]["content"][0];
+    assert_eq!(tool_result["type"], "tool_result");
+    assert_eq!(tool_result["tool_use_id"], "toolu_notes");
+    assert!(tool_result.to_string().contains("hosted notes"));
+    // The follow-up turn only grows the first turn's request, so its signed
+    // thinking stays valid.
+    let earlier = without_cache_control(&bodies[1]["messages"]);
+    let later = without_cache_control(&bodies[2]["messages"]);
+    let earlier = earlier.as_array().expect("messages");
+    assert_eq!(
+        later.as_array().expect("messages")[..earlier.len()],
+        earlier[..]
     );
 }
 

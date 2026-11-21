@@ -480,9 +480,10 @@ impl ProviderSpec {
     /// summarized adaptive thinking. Every Claude model shares one reasoning
     /// family, so a switch between Claude models replays signed thinking,
     /// which the API ignores for a model that cannot read it, while a switch
-    /// to another provider carries it as a short note. Serve it with
-    /// [`crate::model::ModelClient::from_spec`]; the catalog lists no Claude
-    /// model yet, so the host declares the context profile and prices.
+    /// to another provider carries it as a short note.
+    /// [`crate::model::ModelClient::anthropic`] sends it with the catalog's
+    /// context profile and output limit; served through
+    /// [`crate::model::ModelClient::from_spec`], the host declares both.
     #[cfg(feature = "providers-anthropic")]
     pub fn anthropic(config: AnthropicConfig) -> Self {
         Self::preset(

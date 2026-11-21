@@ -520,6 +520,58 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
 }
 
+#[cfg(all(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
+#[test]
+fn environment_catalogs_claude_models_after_other_role_candidates() {
+    // Arrange
+    let claude_only = lookup(&[("ANTHROPIC_API_KEY", "claude-key")]);
+    let with_openai = lookup(&[
+        ("ANTHROPIC_API_KEY", "claude-key"),
+        ("OPENAI_API_KEY", "openai-key"),
+    ]);
+
+    // Act
+    let claude_only = ModelCatalog::from_environment_with(claude_only).expect("valid environment");
+    let with_openai = ModelCatalog::from_environment_with(with_openai).expect("valid environment");
+
+    // Assert
+    assert_eq!(
+        spec_ids(&claude_only),
+        [
+            "anthropic/claude-fable-5-2",
+            "anthropic/claude-haiku-5-5",
+            "anthropic/claude-opus-5-5",
+            "anthropic/claude-sonnet-5-5",
+        ]
+    );
+    for role in [Role::SMART, Role::VISION] {
+        assert_eq!(
+            ids(claude_only.candidates(&role)),
+            ["anthropic/claude-opus-5-5"],
+            "{role}"
+        );
+    }
+    for role in [Role::CHEAP, Role::FAST] {
+        assert_eq!(
+            ids(claude_only.candidates(&role)),
+            ["anthropic/claude-haiku-5-5"],
+            "{role}"
+        );
+    }
+    assert_eq!(
+        ids(with_openai.candidates(&Role::SMART)),
+        ["openai/gpt-6.1-sol", "anthropic/claude-opus-5-5"]
+    );
+    assert_eq!(
+        ids(with_openai.candidates(&Role::FAST)),
+        ["openai/gpt-6-luna", "anthropic/claude-haiku-5-5"]
+    );
+}
+
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_skips_a_provider_whose_required_base_url_is_absent() {

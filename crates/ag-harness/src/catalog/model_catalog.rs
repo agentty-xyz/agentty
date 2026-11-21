@@ -20,9 +20,9 @@ use crate::model::Model;
 use crate::model_profile::ModelProfile;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use crate::provider::{
-    CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_LUNA, GPT_6_1_SOL, GPT_6_LUNA, KIMI_K2_6, KIMI_K3,
-    MUSE_SPARK_1_3, ModelConfiguration, ModelConfigurationError, ModelProvider, QWEN3_7_FLASH,
-    QWEN3_8_FLASH, QWEN3_8_MAX,
+    CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_LUNA, CLAUDE_HAIKU_5_5, CLAUDE_OPUS_5_5, GPT_6_1_SOL,
+    GPT_6_LUNA, KIMI_K2_6, KIMI_K3, MUSE_SPARK_1_3, ModelConfiguration, ModelConfigurationError,
+    ModelProvider, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX,
 };
 
 /// Built-in models, by provider and model identifier, in preference order.
@@ -38,6 +38,7 @@ const SMART_CANDIDATES: Candidates = &[
     (ModelProvider::Muse, MUSE_SPARK_1_3),
     (ModelProvider::Kimi, KIMI_K3),
     (ModelProvider::Qwen, QWEN3_8_MAX),
+    (ModelProvider::Anthropic, CLAUDE_OPUS_5_5),
 ];
 /// Candidates of [`Role::CHEAP`] in the environment catalog.
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -47,6 +48,7 @@ const CHEAP_CANDIDATES: Candidates = &[
     (ModelProvider::Qwen, QWEN3_8_FLASH),
     (ModelProvider::Qwen, QWEN3_7_FLASH),
     (ModelProvider::Kimi, KIMI_K2_6),
+    (ModelProvider::Anthropic, CLAUDE_HAIKU_5_5),
 ];
 /// Candidates of [`Role::FAST`] in the environment catalog.
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -55,6 +57,7 @@ const FAST_CANDIDATES: Candidates = &[
     (ModelProvider::OpenAi, GPT_6_LUNA),
     (ModelProvider::Qwen, QWEN3_8_FLASH),
     (ModelProvider::Qwen, QWEN3_7_FLASH),
+    (ModelProvider::Anthropic, CLAUDE_HAIKU_5_5),
 ];
 /// Default role candidates of the environment catalog, in order.
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
@@ -80,12 +83,12 @@ const DEFAULT_ROLES: &[(Role, Candidates)] = &[
 /// built-in model whose provider the build includes and the environment
 /// configures, with these default role candidates:
 ///
-/// | Role             | Candidates, in order                                                                                       |
-/// | ---------------- | ---------------------------------------------------------------------------------------------------------- |
-/// | [`Role::SMART`]  | `chatgpt/gpt-6.1-sol`, `openai/gpt-6.1-sol`, `muse/muse-spark-1.3`, `kimi/kimi-k3`, `qwen/qwen3.8-max`     |
-/// | [`Role::CHEAP`]  | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `kimi/kimi-k2.6`    |
-/// | [`Role::FAST`]   | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`                      |
-/// | [`Role::VISION`] | the [`Role::SMART`] candidates that read images                                                            |
+/// | Role             | Candidates, in order                                                                                                                  |
+/// | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+/// | [`Role::SMART`]  | `chatgpt/gpt-6.1-sol`, `openai/gpt-6.1-sol`, `muse/muse-spark-1.3`, `kimi/kimi-k3`, `qwen/qwen3.8-max`, `anthropic/claude-opus-5-5`   |
+/// | [`Role::CHEAP`]  | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `kimi/kimi-k2.6`, `anthropic/claude-haiku-5-5` |
+/// | [`Role::FAST`]   | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`, `anthropic/claude-haiku-5-5`                   |
+/// | [`Role::VISION`] | the [`Role::SMART`] candidates that read images                                                                                       |
 ///
 /// A role keeps only the candidates that are cataloged, declare a context
 /// profile, and have the role's required capabilities, so every default

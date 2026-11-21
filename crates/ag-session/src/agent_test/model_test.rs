@@ -385,8 +385,10 @@ fn test_agent_selection_falls_back_to_the_provider_default_model() {
 
 #[test]
 /// Ensures the harness lists every model of its own catalog block and shares
-/// the Codex models the Responses API serves, without Codex Spark.
-fn test_harness_models_include_its_own_and_shared_codex_models() {
+/// the Codex models the Responses API serves, without Codex Spark, and the
+/// Claude models the Anthropic Messages API serves, which stay owned by the
+/// Claude backend.
+fn test_harness_models_include_its_own_and_shared_codex_and_claude_models() {
     // Arrange
     let harness_models = AgentKind::Harness.models();
 
@@ -400,6 +402,15 @@ fn test_harness_models_include_its_own_and_shared_codex_models() {
     assert!(!AgentKind::Harness.supports_model(AgentModel::Gpt53CodexSpark));
     assert!(AgentKind::Harness.supports_model(AgentModel::ChatGptGpt61Sol));
     assert!(!AgentKind::Codex.supports_model(AgentModel::ChatGptGpt61Sol));
+    for model in AgentKind::Claude.models() {
+        assert!(AgentKind::Harness.supports_model(*model), "{model:?}");
+        assert_eq!(model.owner_kind(), AgentKind::Claude, "{model:?}");
+    }
+    assert_eq!(
+        harness_models.last(),
+        Some(&AgentModel::ClaudeHaiku55),
+        "Claude models follow every other hosted model"
+    );
     assert_eq!(
         AgentModel::OpenAiCompatible(ServedModel::CONFIGURED).owner_kind(),
         AgentKind::Harness

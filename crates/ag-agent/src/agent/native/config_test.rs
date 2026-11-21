@@ -184,6 +184,7 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
         .iter()
         .map(|option| (option.model, option.cost, option.status))
         .collect::<Vec<_>>();
+    let anthropic = HarnessModelStatus::MissingConfiguration("ANTHROPIC_API_KEY");
     let dashscope = HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY");
     let openai = HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY");
     let ready = HarnessModelStatus::Ready;
@@ -213,6 +214,10 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
             (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
             (AgentModel::Gpt56Terra, ModelCost::Standard, openai),
+            (AgentModel::ClaudeFable52, ModelCost::Premium, anthropic),
+            (AgentModel::ClaudeOpus55, ModelCost::Premium, anthropic),
+            (AgentModel::ClaudeSonnet55, ModelCost::Standard, anthropic),
+            (AgentModel::ClaudeHaiku55, ModelCost::Cheap, anthropic),
         ]
     );
     assert_eq!(options[0].provider, "OpenAI-compatible server");
@@ -221,6 +226,7 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     assert_eq!(options[5].provider, "Qwen");
     assert_eq!(options[9].provider, "ChatGPT plan");
     assert_eq!(options[17].provider, "OpenAI");
+    assert_eq!(options[21].provider, "Anthropic");
     // Only Muse's contributor tier lets the provider train on prompts.
     assert_eq!(
         options
@@ -297,6 +303,7 @@ fn providers_have_display_names() {
             "Qwen",
             "OpenAI",
             "ChatGPT plan",
+            "Anthropic",
             "OpenAI-compatible server"
         ]
     );
@@ -594,7 +601,7 @@ fn model_selection_round_trips_registration_keys() {
     assert_eq!(ModelSelection::from_key(&key), Some(selection));
     assert_eq!(ModelSelection::from_key("kimi-k3"), None);
     assert_eq!(ModelSelection::from_key("qwen/kimi-k3"), None);
-    assert!(ModelSelection::resolve("claude-opus-5-5", &environment(&[])).is_err());
+    assert!(ModelSelection::resolve("claude-unlisted", &environment(&[])).is_err());
 }
 
 #[test]
@@ -698,6 +705,7 @@ fn registrations_declare_revision_profiles_and_capabilities() {
     let environment = environment(&[
         ("DASHSCOPE_API_KEY", "key"),
         ("DASHSCOPE_BASE_URL", "http://qwen"),
+        ("ANTHROPIC_API_KEY", "key"),
         ("KIMI_API_KEY", "key"),
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "key"),
@@ -813,6 +821,8 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
     // Arrange
     let environment = environment(&[
         ("AAA", "first"),
+        ("ANTHROPIC_API_KEY", "secret"),
+        ("ANTHROPIC_BASE_URL", "https://proxy.example/v1"),
         ("CHATGPT_AUTH_FILE", "/home/test/chatgpt.json"),
         ("DASHSCOPE_API_KEY", "secret"),
         ("HOME", "/home/test"),
@@ -978,11 +988,83 @@ async fn budgeted_model_charges_before_each_request() {
     assert!(model.validate_input(&image_input).is_ok());
     assert!(!model.keeps_prefix_across_schemas());
     assert!(!model.replays_reasoning_text());
+    assert!(!model.replays_turn_instructions());
     let error = completion.expect_err("an exhausted budget should refuse the request");
     assert!(
         error.to_string().contains("provider call limit reached"),
         "{error}"
     );
+}
+
+#[test]
+/// Serves Claude ids shared with the Claude Code backend through the
+/// Anthropic provider, under an `anthropic/<model>` key, with or without a
+/// provider-call budget and without credentials when only resuming.
+fn claude_models_register_on_the_anthropic_provider() {
+    // Arrange
+    let worktree = tempfile::tempdir().expect("worktree");
+    let real_path = std::env::var("PATH").expect("test PATH should be set");
+    let keyed = environment(&[("ANTHROPIC_API_KEY", "key"), ("PATH", &real_path)]);
+    let unkeyed = environment(&[("PATH", &real_path)]);
+    let repository = repository(worktree.path(), &unkeyed).expect("repository");
+    let budget = ProviderCallBudget::new(1);
+    let budgeted_client = BudgetedModel {
+        budget: budget.clone(),
+        inner: ModelConfiguration::new(ModelProvider::Anthropic, "claude-opus-5-5")
+            .client_from_environment(|name| {
+                keyed
+                    .get(name)
+                    .cloned()
+                    .ok_or(std::env::VarError::NotPresent)
+            })
+            .expect("client should build"),
+    };
+    let context = HarnessContext {
+        environment: &unkeyed,
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::Medium,
+        repository: &repository,
+        running_context_window: None,
+    };
+
+    // Act
+    let selection = ModelSelection::resolve("claude-opus-5-5", &keyed).expect("served model");
+    let unbudgeted = selection.registry(&keyed, None, None).expect("registry");
+    let budgeted = selection
+        .registry(&keyed, Some(&budget), None)
+        .expect("budgeted registry");
+    let missing_key = selection.registry(&unkeyed, None, None);
+    let resume_only = selection.resume_only_harness(&context, |_: LifecycleEvent| {});
+
+    // Assert
+    assert_eq!(selection.key(), "anthropic/claude-opus-5-5");
+    assert_eq!(
+        ModelSelection::from_key("anthropic/claude-opus-5-5").as_ref(),
+        Some(&selection)
+    );
+    assert_eq!(ModelSelection::from_key("anthropic/claude-unlisted"), None);
+    for registry in [&unbudgeted, &budgeted] {
+        let registration = registry
+            .resolve("anthropic/claude-opus-5-5")
+            .expect("registration");
+        assert_eq!(registration.identity().revision(), "agentty-native-2");
+        assert_eq!(
+            registration.capabilities().profile.context_window_tokens(),
+            1_000_000
+        );
+        assert!(registration.capabilities().image_input);
+    }
+    // Anthropic keeps signed thinking valid only when history replays each
+    // turn's instructions, which a provider-call budget must not hide.
+    assert!(budgeted_client.replays_turn_instructions());
+    let error = missing_key.err().expect("a missing key should be reported");
+    assert!(
+        error.ends_with("Set ANTHROPIC_API_KEY before starting Agentty."),
+        "{error}"
+    );
+    let resume_only = resume_only.expect("resume-only harness");
+    let registration = resume_only.model_registration().expect("registration");
+    assert_eq!(registration.identity().key(), "anthropic/claude-opus-5-5");
 }
 
 #[test]

@@ -14,6 +14,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! [`ModelProvider::Anthropic`] serves Claude models through the streamed
+//! Anthropic Messages API with `ANTHROPIC_API_KEY`.
 //! [`ModelProvider::OpenAi`] serves `OpenAI` models through the stateless,
 //! streamed Responses API with `OPENAI_API_KEY`. [`ModelProvider::ChatGpt`]
 //! serves the same API billed to the user's `ChatGPT` plan, authenticated by
@@ -40,9 +42,9 @@
 //! [`WireProtocol`], base URL, [`Auth`], extra headers and query parameters,
 //! and request policy, and serves it through
 //! [`crate::model::ModelClient::from_spec`]. The built-in providers are
-//! presets of the same type, such as [`ProviderSpec::kimi`]; Claude models
-//! are served only this way, through the `ProviderSpec::anthropic` preset,
-//! and have no catalog entry yet.
+//! presets of the same type, such as [`ProviderSpec::kimi`] and the
+//! `ProviderSpec::anthropic` preset behind
+//! `crate::model::ModelClient::anthropic`.
 //!
 //! This module requires a `providers-*` feature. Every cataloged provider's
 //! entries, profiles, and prices are available with `providers-openai` or
@@ -50,12 +52,12 @@
 //! `providers-openai` for [`ModelProvider::OpenAi`] and
 //! [`ModelProvider::ChatGpt`], including the `ChatGPT` sign-in flow,
 //! `providers-compat` for the Chat Completions providers, and
-//! `providers-anthropic` for the Anthropic preset.
+//! `providers-anthropic` for [`ModelProvider::Anthropic`] and the Anthropic
+//! preset.
 //! [`ModelConfiguration::client_from_environment`] returns
 //! `ModelConfigurationError::ProviderDisabled` for a provider whose family
 //! feature is off.
 
-#[cfg(feature = "providers-anthropic")]
 mod anthropic;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 mod catalog;
@@ -85,7 +87,15 @@ pub use ag_router::chatgpt::{ChatGptAuth, ChatGptCredentials, ChatGptLogin};
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
 #[cfg(feature = "providers-anthropic")]
-pub use anthropic::{AnthropicConfig, DEFAULT_ANTHROPIC_BASE_URL};
+pub use anthropic::AnthropicConfig;
+pub use anthropic::{
+    CLAUDE_FABLE_5_2, CLAUDE_HAIKU_5_5, CLAUDE_OPUS_5_5, CLAUDE_SONNET_5_5,
+    DEFAULT_ANTHROPIC_BASE_URL,
+};
+#[cfg(feature = "providers-anthropic")]
+pub(crate) use anthropic::{
+    max_output_tokens as anthropic_max_output_tokens, profile as anthropic_profile,
+};
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub use catalog::{
     ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,

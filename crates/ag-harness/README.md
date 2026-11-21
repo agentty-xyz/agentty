@@ -357,11 +357,11 @@ let outcome = session
   `Usage` counts overlap: `cache_read` and a known `cache_write` are part of `input`,
   and `reasoning` is part of `output`. Uncached input, cache reads, cache writes, and
   output bill at their own prices, and cache reads and writes fall back to the input
-  price when no cache price is declared, as built-in prices do not yet. Each request's
-  exact cost rounds to the nearest micro-USD, halves up, and sums saturate at
-  `u64::MAX`. Models without prices, such as models set with `HarnessBuilder::model` or
-  `switch_model`, OpenAI-compatible servers, and plan-billed ChatGPT models, report no
-  cost.
+  price when no cache price is declared; built-in prices declare cache prices only for
+  Claude models. Each request's exact cost rounds to the nearest micro-USD, halves up,
+  and sums saturate at `u64::MAX`. Models without prices, such as models set with
+  `HarnessBuilder::model` or `switch_model`, OpenAI-compatible servers, and plan-billed
+  ChatGPT models, report no cost.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. `EventStream::run_id` returns the
   run ID before the run starts. Each event has the run ID, a gap-free `seq`, and a
@@ -755,25 +755,29 @@ budget explicitly.
 
 ### Claude through the Anthropic Messages API
 
-`WireProtocol::AnthropicMessages` serves Claude models, and `ProviderSpec::anthropic`
-presets it with an `AnthropicConfig` (the API key, a base URL such as
-`DEFAULT_ANTHROPIC_BASE_URL`, and the model), sending the key as `x-api-key` beside the
-protocol's `anthropic-version: 2023-06-01` header, which `ProviderSpec::with_header` can
-replace. The catalog lists no Claude model yet, so serve it with
-`ModelClient::from_spec` and declare its context profile with a `ModelRegistry`
-registration's `ModelCapabilities` (see "Model catalog" below) and its prices with
-`catalog::ModelSpec::with_pricing`:
+`ModelProvider::Anthropic` serves the cataloged Claude models (`CLAUDE_FABLE_5_2`,
+`CLAUDE_OPUS_5_5`, `CLAUDE_SONNET_5_5`, and `CLAUDE_HAIKU_5_5`) with `ANTHROPIC_API_KEY`
+and an optional `ANTHROPIC_BASE_URL` (default `DEFAULT_ANTHROPIC_BASE_URL`). Each
+declares its documented 1,000,000-token window and 128,000-token output limit, and
+built-in prices with Anthropic's cache-read and 5-minute cache-write rates. Claude Haiku
+5.5 bills prompts over 100,000 tokens at five times those rates, which the catalog's
+single price per token understates:
 
 ```rust
-use ag_harness::model::ModelClient;
-use ag_harness::provider::{AnthropicConfig, DEFAULT_ANTHROPIC_BASE_URL, ProviderSpec};
+use ag_harness::provider::{CLAUDE_OPUS_5_5, ModelConfiguration, ModelProvider};
 
-let model = ModelClient::from_spec(ProviderSpec::anthropic(AnthropicConfig {
-    api_key: std::env::var("ANTHROPIC_API_KEY")?,
-    base_url: DEFAULT_ANTHROPIC_BASE_URL.to_string(),
-    model: "claude-opus-5-5".to_string(),
-}))?;
+let model = ModelConfiguration::new(ModelProvider::Anthropic, CLAUDE_OPUS_5_5)
+    .client_from_environment(|name| std::env::var(name))?;
 ```
+
+`ModelClient::anthropic` builds the same client from an `AnthropicConfig` (the API key,
+a base URL, and the model). Underneath, `WireProtocol::AnthropicMessages` serves Claude
+models and `ProviderSpec::anthropic` presets it, sending the key as `x-api-key` beside
+the protocol's `anthropic-version: 2023-06-01` header, which `ProviderSpec::with_header`
+can replace. Serve an uncataloged Claude model or a gateway with
+`ModelClient::from_spec`, declaring its context profile with a `ModelRegistry`
+registration's `ModelCapabilities` (see "Model catalog" below) and its prices with
+`catalog::ModelSpec::with_pricing`.
 
 Requests stream, so thinking, text, and tool arguments arrive as `ItemDelta` events, and
 mark the tools, `system` blocks, and latest message as prompt-cache breakpoints
@@ -790,12 +794,13 @@ as first sent (`Model::replays_turn_instructions`), because the newest Claude mo
 drop or reject signed thinking after an edited earlier message. Context reductions that
 clear or elide earlier rounds still edit history, so long sessions on those models can
 lose earlier thinking. Every Claude model shares one reasoning family, and a switch to
-another provider carries that reasoning as a short note. A request without an output
-bound sends `max_tokens` 16,000 (`ProviderSpec::with_fallback_max_tokens`), since the
-API requires one. Usage counts cache reads and cache writes as input, and
-`Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop fails as an
-incomplete response, a `model_context_window_exceeded` stop or a "prompt is too long"
-`400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
+another provider carries that reasoning as a short note. The API requires an output
+bound, so a request without one sends `max_tokens` 128,000, the output limit, for a
+cataloged model through `ModelClient::anthropic`, and otherwise 16,000
+(`ProviderSpec::with_fallback_max_tokens`). Usage counts cache reads and cache writes as
+input, and `Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop
+fails as an incomplete response, a `model_context_window_exceeded` stop or a "prompt is
+too long" `400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and
@@ -1034,7 +1039,7 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `otel`                | yes     | OpenTelemetry request metrics, `LifecycleMetrics`, `LifecycleTraceObserver`, span context |
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
-| `providers-anthropic` | yes     | The Anthropic Messages preset, `ProviderSpec::anthropic`, for Claude models               |
+| `providers-anthropic` | yes     | `ModelClient::anthropic` and the `ProviderSpec::anthropic` preset for Claude models       |
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
@@ -1059,7 +1064,7 @@ grouped by topic:
 
 | Module       | Contents                                                 |
 | ------------ | -------------------------------------------------------- |
-| `provider`   | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
+| `provider`   | Muse, Kimi, Qwen, OpenAI, Claude, and compatible clients |
 | `catalog`    | Model specs, roles, capabilities, pricing, and selection |
 | `model`      | The `Model` trait, requests, registry, context budgets   |
 | `tool`       | Tool arguments, results, and the `FileSystem` seam       |

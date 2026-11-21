@@ -192,6 +192,8 @@ alongside local models stored as `openai-compatible/<model>`:
   `chatgpt/gpt-6-sol`, `chatgpt/gpt-6-luna`, `chatgpt/gpt-5.6-sol`,
   `chatgpt/gpt-5.6-terra`, and `chatgpt/gpt-5.6-luna`.
 - OpenAI API: `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, and `gpt-5.6-terra`.
+- Anthropic API: `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, and
+  `claude-haiku-5-5`.
 
 Each request fits within an input budget below the model's context window, leaving out
 older turns that no longer fit, including after switching to a smaller model.
@@ -228,6 +230,7 @@ external CLI, against a free local model server or a paid hosted provider:
 | Kimi         | Paid | `KIMI_API_KEY`                       | Optional `KIMI_BASE_URL`              |
 | Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
 | OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+| Anthropic    | Paid | `ANTHROPIC_API_KEY`                  | Optional `ANTHROPIC_BASE_URL`         |
 | ChatGPT plan | Plan | `ag-harness login chatgpt` sign-in   | Optional `CHATGPT_BASE_URL`           |
 
 Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
@@ -266,7 +269,7 @@ ready, or without the flag, the Fast default falls back as if unset.
 
 <a id="backends-harness-model"></a> In a Harness session, `/model` lists only harness
 models: local models first, marked `[local]`, then hosted models marked `[paid]` with
-their price class, with OpenAI models last:
+their price class, with OpenAI and Claude models last:
 
 ```text
 [local] qwen3:latest              free · Ollama · runs 32k ctx
@@ -274,13 +277,15 @@ their price class, with OpenAI models last:
 [paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
 [paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
 [paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
+[paid] claude-opus-5-5            premium · Anthropic · needs ANTHROPIC_API_KEY
 ```
 
 Price classes follow each provider's list price per million output tokens: `cheap` is at
 most $2.50, `premium` at least $15, and `standard` in between. The cheap models,
 `muse-spark-1.3-contributor`, `qwen-plus`, `qwen3.8-flash`, `qwen3.7-flash`, and
-`gpt-6-luna`, suit simple work such as titles and commit messages. Meta may train on
-prompts and completions sent to `muse-spark-1.3-contributor`.
+`gpt-6-luna`, and `claude-haiku-5-5`, suit simple work such as titles and commit
+messages. Meta may train on prompts and completions sent to
+`muse-spark-1.3-contributor`.
 
 Rows that cannot run a turn, such as a model without tool calls or a provider without
 its key, say what is missing and cannot be selected. The list refreshes each time you
@@ -289,9 +294,9 @@ open it, so newly pulled models and started servers appear without a restart.
 The model you pick becomes the default for new Harness sessions; it never changes the
 project default for other session types. Until you pick one, new sessions prefer a ready
 local model, then the first ready paid model in list order, so an exported API key, such
-as `OPENAI_API_KEY` set for other tools, never makes a paid provider the default. A
-remembered local model stays the default while its server is stopped; a remembered paid
-model whose key is gone gives way to the next ready model.
+as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other tools, never makes a paid
+provider the default. A remembered local model stays the default while its server is
+stopped; a remembered paid model whose key is gone gives way to the next ready model.
 
 ### OpenAI Models
 
@@ -335,6 +340,28 @@ agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /
   model.
 - A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses
   `OPENAI_API_KEY`; neither falls back to the other.
+
+### Claude Models
+
+<a id="backends-harness-claude"></a> The harness runs `claude-fable-5-2`,
+`claude-opus-5-5`, `claude-sonnet-5-5`, and `claude-haiku-5-5` through Anthropic's
+Messages API with a Claude Console API key:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+agentty --experimental-harness   # then choose a claude-* model in the Harness /model list
+```
+
+- Usage is billed to the key's Console organization at API rates, never to a Claude
+  subscription.
+- A Harness session and a **Claude** session share these model names but not their
+  backend: the Harness session always uses `ANTHROPIC_API_KEY` and the Claude session
+  always uses the `claude` CLI; neither falls back to the other.
+- `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com/v1`) selects another Messages
+  API endpoint.
+- Each request resends the session history, billed at Anthropic's cache-read rate where
+  cached. `claude-haiku-5-5` prompts over 100,000 tokens cost five times its listed
+  rates, which long sessions can reach.
 
 ### Local and Self-Hosted Models
 
