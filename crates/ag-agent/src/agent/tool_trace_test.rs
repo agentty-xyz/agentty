@@ -1,5 +1,6 @@
 //! Tool trace metadata allowlisting and bounded content preview unit tests.
 
+use std::collections::VecDeque;
 use std::io::Write as _;
 
 use ag_telemetry::KeyValue;
@@ -164,7 +165,7 @@ fn metadata_only_counts_compact_json_without_retaining_serialized_content() {
         let preview = Preview::new(value, false);
         assert_eq!(preview.bytes, expected);
         assert_eq!(preview.head, [] as [u8; 0]);
-        assert!(preview.tail.is_empty());
+        assert_eq!(preview.tail, VecDeque::new());
         assert!(!preview.retain);
     }
 }
@@ -313,7 +314,7 @@ fn writer_counts_without_retaining_disabled_content_and_flushes() {
     // Assert
     assert_eq!(preview.bytes, initial_bytes + 3);
     assert_eq!(preview.head, [] as [u8; 0]);
-    assert!(preview.tail.is_empty());
+    assert_eq!(preview.tail, VecDeque::new());
 }
 
 #[test]

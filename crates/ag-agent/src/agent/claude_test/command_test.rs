@@ -276,7 +276,7 @@ fn test_claude_command_adds_attachment_access_directories() {
             .count(),
         1
     );
-    assert!(args.contains(&"/tmp/agentty/images".to_string()));
+    assert!(args.iter().any(|arg| arg == "/tmp/agentty/images"));
 }
 
 #[test]

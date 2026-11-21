@@ -27,15 +27,18 @@ fn test_render_html_normalizes_block_and_inline_markup() {
     let text = lines.iter().map(Line::to_string).collect::<Vec<_>>();
 
     // Assert
-    assert!(text.contains(&"Release notes".to_string()));
-    assert!(text.contains(&"One".to_string()));
-    assert!(text.contains(&"Two".to_string()));
-    assert!(text.contains(&"Three".to_string()));
-    assert!(text.contains(&"Four".to_string()));
-    assert!(text.contains(&"Five".to_string()));
-    assert!(text.contains(&"Six".to_string()));
-    assert!(text.contains(&"- Fix parser with fast and Enter.".to_string()));
-    assert!(text.contains(&"│ Quoted".to_string()));
+    assert!(text.iter().any(|line| line == "Release notes"));
+    assert!(text.iter().any(|line| line == "One"));
+    assert!(text.iter().any(|line| line == "Two"));
+    assert!(text.iter().any(|line| line == "Three"));
+    assert!(text.iter().any(|line| line == "Four"));
+    assert!(text.iter().any(|line| line == "Five"));
+    assert!(text.iter().any(|line| line == "Six"));
+    assert!(
+        text.iter()
+            .any(|line| line == "- Fix parser with fast and Enter.")
+    );
+    assert!(text.iter().any(|line| line == "│ Quoted"));
     assert!(lines.iter().any(|line| line.spans.iter().any(|span| {
         span.content.as_ref() == "Fix" && span.style.add_modifier.contains(Modifier::BOLD)
     })));

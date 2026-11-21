@@ -92,7 +92,7 @@ async fn traced_chat_exports_the_turn_span() {
         .flat_map(|scope| scope.spans)
         .map(|span| span.name)
         .collect::<Vec<_>>();
-    assert!(span_names.contains(&"invoke_agent".to_string()));
+    assert!(span_names.iter().any(|name| name == "invoke_agent"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -390,7 +390,9 @@ async fn failed_run_completes_its_stream_with_the_failure() -> Result<(), Box<dy
     assert_eq!(summary.usage, outcome.usage);
     assert_eq!(labels(&events).first().map(String::as_str), Some("started"));
     assert!(
-        !labels(&events).contains(&"started Output".to_string()),
+        !labels(&events)
+            .iter()
+            .any(|label| label == "started Output"),
         "a failed run has no output item"
     );
 
