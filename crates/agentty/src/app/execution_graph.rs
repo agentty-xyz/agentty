@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
-    GraphBlockedReason, GraphContext, GraphControlRequest, GraphNode, GraphNodeStatus, GraphResult,
-    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
+    GraphBlockedReason, GraphContext, GraphControlRequest, GraphExecutionRef, GraphNode,
+    GraphNodeStatus, GraphResult, GraphResultRef, ResumeExecutionGraphRequest,
+    StartExecutionGraphRequest,
 };
 use ag_worker::{
     GraphExecutionRecord, GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner,
@@ -147,10 +148,28 @@ impl App {
         false
     }
 
+    /// Projects persisted graph progress with the live driver's state: nodes
+    /// it is still settling stay running, pending nodes report spent budgets,
+    /// and a graph without a live driver is paused.
+    ///
+    /// A run turns terminal before its settlement stores the graph response,
+    /// so the persisted projection alone reads a settling node as failed. Only
+    /// a settlement no live executor owns, such as one interrupted by a
+    /// restart or one that failed to store, remains failed.
     pub(super) async fn execution_graph_progress(
         &self,
         graph_id: &str,
     ) -> Result<Option<ExecutionGraphProgress>, ag_session::SessionError> {
+        // Sampled before the read, so the read reflects the settlement of any
+        // execution missing from the sample.
+        let unsettled = self
+            .services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(graph_id)
+            .filter(|driver| driver.is_live())
+            .map(|driver| driver.executor.unsettled_executions());
         let Some(mut progress) = self
             .services
             .db()
@@ -167,6 +186,9 @@ impl App {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let driver = drivers.get(graph_id).filter(|driver| driver.is_live());
+        if let Some(unsettled) = &unsettled {
+            project_unsettled_nodes_running(&mut progress, unsettled);
+        }
         for node in &mut progress.nodes {
             if node.status != GraphNodeStatus::Pending {
                 continue;
@@ -828,6 +850,36 @@ impl AppServices {
 
                 !stop
             });
+    }
+}
+
+/// Reports nodes whose latest execution is still `unsettled` as running
+/// instead of failed, and recomputes a graph status that only those nodes made
+/// failed.
+fn project_unsettled_nodes_running(
+    progress: &mut ExecutionGraphProgress,
+    unsettled: &[GraphExecutionRef],
+) {
+    for node in &mut progress.nodes {
+        if node.status == GraphNodeStatus::Failed
+            && node
+                .executions
+                .last()
+                .is_some_and(|execution| unsettled.contains(execution))
+        {
+            node.status = GraphNodeStatus::Running;
+            node.last_error = None;
+        }
+    }
+    if progress.status == ExecutionGraphStatus::Failed
+        && !progress.nodes.iter().any(|node| {
+            matches!(
+                node.status,
+                GraphNodeStatus::Failed | GraphNodeStatus::Cancelled
+            )
+        })
+    {
+        progress.status = ExecutionGraphStatus::Running;
     }
 }
 

@@ -268,7 +268,8 @@ identity.
 
 An automatic focused review keeps its durable trigger while a live driver dispatches a
 graph that does the session's work and can still finish. It starts once that graph
-completes, fails, exhausts a budget, or its driver stops.
+completes, fails, exhausts a budget, or its driver stops. A node turn that has ended
+while its driver still settles the response counts as running, not failed.
 
 Focused review checks captured diff fragments, cross-file risks, and consolidation as a
 [static execution graph](@/docs/architecture/execution-graphs.md#focused-review-graph).

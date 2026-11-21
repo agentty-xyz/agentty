@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Waker};
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use tokio::sync::Notify;
 
+use super::UnsettledExecutions;
 use crate::graph::model::{MockGraphDispatchRepository, MockGraphNodeRunner};
 use crate::graph::support_test::{dispatch, graph};
 use crate::graph::{GraphAdmission, GraphExecutor, GraphResources};
@@ -632,6 +633,84 @@ async fn panicked_node_settles_failure_before_releasing_resource_leases() {
                 .has_changed()
                 .expect("failed node wakes drivers after releasing leases")
         );
+    }
+}
+
+#[tokio::test]
+async fn admitted_execution_stays_unsettled_until_its_settlement_returns() {
+    for settles in [true, false] {
+        // Arrange
+        let unsettled = Arc::new(OnceLock::<UnsettledExecutions>::new());
+        let mut repository = MockGraphDispatchRepository::new();
+        repository.expect_graph().once().return_const(Ok(graph()));
+        let mut claims = 0;
+        repository.expect_claim().returning(move |_, _, _, _, _| {
+            claims += 1;
+            if claims == 1 {
+                Ok(GraphAdmission::Claimed(Box::new(dispatch())))
+            } else {
+                Ok(GraphAdmission::Blocked)
+            }
+        });
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let observe = {
+            let unsettled = unsettled.clone();
+            let observed = observed.clone();
+            move || {
+                let listed = unsettled
+                    .get()
+                    .expect("executor tracking")
+                    .lock()
+                    .expect("unsettled list")
+                    .contains(&dispatch().record.execution);
+                observed.lock().expect("observations").push(listed);
+            }
+        };
+        if settles {
+            repository.expect_finish().once().returning(move |_, _| {
+                observe();
+
+                Ok(())
+            });
+        } else {
+            repository.expect_fail().once().returning(move |_, _| {
+                observe();
+
+                Ok(())
+            });
+        }
+        let mut runner = MockGraphNodeRunner::new();
+        runner.expect_supports().once().return_const(true);
+        runner.expect_run().once().returning(move |_| {
+            if settles {
+                Ok("response".into())
+            } else {
+                Err(OneShotError::new("run failed"))
+            }
+        });
+        let executor = GraphExecutor::new(
+            Arc::new(repository),
+            Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new())),
+            Arc::new(runner),
+        );
+        unsettled
+            .set(executor.unsettled.clone())
+            .expect("track once");
+
+        // Act
+        let result = executor
+            .run_ready(
+                "graph",
+                NonZeroU64::MIN,
+                Path::new("workspace"),
+                PermissionMode::ReadOnly,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(result.is_ok(), settles);
+        assert_eq!(*observed.lock().expect("observations"), [true]);
+        assert_eq!(executor.unsettled_executions(), []);
     }
 }
 
