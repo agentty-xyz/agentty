@@ -22,7 +22,17 @@ use crate::{common, selection};
 async fn seed_settings_navigation_models(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_settings_models(env, false).await?;
+    seed_settings_models(env, "claude-opus-4-6", false).await?;
+
+    seed_settings_tab(env).await
+}
+
+/// Seeds every role to `claude-fable-5-2`, which has no Fast support, and
+/// starts on the Settings tab.
+async fn seed_settings_models_without_fast_support(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_settings_models(env, "claude-fable-5-2", false).await?;
 
     seed_settings_tab(env).await
 }
@@ -40,12 +50,13 @@ async fn seed_settings_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error::E
 
 /// Seeds deterministic selector values and starts the feature demo on Settings.
 async fn seed_settings_dropdown_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_settings_models(env, true).await
+    seed_settings_models(env, "claude-opus-4-6", true).await
 }
 
-/// Seeds deterministic Claude selectors with optional dropdown-demo state.
+/// Seeds every role to one Claude `model` with optional dropdown-demo state.
 async fn seed_settings_models(
     env: &BuilderEnv,
+    model: &str,
     configure_dropdown_demo: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
@@ -73,9 +84,9 @@ async fn seed_settings_models(
             ("DefaultSmartAgent", "claude"),
             ("DefaultFastAgent", "claude"),
             ("DefaultReviewAgent", "claude"),
-            ("DefaultSmartModel", "claude-opus-4-6"),
-            ("DefaultFastModel", "claude-opus-4-6"),
-            ("DefaultReviewModel", "claude-opus-4-6"),
+            ("DefaultSmartModel", model),
+            ("DefaultFastModel", model),
+            ("DefaultReviewModel", model),
         ] {
             sqlx::query!(
                 r"
@@ -530,6 +541,48 @@ async fn settings_max_subagents_selects_limit() {
 
                     assertion::assert_match_count(frame, "4 (applies after restart)", 1);
                     assertion::assert_match_count(frame, "Select setting value", 0);
+                })
+            },
+        )
+        .await
+        .expect("feature test failed");
+}
+
+/// Verify that a role model without Fast support skips the speed selector.
+///
+/// Every role starts on `claude-fable-5-2`. Choosing that model and a
+/// reasoning level for the Smart role saves immediately, keeps the chosen
+/// model instead of switching to a Fast-capable one, and shows no speed.
+#[tokio::test]
+async fn settings_model_without_fast_support_skips_speed() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_model_without_fast")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_settings_models_without_fast_support(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("claude/claude-fable-5-2", 5000)
+                    .compose(&common::move_to_settings_row(
+                        SettingsRow::DefaultSmartModel,
+                    ))
+                    .press_key("Enter")
+                    .wait_for_text("Select model", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Select reasoning level", 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("saved", "Smart model saved without a speed step")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assert_eq!(report.captures.len(), 1, "Expected the saved capture");
+                    assertion::assert_match_count(frame, "Select reasoning level", 0);
+                    assertion::assert_match_count(frame, "Select response speed", 0);
+                    assertion::assert_match_count(frame, "claude/claude-fable-5-2 [", 3);
+                    assertion::assert_match_count(frame, "claude/claude-opus-5-5", 0);
+                    assertion::assert_match_count(frame, "Normal", 0);
                 })
             },
         )

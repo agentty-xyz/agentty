@@ -5,8 +5,8 @@ use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
     SettingsManager, load_default_fast_agent_setting, load_default_smart_agent_setting,
-    load_default_smart_model_setting, load_max_concurrent_subagents_setting,
-    normalized_speed_default, selectable_model_options,
+    load_default_smart_model_setting, load_max_concurrent_subagents_setting, normalized_speed_mode,
+    selectable_model_options,
 };
 use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
@@ -23,27 +23,29 @@ use crate::domain::theme::ColorTheme;
 use crate::presentation::setting::SettingsOperation;
 use crate::test_support::enable_tracing_log_fallback;
 
+/// Ensures Fast survives only on models that support it; other models keep
+/// `Normal` instead of switching to a Fast-capable model.
 #[test]
-fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
+fn speed_defaults_keep_fast_only_on_models_with_fast_support() {
     // Arrange
+    let codex_sol = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
     let codex_spark = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
+    let claude_fable = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
     let antigravity = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon);
 
     // Act
-    let fast_codex = normalized_speed_default(codex_spark, SpeedMode::Fast);
-    let fast_antigravity = normalized_speed_default(antigravity, SpeedMode::Fast);
-    let normal_codex = normalized_speed_default(codex_spark, SpeedMode::Normal);
+    let fast_sol = normalized_speed_mode(codex_sol, SpeedMode::Fast);
+    let fast_spark = normalized_speed_mode(codex_spark, SpeedMode::Fast);
+    let fast_fable = normalized_speed_mode(claude_fable, SpeedMode::Fast);
+    let fast_antigravity = normalized_speed_mode(antigravity, SpeedMode::Fast);
+    let normal_sol = normalized_speed_mode(codex_sol, SpeedMode::Normal);
 
     // Assert
-    assert_eq!(
-        fast_codex,
-        (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            SpeedMode::Fast,
-        )
-    );
-    assert_eq!(fast_antigravity, (antigravity, SpeedMode::Normal));
-    assert_eq!(normal_codex, (codex_spark, SpeedMode::Normal));
+    assert_eq!(fast_sol, SpeedMode::Fast);
+    assert_eq!(fast_spark, SpeedMode::Normal);
+    assert_eq!(fast_fable, SpeedMode::Normal);
+    assert_eq!(fast_antigravity, SpeedMode::Normal);
+    assert_eq!(normal_sol, SpeedMode::Normal);
 }
 
 #[test]

@@ -256,17 +256,30 @@ pub(crate) async fn load_project_speed_mode_setting(
         .unwrap_or_default()
 }
 
+/// Normalizes one role speed default so a model without Fast support keeps
+/// `Normal` responses instead of switching to a Fast-capable model.
+///
+/// Settings and every workflow that launches a role selection share this
+/// rule, so the configured model is the model that runs.
+pub(crate) fn normalized_speed_mode(selection: AgentSelection, speed_mode: SpeedMode) -> SpeedMode {
+    if selection.supports_fast_mode() {
+        return speed_mode;
+    }
+
+    SpeedMode::Normal
+}
+
 /// Loads and normalizes one project-scoped role speed default.
-async fn load_normalized_speed_default(
+async fn load_normalized_speed_mode(
     repositories: &AppRepositories,
     project_id: i64,
     setting_name: SettingName,
     selection: AgentSelection,
-) -> (AgentSelection, SpeedMode) {
+) -> SpeedMode {
     let speed_mode =
         load_project_speed_mode_setting(repositories, Some(project_id), setting_name).await;
 
-    normalized_speed_default(selection, speed_mode)
+    normalized_speed_mode(selection, speed_mode)
 }
 
 /// Model, reasoning, and speed defaults for one settings role.
@@ -288,9 +301,8 @@ async fn load_model_role_defaults(
         .load_project_reasoning_level(project_id, reasoning_setting_name)
         .await
         .unwrap_or_default();
-    let (selection, speed_mode) =
-        load_normalized_speed_default(repositories, project_id, speed_setting_name, selection)
-            .await;
+    let speed_mode =
+        load_normalized_speed_mode(repositories, project_id, speed_setting_name, selection).await;
 
     ModelRoleDefaults {
         reasoning_level,
@@ -475,8 +487,9 @@ impl SettingsManager {
             &self.harness_models,
         )
         .await;
-        (self.default_fast_selection, self.default_fast_speed_mode) =
-            normalized_speed_default(selection, self.default_fast_speed_mode);
+        self.default_fast_speed_mode =
+            normalized_speed_mode(selection, self.default_fast_speed_mode);
+        self.default_fast_selection = selection;
     }
 
     /// Returns an immutable projection for the settings screen.
@@ -518,10 +531,9 @@ impl SettingsManager {
                 selection,
                 speed_mode,
             } => {
-                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_fast_reasoning_level = reasoning_level;
                 self.default_fast_selection = selection;
-                self.default_fast_speed_mode = speed_mode;
+                self.default_fast_speed_mode = normalized_speed_mode(selection, speed_mode);
                 self.persist_default_fast_model_setting().await;
             }
             SettingsOperation::DefaultReviewSelection {
@@ -529,10 +541,9 @@ impl SettingsManager {
                 selection,
                 speed_mode,
             } => {
-                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_review_reasoning_level = reasoning_level;
                 self.default_review_selection = selection;
-                self.default_review_speed_mode = speed_mode;
+                self.default_review_speed_mode = normalized_speed_mode(selection, speed_mode);
                 self.persist_default_review_model_setting().await;
             }
             SettingsOperation::DefaultResponseStyle(value) => {
@@ -545,10 +556,9 @@ impl SettingsManager {
                 speed_mode,
                 use_last_used_model_as_default,
             } => {
-                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_smart_reasoning_level = reasoning_level;
                 self.default_smart_selection = selection;
-                self.default_smart_speed_mode = speed_mode;
+                self.default_smart_speed_mode = normalized_speed_mode(selection, speed_mode);
                 self.use_last_used_model_as_default = use_last_used_model_as_default;
                 self.persist_default_smart_model_settings().await;
             }
@@ -797,19 +807,6 @@ impl ModelSelectorOption {
     fn selection(self) -> AgentSelection {
         AgentSelection::new(self.agent_kind, self.model)
     }
-}
-
-/// Normalizes one role default so unsupported providers cannot retain Fast
-/// and supported providers use a model accepted by their Fast transport.
-fn normalized_speed_default(
-    selection: AgentSelection,
-    speed_mode: SpeedMode,
-) -> (AgentSelection, SpeedMode) {
-    if !selection.kind().supports_speed_mode() {
-        return (selection, SpeedMode::Normal);
-    }
-
-    (selection.compatible_with_speed_mode(speed_mode), speed_mode)
 }
 
 /// Parses the persisted settings value into executable launch-configuration

@@ -8,9 +8,10 @@ use super::{
     SelectorDropdownState, SettingRow, SettingSelectorOption, SettingSelectorValue, SettingsAction,
     SettingsInput, SettingsOperation, SettingsPresentationState, SettingsView,
     apply_launch_configuration_input, display_last_used_model_value, display_model_selector_value,
-    move_launch_configuration_list_editor_selection, reasoning_selector_option_labels,
-    selector_options_for_row, settings_operation_for_model_selector,
-    settings_operation_for_primary_selector, speed_selector_option_labels,
+    display_model_selector_value_with_reasoning, move_launch_configuration_list_editor_selection,
+    reasoning_selector_option_labels, selector_options_for_row,
+    settings_operation_for_model_selector, settings_operation_for_primary_selector,
+    speed_selector_option_labels,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
@@ -341,7 +342,10 @@ fn empty_selector_options_close_or_remain_closed() {
 #[test]
 fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
     // Arrange
-    let view = test_settings_view("");
+    let mut view = test_settings_view("");
+    // A Fast-capable smart model keeps every role on the speed-selector path.
+    view.default_smart_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
+    view.default_smart_speed_mode = SpeedMode::Fast;
 
     // Act
     let operations = [
@@ -565,6 +569,42 @@ fn last_used_speed_capable_model_value_includes_speed() {
 
     // Assert
     assert_eq!(display_value, "Last used model as default [high, Fast]");
+}
+
+/// Ensures a model without Fast support skips the speed selector, saves
+/// `Normal` on that same model, and shows no speed in its row.
+#[test]
+fn model_without_fast_support_skips_speed_selector_and_keeps_model() {
+    // Arrange
+    let fable = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
+    let mut view = test_settings_view("");
+    view.available_model_selections.push(fable);
+    view.default_review_selection = fable;
+    let mut state = SettingsPresentationState::default();
+    select_row(&mut state, &view, SettingRow::DefaultReviewModel);
+    let _ = state.apply(&view, SettingsAction::Activate);
+
+    // Act
+    let model_operation = state.apply(&view, SettingsAction::Confirm);
+    let reasoning_operation = state.apply(&view, SettingsAction::Confirm);
+    let display_value =
+        display_model_selector_value_with_reasoning(fable, ReasoningLevel::High, SpeedMode::Fast);
+    let last_used_display_value =
+        display_last_used_model_value(fable, ReasoningLevel::High, SpeedMode::Fast);
+
+    // Assert
+    assert_eq!(model_operation, None);
+    assert_eq!(
+        reasoning_operation,
+        Some(SettingsOperation::DefaultReviewSelection {
+            reasoning_level: view.default_review_reasoning_level,
+            selection: fable,
+            speed_mode: SpeedMode::Normal,
+        })
+    );
+    assert!(!state.is_selector_dropdown_open());
+    assert_eq!(display_value, "claude/claude-fable-5-2 [high]");
+    assert_eq!(last_used_display_value, "Last used model as default [high]");
 }
 
 #[test]

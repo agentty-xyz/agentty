@@ -559,7 +559,9 @@ impl SettingsPresentationState {
                             .min(ReasoningLevel::ALL.len().saturating_sub(1)),
                     )
                     .copied()?;
-                if selection.kind().supports_speed_mode() {
+                // Only models with Fast support offer a speed choice, so the
+                // chosen model is never swapped for a Fast-capable one.
+                if selection.supports_fast_mode() {
                     self.open_speed_selector(
                         selector_dropdown.row,
                         selection,
@@ -597,7 +599,7 @@ impl SettingsPresentationState {
 
                 settings_operation_for_model_selector(
                     selector_dropdown.row,
-                    selection.compatible_with_speed_mode(speed_mode),
+                    selection,
                     reasoning_level,
                     speed_mode,
                     use_last_used_model_as_default,
@@ -1196,7 +1198,7 @@ fn display_model_selector_value_with_reasoning(
     speed_mode: SpeedMode,
 ) -> String {
     let display_value = display_model_selector_value(selection);
-    if !selection.kind().supports_speed_mode() {
+    if !selection.supports_fast_mode() {
         return format!("{display_value} [{}]", reasoning_level.as_str());
     }
 
@@ -1212,7 +1214,7 @@ fn display_last_used_model_value(
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
 ) -> String {
-    if selection.kind().supports_speed_mode() {
+    if selection.supports_fast_mode() {
         return format!(
             "Last used model as default [{}, {}]",
             reasoning_level.as_str(),

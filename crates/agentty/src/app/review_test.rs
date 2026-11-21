@@ -291,10 +291,7 @@ fn review_loading_message_uses_normalized_agent_profile() {
     // Assert
     assert_eq!(
         message,
-        format!(
-            "Reviewing changes\nCodex · {} · Extra-high reasoning · Fast",
-            model_fixture::CODEX_MODEL_ID
-        )
+        "Reviewing changes\nCodex · gpt-5.3-codex-spark · Extra-high reasoning · Normal"
     );
 }
 
@@ -342,7 +339,8 @@ fn review_reasoning_labels_are_human_readable() {
 #[test]
 fn review_agent_speed_normalization_preserves_only_supported_speed() {
     // Arrange
-    let supported_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
+    let supported_selection = model_fixture::codex_selection();
+    let model_without_fast = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
     let unsupported_selection = AgentSelection::new(
         AgentKind::Antigravity,
         AgentKind::Antigravity.default_model(),
@@ -351,6 +349,8 @@ fn review_agent_speed_normalization_preserves_only_supported_speed() {
     // Act
     let supported =
         normalize_review_agent((supported_selection, ReasoningLevel::XHigh, SpeedMode::Fast));
+    let kept_model =
+        normalize_review_agent((model_without_fast, ReasoningLevel::High, SpeedMode::Fast));
     let unsupported = normalize_review_agent((
         unsupported_selection,
         ReasoningLevel::Medium,
@@ -360,11 +360,11 @@ fn review_agent_speed_normalization_preserves_only_supported_speed() {
     // Assert
     assert_eq!(
         supported,
-        (
-            model_fixture::codex_selection(),
-            ReasoningLevel::XHigh,
-            SpeedMode::Fast,
-        )
+        (supported_selection, ReasoningLevel::XHigh, SpeedMode::Fast)
+    );
+    assert_eq!(
+        kept_model,
+        (model_without_fast, ReasoningLevel::High, SpeedMode::Normal)
     );
     assert_eq!(
         unsupported,
