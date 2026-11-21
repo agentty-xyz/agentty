@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use super::{
     PAIRING_CODE_ALPHABET, PAIRING_CODE_LIFETIME, PAIRING_CODE_MAX_FAILURES, PairingCode,
-    PairingState, UNBIASED_BYTE_LIMIT,
+    PairingState, UNBIASED_BYTE_LIMIT, random_code,
 };
 use crate::entropy::OsEntropy;
 use crate::test_support::{FailingEntropy, ReplayEntropy};
@@ -52,6 +52,21 @@ fn issue_skips_bytes_that_would_bias_the_alphabet() {
 
     // Assert
     assert_eq!(code.code, "ABCD-EFGH");
+}
+
+#[test]
+fn random_code_draws_the_requested_length_without_bias() {
+    // Arrange
+    let first_biased = u8::try_from(UNBIASED_BYTE_LIMIT).expect("limit should fit in a byte");
+    let entropy = ReplayEntropy::new(vec![first_biased, 8, 9, 10, 11]);
+
+    // Act
+    let confirmation = random_code(&entropy, 4);
+    let failed = random_code(&FailingEntropy, 4);
+
+    // Assert
+    assert_eq!(confirmation.as_deref(), Some("JKMN"));
+    assert_eq!(failed, None);
 }
 
 #[test]

@@ -87,13 +87,15 @@ impl DeviceStore for RepositoryDeviceStore {
 #[async_trait]
 pub(crate) trait RemoteControlLauncher: Send + Sync {
     /// Binds `127.0.0.1:port` and serves `host` until the returned server
-    /// shuts down. Port `0` selects a free port.
+    /// shuts down. Port `0` selects a free port. Requests must name a
+    /// loopback host or one of `allowed_hosts`.
     ///
     /// # Errors
     /// Returns a user-facing message when the listener cannot start.
     async fn start(
         &self,
         port: u16,
+        allowed_hosts: Vec<String>,
         host: RemoteHost,
     ) -> Result<Box<dyn RemoteControlServer>, String>;
 }
@@ -110,8 +112,16 @@ pub(crate) trait RemoteControlServer: Send + Sync {
     /// Returns [`RemoteError::Entropy`] when no secure code can be generated.
     fn issue_pairing_code(&self) -> Result<String, RemoteError>;
 
-    /// Subscribes to the authenticated connections.
+    /// Subscribes to the authenticated connections and pending pairings.
     fn status(&self) -> watch::Receiver<RemoteServerStatus>;
+
+    /// Lets one pending device finish pairing; `false` when the request is
+    /// no longer pending.
+    fn approve_pairing(&self, request_id: u64) -> bool;
+
+    /// Refuses one pending device; `false` when the request is no longer
+    /// pending.
+    fn deny_pairing(&self, request_id: u64) -> bool;
 
     /// Forgets one paired device and closes its live connections.
     ///
@@ -131,9 +141,11 @@ impl RemoteControlLauncher for RealRemoteControlLauncher {
     async fn start(
         &self,
         port: u16,
+        allowed_hosts: Vec<String>,
         host: RemoteHost,
     ) -> Result<Box<dyn RemoteControlServer>, String> {
         let config = RemoteServerConfig {
+            allowed_hosts,
             bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
         };
         let handle = ag_remote::start(config, host)
@@ -156,6 +168,14 @@ impl RemoteControlServer for RemoteServerHandle {
 
     fn status(&self) -> watch::Receiver<RemoteServerStatus> {
         RemoteServerHandle::status(self)
+    }
+
+    fn approve_pairing(&self, request_id: u64) -> bool {
+        RemoteServerHandle::approve_pairing(self, request_id)
+    }
+
+    fn deny_pairing(&self, request_id: u64) -> bool {
+        RemoteServerHandle::deny_pairing(self, request_id)
     }
 
     async fn revoke_device(&self, device_id: &str) -> Result<(), String> {

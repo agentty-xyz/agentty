@@ -9,6 +9,8 @@ pub struct RemoteControlView {
     pub error: Option<String>,
     /// Running listener, or `None` while remote control is off.
     pub listener: Option<RemoteListenerView>,
+    /// Devices waiting for approval in arrival order.
+    pub pairing_requests: Vec<RemotePairingRequestView>,
 }
 
 impl RemoteControlView {
@@ -20,13 +22,23 @@ impl RemoteControlView {
             .count()
     }
 
-    /// Returns the connected device count while the listener runs, for the
-    /// status-bar notice, or `None` while remote control is off.
-    pub fn status_bar_connections(&self) -> Option<usize> {
-        self.listener
-            .as_ref()
-            .map(|_| self.connected_device_count())
+    /// Returns the status-bar notice while the listener runs, or `None`
+    /// while remote control is off.
+    pub fn status_bar_notice(&self) -> Option<RemoteControlNotice> {
+        self.listener.as_ref().map(|_| RemoteControlNotice {
+            connected_devices: self.connected_device_count(),
+            pairing_requests: self.pairing_requests.len(),
+        })
     }
+}
+
+/// Counts the status bar reports while remote control listens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteControlNotice {
+    /// Paired devices connected now.
+    pub connected_devices: usize,
+    /// Devices waiting for approval.
+    pub pairing_requests: usize,
 }
 
 /// One running remote-control listener.
@@ -47,6 +59,17 @@ pub struct RemoteDeviceView {
     pub is_connected: bool,
     /// Name the device gave when it paired.
     pub name: String,
+}
+
+/// One device that entered the pairing code and waits for approval.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemotePairingRequestView {
+    /// Code the device also shows, so the user can match them.
+    pub confirmation: String,
+    /// Name the device gave.
+    pub device_name: String,
+    /// Request identifier used to approve or deny it.
+    pub id: u64,
 }
 
 #[cfg(test)]

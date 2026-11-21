@@ -122,6 +122,25 @@ async fn shutdown_closes_sockets_and_releases_the_port() -> TestResult {
 }
 
 #[tokio::test]
+async fn shutdown_closes_sockets_waiting_for_pairing_approval() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut waiting, _request_id) = server.request_pairing("Phone").await?;
+
+    // Act
+    server.handle.shutdown().await;
+
+    // Assert
+    let close = close_frame(&mut waiting)
+        .await?
+        .ok_or("waiting socket should close")?;
+    assert_eq!(u16::from(close.code), 1001);
+    assert_eq!(server.devices.device_ids(), Vec::<String>::new());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn dropping_the_handle_stops_the_server() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
@@ -154,6 +173,7 @@ async fn start_reports_an_address_that_is_already_bound() -> TestResult {
     // Act
     let result = ag_remote::start(
         RemoteServerConfig {
+            allowed_hosts: Vec::new(),
             bind_addr: occupied.local_addr()?,
         },
         host,

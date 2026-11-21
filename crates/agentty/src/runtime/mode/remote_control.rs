@@ -25,6 +25,8 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
             return EventResult::Continue;
         }
         KeyCode::Char('n') => app.issue_remote_pairing_code(),
+        KeyCode::Char('y') => app.settle_remote_pairing(true),
+        KeyCode::Char('x') => app.settle_remote_pairing(false),
         KeyCode::Char('s') => {
             if app.remote_control.view().listener.is_some() {
                 app.stop_remote_control().await;

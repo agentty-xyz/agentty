@@ -133,6 +133,9 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
         ServerFrame::Rejected {
             reason: "no".to_string(),
         },
+        ServerFrame::AwaitingApproval {
+            confirmation: "ABCD".to_string(),
+        },
     ];
 
     // Act
@@ -151,7 +154,8 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
             {"type": "response", "id": 3, "result": {"ok": {"kind": "session", "session": null}}},
             {"type": "response", "id": 4, "result": {"ok": {"kind": "sessions", "sessions": []}}},
             {"type": "changed", "revision": 4},
-            {"type": "rejected", "reason": "no"}
+            {"type": "rejected", "reason": "no"},
+            {"type": "awaiting_approval", "confirmation": "ABCD"}
         ])
     );
     assert_eq!(decoded, frames);

@@ -6,6 +6,7 @@ use ratatui::style::Modifier;
 use super::{StatusBar, centered_label_area};
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
 use crate::domain::theme::ColorTheme;
+use crate::presentation::remote_control::RemoteControlNotice;
 use crate::ui::{Component, style};
 
 fn project_sync_status(phase: ProjectSyncPhase) -> ProjectSyncStatus {
@@ -70,14 +71,11 @@ fn test_status_bar_render_shows_current_version_without_update() {
     assert!(!text.contains("version available update"));
 }
 
-#[test]
-fn test_status_bar_render_shows_remote_control_connections() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(100, 1);
+/// Renders a status bar with `notice` and returns its text.
+fn remote_control_status_text(notice: RemoteControlNotice) -> String {
+    let backend = ratatui::backend::TestBackend::new(120, 1);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let status_bar = StatusBar::new("v0.1.12".to_string()).remote_control_connections(Some(1));
-
-    // Act
+    let status_bar = StatusBar::new("v0.1.12".to_string()).remote_control(Some(notice));
     terminal
         .draw(|frame| {
             let area = frame.area();
@@ -85,9 +83,37 @@ fn test_status_bar_render_shows_remote_control_connections() {
         })
         .expect("failed to draw");
 
+    buffer_text(&terminal)
+}
+
+#[test]
+fn test_status_bar_render_shows_remote_control_connections() {
+    // Arrange
+    let notice = RemoteControlNotice {
+        connected_devices: 1,
+        pairing_requests: 0,
+    };
+
+    // Act
+    let text = remote_control_status_text(notice);
+
     // Assert
-    let text = buffer_text(&terminal);
     assert!(text.contains("Agentty v0.1.12 | Remote control on, 1 device connected"));
+}
+
+#[test]
+fn test_status_bar_render_asks_to_approve_pending_pairings() {
+    // Arrange
+    let notice = RemoteControlNotice {
+        connected_devices: 1,
+        pairing_requests: 2,
+    };
+
+    // Act
+    let text = remote_control_status_text(notice);
+
+    // Assert
+    assert!(text.contains("Remote control: approve 2 pairing requests in /remote-control"));
 }
 
 #[test]

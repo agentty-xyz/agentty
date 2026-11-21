@@ -48,6 +48,11 @@ struct Cli {
         requires = "remote"
     )]
     remote_control_port: u16,
+    /// Host name a tunnel uses to reach `/remote-control`, such as a
+    /// Tailscale machine name; repeat for several. Loopback names are always
+    /// accepted.
+    #[arg(long, value_name = "HOST", requires = "remote")]
+    remote_control_host: Vec<String>,
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
@@ -217,7 +222,7 @@ async fn run_application(
             let mut app = app?;
             app.set_analytics(analytics.clone());
             if cli.experimental.remote {
-                app.enable_remote_control(cli.remote_control_port);
+                app.enable_remote_control(cli.remote_control_port, cli.remote_control_host);
             }
 
             runtime(&mut app).await

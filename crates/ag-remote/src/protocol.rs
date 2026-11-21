@@ -1,8 +1,10 @@
 //! JSON frames exchanged over the remote control WebSocket.
 //!
 //! Every frame is one text message. The client's first frame is
-//! [`ClientFrame::Hello`] or [`ClientFrame::Pair`]; after the server answers
-//! with [`ServerFrame::Welcome`] or [`ServerFrame::Paired`], the client sends
+//! [`ClientFrame::Hello`] or [`ClientFrame::Pair`]. A pairing client first
+//! receives [`ServerFrame::AwaitingApproval`] while the terminal decides.
+//! After the server answers with [`ServerFrame::Welcome`] or
+//! [`ServerFrame::Paired`], the client sends
 //! [`ClientFrame::Request`] frames and the server answers each with a
 //! [`ServerFrame::Response`] carrying the same `id`. The server also pushes
 //! [`ServerFrame::Changed`] when host session state changes, so the client can
@@ -88,6 +90,12 @@ pub struct RemoteQuestionAnswer {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
+    /// A valid pairing code was accepted and waits for approval in the
+    /// terminal, which shows the same `confirmation` beside the request.
+    AwaitingApproval {
+        /// Short code the user compares between the device and terminal.
+        confirmation: String,
+    },
     /// Host session state changed after `revision` was last reported.
     Changed {
         /// Latest host revision.

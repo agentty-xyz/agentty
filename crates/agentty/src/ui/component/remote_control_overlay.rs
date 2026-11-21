@@ -12,11 +12,11 @@ use crate::presentation::remote_control::RemoteControlView;
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay, style};
 
-const MIN_OVERLAY_HEIGHT: u16 = 16;
+const MIN_OVERLAY_HEIGHT: u16 = 22;
 const MIN_OVERLAY_WIDTH: u16 = 56;
 /// Popup dimensions for the remote-control status.
 const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
-    overlay::OverlayDimensions::new(64, 60, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
+    overlay::OverlayDimensions::new(64, 70, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 /// Width of the left-hand field labels.
 const LABEL_WIDTH: usize = 8;
 
@@ -46,6 +46,28 @@ impl<'a> RemoteControlOverlay<'a> {
     /// Returns all render lines for content `width` columns wide.
     fn lines(&self, width: usize) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        if let Some(request) = self.view.pairing_requests.first() {
+            lines.push(Line::from(Span::styled(
+                "Pairing request",
+                Style::default()
+                    .fg(palette::warning())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(field_line("Device", &request.device_name, palette::text()));
+            lines.push(field_line(
+                "Confirm",
+                &request.confirmation,
+                palette::warning(),
+            ));
+            lines.push(muted_line(
+                "Approve only if the device shows the same confirmation code.",
+            ));
+            let waiting = self.view.pairing_requests.len() - 1;
+            if waiting > 0 {
+                lines.push(muted_line(&format!("{waiting} more waiting")));
+            }
+            lines.push(Line::from(""));
+        }
         match &self.view.listener {
             Some(listener) => {
                 lines.push(field_line("Status", "On", palette::success()));
@@ -116,6 +138,10 @@ impl<'a> RemoteControlOverlay<'a> {
     /// Returns the key hints that apply to the current state.
     fn help_text(&self) -> String {
         let mut hints = Vec::new();
+        if !self.view.pairing_requests.is_empty() {
+            hints.push("y: approve");
+            hints.push("x: deny");
+        }
         if self.view.listener.is_some() {
             hints.push("n: new code");
             hints.push("s: stop");

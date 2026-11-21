@@ -1,9 +1,10 @@
-//! One WebSocket connection: authentication, requests, and change pushes.
+//! One WebSocket connection: authentication, pairing approval, requests, and
+//! change pushes.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionId, SessionService};
+use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
 use tokio::sync::{oneshot, watch};
 use tokio::time::{Instant, sleep_until, timeout};
@@ -11,14 +12,19 @@ use tokio::time::{Instant, sleep_until, timeout};
 use crate::PROTOCOL_VERSION;
 use crate::device::{NewRemoteDevice, token_hash};
 use crate::entropy::random_hex;
+use crate::pairing::random_code;
 use crate::protocol::{
     ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionSummary,
     ServerFrame,
 };
-use crate::server::{RemoteConnection, ServerState};
+use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 
 /// Time a client has to send its first frame.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time the host has to approve or deny a pairing request.
+pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_mins(2);
+/// Characters in the confirmation shown on the device and the terminal.
+pub(crate) const CONFIRMATION_LENGTH: usize = 4;
 /// Quiet period that coalesces bursts of host changes into one push.
 pub(crate) const CHANGE_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Longest device name kept, in characters.
@@ -27,12 +33,23 @@ const MAX_DEVICE_NAME_CHARS: usize = 64;
 const DEFAULT_DEVICE_NAME: &str = "Remote device";
 /// Rejection reason for device store failures, which stay out of the wire.
 const DEVICE_STORE_UNAVAILABLE: &str = "Device store is unavailable";
+/// Rejection reason when the host denies a pairing request.
+const PAIRING_DENIED: &str = "Pairing was denied";
+/// Rejection reason when the host does not decide in time.
+const PAIRING_TIMED_OUT: &str = "Pairing was not approved in time";
+/// Rejection reason for frames sent while pairing waits for approval.
+const PAIRING_PENDING: &str = "Wait for pairing approval";
 /// Close reason sent to every socket when the server stops.
 const SERVER_STOPPED: &str = "Server stopped";
 
 /// Runs one upgraded socket until the client leaves, the device is revoked,
-/// or the server stops.
-pub(crate) async fn serve(mut socket: WebSocket, state: Arc<ServerState>) {
+/// or the server stops. `handshake` counts the socket as unauthenticated
+/// until a device authenticates on it.
+pub(crate) async fn serve(
+    mut socket: WebSocket,
+    state: Arc<ServerState>,
+    handshake: HandshakeSlot,
+) {
     let _open_socket = state.track_socket();
     let mut revisions = state.revisions();
     let mut shutdown_rx = state.shutdown_rx.clone();
@@ -56,7 +73,26 @@ pub(crate) async fn serve(mut socket: WebSocket, state: Arc<ServerState>) {
 
         return;
     };
-    let (connection, reply) = match authenticate(&state, frame, &mut revisions).await {
+    let authenticated = match authenticate(&state, frame, &mut revisions).await {
+        Ok(Authentication::Authenticated { connection, reply }) => Ok((connection, reply)),
+        Ok(Authentication::PairingRequested(device)) => {
+            let Some(decision) = await_approval(
+                &mut socket,
+                &state,
+                device,
+                &mut revisions,
+                &mut shutdown_rx,
+            )
+            .await
+            else {
+                return;
+            };
+
+            decision
+        }
+        Err(reason) => Err(reason),
+    };
+    let (connection, reply) = match authenticated {
         Ok(authenticated) => authenticated,
         Err(reason) => {
             tracing::debug!(reason, "remote connection rejected");
@@ -65,21 +101,50 @@ pub(crate) async fn serve(mut socket: WebSocket, state: Arc<ServerState>) {
             return;
         }
     };
+    drop(handshake);
     let (close_rx, _registration) = state.register(connection);
     send(&mut socket, &reply).await;
 
     run(socket, &state, revisions, shutdown_rx, close_rx).await;
 }
 
-/// Authenticates the first frame and returns the connection to register with
-/// the frame that acknowledges it.
+/// Outcome of a valid first frame.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Authentication {
+    /// A known device authenticated; register `connection` and send `reply`.
+    Authenticated {
+        /// Connection to register.
+        connection: RemoteConnection,
+        /// Frame that acknowledges the authentication.
+        reply: ServerFrame,
+    },
+    /// A pairing code was redeemed; the device waits for host approval.
+    PairingRequested(PairingDevice),
+}
+
+/// Credentials prepared for a device whose pairing code was redeemed.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PairingDevice {
+    /// Code the device and the terminal both show.
+    pub(crate) confirmation: String,
+    /// Identifier the device receives on approval.
+    pub(crate) device_id: String,
+    /// Bounded, trimmed device name.
+    pub(crate) device_name: String,
+    /// Secret token the device receives on approval.
+    pub(crate) token: String,
+}
+
+/// Authenticates the first frame.
 ///
-/// Successful authentication marks the current host revision as reported.
+/// Token authentication marks the current host revision as reported. A
+/// redeemed pairing code only prepares credentials; nothing is stored until
+/// the host approves the request.
 pub(crate) async fn authenticate(
     state: &ServerState,
     frame: ClientFrame,
     revisions: &mut watch::Receiver<u64>,
-) -> Result<(RemoteConnection, ServerFrame), &'static str> {
+) -> Result<Authentication, &'static str> {
     match frame {
         ClientFrame::Hello {
             protocol_version,
@@ -99,17 +164,17 @@ pub(crate) async fn authenticate(
                 .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
             let revision = *revisions.borrow_and_update();
 
-            Ok((
-                RemoteConnection {
+            Ok(Authentication::Authenticated {
+                connection: RemoteConnection {
                     device_id: device.id.clone(),
                     device_name: device.name,
                 },
-                ServerFrame::Welcome {
+                reply: ServerFrame::Welcome {
                     device_id: device.id,
                     protocol_version: PROTOCOL_VERSION,
                     revision,
                 },
-            ))
+            })
         }
         ClientFrame::Pair {
             code,
@@ -118,41 +183,102 @@ pub(crate) async fn authenticate(
         } => {
             check_protocol_version(protocol_version)?;
             let entropy = state.entropy.as_ref();
-            let (Some(device_id), Some(token)) = (random_hex(entropy, 16), random_hex(entropy, 32))
-            else {
+            let (Some(device_id), Some(token), Some(confirmation)) = (
+                random_hex(entropy, 16),
+                random_hex(entropy, 32),
+                random_code(entropy, CONFIRMATION_LENGTH),
+            ) else {
                 return Err("Cannot generate device credentials");
             };
             if !state.pairing().redeem(&code) {
                 return Err("Invalid or expired pairing code");
             }
-            let device_name = device_display_name(&device_name);
-            state
-                .devices()
-                .insert_device(NewRemoteDevice {
-                    id: device_id.clone(),
-                    name: device_name.clone(),
-                    token_hash: token_hash(&token),
-                })
-                .await
-                .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
-            tracing::info!(device_id, "remote device paired");
-            let revision = *revisions.borrow_and_update();
 
-            Ok((
-                RemoteConnection {
-                    device_id: device_id.clone(),
-                    device_name,
-                },
-                ServerFrame::Paired {
-                    device_id,
-                    protocol_version: PROTOCOL_VERSION,
-                    revision,
-                    token,
-                },
-            ))
+            Ok(Authentication::PairingRequested(PairingDevice {
+                confirmation,
+                device_id,
+                device_name: device_display_name(&device_name),
+                token,
+            }))
         }
         ClientFrame::Request { .. } => Err("Authenticate before sending requests"),
     }
+}
+
+/// Lists the pairing request, tells the device to wait, and returns the
+/// authentication once the host approves.
+///
+/// Returns `None` when the device leaves or the server stops first; a
+/// stopping server has already closed the socket.
+async fn await_approval(
+    socket: &mut WebSocket,
+    state: &Arc<ServerState>,
+    device: PairingDevice,
+    revisions: &mut watch::Receiver<u64>,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> Option<Result<(RemoteConnection, ServerFrame), &'static str>> {
+    let (decision_rx, _request) =
+        state.request_pairing(device.device_name.clone(), device.confirmation.clone());
+    let awaiting = ServerFrame::AwaitingApproval {
+        confirmation: device.confirmation.clone(),
+    };
+    send(socket, &awaiting).await;
+    let decision = tokio::select! {
+        biased;
+        () = wait_until_stopping(shutdown_rx) => {
+            close(socket, close_code::AWAY, SERVER_STOPPED).await;
+
+            return None;
+        }
+        decision = timeout(APPROVAL_TIMEOUT, decision_rx) => decision,
+        message = socket.recv() => {
+            return match message {
+                Some(Ok(Message::Close(_)) | Err(_)) | None => None,
+                Some(Ok(_)) => Some(Err(PAIRING_PENDING)),
+            };
+        }
+    };
+
+    Some(match decision {
+        Ok(Ok(true)) => complete_pairing(state, device, revisions).await,
+        Ok(Ok(false) | Err(_)) => Err(PAIRING_DENIED),
+        Err(_) => Err(PAIRING_TIMED_OUT),
+    })
+}
+
+/// Stores an approved device and returns the connection to register with
+/// the frame that hands the device its token.
+///
+/// Marks the current host revision as reported.
+pub(crate) async fn complete_pairing(
+    state: &ServerState,
+    device: PairingDevice,
+    revisions: &mut watch::Receiver<u64>,
+) -> Result<(RemoteConnection, ServerFrame), &'static str> {
+    state
+        .devices()
+        .insert_device(NewRemoteDevice {
+            id: device.device_id.clone(),
+            name: device.device_name.clone(),
+            token_hash: token_hash(&device.token),
+        })
+        .await
+        .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
+    tracing::info!(device_id = device.device_id, "remote device paired");
+    let revision = *revisions.borrow_and_update();
+
+    Ok((
+        RemoteConnection {
+            device_id: device.device_id.clone(),
+            device_name: device.device_name,
+        },
+        ServerFrame::Paired {
+            device_id: device.device_id,
+            protocol_version: PROTOCOL_VERSION,
+            revision,
+            token: device.token,
+        },
+    ))
 }
 
 /// Serves requests and change pushes for one authenticated connection.
@@ -272,12 +398,7 @@ async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteRes
             .cancel_session(&SessionId::from(session_id))
             .await
             .map(|()| RemoteResponse::Accepted),
-        RemoteRequest::GetSession { session_id } => sessions
-            .get_session(&SessionId::from(session_id))
-            .await
-            .map(|session| RemoteResponse::Session {
-                session: session.map(RemoteSession::from),
-            }),
+        RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::ListSessions => {
             sessions
                 .list_sessions()
@@ -302,6 +423,27 @@ async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteRes
         Ok(response) => RemoteResult::Ok(response),
         Err(error) => RemoteResult::Error(error.to_string()),
     }
+}
+
+/// Loads one session only when the host lists it, so remote clients read
+/// nothing beyond the sessions they can see.
+async fn get_listed_session(
+    sessions: &SessionService,
+    session_id: String,
+) -> Result<RemoteResponse, SessionError> {
+    let is_listed = sessions
+        .list_sessions()
+        .await?
+        .iter()
+        .any(|summary| summary.id.as_str() == session_id);
+    if !is_listed {
+        return Ok(RemoteResponse::Session { session: None });
+    }
+    let session = sessions.get_session(&SessionId::from(session_id)).await?;
+
+    Ok(RemoteResponse::Session {
+        session: session.map(RemoteSession::from),
+    })
 }
 
 /// Resolves once the server starts stopping or its handle is gone.
