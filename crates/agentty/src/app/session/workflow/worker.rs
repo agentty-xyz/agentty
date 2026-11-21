@@ -44,7 +44,9 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{GeneratedTurnLabels, GeneratedTurnUpdate};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
+use crate::infra::db::{
+    AppRepositories, GRAPH_NODE_ACTIVITY_OPERATION_KIND, OperationRepository, SessionOperationRow,
+};
 use crate::infra::fs::FsClient;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
@@ -1096,12 +1098,15 @@ impl SessionWorkerService {
                     // `InProgress` and ends in `Review`, so interrupted graph
                     // work alone undoes just that and leaves every other
                     // status as the lease found it.
-                    let is_graph_activity_only = session_operations
-                        .iter()
-                        .any(|operation| operation.kind == GRAPH_ACTIVITY_OPERATION_KIND)
+                    let is_graph_lease = |operation: &&SessionOperationRow| {
+                        matches!(
+                            operation.kind.as_str(),
+                            GRAPH_ACTIVITY_OPERATION_KIND | GRAPH_NODE_ACTIVITY_OPERATION_KIND
+                        )
+                    };
+                    let is_graph_activity_only = session_operations.iter().any(is_graph_lease)
                         && session_operations.iter().all(|operation| {
-                            operation.started_at.is_none()
-                                || operation.kind == GRAPH_ACTIVITY_OPERATION_KIND
+                            operation.started_at.is_none() || is_graph_lease(operation)
                         });
                     if is_graph_activity_only {
                         let is_in_progress = db

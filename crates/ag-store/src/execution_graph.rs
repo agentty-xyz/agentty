@@ -15,8 +15,8 @@ mod result;
 mod task_turn;
 
 pub use model::{
-    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
-    GraphProposalReplyRecord, StoredGraphEvidence, StoredGraphResult,
+    GRAPH_NODE_ACTIVITY_OPERATION_KIND, GraphEvidence, GraphExecutionRecord, GraphNodeHistory,
+    GraphOutputReplyRecord, GraphProposalReplyRecord, StoredGraphEvidence, StoredGraphResult,
 };
 pub use proposal::GraphProposalRepository;
 #[cfg(any(test, feature = "test-utils"))]

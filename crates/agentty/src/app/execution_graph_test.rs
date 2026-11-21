@@ -20,7 +20,7 @@ use ag_session::{
 use ag_worker::SessionRunClient;
 use tokio::sync::{Notify, mpsc, watch};
 
-use super::{GraphDriverSession, can_still_finish};
+use super::{GraphDriverSession, GraphNodeLeases, can_still_finish};
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionManager;
@@ -311,10 +311,19 @@ async fn queue_sync_behind_selected_graph_writer(
     observed_rx: &mut mpsc::UnboundedReceiver<TurnRequest>,
 ) {
     let status = app.sessions.session_handles()["sess"].status.clone();
+    let background_readers = app
+        .services
+        .graph_resources
+        .background_readers(&EnvId::SessionWorktree("sess".into()));
+    // The node's status lease shows `InProgress` before the worker selects
+    // the writer, so also wait for the selected writer to queue behind the
+    // held review, which turns new readers away.
     app.drive_session_request(tokio::time::timeout(
         std::time::Duration::from_secs(5),
         async {
-            while *status.lock().expect("status") != Status::InProgress {
+            while background_readers.try_read().is_ok()
+                || *status.lock().expect("status") != Status::InProgress
+            {
                 tokio::task::yield_now().await;
             }
         },
@@ -693,6 +702,7 @@ pub(in crate::app) async fn seed_session(manager: &mut SessionManager, db: &AppR
 fn driver_session() -> GraphDriverSession {
     GraphDriverSession {
         folder: PathBuf::from("workspace"),
+        leases: GraphNodeLeases::default(),
         transcript: Arc::new(Mutex::new(SessionTranscript::ephemeral(Vec::new()))),
     }
 }

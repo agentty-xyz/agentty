@@ -1,17 +1,17 @@
 //! Session status ownership for background graph work.
 //!
-//! Proposal generation and graph reply decisions run on the utility worker,
-//! outside the session worker, yet they are work the session is doing. Each
-//! holds a [`GraphActivity`] lease that shows a `Draft` or `Review` session
-//! as `InProgress` from the moment the work is requested, before its task
-//! starts. Leases and worker turns share one status: a turn or rebase
-//! that ends while a lease is held defers its `Review` to the last lease, and
-//! the last lease never ends a turn that is still running. Each lease also
-//! persists a running session operation, so restart recovery returns a
-//! session the lease left `InProgress` to `Review` and keeps any other status.
-//! Leases and turns persist the status from separate tasks, so each write
-//! re-reads it under one publication lock and the last write stores the
-//! latest status.
+//! Proposal generation, graph reply decisions, and running execution graph
+//! nodes are work the session is doing, even when they run on the utility
+//! worker, outside the session worker. Each holds a [`GraphActivity`] lease
+//! that shows a `Draft` or `Review` session as `InProgress` from the moment the
+//! work is requested, before its task starts. Leases and worker turns share one
+//! status: a turn or rebase that ends while a lease is held defers its `Review`
+//! to the last lease, and the last lease never ends a turn that is still
+//! running. Each lease also persists a running session operation, so restart
+//! recovery returns a session the lease left `InProgress` to `Review` and keeps
+//! any other status. Leases and turns persist the status from separate tasks,
+//! so each write re-reads it under one publication lock and the last write
+//! stores the latest status.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::app::service::AppServices;
 use crate::app::session::SessionTaskService;
 use crate::domain::session::{SessionId, Status};
+use crate::infra::db::GRAPH_NODE_ACTIVITY_OPERATION_KIND;
 
 /// Session operation kind recorded while a graph lease is held.
 pub(crate) const GRAPH_ACTIVITY_OPERATION_KIND: &str = "graph_activity";
@@ -192,6 +193,8 @@ pub(crate) struct GraphActivity {
     /// Whether this lease moved the session to `InProgress`.
     is_claimed: bool,
     operation_id: String,
+    /// Session operation kind persisted for restart recovery.
+    operation_kind: &'static str,
     session_id: SessionId,
     /// Status handle of the loaded session; an unloaded session keeps its
     /// status.
@@ -206,11 +209,7 @@ impl GraphActivity {
         let operations = services.db().operations();
         // Best-effort: without the row, only restart recovery is lost.
         let _ = operations
-            .insert_session_operation(
-                &self.operation_id,
-                &self.session_id,
-                GRAPH_ACTIVITY_OPERATION_KIND,
-            )
+            .insert_session_operation(&self.operation_id, &self.session_id, self.operation_kind)
             .await;
         let _ = operations
             .mark_session_operation_running(&self.operation_id)
@@ -260,6 +259,27 @@ impl AppServices {
         session_id: &SessionId,
         status: Option<Arc<Mutex<Status>>>,
     ) -> GraphActivity {
+        self.begin_graph_activity_of_kind(session_id, status, GRAPH_ACTIVITY_OPERATION_KIND)
+    }
+
+    /// Starts one lease for a running execution graph node.
+    ///
+    /// Its recovery operation never blocks graph claims, so the lease never
+    /// delays the graph's next node.
+    pub(crate) fn begin_graph_node_activity(
+        &self,
+        session_id: &SessionId,
+        status: Option<Arc<Mutex<Status>>>,
+    ) -> GraphActivity {
+        self.begin_graph_activity_of_kind(session_id, status, GRAPH_NODE_ACTIVITY_OPERATION_KIND)
+    }
+
+    fn begin_graph_activity_of_kind(
+        &self,
+        session_id: &SessionId,
+        status: Option<Arc<Mutex<Status>>>,
+        operation_kind: &'static str,
+    ) -> GraphActivity {
         let is_claimed = status
             .as_ref()
             .is_some_and(|status| self.graph_activity.acquire(session_id, status));
@@ -274,6 +294,7 @@ impl AppServices {
         GraphActivity {
             is_claimed,
             operation_id: Uuid::new_v4().to_string(),
+            operation_kind,
             session_id: session_id.clone(),
             status,
         }

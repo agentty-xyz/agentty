@@ -423,6 +423,7 @@ impl SqliteGraphRepository {
     /// Durable graph claims exclude conflicting active work across graphs.
     /// Other host work must also use the shared `GraphResources` Env lease.
     /// Writers exclude every active execution, including background readers.
+    /// Graph node activity markers stand for executions counted here already.
     pub(super) async fn env_busy(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
@@ -431,12 +432,13 @@ impl SqliteGraphRepository {
         let active: Vec<Option<String>> = sqlx::query_scalar(
             "SELECT e.reference FROM session_operation o LEFT JOIN task_attempt a ON \
              a.session_operation_id = o.id LEFT JOIN execution_graph_execution e ON \
-             e.task_attempt_id = a.id WHERE o.session_id = ? AND o.status IN ('queued', \
-             'running') UNION ALL SELECT e.reference FROM agent_run r LEFT JOIN \
+             e.task_attempt_id = a.id WHERE o.session_id = ? AND o.kind != ? AND o.status IN \
+             ('queued', 'running') UNION ALL SELECT e.reference FROM agent_run r LEFT JOIN \
              execution_graph_execution e ON e.agent_run_id = r.id WHERE r.session_id = ? AND \
              r.status IN ('queued', 'running')",
         )
         .bind(graph.session_id.as_str())
+        .bind(super::GRAPH_NODE_ACTIVITY_OPERATION_KIND)
         .bind(graph.session_id.as_str())
         .fetch_all(&mut *connection)
         .await?;

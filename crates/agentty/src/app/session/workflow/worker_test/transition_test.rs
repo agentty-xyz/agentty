@@ -42,7 +42,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, GRAPH_NODE_ACTIVITY_OPERATION_KIND};
 use crate::infra::fs;
 
 #[tokio::test]
@@ -1397,16 +1397,19 @@ async fn test_restart_recovery_skips_abort_without_rebase_in_progress() {
 /// Verifies an interrupted graph lease leaves every status it never claimed,
 /// because a lease only moves `Review` to `InProgress`.
 async fn test_restart_recovery_keeps_statuses_a_graph_lease_never_claimed() {
-    for status in [
+    for (status, kind) in [
         Status::Draft,
         Status::AgentReview,
         Status::Watching,
         Status::Question,
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|status| GRAPH_LEASE_KINDS.map(|kind| (status, kind)))
+    {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await.expect("db should open");
-        seed_recovery_test_operation(&db, status, GRAPH_ACTIVITY_OPERATION_KIND).await;
+        seed_recovery_test_operation(&db, status, kind).await;
         db.operations()
             .mark_session_operation_running("op-1")
             .await
@@ -1428,7 +1431,7 @@ async fn test_restart_recovery_keeps_statuses_a_graph_lease_never_claimed() {
 
         // Assert
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(sessions[0].status, status.to_string());
+        assert_eq!(sessions[0].status, status.to_string(), "{kind}");
     }
 }
 
@@ -1436,39 +1439,48 @@ async fn test_restart_recovery_keeps_statuses_a_graph_lease_never_claimed() {
 /// Verifies an interrupted graph lease that held `InProgress` returns the
 /// session to `Review`.
 async fn test_restart_recovery_returns_graph_lease_in_progress_to_review() {
-    // Arrange
-    let base_dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    seed_recovery_test_operation(&db, Status::InProgress, GRAPH_ACTIVITY_OPERATION_KIND).await;
-    db.operations()
-        .mark_session_operation_running("op-1")
-        .await
-        .expect("operation should start");
+    for kind in GRAPH_LEASE_KINDS {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        seed_recovery_test_operation(&db, Status::InProgress, kind).await;
+        db.operations()
+            .mark_session_operation_running("op-1")
+            .await
+            .expect("operation should start");
 
-    // Act
-    let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
-        &db,
-        base_dir.path(),
-        Arc::new(MockGitClient::new()),
-        300,
-    )
-    .await;
-    let sessions = db
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("sessions should load");
-    let unfinished = db
-        .operations()
-        .load_unfinished_session_operations()
-        .await
-        .expect("operations should load");
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(MockGitClient::new()),
+            300,
+        )
+        .await;
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("sessions should load");
+        let unfinished = db
+            .operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("operations should load");
 
-    // Assert
-    assert!(result.is_ok(), "{result:?}");
-    assert_eq!(sessions[0].status, "Review");
-    assert!(unfinished.is_empty());
+        // Assert
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(sessions[0].status, "Review", "{kind}");
+        assert!(unfinished.is_empty(), "{kind}");
+    }
 }
+
+/// Operation kinds of graph leases, which hold only the `InProgress` they
+/// claimed.
+const GRAPH_LEASE_KINDS: [&str; 2] = [
+    GRAPH_ACTIVITY_OPERATION_KIND,
+    GRAPH_NODE_ACTIVITY_OPERATION_KIND,
+];
 
 #[tokio::test]
 /// Verifies a preparation prompt without a queued workspace handoff does not

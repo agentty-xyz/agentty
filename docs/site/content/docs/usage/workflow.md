@@ -557,8 +557,11 @@ attention and counts hidden nodes. Proposals are restored when you reopen the se
 restart Agentty.
 
 While a proposal is generated or a reply is being decided, a **Draft** or **Review**
-session shows **InProgress**, starting as soon as you send the message. A message sent
-meanwhile starts at once. `Ctrl+C` cancels generation or drops an undecided reply.
+session shows **InProgress**, starting as soon as you send the message. A running graph
+keeps the session **InProgress** while any of its nodes runs, including between a node
+and the next node it unblocks; it returns to **Review** once the graph finishes or waits
+for you. A message sent meanwhile starts at once. `Ctrl+C` cancels generation or drops
+an undecided reply.
 
 Reply in chat to act on a pending proposal. The session model decides what your reply
 means:
