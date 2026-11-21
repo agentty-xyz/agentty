@@ -656,6 +656,42 @@ async fn review_diff_after_new_turn_compares_content_and_allows_manual_review() 
 }
 
 #[tokio::test]
+async fn interrupted_review_restarts_after_unchanged_follow_up_turn() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    let diff = "+unreviewed change";
+    let review_update = |request_id| SessionDiffUpdate {
+        request_id,
+        result: Ok(diff.to_string()),
+        session_id: session_id.clone(),
+    };
+    let target = test_review_target(&app, &session_id);
+    app.apply_review_diff_update(review_update(1), None, false, target)
+        .await;
+    assert!(app.review_is_loading(&session_id));
+
+    // Act: a follow-up prompt interrupts the review, and its turn leaves the
+    // diff unchanged.
+    app.clear_review_output(&session_id);
+    app.services
+        .db()
+        .sessions()
+        .update_session_focused_review(&session_id, None, None, None)
+        .await
+        .expect("new turn should clear review output");
+    let target = test_review_target(&app, &session_id);
+    app.apply_review_diff_update(review_update(2), None, false, target)
+        .await;
+
+    // Assert
+    assert!(app.review_is_loading(&session_id));
+    assert_eq!(
+        app.review_diff_hashes.get(&session_id),
+        Some(&review::diff_content_hash(diff))
+    );
+}
+
+#[tokio::test]
 async fn unchanged_review_diff_clears_durable_trigger_across_consecutive_turns() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;

@@ -1089,20 +1089,28 @@ impl App {
     }
 
     /// Clears cached focused-review state, invalidates pending `/apply`
-    /// continuations, and retracts its display slot while retaining the diff
-    /// baseline for automatic review of the next turn.
+    /// continuations, and retracts its display slot.
+    ///
+    /// A finished review keeps its diff as the baseline for automatic review
+    /// of the next turn. An interrupted generation discards the baseline it
+    /// claimed, so a following turn without changes still reviews that diff.
     pub(crate) fn clear_review_output(&mut self, session_id: &str) {
-        self.discard_pending_apply_review_diff_loads(&SessionId::from(session_id));
-        if let Some(diff_hash) = self
-            .review_cache
-            .remove(session_id)
-            .and_then(|entry| entry.diff_hash())
-        {
-            self.review_diff_hashes
-                .entry(SessionId::from(session_id))
-                .or_insert(diff_hash);
+        let session_id = SessionId::from(session_id);
+        self.discard_pending_apply_review_diff_loads(&session_id);
+        match self.review_cache.remove(&session_id) {
+            Some(ReviewCacheEntry::Loading { .. }) => {
+                self.review_diff_hashes.remove(&session_id);
+            }
+            Some(entry) => {
+                if let Some(diff_hash) = entry.diff_hash() {
+                    self.review_diff_hashes
+                        .entry(session_id.clone())
+                        .or_insert(diff_hash);
+                }
+            }
+            None => {}
         }
-        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+        if let Some(session) = self.sessions.state_mut().session_mut_for_id(&session_id) {
             session
                 .transient_messages
                 .retract(TransientMessageSlot::Review);
