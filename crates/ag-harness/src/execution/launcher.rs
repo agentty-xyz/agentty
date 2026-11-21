@@ -481,19 +481,18 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .arg("--ro-bind")
         .arg(&configuration.workspace)
         .arg(&configuration.workspace);
-    // Hidden paths cover the read mounts above, and the writable mounts
-    // below stay accessible inside them: an empty directory over a
-    // directory, made read-only once those are mounted, and the empty
-    // device over a file. A missing path cannot appear, since none lies
-    // inside a writable directory.
-    let mut hidden_directories = Vec::new();
-    for path in &configuration.hidden_paths {
-        if path.is_dir() {
-            command.arg("--tmpfs").arg(path);
-            hidden_directories.push(path);
-        } else if path.exists() {
-            command.arg("--ro-bind").arg("/dev/null").arg(path);
-        }
+    // Hidden directories cover the read mounts above, and the writable
+    // mounts below stay accessible inside them: an empty directory, made
+    // read-only once those are mounted. Hidden files get the empty device
+    // last. A missing path cannot appear, since none lies inside a writable
+    // directory.
+    let (hidden_directories, hidden_files): (Vec<_>, Vec<_>) = configuration
+        .hidden_paths
+        .iter()
+        .filter(|path| path.exists())
+        .partition(|path| path.is_dir());
+    for path in &hidden_directories {
+        command.arg("--tmpfs").arg(path);
     }
     for path in &configuration.writes {
         command.arg("--bind").arg(path).arg(path);
@@ -518,6 +517,9 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
     }
     for path in hidden_directories {
         command.arg("--remount-ro").arg(path);
+    }
+    for path in hidden_files {
+        command.arg("--ro-bind").arg("/dev/null").arg(path);
     }
     if !devices {
         command.args(["--dev-bind", "/dev/null", "/dev/null"]);
