@@ -44,15 +44,17 @@ jobs:
           ALWAYS: ${{ inputs.always }}
         run: |
           if [ "$ALWAYS" = "true" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+            printf 'run=true\npackage=true\n' >> "$GITHUB_OUTPUT"
           else
             cargo run -q --locked -p ag-xtask -- release-gate --base HEAD^1 --output "$GITHUB_OUTPUT"
           fi
 
       # Builds each crate from its `.crate` tarball, so a file the package
-      # leaves out fails here instead of in `cargo publish`.
+      # leaves out fails here instead of in `cargo publish`. Only a version
+      # crates.io does not hold yet verifies against the workspace's own
+      # sibling crates, so tooling changes skip it.
       - name: Package published crates
-        if: ${{ steps.gate.outputs.run == 'true' }}
+        if: ${{ steps.gate.outputs.package == 'true' }}
         run: prek run package-crates --all-files --hook-stage manual
 
       # Workspace crates depend on each other with caret requirements, so a

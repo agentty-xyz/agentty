@@ -23,6 +23,7 @@ fn a_moved_workspace_version_runs_the_checks() {
         }
     );
     assert!(decision.runs());
+    assert!(decision.packages());
     assert_eq!(decision.release_type(), "");
     assert_eq!(
         decision.reason(),
@@ -46,6 +47,7 @@ fn a_changed_check_input_runs_the_checks() {
         Decision::InputsChanged(paths(&["rust-toolchain.toml", ".pre-commit-config.yaml"]))
     );
     assert!(decision.runs());
+    assert!(!decision.packages());
     assert_eq!(decision.release_type(), "major");
     assert_eq!(
         decision.reason(),
@@ -62,6 +64,7 @@ fn other_changes_skip_the_checks() {
     // Assert
     assert_eq!(decision, Decision::Unchanged);
     assert!(!decision.runs());
+    assert!(!decision.packages());
     assert_eq!(decision.release_type(), "");
     assert!(decision.reason().starts_with("Release checks skipped"));
 }

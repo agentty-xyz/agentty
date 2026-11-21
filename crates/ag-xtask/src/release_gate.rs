@@ -28,20 +28,25 @@ pub(crate) struct Options {
     /// Base revision whose fork point bounds the change.
     #[arg(long, default_value = "origin/main")]
     base: String,
-    /// File that receives the `run` and `release-type` outputs, such as
-    /// `$GITHUB_OUTPUT`.
+    /// File that receives the `run`, `package`, and `release-type` outputs,
+    /// such as `$GITHUB_OUTPUT`.
     #[arg(long)]
     output: PathBuf,
 }
 
 /// Appends `run=true` to the output file when the change moves
 /// `[workspace.package].version` or edits a check input, else `run=false`,
-/// followed by the `release-type` the semver check should assume.
+/// followed by whether to package the crates and the `release-type` the
+/// semver check should assume.
 ///
-/// A version change leaves `release-type` empty, so the check enforces the
-/// bump the new version implies. A check-input change only has to prove the
-/// tooling still runs, so it assumes `major`: an unreleased break already
-/// on the target branch is the next release's decision, not this change's.
+/// A version change packages the crates and leaves `release-type` empty, so
+/// the check enforces the bump the new version implies. A check-input change
+/// only has to prove the semver tooling still runs, so it assumes `major`:
+/// an unreleased break already on the target branch is the next release's
+/// decision, not this change's. It also skips packaging: at an unchanged
+/// version, Cargo verifies each tarball against the sibling crates already
+/// on crates.io instead of the workspace's, which fails for API added since
+/// that release.
 ///
 /// # Errors
 ///
@@ -71,8 +76,9 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
         .and_then(|mut output| {
             writeln!(
                 output,
-                "run={}\nrelease-type={}",
+                "run={}\npackage={}\nrelease-type={}",
                 decision.runs(),
+                decision.packages(),
                 decision.release_type()
             )
         })
@@ -114,6 +120,12 @@ impl Decision {
     /// Returns whether the release checks run.
     fn runs(&self) -> bool {
         !matches!(self, Self::Unchanged)
+    }
+
+    /// Returns whether to package and verify the crates, which needs a
+    /// version crates.io does not hold yet.
+    fn packages(&self) -> bool {
+        matches!(self, Self::VersionChanged { .. })
     }
 
     /// Returns the release type the semver check assumes, or an empty string

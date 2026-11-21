@@ -98,7 +98,7 @@ fn a_version_bump_runs_the_release_checks() -> Result<(), Box<dyn Error>> {
     // Act
     let decision = fixture.decide()?;
     // Assert
-    assert_eq!(decision, "run=true\nrelease-type=\n");
+    assert_eq!(decision, "run=true\npackage=true\nrelease-type=\n");
 
     Ok(())
 }
@@ -114,7 +114,7 @@ fn a_changed_check_input_runs_the_release_checks() -> Result<(), Box<dyn Error>>
     // Act
     let decision = fixture.decide()?;
     // Assert
-    assert_eq!(decision, "run=true\nrelease-type=major\n");
+    assert_eq!(decision, "run=true\npackage=false\nrelease-type=major\n");
 
     Ok(())
 }
@@ -127,7 +127,7 @@ fn other_changes_skip_the_release_checks() -> Result<(), Box<dyn Error>> {
     // Act
     let decision = fixture.decide()?;
     // Assert
-    assert_eq!(decision, "run=false\nrelease-type=\n");
+    assert_eq!(decision, "run=false\npackage=false\nrelease-type=\n");
 
     Ok(())
 }
