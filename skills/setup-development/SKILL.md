@@ -44,8 +44,8 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   provisions in `.github/actions/setup-native-sandbox/action.yml`. Consult
   `.github/actions/setup-rust-prek/action.yml` when reproducing CI tooling.
 
-- **Published-crate checks:** the `semver-checks` hook needs `cargo-semver-checks` at
-  the version `.github/actions/setup-rust-prek/action.yml` pins, for example
+- **Published-crate checks:** the `cargo-semver-checks` hook needs `cargo-semver-checks`
+  at the version `.github/actions/setup-rust-prek/action.yml` pins, for example
   `cargo install cargo-semver-checks --version <pinned version> --locked`; a newer
   nightly can require a newer release to read its rustdoc JSON.
 

@@ -504,7 +504,7 @@ repos:
         description: Compile and run rustdoc examples across the workspace, including the crate README examples that `ag-harness`, `ag-router`, and `testty` compile as doctests.
         entry: cargo test --locked --doc --workspace
         language: system
-        always_run: true
+        files: (^|/)(.*\.rs|README\.md|Cargo\.(toml|lock)|rust-toolchain\.toml)$
         pass_filenames: false
         stages: [manual]
       - id: package-crates
@@ -515,10 +515,10 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
-      - id: semver-checks
+      - id: cargo-semver-checks
         name: cargo semver-checks
-        description: Check each published library crate's public API against its newest crates.io release for changes the workspace version bump does not allow. The `agentty` application, which no crate depends on, is excluded.
-        entry: cargo semver-checks --workspace --exclude agentty
+        description: Check each published library crate's public API against its newest crates.io release for changes the workspace version allows, skipping new crates without a release and the `agentty` application, which no crate depends on.
+        entry: cargo run -q --locked -p ag-xtask -- semver-checks --exclude agentty
         language: system
         always_run: true
         pass_filenames: false

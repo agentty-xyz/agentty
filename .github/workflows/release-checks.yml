@@ -24,3 +24,5 @@ jobs:
     name: Release crates
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     uses: $/.github/workflows/published-crates.yml
+    with:
+      always: true
