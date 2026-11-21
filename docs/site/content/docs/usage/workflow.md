@@ -156,8 +156,11 @@ their inputs are unchanged and still run repository-required checks.
 ### Focused Review
 
 Agentty reviews a changed diff automatically when a session enters **Review**; unchanged
-diffs and stopped turns are skipped. Press `f` to show the review, request one, or bring
-a running review's progress into view. Results stay visible until the next prompt, and a
+diffs and stopped turns are skipped. While an approved
+[graph](@/docs/usage/workflow.md#generated-graph-proposals) is running or waiting on
+you, the review waits until the graph finishes, fails, runs out of provider calls, is
+canceled, or pauses. Press `f` to show the review, request one, or bring a running
+review's progress into view. Results stay visible until the next prompt, and a
 conflict-free sync keeps them.
 
 Reviews read the diff, conversation, files, and history and may browse, but recommend
@@ -563,7 +566,10 @@ be accepted, the producer shows **Awaiting your approval**, and chat shows its o
 with a prompt to approve it. Your next chat reply accepts it, as with "start
 implementing", or sends revision guidance; replies with images always revise. Outputs
 already consumed by a started dependent, or from nodes without a task conversation, can
-only be accepted.
+only be accepted. A paused graph, such as one restored after a restart, still shows the
+output as awaiting approval, and your reply resumes the graph before acting on it. This
+applies to the session's newest graph only; an older paused graph leaves your message as
+an ordinary turn.
 
 Duplicate approvals do not launch again. Pending proposals and undecided replies survive
 a restart or project switch, though a recovered reply loses its images; stopping the
@@ -582,8 +588,9 @@ Available controls appear below the graph. `a` accepts the displayed output, `e`
 revision guidance to that node's task conversation, `t` retries a failed node, `s`
 resumes paused dispatch, and `x` cancels the whole graph permanently after you type
 `cancel`. Answer node questions in session chat. Retry and answers record intent; they
-do not resume a stopped graph. A rejected reply keeps its draft: press `Ctrl+r` to
-refresh and resubmit, or `Esc` to discard it.
+do not resume a stopped graph, unlike a chat reply to an output awaiting approval. A
+rejected reply keeps its draft: press `Ctrl+r` to refresh and resubmit, or `Esc` to
+discard it.
 
 Provider-call limits are fixed when a graph first launches, and resuming continues from
 the calls that remain; a node whose budget is spent stays blocked. Nothing replays

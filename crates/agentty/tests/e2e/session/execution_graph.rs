@@ -12,7 +12,7 @@ use ag_session::{
     GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphOutput, GraphPostProcessing,
     GraphWorkspaceAccess, test_support as model_fixture,
 };
-use ag_worker::GraphAdmission;
+use ag_worker::{GraphAdmission, GraphDispatch};
 use agentty::db::Database;
 use testty::assertion;
 use testty::journey::Journey;
@@ -35,32 +35,13 @@ async fn seed_graph(env: &BuilderEnv, agent: AgentSelection) -> E2eResult {
     .await?;
     let database = common::open_database(env).await?;
     let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
-    let node = |id: &str| GraphNode {
-        agent,
-        definition: definition.clone(),
-        dependencies: Vec::new(),
-        env_id: EnvId::SessionWorktree(SESSION.into()),
-        execution: GraphExecutionProfile {
-            context: GraphContext::TaskConversation {
-                task_id: format!("task-{id}"),
-            },
-            post_processing: GraphPostProcessing::None,
-            response_profile: ProtocolRequestProfile::SessionTurn,
-            shared_budget_id: Some("calls".into()),
-            workspace_access: GraphWorkspaceAccess::SharedRead,
-        },
-        id: id.into(),
-        inputs: Vec::new(),
-        objective: if id == "design" {
-            format!("Inspect {id}: {}METADATA_SUFFIX", "nested/".repeat(38))
-        } else {
-            format!("Inspect {id}")
-        },
-        outputs: vec![GraphOutput {
-            name: "response".into(),
-            schema: ProtocolRequestProfile::SessionTurn,
-        }],
-        request: TurnPrompt::from_agent_data("Inspect repository".into()),
+    let node = |id: &str| {
+        let mut node = reader_node(agent, &definition, id);
+        if id == "design" {
+            node.objective = format!("Inspect {id}: {}METADATA_SUFFIX", "nested/".repeat(38));
+        }
+
+        node
     };
     let mut join = node("join");
     for id in ["design", "inspect", "check"] {
@@ -83,39 +64,16 @@ async fn seed_graph(env: &BuilderEnv, agent: AgentSelection) -> E2eResult {
     };
     launch_restored(&database, &graph).await?;
     for (index, id) in ["design", "inspect", "check"].iter().enumerate() {
-        let admission = database
-            .graph_dispatch()
-            .claim(
-                &graph.id,
-                graph.revision,
-                id,
-                &uuid::Uuid::from_u128(index as u128 + 1).to_string(),
-                &env.workdir,
-            )
-            .await?;
-        let dispatch = match admission {
-            GraphAdmission::Claimed(dispatch) => Some(dispatch),
-            _ => None,
-        }
-        .ok_or("Expected graph claim")?;
-        let operation_id = match &dispatch.record.execution {
-            GraphExecutionRef::TaskAttempt { operation_id, .. } => Some(operation_id.as_str()),
-            GraphExecutionRef::UtilityRun { .. } => None,
-        }
-        .ok_or("Expected task attempt")?;
-        database
-            .operations()
-            .mark_session_operation_running(operation_id)
-            .await?;
+        let (dispatch, operation_id) = claim_running(env, &database, &graph, id, index).await?;
         if *id == "check" {
             database
                 .operations()
-                .mark_session_operation_failed(operation_id, "Fixture failure")
+                .mark_session_operation_failed(&operation_id, "Fixture failure")
                 .await?;
         } else {
             database
                 .operations()
-                .mark_session_operation_done(operation_id)
+                .mark_session_operation_done(&operation_id)
                 .await?;
             let body = node_output_body(id);
             database.graph_dispatch().finish(&dispatch, &body).await?;
@@ -123,6 +81,142 @@ async fn seed_graph(env: &BuilderEnv, agent: AgentSelection) -> E2eResult {
     }
 
     Ok(())
+}
+
+/// Seeds a graph restored after a restart: `plan` finished, and `implement`
+/// waits for the user to accept its `response` output. A provider stub
+/// accepts the reply decision, and its `implement` turn asks a question,
+/// which shows in chat that the node ran.
+async fn seed_paused_plan_graph(env: &BuilderEnv) -> E2eResult {
+    let workspace = env.agentty_root.join("wt").join("graph-ui");
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/graph-ui",
+            workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
+        ],
+    )?;
+    common::seed_active_project_setting(env).await?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
+            .with_title("Graph controls"),
+    )
+    .await?;
+    let database = common::open_database(env).await?;
+    let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
+    let agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
+    let mut implement = reader_node(agent, &definition, "implement");
+    implement.dependencies.push(GraphDependency {
+        node_id: "plan".into(),
+        gate: GraphCompletionGate::ResultAccepted {
+            output_name: "response".into(),
+        },
+    });
+    let graph = ExecutionGraph {
+        id: "paused-plan".into(),
+        nodes: vec![reader_node(agent, &definition, "plan"), implement],
+        revision: NonZeroU64::MIN,
+        session_id: SESSION.into(),
+    };
+    launch_restored(&database, &graph).await?;
+    let (dispatch, operation_id) = claim_running(env, &database, &graph, "plan", 0).await?;
+    database
+        .operations()
+        .mark_session_operation_done(&operation_id)
+        .await?;
+    let plan = serde_json::json!({
+        "answer": "Plan: change the parser.",
+        "questions": [],
+        "review_comment_outcomes": []
+    });
+    database
+        .graph_dispatch()
+        .finish(&dispatch, &plan.to_string())
+        .await?;
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+printf '%s\n' '{"type":"system","subtype":"init"}'
+case "$prompt" in
+  *'Output awaiting acceptance'*) printf '%s\n' '{"type":"result","subtype":"success","structured_output":{"answer":"accept"},"usage":{"input_tokens":5,"output_tokens":9}}' ;;
+  *) printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Implemented inside the graph.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}' ;;
+esac
+"#;
+    let executable = env.stub_bin.join("claude");
+    std::fs::write(&executable, script)?;
+    std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
+/// Read-only task-conversation node `id` that draws on the shared `calls`
+/// budget.
+fn reader_node(agent: AgentSelection, definition: &AgentDefinition, id: &str) -> GraphNode {
+    GraphNode {
+        agent,
+        definition: definition.clone(),
+        dependencies: Vec::new(),
+        env_id: EnvId::SessionWorktree(SESSION.into()),
+        execution: GraphExecutionProfile {
+            context: GraphContext::TaskConversation {
+                task_id: format!("task-{id}"),
+            },
+            post_processing: GraphPostProcessing::None,
+            response_profile: ProtocolRequestProfile::SessionTurn,
+            shared_budget_id: Some("calls".into()),
+            workspace_access: GraphWorkspaceAccess::SharedRead,
+        },
+        id: id.into(),
+        inputs: Vec::new(),
+        objective: format!("Inspect {id}"),
+        outputs: vec![GraphOutput {
+            name: "response".into(),
+            schema: ProtocolRequestProfile::SessionTurn,
+        }],
+        request: TurnPrompt::from_agent_data("Inspect repository".into()),
+    }
+}
+
+/// Claims node `id` as execution `index` of the earlier run and marks its
+/// operation running, returning the dispatch and that operation's identity.
+async fn claim_running(
+    env: &BuilderEnv,
+    database: &Database,
+    graph: &ExecutionGraph,
+    id: &str,
+    index: usize,
+) -> Result<(GraphDispatch, String), Box<dyn std::error::Error>> {
+    let admission = database
+        .graph_dispatch()
+        .claim(
+            &graph.id,
+            graph.revision,
+            id,
+            &uuid::Uuid::from_u128(index as u128 + 1).to_string(),
+            &env.workdir,
+        )
+        .await?;
+    let dispatch = match admission {
+        GraphAdmission::Claimed(dispatch) => Some(dispatch),
+        _ => None,
+    }
+    .ok_or("Expected graph claim")?;
+    let operation_id = match &dispatch.record.execution {
+        GraphExecutionRef::TaskAttempt { operation_id, .. } => Some(operation_id.clone()),
+        GraphExecutionRef::UtilityRun { .. } => None,
+    }
+    .ok_or("Expected task attempt")?;
+    database
+        .operations()
+        .mark_session_operation_running(&operation_id)
+        .await?;
+
+    Ok((*dispatch, operation_id))
 }
 
 /// Restored after a restart: limits fixed at launch, with three of four
@@ -645,6 +739,72 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Remo
                         assertion::assert_text_in_region(&exhausted, expected, &full);
                     }
                     assertion::assert_not_visible(&exhausted, "s resume graph");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn chat_reply_resumes_a_paused_graph_and_continues_inside_it() -> E2eResult {
+    // Arrange
+    FeatureTest::new("paused_graph_output_reply_resumes")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| Box::pin(seed_paused_plan_graph(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("w")
+                    .wait_for_text("paused-plan", 5000)
+                    .press_key("j")
+                    .wait_for_text("resume required", 5000)
+                    .capture_labeled("paused", "Restored graph waits on the plan's approval")
+                    .press_key("q")
+                    .step(wait_for_chat_after_graph_page())
+                    .press_key("Enter")
+                    .write_text("Start implementing")
+                    .press_key("Enter")
+                    .wait_for_text("Accepted response from plan · continuing", 15000)
+                    .wait_for_text("Which branch next?", 15000)
+                    .wait_for_text("Question 1/1", 5000)
+                    .capture_labeled("continued", "Reply resumed the graph and ran its node")
+                    .compose(&close_graph_question())
+                    .press_key("w")
+                    .wait_for_text("paused-plan", 5000)
+                    .press_key("j")
+                    .wait_for_text("Inspect implement", 5000)
+                    .wait_for_text("Which branch next?", 5000)
+                    .capture_labeled("asked", "The question belongs to the resumed graph node")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let paused = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(paused.cols(), paused.rows());
+                    for expected in ["resume required", "s resume graph"] {
+                        assertion::assert_text_in_region(&paused, expected, &full);
+                    }
+                    let continued = common::frame_from_capture(&report.captures[1]);
+                    let full = Region::full(continued.cols(), continued.rows());
+                    for expected in [
+                        "Accepted response from plan · continuing",
+                        "Implemented inside the graph.",
+                        "Question 1/1",
+                    ] {
+                        assertion::assert_text_in_region(&continued, expected, &full);
+                    }
+                    // The reply ran as the graph's own node: the graph is no
+                    // longer paused, and the node owns the question.
+                    let asked = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_not_visible(&asked, "resume required");
+                    assertion::assert_not_visible(&asked, "s resume graph");
                 })
             },
         )

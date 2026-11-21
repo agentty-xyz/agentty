@@ -219,14 +219,13 @@ fn outputs_awaiting_acceptance_require_a_pending_accepted_output_gate() {
     parallel.status = ExecutionGraphStatus::Running;
 
     // Act
-    let awaiting = [&gated, &parallel].map(outputs_awaiting_acceptance);
+    let awaiting = [&gated, &parallel, &paused].map(outputs_awaiting_acceptance);
     let others = [
         accepted,
         other_output,
         validated_gate,
         running,
         ungated,
-        paused,
         cancelled,
         failed,
     ]
@@ -238,7 +237,7 @@ fn outputs_awaiting_acceptance_require_a_pending_accepted_output_gate() {
         assert_eq!(awaiting[0].0.node_id, "first");
         assert_eq!(awaiting[0].1.reference.id, "result");
     }
-    assert_eq!(others, [0; 8]);
+    assert_eq!(others, [0; 7]);
 }
 
 #[test]

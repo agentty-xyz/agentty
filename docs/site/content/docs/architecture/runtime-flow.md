@@ -122,9 +122,11 @@ With `--experimental-graph`, session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
 pending, a composer message is a reply to it; while a graph node waits for answers or
 for acceptance of a predecessor's output, the message is a reply to that exact execution
-or output version. A read-only utility run on the Run Worker classifies replies that
-need a decision, and the resulting action enters the shared command gateway. Pending
-graph questions open the ordinary question panel bound to the exact asking version or
+or output version. A reply to an output of the session's newest working graph first
+resumes that graph through the command gateway when it is paused, so the work stays
+inside it. A read-only utility run on the Run Worker classifies replies that need a
+decision, and the resulting action enters the shared command gateway. Pending graph
+questions open the ordinary question panel bound to the exact asking version or
 execution, so a reply never reaches work that asked later.
 
 ## Session Turn Data Flow
@@ -263,6 +265,10 @@ work; it does not submit an empty reply.
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
 execution and cleanup, and background results keep their original session and project
 identity.
+
+An automatic focused review keeps its durable trigger while a live driver dispatches a
+graph that does the session's work and can still finish. It starts once that graph
+completes, fails, exhausts a budget, or its driver stops.
 
 Focused review checks captured diff fragments, cross-file risks, and consolidation as a
 [static execution graph](@/docs/architecture/execution-graphs.md#focused-review-graph).

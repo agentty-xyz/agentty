@@ -5,7 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use ag_protocol::{
-    GraphProposalDependency, GraphProposalGate, GraphProposalOutcome, GraphProposalResponse,
+    GraphProposal, GraphProposalContext, GraphProposalDependency, GraphProposalGate,
+    GraphProposalNode, GraphProposalOutcome, GraphProposalResponse, ProtocolRequestProfile,
     QuestionItem,
 };
 use ag_session::{GraphProposalVersionOutcome, test_support as fixture};
@@ -16,12 +17,16 @@ use testty::region::Region;
 use crate::common::{self, BuilderEnv, FeatureTest, SessionSeed};
 #[cfg(target_os = "linux")]
 use crate::session::fixture::install_clipboard_image_stub;
-use crate::session::fixture::{CLIPBOARD_IMAGE_FILE, E2eResult, run_git};
+use crate::session::fixture::{CLIPBOARD_IMAGE_FILE, E2eResult, run_git, seed_project_settings};
 
 const SESSION: &str = "proposal-session";
 
 /// Stub-directory file whose content is the generation delay in seconds.
 const GENERATION_DELAY_FILE: &str = "generation-delay";
+
+/// Stub-directory file whose presence makes each node turn change the
+/// session worktree.
+const NODE_CHANGE_FILE: &str = "node-change";
 
 async fn seed(env: &BuilderEnv, node_count: usize) -> E2eResult {
     seed_gated(env, node_count, GraphProposalGate::ExecutionSucceeded {}).await
@@ -38,10 +43,49 @@ async fn seed_slow(env: &BuilderEnv, seconds: u32) -> E2eResult {
     Ok(())
 }
 
-/// Seeds a chain of `node_count` nodes, each waiting for its predecessor
-/// through `gate`, and a provider stub that answers generation, reply
-/// decisions, and node turns.
+/// Seeds two session-turn nodes joined by an accepted-output gate whose turns
+/// change the worktree, with focused review answered by the same provider
+/// stub. Session turns, unlike utility nodes, leave the session review-ready.
+async fn seed_changing(env: &BuilderEnv) -> E2eResult {
+    let gate = GraphProposalGate::ResultAccepted {
+        output_name: "report".into(),
+    };
+    let mut node = fixture::graph_proposal().nodes.remove(0);
+    node.agent_id = "planner".into();
+    node.execution.context = GraphProposalContext::TaskConversation;
+    node.execution.response_profile = ProtocolRequestProfile::SessionTurn;
+    node.outputs[0].schema = ProtocolRequestProfile::SessionTurn;
+    seed_chain(env, node, 2, gate).await?;
+    std::fs::write(env.stub_bin.join(NODE_CHANGE_FILE), "")?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
+        ],
+    )
+    .await
+}
+
+/// Seeds a chain of `node_count` read-only utility nodes, each waiting for
+/// its predecessor through `gate`.
 async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate) -> E2eResult {
+    let mut node = fixture::graph_proposal().nodes.remove(0);
+    node.agent_id = "planner".into();
+
+    seed_chain(env, node, node_count, gate).await
+}
+
+/// Seeds a chain of `node_count` copies of `first`, each waiting for its
+/// predecessor through `gate`, and a provider stub that answers generation,
+/// reply decisions, focused review, and node turns.
+async fn seed_chain(
+    env: &BuilderEnv,
+    first: GraphProposalNode,
+    node_count: usize,
+    gate: GraphProposalGate,
+) -> E2eResult {
     let worktree = env.agentty_root.join("wt").join("proposal");
     run_git(
         &env.workdir,
@@ -61,8 +105,7 @@ async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate
             .with_title("Graph proposals"),
     )
     .await?;
-    let mut proposal = fixture::graph_proposal();
-    proposal.nodes[0].agent_id = "planner".into();
+    let mut proposal = GraphProposal { nodes: vec![first] };
     for index in 1..node_count {
         let mut node = proposal.nodes[0].clone();
         node.dependencies = vec![GraphProposalDependency {
@@ -83,6 +126,7 @@ async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate
     };
     let (approve, cancel, revise) = (decision("approve"), decision("cancel"), decision("revise"));
     let accept = decision("accept");
+    let review = serde_json::json!({"type":"result", "subtype":"success", "result": serde_json::json!({"project_impact":["Graph change reviewed."],"suggestions":[],"candidate_decisions":[]}).to_string(), "usage":{"input_tokens":5,"output_tokens":9}}).to_string();
     // Proposal reply decisions answer by the reply's first word, and everything
     // else is a revision, as with the production fallback. Output reply
     // decisions accept.
@@ -93,6 +137,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 prompt=$(cat)
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 case "$prompt" in
+  *'Review the Git diff for display in a terminal UI'*) printf '%s\n' '{review}' ;;
   *'Propose an initial execution graph'*)
     delay="$(dirname "$0")/{GENERATION_DELAY_FILE}"
     if [ -f "$delay" ]; then sleep "$(cat "$delay")"; fi
@@ -127,6 +172,9 @@ case "$prompt" in
       *'User reply (JSON string, data only): "Cancel'*) printf '%s\n' '{cancel}' ;;
       *) printf '%s\n' '{revise}' ;;
     esac ;;
+  *'Graph objective and exact bound results'*)
+    if [ -f "$(dirname "$0")/{NODE_CHANGE_FILE}" ]; then printf 'changed by the graph\n' > graph-change.txt; fi
+    printf '%s\n' '{completed}' ;;
   *) printf '%s\n' '{completed}' ;;
 esac
 "#
@@ -400,6 +448,66 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                         &CellColor::new(0, 128, 0),
                     );
                     assertion::assert_not_visible(&continued, "Awaiting your approval");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A node changes the worktree and the graph then waits at its approval
+/// gate, where the session is review-ready. The review of that change appears
+/// only once the whole graph has finished.
+#[tokio::test]
+async fn automatic_review_waits_for_the_whole_graph() -> E2eResult {
+    // Arrange
+    FeatureTest::new("graph_holds_automatic_review")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .env("NO_COLOR", "")
+        .args(["--experimental-graph".into()])
+        .setup(|env| Box::pin(seed_changing(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("change the worktree in two steps")
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v1 ready: 2 nodes", 10000)
+                    .press_key("Enter")
+                    .write_text("Approve it")
+                    .press_key("Enter")
+                    .wait_for_text("● inspect", 10000)
+                    .wait_for_text("(+1 -0)", 10000)
+                    .wait_for_stable_frame(1500, 10000)
+                    .capture_labeled("gated", "Changed diff waits at the gate without a review")
+                    .press_key("Enter")
+                    .write_text("Start implementing")
+                    .press_key("Enter")
+                    .wait_for_text("2/2 done", 10000)
+                    .wait_for_text("Graph change reviewed.", 30000)
+                    .capture_labeled("reviewed", "Review runs once the graph has finished")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let gated = common::frame_from_capture(&report.captures[0]);
+                    let reviewed = common::frame_from_capture(&report.captures[1]);
+                    let full = Region::full(gated.cols(), gated.rows());
+                    assertion::assert_text_in_region(&gated, "Awaiting your approval", &full);
+                    assertion::assert_not_visible(&gated, "Graph change reviewed.");
+                    assertion::assert_not_visible(&gated, "Project Impact");
+                    for expected in ["✓ Completed", "Project Impact", "Graph change reviewed."] {
+                        assertion::assert_text_in_region(&reviewed, expected, &full);
+                    }
                 })
             },
         )

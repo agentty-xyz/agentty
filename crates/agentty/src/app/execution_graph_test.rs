@@ -13,14 +13,14 @@ use ag_protocol::{
 };
 use ag_session::{
     AgentDefinition, AgentKind, AgentModel, AgentSelection, EnvId, ExecutionGraph,
-    GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile, GraphInputBinding,
-    GraphNode, GraphOutput, GraphPostProcessing, GraphResultState, GraphWorkspaceAccess, SessionId,
-    StartExecutionGraphRequest,
+    ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate, GraphContext, GraphDependency,
+    GraphExecutionProfile, GraphInputBinding, GraphNode, GraphOutput, GraphPostProcessing,
+    GraphResultState, GraphWorkspaceAccess, SessionId, StartExecutionGraphRequest,
 };
 use ag_worker::SessionRunClient;
 use tokio::sync::{Notify, mpsc, watch};
 
-use super::GraphDriverSession;
+use super::{GraphDriverSession, can_still_finish};
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionManager;
@@ -28,13 +28,14 @@ use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::infra::db::{AppRepositories, StoredGraphResult};
 use crate::infra::fs::MockFsClient;
+use crate::presentation::execution_graph::tests::acceptance_gated_view;
 use crate::test_support::{
     SessionFixtureBuilder, new_test_app_with_clients, session_manager_with_handles,
     test_app_clients,
 };
 
 #[path = "execution_graph_driver_test.rs"]
-mod driver;
+pub(in crate::app) mod driver;
 
 #[path = "execution_graph_boundary_test.rs"]
 mod boundary;
@@ -168,6 +169,38 @@ async fn graph_handoffs_reject_stale_or_conflicting_claims_before_worker_deliver
             "{scenario}"
         );
     }
+}
+
+#[test]
+fn graph_can_still_finish_only_while_it_runs_or_waits_with_budget_left() {
+    // Arrange
+    let gated = acceptance_gated_view().progress.expect("gated progress");
+    let with_status = |status| {
+        let mut progress = gated.clone();
+        progress.status = status;
+
+        progress
+    };
+    let mut exhausted = gated.clone();
+    exhausted.nodes[1]
+        .blocked
+        .push(GraphBlockedReason::BudgetExhausted("calls".into()));
+
+    // Act
+    let finishable = [gated.clone(), with_status(ExecutionGraphStatus::Running)]
+        .map(|progress| can_still_finish(&progress));
+    let stuck = [
+        with_status(ExecutionGraphStatus::Paused),
+        with_status(ExecutionGraphStatus::Failed),
+        with_status(ExecutionGraphStatus::Completed),
+        with_status(ExecutionGraphStatus::Cancelled),
+        exhausted,
+    ]
+    .map(|progress| can_still_finish(&progress));
+
+    // Assert
+    assert_eq!(finishable, [true; 2]);
+    assert_eq!(stuck, [false; 5]);
 }
 
 #[tokio::test]

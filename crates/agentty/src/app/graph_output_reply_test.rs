@@ -10,7 +10,7 @@ use ag_contracts::{
     SessionStats, TurnRequest, TurnResult,
 };
 use ag_git::{DiffStats, MockGitClient};
-use ag_protocol::{AgentResponse, TurnPrompt};
+use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNode,
     GraphNodeContinuation, GraphNodeStatus, GraphPostProcessing, GraphWorkspaceAccess,
@@ -422,13 +422,7 @@ async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
 
 #[tokio::test]
 async fn graphs_without_an_awaited_output_leave_ordinary_routing() {
-    for case in [
-        "paused",
-        "no-progress",
-        "cancelled",
-        "accepted",
-        "no-execution",
-    ] {
+    for case in ["no-progress", "cancelled", "accepted", "no-execution"] {
         // Arrange
         let (graph, mut progress) = gated();
         match case {
@@ -445,7 +439,7 @@ async fn graphs_without_an_awaited_output_leave_ordinary_routing() {
             .expect_progress()
             .returning(move |_| Ok((case != "no-progress").then(|| progress.clone())));
         let (mut app, _directory) = app_with(repository).await;
-        let _driver = (case != "paused").then(|| live_driver(&app));
+        let _driver = live_driver(&app);
 
         // Act
         let outcome = app
@@ -459,6 +453,130 @@ async fn graphs_without_an_awaited_output_leave_ordinary_routing() {
         assert_eq!(outcome, None, "{case}");
         assert!(messages(&app).await.is_empty(), "{case}");
     }
+}
+
+#[tokio::test]
+async fn reply_to_a_paused_graph_resumes_it_and_continues_inside_the_graph() {
+    // Arrange
+    let (mut app, _directory, mut observed_rx) = reader_graph_app().await;
+    let _consumer = app.sessions.foreground_consumer();
+    let service = app.session_service();
+    let request = StartExecutionGraphRequest {
+        graph: reader_graph(),
+        provider_call_limits: BTreeMap::from([("calls".into(), 2)]),
+    };
+    app.drive_session_request(service.start_execution_graph(request))
+        .await
+        .expect("start");
+    app.drive_session_request(async { observed_rx.recv().await.expect("first turn") })
+        .await;
+    wait_for_node(&mut app, 0, GraphNodeStatus::Succeeded).await;
+    // A restart or a stopped session leaves the graph without a driver.
+    app.services.stop_graph_drivers(None);
+    let budget_writers = app.services.graph_budget_writers.clone();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async move {
+            while budget_writers.has_unrecorded_spending("graph") {
+                tokio::task::yield_now().await;
+            }
+        }),
+    )
+    .await
+    .expect("stopped driver records its spending");
+    let paused = app
+        .drive_session_request(service.get_execution_graph("graph"))
+        .await
+        .expect("progress")
+        .expect("graph");
+
+    // Act
+    let outcome = app.submit_prompt(submission("Start implementing")).await;
+    let second = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async { observed_rx.recv().await.expect("second turn") }),
+    )
+    .await
+    .expect("the resumed graph dispatches the waiting node");
+    let completed = wait_for_node(&mut app, 1, GraphNodeStatus::Succeeded).await;
+    let notice = wait_for_message(&app, "Accepted").await;
+
+    // Assert
+    assert_eq!(paused.status, ExecutionGraphStatus::Paused);
+    assert_eq!(
+        outcome,
+        PromptWorkflowOutcome::ShowSession {
+            session_id: "sess".into()
+        }
+    );
+    assert!(second.prompt.agent_text().contains("Plan ready"));
+    assert_eq!(completed.status, ExecutionGraphStatus::Completed);
+    assert_eq!(notice, "Accepted `response` from `first` · continuing");
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn older_paused_graph_leaves_ordinary_routing_once_a_newer_graph_exists() {
+    // Arrange: the resume lookup is not mocked, so reaching it would panic.
+    let (graph, progress) = gated();
+    let mut newer = graph.clone();
+    newer.id = "newer".into();
+    let (mut app, _directory) = app_with(listing_before(graph, progress, vec![newer])).await;
+
+    // Act
+    let outcome = app
+        .submit_graph_output_reply(
+            &SessionId::from("sess"),
+            &TurnPrompt::from_text("Unrelated follow-up".into()),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(outcome, None);
+    assert_eq!(messages(&app).await, Vec::new());
+}
+
+#[tokio::test]
+async fn reply_to_a_paused_graph_that_cannot_resume_keeps_the_composer() {
+    // Arrange: a focused review that ran since is not a newer working graph.
+    let (graph, progress) = gated();
+    let mut review = graph.clone();
+    review.id = "review".into();
+    review.nodes[0].execution.response_profile = ProtocolRequestProfile::FocusedReview;
+    review.nodes[0].execution.workspace_access = GraphWorkspaceAccess::BackgroundRead;
+    let mut repository = listing_before(graph, progress, vec![review]);
+    repository.expect_load_graph().returning(|_, _| Ok(None));
+    let (mut app, _directory) = app_with(repository).await;
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    app.services.set_run_client(Arc::new(client));
+
+    // Act
+    let outcome = app
+        .submit_graph_output_reply(
+            &SessionId::from("sess"),
+            &TurnPrompt::from_text("Go ahead".into()),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    let messages = messages(&app).await;
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].1.contains(
+            "the paused graph could not resume to act on `first`: Missing or stale graph. Resume \
+             it from `w`, then reply again."
+        ),
+        "{messages:?}"
+    );
+    assert!(
+        app.services
+            .output_reply_decisions
+            .lock()
+            .expect("decision lock")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -519,14 +637,26 @@ fn gated() -> (ExecutionGraph, ExecutionGraphProgress) {
 
 /// Repository that lists the gated graph and its stored output body.
 fn listing(graph: ExecutionGraph, progress: ExecutionGraphProgress) -> MockGraphRepository {
+    listing_before(graph, progress, Vec::new())
+}
+
+/// Repository that lists the gated graph, then `newer` graphs created after
+/// it that have no progress yet, with the gated graph's stored output body.
+fn listing_before(
+    graph: ExecutionGraph,
+    progress: ExecutionGraphProgress,
+    newer: Vec<ExecutionGraph>,
+) -> MockGraphRepository {
     let result = progress.nodes[0].results[0].clone();
+    let gated_id = graph.id.clone();
+    let graphs: Vec<_> = std::iter::once(graph).chain(newer).collect();
     let mut repository = MockGraphRepository::new();
     repository
         .expect_list_graphs()
-        .returning(move |_| Ok(vec![graph.clone()]));
+        .returning(move |_| Ok(graphs.clone()));
     repository
         .expect_progress()
-        .returning(move |_| Ok(Some(progress.clone())));
+        .returning(move |id| Ok((id == gated_id).then(|| progress.clone())));
     repository.expect_load_result().returning(move |_| {
         Ok(Some(StoredGraphResult {
             acceptance: None,

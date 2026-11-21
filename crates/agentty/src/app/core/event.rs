@@ -2391,11 +2391,20 @@ impl App {
 
     /// Starts automatic reviews for loaded and inactive-project sessions,
     /// retaining durable triggers when preparation cannot start yet.
+    ///
+    /// A session whose graph is still working keeps its trigger until the
+    /// graph finishes, fails, or stops, so the review covers the whole graph
+    /// rather than the diff between two nodes.
     async fn start_or_defer_auto_reviews(&mut self, session_ids: &HashSet<SessionId>) {
         let mut loaded_session_ids = HashSet::new();
 
         for session_id in session_ids {
             if self.role_review_suppression.contains_key(session_id) {
+                continue;
+            }
+            if self.graph_holds_automatic_review(session_id).await {
+                self.defer_auto_review_session(session_id).await;
+
                 continue;
             }
             let loaded_status = self
@@ -2423,16 +2432,23 @@ impl App {
     }
 
     /// Consumes deferred automatic-review triggers whose sessions were
-    /// restored by the latest project switch.
-    pub(super) fn resume_deferred_auto_reviews(&mut self, persisted_session_ids: Vec<String>) {
+    /// restored by the latest project switch. A session whose graph is still
+    /// working keeps its trigger for the update that graph emits when it
+    /// settles or stops.
+    pub(super) async fn resume_deferred_auto_reviews(
+        &mut self,
+        persisted_session_ids: Vec<String>,
+    ) {
         self.deferred_auto_review_session_ids
             .extend(persisted_session_ids.into_iter().map(SessionId::from));
-        let loaded_session_ids = self
-            .deferred_auto_review_session_ids
-            .iter()
-            .filter(|session_id| self.sessions.session_for_id(session_id).is_some())
-            .cloned()
-            .collect::<HashSet<_>>();
+        let mut loaded_session_ids = HashSet::new();
+        for session_id in &self.deferred_auto_review_session_ids {
+            if self.sessions.session_for_id(session_id).is_some()
+                && !self.graph_holds_automatic_review(session_id).await
+            {
+                loaded_session_ids.insert(session_id.clone());
+            }
+        }
 
         for session_id in &loaded_session_ids {
             self.deferred_auto_review_session_ids.remove(session_id);

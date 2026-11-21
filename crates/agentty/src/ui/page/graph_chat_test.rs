@@ -411,6 +411,26 @@ fn awaited_output_shows_approval_on_its_producer_and_prioritizes_it() {
 }
 
 #[test]
+fn paused_graph_keeps_its_awaited_output_and_offers_to_resume_by_reply() {
+    // Arrange
+    let mut snapshot = awaiting_snapshot();
+    snapshot.progress.as_mut().expect("progress").status = ExecutionGraphStatus::Paused;
+
+    // Act
+    let rows = inner_rows(Some(&snapshot), 90, 22);
+
+    // Assert
+    assert_eq!(
+        rows[..2],
+        [
+            "‖ Paused",
+            "inspect awaits your approval; reply in chat to accept it and resume the graph",
+        ]
+    );
+    assert_eq!(rows[4], spread("● inspect", "Awaiting your approval", 88));
+}
+
+#[test]
 fn awaited_output_without_a_task_conversation_offers_only_acceptance() {
     // Arrange
     let snapshot = awaiting_snapshot();

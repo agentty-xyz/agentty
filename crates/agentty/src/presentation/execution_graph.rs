@@ -113,13 +113,7 @@ impl GraphView {
 
     /// Focused reviews have a host coordinator and must start a new generation.
     pub(crate) fn is_focused_review(&self) -> bool {
-        self.graph().is_some_and(|graph| {
-            graph.nodes.iter().any(|node| {
-                node.execution.response_profile
-                    == ag_protocol::ProtocolRequestProfile::FocusedReview
-                    && node.execution.workspace_access == GraphWorkspaceAccess::BackgroundRead
-            })
-        })
+        self.graph().is_some_and(is_focused_review_graph)
     }
 
     pub(crate) fn can_resume(&self) -> bool {
@@ -230,15 +224,27 @@ impl GraphViewOutput {
     }
 }
 
+/// Whether `graph` is a focused review, which a host coordinator drives,
+/// rather than work the session's user asked a graph to do.
+pub(crate) fn is_focused_review_graph(graph: &ExecutionGraph) -> bool {
+    graph.nodes.iter().any(|node| {
+        node.execution.response_profile == ProtocolRequestProfile::FocusedReview
+            && node.execution.workspace_access == GraphWorkspaceAccess::BackgroundRead
+    })
+}
+
 /// Lists validated outputs whose acceptance a pending dependent waits for,
-/// with their succeeded producer, in producer declaration order. Only running
-/// or blocked graphs, which a live driver dispatches, list any.
+/// with their succeeded producer, in producer declaration order. Running and
+/// blocked graphs list them, and so do paused graphs, whose outputs still
+/// wait on the user while dispatch waits for a resume.
 pub(crate) fn outputs_awaiting_acceptance(
     progress: &ExecutionGraphProgress,
 ) -> Vec<(&GraphNodeProgress, &GraphResult)> {
     if !matches!(
         progress.status,
-        ExecutionGraphStatus::Running | ExecutionGraphStatus::Blocked
+        ExecutionGraphStatus::Running
+            | ExecutionGraphStatus::Blocked
+            | ExecutionGraphStatus::Paused
     ) {
         return Vec::new();
     }
