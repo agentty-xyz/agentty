@@ -65,7 +65,8 @@ jobs:
         id: version
         run: |
           workspace_version() {
-            git show "$1:Cargo.toml" |
+            local revision="$1"
+            git show "$revision:Cargo.toml" |
               awk '/^\[/ { package = ($0 == "[workspace.package]") } package && /^version *=/ { print; exit }'
           }
 
