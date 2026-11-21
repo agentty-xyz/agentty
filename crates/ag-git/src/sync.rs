@@ -24,9 +24,8 @@ use super::repo::{
     spawn_blocking_in_context,
 };
 
-/// Map of local branch names to their ahead/behind counts relative to their
-/// tracked upstream branch. `None` indicates no upstream or a gone upstream.
-pub type BranchTrackingMap = HashMap<String, Option<(u32, u32)>>;
+/// Map of local branch names to their tip commit and tracked-upstream status.
+pub type BranchTrackingMap = HashMap<String, BranchTrackingStatus>;
 
 /// Result of pushing one explicit remote branch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +34,17 @@ pub struct BranchPushOutcome {
     pub updated: bool,
     /// Remote-tracking reference configured by the successful push.
     pub upstream_reference: String,
+}
+
+/// Tip commit and tracked-upstream comparison of one local branch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchTrackingStatus {
+    /// Full object id of the branch tip, which callers can use to detect
+    /// unchanged branches between snapshots.
+    pub commit_hash: String,
+    /// Ahead/behind counts relative to the tracked upstream branch, or `None`
+    /// when the branch has no upstream or its upstream is gone.
+    pub upstream_status: Option<(u32, u32)>,
 }
 
 /// Line totals for a worktree diff, read from `git diff --numstat`.
@@ -1464,11 +1474,12 @@ fn parse_ahead_behind_counts(rev_list_output: &str) -> Result<(u32, u32), GitErr
     ))
 }
 
-/// Returns ahead/behind snapshots for every local branch in `repo_path`.
+/// Returns tip commits and upstream ahead/behind snapshots for every local
+/// branch in `repo_path`.
 ///
-/// The returned map is keyed by local branch name. Branches without an
-/// upstream, with a gone upstream, or without ahead/behind markers map to
-/// `None`.
+/// The returned map is keyed by the unambiguous short branch name. Branches
+/// without an upstream, with a gone upstream, or without ahead/behind markers
+/// have no upstream status.
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git for-each-ref` fails.
@@ -1479,7 +1490,9 @@ pub(crate) async fn branch_tracking_statuses(
         repo_path,
         vec![
             "for-each-ref".to_string(),
-            "--format=%(refname:short)\t%(upstream:short)\t%(upstream:track,nobracket)".to_string(),
+            "--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track,\
+             nobracket)"
+                .to_string(),
             "refs/heads".to_string(),
         ],
         "Git for-each-ref failed".to_string(),
@@ -1629,17 +1642,24 @@ fn parse_branch_tracking_statuses(output: &str) -> BranchTrackingMap {
     {
         // The trimmed, non-empty line starts with the branch name, so the
         // first field is never empty.
-        let mut parts = line.splitn(3, '\t').map(str::trim);
+        let mut parts = line.splitn(4, '\t').map(str::trim);
         let branch_name = parts.next().unwrap_or_default();
+        let commit_hash = parts.next().unwrap_or_default();
         let upstream_ref = parts.next().unwrap_or_default();
         let track = parts.next().unwrap_or_default();
 
-        let status = if upstream_ref.is_empty() {
+        let upstream_status = if upstream_ref.is_empty() {
             None
         } else {
             parse_branch_tracking_counts(track)
         };
-        branch_tracking_statuses.insert(branch_name.to_string(), status);
+        branch_tracking_statuses.insert(
+            branch_name.to_string(),
+            BranchTrackingStatus {
+                commit_hash: commit_hash.to_string(),
+                upstream_status,
+            },
+        );
     }
 
     branch_tracking_statuses

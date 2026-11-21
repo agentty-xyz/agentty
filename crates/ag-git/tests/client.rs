@@ -851,14 +851,26 @@ const REMOTE_CASES: &[ContractCase] = &[
         observe: |repository| {
             Box::pin(async move {
                 let statuses = RealGitClient
-                    .branch_tracking_statuses(repository.local)
+                    .branch_tracking_statuses(repository.local.clone())
                     .await
-                    .map(|statuses| statuses.into_iter().collect::<BTreeMap<_, _>>());
+                    .map(|statuses| {
+                        statuses
+                            .into_iter()
+                            .map(|(branch_name, status)| {
+                                let tip = repository.observe_git(&["rev-parse", &branch_name]);
+
+                                (
+                                    branch_name,
+                                    (status.upstream_status, status.commit_hash == tip),
+                                )
+                            })
+                            .collect::<BTreeMap<_, _>>()
+                    });
 
                 format!("{statuses:?}")
             })
         },
-        expected: r#"Ok({"feature": None, "main": Some((0, 1))})"#,
+        expected: r#"Ok({"feature": (None, true), "main": (Some((0, 1)), true)})"#,
     },
     ContractCase {
         operation: "list_upstream_commit_titles",

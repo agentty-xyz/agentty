@@ -16,15 +16,15 @@ use crate::repo::{
     AsyncGitCommand, AsyncGitCommandOutput, MockAsyncGitCommandRunner, ProcessAsyncGitCommandRunner,
 };
 use crate::sync::{
-    PullRebaseResult, SingleCommitMessageStrategy, advertised_commit, branch_tracking_statuses,
-    commit_all_preserving_single_commit, current_branch_name, current_branch_remote_name,
-    current_upstream_reference, fetch_remote_branch_commits_with_runner, get_ref_ahead_behind,
-    parse_ahead_behind_counts, parse_branch_push_updated, parse_branch_tracking_statuses,
-    parse_current_branch_remote_output, primary_upstream_reference, pull_rebase,
-    pull_rebase_with_runner, push_current_branch, push_current_branch_to_new_remote_branch,
-    push_current_branch_to_new_remote_branch_with_runner, push_current_branch_to_remote_branch,
-    push_current_branch_to_remote_branch_with_runner, push_current_branch_with_runner,
-    remote_branch_exists, remote_branch_exists_with_runner,
+    BranchTrackingStatus, PullRebaseResult, SingleCommitMessageStrategy, advertised_commit,
+    branch_tracking_statuses, commit_all_preserving_single_commit, current_branch_name,
+    current_branch_remote_name, current_upstream_reference,
+    fetch_remote_branch_commits_with_runner, get_ref_ahead_behind, parse_ahead_behind_counts,
+    parse_branch_push_updated, parse_branch_tracking_statuses, parse_current_branch_remote_output,
+    primary_upstream_reference, pull_rebase, pull_rebase_with_runner, push_current_branch,
+    push_current_branch_to_new_remote_branch, push_current_branch_to_new_remote_branch_with_runner,
+    push_current_branch_to_remote_branch, push_current_branch_to_remote_branch_with_runner,
+    push_current_branch_with_runner, remote_branch_exists, remote_branch_exists_with_runner,
 };
 
 #[test]
@@ -739,11 +739,11 @@ async fn push_without_upstream_reuses_configured_remote() {
 fn parse_branch_tracking_statuses_reads_repo_wide_branch_snapshot() {
     // Arrange
     let output = [
-        "main\torigin/main\tbehind 2",
-        "wt/1234abcd\torigin/wt/1234abcd\tahead 3, behind 1",
-        "feature/local\t\t",
-        "feature/gone\torigin/feature/gone\tgone",
-        "feature/marker\torigin/feature/marker\tahead 4, unknown 7",
+        "main\taaa1\torigin/main\tbehind 2",
+        "wt/1234abcd\tbbb2\torigin/wt/1234abcd\tahead 3, behind 1",
+        "feature/local\tccc3\t\t",
+        "feature/gone\tddd4\torigin/feature/gone\tgone",
+        "feature/marker\teee5\torigin/feature/marker\tahead 4, unknown 7",
     ]
     .join("\n");
 
@@ -751,16 +751,29 @@ fn parse_branch_tracking_statuses_reads_repo_wide_branch_snapshot() {
     let branch_tracking_statuses = parse_branch_tracking_statuses(&output);
 
     // Assert
-    assert_eq!(branch_tracking_statuses.get("main"), Some(&Some((0, 2))));
+    let branch_status = |commit_hash: &str, upstream_status| BranchTrackingStatus {
+        commit_hash: commit_hash.to_string(),
+        upstream_status,
+    };
+    assert_eq!(
+        branch_tracking_statuses.get("main"),
+        Some(&branch_status("aaa1", Some((0, 2))))
+    );
     assert_eq!(
         branch_tracking_statuses.get("wt/1234abcd"),
-        Some(&Some((3, 1)))
+        Some(&branch_status("bbb2", Some((3, 1))))
     );
-    assert_eq!(branch_tracking_statuses.get("feature/local"), Some(&None));
-    assert_eq!(branch_tracking_statuses.get("feature/gone"), Some(&None));
+    assert_eq!(
+        branch_tracking_statuses.get("feature/local"),
+        Some(&branch_status("ccc3", None))
+    );
+    assert_eq!(
+        branch_tracking_statuses.get("feature/gone"),
+        Some(&branch_status("ddd4", None))
+    );
     assert_eq!(
         branch_tracking_statuses.get("feature/marker"),
-        Some(&Some((4, 0)))
+        Some(&branch_status("eee5", Some((4, 0))))
     );
 }
 
@@ -1162,10 +1175,19 @@ async fn branch_tracking_statuses_returns_repo_wide_branch_counts() {
         .expect("failed to read branch tracking statuses");
 
     // Assert
-    assert_eq!(branch_tracking_statuses.get("main"), Some(&Some((0, 1))));
+    assert_eq!(
+        branch_tracking_statuses.get("main"),
+        Some(&BranchTrackingStatus {
+            commit_hash: git_command_stdout(temp_dir.path(), &["rev-parse", "main"]),
+            upstream_status: Some((0, 1)),
+        })
+    );
     assert_eq!(
         branch_tracking_statuses.get("wt/1234abcd"),
-        Some(&Some((1, 0)))
+        Some(&BranchTrackingStatus {
+            commit_hash: git_command_stdout(temp_dir.path(), &["rev-parse", "wt/1234abcd"]),
+            upstream_status: Some((1, 0)),
+        })
     );
 }
 

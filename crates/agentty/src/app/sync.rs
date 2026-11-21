@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
-use ag_git::GitClient;
+use ag_git::{BranchTrackingMap, GitClient};
 use ag_telemetry::{FutureExt as _, KeyValue, Outcome, Span};
 use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
@@ -134,6 +134,7 @@ impl SyncHandle {
         let (context_tx, context_rx) = watch::channel(initial_context);
         let orchestrator = SyncOrchestrator {
             app_event_tx,
+            base_comparison_cache: BaseComparisonCache::default(),
             command_rx,
             context_rx,
             fetch_failures: HashMap::new(),
@@ -450,6 +451,7 @@ fn review_target_polling_keys(
 /// the periodic passes through the same queue.
 pub(crate) struct SyncOrchestrator {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    base_comparison_cache: BaseComparisonCache,
     command_rx: mpsc::UnboundedReceiver<SyncCommand>,
     context_rx: watch::Receiver<SyncContext>,
     fetch_failures: HashMap<i64, FailureBackoff>,
@@ -543,7 +545,9 @@ impl SyncOrchestrator {
     /// A failed fetch or tracking-status query still emits the snapshot
     /// computed from the remaining data, but fails its `git.fetch` or
     /// `sync.branch_status` phase and the returned outcome. A fetch skipped
-    /// by failure backoff does not fail the pass.
+    /// by failure backoff does not fail the pass. Session base comparisons
+    /// whose commits did not move since the previous pass are reused without
+    /// spawning Git.
     async fn run_git_status_pass(&mut self, context: &SyncContext) -> Outcome {
         let working_dir = context.working_dir.clone();
         let repo_root = context
@@ -572,13 +576,15 @@ impl SyncOrchestrator {
                 Ok(branch_tracking_statuses) => (branch_tracking_statuses, Outcome::Completed),
                 Err(_) => (HashMap::new(), Outcome::Failed),
             };
-            let session_statuses = session_git_statuses(
-                &branch_tracking_statuses,
-                &repo_root,
-                &context.session_git_status_targets,
-                context.git_client.as_ref(),
-            )
-            .await;
+            let session_statuses = self
+                .base_comparison_cache
+                .session_git_statuses(
+                    &branch_tracking_statuses,
+                    &repo_root,
+                    &context.session_git_status_targets,
+                    context.git_client.as_ref(),
+                )
+                .await;
 
             (branch_tracking_statuses, session_statuses, status_outcome)
         }
@@ -588,8 +594,7 @@ impl SyncOrchestrator {
         let project_branch_name = context.project_branch_name.as_deref().unwrap_or_default();
         let status = branch_tracking_statuses
             .get(project_branch_name)
-            .copied()
-            .flatten();
+            .and_then(|branch_status| branch_status.upstream_status);
 
         let outcome = combined_outcome(fetch_outcome, status_outcome);
         if self.context_is_stale(context) {
@@ -1165,23 +1170,157 @@ fn has_running_checks(task_result: &SyncReviewRequestTaskResult) -> bool {
     matches!(&task_result.attention, Some(Ok(attention)) if attention.has_pending_checks)
 }
 
-/// Resolves ahead/behind and merge-conflict snapshots for all tracked session
-/// branches, combining each branch's base comparison with any tracked-remote
-/// snapshot already available from the repo-wide status query.
-async fn session_git_statuses(
-    branch_tracking_statuses: &HashMap<String, Option<(u32, u32)>>,
-    repo_root: &Path,
-    session_git_status_targets: &[SessionGitStatusTarget],
-    git_client: &dyn GitClient,
-) -> HashMap<SessionId, SessionGitStatus> {
-    let mut session_git_statuses = HashMap::with_capacity(session_git_status_targets.len());
+/// Session base comparisons memoized by the commits they were computed from.
+///
+/// Ahead/behind counts and merge conflicts between two commits never change,
+/// so a session whose branch tip and base tip did not move since the previous
+/// pass reuses its comparison instead of spawning `git rev-list` and
+/// `git merge-tree` again. Each pass keeps only the commit pairs it targeted,
+/// and a different repository root starts from an empty cache.
+#[derive(Default)]
+struct BaseComparisonCache {
+    /// Complete comparisons from the latest pass, keyed by commit pair.
+    comparisons: HashMap<CommitPair, BaseComparison>,
+    /// Repository root the cached comparisons were computed in.
+    repo_root: PathBuf,
+}
 
-    for session_git_status_target in session_git_status_targets {
+impl BaseComparisonCache {
+    /// Resolves ahead/behind and merge-conflict snapshots for all tracked
+    /// session branches, combining each branch's base comparison with any
+    /// tracked-remote snapshot already available from the repo-wide status
+    /// query.
+    ///
+    /// Branches whose tip and base tip both appear in
+    /// `branch_tracking_statuses` are compared by commit and memoized;
+    /// identical tips compare as even without Git. Other branches are compared
+    /// by name on every pass.
+    async fn session_git_statuses(
+        &mut self,
+        branch_tracking_statuses: &BranchTrackingMap,
+        repo_root: &Path,
+        session_git_status_targets: &[SessionGitStatusTarget],
+        git_client: &dyn GitClient,
+    ) -> HashMap<SessionId, SessionGitStatus> {
+        let previous_comparisons = if self.repo_root == repo_root {
+            std::mem::take(&mut self.comparisons)
+        } else {
+            HashMap::new()
+        };
+        let mut comparisons = HashMap::new();
+        let mut session_git_statuses = HashMap::with_capacity(session_git_status_targets.len());
+
+        for session_git_status_target in session_git_status_targets {
+            let base_comparison =
+                match CommitPair::for_target(branch_tracking_statuses, session_git_status_target) {
+                    Some(commit_pair) => {
+                        let cached_comparison = comparisons
+                            .get(&commit_pair)
+                            .or_else(|| previous_comparisons.get(&commit_pair))
+                            .copied();
+                        let base_comparison = match cached_comparison {
+                            Some(base_comparison) => base_comparison,
+                            None => commit_pair.compare(git_client, repo_root).await,
+                        };
+                        if base_comparison.is_complete() {
+                            comparisons.insert(commit_pair, base_comparison);
+                        }
+
+                        base_comparison
+                    }
+                    None => {
+                        BaseComparison::compute(
+                            git_client,
+                            repo_root,
+                            &session_git_status_target.branch_name,
+                            &session_git_status_target.base_branch,
+                        )
+                        .await
+                    }
+                };
+            let remote_status = branch_tracking_statuses
+                .get(&session_git_status_target.branch_name)
+                .and_then(|branch_status| branch_status.upstream_status);
+            session_git_statuses.insert(
+                session_git_status_target.session_id.clone(),
+                SessionGitStatus {
+                    base_status: base_comparison.base_status,
+                    has_merge_conflict: base_comparison.has_merge_conflict,
+                    remote_status,
+                },
+            );
+        }
+
+        self.comparisons = comparisons;
+        repo_root.clone_into(&mut self.repo_root);
+
+        session_git_statuses
+    }
+}
+
+/// Tip commits of one session branch and its base branch.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CommitPair {
+    /// Commit the base branch points to.
+    base_commit: String,
+    /// Commit the session branch points to.
+    head_commit: String,
+}
+
+impl CommitPair {
+    /// Returns the tip commits of `target`'s branch and base branch, or
+    /// `None` when either is not a local branch in `branch_tracking_statuses`.
+    fn for_target(
+        branch_tracking_statuses: &BranchTrackingMap,
+        target: &SessionGitStatusTarget,
+    ) -> Option<Self> {
+        let branch_status = branch_tracking_statuses.get(&target.branch_name)?;
+        let base_status = branch_tracking_statuses.get(&target.base_branch)?;
+
+        Some(Self {
+            base_commit: base_status.commit_hash.clone(),
+            head_commit: branch_status.commit_hash.clone(),
+        })
+    }
+
+    /// Compares the two commits, treating identical commits as even without
+    /// running Git.
+    async fn compare(&self, git_client: &dyn GitClient, repo_root: &Path) -> BaseComparison {
+        if self.head_commit == self.base_commit {
+            return BaseComparison {
+                base_status: Some((0, 0)),
+                has_merge_conflict: Some(false),
+            };
+        }
+
+        BaseComparison::compute(git_client, repo_root, &self.head_commit, &self.base_commit).await
+    }
+}
+
+/// Ahead/behind counts and merge-conflict state of one session branch
+/// against its base, each `None` when Git could not compute it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BaseComparison {
+    /// Commits the session branch is ahead of and behind its base.
+    base_status: Option<(u32, u32)>,
+    /// Whether merging the session branch into its base would conflict.
+    has_merge_conflict: Option<bool>,
+}
+
+impl BaseComparison {
+    /// Compares `head_ref` with `base_ref`, probing for merge conflicts only
+    /// when the two have diverged.
+    async fn compute(
+        git_client: &dyn GitClient,
+        repo_root: &Path,
+        head_ref: &str,
+        base_ref: &str,
+    ) -> Self {
         let base_status = git_client
             .get_ref_ahead_behind(
                 repo_root.to_path_buf(),
-                session_git_status_target.branch_name.clone(),
-                session_git_status_target.base_branch.clone(),
+                head_ref.to_string(),
+                base_ref.to_string(),
             )
             .await
             .ok();
@@ -1189,29 +1328,27 @@ async fn session_git_statuses(
             Some((ahead, behind)) if ahead > 0 && behind > 0 => git_client
                 .has_merge_conflicts(
                     repo_root.to_path_buf(),
-                    session_git_status_target.branch_name.clone(),
-                    session_git_status_target.base_branch.clone(),
+                    head_ref.to_string(),
+                    base_ref.to_string(),
                 )
                 .await
                 .ok(),
             Some(_) => Some(false),
             None => None,
         };
-        let remote_status = branch_tracking_statuses
-            .get(&session_git_status_target.branch_name)
-            .copied()
-            .flatten();
-        session_git_statuses.insert(
-            session_git_status_target.session_id.clone(),
-            SessionGitStatus {
-                base_status,
-                has_merge_conflict,
-                remote_status,
-            },
-        );
+
+        Self {
+            base_status,
+            has_merge_conflict,
+        }
     }
 
-    session_git_statuses
+    /// Returns whether every Git query succeeded, so the comparison can be
+    /// reused while its commits stay unchanged. A conflict state exists only
+    /// after a successful ahead/behind query.
+    fn is_complete(self) -> bool {
+        self.has_merge_conflict.is_some()
+    }
 }
 
 /// Runs one review-request sync against the forge.
