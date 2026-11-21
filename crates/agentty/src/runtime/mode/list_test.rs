@@ -1135,6 +1135,7 @@ fn cancel_confirmation_preserves_session_and_default_for_allowed_statuses() {
         (Status::Draft, true, true),
         (Status::InProgress, false, true),
         (Status::Review, false, true),
+        (Status::Question, false, true),
         (Status::Draft, false, false),
         (Status::Done, false, false),
         (Status::Canceled, false, false),

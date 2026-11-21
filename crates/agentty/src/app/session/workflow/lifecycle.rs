@@ -3488,7 +3488,7 @@ impl SessionManager {
         .await;
     }
 
-    /// Cancels a review, running, or unstarted draft session.
+    /// Cancels a review, question, running, or unstarted draft session.
     ///
     /// Persisted transcript metadata remains available after the worktree
     /// checkout and session branch are removed. Draft sessions that never
