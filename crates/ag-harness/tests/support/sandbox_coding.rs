@@ -1,17 +1,24 @@
-//! Native sandbox coding-agent grants: full-disk reads with hidden paths,
-//! writable roots outside the workspace, the Unix-socket allowlist, commands
-//! excluded from the sandbox, and the denial flag a host escalates from.
+//! Native sandbox coding-agent grants: full-disk reads with hidden paths and
+//! the built-in credential denials, writable roots outside the workspace,
+//! the Unix-socket allowlist, approved commands excluded from the sandbox,
+//! and the advisory denial note.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_harness::approval::{ApprovalHandler, ApprovalRequest, Decision};
 use ag_harness::bash::BashConfig;
-use ag_harness::tool::ToolSet;
-use ag_harness::{Harness, TurnOptions};
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::sandbox::{IfUnavailable, Sandbox};
+use ag_harness::tool::{ToolEffects, ToolSet};
+use ag_harness::{Harness, Repository, TurnOptions};
+use async_trait::async_trait;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::fixture::{Workspace, schema, with_runtime};
+use super::fixture::{ShellModel, Workspace, schema, with_runtime};
+use crate::context_budget_fixture::unbounded_context_budget;
 
 /// A workspace beside an outside tree holding a readable file, hidden
 /// paths, a writable root, and a directory no grant covers.
@@ -58,6 +65,7 @@ fn configuration(
     .expect("configuration")
     .with_host_information()
     .with_full_disk_read()
+    .expect("full-disk read")
     .with_environment("PATH".into(), "/usr/bin:/bin".into())
     .expect("PATH")
     .with_write("output".into())
@@ -68,6 +76,7 @@ fn configuration(
         .with_bash(grant(with_runtime(configuration, &[])))
 }
 
+/// Runs `command` as one turn and returns the `bash` result.
 async fn run(harness: &Harness, command: &str, options: &TurnOptions) -> Value {
     harness
         .turn(command, options.clone())
@@ -81,18 +90,18 @@ fn quoted(path: &Path) -> String {
 }
 
 #[tokio::test]
-async fn native_full_disk_read_hides_denied_paths_and_writes_only_writable_roots() {
+async fn native_full_disk_read_hides_hidden_paths_and_writes_only_writable_roots() {
     // Arrange
     let workspace = Workspace::new();
     let outside = Outside::new();
     let options = configuration(&workspace, |configuration| {
         configuration
-            .with_read_denial(outside.path("secret"))
+            .with_hidden_path(outside.path("secret"))
             .expect("hidden directory")
-            .with_read_denial(outside.path("secret-file"))
+            .with_hidden_path(outside.path("secret-file"))
             .expect("hidden file")
-            .with_read_denial(outside.path("missing"))
-            .expect("missing hidden path")
+            .with_hidden_path(outside.path("later"))
+            .expect("hidden path missing at launch")
             .with_writable_root(outside.path("cache"))
             .expect("writable root")
     });
@@ -120,11 +129,22 @@ async fn native_full_disk_read_hides_denied_paths_and_writes_only_writable_roots
     let hidden = run(
         &harness,
         &format!(
-            "cat {} {} 2>/dev/null; ls {} 2>/dev/null",
-            quoted(&outside.path("secret/key")),
-            quoted(&outside.path("secret-file")),
-            quoted(&outside.path("secret")),
+            "cat {readable}; echo; cat {key}; echo \"key=$?\"; cat {file}; echo \"file=$?\"; ls \
+             -A {secret}; echo \"list=$?\"; printf x > {new}; echo \"write=$?\"",
+            readable = quoted(&outside.path("readable")),
+            key = quoted(&outside.path("secret/key")),
+            file = quoted(&outside.path("secret-file")),
+            secret = quoted(&outside.path("secret")),
+            new = quoted(&outside.path("secret/new")),
         ),
+        &options,
+    )
+    .await;
+    // A path hidden while missing stays hidden once it appears.
+    std::fs::write(outside.path("later"), "secret-value").expect("later secret");
+    let later = run(
+        &harness,
+        &format!("cat {}", quoted(&outside.path("later"))),
         &options,
     )
     .await;
@@ -141,55 +161,170 @@ async fn native_full_disk_read_hides_denied_paths_and_writes_only_writable_roots
     assert!(
         escaped["sandbox"]
             .as_str()
-            .is_some_and(|note| note.contains("sandbox blocked")),
+            .is_some_and(|note| note.contains("If the sandbox caused it")),
         "{escaped}"
     );
     assert!(!outside.path("elsewhere/escaped").exists());
-    let hidden_output = hidden["stdout"].as_str().expect("stdout");
-    assert!(!hidden_output.contains("secret-value"), "{hidden}");
-    assert!(!hidden_output.contains("key"), "{hidden}");
+    // The control read works in the same command; the hidden directory
+    // reads as missing on macOS and as empty on Linux, its key cannot be
+    // read, nothing can be written into it, and the hidden file reads as
+    // empty at most.
+    let stdout = hidden["stdout"].as_str().expect("stdout");
+    assert!(stdout.starts_with("readable-value\n"), "{hidden}");
+    assert!(!stdout.contains("secret-value"), "{hidden}");
+    assert!(stdout.contains("key=1"), "{hidden}");
+    assert!(stdout.contains("write=1"), "{hidden}");
+    if cfg!(target_os = "macos") {
+        assert!(stdout.contains("file=1"), "{hidden}");
+        assert!(stdout.contains("list=1"), "{hidden}");
+    } else {
+        assert!(stdout.contains("file=0"), "{hidden}");
+        assert!(stdout.contains("list=0"), "{hidden}");
+    }
+    assert!(!outside.path("secret/new").exists());
+    assert!(
+        !later["stdout"]
+            .as_str()
+            .expect("stdout")
+            .contains("secret-value"),
+        "{later}"
+    );
     workspace.assert_launcher_profiles();
 }
 
+/// The login keychain stays unreadable under full-disk reads, without any
+/// hidden path the host names.
+#[cfg(target_os = "macos")]
 #[tokio::test]
-async fn native_excluded_commands_run_outside_the_sandbox() {
+async fn native_full_disk_read_never_exposes_the_keychain() {
     // Arrange
     let workspace = Workspace::new();
-    let outside = Outside::new();
-    let options = configuration(&workspace, |configuration| {
-        configuration
-            .with_excluded_command("touch".into())
-            .expect("excluded command")
-    });
-    let harness = workspace.harness();
+    let keychains = std::env::home_dir()
+        .expect("home directory")
+        .join("Library/Keychains");
+    let options = configuration(&workspace, BashConfig::with_network);
 
     // Act
-    let excluded = run(
-        &harness,
-        &format!("touch {}", quoted(&outside.path("elsewhere/excluded"))),
-        &options,
-    )
-    .await;
-    let sandboxed = run(
-        &harness,
-        &format!(
-            "command touch {}",
-            quoted(&outside.path("elsewhere/sandboxed"))
-        ),
+    let listed = run(
+        &workspace.harness(),
+        &format!("ls {} >/dev/null", quoted(&keychains)),
         &options,
     )
     .await;
 
     // Assert
-    assert_eq!(excluded["exit_code"], 0, "{excluded}");
-    assert!(excluded.get("sandbox").is_none(), "{excluded}");
-    assert!(outside.path("elsewhere/excluded").exists());
-    assert_ne!(sandboxed["exit_code"], 0, "{sandboxed}");
-    assert!(sandboxed["sandbox"].is_string(), "{sandboxed}");
-    assert!(!outside.path("elsewhere/sandboxed").exists());
+    assert_ne!(listed["exit_code"], 0, "{listed}");
+    assert!(
+        listed["stderr"]
+            .as_str()
+            .expect("stderr")
+            .contains("Operation not permitted"),
+        "{listed}"
+    );
 }
 
-/// Seatbelt allows Unix-domain sockets by path; Linux keeps them denied.
+#[tokio::test]
+async fn native_hidden_paths_inside_writable_directories_are_refused() {
+    // Arrange
+    let workspace = Workspace::new();
+    std::fs::write(workspace.path().join("output/secret"), "secret-value").expect("secret");
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_hidden_path(workspace.path().join("output/secret"))
+            .expect("hidden path")
+    });
+
+    // Act
+    // Renaming `output` would otherwise reveal the hidden file.
+    let result = workspace
+        .harness()
+        .turn("mv output moved && cat moved/secret", options)
+        .await;
+
+    // Assert
+    assert!(result.is_err(), "{result:?}");
+    assert!(workspace.path().join("output/secret").exists());
+}
+
+/// Approves every call and records the effects it was asked about.
+#[derive(Default)]
+struct Approver(Mutex<Vec<ToolEffects>>);
+
+#[async_trait]
+impl ApprovalHandler for Approver {
+    async fn decide(&self, request: &ApprovalRequest) -> Decision {
+        self.0.lock().expect("approvals").push(request.effects);
+
+        Decision::Allow
+    }
+}
+
+#[tokio::test]
+async fn native_excluded_commands_run_outside_the_sandbox_once_approved() {
+    // Arrange
+    let workspace = Workspace::new();
+    let outside = Outside::new();
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_excluded_command("/usr/bin/touch".into())
+            .expect("excluded command")
+    });
+    let decisions = Arc::new(Approver::default());
+    let with_approval = Harness::builder()
+        .model(Arc::new(ShellModel))
+        .context_budget(unbounded_context_budget())
+        .repository(Repository::new(workspace.path(), "/usr/bin/git").expect("repository"))
+        .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
+        .sandbox(Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse,
+        })
+        .approval(decisions.clone())
+        .build()
+        .expect("harness");
+    let touch = |name: &str| format!("touch {}", quoted(&outside.path(name)));
+
+    // Act
+    let approved = run(&with_approval, &touch("elsewhere/approved"), &options).await;
+    let unapproved = run(
+        &workspace.harness(),
+        &touch("elsewhere/unapproved"),
+        &options,
+    )
+    .await;
+    let compound = run(
+        &with_approval,
+        &format!("{}; true", touch("elsewhere/compound")),
+        &options,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(approved["exit_code"], 0, "{approved}");
+    assert!(approved.get("sandbox").is_none(), "{approved}");
+    assert!(outside.path("elsewhere/approved").exists());
+    // Without an approval handler, or for a command that is not simple,
+    // the command runs inside the sandbox.
+    assert_ne!(unapproved["exit_code"], 0, "{unapproved}");
+    assert!(unapproved["sandbox"].is_string(), "{unapproved}");
+    assert!(!outside.path("elsewhere/unapproved").exists());
+    assert!(!outside.path("elsewhere/compound").exists(), "{compound}");
+    assert_eq!(
+        *decisions.0.lock().expect("approvals"),
+        [ToolEffects::ExecutesUnsandboxed, ToolEffects::Executes]
+    );
+}
+
+/// Starts a listener at `path` that greets its one connection.
+fn greeting_socket(path: &Path) {
+    let listener = std::os::unix::net::UnixListener::bind(path).expect("socket");
+    std::thread::spawn(move || {
+        if let Some(Ok(mut stream)) = listener.incoming().next() {
+            let _ = std::io::Write::write_all(&mut stream, b"hello");
+        }
+    });
+}
+
+/// Seatbelt allows Unix-domain sockets by path.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn native_unix_socket_allowlist_allows_only_listed_sockets() {
@@ -199,12 +334,7 @@ async fn native_unix_socket_allowlist_allows_only_listed_sockets() {
     let sockets = tempfile::tempdir_in("/tmp").expect("socket directory");
     let sockets = sockets.path().canonicalize().expect("canonical sockets");
     for name in ["listed", "unlisted"] {
-        let listener = std::os::unix::net::UnixListener::bind(sockets.join(name)).expect("socket");
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let _ = std::io::Write::write_all(&mut stream.expect("connection"), b"hello");
-            }
-        });
+        greeting_socket(&sockets.join(name));
     }
     std::os::unix::fs::symlink(sockets.join("listed"), sockets.join("alias"))
         .expect("socket alias");
@@ -214,24 +344,51 @@ async fn native_unix_socket_allowlist_allows_only_listed_sockets() {
             .expect("socket grant")
     });
     let harness = workspace.harness();
+    // `-d` keeps `nc` from reading standard input, so it reads the greeting.
+    let connect = |name: &str| format!("nc -d -U {}", quoted(&sockets.join(name)));
 
     // Act
-    let listed = run(
-        &harness,
-        &format!("nc -U {} </dev/null", quoted(&sockets.join("listed"))),
-        &options,
-    )
-    .await;
-    let unlisted = run(
-        &harness,
-        &format!("nc -U {} </dev/null", quoted(&sockets.join("unlisted"))),
-        &options,
-    )
-    .await;
+    let listed = run(&harness, &connect("listed"), &options).await;
+    let unlisted = run(&harness, &connect("unlisted"), &options).await;
 
     // Assert
     assert_eq!(listed["exit_code"], 0, "{listed}");
     assert_eq!(listed["stdout"], "hello");
     assert_ne!(unlisted["exit_code"], 0, "{unlisted}");
     assert_eq!(unlisted["stdout"], "", "{unlisted}");
+}
+
+/// Linux cannot allow sockets by path, so a socket grant warns, or, as
+/// here, refuses the turn when the harness refuses to run without it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_unix_socket_grants_are_refused_on_linux() {
+    // Arrange
+    let workspace = Workspace::new();
+    let sockets = tempfile::tempdir_in("/tmp").expect("socket directory");
+    let socket = sockets
+        .path()
+        .canonicalize()
+        .expect("canonical")
+        .join("agent");
+    greeting_socket(&socket);
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_unix_socket(socket.clone())
+            .expect("socket grant")
+    });
+
+    // Act
+    let result = workspace.harness().turn("true", options).await;
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(ag_harness::TurnError::SandboxUnavailable(
+                ag_harness::sandbox::SandboxUnavailableReason::UnixSocketsUnsupported
+            ))
+        ),
+        "{result:?}"
+    );
 }

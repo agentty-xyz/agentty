@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -211,13 +212,13 @@ impl BashConfig {
                 capabilities: BTreeSet::new(),
                 capture_bytes,
                 environment_names: Vec::new(),
-                excluded_commands: BTreeSet::new(),
+                excluded_commands: BTreeMap::new(),
                 executor: identity,
                 external_reads: Vec::new(),
+                hidden_paths: Vec::new(),
                 host_information: false,
                 launcher,
                 linux_bubblewrap: None,
-                read_denials: Vec::new(),
                 revision,
                 temporary_directory: None,
                 timeout,
@@ -250,56 +251,101 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Grants read access to the whole filesystem except the paths
-    /// [`Self::with_read_denial`] hides, as the sandboxes of coding agents
-    /// such as Claude Code and Codex do by default; without it, reads are
-    /// limited to the workspace and the explicit read grants. It covers
-    /// [`Self::with_system_reads`] and every toolchain, so a coding session
-    /// needs no per-root read grants. On Linux the root is mounted
-    /// read-only with a private `/proc` and a minimal `/dev`. Writes still
-    /// need grants.
-    #[must_use]
-    pub fn with_full_disk_read(mut self) -> Self {
-        self.snapshot.capabilities.insert(Capability::FullDiskRead);
-
-        self
-    }
-
-    /// Hides an absolute path from commands: they can neither read nor
-    /// write it or anything beneath it, even under a broader read or write
-    /// grant, such as [`Self::with_full_disk_read`]. Use it for secrets,
-    /// such as `~/.ssh` or `~/.aws`. Preparation resolves links and skips a
-    /// path missing at launch; a hidden path must not contain the
-    /// workspace. Linux mounts an empty read-only directory, or an empty
-    /// file, over each hidden path.
+    /// Grants read access to the whole filesystem except hidden paths, as
+    /// the sandboxes of coding agents such as Claude Code and Codex do;
+    /// without it, reads are limited to the workspace and the explicit read
+    /// grants. It covers [`Self::with_system_reads`], every toolchain, and
+    /// user configuration such as `~/.gitconfig`, so a coding session needs
+    /// no per-root read grants. On Linux the root is mounted read-only with
+    /// a private `/proc` and a minimal `/dev`. Writes still need grants.
+    ///
+    /// Besides the paths [`Self::with_hidden_path`] names, it always hides
+    /// these credential stores of the user running the harness, whose home
+    /// comes from the account database rather than `HOME`:
+    /// `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.gnupg`,
+    /// `~/.config/gh/hosts.yml`, `~/.netrc`, `~/.docker/config.json`,
+    /// `~/.config/gcloud`, `~/.kube/config`, and `/run/secrets`; and, when
+    /// [`Self::with_temporary_directory`] names a directory inside a
+    /// dedicated parent (not a system temporary directory), every other
+    /// directory in that parent, such as other sessions' temporary
+    /// directories. Tools that need a credential get it another way, such
+    /// as a token passed with [`Self::with_environment`].
     ///
     /// # Errors
-    /// Rejects relative paths, traversal, and more than 64 hidden paths.
-    pub fn with_read_denial(mut self, path: PathBuf) -> Result<Self, BashError> {
-        if !valid_path(&path, true) || self.snapshot.read_denials.len() >= MAX_PATH_GRANTS {
-            return Err(BashError::InvalidPolicy);
-        }
-        self.snapshot.read_denials.push(path);
+    /// Rejects a host executor that enforces isolation but does not declare
+    /// [`BashExecutor::supports_hidden_paths`], since it would expose the
+    /// hidden credential stores.
+    pub fn with_full_disk_read(mut self) -> Result<Self, BashError> {
+        self.require_hidden_paths()?;
+        self.snapshot.capabilities.insert(Capability::FullDiskRead);
 
         Ok(self)
     }
 
-    /// Grants reads and writes beneath an existing absolute directory
-    /// outside the workspace, such as a tool cache (`~/.cargo`, `~/.npm`,
-    /// `~/.cache`, `~/Library/Caches`, or `~/go`), like the writable roots of
-    /// Codex and the write allowlist of Claude Code. Preparation resolves
-    /// links and refuses a root that is not a directory, is `/`, is or
-    /// contains the home directory, overlaps the workspace (grant those
-    /// with [`Self::with_write`]), or overlaps Git metadata; `.git`
-    /// entries inside it stay read-only on macOS, as everywhere.
+    /// Hides an absolute path from commands: they can neither read nor
+    /// write it or anything beneath it, even under a broader read grant,
+    /// such as [`Self::with_full_disk_read`]. Use it for secrets, such as a
+    /// project's `.env` file. A writable directory inside a hidden path
+    /// stays accessible.
+    ///
+    /// Preparation resolves links and refuses a hidden path that contains
+    /// the workspace or lies inside a writable directory, where a command
+    /// could rename one of its parents to read it. A path missing at launch
+    /// stays hidden on macOS, where the rule names the path; on Linux,
+    /// which mounts an empty read-only directory or file over each hidden
+    /// path, a missing path cannot be created by commands anyway, because
+    /// it is not inside a writable directory.
     ///
     /// # Errors
-    /// Rejects relative paths, traversal, `/`, Git metadata components, and
-    /// more than 64 roots.
+    /// Rejects relative paths, traversal, `/`, a path given twice, more
+    /// than 64 hidden paths, and a host executor that enforces isolation
+    /// but does not declare [`BashExecutor::supports_hidden_paths`].
+    pub fn with_hidden_path(mut self, path: PathBuf) -> Result<Self, BashError> {
+        self.require_hidden_paths()?;
+        if !valid_path(&path, true)
+            || path.parent().is_none()
+            || self.snapshot.hidden_paths.contains(&path)
+            || self.snapshot.hidden_paths.len() >= MAX_PATH_GRANTS
+        {
+            return Err(BashError::InvalidPolicy);
+        }
+        self.snapshot.hidden_paths.push(path);
+
+        Ok(self)
+    }
+
+    /// Grants reads and writes beneath an existing absolute cache directory
+    /// outside the workspace, like the writable roots of Codex and the
+    /// write allowlist of Claude Code.
+    ///
+    /// A command can plant code in a writable directory that host tools run
+    /// later, outside the sandbox, so preparation accepts only cache
+    /// locations. Inside the home directory, which comes from the account
+    /// database rather than `HOME`, a root must lie within `~/.cargo/registry`,
+    /// `~/.cargo/git`, `~/.npm/_cacache`, `~/go/pkg/mod`, `~/.gradle/caches`,
+    /// `~/.m2/repository`, or a directory inside `~/.cache` or
+    /// `~/Library/Caches`, except the hook and browser caches that host
+    /// tools execute (`~/.cache/prek`, `~/.cache/pre-commit`, and the
+    /// Playwright browsers). Outside it, a root must not overlap system or
+    /// toolchain directories such as `/usr`, `/opt`, `/etc`, or `/Library`.
+    /// A root must also be a directory that does not overlap the workspace
+    /// (grant those with [`Self::with_write`]) or its Git metadata. Even
+    /// cache contents can feed later host builds, for example extracted
+    /// crate sources under `~/.cargo/registry/src`, so grant only what
+    /// sessions need.
+    ///
+    /// macOS keeps every `.git` entry inside a root read-only; Linux
+    /// protects only the workspace repository's own Git metadata, so a
+    /// repository nested in a root is writable there.
+    ///
+    /// # Errors
+    /// Rejects relative paths, traversal, `/`, Git metadata components, a
+    /// root given twice, and more than 64 roots.
     pub fn with_writable_root(mut self, path: PathBuf) -> Result<Self, BashError> {
         if !valid_path(&path, true)
             || path.parent().is_none()
             || has_git_component(&path)
+            || self.snapshot.writable_roots.contains(&path)
             || self.snapshot.writable_roots.len() >= MAX_PATH_GRANTS
         {
             return Err(BashError::InvalidPolicy);
@@ -310,50 +356,91 @@ impl BashConfig {
     }
 
     /// Lets commands connect to the Unix-domain socket at an absolute path,
-    /// such as an `ssh-agent`, `gpg-agent`, or Docker socket; every other
-    /// Unix-domain socket stays denied. Preparation resolves links and
-    /// skips a socket missing at launch. Only macOS can allow sockets by
-    /// path: on Linux, where seccomp cannot tell sockets apart, the grant
-    /// has no effect and Unix-domain sockets stay denied, as in Claude
-    /// Code's sandbox.
+    /// such as an `ssh-agent` or `gpg-agent` socket; every other
+    /// Unix-domain socket stays denied. The path is resolved now and the
+    /// grant pinned to the socket it names, so a link changed later cannot
+    /// redirect it; grant a Docker socket only by naming it. Preparation
+    /// refuses a socket inside the workspace or a writable directory, where
+    /// a command could replace it.
+    ///
+    /// Only macOS can allow sockets by path. Linux cannot tell sockets
+    /// apart, so they stay denied there, as in Claude Code's sandbox, and
+    /// the harness reports
+    /// [`crate::sandbox::SandboxUnavailableReason::UnixSocketsUnsupported`]:
+    /// a warning on each turn, or a refused turn under
+    /// [`crate::sandbox::IfUnavailable::Refuse`].
     ///
     /// # Errors
-    /// Rejects relative paths, traversal, and more than 64 sockets.
+    /// Rejects relative paths, traversal, a path that does not name an
+    /// existing socket, a socket given twice, and more than 64 sockets.
     pub fn with_unix_socket(mut self, path: PathBuf) -> Result<Self, BashError> {
         if !valid_path(&path, true) || self.snapshot.unix_sockets.len() >= MAX_PATH_GRANTS {
             return Err(BashError::InvalidPolicy);
         }
-        self.snapshot.unix_sockets.push(path);
+        let socket = std::fs::canonicalize(path)
+            .ok()
+            .filter(|socket| {
+                std::fs::metadata(socket).is_ok_and(|metadata| metadata.file_type().is_socket())
+            })
+            .filter(|socket| !self.snapshot.unix_sockets.contains(socket))
+            .ok_or(BashError::InvalidPolicy)?;
+        self.snapshot.unix_sockets.push(socket);
 
         Ok(self)
     }
 
-    /// Runs commands that invoke `program` outside the sandbox, with the
-    /// harness process's own access, like Claude Code's `excludedCommands`.
-    /// Use it for tools the sandbox cannot host, such as `docker`. Only a
-    /// simple command qualifies: its first word is exactly `program`, and
-    /// it contains no `;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, backquote,
-    /// backslash, or line break, so it can neither chain other commands
-    /// nor substitute or redirect; anything else runs sandboxed. The
-    /// program, and whatever it starts, has full access. The excluded
-    /// command's record names the unsandboxed executor. It applies only to
-    /// a configuration whose executor enforces isolation.
+    /// Lets simple commands of the program at the absolute path
+    /// `executable` run outside the sandbox, with the harness process's own
+    /// access, once the host's [`crate::approval::ApprovalHandler`]
+    /// approves each one, like Claude Code's `excludedCommands`, which
+    /// still ask for permission. Without an approval handler, or for calls
+    /// it did not approve as [`crate::ToolEffects::ExecutesUnsandboxed`],
+    /// the commands run inside the sandbox.
+    ///
+    /// Excluding a program trusts it fully: it runs code its arguments and
+    /// the workspace name, such as `git -c alias.x='!sh'`, `gh extension
+    /// install`, or `docker run -v /:/host`, so an approval must show the
+    /// exact command. A command qualifies when its first word is the
+    /// executable's file name and it contains no `;`, `&`, `|`, `<`, `>`,
+    /// `(`, `)`, `$`, backquote, backslash, or line break. The harness then
+    /// runs the executable resolved now, never one found through `PATH`,
+    /// and passes `PATH` without relative entries and without directories
+    /// commands can write; it refuses the turn when the executable lies
+    /// inside the workspace, the temporary directory, or a writable root.
+    /// The excluded command's record names the unsandboxed executor. It
+    /// applies only to a configuration whose executor enforces isolation,
+    /// and the model-facing `bash` description names the program.
     ///
     /// # Errors
-    /// Rejects names other than 1–64 ASCII letters, digits, `.`, `_`, `+`,
-    /// or `-` not starting with `-`, and more than 64 programs.
-    pub fn with_excluded_command(mut self, program: String) -> Result<Self, BashError> {
-        if program.is_empty()
-            || program.len() > 64
-            || program.starts_with('-')
-            || !program
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
-            || self.snapshot.excluded_commands.len() >= MAX_PATH_GRANTS
-        {
+    /// Rejects a relative path, a path that does not name an executable
+    /// regular file, a file name other than 1–64 ASCII letters, digits, `.`,
+    /// `_`, `+`, or `-` not starting with `-`, a program named twice, and
+    /// more than 64 programs.
+    pub fn with_excluded_command(mut self, executable: PathBuf) -> Result<Self, BashError> {
+        let program = executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|program| {
+                program.len() <= 64
+                    && !program.starts_with('-')
+                    && program
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+            })
+            .map(str::to_owned)
+            .filter(|program| {
+                valid_path(&executable, true)
+                    && !self.snapshot.excluded_commands.contains_key(program)
+                    && self.snapshot.excluded_commands.len() < MAX_PATH_GRANTS
+            });
+        let resolved = std::fs::canonicalize(executable).ok().filter(|resolved| {
+            std::fs::metadata(resolved)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
+        });
+        let (Some(program), Some(resolved)) = (program, resolved) else {
             return Err(BashError::InvalidPolicy);
-        }
-        self.snapshot.excluded_commands.insert(program);
+        };
+        self.snapshot.excluded_commands.insert(program, resolved);
 
         Ok(self)
     }
@@ -544,15 +631,35 @@ impl BashConfig {
         self.enforcement
     }
 
-    /// Returns whether `command` is a simple command invoking a program
-    /// [`Self::with_excluded_command`] excludes from the sandbox.
-    pub(crate) fn excludes(&self, command: &str) -> bool {
-        !command.contains([
+    /// Returns the resolved executable of the program
+    /// [`Self::with_excluded_command`] excludes when `command` is a simple
+    /// command invoking it.
+    pub(crate) fn excluded_program(&self, command: &str) -> Option<&Path> {
+        if command.contains([
             ';', '&', '|', '<', '>', '(', ')', '$', '`', '\\', '\n', '\r',
-        ]) && command
+        ]) {
+            return None;
+        }
+
+        command
             .split_ascii_whitespace()
             .next()
-            .is_some_and(|program| self.snapshot.excluded_commands.contains(program))
+            .and_then(|program| self.snapshot.excluded_commands.get(program))
+            .map(PathBuf::as_path)
+    }
+
+    /// Fails for a host executor that enforces isolation but would ignore
+    /// hidden paths.
+    fn require_hidden_paths(&self) -> Result<(), BashError> {
+        match &self.executor {
+            Some(executor)
+                if executor.enforcement() != Enforcement::None
+                    && !executor.supports_hidden_paths() =>
+            {
+                Err(BashError::InvalidPolicy)
+            }
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn fingerprint(&self) -> Value {
@@ -621,9 +728,10 @@ pub(crate) struct BashPolicySnapshot {
     pub(crate) capabilities: BTreeSet<Capability>,
     pub(crate) capture_bytes: usize,
     pub(crate) environment_names: Vec<String>,
-    /// [`BashConfig::with_excluded_command`] programs.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) excluded_commands: BTreeSet<String>,
+    /// [`BashConfig::with_excluded_command`] programs by name, with their
+    /// resolved executables.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) excluded_commands: BTreeMap<String, PathBuf>,
     /// Selected executor identity. Legacy snapshots predate executor
     /// selection and decode as the native default; the native identity is
     /// skipped on write so their recorded fingerprints stay stable.
@@ -633,17 +741,17 @@ pub(crate) struct BashPolicySnapshot {
     )]
     pub(crate) executor: String,
     pub(crate) external_reads: Vec<PathBuf>,
+    /// [`BashConfig::with_hidden_path`] paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) hidden_paths: Vec<PathBuf>,
     pub(crate) host_information: bool,
     pub(crate) launcher: Option<PathBuf>,
     pub(crate) linux_bubblewrap: Option<PathBuf>,
-    /// [`BashConfig::with_read_denial`] paths.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) read_denials: Vec<PathBuf>,
     pub(crate) revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) temporary_directory: Option<PathBuf>,
     pub(crate) timeout: Duration,
-    /// [`BashConfig::with_unix_socket`] paths.
+    /// [`BashConfig::with_unix_socket`] sockets, resolved.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) unix_sockets: Vec<PathBuf>,
     pub(crate) workspace_writes: Vec<PathBuf>,

@@ -2,7 +2,7 @@
 //! retains its journal and control.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,6 +22,10 @@ use crate::command_journal::{
 };
 use crate::command_settlement::Commands;
 use crate::reservation::WriteJournal;
+
+/// `PATH` excluded commands search when the host grants none, instead of
+/// Bash's compiled default, which ends in the working directory.
+const DEFAULT_EXCLUDED_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 pub(crate) struct BashTool {
     cleanup_scope: CommandCleanupScope,
@@ -69,18 +73,15 @@ impl BashTool {
         if configuration.snapshot.grants(Capability::SystemReads) {
             external_reads.extend(super::system::reads());
         }
-        let excluded = if configuration.snapshot.excluded_commands.is_empty()
-            || configuration.enforcement() == Enforcement::None
-        {
-            None
-        } else {
-            Some(Box::new(Self::new(
-                configuration.unsandboxed(),
-                root.clone(),
-                commands.clone(),
-                journal.clone(),
-            )?))
-        };
+        let excluded = (!configuration.snapshot.excluded_commands.is_empty()
+            && configuration.enforcement() != Enforcement::None)
+            .then(|| {
+                Self::excluded_configuration(&configuration, &root).and_then(|excluded| {
+                    Self::new(excluded, root.clone(), commands.clone(), journal.clone())
+                })
+            })
+            .transpose()?
+            .map(Box::new);
 
         Ok(Self {
             cleanup_scope,
@@ -94,29 +95,102 @@ impl BashTool {
         })
     }
 
-    /// Runs `arguments`, outside the sandbox when the configuration
-    /// excludes its command.
+    /// Runs `arguments`: outside the sandbox, through its resolved
+    /// executable, when the configuration excludes its command and
+    /// `unsandboxed` says the approval handler allowed that.
     pub(crate) async fn execute(
         &self,
         arguments: &BashArguments,
         call_id: &str,
+        unsandboxed: bool,
     ) -> Result<CommandOutcome, TurnError> {
-        self.selected(arguments).run(arguments, call_id).await
+        match self.excluded_launch(arguments, unsandboxed) {
+            Some((excluded, arguments)) => excluded.run(&arguments, call_id).await,
+            None => self.run(arguments, call_id).await,
+        }
+    }
+
+    /// Returns whether `arguments` would leave the sandbox once approved.
+    pub(crate) fn excludes(&self, arguments: &BashArguments) -> bool {
+        self.excluded.is_some()
+            && self
+                .configuration
+                .excluded_program(arguments.command())
+                .is_some()
     }
 
     /// Returns whether `arguments` runs under an executor that enforces
     /// isolation, so a failure can come from the sandbox.
-    pub(crate) fn enforces(&self, arguments: &BashArguments) -> bool {
-        self.selected(arguments).configuration.enforcement() != Enforcement::None
+    pub(crate) fn enforces(&self, arguments: &BashArguments, unsandboxed: bool) -> bool {
+        self.configuration.enforcement() != Enforcement::None
+            && self.excluded_launch(arguments, unsandboxed).is_none()
     }
 
-    /// Returns the tool that runs `arguments`: the unsandboxed one for an
-    /// excluded command, else this one.
-    fn selected(&self, arguments: &BashArguments) -> &Self {
-        match &self.excluded {
-            Some(excluded) if self.configuration.excludes(arguments.command()) => excluded,
-            _ => self,
+    /// Returns the unsandboxed tool and the command naming the resolved
+    /// executable that run `arguments` when they leave the sandbox.
+    fn excluded_launch(
+        &self,
+        arguments: &BashArguments,
+        unsandboxed: bool,
+    ) -> Option<(&Self, BashArguments)> {
+        let excluded = self.excluded.as_deref().filter(|_| unsandboxed)?;
+        let executable = self.configuration.excluded_program(arguments.command())?;
+        let command = arguments.command().trim_start();
+        let rest = command.trim_start_matches(|character: char| !character.is_ascii_whitespace());
+        let quoted = executable.to_string_lossy().replace('\'', r"'\''");
+
+        BashArguments::new(format!("'{quoted}'{rest}"))
+            .ok()
+            .map(|arguments| (excluded, arguments))
+    }
+
+    /// Returns the configuration excluded commands run with: no isolation,
+    /// and a `PATH` without relative entries or directories commands can
+    /// write.
+    ///
+    /// # Errors
+    /// Returns [`BashError::InvalidPolicy`] when an excluded executable lies
+    /// inside the workspace, the temporary directory, or a writable root,
+    /// where a command could replace it.
+    fn excluded_configuration(
+        configuration: &BashConfig,
+        root: &Path,
+    ) -> Result<BashConfig, BashError> {
+        let snapshot = &configuration.snapshot;
+        let writable = std::iter::once(root.to_path_buf())
+            .chain(snapshot.temporary_directory.iter().cloned())
+            .chain(snapshot.writable_roots.iter().cloned())
+            .flat_map(|path| {
+                let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+
+                [path, resolved]
+            })
+            .collect::<Vec<_>>();
+        let inside_writable = |path: &Path| writable.iter().any(|area| path.starts_with(area));
+        if snapshot
+            .excluded_commands
+            .values()
+            .any(|executable| inside_writable(executable))
+        {
+            return Err(BashError::InvalidPolicy);
         }
+        let host_path = configuration
+            .environment
+            .get("PATH")
+            .map_or(DEFAULT_EXCLUDED_PATH, String::as_str);
+        let path = std::env::join_paths(std::env::split_paths(host_path).filter(|directory| {
+            directory.is_absolute()
+                && !inside_writable(directory)
+                && !inside_writable(&std::fs::canonicalize(directory).unwrap_or_default())
+        }))
+        .unwrap_or_default();
+        let mut excluded = configuration.unsandboxed();
+        excluded
+            .environment
+            .insert("PATH".into(), path.to_string_lossy().into_owned());
+        excluded.snapshot.environment_names = excluded.environment.keys().cloned().collect();
+
+        Ok(excluded)
     }
 
     async fn run(
@@ -142,7 +216,7 @@ impl BashTool {
             git_writes: configuration.grants(Capability::GitWrites),
             host_information: configuration.host_information,
             network: configuration.grants(Capability::Network),
-            read_denials: configuration.read_denials.clone(),
+            hidden_paths: configuration.hidden_paths.clone(),
             read_scope: if configuration.grants(Capability::FullDiskRead) {
                 ReadScope::FullDisk
             } else {

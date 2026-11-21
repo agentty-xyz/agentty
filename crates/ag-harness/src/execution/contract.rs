@@ -53,6 +53,15 @@ pub trait BashExecutor: Send + Sync {
     /// [`crate::bash::BashConfig`] reads it once at construction.
     fn enforcement(&self) -> Enforcement;
 
+    /// Whether this executor enforces [`ExecutionPolicy::hidden_paths`],
+    /// which narrow the other grants. Executors that predate hidden paths
+    /// would ignore them, so the default is `false`, and
+    /// [`crate::bash::BashConfig`] refuses hidden paths and full-disk reads
+    /// for an executor that enforces isolation without declaring support.
+    fn supports_hidden_paths(&self) -> bool {
+        false
+    }
+
     /// Cleanup scope this executor acknowledges, carried on every recorded
     /// command outcome.
     fn cleanup_scope(&self) -> CommandCleanupScope;
@@ -190,8 +199,8 @@ pub(super) struct Grants {
     pub(super) external_reads: Vec<PathBuf>,
     pub(super) git_writes: bool,
     pub(super) host_information: bool,
+    pub(super) hidden_paths: Vec<PathBuf>,
     pub(super) network: bool,
-    pub(super) read_denials: Vec<PathBuf>,
     pub(super) read_scope: ReadScope,
     pub(super) temporary_directory: Option<PathBuf>,
     pub(super) unix_sockets: Vec<PathBuf>,
@@ -221,9 +230,9 @@ pub struct ExecutionPolicy {
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
     git_writes: bool,
+    hidden_paths: Vec<PathBuf>,
     host_information: bool,
     network: bool,
-    read_denials: Vec<PathBuf>,
     read_scope: ReadScope,
     temporary_directory: Option<PathBuf>,
     unix_sockets: Vec<PathBuf>,
@@ -258,17 +267,30 @@ impl ExecutionPolicy {
         for path in grants
             .external_reads
             .iter()
-            .chain(&grants.read_denials)
+            .chain(&grants.hidden_paths)
             .chain(&grants.unix_sockets)
         {
             validate_path(path, true)?;
         }
-        if grants
-            .read_denials
+        // A hidden path inside a writable directory could be read after
+        // renaming one of its parents; one containing the workspace would
+        // hide the command's own files.
+        let writable = grants
+            .temporary_directory
             .iter()
-            .any(|path| workspace.starts_with(path))
-        {
-            return Err(ValidationError::InvalidWorkspace);
+            .chain(&grants.writable_roots)
+            .cloned()
+            .chain(
+                grants
+                    .workspace_writes
+                    .iter()
+                    .map(|path| workspace.join(path)),
+            )
+            .collect::<Vec<_>>();
+        if grants.hidden_paths.iter().any(|path| {
+            workspace.starts_with(path) || writable.iter().any(|root| path.starts_with(root))
+        }) {
+            return Err(ValidationError::HiddenPathUnenforceable);
         }
         // Writable directories outside the workspace must stay outside it
         // and its Git metadata, which also rules out the filesystem root.
@@ -311,9 +333,9 @@ impl ExecutionPolicy {
             external_reads: grants.external_reads,
             git_metadata,
             git_writes: grants.git_writes,
+            hidden_paths: grants.hidden_paths,
             host_information: grants.host_information,
             network: grants.network,
-            read_denials: grants.read_denials,
             read_scope: grants.read_scope,
             temporary_directory: grants.temporary_directory,
             unix_sockets: grants.unix_sockets,
@@ -369,8 +391,9 @@ impl ExecutionPolicy {
     }
 
     /// Whether the host granted reads of the whole filesystem except
-    /// [`Self::read_denials`], in place of explicit read roots.
-    pub fn reads_full_disk(&self) -> bool {
+    /// [`Self::hidden_paths`], in place of explicit read roots. An executor
+    /// granting it must also enforce the hidden paths.
+    pub fn allows_full_disk_read(&self) -> bool {
         self.read_scope() == ReadScope::FullDisk
     }
 
@@ -381,9 +404,13 @@ impl ExecutionPolicy {
     }
 
     /// Absolute paths hidden from commands, which can neither read nor
-    /// write them even under a broader grant. None contains the workspace.
-    pub fn read_denials(&self) -> &[PathBuf] {
-        &self.read_denials
+    /// write them even under a broader read grant; writable directories
+    /// inside them stay accessible. None contains the workspace or lies
+    /// inside a writable directory. Unlike every other field, they narrow
+    /// the policy, so only an executor declaring
+    /// [`BashExecutor::supports_hidden_paths`] receives them.
+    pub fn hidden_paths(&self) -> &[PathBuf] {
+        &self.hidden_paths
     }
 
     /// Absolute directories outside the workspace and its Git metadata
@@ -424,10 +451,10 @@ impl ExecutionPolicy {
             .iter()
             .chain(&self.writable_roots)
             .any(|root| path.starts_with(root));
-        if self.read_denials.iter().any(|root| path.starts_with(root))
+        if !in_writable_root && self.hidden_paths.iter().any(|root| path.starts_with(root))
             || !in_workspace
                 && !in_writable_root
-                && !self.reads_full_disk()
+                && !self.allows_full_disk_read()
                 && !self
                     .external_reads
                     .iter()
@@ -724,6 +751,7 @@ pub(super) enum ValidationError {
     InvalidWorkspace,
     MissingGitMetadata,
     GitMetadataWrite,
+    HiddenPathUnenforceable,
     InvalidDeadline,
 }
 

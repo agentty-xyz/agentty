@@ -147,8 +147,8 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
     let cases = [
         (ToolActivity::Bash { duration }, ToolCallStatus::Completed),
         (
-            ToolActivity::BashSandboxDenied { duration },
-            ToolCallStatus::SandboxDenied,
+            ToolActivity::BashLikelySandboxDenial { duration },
+            ToolCallStatus::Completed,
         ),
         (
             ToolActivity::ReadRejected {
@@ -203,6 +203,39 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
     // Assert
     let expected: Vec<ToolCallStatus> = cases.iter().map(|(_, status)| *status).collect();
     assert_eq!(statuses, expected);
+}
+
+#[test]
+fn only_a_likely_sandbox_denial_sets_the_advisory_flag() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let call = ToolCall::from_json("call-1".into(), "bash", r#"{"command":"ls"}"#, None)?;
+    let duration = Duration::from_millis(1);
+
+    // Act
+    let flagged = ToolCallItem::new(
+        &call,
+        "{}",
+        &ToolActivity::BashLikelySandboxDenial { duration },
+    );
+    let plain = ToolCallItem::new(&call, "{}", &ToolActivity::Bash { duration });
+    let unanswered = ToolCallItem::unanswered(&call);
+
+    // Assert
+    assert!(flagged.likely_sandbox_denial);
+    assert_eq!(flagged.status, ToolCallStatus::Completed);
+    assert_eq!(
+        serde_json::to_value(&flagged)?["likely_sandbox_denial"],
+        true
+    );
+    assert!(!plain.likely_sandbox_denial);
+    assert!(
+        serde_json::to_value(&plain)?
+            .get("likely_sandbox_denial")
+            .is_none()
+    );
+    assert!(!unanswered.likely_sandbox_denial);
+
+    Ok(())
 }
 
 /// Returns a completed `read` call item.

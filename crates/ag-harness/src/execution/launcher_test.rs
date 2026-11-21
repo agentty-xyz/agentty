@@ -121,14 +121,14 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         environment: BTreeMap::new(),
         executable: "/bin/bash".into(),
         external_reads: vec![],
-        read_scope: ReadScope::Granted,
         git_metadata: vec![],
         git_writes: None,
+        hidden_paths: vec![],
         host_information: false,
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
         network: false,
-        read_denials: vec![],
+        read_scope: ReadScope::Granted,
         system: false,
         unix_sockets: vec![],
         workspace: "/workspace".into(),
@@ -145,9 +145,9 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
     configuration.unix_sockets.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
     configuration.unix_sockets.clear();
-    configuration.read_denials.push(invalid.clone().into());
+    configuration.hidden_paths.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
-    configuration.read_denials.clear();
+    configuration.hidden_paths.clear();
     configuration.external_reads.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
     configuration.external_reads.clear();
@@ -176,22 +176,22 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         environment: BTreeMap::new(),
         executable: "/bin/bash".into(),
         external_reads: vec![],
-        read_scope: ReadScope::FullDisk,
         git_metadata: vec!["/workspace/.git".into()],
         git_writes: Some(GitWrites {
             admin: None,
             common: "/workspace/.git".into(),
         }),
+        hidden_paths: vec!["/sessions".into()],
         host_information: true,
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
         network: true,
-        read_denials: vec!["/home/.ssh".into()],
+        read_scope: ReadScope::FullDisk,
         system: false,
         unix_sockets: vec!["/agent.sock".into()],
         workspace: "/workspace".into(),
         write_nodes: vec![],
-        writes: vec!["/home/.cargo".into()],
+        writes: vec!["/sessions/own".into()],
     };
 
     // Act
@@ -215,16 +215,29 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     assert!(profile.contains("(allow network-outbound (remote ip))"));
     assert!(profile.contains("\"/private/var/run/mDNSResponder\""));
     assert!(profile.contains("(global-name \"com.apple.TrustEvaluationAgent\")"));
-    // Full-disk reads, the socket grant, and hidden paths, which come last
-    // so they override the read and write grants before them.
-    assert!(profile.contains("(allow file-read*)\n"));
+    // The keychain service stays denied, so credentials stay out of reach.
+    assert!(!profile.contains("com.apple.SecurityServer"), "{profile}");
     assert!(
         profile.contains(
             "(allow network-outbound (remote unix-socket (path-literal \"/agent.sock\")))"
         )
     );
+    // Hidden paths follow the full-disk and metadata reads they override,
+    // and the writable directories inside them follow the hidden paths.
+    let full_disk = profile
+        .find("(allow file-read*)\n")
+        .expect("full-disk reads");
+    let metadata = profile
+        .find("(allow sysctl-read file-read-metadata)")
+        .expect("host information");
+    let hidden = profile
+        .find("(deny file-read* file-write* (subpath \"/sessions\"))")
+        .expect("hidden path");
+    let writable = profile
+        .find("(allow file-read* file-write* (subpath \"/sessions/own\"))")
+        .expect("writable directory");
     assert!(
-        profile.ends_with("(deny file-read* file-write* (subpath \"/home/.ssh\"))\n"),
+        full_disk < hidden && metadata < hidden && hidden < writable,
         "{profile}"
     );
 }

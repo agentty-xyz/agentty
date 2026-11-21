@@ -50,7 +50,8 @@ use crate::tool::{
     ToolDefinition, UnknownToolCall,
 };
 use crate::tool_handler::{
-    SharedResultFits, ToolContext, ToolEntry, ToolError, ToolErrorKind, ToolHandler, ToolOutput,
+    SharedResultFits, ToolContext, ToolEffects, ToolEntry, ToolError, ToolErrorKind, ToolHandler,
+    ToolOutput,
 };
 use crate::turn::{
     ContextActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
@@ -1075,7 +1076,7 @@ impl Engine<'_> {
                 let configuration = bash.cloned().ok_or(BashError::InvalidPolicy)?;
 
                 Arc::new(BashHandler {
-                    definition: ToolDefinition::bash(configuration.enforcement()),
+                    definition: ToolDefinition::bash_for(&configuration),
                     tool: BashTool::new(
                         configuration,
                         root,
@@ -1332,6 +1333,7 @@ impl Engine<'_> {
     /// Describes `call` to its handler; `fits` bounds a built-in `read`.
     fn tool_context(&self, call: &ToolCall, fits: Option<SharedResultFits>) -> ToolContext {
         ToolContext {
+            approved: None,
             call_id: call.id().to_string(),
             control: self.control.cloned(),
             fits,
@@ -1982,15 +1984,15 @@ impl ApprovalGate<'_> {
     /// decision on it.
     async fn approve(
         self,
-        (definition, handler): &(ToolDefinition, Arc<dyn ToolHandler>),
+        (definition, _): &(ToolDefinition, Arc<dyn ToolHandler>),
         call: &ToolCall,
-        arguments: Value,
+        (arguments, effects): (Value, ToolEffects),
         tool_context: &ToolContext,
     ) -> Result<Approved, TurnError> {
         let request = ApprovalRequest {
+            effects,
             arguments,
             call_id: call.id().to_string(),
-            effects: handler.effects(),
             run: tool_context.run.clone(),
             session: tool_context.session.clone(),
             tool: call.name().to_string(),
@@ -2055,7 +2057,7 @@ async fn execute_tool(
 async fn run_handler(
     tool: &(ToolDefinition, Arc<dyn ToolHandler>),
     call: &ToolCall,
-    tool_context: ToolContext,
+    mut tool_context: ToolContext,
     gate: Option<ApprovalGate<'_>>,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
@@ -2074,9 +2076,16 @@ async fn run_handler(
     };
     // A host call's duration starts once it is approved, not while a
     // decision is pending.
+    let effects = handler.call_effects(&arguments);
     let (arguments, replaced, started_at) = match gate {
-        Some(gate) if Approval::requires(handler.effects()) => {
-            match gate.approve(tool, call, arguments, &tool_context).await? {
+        Some(gate) if Approval::requires(effects) => {
+            // The handler sees which effects it approves; the call runs
+            // with those, even with replacement arguments.
+            tool_context.approved = Some(effects);
+            match gate
+                .approve(tool, call, (arguments, effects), &tool_context)
+                .await?
+            {
                 Approved::Run(arguments) => (arguments, None, Instant::now()),
                 Approved::Replaced(arguments) => {
                     (arguments.clone(), Some(arguments), Instant::now())
