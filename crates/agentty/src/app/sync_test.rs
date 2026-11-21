@@ -15,10 +15,11 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus, ReviewRequestPassUpdate,
+    FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext, ProjectSyncPhase,
+    ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewRequestPassUpdate,
     ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext, SyncHandle, SyncMainCompletion,
-    SyncMainRequest, SyncOrchestrator, review_request_repo_url, review_sync_backoff_passes,
-    session_git_statuses, sync_review_request_status, sync_task_result_from_summary,
+    SyncMainRequest, SyncOrchestrator, review_request_repo_url, session_git_statuses,
+    sync_review_request_status, sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::review_watch_config::ReviewWatchConfig;
@@ -169,6 +170,8 @@ fn orchestrator_for(
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -179,7 +182,8 @@ fn orchestrator_for(
 
 #[tokio::test]
 /// Failed fetch and tracking queries keep the best-effort snapshot but end
-/// their phases and the refresh trace as failed.
+/// their phases and the refresh trace as failed, classifying the fetch
+/// failure without exporting its text.
 async fn refresh_pass_traces_failed_fetch_and_tracking_status() {
     // Arrange
     let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
@@ -193,7 +197,7 @@ async fn refresh_pass_traces_failed_fetch_and_tracking_status() {
         Box::pin(async {
             Err(GitError::CommandFailed {
                 command: "git fetch".to_string(),
-                stderr: "private remote failure".to_string(),
+                stderr: "git@private.example: Permission denied (publickey).".to_string(),
             })
         })
     });
@@ -243,7 +247,10 @@ async fn refresh_pass_traces_failed_fetch_and_tracking_status() {
         &finished_span(&exporter, "git.fetch"),
         &refresh,
         "failed",
-        &[KeyValue::new("error.type", "execution")],
+        &[
+            KeyValue::new("agentty.sync.consecutive_failures", 1_i64),
+            KeyValue::new("error.type", "auth"),
+        ],
     );
     assert_phase(
         &finished_span(&exporter, "sync.branch_status"),
@@ -312,6 +319,108 @@ async fn superseded_refresh_pass_is_traced_as_canceled() {
         &refresh,
         "completed",
         &[],
+    );
+}
+
+#[tokio::test]
+/// Consecutive fetch failures skip later fetches while still emitting the
+/// branch snapshot, and one success clears only that project's backoff.
+async fn refresh_pass_backs_off_failing_fetches_until_one_succeeds() {
+    // Arrange
+    crate::test_support::enable_tracing_log_fallback();
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = install_span_exporter();
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(5)
+        .returning(|_| Box::pin(async { None }));
+    let mut fetch_attempts = 0_u8;
+    mock_git_client
+        .expect_fetch_remote()
+        .times(4)
+        .returning(move |_| {
+            fetch_attempts = fetch_attempts.saturating_add(1);
+            let result = if fetch_attempts <= 2 {
+                Err(GitError::CommandFailed {
+                    command: "git fetch".to_string(),
+                    stderr: "ssh: Could not resolve hostname private.example".to_string(),
+                })
+            } else {
+                Ok(())
+            };
+
+            Box::pin(async move { result })
+        });
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(5)
+        .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+    let context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        ..sync_context_fixture(0, Vec::new())
+    };
+    let (_context_tx, context_rx) = watch::channel(context);
+    let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
+    orchestrator.fetch_failures.insert(
+        2,
+        FailureBackoff {
+            consecutive_failures: 9,
+            retry_after_pass: u64::MAX,
+        },
+    );
+
+    // Act
+    for _ in 0..5 {
+        orchestrator.run_refresh_pass(false).await;
+    }
+
+    // Assert
+    for _ in 0..5 {
+        assert!(matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::GitStatusUpdated { .. })
+        ));
+    }
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let fetches = spans
+        .iter()
+        .filter(|span| span.name == "git.fetch")
+        .collect::<Vec<_>>();
+    assert_eq!(fetches.len(), 4);
+    assert!(
+        fetches[1]
+            .attributes
+            .contains(&KeyValue::new("agentty.sync.consecutive_failures", 2_i64))
+    );
+    assert!(
+        fetches[1]
+            .attributes
+            .contains(&KeyValue::new("error.type", "network"))
+    );
+    let backed_off_refreshes = spans
+        .iter()
+        .filter(|span| {
+            span.name == "sync.refresh"
+                && span
+                    .attributes
+                    .contains(&KeyValue::new("agentty.sync.fetch_backed_off", true))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(backed_off_refreshes.len(), 1);
+    assert!(
+        backed_off_refreshes[0]
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed"))
+    );
+    assert!(!format!("{spans:?}").contains("private"));
+    assert_eq!(
+        orchestrator
+            .fetch_failures
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![2]
     );
 }
 
@@ -419,8 +528,9 @@ async fn unstarted_orchestrator_first_pass_reads_context_published_before_spawn(
 }
 
 #[tokio::test]
-/// Successful manual syncs preserve their captured review results and
-/// emit them only with the matching project operation.
+/// Successful manual syncs preserve their captured review results, emit
+/// them only with the matching project operation, and clear the project's
+/// fetch backoff.
 async fn run_sync_main_emits_captured_review_updates_after_success() {
     // Arrange
     let working_dir = PathBuf::from("/tmp/project");
@@ -483,16 +593,13 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
         ..sync_context_fixture(0, Vec::new())
     };
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(sync_context.clone());
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx: app_event_tx.clone(),
-        command_rx,
-        context_rx,
-        review_pass_index: 0,
-        review_sync_failures: HashMap::new(),
-        tick_index: 0,
+    let (mut orchestrator, _orchestrator_event_rx) = orchestrator_for(context_rx);
+    let backoff = FailureBackoff {
+        consecutive_failures: 4,
+        retry_after_pass: u64::MAX,
     };
+    orchestrator.fetch_failures.insert(1, backoff);
     let operation = project_sync_context();
 
     // Act
@@ -523,6 +630,7 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
             && review_request_updates[0].session_id.as_str() == "session-1"
             && review_request_updates[0].result.is_err()
     ));
+    assert!(orchestrator.fetch_failures.is_empty());
 }
 
 #[tokio::test]
@@ -586,6 +694,8 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -716,13 +826,19 @@ fn same_polling_inputs_detects_linked_state_change() {
 #[test]
 /// Backoff windows grow exponentially with consecutive failures and stay
 /// capped so failing targets are retried within a bounded interval.
-fn review_sync_backoff_passes_grows_exponentially_and_caps() {
-    // Arrange / Act / Assert
-    assert_eq!(review_sync_backoff_passes(1), 0);
-    assert_eq!(review_sync_backoff_passes(2), 1);
-    assert_eq!(review_sync_backoff_passes(3), 3);
-    assert_eq!(review_sync_backoff_passes(4), 7);
-    assert_eq!(review_sync_backoff_passes(50), 7);
+fn failure_backoff_skipped_passes_grows_exponentially_and_caps() {
+    // Arrange
+    let review_cap = REVIEW_SYNC_MAX_BACKOFF_PASSES;
+    let fetch_cap = FETCH_MAX_BACKOFF_PASSES;
+
+    // Act / Assert
+    assert_eq!(FailureBackoff::skipped_passes(1, review_cap), 0);
+    assert_eq!(FailureBackoff::skipped_passes(2, review_cap), 1);
+    assert_eq!(FailureBackoff::skipped_passes(3, review_cap), 3);
+    assert_eq!(FailureBackoff::skipped_passes(4, review_cap), 7);
+    assert_eq!(FailureBackoff::skipped_passes(50, review_cap), 7);
+    assert_eq!(FailureBackoff::skipped_passes(5, fetch_cap), 15);
+    assert_eq!(FailureBackoff::skipped_passes(u32::MAX, fetch_cap), 15);
 }
 
 #[tokio::test]
@@ -737,6 +853,8 @@ async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -782,6 +900,8 @@ async fn record_review_sync_outcome_success_resets_backoff() {
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -1380,6 +1500,8 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -1466,6 +1588,8 @@ async fn refresh_pass_emits_review_updates_only_when_requested() {
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,
@@ -1758,6 +1882,8 @@ async fn collect_review_request_pass_updates_loads_configuration_only_for_watche
         app_event_tx,
         command_rx,
         context_rx,
+        fetch_failures: HashMap::new(),
+        fetch_pass_index: 0,
         review_pass_index: 0,
         review_sync_failures: HashMap::new(),
         tick_index: 0,

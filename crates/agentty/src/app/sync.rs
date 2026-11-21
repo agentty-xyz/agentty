@@ -44,6 +44,10 @@ const REVIEW_SYNC_FAILURE_NOTICE_THRESHOLD: u32 = 3;
 /// Upper bound of review passes one failing target is skipped between
 /// retries.
 const REVIEW_SYNC_MAX_BACKOFF_PASSES: u64 = 7;
+/// Upper bound of status passes the background fetch of one failing project
+/// is skipped between retries, so an unreachable remote is retried about
+/// every eight minutes at the periodic cadence.
+const FETCH_MAX_BACKOFF_PASSES: u64 = 15;
 
 /// Starts project sync work and emits operation-scoped progress events.
 #[cfg_attr(test, mockall::automock)]
@@ -121,6 +125,8 @@ impl SyncHandle {
             app_event_tx,
             command_rx,
             context_rx,
+            fetch_failures: HashMap::new(),
+            fetch_pass_index: 0,
             review_pass_index: 0,
             review_sync_failures: HashMap::new(),
             tick_index: 0,
@@ -434,8 +440,10 @@ pub(crate) struct SyncOrchestrator {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     command_rx: mpsc::UnboundedReceiver<SyncCommand>,
     context_rx: watch::Receiver<SyncContext>,
+    fetch_failures: HashMap<i64, FailureBackoff>,
+    fetch_pass_index: u64,
     review_pass_index: u64,
-    review_sync_failures: HashMap<SessionId, ReviewSyncFailureState>,
+    review_sync_failures: HashMap<SessionId, FailureBackoff>,
     tick_index: u64,
 }
 
@@ -521,8 +529,9 @@ impl SyncOrchestrator {
     ///
     /// A failed fetch or tracking-status query still emits the snapshot
     /// computed from the remaining data, but fails its `git.fetch` or
-    /// `sync.branch_status` phase and the returned outcome.
-    async fn run_git_status_pass(&self, context: &SyncContext) -> Outcome {
+    /// `sync.branch_status` phase and the returned outcome. A fetch skipped
+    /// by failure backoff does not fail the pass.
+    async fn run_git_status_pass(&mut self, context: &SyncContext) -> Outcome {
         let working_dir = context.working_dir.clone();
         let repo_root = context
             .git_client
@@ -532,12 +541,9 @@ impl SyncOrchestrator {
 
         // Background fetch failure is non-critical: tracking statuses still
         // compare against the last fetched remote refs.
-        let fetched = Span::child("git.fetch")
-            .run(context.git_client.fetch_remote(repo_root.clone()), |_| {
-                Outcome::Failed
-            })
-            .await
-            .is_ok();
+        let fetch_outcome = self
+            .fetch_remote_unless_backed_off(context, &repo_root)
+            .await;
 
         let branch_status = Span::child("sync.branch_status");
         branch_status.attribute(
@@ -572,11 +578,7 @@ impl SyncOrchestrator {
             .copied()
             .flatten();
 
-        let outcome = if fetched {
-            status_outcome
-        } else {
-            Outcome::Failed
-        };
+        let outcome = combined_outcome(fetch_outcome, status_outcome);
         if self.context_is_stale(context) {
             return combined_outcome(outcome, Outcome::Canceled);
         }
@@ -589,6 +591,63 @@ impl SyncOrchestrator {
         });
 
         outcome
+    }
+
+    /// Fetches the project remote in one `git.fetch` phase unless repeated
+    /// failures put the project in backoff.
+    ///
+    /// Every call counts as one fetch pass, whether periodic or requested.
+    /// A skipped fetch starts no phase, marks the enclosing trace with
+    /// `agentty.sync.fetch_backed_off`, and completes. A failed fetch extends
+    /// the project's backoff window exponentially and ends its phase with
+    /// the bounded [`ag_git::GitError::failure_class`] as `error.type` plus
+    /// the consecutive failure count. A success clears the backoff.
+    async fn fetch_remote_unless_backed_off(
+        &mut self,
+        context: &SyncContext,
+        repo_root: &Path,
+    ) -> Outcome {
+        let fetch_pass_index = self.fetch_pass_index;
+        self.fetch_pass_index = self.fetch_pass_index.wrapping_add(1);
+        if self
+            .fetch_failures
+            .get(&context.project_id)
+            .is_some_and(|backoff| backoff.is_backed_off(fetch_pass_index))
+        {
+            ag_telemetry::current_attribute("agentty.sync.fetch_backed_off", true);
+
+            return Outcome::Completed;
+        }
+
+        let fetch = Span::child("git.fetch");
+        let result = context
+            .git_client
+            .fetch_remote(repo_root.to_path_buf())
+            .with_context(fetch.context())
+            .await;
+        let Err(error) = result else {
+            self.fetch_failures.remove(&context.project_id);
+            fetch.finish(Outcome::Completed);
+
+            return Outcome::Completed;
+        };
+
+        let backoff = self.fetch_failures.entry(context.project_id).or_default();
+        backoff.record_failure(fetch_pass_index, FETCH_MAX_BACKOFF_PASSES);
+        let failure_class = error.failure_class();
+        tracing::warn!(
+            project_id = context.project_id,
+            consecutive_failures = backoff.consecutive_failures,
+            failure_class,
+            "background git fetch failed: {error}",
+        );
+        fetch.attribute(
+            "agentty.sync.consecutive_failures",
+            i64::from(backoff.consecutive_failures),
+        );
+        fetch.fail(failure_class);
+
+        Outcome::Failed
     }
 
     /// Refreshes linked or published review-request state for all targets in
@@ -738,7 +797,8 @@ impl SyncOrchestrator {
     /// Review-request state is refreshed before the mutating git phases, but
     /// successful terminal updates are emitted only after the main branch
     /// sync succeeds. That keeps externally merged session finalization behind
-    /// the updated local default branch for the manual `s` workflow.
+    /// the updated local default branch for the manual `s` workflow. A
+    /// successful sync also clears the project's background fetch backoff.
     ///
     /// Both phases and any conflict-assistance utilities nest beneath one
     /// independent `project.sync_main` trace, which fails with the sync.
@@ -790,6 +850,11 @@ impl SyncOrchestrator {
         } else {
             Outcome::Failed
         });
+        if result.is_ok() {
+            // A completed explicit sync shows the remote is reachable again,
+            // so the next status pass fetches instead of waiting out backoff.
+            self.fetch_failures.remove(&sync_context.project_id);
+        }
         let review_request_updates = result.is_ok().then(|| {
             review_request_updates
                 .into_iter()
@@ -820,7 +885,7 @@ impl SyncOrchestrator {
     fn is_target_backed_off(&self, session_id: &SessionId, review_pass_index: u64) -> bool {
         self.review_sync_failures
             .get(session_id)
-            .is_some_and(|failure_state| review_pass_index < failure_state.retry_after_pass)
+            .is_some_and(|backoff| backoff.is_backed_off(review_pass_index))
     }
 
     /// Updates per-target failure tracking after one review-request sync.
@@ -841,24 +906,18 @@ impl SyncOrchestrator {
                 self.review_sync_failures.remove(session_id);
             }
             Err(error) => {
-                let failure_state = self
+                let backoff = self
                     .review_sync_failures
                     .entry(session_id.clone())
                     .or_default();
-                failure_state.consecutive_failures =
-                    failure_state.consecutive_failures.saturating_add(1);
-                failure_state.retry_after_pass = review_pass_index
-                    .saturating_add(1)
-                    .saturating_add(review_sync_backoff_passes(
-                        failure_state.consecutive_failures,
-                    ));
+                backoff.record_failure(review_pass_index, REVIEW_SYNC_MAX_BACKOFF_PASSES);
 
                 tracing::warn!(
                     session_id = %session_id,
-                    consecutive_failures = failure_state.consecutive_failures,
+                    consecutive_failures = backoff.consecutive_failures,
                     "review request sync failed: {error}",
                 );
-                if failure_state.consecutive_failures == REVIEW_SYNC_FAILURE_NOTICE_THRESHOLD {
+                if backoff.consecutive_failures == REVIEW_SYNC_FAILURE_NOTICE_THRESHOLD {
                     // Fire-and-forget: receiver may be dropped during
                     // shutdown.
                     let _ = self
@@ -867,7 +926,7 @@ impl SyncOrchestrator {
                             notice: format!(
                                 "[Review request sync] {} consecutive failures; retrying with \
                                  backoff. Last error: {error}",
-                                failure_state.consecutive_failures
+                                backoff.consecutive_failures
                             ),
                             session_id: session_id.clone(),
                         });
@@ -889,13 +948,46 @@ impl SyncOrchestrator {
     }
 }
 
-/// Per-session consecutive review-sync failure tracking used for backoff.
+/// Consecutive-failure tracking for one polled target, used to skip passes
+/// between retries.
+///
+/// Review-request targets count review passes and project fetches count
+/// fetch passes.
 #[derive(Default)]
-struct ReviewSyncFailureState {
-    /// Number of review-sync failures since the last success.
+struct FailureBackoff {
+    /// Number of failures since the last success.
     consecutive_failures: u32,
-    /// Review-pass index at which the target may be retried.
+    /// Pass index at which the target may be retried.
     retry_after_pass: u64,
+}
+
+impl FailureBackoff {
+    /// Returns whether `pass_index` is still inside the backoff window.
+    fn is_backed_off(&self, pass_index: u64) -> bool {
+        pass_index < self.retry_after_pass
+    }
+
+    /// Records one failure during `pass_index` and extends the backoff
+    /// window by [`Self::skipped_passes`].
+    fn record_failure(&mut self, pass_index: u64, max_skipped_passes: u64) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.retry_after_pass = pass_index
+            .saturating_add(1)
+            .saturating_add(Self::skipped_passes(
+                self.consecutive_failures,
+                max_skipped_passes,
+            ));
+    }
+
+    /// Returns how many passes a failing target is skipped before retry.
+    ///
+    /// Grows exponentially (`0, 1, 3, 7, ...`) with the consecutive failure
+    /// count and is capped at `max_skipped_passes`.
+    fn skipped_passes(consecutive_failures: u32, max_skipped_passes: u64) -> u64 {
+        let exponent = consecutive_failures.saturating_sub(1).min(u64::BITS - 1);
+
+        ((1_u64 << exponent) - 1).min(max_skipped_passes)
+    }
 }
 
 /// One review-request refresh result and its polling target.
@@ -920,16 +1012,6 @@ fn combined_outcome(first: Outcome, second: Outcome) -> Outcome {
 /// Converts one collection size to an integer span attribute.
 fn attribute_count(count: usize) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
-}
-
-/// Returns how many review passes a failing target is skipped before retry.
-///
-/// Grows exponentially with the consecutive failure count and is capped at
-/// [`REVIEW_SYNC_MAX_BACKOFF_PASSES`].
-fn review_sync_backoff_passes(consecutive_failures: u32) -> u64 {
-    let exponent = consecutive_failures.saturating_sub(1).min(3);
-
-    ((1_u64 << exponent) - 1).min(REVIEW_SYNC_MAX_BACKOFF_PASSES)
 }
 
 /// Resolves ahead/behind and merge-conflict snapshots for all tracked session

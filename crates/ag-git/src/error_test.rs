@@ -47,6 +47,67 @@ fn index_lock_classification_requires_a_matching_command_failure() {
 }
 
 #[test]
+fn failure_class_buckets_errors_without_exporting_their_text() {
+    // Arrange
+    let cases = [
+        (
+            "Git fetch failed: git@gitlab.example.com: Permission denied (publickey).\nfatal: \
+             Could not read from remote repository.",
+            "auth",
+        ),
+        (
+            "Git fetch failed: remote: HTTP Basic: Access denied\nfatal: Authentication failed \
+             for 'https://gitlab.example.com/group/repo.git/'",
+            "auth",
+        ),
+        (
+            "Git fetch failed: fatal: could not read Username for 'https://github.com': terminal \
+             prompts disabled",
+            "auth",
+        ),
+        (
+            "Git fetch failed: ssh: Could not resolve hostname gitlab.internal: nodename nor \
+             servname provided, or not known",
+            "network",
+        ),
+        (
+            "Git fetch failed: fatal: unable to access 'https://gitlab.internal/repo.git/': \
+             Failed to connect to gitlab.internal port 443: Connection refused",
+            "network",
+        ),
+        (
+            "Git fetch failed: ssh: connect to host gitlab.internal port 22: Operation timed out",
+            "network",
+        ),
+        (
+            "Git fetch failed: fatal: 'origin' does not appear to be a git repository",
+            "other",
+        ),
+    ];
+
+    for (stderr, expected) in cases {
+        let error = GitError::CommandFailed {
+            command: "git fetch".to_string(),
+            stderr: stderr.to_string(),
+        };
+
+        // Act / Assert
+        assert_eq!(error.failure_class(), expected, "{stderr}");
+    }
+
+    // Arrange
+    let timed_out = GitError::CommandTimedOut {
+        command: "git fetch".to_string(),
+        timeout: Duration::from_mins(5),
+    };
+    let unparsed = GitError::OutputParse("Connection refused".to_string());
+
+    // Act / Assert
+    assert_eq!(timed_out.failure_class(), "timeout");
+    assert_eq!(unparsed.failure_class(), "other");
+}
+
+#[test]
 fn command_failed_display_includes_command_and_stderr() {
     // Arrange
     let error = GitError::CommandFailed {

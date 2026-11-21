@@ -62,7 +62,63 @@ pub enum GitError {
     Join(#[from] tokio::task::JoinError),
 }
 
+/// Lowercase stderr fragments that identify a rejected or missing credential.
+const AUTH_FAILURE_MARKERS: [&str; 10] = [
+    "access denied",
+    "authentication failed",
+    "could not read password",
+    "could not read username",
+    "host key verification failed",
+    "invalid username or password",
+    "permission denied (",
+    "returned error: 401",
+    "returned error: 403",
+    "terminal prompts disabled",
+];
+
+/// Lowercase stderr fragments that identify an unreachable remote host.
+const NETWORK_FAILURE_MARKERS: [&str; 10] = [
+    "connection closed by",
+    "connection refused",
+    "connection reset",
+    "connection timed out",
+    "could not resolve host",
+    "failed to connect to",
+    "kex_exchange_identification",
+    "network is unreachable",
+    "no route to host",
+    "operation timed out",
+];
+
 impl GitError {
+    /// Returns a bounded, content-free failure class for telemetry.
+    ///
+    /// The class is one of `auth` (rejected or missing credentials),
+    /// `network` (unreachable remote), `timeout` (runtime bound exceeded), or
+    /// `other`. It is derived from the error kind and well-known Git and SSH
+    /// diagnostics, so callers can export it without exporting stderr text,
+    /// paths, or remote URLs.
+    #[must_use]
+    pub fn failure_class(&self) -> &'static str {
+        match self {
+            Self::CommandTimedOut { .. } => "timeout",
+            Self::CommandFailed { stderr, .. } => {
+                let stderr = stderr.to_lowercase();
+                let contains_any =
+                    |markers: &[&str]| markers.iter().any(|marker| stderr.contains(marker));
+
+                if contains_any(&AUTH_FAILURE_MARKERS) {
+                    "auth"
+                } else if contains_any(&NETWORK_FAILURE_MARKERS) {
+                    "network"
+                } else {
+                    "other"
+                }
+            }
+            _ => "other",
+        }
+    }
+
     /// Returns whether a failed command reports Git index-lock contention.
     ///
     /// This identifies the lock failure without implying that the lock is
