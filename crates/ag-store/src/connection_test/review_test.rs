@@ -234,6 +234,62 @@ async fn review_diff_baseline_survives_output_clear_and_database_reopen() {
 }
 
 #[tokio::test]
+async fn clearing_unfinished_review_discards_its_diff_baseline() {
+    // Arrange
+    let database = Database::in_memory().await.expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("review-project", None)
+        .await
+        .expect("project should persist");
+    for session_id in ["finished", "unfinished"] {
+        database
+            .sessions()
+            .insert_session(session_id, "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("session should persist");
+        database
+            .sessions()
+            .update_session_review_diff_hash(session_id, "42", true)
+            .await
+            .expect("baseline and review claim should persist");
+    }
+    database
+        .sessions()
+        .update_session_focused_review(
+            "finished",
+            Some(ag_session::FocusedReviewStatus::Ready),
+            Some("42".to_string()),
+            Some("Review".to_string()),
+        )
+        .await
+        .expect("finished review should persist");
+
+    // Act
+    for session_id in ["finished", "unfinished"] {
+        database
+            .sessions()
+            .update_session_focused_review(session_id, None, None, None)
+            .await
+            .expect("review output should clear");
+    }
+    let finished = database
+        .sessions()
+        .load_session_review_diff_hash("finished")
+        .await
+        .expect("finished baseline should load");
+    let unfinished = database
+        .sessions()
+        .load_session_review_diff_hash("unfinished")
+        .await
+        .expect("unfinished baseline should load");
+
+    // Assert
+    assert_eq!(finished.as_deref(), Some("42"));
+    assert_eq!(unfinished, None);
+}
+
+#[tokio::test]
 async fn review_diff_claim_failure_rolls_back_baseline() {
     // Arrange
     let database = Database::in_memory().await.expect("database should open");
