@@ -83,20 +83,20 @@ function visibleView() {
 }
 
 function texts(nodes) {
-  return nodes.map((node) => node.textContent);
+  return Array.from(nodes, (node) => node.textContent);
 }
 
 // The messages on screen. An answer reports its rendered Markdown, not
 // its hidden source or the toggle beneath it.
 function transcript() {
-  return byId("transcript").children.map((item) => ({
+  return Array.from(byId("transcript").children, (item) => ({
     kind: item.dataset.kind,
     text: (item.querySelector(".md") ?? item).textContent,
   }));
 }
 
 function rows() {
-  return byId("sessions").querySelectorAll(".row");
+  return Array.from(byId("sessions").querySelectorAll(".row"));
 }
 
 // Ids of the rows that show the unread dot.
@@ -139,13 +139,11 @@ async function sessionFlow() {
     mergeDisabled: byId("merge").disabled,
     mergeHidden: byId("merge").hidden,
     moreHidden: byId("session-more").hidden,
-    questions: byId("questions")
-      .querySelectorAll("[data-question]")
-      .map((group) => ({
-        eyebrow: group.querySelector(".eyebrow").textContent,
-        options: group.querySelectorAll(".option").map((option) => option.firstChild.textContent),
-        text: group.dataset.question,
-      })),
+    questions: Array.from(byId("questions").querySelectorAll("[data-question]"), (group) => ({
+      eyebrow: group.querySelector(".eyebrow").textContent,
+      options: Array.from(group.querySelectorAll(".option"), (option) => option.firstChild.textContent),
+      text: group.dataset.question,
+    })),
     status: byId("session-status").textContent,
     transcript: transcript(),
     view: visibleView(),
@@ -221,7 +219,7 @@ async function sessionFlow() {
     step: "running",
     activity: {
       isOpen: activity.open,
-      lines: activity.querySelectorAll("li").map((line) => [line.className, line.textContent]),
+      lines: Array.from(activity.querySelectorAll("li"), (line) => [line.className, line.textContent]),
       summary: activity.querySelector("summary").textContent,
     },
     answerBarHidden: byId("answer-bar").hidden,
@@ -233,7 +231,8 @@ async function sessionFlow() {
       .filter((node) => !node.classList.contains("timer"))
       .map((node) => node.textContent),
     isTimerShown: /^Timer \d/.test(byId("heading-sub").querySelector(".timer")?.textContent ?? ""),
-    meta: byId("composer-meta").textContent,
+    // The server lists `settings` and `host`, so the line is a button.
+    meta: byId("composer-settings").hidden ? null : byId("composer-settings").textContent,
     notice: {
       isError: byId("transcript").querySelector(".msg--notice").classList.contains("is-error"),
       label: byId("transcript").querySelector(".notice-label").textContent,
@@ -353,8 +352,38 @@ async function routeFlow() {
     step: "diff",
     chatHidden: byId("chat-scroll").hidden,
     files: texts(byId("diff-files").querySelectorAll("summary")),
-    patch: file.querySelectorAll(".patch-line").map((line) => [line.className, line.textContent]),
+    patch: Array.from(file.querySelectorAll(".patch-line"), (line) => [line.className, line.textContent]),
     summary: byId("diff-summary").textContent,
+  });
+
+  // The settings line opens the sheet, which lists the host's models and
+  // sends the one change.
+  byId("diff").click();
+  byId("composer-settings").click();
+  await waitFor("the models", () => byId("settings-model").getAttribute("aria-busy") === "false");
+  const models = Array.from(byId("settings-model").children, (option) => option.textContent);
+  byId("settings-reasoning").querySelector('[data-value="low"]').click();
+  byId("settings-apply").click();
+  await waitFor("the sheet to close", () => !byId("settings-dialog").open);
+  report({
+    step: "settings",
+    error: byId("settings-error").textContent,
+    models: models,
+    noteHidden: byId("settings-note").hidden,
+  });
+
+  // Sync asks first, and the test host refuses it.
+  byId("session-more").click();
+  const syncLabel = byId("sheet-sync-label").textContent;
+  byId("sheet-sync").click();
+  const askedFirst = byId("sync-dialog").open;
+  byId("sync-dialog").querySelector('button[value="confirm"]').click();
+  await waitFor("the refusal", () => byId("action-error").textContent !== "");
+  report({
+    step: "sync",
+    askedFirst: askedFirst,
+    error: byId("action-error").textContent,
+    label: syncLabel,
   });
 }
 

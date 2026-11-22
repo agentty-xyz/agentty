@@ -2,7 +2,8 @@
 // browser API the client may use, and refuses the rest: `innerHTML`,
 // `outerHTML`, `insertAdjacentHTML`, `document.write`, inline styles and
 // inline event handler attributes all throw, so a test fails as soon as
-// client code tries to build markup from a string.
+// client code tries to build markup from a string. `querySelectorAll` and
+// `children` return lists without Array methods, as a browser does.
 //
 // `createDocument(html)` builds a document from markup such as the
 // client's index.html. `createWindow(document, url)` adds the window the
@@ -29,6 +30,62 @@ const VALUE_ELEMENTS = new Set(["input", "select", "textarea"]);
 
 function refuse(member) {
   throw new Error(member + " is not allowed: build nodes and set textContent instead");
+}
+
+// A snapshot list of nodes, as a browser returns it: indexable, with
+// `length` and `item()`, and iterable, but without the Array methods, so
+// client code that calls `.map` or `.filter` on one fails here as it does
+// in a browser. Spread it or use `Array.from` first.
+class FakeNodeCollection {
+  #items;
+
+  constructor(items) {
+    this.#items = items;
+    items.forEach((item, index) => {
+      Object.defineProperty(this, index, { enumerable: true, value: item });
+    });
+  }
+
+  get length() {
+    return this.#items.length;
+  }
+
+  item(index) {
+    return this.#items[index] ?? null;
+  }
+
+  [Symbol.iterator]() {
+    return this.#items.values();
+  }
+}
+
+// What `querySelectorAll` returns: a `NodeList`, which also has
+// `forEach`, `entries`, `keys` and `values`.
+class FakeNodeList extends FakeNodeCollection {
+  forEach(callback, thisArg) {
+    for (let index = 0; index < this.length; index += 1) {
+      callback.call(thisArg, this[index], index, this);
+    }
+  }
+
+  entries() {
+    return Array.from(this).entries();
+  }
+
+  keys() {
+    return Array.from(this).keys();
+  }
+
+  values() {
+    return this[Symbol.iterator]();
+  }
+}
+
+// What `children` returns: an `HTMLCollection`, which has no `forEach`.
+class FakeHTMLCollection extends FakeNodeCollection {
+  namedItem(name) {
+    return Array.from(this).find((node) => node.id === name || node.getAttribute("name") === name) ?? null;
+  }
 }
 
 export class FakeEvent {
@@ -436,15 +493,15 @@ export class FakeElement extends FakeNode {
   }
 
   get children() {
-    return this.childNodes.filter((node) => node instanceof FakeElement);
+    return new FakeHTMLCollection(elementChildren(this));
   }
 
   get firstElementChild() {
-    return this.children[0] ?? null;
+    return elementChildren(this)[0] ?? null;
   }
 
   get lastElementChild() {
-    return this.children.at(-1) ?? null;
+    return elementChildren(this).at(-1) ?? null;
   }
 
   get childElementCount() {
@@ -550,7 +607,7 @@ export class FakeElement extends FakeNode {
   }
 
   querySelectorAll(selector) {
-    return descendants(this).filter((node) => node.matches(selector));
+    return new FakeNodeList(descendants(this).filter((node) => node.matches(selector)));
   }
 
   // A click on an enabled submit button submits its form, as in a browser.
@@ -632,10 +689,15 @@ for (const [property, attribute] of Object.entries(STRING_PROPERTIES)) {
   });
 }
 
+// The element children of `node`, as an array for this file's own use.
+function elementChildren(node) {
+  return node.childNodes.filter((child) => child instanceof FakeElement);
+}
+
 function descendants(root) {
   const found = [];
   const visit = (node) => {
-    for (const child of node.children) {
+    for (const child of elementChildren(node)) {
       found.push(child);
       visit(child);
     }
@@ -747,7 +809,7 @@ export class FakeDocument extends FakeNode {
   }
 
   get children() {
-    return this.childNodes.filter((node) => node instanceof FakeElement);
+    return new FakeHTMLCollection(elementChildren(this));
   }
 
   createElement(tagName) {
@@ -775,7 +837,7 @@ export class FakeDocument extends FakeNode {
   }
 
   querySelectorAll(selector) {
-    return descendants(this).filter((node) => node.matches(selector));
+    return new FakeNodeList(descendants(this).filter((node) => node.matches(selector)));
   }
 
   write() {

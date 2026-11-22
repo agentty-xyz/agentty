@@ -132,7 +132,7 @@ test("the composer shows the project, base branch and model as text", async () =
   assert.equal(page.byId("home-modes").hidden, true);
   const chips = page.byId("home-chips").children;
   assert.deepEqual(
-    chips.map((chip) => chip.textContent),
+    Array.from(chips, (chip) => chip.textContent),
     ["project " + project, "base main", "claude-opus-5-5"],
   );
   assert.equal(chips[0].querySelector("b").childNodes[0].nodeType, 3);
@@ -144,7 +144,7 @@ test("a host without a base branch or model shows only its project", async () =>
   await page.home.setCapabilities(CAPABILITIES);
 
   assert.deepEqual(
-    page.byId("home-chips").children.map((chip) => chip.textContent),
+    Array.from(page.byId("home-chips").children, (chip) => chip.textContent),
     ["project agentty"],
   );
 });
@@ -158,7 +158,7 @@ test("several modes offer a choice, and the chosen one is sent", async () => {
   const modes = page.byId("home-modes");
   assert.equal(modes.hidden, false);
   assert.deepEqual(
-    modes.children.map((button) => [button.textContent, button.getAttribute("aria-pressed")]),
+    Array.from(modes.children, (button) => [button.textContent, button.getAttribute("aria-pressed")]),
     [
       ["Regular", "true"],
       ["Harness", "false"],

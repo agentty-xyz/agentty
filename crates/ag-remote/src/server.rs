@@ -38,7 +38,7 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; st
 /// Web client files by request path, with their content types. The page
 /// refers to the others by relative path, so a relay can serve the same
 /// files under a path prefix.
-const WEB_ASSETS: [(&str, &str, &str); 13] = [
+const WEB_ASSETS: [(&str, &str, &str); 14] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -98,6 +98,11 @@ const WEB_ASSETS: [(&str, &str, &str); 13] = [
         "/session_list.mjs",
         "text/javascript; charset=utf-8",
         include_str!("../assets/session_list.mjs"),
+    ),
+    (
+        "/settings.mjs",
+        "text/javascript; charset=utf-8",
+        include_str!("../assets/settings.mjs"),
     ),
     (
         "/shell.mjs",

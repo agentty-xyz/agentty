@@ -116,7 +116,7 @@ test("the view lists the files and loads a patch only when one opens", async () 
   assert.equal(page.byId("diff-summary").textContent, "3 files · +52 -12");
   const rows = page.byId("diff-files").querySelectorAll("summary");
   assert.deepEqual(
-    rows.map((row) => row.textContent),
+    Array.from(rows, (row) => row.textContent),
     ["Msrc/lib.rs+12 -3", "Asrc/new.rs+40 -0", "Rsrc/a.rs → src/b.rs+0 -9"],
   );
   assert.equal(rows[1].querySelector(".diff-status").className, "diff-status diff-status--A");
@@ -146,13 +146,13 @@ test("a refresh with the same files changes nothing on screen", async () => {
   await page.diff.open("s1");
   const details = openFile(page, 2);
   await settle();
-  const rows = page.byId("diff-files").children;
+  const rows = [...page.byId("diff-files").children];
   const patch = details.querySelector(".patch");
   const summary = page.byId("diff-summary").firstChild;
   await page.diff.refresh();
   await settle();
 
-  assert.deepEqual(page.byId("diff-files").children, rows);
+  assert.deepEqual([...page.byId("diff-files").children], rows);
   assert.equal(details.querySelector(".patch"), patch);
   assert.equal(page.byId("diff-summary").firstChild, summary);
   assert.equal(details.open, true);
@@ -200,7 +200,7 @@ test("a changed file keeps its row and its old patch until the new one arrives",
 
   const now = page.byId("diff-files").children;
   assert.deepEqual(
-    now.map((row) => row.dataset.path),
+    Array.from(now, (row) => row.dataset.path),
     ["README.md", "src/lib.rs", "src/new.rs"],
   );
   assert.equal(now[1], rows[0]);
@@ -299,7 +299,7 @@ test("an empty diff, a cut list and a cut patch say so", async () => {
   const details = openFile(cut, 0);
   await settle();
   assert.deepEqual(
-    details.querySelectorAll(".diff-note").map((note) => note.textContent),
+    Array.from(details.querySelectorAll(".diff-note"), (note) => note.textContent),
     ["No text changes to show.", "The rest of this patch is too large to show here."],
   );
 });

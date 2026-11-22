@@ -323,9 +323,30 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     let restored = app.next_step().await?;
     let sent = app.next_step().await?;
     let diff = app.next_step().await?;
+    let settings = app.next_step().await?;
+    let sync = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
+    assert_eq!(
+        settings,
+        json!({
+            "step": "settings",
+            "error": "",
+            "models": ["gpt-6.1-sol"],
+            // `Plan it` runs a turn, so the change waits for the next one.
+            "noteHidden": false,
+        })
+    );
+    assert_eq!(
+        sync,
+        json!({
+            "step": "sync",
+            "askedFirst": true,
+            "error": "Session cannot sync in status `Done`",
+            "label": "Sync with main",
+        })
+    );
     assert_eq!(
         diff,
         json!({
@@ -352,13 +373,17 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     );
     assert_eq!(sent, json!({"step": "sent", "draft": null, "error": ""}));
     assert!(succeeded);
-    assert!(
-        server
-            .backend
-            .calls()
-            .iter()
-            .any(|call| call == "send:session-2:Resume the plan")
-    );
+    let calls = server.backend.calls();
+    for expected in [
+        "send:session-2:Resume the plan",
+        "settings:session-2:low",
+        "sync:session-2",
+    ] {
+        assert!(
+            calls.iter().any(|call| call == expected),
+            "{expected} in {calls:?}"
+        );
+    }
 
     Ok(())
 }

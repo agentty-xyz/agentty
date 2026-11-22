@@ -32,6 +32,17 @@ const MAX_DESTINATION_LENGTH = 2048;
 // Deepest nesting of parentheses in a bare link destination. CommonMark
 // asks for at least three.
 const MAX_DESTINATION_PARENTHESES = 8;
+// Characters the look-ahead of link destinations and `nextIndex` has read
+// since the module loaded. The tests compare it with a text's length to
+// check that link attempts that never close do not read the text again
+// and again, without timing the parser.
+let lookAheadReads = 0;
+
+// How many characters the parser's look-ahead has read so far; see
+// `lookAheadReads`.
+export function lookAheadReadCount() {
+  return lookAheadReads;
+}
 
 // Every element the renderer creates, by the part it plays. Nothing else
 // reaches `createElement`.
@@ -679,6 +690,7 @@ function skipLinkSpaces(text, index, limit) {
   while (next < limit && (text[next] === " " || text[next] === "\n")) {
     next += 1;
   }
+  lookAheadReads += next - index + 1;
 
   return next;
 }
@@ -711,10 +723,13 @@ function readDestination(scanner, index, limit) {
     }
     parentheses += parenthesisStep(character);
     if (parentheses > MAX_DESTINATION_PARENTHESES) {
+      lookAheadReads += end - index + 1;
+
       return null;
     }
     end += 1;
   }
+  lookAheadReads += end - index + 1;
 
   return { destination: text.slice(index, end), end: end };
 }
@@ -859,6 +874,7 @@ class InlineScanner {
     }
     const at = this.text.indexOf(character, from);
     const found = at === -1 ? this.text.length : at;
+    lookAheadReads += Math.max(0, found - from) + 1;
     this.found.set(character, { at: found, from: from });
 
     return found;
