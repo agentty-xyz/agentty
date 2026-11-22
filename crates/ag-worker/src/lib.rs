@@ -15,6 +15,7 @@ mod store;
 mod turn;
 mod utility;
 
+pub use ag_runtime::dispatch_sandbox_helper;
 pub use graph::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
     GraphInputValue, GraphNodeRunner, GraphResources, GraphRunRequest, GraphUtilityRunner,

@@ -311,6 +311,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-agent-sandbox
+        name: cargo nextest ag-agent native sandbox
+        description: Run Agentty's command grants under the real native sandbox on a qualified Linux or macOS host.
+        entry: cargo nextest run --locked --timings --profile ci -p ag-agent --test native_sandbox
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-agentty-e2e
         name: cargo nextest agentty e2e
         description: Agentty integration tests from `crates/agentty/tests`.

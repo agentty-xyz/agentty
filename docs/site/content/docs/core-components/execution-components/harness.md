@@ -85,3 +85,13 @@ validated final answer names the message it replaces, and the items of a discard
 response, or items a run left unfinished, are dropped. External agent adapters emit none
 and keep showing answers when the turn completes. Like activity, the output is transient
 session content: hosts render it and never persist, replay, or export it.
+
+## Sandbox Notices
+
+`TurnEvent::Notice` also carries what an in-process `ag-harness` session turn reports
+about the native sandbox its `bash` commands run in: that commands ran without it, with
+user-facing remedy text, or that a sandboxed command likely hit a sandbox denial. The
+host shows the warning once per session, or again when it changes, and the denial hint
+for the turn that reported it, and leaves both out of provider replay. Notices are
+advisory; no layer reruns a command outside the sandbox because of one. Utility runs
+keep the same sandbox but report no notices.

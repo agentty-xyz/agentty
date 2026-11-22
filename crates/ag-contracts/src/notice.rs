@@ -18,4 +18,18 @@ pub enum TurnNotice {
         /// output`; never a provider's response text.
         reason: String,
     },
+    /// The turn's shell commands run without the native sandbox, or inside
+    /// it without a grant this host cannot honor. Every turn offering
+    /// commands reports it while the condition lasts.
+    SandboxUnavailable {
+        /// What is missing, written for the user.
+        message: String,
+        /// How the user can fix it.
+        remedy: String,
+    },
+    /// A sandboxed command failed with an operating-system denial the
+    /// sandbox may have caused. The guess is heuristic, since the command's
+    /// own output can trigger it; hosts never rerun a command outside the
+    /// sandbox because of it.
+    LikelySandboxDenial,
 }

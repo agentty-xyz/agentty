@@ -228,7 +228,7 @@ fn test_session_transcript_conversation_replay_text_ignores_notice_only_transcri
 }
 
 #[test]
-fn provider_replay_keeps_workflow_notices_but_not_context_notices() {
+fn provider_replay_keeps_workflow_notices_but_not_context_or_sandbox_notices() {
     // Arrange
     let transcript = SessionTranscript::new(vec![
         SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "keep going"),
@@ -236,6 +236,16 @@ fn provider_replay_keeps_workflow_notices_but_not_context_notices() {
             1,
             SessionMessageKind::WorkflowNotice,
             "\n[Context] Summarized earlier turns to fit the context window.\n",
+        ),
+        SessionMessage::new(
+            1,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Sandbox Warning] Commands run without the sandbox. Install bubblewrap.\n",
+        ),
+        SessionMessage::new(
+            1,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Sandbox] A command may have been blocked by the sandbox.\n",
         ),
         SessionMessage::new(
             2,
@@ -270,6 +280,8 @@ fn provider_replay_keeps_workflow_notices_but_not_context_notices() {
     );
     assert!(displayed.contains("[Context] Summarized"));
     assert!(displayed.contains("[Context Warning]"));
+    assert!(displayed.contains("[Sandbox Warning]"));
+    assert!(displayed.contains("[Sandbox] A command"));
     assert_eq!(notices_only.provider_replay_text(), None);
 }
 

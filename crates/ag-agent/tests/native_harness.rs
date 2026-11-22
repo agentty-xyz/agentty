@@ -819,7 +819,7 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
     let unsandboxed = json!(ToolDefinition::bash(Enforcement::None).description()).to_string();
     assert!(
         bodies[0].contains(&unsandboxed),
-        "the edit-mode bash tool must state that commands run unsandboxed"
+        "without the sandbox, the bash tool must state that commands run unsandboxed"
     );
     let bash_result = bodies
         .iter()
@@ -827,8 +827,61 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
         .expect("bash result should reach the model");
     assert!(bash_result.contains("hello harness"));
     assert!(bash_result.contains("PATH="));
+    let cargo_home = data_root.path().join("session-tools/tmp/cargo");
+    assert!(
+        bash_result.contains(&format!("CARGO_HOME={}", cargo_home.display())),
+        "tool caches must live in the session's temporary directory"
+    );
     assert!(!bash_result.contains("muse-key"));
     assert!(!bash_result.contains("MODEL_API_KEY"));
+}
+
+#[tokio::test]
+async fn edit_mode_turn_without_the_sandbox_reports_why_and_continues() {
+    // Arrange
+    // This test process never dispatches the sandbox helper, so the native
+    // sandbox is unavailable to every turn offering `bash`.
+    let server = MockServer::start().await;
+    respond(&server, "Say hello", answer("Hello"), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let mut read_only = turn_request(worktree.path(), MUSE_MODEL, "Say hello");
+    read_only.permission_mode = PermissionMode::ReadOnly;
+
+    // Act
+    let (result, events) = run_turn(
+        &channel,
+        "session-unsandboxed",
+        turn_request(worktree.path(), MUSE_MODEL, "Say hello"),
+    )
+    .await;
+    let (read_only_result, read_only_events) =
+        run_turn(&channel, "session-read-only", read_only).await;
+
+    // Assert
+    let notices = |events: &[TurnEvent]| {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                TurnEvent::Notice(notice) => Some(notice.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(result.expect("turn").assistant_message.answer, "Hello");
+    assert_eq!(
+        notices(&events),
+        [TurnNotice::SandboxUnavailable {
+            message: "Commands run without the sandbox. No native sandbox helper is configured."
+                .to_string(),
+            remedy: "Reinstall or update Agentty, which is missing its sandbox helper.".to_string(),
+        }]
+    );
+    // A read-only turn offers no commands, so it has nothing to report.
+    assert!(read_only_result.is_ok());
+    assert_eq!(notices(&read_only_events), []);
 }
 
 #[tokio::test]
@@ -2427,9 +2480,20 @@ fn numbered_turn(
     request
 }
 
+/// Returns whether `event` reports a compaction attempt, as opposed to the
+/// sandbox notice every edit-mode turn of this process reports.
+fn is_compaction_notice(event: &TurnEvent) -> bool {
+    matches!(
+        event,
+        TurnEvent::Notice(
+            TurnNotice::ContextCompacted { .. } | TurnNotice::ContextCompactionFailed { .. }
+        )
+    )
+}
+
 /// Runs numbered session turns of `session_id` on [`SMALL_WINDOW_MODEL`]
-/// with `compaction` until one reports a notice, and returns that turn's
-/// result and events; the first turn resumes the session when `resumed`.
+/// with `compaction` until one reports a compaction notice, and returns that
+/// turn's result and events; the first turn resumes the session when `resumed`.
 ///
 /// # Errors
 /// Returns a failed turn's error, or a failure when no turn reports a notice.
@@ -2452,10 +2516,7 @@ async fn run_until_notice(
         request.continuation = continuing(provider_conversation_id.take());
         let (result, events) = run_turn(channel, session_id, request).await;
         let result = result?;
-        if events
-            .iter()
-            .any(|event| matches!(event, TurnEvent::Notice(_)))
-        {
+        if events.iter().any(is_compaction_notice) {
             return Ok((result, events));
         }
         provider_conversation_id = result.provider_conversation_id;
@@ -2633,11 +2694,7 @@ async fn switching_to_a_small_window_compacts_on_the_fast_model() {
         let request = numbered_turn(worktree.path(), MUSE_MODEL, number, &compaction, number > 1);
         let (result, events) = run_turn(&channel, "session-switch", request).await;
         result.expect("Muse turn should succeed");
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, TurnEvent::Notice(_)))
-        );
+        assert!(!events.iter().any(is_compaction_notice));
     }
 
     // Act

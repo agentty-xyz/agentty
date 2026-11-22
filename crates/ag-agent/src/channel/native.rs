@@ -35,8 +35,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
     NativeTurnError, OutputProjector, RunOptions, cleanup_failure, failure, output_schema,
-    parse_output, reject_attachments, repository, running_context_window, system_prompt,
-    turn_notice,
+    parse_output, reject_attachments, repository, running_context_window, sandbox_notice,
+    system_prompt, turn_notice,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -139,9 +139,10 @@ async fn run_session_turn(
         ),
     };
     let profile = req.request_kind.protocol_profile();
-    let options = RunOptions::new(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
+    let sandbox = config.session_sandbox(&session_id, &environment).await?;
+    let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
         .map_err(failure("Failed to apply the response style"))?
         .agent_text();
@@ -230,12 +231,12 @@ async fn run_session_turn(
 }
 
 /// Forwards the output a run streams as [`TurnEvent::Output`] events, and
-/// its compaction attempts worth noting as [`TurnEvent::Notice`] events,
-/// until the run's stream ends.
+/// its compaction attempts and what it reports about the sandbox as
+/// [`TurnEvent::Notice`] events, until the run's stream ends.
 async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
     let mut projector = OutputProjector::default();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
-        if let Some(notice) = turn_notice(&event.kind) {
+        if let Some(notice) = turn_notice(&event.kind).or_else(|| sandbox_notice(&event.kind)) {
             let _ = events.send(TurnEvent::Notice(notice));
         }
         for output in projector.project(event.kind) {

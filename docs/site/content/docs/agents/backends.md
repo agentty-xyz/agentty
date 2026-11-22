@@ -245,8 +245,24 @@ starts even when no backend CLI is installed, and new sessions then start on the
 model.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
-  unsandboxed `bash`, which can reach the network and paths outside the worktree.
-  Provider keys and endpoints are removed from the `bash` environment.
+  `bash`. Provider keys and endpoints are removed from the `bash` environment.
+- <a id="backends-harness-sandbox"></a> `bash` runs in the operating system's sandbox
+  where it is available: Seatbelt on macOS, Bubblewrap on Linux. Commands can read the
+  disk but write only the session worktree, its Git metadata, and a temporary directory
+  per session, which also holds the Cargo, npm, Go, pip, and other tool caches, so
+  dependencies download again in each session. They keep network access but cannot reach
+  local sockets such as Docker's. Credential stores such as `~/.ssh`, `~/.aws`,
+  `~/.config/gh`, the keychains, browser profiles, and Agentty's harness history and
+  ChatGPT sign-in stay hidden; on macOS, Git over SSH can still use the SSH agent. Run
+  commands that need more access yourself; Agentty never reruns a blocked command
+  outside the sandbox, and shows a `[Sandbox]` hint when a command may have been
+  blocked.
+- Where the sandbox cannot run, commands run without it and the session shows a
+  `[Sandbox Warning]` once, naming what is missing and how to fix it. On Linux, install
+  Bubblewrap (for example `sudo apt install bubblewrap`), allow unprivileged user
+  namespaces, and run kernel 6.2 or later; on macOS, start Agentty outside other
+  sandboxes. Restart Agentty after upgrading it, since the running process uses its own
+  executable as the sandbox helper.
 - Answers and reasoning stream into the session view as the model writes them, with a
   short "Preparing a tool call" line while tool arguments arrive; the activity footer
   shows tool calls while a turn runs. Streamed text is replaced by the saved answer when

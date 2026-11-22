@@ -42,5 +42,11 @@ wiremock.workspace = true
 [features]
 test-utils = ["dep:mockall"]
 
+# Its `main` dispatches the native sandbox helper before running its one
+# test, as Agentty's `main` does, and answers the nextest listing protocol.
+[[test]]
+name = "native_sandbox"
+harness = false
+
 [lints]
 workspace = true

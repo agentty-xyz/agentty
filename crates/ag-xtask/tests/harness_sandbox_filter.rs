@@ -1,6 +1,7 @@
 //! The Native Harness Sandbox pull request path filter must name exactly the
-//! workspace crates that `ag-harness` builds from, so a pull request that
-//! changes one of them still qualifies the macOS launcher.
+//! workspace crates that `ag-harness` and `ag-agent` build from, so a pull
+//! request that changes one of them still qualifies the macOS launcher and
+//! Agentty's sandbox grants.
 
 use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
@@ -10,10 +11,11 @@ use std::process::Command;
 use serde_json::Value as Json;
 use serde_yaml_ng::Value as Yaml;
 
-const ROOT_PACKAGE: &str = "ag-harness";
+/// Packages whose sandbox suites the workflow runs on macOS.
+const ROOT_PACKAGES: [&str; 2] = ["ag-harness", "ag-agent"];
 
 #[test]
-fn pull_request_filter_names_every_ag_harness_workspace_crate() -> Result<(), Box<dyn Error>> {
+fn pull_request_filter_names_every_sandboxed_workspace_crate() -> Result<(), Box<dyn Error>> {
     // Arrange
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -33,7 +35,7 @@ fn pull_request_filter_names_every_ag_harness_workspace_crate() -> Result<(), Bo
         .collect::<BTreeSet<_>>();
 
     // Act
-    let built_crates = ag_harness_workspace_crates(&root)?
+    let built_crates = sandboxed_workspace_crates(&root)?
         .into_iter()
         .map(|directory| format!("{}/**", directory.display()))
         .collect::<BTreeSet<_>>();
@@ -42,16 +44,17 @@ fn pull_request_filter_names_every_ag_harness_workspace_crate() -> Result<(), Bo
     assert_eq!(
         filtered_crates, built_crates,
         "`.github/workflows/harness-sandbox.yml` must filter on every workspace crate \
-         `ag-harness` builds from, and no others"
+         `ag-harness` and `ag-agent` build from, and no others"
     );
 
     Ok(())
 }
 
-/// Returns the repository-relative directories of `ag-harness` and the
-/// workspace crates it builds from: its own normal, build, and dev
-/// dependencies, then their normal and build dependencies transitively.
-fn ag_harness_workspace_crates(root: &Path) -> Result<BTreeSet<PathBuf>, Box<dyn Error>> {
+/// Returns the repository-relative directories of the root packages and the
+/// workspace crates they build from: their own normal, build, and dev
+/// dependencies, then those dependencies' normal and build dependencies
+/// transitively.
+fn sandboxed_workspace_crates(root: &Path) -> Result<BTreeSet<PathBuf>, Box<dyn Error>> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
@@ -67,7 +70,7 @@ fn ag_harness_workspace_crates(root: &Path) -> Result<BTreeSet<PathBuf>, Box<dyn
         .iter()
         .map(|package| Ok((package["name"].as_str().ok_or("package name")?, package)))
         .collect::<Result<HashMap<_, _>, Box<dyn Error>>>()?;
-    let mut pending = vec![(ROOT_PACKAGE, true)];
+    let mut pending = ROOT_PACKAGES.map(|package| (package, true)).to_vec();
     let mut seen = BTreeSet::new();
     let mut directories = BTreeSet::new();
     while let Some((name, is_root)) = pending.pop() {

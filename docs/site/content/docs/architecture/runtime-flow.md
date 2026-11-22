@@ -135,6 +135,13 @@ harness turn compacts the session's earlier context, or fails to, the runtime al
 a `TurnEvent::Notice`; the worker saves it as a workflow notice ahead of the turn's
 answer, which provider replay leaves out.
 
+Sandbox notices travel the same path as `TurnEvent::Notice`. The worker collects them
+during the turn and, before saving the answer, appends a `[Sandbox Warning]` workflow
+notice unless the transcript's latest one is identical, plus a `[Sandbox]` hint when a
+command may have been blocked; provider replay leaves both out. The `agentty` binary
+dispatches the native sandbox helper before it starts any runtime, so a harness can
+start the same executable as its helper.
+
 Session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
 pending, a chat message is a reply to it, whether it comes from the composer or a

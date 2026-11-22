@@ -462,9 +462,15 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
 - A native transport beside the CLI and app-server transports provides a durable
   `AgentChannel` and the one-shot path. The harness session shares the Agentty session
   ID and is canonical; a missing database restarts from Agentty's replay transcript.
-- `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
-  inherits Agentty's environment without provider credential and endpoint variables.
-  Like Codex and Claude full access, `bash` does not keep the main checkout read-only.
+- `ReadOnly` maps to `read`. Edit modes add `write` and `bash`, which inherits Agentty's
+  environment without provider credential and endpoint variables.
+- `bash` runs in the native sandbox with Agentty's grants: full-disk reads, writes to
+  the worktree, its Git metadata, and a per-session temporary directory that holds the
+  tool caches, network, and on macOS the SSH agent socket. The harness data root and the
+  ChatGPT sign-in are hidden. The `agentty` executable calls
+  `ag_harness::sandbox::dispatch` first in `main`, so it is its own sandbox helper.
+  Where the sandbox cannot run, commands run unsandboxed and each turn reports
+  `SandboxUnavailable`, which the session view shows once per session.
 - Each session's database lives under the Agentty data root, outside the session
   worktree; session deletion removes it.
 - A turn returns to Agentty only after `TurnControl::settled`, so Agentty commits a

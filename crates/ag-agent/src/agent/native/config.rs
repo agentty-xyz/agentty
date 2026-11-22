@@ -9,7 +9,7 @@ use std::time::Duration;
 use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
-use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
+use ag_harness::bash::BashConfig;
 use ag_harness::catalog::{
     Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
 };
@@ -34,6 +34,7 @@ use ag_session::{
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
+use super::sandbox::{self, CommandSandbox};
 use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
@@ -56,8 +57,16 @@ const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";
 const SESSION_DATABASE_FILE: &str = "harness.db";
 /// Trusted Bash executable used by edit-mode `bash` calls.
 const BASH_EXECUTABLE: &str = "/bin/bash";
-/// Nonsecret identity of the unsandboxed Bash policy.
-const BASH_POLICY_REVISION: &str = "agentty-unsandboxed-1";
+/// Nonsecret identity of the native sandbox Bash policy. Change it when the
+/// grants, the Bash executable, or the `ag-harness` sandbox enforcement
+/// change.
+const BASH_POLICY_REVISION: &str = "agentty-native-sandbox-1";
+/// Directory inside a session's harness directory that its commands use as
+/// `TMPDIR`.
+const SESSION_TEMPORARY_DIRECTORY: &str = "tmp";
+/// Directory under the data root holding one temporary directory per
+/// running utility prompt. Session ids never start with a dot.
+const UTILITY_TEMPORARY_PARENT: &str = ".utility";
 /// Deadline for one `bash` call.
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 /// Environment variable naming the model the OpenAI-compatible server serves
@@ -115,8 +124,14 @@ type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>
 /// Host configuration that enables in-process [`AgentKind::Harness`] turns.
 ///
 /// Each session keeps its durable harness history in
-/// `<data_root>/<session id>/`, outside the session worktree; hosts remove that
-/// directory when they delete the session.
+/// `<data_root>/<session id>/`, outside the session worktree, with the
+/// temporary directory its commands use; hosts remove that directory when
+/// they delete the session. Commands cannot read the data root, apart from
+/// their own temporary directory.
+///
+/// `bash` runs inside the native sandbox, which needs the host to call
+/// [`super::dispatch_sandbox_helper`] first in `main`; where the sandbox
+/// cannot run, commands run without it and every turn reports why.
 #[derive(Clone)]
 pub struct NativeHarnessConfig {
     data_root: PathBuf,
@@ -131,13 +146,14 @@ impl NativeHarnessConfig {
     }
 
     /// Configures harness storage under `data_root` with an explicit
-    /// environment source for provider credentials and `bash` grants.
+    /// environment source for provider credentials and `bash` grants. A
+    /// relative `data_root` is resolved against the current directory.
     pub fn with_environment(
         data_root: PathBuf,
         environment: impl Fn() -> BTreeMap<String, String> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            data_root,
+            data_root: std::path::absolute(&data_root).unwrap_or(data_root),
             environment: Arc::new(environment),
         }
     }
@@ -153,6 +169,68 @@ impl NativeHarnessConfig {
     /// Returns an error for an identifier that is not one path component or
     /// when the session directory cannot be created.
     pub(crate) async fn session_database(&self, session_id: &str) -> Result<PathBuf, String> {
+        Ok(self
+            .session_directory(session_id, None)
+            .await?
+            .join(SESSION_DATABASE_FILE))
+    }
+
+    /// Creates the session's temporary directory and returns the sandbox of
+    /// its commands. The directory keeps one path for the session's
+    /// lifetime, because the harness fingerprints it into the policy.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid session id or when the directory
+    /// cannot be created.
+    pub(crate) async fn session_sandbox(
+        &self,
+        session_id: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<CommandSandbox, String> {
+        let temporary_directory = self
+            .session_directory(session_id, Some(SESSION_TEMPORARY_DIRECTORY))
+            .await?;
+
+        Ok(CommandSandbox::new(
+            &self.data_root,
+            temporary_directory,
+            environment,
+        ))
+    }
+
+    /// Creates a fresh temporary directory for one utility prompt and
+    /// returns the sandbox of its commands with the directory, which is
+    /// removed when dropped.
+    ///
+    /// # Errors
+    /// Returns an error when the directory cannot be created.
+    pub(crate) fn utility_sandbox(
+        &self,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<(CommandSandbox, tempfile::TempDir), String> {
+        let parent = self.data_root.join(UTILITY_TEMPORARY_PARENT);
+        let directory = std::fs::create_dir_all(&parent)
+            .and_then(|()| tempfile::Builder::new().prefix("run-").tempdir_in(&parent))
+            .map_err(|error| {
+                format!("Failed to create the harness temporary directory: {error}")
+            })?;
+        let sandbox =
+            CommandSandbox::new(&self.data_root, directory.path().to_path_buf(), environment);
+
+        Ok((sandbox, directory))
+    }
+
+    /// Creates the session's directory, or its `child` directory, and
+    /// returns it.
+    ///
+    /// # Errors
+    /// Returns an error for an identifier that is not one path component or
+    /// when the directory cannot be created.
+    async fn session_directory(
+        &self,
+        session_id: &str,
+        child: Option<&str>,
+    ) -> Result<PathBuf, String> {
         let is_single_component = !session_id.is_empty()
             && session_id != "."
             && session_id != ".."
@@ -160,12 +238,16 @@ impl NativeHarnessConfig {
         if !is_single_component {
             return Err(format!("Invalid harness session id `{session_id}`."));
         }
-        let directory = self.data_root.join(session_id);
+        let session = self.data_root.join(session_id);
+        let directory = match child {
+            Some(child) => session.join(child),
+            None => session,
+        };
         tokio::fs::create_dir_all(&directory)
             .await
             .map_err(|error| format!("Failed to create the harness session directory: {error}"))?;
 
-        Ok(directory.join(SESSION_DATABASE_FILE))
+        Ok(directory)
     }
 }
 
@@ -790,6 +872,7 @@ impl ModelSelection {
             .map_err(failure("Invalid harness model registration"))?
             .context_policy(context_policy)
             .repository(context.repository.clone())
+            .sandbox(sandbox::SANDBOX)
             .model_reasoning_effort(reasoning_effort(context.reasoning_level))
             .with_lifecycle_observer(traced(observer)))
     }
@@ -893,7 +976,7 @@ pub(crate) struct RunOptions {
 
 impl RunOptions {
     /// Builds the options for one turn: `read` always, plus `write` and
-    /// unsandboxed `bash` outside read-only mode.
+    /// `bash` in `sandbox` outside read-only mode.
     ///
     /// # Errors
     /// Returns an error when the schema or `bash` policy is rejected.
@@ -901,6 +984,7 @@ impl RunOptions {
         profile: ProtocolRequestProfile,
         permission_mode: PermissionMode,
         environment: &BTreeMap<String, String>,
+        sandbox: &CommandSandbox,
     ) -> Result<Self, String> {
         let output = output_schema(profile)?;
         if permission_mode == PermissionMode::ReadOnly {
@@ -912,7 +996,7 @@ impl RunOptions {
         }
 
         Ok(Self {
-            bash: Some(bash_config(environment)?),
+            bash: Some(bash_config(environment, sandbox)?),
             output,
             tools: ToolSet::builtins(),
         })
@@ -929,18 +1013,22 @@ impl RunOptions {
     }
 }
 
-/// Configures unsandboxed `bash` with the host environment minus provider
-/// variables, keeping essentials first within the harness grant limits.
-fn bash_config(environment: &BTreeMap<String, String>) -> Result<BashConfig, String> {
-    let mut config = BashConfig::for_executor(
-        Arc::new(UnsandboxedExecutor::without_isolation()),
+/// Configures `bash` in the native sandbox with `sandbox`'s grants and the
+/// host environment minus provider variables, keeping essentials first
+/// within the harness grant limits. Host values of the variables the
+/// grants set, such as `TMPDIR` and the tool caches, are not granted.
+fn bash_config(
+    environment: &BTreeMap<String, String>,
+    sandbox: &CommandSandbox,
+) -> Result<BashConfig, String> {
+    let mut config = BashConfig::native(
         PathBuf::from(BASH_EXECUTABLE),
         BASH_POLICY_REVISION.to_string(),
         BASH_TIMEOUT,
         BashConfig::DEFAULT_CAPTURE_BYTES,
     )
-    .map_err(failure("Invalid harness bash policy"))?
-    .with_host_information();
+    .and_then(|config| sandbox.grant(config.with_host_information(), environment))
+    .map_err(failure("Invalid harness bash policy"))?;
     for (name, value) in bash_environment(environment) {
         if let Ok(granted) = config.clone().with_environment(name.clone(), value.clone()) {
             config = granted;

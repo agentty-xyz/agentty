@@ -115,7 +115,10 @@ pub(crate) async fn run_one_shot(
     let environment = config.environment();
     let selection = ModelSelection::resolve(&request.model, &environment)?;
     let profile = request.request_kind.protocol_profile();
-    let options = RunOptions::new(profile, request.permission_mode, &environment)?;
+    // Kept until the run settles; dropping it removes the run's temporary
+    // directory.
+    let (sandbox, _temporary_directory) = config.utility_sandbox(&environment)?;
+    let options = RunOptions::new(profile, request.permission_mode, &environment, &sandbox)?;
     let repository = config::repository(&request.folder, &environment)?;
     let running_context_window = config::running_context_window(&selection, &environment).await?;
     let activity_tx = request.activity_tx.clone();

@@ -121,14 +121,19 @@ impl SessionMessage {
     }
 
     /// Returns whether this is a workflow notice only the user reads, such as
-    /// a context compaction notice.
+    /// a context compaction or sandbox notice.
     fn is_user_only_notice(&self) -> bool {
         let content = self.content.trim_start();
 
         self.kind == SessionMessageKind::WorkflowNotice
-            && [TranscriptNotice::Context, TranscriptNotice::ContextWarning]
-                .iter()
-                .any(|notice| content.starts_with(&format!("{} ", notice.prefix())))
+            && [
+                TranscriptNotice::Context,
+                TranscriptNotice::ContextWarning,
+                TranscriptNotice::Sandbox,
+                TranscriptNotice::SandboxWarning,
+            ]
+            .iter()
+            .any(|notice| content.starts_with(&format!("{} ", notice.prefix())))
     }
 
     /// Appends this message to a formatted transcript display buffer.
@@ -314,6 +319,7 @@ impl SessionTranscript {
 
     /// Returns [`Self::replay_text`] for a provider: without the notices that
     /// only tell the user how Agentty ran a turn, such as context compaction
+    /// and sandbox
     /// notices, which would mislead a model reading the full history.
     pub fn provider_replay_text(&self) -> Option<String> {
         let messages = self

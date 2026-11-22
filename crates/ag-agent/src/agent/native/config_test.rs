@@ -32,6 +32,7 @@ use super::{
     running_context_window, unicode_environment,
 };
 use crate::agent::model_profile;
+use crate::agent::native::sandbox::CommandSandbox;
 
 #[test]
 /// Asks for the base URL of a keyed provider without a default endpoint,
@@ -1013,6 +1014,109 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
     assert_eq!(granted.len(), 102);
 }
 
+#[tokio::test]
+/// Gives each session one stable temporary directory inside its harness
+/// directory and rejects invalid session ids.
+async fn session_sandbox_creates_a_stable_temporary_directory() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let environment = BTreeMap::new();
+
+    // Act
+    let first = config.session_sandbox("session-1", &environment).await;
+    let second = config.session_sandbox("session-1", &environment).await;
+    let invalid = config.session_sandbox("a/b", &environment).await;
+
+    // Assert
+    let temporary = data_root.path().join("session-1").join("tmp");
+    assert!(temporary.is_dir());
+    let policy = |sandbox: CommandSandbox| {
+        RunOptions::new(
+            ProtocolRequestProfile::SessionTurn,
+            PermissionMode::AutoEdit,
+            &environment,
+            &sandbox,
+        )
+        .expect("options")
+        .bash
+    };
+    assert_eq!(
+        policy(first.expect("first sandbox")),
+        policy(second.expect("second sandbox"))
+    );
+    assert!(invalid.is_err());
+}
+
+#[test]
+/// Gives each utility prompt a fresh temporary directory beside the session
+/// directories, removed when the prompt ends, and reports a data root that
+/// cannot hold one.
+fn utility_sandbox_creates_a_temporary_directory_per_prompt() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let file_root = tempfile::NamedTempFile::new().expect("file in place of a directory");
+    let unusable = NativeHarnessConfig::new(file_root.path().to_path_buf());
+
+    // Act
+    let (_sandbox, directory) = config
+        .utility_sandbox(&BTreeMap::new())
+        .expect("utility sandbox");
+    let failure = unusable.utility_sandbox(&BTreeMap::new());
+
+    // Assert
+    let path = directory.path().to_path_buf();
+    assert_eq!(
+        path.parent(),
+        Some(data_root.path().join(".utility").as_path())
+    );
+    assert!(path.is_dir());
+    drop(directory);
+    assert!(!path.exists());
+    assert!(
+        failure
+            .err()
+            .expect("a file root should fail")
+            .contains("Failed to create the harness temporary directory")
+    );
+}
+
+#[test]
+/// Grants the sandbox's own `TMPDIR` and tool caches in place of the host's.
+fn bash_policies_replace_host_temporary_and_cache_directories() {
+    // Arrange
+    let sandbox = CommandSandbox::new(
+        Path::new("/data-root"),
+        PathBuf::from("/data-root/session-1/tmp"),
+        &BTreeMap::new(),
+    );
+    let host = environment(&[
+        ("CARGO_HOME", "/home/test/.cargo"),
+        ("PATH", "/usr/bin"),
+        ("TMPDIR", "/tmp/host"),
+        ("XDG_CACHE_HOME", "/home/test/.cache"),
+    ]);
+    let without_host_values = environment(&[("PATH", "/usr/bin")]);
+    let policy = |environment: &BTreeMap<String, String>| {
+        RunOptions::new(
+            ProtocolRequestProfile::SessionTurn,
+            PermissionMode::AutoEdit,
+            environment,
+            &sandbox,
+        )
+        .expect("options")
+        .bash
+    };
+
+    // Act
+    let with_host = policy(&host);
+    let without_host = policy(&without_host_values);
+
+    // Assert
+    assert_eq!(with_host, without_host);
+}
+
 #[test]
 /// Skips variables beyond the harness grant limit instead of failing.
 fn run_options_tolerate_oversized_environments() {
@@ -1020,17 +1124,24 @@ fn run_options_tolerate_oversized_environments() {
     let environment = (0..100)
         .map(|index| (format!("VAR_{index:03}"), "value".to_string()))
         .collect::<BTreeMap<_, _>>();
+    let sandbox = CommandSandbox::new(
+        Path::new("/data-root"),
+        PathBuf::from("/data-root/session-1/tmp"),
+        &environment,
+    );
 
     // Act
     let edit = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::AutoEdit,
         &environment,
+        &sandbox,
     );
     let read_only = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::ReadOnly,
         &environment,
+        &sandbox,
     );
 
     // Assert

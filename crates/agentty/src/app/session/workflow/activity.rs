@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::output::LiveOutput;
+use super::sandbox::TurnSandbox;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -28,6 +29,9 @@ pub(super) struct TurnActivity {
     /// Transcript notices the turn reported, in order.
     notices: Vec<String>,
     output: LiveOutput,
+    /// What the turn reported about the native sandbox, shown with the
+    /// session's earlier warnings in mind.
+    sandbox: TurnSandbox,
 }
 
 impl TurnActivity {
@@ -76,9 +80,14 @@ impl TurnActivity {
     }
 
     /// Keeps the transcript notice for one thing the turn reported about how
-    /// it ran, such as a compaction of the session's earlier context.
+    /// it ran, such as a compaction of the session's earlier context, or
+    /// records what it reported about the native sandbox.
     pub(super) fn observe_notice(&mut self, notice: &TurnNotice) {
         let text = match notice {
+            TurnNotice::SandboxUnavailable { message, remedy } => {
+                return self.sandbox.observe_unavailable(message, remedy);
+            }
+            TurnNotice::LikelySandboxDenial => return self.sandbox.observe_likely_denial(),
             TurnNotice::ContextCompacted { model: Some(model) } => TranscriptNotice::Context
                 .format(format_args!(
                     "Summarized earlier turns with `{model}` to fit the context window."
@@ -97,6 +106,11 @@ impl TurnActivity {
     /// Returns the transcript notices the turn reported, in order.
     pub(super) fn notices(&self) -> &[String] {
         &self.notices
+    }
+
+    /// Returns what the turn reported about the native sandbox.
+    pub(super) fn sandbox(&self) -> &TurnSandbox {
+        &self.sandbox
     }
 
     /// Settles calls lacking a terminal provider event when the stream closes.

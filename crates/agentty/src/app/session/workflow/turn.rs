@@ -16,6 +16,7 @@ use tracing::debug;
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
+use super::sandbox::TurnSandbox;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::service::HarnessModels;
@@ -257,6 +258,7 @@ pub(super) async fn run_channel_turn(
 
     let activity = consumer.await.unwrap_or_default();
     // Notices describe how the turn ran, so they precede its answer.
+    append_sandbox_notices(context, activity.sandbox()).await;
     for notice in activity.notices() {
         append_transcript_notice(context, notice).await;
     }
@@ -583,7 +585,8 @@ pub(super) async fn load_session_speed_mode(
 /// - [`TurnEvent::Output`]: accumulates streamed model output, published at
 ///   most once per frame.
 /// - [`TurnEvent::Notice`]: keeps a transcript notice the caller appends once
-///   the turn ends.
+///   the turn ends; sandbox notices are deduplicated against the session's
+///   earlier warnings then.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -741,6 +744,19 @@ pub(super) fn fresh_turn_cancel_token(
     *guard = CancellationToken::new();
 
     Ok(guard.clone())
+}
+
+/// Appends what the turn reported about the native sandbox to the live and
+/// persisted transcript: a warning once per session or when it changes, and
+/// a hint when the sandbox may have blocked a command.
+async fn append_sandbox_notices(context: &SessionWorkerContext, sandbox: &TurnSandbox) {
+    let notices = context
+        .transcript
+        .lock()
+        .map_or_default(|transcript| sandbox.notices(transcript.messages()));
+    for notice in notices {
+        append_transcript_notice(context, &notice).await;
+    }
 }
 
 /// Appends one turn notice, such as a main-checkout warning, to the live and

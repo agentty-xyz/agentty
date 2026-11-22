@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnResult,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice,
+    TurnResult,
 };
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -16,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    MainCheckoutSnapshot, add_main_checkout_warning, fresh_turn_cancel_token,
-    live_transcript_source, load_session_response_style, load_title_reasoning_level,
-    prepare_turn_request,
+    MainCheckoutSnapshot, add_main_checkout_warning, append_sandbox_notices, consume_turn_events,
+    fresh_turn_cancel_token, live_transcript_source, load_session_response_style,
+    load_title_reasoning_level, prepare_turn_request,
 };
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
@@ -354,6 +355,60 @@ async fn main_checkout_status_failure_after_the_turn_fails_the_turn() {
     assert!(
         matches!(&error, AgentError::Backend(message) if message.contains("status unavailable")),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_notices_reach_the_transcript_once_per_session_and_hints_per_turn() {
+    // Arrange
+    let (context, _) = persisted_turn_test_context().await;
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    // The thought makes the consumer coalesce the queued warning.
+    for event in [
+        TurnEvent::Notice(TurnNotice::LikelySandboxDenial),
+        TurnEvent::ThoughtDelta("Running a command".to_string()),
+        TurnEvent::Notice(TurnNotice::SandboxUnavailable {
+            message: "Commands run without the sandbox. Bubblewrap (`bwrap`) is not installed."
+                .to_string(),
+            remedy: "Install bubblewrap.".to_string(),
+        }),
+    ] {
+        event_tx.send(event).expect("queued event");
+    }
+    drop(event_tx);
+
+    // Act
+    let activity = consume_turn_events(
+        event_rx,
+        context.app_event_tx.clone(),
+        context.session_id.clone(),
+        Arc::clone(&context.child_pid),
+    )
+    .await;
+    append_sandbox_notices(&context, activity.sandbox()).await;
+    append_sandbox_notices(&context, activity.sandbox()).await;
+
+    // Assert
+    let notices = context
+        .transcript
+        .lock()
+        .expect("transcript")
+        .messages()
+        .iter()
+        .map(|message| message.content.trim().to_string())
+        .collect::<Vec<_>>();
+    let warning = "[Sandbox Warning] Commands run without the sandbox. Bubblewrap (`bwrap`) is \
+                   not installed. Install bubblewrap.";
+    assert_eq!(
+        notices.iter().filter(|notice| *notice == warning).count(),
+        1
+    );
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|notice| notice.starts_with("[Sandbox] A command may have been blocked"))
+            .count(),
+        2
     );
 }
 
