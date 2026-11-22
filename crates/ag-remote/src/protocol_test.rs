@@ -1,13 +1,14 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, CreateSessionMode, ForgeKind, ReviewRequest,
-    ReviewRequestState, ReviewRequestSummary, SessionId, SessionStatus, SessionSummary,
+    AgentKind, AgentModel, AgentSelection, CreateSessionMode, ForgeKind, ReasoningLevel,
+    ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionListEntry,
+    SessionListStats, SessionStatus, SessionSummary,
 };
 use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, RemoteMessage, RemoteMessageKind, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, session_fixture};
 
@@ -340,7 +341,8 @@ fn session_summary_converts_status_to_display_string() {
     };
 
     // Act
-    let remote = RemoteSessionSummary::from(summary);
+    let remote = RemoteSessionSummary::from(SessionListEntry::from(summary));
+    let encoded = serde_json::to_value(&remote).expect("summary should encode");
 
     // Assert
     assert_eq!(
@@ -350,7 +352,94 @@ fn session_summary_converts_status_to_display_string() {
             status: "InProgress".to_string(),
             title: None,
             updated_at: 5,
+            ..RemoteSessionSummary::default()
         }
+    );
+    assert_eq!(
+        encoded,
+        json!({"id": "session-1", "status": "InProgress", "title": null, "updated_at": 5})
+    );
+}
+
+/// Builds a list entry for `session-1` with stats and, optionally, a linked
+/// review request whose forge status is `status_summary`.
+fn entry_with_stats(status_summary: Option<&str>) -> SessionListEntry {
+    SessionListEntry {
+        stats: Some(SessionListStats {
+            added_lines: 12,
+            deleted_lines: 3,
+            has_merge_conflict: true,
+            in_progress_started_at: Some(40),
+            in_progress_total_seconds: 90,
+            model: AgentModel::ClaudeOpus55,
+            reasoning_level: ReasoningLevel::Max,
+            review_request: status_summary.map(|status_summary| ReviewRequestSummary {
+                display_id: "#12".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/session-".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some(status_summary.to_string()),
+                target_branch: "main".to_string(),
+                title: "Build it".to_string(),
+                web_url: "https://example.com/pull/12".to_string(),
+            }),
+            size_label: "S".to_string(),
+        }),
+        summary: SessionSummary {
+            id: SessionId::from("session-1"),
+            status: SessionStatus::Review,
+            title: Some("Build it".to_string()),
+            updated_at: 5,
+        },
+    }
+}
+
+#[test]
+fn session_list_stats_carry_the_host_size_label_and_review_readiness() {
+    // Arrange
+    let ready = entry_with_stats(Some("Mergeable, PR ready"));
+    let bypass = entry_with_stats(Some("Review required, PR ready with bypass"));
+    let blocked = entry_with_stats(Some("Checks failing"));
+    let unlinked = entry_with_stats(None);
+
+    // Act
+    let ready = RemoteSessionSummary::from(ready);
+    let encoded = serde_json::to_value(&ready).expect("summary should encode");
+    let bypass = RemoteSessionSummary::from(bypass);
+    let blocked = RemoteSessionSummary::from(blocked);
+    let unlinked = RemoteSessionSummary::from(unlinked);
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "added_lines": 12,
+            "deleted_lines": 3,
+            "has_merge_conflict": true,
+            "id": "session-1",
+            "in_progress_started_at": 40,
+            "in_progress_total_seconds": 90,
+            "model": "claude-opus-5-5",
+            "model_short_name": AgentModel::ClaudeOpus55.short_name(),
+            "reasoning": "max",
+            "review_ready": "ready",
+            "review_state": "Open",
+            "size": "S",
+            "status": "Review",
+            "title": "Build it",
+            "updated_at": 5
+        })
+    );
+    assert_eq!(
+        bypass.review_ready,
+        Some(RemoteReviewReadiness::ReadyWithBypass)
+    );
+    assert_eq!(blocked.review_ready, None);
+    assert_eq!(blocked.review_state.as_deref(), Some("Open"));
+    assert_eq!(unlinked.review_state, None);
+    assert_eq!(
+        serde_json::from_value::<RemoteSessionSummary>(encoded).expect("summary should decode"),
+        ready
     );
 }
 

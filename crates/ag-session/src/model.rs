@@ -15,7 +15,7 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::message::SessionMessage;
-use crate::{AgentSelection, EnvId, ReasoningLevel};
+use crate::{AgentModel, AgentSelection, EnvId, ReasoningLevel};
 
 /// Returns the default worktree branch name for a session.
 pub fn session_branch(session_id: &str) -> String {
@@ -415,6 +415,51 @@ pub struct SessionSummary {
     pub title: Option<String>,
     /// Last update timestamp in Unix seconds.
     pub updated_at: i64,
+}
+
+/// Listing entry for one session, with the figures a dense session list
+/// shows when the host provides them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionListEntry {
+    /// Diff size, model, timer, and review state, or `None` when the host
+    /// lists only summaries.
+    pub stats: Option<SessionListStats>,
+    /// Identity, status, title, and update time.
+    pub summary: SessionSummary,
+}
+
+impl From<SessionSummary> for SessionListEntry {
+    fn from(summary: SessionSummary) -> Self {
+        Self {
+            stats: None,
+            summary,
+        }
+    }
+}
+
+/// Figures a dense session list shows beside one session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionListStats {
+    /// Lines the session's diff adds.
+    pub added_lines: u64,
+    /// Lines the session's diff removes.
+    pub deleted_lines: u64,
+    /// Whether merging the session branch into its base would conflict, as
+    /// of the host's latest check.
+    pub has_merge_conflict: bool,
+    /// Start of the current active-work interval in Unix seconds, while the
+    /// session accumulates `InProgress` time.
+    pub in_progress_started_at: Option<i64>,
+    /// Active-work seconds completed before the current interval.
+    pub in_progress_total_seconds: i64,
+    /// Model the session runs on.
+    pub model: AgentModel,
+    /// Reasoning level of the session's next turn.
+    pub reasoning_level: ReasoningLevel,
+    /// Linked review request as of the latest forge refresh.
+    pub review_request: Option<ReviewRequestSummary>,
+    /// Host size bucket of the diff, such as `XS` or `XXL`.
+    pub size_label: String,
 }
 
 /// Converts Unix timestamp seconds to a day key after applying a UTC offset.

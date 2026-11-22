@@ -483,6 +483,7 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
                     status: "InProgress".to_string(),
                     title: Some("Build it".to_string()),
                     updated_at: 20,
+                    ..RemoteSessionSummary::default()
                 }],
             }),
             RemoteResult::Ok(RemoteResponse::Session {

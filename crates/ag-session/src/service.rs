@@ -6,7 +6,7 @@ use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use async_trait::async_trait;
 
 use crate::error::SessionError;
-use crate::model::{ReviewRequest, Session, SessionId, SessionSummary};
+use crate::model::{ReviewRequest, Session, SessionId, SessionListEntry, SessionSummary};
 use crate::{AcceptTaskPlanRequest, AgentModel, CreateTaskRequest, SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
@@ -352,6 +352,15 @@ pub trait SessionBackend: Send + Sync {
         Err(SessionError::Operation(
             "Host does not support session listing".to_string(),
         ))
+    }
+
+    /// Lists the host's loaded sessions in its display order, with the
+    /// figures a dense list shows. Hosts that do not provide them return
+    /// [`Self::list_sessions`] without stats.
+    async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
+        let summaries = self.list_sessions().await?;
+
+        Ok(summaries.into_iter().map(SessionListEntry::from).collect())
     }
 
     /// Sends one text message, starting, resuming, or queueing as appropriate.
@@ -725,6 +734,15 @@ impl SessionService {
     /// Returns an error when the host cannot list sessions.
     pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
         self.backend.list_sessions().await
+    }
+
+    /// Lists the host's loaded sessions in its display order, with list
+    /// stats when the host provides them.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot list sessions.
+    pub async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
+        self.backend.list_session_entries().await
     }
 
     /// Sends a text message to one session.
