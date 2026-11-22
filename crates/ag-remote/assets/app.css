@@ -1306,6 +1306,26 @@ kbd {
   font-size: 0.76rem;
 }
 
+.action-note {
+  display: block;
+  margin: 0;
+  padding: 0.45rem var(--gutter);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+  background: var(--color-surface-raised);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.action-note:empty {
+  display: none;
+}
+
+.action-note a {
+  color: var(--color-accent-dim);
+  text-underline-offset: 0.2rem;
+}
+
 .chat-actions .btn .icon {
   width: 0.95rem;
   height: 0.95rem;
@@ -2068,6 +2088,54 @@ kbd {
 .composer-meta .sep {
   margin: 0 0.45rem;
   opacity: 0.6;
+}
+
+/* The settings line as a button: it reads as the line, and shows it can
+   be pressed by its underline on hover and its focus ring. */
+.composer-settings {
+  flex: 0 1 auto;
+  min-height: 1.75rem;
+  padding: 0 0.35rem;
+  margin: 0 auto 0 -0.35rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-settings:hover:not(:disabled) {
+  background: var(--color-surface-interactive);
+  color: var(--color-muted);
+}
+
+.composer-settings:disabled {
+  cursor: default;
+}
+
+/* ---- Settings sheet ----------------------------------------------- */
+.settings-row {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.settings-label {
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-row select.field {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.dialog .settings-note {
+  color: var(--tone-working);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
 }
 
 .dock-hint {

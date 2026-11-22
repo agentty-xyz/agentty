@@ -15,17 +15,20 @@ import {
   createRefreshGate,
   mergeTarget,
   messageKind,
+  publishBranch,
   sessionActions,
   transcriptChanges,
   transcriptEntries,
 } from "../../assets/chat.mjs";
 import { createDiff } from "../../assets/diff.mjs";
+import { createSettings } from "../../assets/settings.mjs";
 
 const INDEX_HTML = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
 
 // Element names `createChat` takes, by the id each has in index.html.
 const ELEMENT_IDS = {
   actionError: "action-error",
+  actionNote: "action-note",
   answerBar: "answer-bar",
   answerCount: "answer-count",
   answerError: "answer-error",
@@ -36,6 +39,7 @@ const ELEMENT_IDS = {
   composer: "composer",
   composerHint: "composer-hint",
   composerMeta: "composer-meta",
+  composerSettings: "composer-settings",
   diff: "diff",
   dock: "dock",
   gone: "session-gone",
@@ -48,6 +52,11 @@ const ELEMENT_IDS = {
   mergeTarget: "merge-target",
   message: "message",
   more: "session-more",
+  publish: "publish",
+  publishBranch: "publish-branch",
+  publishDialog: "publish-dialog",
+  publishLabel: "publish-label",
+  publishReview: "publish-review",
   questions: "questions",
   queued: "queued",
   queuedBox: "queued-box",
@@ -60,11 +69,31 @@ const ELEMENT_IDS = {
   sheetDiffLabel: "sheet-diff-label",
   sheetMerge: "sheet-merge",
   sheetMergeLabel: "sheet-merge-label",
+  sheetPublish: "sheet-publish",
+  sheetPublishNote: "sheet-publish-note",
   sheetSub: "sheet-sub",
+  sheetSync: "sheet-sync",
+  sheetSyncLabel: "sheet-sync-label",
   sheetTitle: "sheet-title",
   stop: "stop",
   sub: "heading-sub",
+  syncDialog: "sync-dialog",
+  syncTarget: "sync-target",
   transcript: "transcript",
+};
+
+// Element names `createSettings` takes, by the id each has in index.html.
+const SETTINGS_IDS = {
+  apply: "settings-apply",
+  dialog: "settings-dialog",
+  error: "settings-error",
+  form: "settings-form",
+  model: "settings-model",
+  note: "settings-note",
+  reasoning: "settings-reasoning",
+  speed: "settings-speed",
+  speedRow: "settings-speed-row",
+  style: "settings-style",
 };
 
 function session(overrides = {}) {
@@ -126,6 +155,11 @@ function mountChat({
       homes += 1;
     },
     request: request,
+    settings: createSettings({
+      document: document,
+      elements: Object.fromEntries(Object.entries(SETTINGS_IDS).map(([name, id]) => [name, byId(id)])),
+      request: request,
+    }),
     window: window,
   });
   chat.setCapabilities(capabilities);
@@ -653,7 +687,7 @@ test("Diff swaps the transcript and the dock for the session's files and back", 
 });
 
 test("header actions appear only with their capability and status", () => {
-  const none = { diff: false, diffEnabled: false };
+  const none = { diff: false, diffEnabled: false, publish: false, publishEnabled: false, sync: false };
   assert.deepEqual(sessionActions("Review"), {
     ...none,
     cancel: true,
@@ -839,6 +873,304 @@ test("mergeTarget reads the base branch only when the host sends one", () => {
   assert.equal(mergeTarget({ base_branch: "" }), null);
   assert.equal(mergeTarget({}), null);
   assert.equal(mergeTarget(null), null);
+});
+
+// A request answer the test settles by hand: `respond` returns `promise`
+// until `resolve` or `reject` runs.
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, reject, resolve };
+}
+
+const REVIEW_REQUEST = {
+  display_id: "#7",
+  forge: "GitHub",
+  source_branch: "wt/s1",
+  state: "Open",
+  target_branch: "main",
+  title: "Build it",
+  web_url: "https://github.com/example/project/pull/7",
+};
+
+test("Publish and Sync appear only with their capability and a status that allows them", () => {
+  assert.equal(sessionActions("Review", ["publish"]).publishEnabled, true);
+  assert.equal(sessionActions("InProgress", ["publish"]).publish, true);
+  assert.equal(sessionActions("InProgress", ["publish"]).publishEnabled, false);
+  assert.equal(sessionActions("Review").publish, false);
+  // Sync follows `allows_rebase_action`, and is left out where it does
+  // not apply.
+  assert.equal(sessionActions("InProgress", ["sync"]).sync, true);
+  assert.equal(sessionActions("Review", ["sync"]).sync, true);
+  assert.equal(sessionActions("Question", ["sync"]).sync, false);
+  assert.equal(sessionActions("Done", ["sync"]).sync, false);
+  assert.equal(sessionActions("Review").sync, false);
+
+  const plain = mountChat();
+  plain.chat.render(session());
+  assert.equal(plain.byId("publish").hidden, true);
+  assert.equal(plain.byId("sheet-publish").hidden, true);
+  assert.equal(plain.byId("sheet-sync").hidden, true);
+
+  const capable = mountChat({ capabilities: ["publish", "sync"] });
+  capable.chat.render(session({ status: "InProgress" }));
+  assert.equal(capable.byId("publish").hidden, false);
+  assert.equal(capable.byId("publish").disabled, true);
+  assert.equal(capable.byId("sheet-publish").disabled, true);
+  assert.equal(capable.byId("sheet-sync").hidden, false);
+  assert.equal(capable.byId("sheet-sync-label").textContent, "Sync with base branch");
+  capable.chat.render(session({ base_branch: "main" }));
+  assert.equal(capable.byId("publish").disabled, false);
+  assert.equal(capable.byId("sheet-publish").disabled, false);
+  assert.equal(capable.byId("sheet-sync-label").textContent, "Sync with main");
+  // Sync lives in the sheet on every screen, so the sheet button does too.
+  assert.equal(capable.byId("session-more").classList.contains("narrow-only"), false);
+  capable.chat.render(session({ status: "Merged" }));
+  assert.equal(capable.byId("sheet-sync").hidden, true);
+  assert.equal(capable.byId("session-more").classList.contains("narrow-only"), true);
+  capable.chat.setConnected(false);
+  capable.chat.render(session());
+  assert.equal(capable.byId("publish").disabled, true);
+  assert.equal(capable.byId("sheet-sync").disabled, true);
+});
+
+test("publishBranch names the branch an earlier publish used, or the session branch", () => {
+  assert.equal(publishBranch({ branch: "wt/s1", published_upstream_ref: "origin/feature/x" }), "feature/x");
+  assert.equal(publishBranch({ published_upstream_ref: "feature" }), "feature");
+  assert.equal(publishBranch({ branch: "wt/s1", published_upstream_ref: null }), "wt/s1");
+  assert.equal(publishBranch({}), null);
+  assert.equal(publishBranch(null), null);
+});
+
+test("Publish asks first, names the remote branch, and says whether it opens or refreshes", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["publish"],
+    respond: () => ({ kind: "review_request", review_request: REVIEW_REQUEST }),
+  });
+  chat.render(session());
+  const dialog = byId("publish-dialog");
+  assert.equal(byId("publish-branch").textContent, "the session branch");
+  assert.equal(byId("publish-review").textContent, "opens a pull request for it");
+  assert.equal(byId("sheet-publish-note").textContent, "opens a pull request");
+
+  byId("publish").click();
+  assert.equal(dialog.open, true);
+  dialog.querySelector('button[value="keep"]').click();
+  await settle();
+  assert.deepEqual(requests, []);
+
+  chat.render(session({ branch: "wt/s1", published_upstream_ref: "origin/feature/x", review_request: REVIEW_REQUEST }));
+  assert.equal(byId("publish-branch").textContent, "feature/x");
+  assert.equal(byId("publish-review").textContent, "refreshes its pull request #7");
+  assert.equal(byId("sheet-publish-note").textContent, "refreshes #7");
+  // On a phone the sheet offers Publish and opens the same confirmation.
+  byId("session-more").click();
+  byId("sheet-publish").click();
+  assert.equal(byId("session-sheet").open, false);
+  assert.equal(dialog.open, true);
+  dialog.querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.deepEqual(requests, [{ method: "publish_session", session_id: "s1" }]);
+  const link = byId("action-note").querySelector("a");
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+  assert.equal(link.getAttribute("href"), "https://github.com/example/project/pull/7");
+  assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+});
+
+test("a publish stays pending across session switches and is never sent twice", async () => {
+  const answer = deferred();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => (body.method === "publish_session" ? answer.promise : { kind: "accepted" }),
+  });
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("publish").disabled, true);
+  assert.equal(byId("publish").getAttribute("aria-busy"), "true");
+  assert.equal(byId("publish-label").textContent, "Publishing…");
+  assert.equal(byId("sheet-publish-note").textContent, "publishing…");
+  // A second confirmation, such as one left open from before, adds nothing.
+  byId("publish-dialog").dataset.sessionId = "s1";
+  byId("publish-dialog").showModal();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+
+  // Another session can publish meanwhile; coming back shows the wait.
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("publish-label").textContent, "Publish");
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("publish").disabled, true);
+  assert.equal(byId("publish-label").textContent, "Publishing…");
+  assert.deepEqual(requests, [{ method: "publish_session", session_id: "s1" }]);
+
+  // The answer arriving while another session is open waits for this one.
+  chat.open("s2");
+  answer.resolve({ kind: "review_request", review_request: REVIEW_REQUEST });
+  await settle();
+  assert.equal(byId("action-note").textContent, "");
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+  assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("publish-label").textContent, "Publish");
+});
+
+test("a failed publish shows the host's error under the header, also after coming back", async () => {
+  const { byId, chat } = mountChat({
+    capabilities: ["publish"],
+    respond: () => {
+      throw new Error("Forge authentication failed");
+    },
+  });
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-error").textContent, "Forge authentication failed");
+  assert.equal(byId("action-note").textContent, "");
+  assert.equal(byId("publish").disabled, false);
+  chat.open("s2");
+  assert.equal(byId("action-error").textContent, "");
+  chat.open("s1");
+  assert.equal(byId("action-error").textContent, "Forge authentication failed");
+});
+
+test("a review request link from a publish goes through the link filter", async () => {
+  const { byId, chat } = mountChat({
+    capabilities: ["publish"],
+    respond: () => ({ kind: "review_request", review_request: { ...REVIEW_REQUEST, web_url: "javascript:alert(1)" } }),
+  });
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  // An address the filter refuses leaves the label as text.
+  assert.equal(byId("action-note").querySelector("a"), null);
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+});
+
+test("Sync asks first, names the base branch, and shows the host's refusal", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["sync"],
+    respond: () => {
+      throw new Error("Session cannot sync in status `Done`");
+    },
+  });
+  chat.render(session({ base_branch: "main" }));
+  const dialog = byId("sync-dialog");
+  assert.equal(byId("sync-target").textContent, "main");
+  byId("session-more").click();
+  byId("sheet-sync").click();
+  assert.equal(dialog.open, true);
+  dialog.querySelector('button[value="keep"]').click();
+  await settle();
+  assert.deepEqual(requests, []);
+
+  byId("session-more").click();
+  byId("sheet-sync").click();
+  dialog.querySelector('button[value="confirm"]').click();
+  assert.equal(byId("sheet-sync").disabled, true);
+  await settle();
+  assert.deepEqual(requests, [{ method: "sync_session", session_id: "s1" }]);
+  assert.equal(byId("action-error").textContent, "Session cannot sync in status `Done`");
+  assert.equal(byId("sheet-sync").disabled, false);
+
+  // A confirmation left from another session does nothing.
+  byId("session-more").click();
+  byId("sheet-sync").click();
+  chat.open("s2");
+  assert.equal(dialog.open, false);
+  await settle();
+  assert.equal(requests.length, 1);
+});
+
+const HOST = {
+  base_branch: "main",
+  default_model: "Opus 5.5",
+  kind: "host",
+  models: [
+    { agent: "claude", description: "", model: "claude-opus-5-5", name: "Opus 5.5", supports_fast: true },
+    { agent: "claude", description: "", model: "claude-sonnet-5", name: "Sonnet 5", supports_fast: false },
+    { agent: "codex", description: "", model: "gpt-6.1", name: "GPT 6.1", supports_fast: false },
+  ],
+  project: "agentty",
+  session_modes: ["regular"],
+};
+
+const SETTINGS_SESSION = {
+  agent: "claude",
+  model: "Opus 5.5",
+  model_id: "claude-opus-5-5",
+  reasoning: "high",
+  response_style: "balanced",
+  speed_mode: "normal",
+};
+
+test("the settings line opens the settings sheet only when the host offers settings and host", async () => {
+  for (const capabilities of [[], ["settings"], ["host"]]) {
+    const plain = mountChat({ capabilities: capabilities });
+    plain.chat.render(session(SETTINGS_SESSION));
+    assert.equal(plain.byId("composer-settings").hidden, true);
+    assert.equal(plain.byId("composer-meta").hidden, false);
+    assert.match(plain.byId("composer-meta").textContent, /balanced/);
+  }
+
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }),
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const line = byId("composer-settings");
+  assert.equal(line.hidden, false);
+  assert.equal(byId("composer-meta").hidden, true);
+  assert.equal(line.textContent, "Opus 5.5 [high]·balanced·normal speed");
+  line.click();
+  await settle();
+  assert.equal(byId("settings-dialog").open, true);
+  assert.equal(byId("settings-note").hidden, true);
+  assert.deepEqual(requests, [{ method: "get_host" }]);
+  // Only the session's agent's models are offered, by name.
+  assert.deepEqual(
+    Array.from(byId("settings-model").children, (option) => [option.value, option.textContent]),
+    [
+      ["claude-opus-5-5", "Opus 5.5"],
+      ["claude-sonnet-5", "Sonnet 5"],
+    ],
+  );
+
+  // Moving to another session closes the sheet without sending.
+  chat.open("s2");
+  assert.equal(byId("settings-dialog").open, false);
+  assert.equal(requests.length, 1);
+});
+
+test("the settings sheet says that changes during a running turn apply after it", async () => {
+  const { byId, chat } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: () => HOST,
+  });
+  chat.render(session({ ...SETTINGS_SESSION, status: "InProgress" }));
+  byId("composer-settings").click();
+  await settle();
+  assert.equal(byId("settings-note").hidden, false);
+  // The turn ends while the sheet is open.
+  chat.render(session(SETTINGS_SESSION));
+  assert.equal(byId("settings-note").hidden, true);
+  assert.equal(byId("settings-dialog").open, true);
+  // Offline, the line cannot open the sheet.
+  byId("settings-dialog").close();
+  chat.setConnected(false);
+  assert.equal(byId("composer-settings").disabled, true);
 });
 
 test("Cancel session asks first and shows the host's refusal under the header", async () => {

@@ -13,8 +13,7 @@ for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
 change a session's settings, create sessions in the active project, merge a session into
-its base branch, and publish its branch. The web page offers stopping, creating, and
-merging; syncing, settings, and publishing have no buttons yet.
+its base branch, and publish its branch; the web page offers each of these.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -85,6 +84,21 @@ devices stop a turn or merge, the page also shows `Stop` next to the send button
 turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` returns the
 session to review and keeps its changes; `Merge` asks before it merges the session into
 its base branch, and names that branch and the changed lines.
+
+When this Agentty lets devices publish, `Publish` sits beside `Merge`, or in the `⋯`
+sheet on a phone, while the session is in review. It asks first and names the remote
+branch: the one the session was published to before, or the session branch the first
+time. Publishing pushes the branch and opens its pull request, or refreshes the one it
+has. The button says `Publishing…` until Agentty answers, also when you open another
+session meanwhile, and then the page links the pull request under the header or shows
+why publishing failed. When this Agentty lets devices sync, the `⋯` sheet offers
+`Sync with` the base branch, which asks first and rebases the session branch, after the
+running turn if there is one.
+
+When this Agentty lets devices change settings, the line under the message box is a
+button. It opens a sheet with the models of the session's agent, the reasoning level,
+the answer style, and the speed when the chosen model can run fast. `Apply` sends only
+what you changed; during a running turn, the changes apply from the next turn.
 
 When this Agentty lets devices read diffs, `Diff` in the header, or in the `⋯` sheet on
 a phone, shows the session's changed files in place of the chat, each with its status

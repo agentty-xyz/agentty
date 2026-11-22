@@ -19,6 +19,7 @@ import {
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
 import { lineCounts, separator } from "./session_list.mjs";
+import { offersSettings } from "./settings.mjs";
 
 // Unsent text of one session, in `sessionStorage`, under this prefix and
 // the session id.
@@ -144,7 +145,8 @@ export function collectAnswers(questions, picks, typed) {
 }
 
 // Which header actions a session in `statusName` shows, and which of them
-// are enabled. Merge appears only with the `merge` capability.
+// are enabled. Diff, Merge and Publish appear only with their capability,
+// and Sync only with its capability in a status that allows it.
 export function sessionActions(statusName, capabilities = []) {
   const info = statusInfo(statusName);
 
@@ -154,12 +156,31 @@ export function sessionActions(statusName, capabilities = []) {
     diffEnabled: capabilities.includes("diff") && info.diff,
     merge: capabilities.includes("merge"),
     mergeEnabled: capabilities.includes("merge") && info.review,
+    publish: capabilities.includes("publish"),
+    publishEnabled: capabilities.includes("publish") && info.review,
+    sync: capabilities.includes("sync") && info.sync,
   };
 }
 
-// The branch a merge lands on, or `null` when the host does not say.
+// The branch a merge or sync lands on, or `null` when the host does not
+// say.
 export function mergeTarget(session) {
   const branch = session?.base_branch;
+
+  return typeof branch === "string" && branch !== "" ? branch : null;
+}
+
+// The remote branch a publish pushes to: the one an earlier publish used,
+// without its remote's name, or else the session branch, which the host
+// uses the first time. `null` when the host names neither.
+export function publishBranch(session) {
+  const upstream = session?.published_upstream_ref;
+  if (typeof upstream === "string" && upstream !== "") {
+    const slash = upstream.indexOf("/");
+
+    return slash === -1 ? upstream : upstream.slice(slash + 1);
+  }
+  const branch = session?.branch;
 
   return typeof branch === "string" && branch !== "" ? branch : null;
 }
@@ -266,6 +287,9 @@ export function createDrafts(window) {
 // resolves with its result; `onHome()` returns to home. `now()` returns
 // the time in seconds, for the header's timer.
 //
+// `diff` and `settings` are the diff view and the settings sheet, from
+// diff.mjs and settings.mjs, when the page has them.
+//
 // Returns `open(sessionId, failure)`, `close()`, `render(session, summary)` for a
 // snapshot and the session's entry in the listing (`session` is `null`
 // when the session is gone), `setConnected(isConnected)`,
@@ -278,11 +302,18 @@ export function createChat({
   request,
   onHome,
   diff = null,
+  settings = null,
   now = () => Date.now() / 1000,
 }) {
   const drafts = createDrafts(window);
   const state = {
     capabilities: [],
+    // Sessions with a publish in flight. A publish can take long and
+    // outlasts switching sessions, so this outlives `reset`.
+    publishing: new Set(),
+    // How the last publish of each session ended: `{ reviewRequest }` or
+    // `{ error }`, shown whenever that session is open.
+    published: new Map(),
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
     // Where the transcript was when the diff replaced it.
@@ -297,6 +328,7 @@ export function createChat({
     isMerging: false,
     isSending: false,
     isStopping: false,
+    isSyncing: false,
     picks: [],
     questions: [],
     questionsKey: null,
@@ -357,10 +389,15 @@ export function createChat({
   }
 
   // Shows the session settings in the composer's line, or the key hint
-  // when the host names none.
+  // when the host names none. A host that lets this device change them
+  // makes the line a button that opens the settings sheet.
   function renderMeta(hint) {
     const parts = settingsParts(state.session, state.summary);
     elements.composerHint.textContent = parts.length > 0 ? hint : "";
+    const isButton = parts.length > 0 && Boolean(settings) && offersSettings(state.capabilities);
+    elements.composerMeta.hidden = isButton;
+    elements.composerSettings.hidden = !isButton;
+    elements.composerSettings.disabled = !state.isConnected;
     if (parts.length === 0) {
       elements.composerMeta.textContent = hint;
 
@@ -374,16 +411,23 @@ export function createChat({
 
       return index === 0 ? [node] : [separator(document), node];
     });
-    elements.composerMeta.replaceChildren(...nodes);
+    (isButton ? elements.composerSettings : elements.composerMeta).replaceChildren(...nodes);
+  }
+
+  function openSettings() {
+    if (state.session && state.isConnected && offersSettings(state.capabilities)) {
+      settings.open(state.session, { isRunning: statusInfo(state.session.status).running });
+    }
   }
 
   // Shows the actions the status and the host allow. Merge sits in the
   // header on wide screens and in the sheet on phones; the sheet holds
   // `Cancel session` everywhere.
   function renderActions() {
+    // Without a session, no capability offers anything.
     const actions = state.session
       ? sessionActions(state.session.status, state.capabilities)
-      : { cancel: false, diff: false, diffEnabled: false, merge: false, mergeEnabled: false };
+      : sessionActions(null, []);
     if (!actions.diffEnabled && diff?.isOpen()) {
       showDiff(false);
     }
@@ -398,17 +442,90 @@ export function createChat({
     elements.merge.disabled = !actions.mergeEnabled || state.isMerging || !state.isConnected;
     elements.sheetMerge.hidden = !actions.merge;
     elements.sheetMerge.disabled = elements.merge.disabled;
+    renderPublish(actions);
+    elements.sheetSync.hidden = !actions.sync;
+    elements.sheetSync.disabled = state.isSyncing || !state.isConnected;
     elements.cancel.hidden = !actions.cancel;
     elements.cancel.disabled = state.isCanceling || !state.isConnected;
-    elements.more.hidden = !actions.cancel && !actions.merge && !actions.diff;
-    // With only Diff and Merge in it, the sheet adds nothing to the wide
-    // header.
-    elements.more.classList.toggle("narrow-only", !actions.cancel);
+    elements.more.hidden =
+      !actions.cancel && !actions.merge && !actions.diff && !actions.publish && !actions.sync;
+    // With only Diff, Publish and Merge in it, the sheet adds nothing to
+    // the wide header.
+    elements.more.classList.toggle("narrow-only", !actions.cancel && !actions.sync);
     const target = mergeTarget(state.session);
     elements.sheetMergeLabel.textContent = target ? "Merge into " + target : "Merge";
     elements.mergeTarget.textContent = target || "its base branch";
+    elements.sheetSyncLabel.textContent = "Sync with " + (target || "base branch");
+    elements.syncTarget.textContent = target || "its base branch";
     const lines = sessionFigures(state.summary).lines;
     elements.mergeLines.textContent = lines ? " (+" + lines.added + " -" + lines.deleted + ")" : "";
+  }
+
+  // Publish sits in the header on wide screens and in the sheet on
+  // phones. While the open session's publish runs, both say so and stay
+  // disabled, even after switching away and back.
+  function renderPublish(actions) {
+    const isPublishing = state.publishing.has(state.sessionId);
+    elements.publish.hidden = !actions.publish;
+    elements.publish.disabled = !actions.publishEnabled || isPublishing || !state.isConnected;
+    elements.publish.setAttribute("aria-busy", String(isPublishing));
+    elements.publishLabel.textContent = isPublishing ? "Publishing…" : "Publish";
+    elements.sheetPublish.hidden = !actions.publish;
+    elements.sheetPublish.disabled = elements.publish.disabled;
+    // `reviewLabel` checks that the host names the review request.
+    const review = state.session?.review_request;
+    const reviewId = reviewLabel(review) ? review.display_id : null;
+    let note = reviewId ? "refreshes " + reviewId : "opens a pull request";
+    if (isPublishing) {
+      note = "publishing…";
+    }
+    elements.sheetPublishNote.textContent = note;
+    elements.publishBranch.textContent = publishBranch(state.session) || "the session branch";
+    elements.publishReview.textContent = reviewId
+      ? "refreshes its pull request " + reviewId
+      : "opens a pull request for it";
+  }
+
+  // Says how the open session's last publish ended: a link to the review
+  // request, or the host's error.
+  function renderPublished() {
+    const outcome = state.published.get(state.sessionId);
+    const link = outcome?.reviewRequest ? reviewNode(document, outcome.reviewRequest) : null;
+    if (link) {
+      elements.actionNote.replaceChildren("Published · ", link);
+    } else {
+      elements.actionNote.replaceChildren();
+    }
+    if (outcome?.error) {
+      elements.actionError.textContent = outcome.error;
+    }
+  }
+
+  // Publishes `sessionId` once at a time, whichever session is open when
+  // it ends.
+  async function publish(sessionId) {
+    if (!sessionId || state.publishing.has(sessionId) || !state.isConnected) {
+      return;
+    }
+    state.publishing.add(sessionId);
+    state.published.delete(sessionId);
+    if (state.sessionId === sessionId) {
+      elements.actionError.textContent = "";
+      renderPublished();
+    }
+    renderActions();
+    try {
+      const result = await request({ method: "publish_session", session_id: sessionId });
+      state.published.set(sessionId, { reviewRequest: result?.review_request ?? null });
+    } catch (error) {
+      state.published.set(sessionId, { error: error.message });
+    } finally {
+      state.publishing.delete(sessionId);
+      if (state.sessionId === sessionId) {
+        renderPublished();
+      }
+      renderActions();
+    }
   }
 
   // Shows the session's diff in place of the transcript and the dock, or
@@ -697,6 +814,7 @@ export function createChat({
     elements.sessionError.textContent = "";
     elements.answerError.textContent = "";
     elements.actionError.textContent = "";
+    elements.actionNote.replaceChildren();
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
     elements.composerHint.textContent = "";
@@ -704,12 +822,20 @@ export function createChat({
     elements.heading.textContent = "";
     state.isLoadError = false;
     // Nothing asked about the previous session may act once it is gone.
-    for (const dialog of [elements.sheet, elements.cancelDialog, elements.mergeDialog]) {
+    const dialogs = [
+      elements.sheet,
+      elements.cancelDialog,
+      elements.mergeDialog,
+      elements.publishDialog,
+      elements.syncDialog,
+    ];
+    for (const dialog of dialogs) {
       delete dialog.dataset.sessionId;
       if (dialog.open) {
         dialog.close("");
       }
     }
+    settings?.close();
     renderActions();
   }
 
@@ -718,6 +844,7 @@ export function createChat({
   function open(sessionId, failure = null) {
     reset();
     state.sessionId = sessionId;
+    renderPublished();
     if (failure) {
       drafts.set(sessionId, failure.draft);
       elements.sessionError.textContent = failure.error;
@@ -760,6 +887,7 @@ export function createChat({
     const questionsChanged = renderQuestions(session.questions || []);
     renderQueued(session.queued_messages || []);
     renderDock();
+    settings?.update(session, { isRunning: statusInfo(session.status).running });
     if (isDiffOpen) {
       // The transcript is out of sight; returning to it says what arrived.
       state.chatPlace.hasMissed ||= transcriptChanged || questionsChanged;
@@ -928,12 +1056,30 @@ export function createChat({
       confirmWith(elements.cancelDialog);
     } else if (choice === "merge") {
       confirmWith(elements.mergeDialog);
+    } else if (choice === "publish") {
+      confirmWith(elements.publishDialog);
+    } else if (choice === "sync") {
+      confirmWith(elements.syncDialog);
     } else if (choice === "diff") {
       toggleDiff();
     }
   });
   elements.diff.addEventListener("click", toggleDiff);
   elements.merge.addEventListener("click", () => confirmWith(elements.mergeDialog));
+  elements.publish.addEventListener("click", () => confirmWith(elements.publishDialog));
+  elements.publishDialog.addEventListener("close", () => {
+    const sessionId = confirmedSession(elements.publishDialog, "confirm");
+    if (sessionId) {
+      void publish(sessionId);
+    }
+  });
+  elements.syncDialog.addEventListener("close", () => {
+    const sessionId = confirmedSession(elements.syncDialog, "confirm");
+    if (sessionId) {
+      void runAction(sessionId, "isSyncing", { method: "sync_session" }, elements.actionError);
+    }
+  });
+  elements.composerSettings.addEventListener("click", openSettings);
   elements.cancelDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.cancelDialog, "confirm");
     if (sessionId) {

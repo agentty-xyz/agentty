@@ -67,6 +67,17 @@
             <line x1="8" y1="8" x2="16" y2="8" />
             <line x1="8" y1="18" x2="16" y2="18" />
             </symbol>
+            <symbol id="i-publish" viewBox="0 0 24 24">
+            <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+            <line x1="12" y1="15" x2="12" y2="4" />
+            <polyline points="7 9 12 4 17 9" />
+            </symbol>
+            <symbol id="i-sync" viewBox="0 0 24 24">
+            <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8" />
+            <polyline points="4 3 4 8 9 8" />
+            <path d="M4 13a8 8 0 0 0 14.3 4.9L20 16" />
+            <polyline points="20 21 20 16 15 16" />
+            </symbol>
             <symbol id="i-device" viewBox="0 0 24 24">
             <rect x="7" y="2.5" width="10" height="19" rx="2" />
             <line x1="11" y1="18" x2="13" y2="18" />
@@ -240,6 +251,12 @@
                             </svg>
                             Diff
                         </button>
+                        <button id="publish" type="button" class="btn wide-only" hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-publish" />
+                            </svg>
+                            <span id="publish-label">Publish</span>
+                        </button>
                         <button id="merge" type="button" class="btn btn--primary wide-only" hidden>
                             <svg class="icon icon--sm" aria-hidden="true">
                                 <use href="#i-merge" />
@@ -260,6 +277,7 @@
                     </div>
                 </header>
                 <p id="action-error" class="error action-error" role="alert"></p>
+                <output id="action-note" class="action-note"></output>
                 <div id="banner" class="banner" hidden>
                     <i></i>
                     <span id="banner-text" class="banner-text"></span>
@@ -347,6 +365,13 @@
                                           aria-label="Message"></textarea>
                                 <div class="composer-row">
                                     <p id="composer-meta" class="composer-meta"></p>
+                                    <button id="composer-settings"
+                                            type="button"
+                                            class="composer-meta composer-settings"
+                                            title="Change the session's settings"
+                                            aria-haspopup="dialog"
+                                            aria-controls="settings-dialog"
+                                            hidden></button>
                                     <button id="stop" type="button" class="send stop" hidden>
                                         <svg class="icon icon--sm" aria-hidden="true">
                                             <use href="#i-stop" />
@@ -383,6 +408,22 @@
                         <span id="sheet-diff-label">Diff</span>
                         <small>read only</small>
                     </button>
+                    <button id="sheet-sync" value="sync" class="sheet-item" hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-sync" />
+                        </svg>
+                        <span id="sheet-sync-label">Sync with base branch</span>
+                    </button>
+                    <button id="sheet-publish"
+                            value="publish"
+                            class="sheet-item narrow-only"
+                            hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-publish" />
+                        </svg>
+                        Publish branch
+                        <small id="sheet-publish-note">opens a pull request</small>
+                    </button>
                     <button id="sheet-merge" value="merge" class="sheet-item narrow-only" hidden>
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-merge" />
@@ -408,6 +449,67 @@
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>
                         <button value="confirm" class="btn btn--lg btn--primary">Merge</button>
+                    </div>
+                </form>
+            </dialog>
+            <dialog id="publish-dialog"
+                    class="dialog"
+                    aria-labelledby="publish-dialog-title">
+                <form method="dialog">
+                    <h2 id="publish-dialog-title">Publish this session?</h2>
+                    <p>
+                        Agentty pushes the session's commits to <code id="publish-branch">the session branch</code> on the remote and <span id="publish-review">opens a pull request</span>, with your Git and forge credentials, as <code>p</code> does in the terminal.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Not now</button>
+                        <button value="confirm" class="btn btn--lg btn--primary">Publish</button>
+                    </div>
+                </form>
+            </dialog>
+            <dialog id="sync-dialog" class="dialog" aria-labelledby="sync-dialog-title">
+                <form method="dialog">
+                    <h2 id="sync-dialog-title">Sync this session?</h2>
+                    <p>
+                        Agentty rebases the session branch onto <code id="sync-target">its base branch</code>, after the running turn if there is one. A conflict starts a turn that resolves it.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Not now</button>
+                        <button value="confirm" class="btn btn--lg btn--primary">Sync</button>
+                    </div>
+                </form>
+            </dialog>
+            <dialog id="settings-dialog"
+                    class="dialog settings-dialog"
+                    aria-labelledby="settings-dialog-title">
+                <form id="settings-form" method="dialog">
+                    <h2 id="settings-dialog-title">Session settings</h2>
+                    <label class="settings-row">
+                        <span class="settings-label">Model</span>
+                        <select id="settings-model" class="field"></select>
+                    </label>
+                    <div class="settings-row">
+                        <span class="settings-label">Reasoning</span>
+                        <fieldset id="settings-reasoning" class="segmented" aria-label="Reasoning">
+                        </fieldset>
+                    </div>
+                    <div class="settings-row">
+                        <span class="settings-label">Answer style</span>
+                        <fieldset id="settings-style" class="segmented" aria-label="Answer style">
+                        </fieldset>
+                    </div>
+                    <div id="settings-speed-row" class="settings-row" hidden>
+                        <span class="settings-label">Speed</span>
+                        <fieldset id="settings-speed" class="segmented" aria-label="Speed">
+                        </fieldset>
+                    </div>
+                    <p id="settings-note" class="settings-note" hidden>A turn is running. The changes apply from the next turn.</p>
+                    <p id="settings-error" class="error" role="alert"></p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg">Not now</button>
+                        <button id="settings-apply"
+                                value="apply"
+                                class="btn btn--lg btn--primary"
+                                disabled>Apply</button>
                     </div>
                 </form>
             </dialog>

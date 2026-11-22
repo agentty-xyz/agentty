@@ -231,7 +231,8 @@ async function sessionFlow() {
       .filter((node) => !node.classList.contains("timer"))
       .map((node) => node.textContent),
     isTimerShown: /^Timer \d/.test(byId("heading-sub").querySelector(".timer")?.textContent ?? ""),
-    meta: byId("composer-meta").textContent,
+    // The server lists `settings` and `host`, so the line is a button.
+    meta: byId("composer-settings").hidden ? null : byId("composer-settings").textContent,
     notice: {
       isError: byId("transcript").querySelector(".msg--notice").classList.contains("is-error"),
       label: byId("transcript").querySelector(".notice-label").textContent,
@@ -353,6 +354,36 @@ async function routeFlow() {
     files: texts(byId("diff-files").querySelectorAll("summary")),
     patch: Array.from(file.querySelectorAll(".patch-line"), (line) => [line.className, line.textContent]),
     summary: byId("diff-summary").textContent,
+  });
+
+  // The settings line opens the sheet, which lists the host's models and
+  // sends the one change.
+  byId("diff").click();
+  byId("composer-settings").click();
+  await waitFor("the models", () => byId("settings-model").getAttribute("aria-busy") === "false");
+  const models = Array.from(byId("settings-model").children, (option) => option.textContent);
+  byId("settings-reasoning").querySelector('[data-value="low"]').click();
+  byId("settings-apply").click();
+  await waitFor("the sheet to close", () => !byId("settings-dialog").open);
+  report({
+    step: "settings",
+    error: byId("settings-error").textContent,
+    models: models,
+    noteHidden: byId("settings-note").hidden,
+  });
+
+  // Sync asks first, and the test host refuses it.
+  byId("session-more").click();
+  const syncLabel = byId("sheet-sync-label").textContent;
+  byId("sheet-sync").click();
+  const askedFirst = byId("sync-dialog").open;
+  byId("sync-dialog").querySelector('button[value="confirm"]').click();
+  await waitFor("the refusal", () => byId("action-error").textContent !== "");
+  report({
+    step: "sync",
+    askedFirst: askedFirst,
+    error: byId("action-error").textContent,
+    label: syncLabel,
   });
 }
 

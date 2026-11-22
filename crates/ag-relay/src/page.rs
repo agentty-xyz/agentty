@@ -29,7 +29,7 @@ static PAGE: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// Files the page loads, by request path, with their content types.
-const FILES: [(&str, &str, &str); 12] = [
+const FILES: [(&str, &str, &str); 13] = [
     (
         "/app.css",
         "text/css; charset=utf-8",
@@ -84,6 +84,11 @@ const FILES: [(&str, &str, &str); 12] = [
         "/session_list.mjs",
         SCRIPT,
         include_str!("../../ag-remote/assets/session_list.mjs"),
+    ),
+    (
+        "/settings.mjs",
+        SCRIPT,
+        include_str!("../../ag-remote/assets/settings.mjs"),
     ),
     (
         "/shell.mjs",
