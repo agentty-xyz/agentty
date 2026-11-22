@@ -12,6 +12,11 @@ const RELAY_KEY = "agentty.remote.relay";
 const MAX_BACKOFF_MS = 30000;
 // Rejections that mean the stored credential can never work again.
 const CREDENTIAL_REJECTIONS = new Set(["Unknown device token", "Device revoked"]);
+// Statuses Agentty lets a session be canceled from. Canceling removes the
+// whole session, so the button asks first.
+const CANCELABLE_STATUSES = new Set([
+  "InProgress", "Question", "Review", "AgentReview", "Watching", "Draft",
+]);
 // A relay serves this page with the marker set to "relay". The device then
 // pairs with a link and reaches Agentty through that relay, encrypted end
 // to end, and its key replaces the token.
@@ -23,7 +28,7 @@ for (const id of [
   "back", "heading", "connection", "pair-view", "pair-hint-local", "pair-hint-relay",
   "pair-form", "pair-code", "pair-name", "pair-status", "pair-error", "list-view",
   "sessions", "sessions-empty", "list-error",
-  "forget", "session-view", "session-status", "cancel", "transcript",
+  "forget", "session-view", "session-status", "cancel", "cancel-dialog", "transcript",
   "queued", "questions", "composer", "message", "session-error",
 ]) {
   elements[id] = document.getElementById(id);
@@ -487,7 +492,7 @@ function renderSession(session) {
   state.session = session;
   elements.heading.textContent = session.title || session.id;
   elements["session-status"].textContent = session.status;
-  elements.cancel.hidden = session.status !== "InProgress";
+  elements.cancel.hidden = !CANCELABLE_STATUSES.has(session.status);
 
   if (isNewTranscript) {
     const nearBottom =
@@ -595,13 +600,22 @@ elements.forget.addEventListener("click", () => {
 
 elements.back.addEventListener("click", closeSession);
 
-elements.cancel.addEventListener("click", async () => {
+elements.cancel.addEventListener("click", () => {
   if (!state.currentSessionId) {
+    return;
+  }
+  elements["cancel-dialog"].returnValue = "";
+  elements["cancel-dialog"].showModal();
+});
+
+elements["cancel-dialog"].addEventListener("close", async () => {
+  const sessionId = state.currentSessionId;
+  if (elements["cancel-dialog"].returnValue !== "confirm" || !sessionId) {
     return;
   }
   elements.cancel.disabled = true;
   try {
-    await request({ method: "cancel_session", session_id: state.currentSessionId });
+    await request({ method: "cancel_session", session_id: sessionId });
     elements["session-error"].textContent = "";
   } catch (error) {
     elements["session-error"].textContent = error.message;

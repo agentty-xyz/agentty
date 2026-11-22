@@ -61,8 +61,20 @@
             <section id="session-view" class="view" hidden>
                 <div class="session-meta">
                     <span id="session-status" class="pill"></span>
-                    <button id="cancel" type="button" class="danger" hidden>Cancel turn</button>
+                    <button id="cancel" type="button" class="danger" hidden>Cancel session</button>
                 </div>
+                <dialog id="cancel-dialog" aria-labelledby="cancel-dialog-title">
+                    <form method="dialog" class="stack">
+                        <h2 id="cancel-dialog-title">Cancel this session?</h2>
+                        <p>
+                            Agentty stops the agent and deletes the session's worktree and branch. Changes that are not merged or published are lost.
+                        </p>
+                        <div class="dialog-actions">
+                            <button value="keep" class="primary" autofocus>Keep session</button>
+                            <button value="confirm" class="danger">Cancel session</button>
+                        </div>
+                    </form>
+                </dialog>
                 <ol id="transcript" class="transcript">
                 </ol>
                 <ul id="queued" class="queued">

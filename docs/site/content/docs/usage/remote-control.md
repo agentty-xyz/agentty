@@ -6,8 +6,10 @@ weight = 4
 
 <a id="usage-remote-control"></a> Remote control lets another device follow your
 sessions and reply to them while Agentty runs. A paired device can list sessions, read
-transcripts, send messages, answer questions, and stop a running turn. While an
-execution graph waits for you, a message replies to it as a terminal reply would; see
+transcripts, send messages, answer questions, and cancel a session. Canceling a session
+stops its agent and deletes its worktree and branch, so changes that are not merged or
+published are lost; the device asks before it cancels. While an execution graph waits
+for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
 Merging, publishing, and session settings stay in the terminal.
 
