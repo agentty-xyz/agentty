@@ -14,7 +14,7 @@
 // shows.
 //
 // In `route` mode the page loads at `#s=session-2` with a draft left in
-// this tab, as after a reload, and sends it.
+// this tab, as after a reload, sends it, and opens the diff.
 //
 // In `create` mode the page starts at home, where the test server offers
 // new sessions in its `agentty` project, and creates one with a message.
@@ -340,6 +340,21 @@ async function routeFlow() {
     step: "sent",
     draft: window.sessionStorage.getItem(ROUTED_DRAFT_KEY),
     error: byId("session-error").textContent,
+  });
+
+  // The diff replaces the chat, and an opened file loads its patch.
+  byId("diff").click();
+  await waitFor("the changed files", () => byId("diff-files").children.length > 0);
+  const file = byId("diff-files").querySelector("details");
+  file.open = true;
+  file.dispatchEvent(new FakeEvent("toggle"));
+  await waitFor("the patch", () => file.querySelector(".patch"));
+  report({
+    step: "diff",
+    chatHidden: byId("chat-scroll").hidden,
+    files: texts(byId("diff-files").querySelectorAll("summary")),
+    patch: file.querySelectorAll(".patch-line").map((line) => [line.className, line.textContent]),
+    summary: byId("diff-summary").textContent,
   });
 }
 

@@ -6,6 +6,7 @@ import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_d
 import {
   DRAFT_KEY_PREFIX,
   clockSkew,
+  diffKey,
   collectAnswers,
   composerKeyAction,
   composerRows,
@@ -18,6 +19,7 @@ import {
   transcriptChanges,
   transcriptEntries,
 } from "../../assets/chat.mjs";
+import { createDiff } from "../../assets/diff.mjs";
 
 const INDEX_HTML = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
 
@@ -34,6 +36,8 @@ const ELEMENT_IDS = {
   composer: "composer",
   composerHint: "composer-hint",
   composerMeta: "composer-meta",
+  diff: "diff",
+  dock: "dock",
   gone: "session-gone",
   goneHome: "session-gone-home",
   heading: "heading",
@@ -52,6 +56,8 @@ const ELEMENT_IDS = {
   send: "send",
   sessionError: "session-error",
   sheet: "session-sheet",
+  sheetDiff: "sheet-diff",
+  sheetDiffLabel: "sheet-diff-label",
   sheetMerge: "sheet-merge",
   sheetMergeLabel: "sheet-merge-label",
   sheetSub: "sheet-sub",
@@ -97,18 +103,29 @@ function mountChat({
   );
   const requests = [];
   let homes = 0;
+  const request = async (body) => {
+    requests.push(body);
+
+    return respond(body);
+  };
   const chat = createChat({
+    diff: createDiff({
+      document: document,
+      elements: {
+        error: byId("diff-error"),
+        files: byId("diff-files"),
+        summary: byId("diff-summary"),
+        view: byId("diff-view"),
+      },
+      request: request,
+    }),
     document: document,
     elements: elements,
     now: now,
     onHome: () => {
       homes += 1;
     },
-    request: async (body) => {
-      requests.push(body);
-
-      return respond(body);
-    },
+    request: request,
     window: window,
   });
   chat.setCapabilities(capabilities);
@@ -580,23 +597,91 @@ test("blank messages and messages while offline are not sent", async () => {
   assert.equal(byId("message").value, "Ship it");
 });
 
+test("Diff swaps the transcript and the dock for the session's files and back", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["diff"],
+    respond: (body) =>
+      body.method === "get_session_diff"
+        ? { files: [{ added_lines: 1, deleted_lines: 0, path: "a.rs", status: "added" }], kind: "diff" }
+        : { kind: "accepted" },
+  });
+  chat.render(session({ status: "Draft" }));
+  assert.equal(byId("diff").hidden, false);
+  assert.equal(byId("diff").disabled, true);
+  byId("diff").click();
+  assert.deepEqual(requests, []);
+
+  chat.render(session());
+  assert.equal(byId("diff").disabled, false);
+  byId("diff").click();
+  await settle();
+  assert.deepEqual(requests, [{ method: "get_session_diff", session_id: "s1" }]);
+  assert.equal(byId("diff").getAttribute("aria-pressed"), "true");
+  assert.equal(byId("sheet-diff-label").textContent, "Back to chat");
+  assert.equal(byId("diff-view").hidden, false);
+  assert.equal(byId("chat-scroll").hidden, true);
+  assert.equal(byId("dock").hidden, true);
+  assert.equal(byId("diff-files").querySelector(".diff-path").textContent, "a.rs");
+
+  // A snapshot of the same session keeps the diff and reloads it only
+  // when the session changed.
+  chat.render(session());
+  await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(byId("chat-scroll").hidden, true);
+  chat.render(session({ updated_at: 11 }));
+  await settle();
+  assert.equal(requests.length, 2);
+
+  // On a phone the sheet offers the way back.
+  byId("session-more").click();
+  byId("sheet-diff").click();
+  assert.equal(byId("diff-view").hidden, true);
+  assert.equal(byId("chat-scroll").hidden, false);
+  assert.equal(byId("dock").hidden, false);
+  assert.equal(byId("sheet-diff-label").textContent, "Diff");
+
+  // A status without a diff closes it, and so does another session.
+  byId("diff").click();
+  chat.render(session({ status: "Draft", updated_at: 12 }));
+  assert.equal(byId("diff-view").hidden, true);
+  chat.render(session({ updated_at: 13 }));
+  byId("diff").click();
+  chat.open("s2");
+  assert.equal(byId("diff-view").hidden, true);
+  assert.equal(byId("dock").hidden, false);
+});
+
 test("header actions appear only with their capability and status", () => {
-  assert.deepEqual(sessionActions("Review"), { cancel: true, merge: false, mergeEnabled: false });
+  const none = { diff: false, diffEnabled: false };
+  assert.deepEqual(sessionActions("Review"), {
+    ...none,
+    cancel: true,
+    merge: false,
+    mergeEnabled: false,
+  });
   assert.deepEqual(sessionActions("Review", ["merge"]), {
+    ...none,
     cancel: true,
     merge: true,
     mergeEnabled: true,
   });
   assert.deepEqual(sessionActions("InProgress", ["merge"]), {
+    ...none,
     cancel: true,
     merge: true,
     mergeEnabled: false,
   });
   assert.deepEqual(sessionActions("Done", ["merge"]), {
+    ...none,
     cancel: false,
     merge: true,
     mergeEnabled: false,
   });
+  // The diff follows `allows_diff_view`: not while a session is a draft.
+  assert.equal(sessionActions("Done", ["diff"]).diffEnabled, true);
+  assert.equal(sessionActions("Draft", ["diff"]).diffEnabled, false);
+  assert.equal(sessionActions("Draft", ["diff"]).diff, true);
 
   const plain = mountChat();
   plain.chat.render(session({ status: "InProgress" }));
@@ -816,6 +901,83 @@ test("new content follows the reader near the end, and otherwise offers Jump to 
   scroller.scrollTop = 1400 - 500;
   scroller.dispatchEvent(new FakeEvent("scroll"));
   assert.equal(byId("jump").hidden, true);
+});
+
+// Sets what a scroller reports: a hidden one reports zeros.
+function layout(scroller, { client, height, top }) {
+  scroller.clientHeight = client;
+  scroller.scrollHeight = height;
+  scroller.scrollTop = top;
+}
+
+function diffAnswer(body) {
+  return body.method === "get_session_diff"
+    ? { files: [{ added_lines: 1, deleted_lines: 0, path: "a.rs", status: "added" }], kind: "diff" }
+    : { kind: "accepted" };
+}
+
+test("back from the diff, the transcript returns to where the reader was", () => {
+  const { byId, chat } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const scroller = byId("chat-scroll");
+  layout(scroller, { client: 500, height: 2000, top: 0 });
+  chat.render(session());
+  // Reading in the middle, then the diff; the hidden scroller reports
+  // zeros, as a browser's does.
+  scroller.scrollTop = 600;
+  byId("diff").click();
+  layout(scroller, { client: 0, height: 0, top: 0 });
+  const grown = [...session().messages, { content: "more", kind: "assistant" }];
+  chat.render(session({ messages: grown, updated_at: 11 }));
+  assert.equal(byId("jump").hidden, true);
+
+  layout(scroller, { client: 500, height: 2400, top: 0 });
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 600);
+  // A message arrived meanwhile, so the pill offers it.
+  assert.equal(byId("jump").hidden, false);
+});
+
+test("back from the diff, a reader who was at the end sees the end", () => {
+  const { byId, chat } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const scroller = byId("chat-scroll");
+  layout(scroller, { client: 500, height: 2000, top: 0 });
+  chat.render(session());
+  assert.equal(scroller.scrollTop, 2000);
+  byId("diff").click();
+  layout(scroller, { client: 0, height: 0, top: 0 });
+  chat.render(session({ updated_at: 11 }));
+
+  layout(scroller, { client: 500, height: 2400, top: 0 });
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 2400);
+  assert.equal(byId("jump").hidden, true);
+  // Nothing new arrived for a reader in the middle either: no pill.
+  scroller.scrollTop = 100;
+  byId("diff").click();
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 100);
+  assert.equal(byId("jump").hidden, true);
+});
+
+test("the open diff is read again only when the session's changes may differ", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const diffReads = () => requests.filter((body) => body.method === "get_session_diff").length;
+  chat.render(detailedSession(), detailedSummary());
+  byId("diff").click();
+  await settle();
+  assert.equal(diffReads(), 1);
+
+  // A running session updates often; the same line counts read nothing.
+  chat.render(detailedSession({ updated_at: 11 }), detailedSummary({ updated_at: 11 }));
+  await settle();
+  assert.equal(diffReads(), 1);
+  chat.render(detailedSession({ updated_at: 12 }), detailedSummary({ added_lines: 65 }));
+  await settle();
+  assert.equal(diffReads(), 2);
+
+  // Without counts in the listing, an update stands in for them.
+  assert.equal(diffKey(session(), null), "updated:10");
+  assert.equal(diffKey(session(), detailedSummary()), "lines:64:9");
 });
 
 test("queued messages show one row each with the full text in the title", () => {

@@ -322,9 +322,23 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     let mut app = WebDevice::run(APP_SCRIPT, &[&address, "route", &token])?;
     let restored = app.next_step().await?;
     let sent = app.next_step().await?;
+    let diff = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
+    assert_eq!(
+        diff,
+        json!({
+            "step": "diff",
+            "chatHidden": true,
+            "files": ["Aa.rs+1 -0"],
+            "patch": [
+                ["patch-line patch-line--meta", "diff --git a/a.rs b/a.rs\n"],
+                ["patch-line patch-line--meta", "+new\n"],
+            ],
+            "summary": "1 file · +1 -0",
+        })
+    );
     assert_eq!(
         restored,
         json!({

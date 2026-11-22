@@ -86,6 +86,11 @@ turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` r
 session to review and keeps its changes; `Merge` asks before it merges the session into
 its base branch, and names that branch and the changed lines.
 
+When this Agentty lets devices read diffs, `Diff` in the header, or in the `⋯` sheet on
+a phone, shows the session's changed files in place of the chat, each with its status
+letter and changed lines. Open a file to read its patch; press `Diff` again to return to
+the chat. A very large file list or patch shows only its beginning.
+
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
 next to the device offers `Forget this device`. While the connection is down, a banner
