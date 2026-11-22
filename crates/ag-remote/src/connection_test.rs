@@ -486,7 +486,7 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
                 }],
             }),
             RemoteResult::Ok(RemoteResponse::Session {
-                session: Some(RemoteSession::from(session)),
+                session: Some(Box::new(RemoteSession::from(session))),
             }),
             RemoteResult::Ok(RemoteResponse::Session { session: None }),
             RemoteResult::Ok(RemoteResponse::Accepted),

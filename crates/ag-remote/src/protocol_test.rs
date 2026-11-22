@@ -1,4 +1,7 @@
-use ag_session::{CreateSessionMode, SessionId, SessionStatus, SessionSummary};
+use ag_session::{
+    AgentKind, AgentModel, AgentSelection, CreateSessionMode, ForgeKind, ReviewRequest,
+    ReviewRequestState, ReviewRequestSummary, SessionId, SessionStatus, SessionSummary,
+};
 use serde_json::json;
 
 use crate::protocol::{
@@ -363,7 +366,18 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
     assert_eq!(
         remote,
         RemoteSession {
+            agent: Some("codex".to_string()),
+            base_branch: Some("main".to_string()),
+            branch: Some("wt/session-".to_string()),
+            created_at: Some(10),
             id: "session-1".to_string(),
+            is_draft: false,
+            model: Some("gpt-6.1-sol".to_string()),
+            published_upstream_ref: None,
+            reasoning: Some("high".to_string()),
+            response_style: Some("balanced".to_string()),
+            review_request: None,
+            speed_mode: Some("normal".to_string()),
             messages: vec![
                 RemoteMessage {
                     content: "build it".to_string(),
@@ -392,4 +406,76 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             updated_at: 20,
         }
     );
+}
+
+#[test]
+fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control() {
+    // Arrange
+    let mut session = session_fixture(&SessionId::from("session-1"));
+    session.published_upstream_ref = Some("origin/wt/session-".to_string());
+    session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 30,
+        summary: ReviewRequestSummary {
+            display_id: "#12".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: "wt/session-".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: Some("PR ready".to_string()),
+            target_branch: "main".to_string(),
+            title: "Build it".to_string(),
+            web_url: "https://example.com/pull/12".to_string(),
+        },
+    });
+    session.settings.agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Neon);
+    session.settings.is_draft = true;
+
+    // Act
+    let remote = RemoteSession::from(session);
+    let encoded = serde_json::to_value(&remote).expect("session should encode");
+
+    // Assert
+    assert_eq!(remote.agent.as_deref(), Some("antigravity"));
+    assert_eq!(remote.speed_mode, None);
+    assert!(remote.is_draft);
+    assert_eq!(
+        remote.published_upstream_ref.as_deref(),
+        Some("origin/wt/session-")
+    );
+    assert_eq!(
+        encoded["review_request"],
+        json!({
+            "display_id": "#12",
+            "source_branch": "wt/session-",
+            "state": "Open",
+            "status_summary": "PR ready",
+            "target_branch": "main",
+            "title": "Build it",
+            "web_url": "https://example.com/pull/12"
+        })
+    );
+    assert!(encoded.get("speed_mode").is_none());
+}
+
+#[test]
+fn session_frames_from_an_older_server_parse_without_details() {
+    // Arrange
+    let old = json!({
+        "id": "s",
+        "messages": [],
+        "questions": [],
+        "queued_messages": [],
+        "status": "Review",
+        "title": null,
+        "updated_at": 1
+    });
+
+    // Act
+    let session: RemoteSession = serde_json::from_value(old.clone()).expect("session should parse");
+    let encoded = serde_json::to_value(&session).expect("session should encode");
+
+    // Assert
+    assert_eq!(session.agent, None);
+    assert_eq!(session.review_request, None);
+    assert!(!session.is_draft);
+    assert_eq!(encoded, old);
 }
