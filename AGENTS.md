@@ -60,8 +60,6 @@ rules.
   coverage. CI enforces this with the `coverage` hook, which generates a fresh report
   and lists every gap; `coverage-focused` checks one package locally. Never add coverage
   ignore patterns or service-side exclusions to satisfy it.
-- Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
-  equivalent flag. Fix the failure.
 - Prefer removing obsolete behavior within the requested scope. Ask only when choosing
   between preserving an existing public contract and making a breaking change that the
   user has not already authorized; leave unrelated compatibility behavior alone.
@@ -78,10 +76,6 @@ exceptions; keep those commands there.
   Format touched paths before focused tests. Final validation covers every touched file,
   changed package, affected dependent, and public contract. Unchanged dependencies need
   no retest.
-- Run required checks once for the final relevant state. Reuse success only while
-  source, tests, dependencies, toolchain, configuration, and relevant environment remain
-  unchanged; rerun after invalidating edits, failures, or new evidence. Record each
-  command, scope, and result at handoff.
 - Pull-request CI owns fresh `coverage` (including the `test-workspace` selection) and
   full `test-agentty-e2e`. Run these locally only to diagnose their CI failure or when
   requested; also run `test-workspace` when impact cannot be bounded. Diagnose the
@@ -123,25 +117,12 @@ Follow the nearest documentation guide for exact routing and integrity rules.
   free of sensitive information: secrets, credentials, personal data such as names,
   emails, or usernames, home-directory paths, private or session links, and details
   about individual users from telemetry. Describe affected users by role instead.
-- Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
-  writing guidance: follow them, but never copy them into commit messages or PR
-  descriptions.
 - When a task includes merging a pull request that the agent's authenticated GitHub
   account (`gh api user --jq .login`) authored, and that account is a code owner in
   `.github/CODEOWNERS` on `origin/main`, the agent may bypass the missing approval
   without asking again. Everything else still holds: every required check succeeded on
   the head commit, with none pending or missing, and no requested changes or unresolved
   review threads remain. Any other agent leaves merging to a maintainer.
-- Bring a branch up to date by rebasing it onto `origin/main` and pushing with
-  `--force-with-lease`; never merge `main` into it.
-- Stack pull requests only when one needs another's code, and link them as a GitHub
-  stack with the `gh stack` extension (`github/gh-stack`) instead of leaving separate
-  pull requests with hand-set bases. Open each layer with its own filled template
-  (`gh pr create --base <parent branch>`), then run `gh stack link` with the pull
-  request numbers from bottom to top. `link` records no local stack, so run
-  `gh stack checkout <pull request>` before any other `gh stack` command. Merge a stack
-  from the bottom, one pull request at a time. If the extension is missing, say so and
-  ask for it; do not leave the stack unlinked silently.
 - Use `skills/bump-version/SKILL.md` for release preparation. Local work stops at the
   ordinary version-bump change; create and publish no release tags locally.
 - After that change lands, create its `v`-prefixed tag for the exact commit in the
@@ -151,6 +132,43 @@ Follow the nearest documentation guide for exact routing and integrity rules.
   crate and regenerate it with `cargo run -p ag-release -- workflow`. Its `plan` job is
   a required check on `main`, so it must keep that name and keep running on every pull
   request and merge-queue check.
+
+## Standalone Harnesses
+
+Agentty sessions leave these steps to Agentty's own workflows and prompts. Follow them
+when a harness such as Claude Code or Codex runs directly in a checkout and owns its
+checks, Git, pull request, and review steps.
+
+- Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
+  equivalent flag. Fix the failure.
+- Run required checks once for the final relevant state. Reuse success only while
+  source, tests, dependencies, toolchain, configuration, and relevant environment remain
+  unchanged; rerun after invalidating edits, failures, or new evidence. Record each
+  command, scope, and result at handoff.
+- Bring a branch up to date by rebasing it onto `origin/main` and pushing with
+  `--force-with-lease`; never merge `main` into it.
+- Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
+  writing guidance: follow them, but never copy them into commit messages or PR
+  descriptions.
+- Branch each pull request from `main` unless the work splits into vertical slices, each
+  fully usable on its own and depending on the one below it. Stack only those slices,
+  and link them as a GitHub stack with the `gh stack` extension (`github/gh-stack`)
+  instead of leaving separate pull requests with hand-set bases. Open each layer with
+  its own filled template (`gh pr create --base <parent branch>`), then run
+  `gh stack link` with the pull request numbers from bottom to top. `link` records no
+  local stack, so run `gh stack checkout <pull request>` before any other `gh stack`
+  command. If the extension is missing, say so and ask for it; do not leave the stack
+  unlinked silently.
+- Merge a stack from the top so the whole stack enters the merge queue at once:
+  `gh stack merge <top pull request> --yes`. A bare number resolves to a stack number
+  before a pull request number, so check that it names the intended pull request.
+- Before marking a pull request ready or merging it, run Agentty's focused review on
+  `git diff origin/main...HEAD`: follow
+  `crates/agentty/src/app/template/review_assist_prompt.md` with the criteria
+  `crates/agentty/src/app/review_rules.rs` selects for the changed paths and the
+  conversation as session history, in a separate read-only agent when the harness offers
+  one. Handle its suggestions as `crates/ag-session/src/template/apply_review_prompt.md`
+  describes, and repeat for at most three rounds while actionable suggestions remain.
 
 ## Instruction Files
 
