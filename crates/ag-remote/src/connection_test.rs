@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use axum::extract::ws::Message;
-
 use super::{
     Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, MAX_DEVICE_NAME_CHARS,
     MessageOutcome, PairingDevice, authenticate, complete_pairing, device_display_name,
-    handle_message,
+    handle_incoming,
 };
 use crate::PROTOCOL_VERSION;
 use crate::device::token_hash;
@@ -18,6 +16,7 @@ use crate::test_support::{
     FIND, FailingEntropy, INSERT, MemoryDeviceStore, RecordingBackend, ReplayEntropy, StateFixture,
     TOUCH,
 };
+use crate::transport::Incoming;
 
 /// State over `devices` with deterministic entropy and a succeeding backend.
 fn fixture(devices: MemoryDeviceStore) -> StateFixture {
@@ -53,14 +52,10 @@ fn pair(code: &str, device_name: &str) -> ClientFrame {
     }
 }
 
-fn request_message(request: RemoteRequest) -> Message {
+fn request_message(request: RemoteRequest) -> Incoming {
     let frame = ClientFrame::Request { id: 9, request };
 
-    Message::Text(
-        serde_json::to_string(&frame)
-            .expect("frame should encode")
-            .into(),
-    )
+    Incoming::Text(serde_json::to_string(&frame).expect("frame should encode"))
 }
 
 /// Returns the result of a response to request `9`.
@@ -306,7 +301,7 @@ fn device_display_name_trims_bounds_and_defaults() {
 }
 
 #[tokio::test]
-async fn handle_message_runs_each_request_against_the_session_service() {
+async fn handle_incoming_runs_each_request_against_the_session_service() {
     // Arrange
     let fixture = fixture(MemoryDeviceStore::default());
     let requests = vec![
@@ -337,7 +332,7 @@ async fn handle_message_runs_each_request_against_the_session_service() {
     let mut results = Vec::new();
     for request in requests {
         results.push(reply_result(
-            handle_message(&fixture.state, request_message(request)).await,
+            handle_incoming(&fixture.state, request_message(request)).await,
         ));
     }
 
@@ -378,7 +373,7 @@ async fn handle_message_runs_each_request_against_the_session_service() {
 }
 
 #[tokio::test]
-async fn handle_message_reports_backend_errors_in_the_response() {
+async fn handle_incoming_reports_backend_errors_in_the_response() {
     // Arrange
     let fixture = StateFixture::new(
         MemoryDeviceStore::default(),
@@ -388,10 +383,10 @@ async fn handle_message_reports_backend_errors_in_the_response() {
 
     // Act
     let listed = reply_result(
-        handle_message(&fixture.state, request_message(RemoteRequest::ListSessions)).await,
+        handle_incoming(&fixture.state, request_message(RemoteRequest::ListSessions)).await,
     );
     let loaded = reply_result(
-        handle_message(
+        handle_incoming(
             &fixture.state,
             request_message(RemoteRequest::GetSession {
                 session_id: "session-1".to_string(),
@@ -407,19 +402,18 @@ async fn handle_message_reports_backend_errors_in_the_response() {
 }
 
 #[tokio::test]
-async fn handle_message_rejects_protocol_violations_and_ignores_control_frames() {
+async fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
     // Arrange
     let fixture = fixture(MemoryDeviceStore::default());
     let repeated_hello = serde_json::to_string(&hello("t")).expect("frame should encode");
 
     // Act
     let outcomes = [
-        handle_message(&fixture.state, Message::Text(repeated_hello.into())).await,
-        handle_message(&fixture.state, Message::Text("not json".into())).await,
-        handle_message(&fixture.state, Message::Binary(vec![1].into())).await,
-        handle_message(&fixture.state, Message::Ping(Vec::new().into())).await,
-        handle_message(&fixture.state, Message::Pong(Vec::new().into())).await,
-        handle_message(&fixture.state, Message::Close(None)).await,
+        handle_incoming(&fixture.state, Incoming::Text(repeated_hello)).await,
+        handle_incoming(&fixture.state, Incoming::Text("not json".to_string())).await,
+        handle_incoming(&fixture.state, Incoming::Binary).await,
+        handle_incoming(&fixture.state, Incoming::Control).await,
+        handle_incoming(&fixture.state, Incoming::Closed).await,
     ];
 
     // Assert
@@ -436,7 +430,6 @@ async fn handle_message_rejects_protocol_violations_and_ignores_control_frames()
         MessageOutcome::Rejected("Binary frames are not supported")
     ));
     assert!(matches!(outcomes[3], MessageOutcome::Ignored));
-    assert!(matches!(outcomes[4], MessageOutcome::Ignored));
-    assert!(matches!(outcomes[5], MessageOutcome::Closed));
+    assert!(matches!(outcomes[4], MessageOutcome::Closed));
     assert_eq!(fixture.backend.calls(), Vec::<String>::new());
 }

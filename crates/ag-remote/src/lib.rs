@@ -17,6 +17,7 @@ mod entropy;
 mod pairing;
 pub mod protocol;
 mod server;
+mod transport;
 
 pub use device::{DeviceStore, DeviceStoreError, NewRemoteDevice, RemoteDevice};
 pub use pairing::PairingCode;

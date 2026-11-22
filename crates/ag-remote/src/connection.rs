@@ -1,11 +1,10 @@
-//! One WebSocket connection: authentication, pairing approval, requests, and
-//! change pushes.
+//! One client connection over a frame transport: authentication, pairing
+//! approval, requests, and change pushes.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
-use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
 use tokio::sync::{oneshot, watch};
 use tokio::time::{Instant, sleep_until, timeout};
 
@@ -18,6 +17,7 @@ use crate::protocol::{
     ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
+use crate::transport::{CloseCause, FrameTransport, Incoming};
 
 /// Time a client has to send its first frame.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,14 +39,14 @@ const PAIRING_DENIED: &str = "Pairing was denied";
 const PAIRING_TIMED_OUT: &str = "Pairing was not approved in time";
 /// Rejection reason for frames sent while pairing waits for approval.
 const PAIRING_PENDING: &str = "Wait for pairing approval";
-/// Close reason sent to every socket when the server stops.
+/// Close reason sent to every connection when the server stops.
 const SERVER_STOPPED: &str = "Server stopped";
 
-/// Runs one upgraded socket until the client leaves, the device is revoked,
-/// or the server stops. `handshake` counts the socket as unauthenticated
+/// Runs one connection until the client leaves, the device is revoked, or
+/// the server stops. `handshake` counts the connection as unauthenticated
 /// until a device authenticates on it.
-pub(crate) async fn serve(
-    mut socket: WebSocket,
+pub(crate) async fn serve<T: FrameTransport>(
+    mut transport: T,
     state: Arc<ServerState>,
     handshake: HandshakeSlot,
 ) {
@@ -54,22 +54,22 @@ pub(crate) async fn serve(
     let mut revisions = state.revisions();
     let mut shutdown_rx = state.shutdown_rx.clone();
 
-    let first_message = tokio::select! {
+    let first_incoming = tokio::select! {
         biased;
         () = wait_until_stopping(&mut shutdown_rx) => {
-            close(&mut socket, close_code::AWAY, SERVER_STOPPED).await;
+            transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
 
             return;
         }
-        first_message = timeout(HANDSHAKE_TIMEOUT, socket.recv()) => first_message,
+        first_incoming = timeout(HANDSHAKE_TIMEOUT, transport.receive()) => first_incoming,
     };
-    let Ok(first_message) = first_message else {
-        reject(&mut socket, "Authentication timed out").await;
+    let Ok(first_incoming) = first_incoming else {
+        reject(&mut transport, "Authentication timed out").await;
 
         return;
     };
-    let Some(frame) = first_message.and_then(|message| parse_text_frame(message.ok()?)) else {
-        reject(&mut socket, "Expected a hello or pair frame").await;
+    let Some(frame) = parse_text_frame(first_incoming) else {
+        reject(&mut transport, "Expected a hello or pair frame").await;
 
         return;
     };
@@ -77,7 +77,7 @@ pub(crate) async fn serve(
         Ok(Authentication::Authenticated { connection, reply }) => Ok((connection, reply)),
         Ok(Authentication::PairingRequested(device)) => {
             let Some(decision) = await_approval(
-                &mut socket,
+                &mut transport,
                 &state,
                 device,
                 &mut revisions,
@@ -96,16 +96,16 @@ pub(crate) async fn serve(
         Ok(authenticated) => authenticated,
         Err(reason) => {
             tracing::debug!(reason, "remote connection rejected");
-            reject(&mut socket, reason).await;
+            reject(&mut transport, reason).await;
 
             return;
         }
     };
     drop(handshake);
     let (close_rx, _registration) = state.register(connection);
-    send(&mut socket, &reply).await;
+    send(&mut transport, &reply).await;
 
-    run(socket, &state, revisions, shutdown_rx, close_rx).await;
+    run(transport, &state, revisions, shutdown_rx, close_rx).await;
 }
 
 /// Outcome of a valid first frame.
@@ -209,9 +209,9 @@ pub(crate) async fn authenticate(
 /// authentication once the host approves.
 ///
 /// Returns `None` when the device leaves or the server stops first; a
-/// stopping server has already closed the socket.
-async fn await_approval(
-    socket: &mut WebSocket,
+/// stopping server has already closed the transport.
+async fn await_approval<T: FrameTransport>(
+    transport: &mut T,
     state: &Arc<ServerState>,
     device: PairingDevice,
     revisions: &mut watch::Receiver<u64>,
@@ -222,19 +222,21 @@ async fn await_approval(
     let awaiting = ServerFrame::AwaitingApproval {
         confirmation: device.confirmation.clone(),
     };
-    send(socket, &awaiting).await;
+    send(transport, &awaiting).await;
     let decision = tokio::select! {
         biased;
         () = wait_until_stopping(shutdown_rx) => {
-            close(socket, close_code::AWAY, SERVER_STOPPED).await;
+            transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
 
             return None;
         }
         decision = timeout(APPROVAL_TIMEOUT, decision_rx) => decision,
-        message = socket.recv() => {
-            return match message {
-                Some(Ok(Message::Close(_)) | Err(_)) | None => None,
-                Some(Ok(_)) => Some(Err(PAIRING_PENDING)),
+        incoming = transport.receive() => {
+            return match incoming {
+                Incoming::Closed => None,
+                Incoming::Binary | Incoming::Control | Incoming::Text(_) => {
+                    Some(Err(PAIRING_PENDING))
+                }
             };
         }
     };
@@ -282,8 +284,8 @@ pub(crate) async fn complete_pairing(
 }
 
 /// Serves requests and change pushes for one authenticated connection.
-async fn run(
-    mut socket: WebSocket,
+async fn run<T: FrameTransport>(
+    mut transport: T,
     state: &ServerState,
     mut revisions: watch::Receiver<u64>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -296,12 +298,12 @@ async fn run(
         tokio::select! {
             biased;
             () = wait_until_stopping(&mut shutdown_rx) => {
-                close(&mut socket, close_code::AWAY, SERVER_STOPPED).await;
+                transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
 
                 return;
             }
             _ = &mut close_rx => {
-                reject(&mut socket, "Device revoked").await;
+                reject(&mut transport, "Device revoked").await;
 
                 return;
             }
@@ -310,7 +312,7 @@ async fn run(
             {
                 change_deadline = None;
                 let revision = *revisions.borrow_and_update();
-                send(&mut socket, &ServerFrame::Changed { revision }).await;
+                send(&mut transport, &ServerFrame::Changed { revision }).await;
             }
             changed = revisions.changed(), if revisions_open && change_deadline.is_none() => {
                 if changed.is_ok() {
@@ -319,19 +321,16 @@ async fn run(
                     revisions_open = false;
                 }
             }
-            message = socket.recv() => {
-                let Some(Ok(message)) = message else {
-                    return;
-                };
-                match handle_message(state, message).await {
+            incoming = transport.receive() => {
+                match handle_incoming(state, incoming).await {
                     MessageOutcome::Closed => return,
                     MessageOutcome::Ignored => {}
                     MessageOutcome::Rejected(reason) => {
-                        reject(&mut socket, reason).await;
+                        reject(&mut transport, reason).await;
 
                         return;
                     }
-                    MessageOutcome::Reply(frame) => send(&mut socket, &frame).await,
+                    MessageOutcome::Reply(frame) => send(&mut transport, &frame).await,
                 }
             }
         }
@@ -340,7 +339,7 @@ async fn run(
 
 /// What the connection does after one authenticated client message.
 pub(crate) enum MessageOutcome {
-    /// The client closed the socket.
+    /// The client left or the transport failed.
     Closed,
     /// Control traffic that needs no reply.
     Ignored,
@@ -350,10 +349,10 @@ pub(crate) enum MessageOutcome {
     Reply(ServerFrame),
 }
 
-/// Handles one message on an authenticated connection.
-pub(crate) async fn handle_message(state: &ServerState, message: Message) -> MessageOutcome {
-    match message {
-        Message::Text(text) => match serde_json::from_str::<ClientFrame>(&text) {
+/// Handles one thing received on an authenticated connection.
+pub(crate) async fn handle_incoming(state: &ServerState, incoming: Incoming) -> MessageOutcome {
+    match incoming {
+        Incoming::Text(text) => match serde_json::from_str::<ClientFrame>(&text) {
             Ok(ClientFrame::Request { id, request }) => {
                 MessageOutcome::Reply(ServerFrame::Response {
                     id,
@@ -365,9 +364,9 @@ pub(crate) async fn handle_message(state: &ServerState, message: Message) -> Mes
             }
             Err(_) => MessageOutcome::Rejected("Invalid frame"),
         },
-        Message::Binary(_) => MessageOutcome::Rejected("Binary frames are not supported"),
-        Message::Close(_) => MessageOutcome::Closed,
-        Message::Ping(_) | Message::Pong(_) => MessageOutcome::Ignored,
+        Incoming::Binary => MessageOutcome::Rejected("Binary frames are not supported"),
+        Incoming::Closed => MessageOutcome::Closed,
+        Incoming::Control => MessageOutcome::Ignored,
     }
 }
 
@@ -452,8 +451,8 @@ async fn wait_until_stopping(shutdown_rx: &mut watch::Receiver<bool>) {
 }
 
 /// Parses one text message as a client frame.
-fn parse_text_frame(message: Message) -> Option<ClientFrame> {
-    let Message::Text(text) = message else {
+fn parse_text_frame(incoming: Incoming) -> Option<ClientFrame> {
+    let Incoming::Text(text) = incoming else {
         return None;
     };
 
@@ -483,34 +482,24 @@ pub(crate) fn device_display_name(device_name: &str) -> String {
     device_name
 }
 
-/// Sends one frame. A failed send surfaces as the next receive failing.
-async fn send(socket: &mut WebSocket, frame: &ServerFrame) {
+/// Sends one frame.
+async fn send<T: FrameTransport>(transport: &mut T, frame: &ServerFrame) {
     // Frames hold only strings, integers, and lists, so serialization
     // cannot fail.
     let text = serde_json::to_string(frame).unwrap_or_default();
-    let _ = socket.send(Message::Text(text.into())).await;
+    transport.send(text).await;
 }
 
-/// Sends a rejection frame, then closes with a policy-violation code.
-async fn reject(socket: &mut WebSocket, reason: &'static str) {
+/// Sends a rejection frame, then closes the transport as rejected.
+async fn reject<T: FrameTransport>(transport: &mut T, reason: &'static str) {
     send(
-        socket,
+        transport,
         &ServerFrame::Rejected {
             reason: reason.to_string(),
         },
     )
     .await;
-    close(socket, close_code::POLICY, reason).await;
-}
-
-/// Starts the closing handshake with `code` and `reason`.
-async fn close(socket: &mut WebSocket, code: u16, reason: &'static str) {
-    let _ = socket
-        .send(Message::Close(Some(CloseFrame {
-            code,
-            reason: reason.into(),
-        })))
-        .await;
+    transport.close(CloseCause::Rejected, reason).await;
 }
 
 #[cfg(test)]
