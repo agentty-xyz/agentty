@@ -514,3 +514,63 @@ fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
     // A value naming a place commands can write is refused.
     assert_eq!(planted, [Err(BashError::InvalidPolicy); 3]);
 }
+
+#[test]
+fn excluded_values_resolve_paths_that_do_not_exist_yet() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let root = directory.path().canonicalize().expect("canonical fixture");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(root.join("outside")).expect("outside");
+    std::os::unix::fs::symlink(&workspace, root.join("outside/link")).expect("link");
+    let tool = root.join("outside/tool");
+    std::fs::write(&tool, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("mode");
+    let configuration = BashConfig::for_executor(
+        Arc::new(crate::bash::UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_excluded_command(tool)
+    .expect("excluded command");
+    let uppercase = workspace.to_string_lossy().to_uppercase();
+    let check = |value: String| {
+        BashTool::excluded_configuration(
+            &configuration
+                .clone()
+                .with_excluded_environment("CARGO_HOME".into(), value)
+                .expect("excluded value"),
+            &workspace,
+        )
+        .map(|_| ())
+    };
+
+    // Act / Assert
+    // Through a link, through `..`, or not existing yet, a value still
+    // resolves to the workspace it would be created in.
+    for value in [
+        root.join("outside/link/missing"),
+        root.join("outside/../workspace/missing"),
+    ] {
+        assert_eq!(
+            check(value.display().to_string()),
+            Err(BashError::InvalidPolicy),
+            "{}",
+            value.display()
+        );
+    }
+    // On a case-insensitive file system, as macOS uses by default, another
+    // letter case names the same workspace.
+    let case_insensitive = std::path::Path::new(&uppercase).exists();
+    assert_eq!(
+        check(format!("{uppercase}/missing")).is_err(),
+        case_insensitive
+    );
+    assert!(check(root.join("outside/elsewhere").display().to_string()).is_ok());
+}

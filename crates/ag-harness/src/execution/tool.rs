@@ -225,9 +225,7 @@ impl BashTool {
         if environment.values().any(|value| {
             std::env::split_paths(value).any(|entry| {
                 entry.is_absolute()
-                    && (inside_writable(&entry)
-                        || std::fs::canonicalize(&entry)
-                            .is_ok_and(|resolved| inside_writable(&resolved)))
+                    && (inside_writable(&entry) || inside_writable(&resolve_nearest(&entry)))
             })
         }) {
             return Err(BashError::InvalidPolicy);
@@ -337,6 +335,26 @@ impl BashTool {
         .await
         .map_err(|_| BashError::Execution)?
     }
+}
+
+/// Returns `path` with its nearest existing ancestor resolved, links, `..`,
+/// and the file system's own letter case included, followed by the rest of
+/// it, so a path that does not exist yet still compares as where it would
+/// be created.
+fn resolve_nearest(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find_map(|ancestor| {
+            let base = std::fs::canonicalize(ancestor).ok()?;
+
+            Some(
+                path.strip_prefix(ancestor)
+                    .unwrap_or(Path::new(""))
+                    .components()
+                    .fold(base, |resolved, part| resolved.join(part)),
+            )
+        })
+        // `/` always resolves, so an absolute path never reaches this.
+        .unwrap_or_default()
 }
 
 struct Cancel(Arc<dyn ExecutionControl>);
