@@ -164,13 +164,15 @@ or review steps directly in a checkout.
   before a pull request number, so check that it names the intended pull request. Stacks
   cannot bypass merge requirements, so the approval bypass above covers single pull
   requests only; an unapproved stack waits for a maintainer's approval.
-- Before marking a pull request ready or merging it, run Agentty's focused review on
-  `git diff origin/main...HEAD`: follow
-  `crates/agentty/src/app/template/review_assist_prompt.md` with the criteria
+- After committing and before opening a pull request, run Agentty's focused review on
+  `git diff <base branch>...HEAD`, such as `origin/main` or a stack layer's parent:
+  follow `crates/agentty/src/app/template/review_assist_prompt.md` with the criteria
   `crates/agentty/src/app/review_rules.rs` selects for the changed paths and the
   conversation as session history, in a separate read-only agent when the harness offers
   one. Handle its suggestions as `crates/ag-session/src/template/apply_review_prompt.md`
   describes, and repeat for at most three rounds while actionable suggestions remain.
+  Review again before marking it ready or merging it if that diff changed since the
+  review; a rebase that leaves it unchanged needs no new review.
 
 ## Instruction Files
 
