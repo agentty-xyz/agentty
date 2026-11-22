@@ -13,7 +13,7 @@ use super::{
     MockTerminalOperation, TerminalEnhancement, TerminalGuard, TerminalOperation,
     has_ssh_environment, prepare_terminal_stdout_with_operation, restore_terminal_state,
 };
-use crate::infra::tmux::TmuxKeyReporting;
+use crate::infra::tmux::{self, TmuxKeyReporting};
 
 /// Verifies keyboard modes are pushed and popped on the alternate screen,
 /// while the legacy and tmux paths retain their transport-specific sequences.
@@ -70,6 +70,20 @@ fn terminal_keyboard_modes_use_the_alternate_screen() {
             format!("{mouse_disable}{pop}\x1b[?2004l\x1b[?1049l\x1b[?25h").as_bytes()
         );
     }
+}
+
+/// Verifies the production terminal operation reports the `tmux` mouse
+/// option through the `tmux` boundary, which answers `false` outside `tmux`.
+#[test]
+fn crossterm_terminal_operation_reports_tmux_mouse_option() {
+    // Arrange
+    let operation = CrosstermTerminalOperation;
+
+    // Act
+    let is_mouse_enabled = operation.is_tmux_mouse_enabled();
+
+    // Assert
+    assert_eq!(is_mouse_enabled, tmux::is_mouse_enabled());
 }
 
 /// Builds one expected terminal enhancement configuration.
