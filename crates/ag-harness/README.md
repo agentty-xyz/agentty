@@ -903,18 +903,26 @@ effort turns on summarized adaptive thinking for the models that take one. Signe
 original place on later requests, and earlier turns replay with their turn instructions
 as first sent (`Model::replays_turn_instructions`), because the newest Claude models
 drop or reject signed thinking after an edited earlier message. Context reductions that
-clear or elide earlier rounds still edit history, so every request that sends thinking
-sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
-`thinking-binding-controls-2026-08-01` beta: the API drops the invalidated thinking for
-that request instead of rejecting it with a `400`, and long sessions on those models
-lose that earlier thinking. Every Claude model shares one reasoning family, and a switch
-to another provider carries that reasoning as a short note. The API requires an output
-bound, so a request without one sends `max_tokens` 128,000, the output limit, for a
-cataloged model through `ModelClient::anthropic`, and otherwise 16,000
-(`ProviderSpec::with_fallback_max_tokens`). Usage counts cache reads and cache writes as
-input, and `Usage::cache_write` reports the writes. A `refusal` or `max_tokens` stop
-fails as an incomplete response, a `model_context_window_exceeded` stop or a "prompt is
-too long" `400` as a context overflow, and an HTTP `529` as `ErrorKind::Overloaded`.
+clear or elide earlier rounds still edit history. Where Anthropic enforces the check, a
+replay after such an edit fails with a `400` unless the request sets
+`thinking.block_binding.prefix_mismatch_behavior: "drop_block"` under the
+`thinking-binding-controls-2026-08-01` beta, and setting it opts an unenforced account
+into the check. The preset therefore sets it on every request that sends thinking only
+for the models Anthropic enforces for every account (Claude Fable 5.2, Mythos 5.1 and
+5.2). For the models it enforces only for accounts created on or after 2026-08-31
+(Claude Fable 5.1, Opus 5.5, Sonnet 5.5, and Haiku 5.5), requests leave it unset, so
+older accounts keep earlier thinking, and a request rejected for an invalidated block is
+sent once more with it. Either way the API then drops that thinking for the request, so
+long sessions can lose it. A request without an effort that replays thinking sends the
+thinking object only for the models that run the check. Every Claude model shares one
+reasoning family, and a switch to another provider carries that reasoning as a short
+note. The API requires an output bound, so a request without one sends `max_tokens`
+128,000, the output limit, for a cataloged model through `ModelClient::anthropic`, and
+otherwise 16,000 (`ProviderSpec::with_fallback_max_tokens`). Usage counts cache reads
+and cache writes as input, and `Usage::cache_write` reports the writes. A `refusal` or
+`max_tokens` stop fails as an incomplete response, a `model_context_window_exceeded`
+stop or a "prompt is too long" `400` as a context overflow, and an HTTP `529` as
+`ErrorKind::Overloaded`.
 
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and

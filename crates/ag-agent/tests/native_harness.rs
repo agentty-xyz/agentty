@@ -1496,17 +1496,15 @@ async fn claude_turn_streams_messages_and_replays_signed_thinking_with_tool_resu
         assert_eq!(body["max_tokens"], 128_000);
         assert_eq!(body["output_config"]["effort"], "low");
         assert_eq!(body["output_config"]["format"]["type"], "json_schema");
-        assert_eq!(
-            body["thinking"]["block_binding"]["prefix_mismatch_behavior"],
-            "drop_block"
-        );
+        // Claude Opus 5.5 checks thinking bindings only for newer accounts,
+        // so an unchanged history leaves the binding to the account.
+        assert_eq!(body["thinking"].get("block_binding"), None);
     }
-    assert!(requests.iter().all(|request| {
-        request
-            .headers
-            .get("anthropic-beta")
-            .is_some_and(|value| value == "thinking-binding-controls-2026-08-01")
-    }));
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("anthropic-beta"))
+    );
     let replayed = bodies[1]["messages"].as_array().expect("messages");
     let assistant = replayed
         .iter()

@@ -266,6 +266,31 @@ pub struct ProviderSpec {
     pub(crate) retry: RetryPolicy,
     pub(crate) stream_usage: StreamUsage,
     pub(crate) structured_output: StructuredOutputMode,
+    pub(crate) thinking_binding: ThinkingBinding,
+}
+
+/// How an Anthropic Messages model treats replayed signed thinking whose
+/// conversation changed since the model produced it.
+///
+/// Claude models from Claude Fable 5.1 on bind each thinking block to the
+/// conversation before it. Where the check is enforced, a request replaying
+/// a block after an earlier message changed fails with a `400` unless it
+/// sets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`
+/// under the `thinking-binding-controls-2026-08-01` beta. Setting the field
+/// opts the request into enforcement, so an account the check does not
+/// enforce, which keeps such blocks, would lose them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ThinkingBinding {
+    /// The model runs no conversation check, or is unknown.
+    #[default]
+    Unchecked,
+    /// The check is enforced for some accounts only, such as those created
+    /// on or after 2026-08-31: requests leave the field unset, and one
+    /// rejected for an invalidated block is sent once more dropping it.
+    OnRejection,
+    /// The check is enforced for every account: every request that sends
+    /// thinking drops invalidated blocks.
+    Always,
 }
 
 /// Whether an Anthropic Messages request marks its stable prefix with
@@ -334,6 +359,7 @@ impl fmt::Debug for ProviderSpec {
             .field("overflow_markers", &self.overflow_markers)
             .field("retry", &self.retry)
             .field("stream_usage", &self.stream_usage)
+            .field("thinking_binding", &self.thinking_binding)
             .finish()
     }
 }
@@ -419,7 +445,17 @@ impl ProviderSpec {
             } else {
                 StructuredOutputMode::JsonSchema
             },
+            thinking_binding: ThinkingBinding::Unchecked,
         }
+    }
+
+    /// Sets how the model treats replayed thinking whose conversation
+    /// changed, as the Anthropic preset declares per model.
+    #[must_use]
+    pub(crate) fn with_thinking_binding(mut self, thinking_binding: ThinkingBinding) -> Self {
+        self.thinking_binding = thinking_binding;
+
+        self
     }
 
     /// Returns the routing prefix of this provider's model identifiers.

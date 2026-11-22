@@ -922,7 +922,6 @@ async fn test_harness_session_runs_on_claude_with_an_api_key() -> E2eResult {
     assert!(body.contains(r#""max_tokens":128000"#));
     assert!(body.contains(r#""tool_use_id":"toolu-write""#));
     assert!(body.contains(r#""signature":"sig-e2e""#));
-    assert!(body.contains(r#""prefix_mismatch_behavior":"drop_block""#));
 
     Ok(())
 }

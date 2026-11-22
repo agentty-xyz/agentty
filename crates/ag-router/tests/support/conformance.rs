@@ -19,12 +19,13 @@
 //! then matched to the serialized key order; they have since gained
 //! `"stream":true` and a `"cache_control":{"type":"ephemeral"}` breakpoint
 //! on the tool, the `system` block, and the last message's last block, with
-//! their `content-length` 125 bytes longer, and then, on requests that send
-//! thinking, the `thinking-binding-controls-2026-08-01` `anthropic-beta`
-//! header and a `"block_binding":{"prefix_mismatch_behavior":"drop_block"}`
-//! thinking field, 58 bytes longer. The `claude-fable-5-2`,
+//! their `content-length` 125 bytes longer. The `claude-fable-5-2`,
 //! `claude-sonnet-5-5`, and `claude-haiku-5-5` fixtures were written the
-//! same way after that. The `anthropic_messages/`
+//! same way after that; `claude-fable-5-2`, whose thinking-binding check
+//! Anthropic enforces for every account, also carries the
+//! `thinking-binding-controls-2026-08-01` `anthropic-beta` header and a
+//! `"block_binding":{"prefix_mismatch_behavior":"drop_block"}` thinking
+//! field. The `anthropic_messages/`
 //! responses follow the same reference:
 //!
 //! ```text

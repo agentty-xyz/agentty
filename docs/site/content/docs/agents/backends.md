@@ -389,9 +389,12 @@ agentty --experimental-harness   # then choose a claude-* model under ag-harness
   cached. A `claude-haiku-5-5` request whose prompt exceeds 100,000 tokens, cached
   tokens included, costs five times its listed rates, which long sessions can reach;
   reported costs include it.
-- When fitting a long session to the context window rewrites earlier turns, the API
-  drops the reasoning recorded after them instead of rejecting the request, so the model
-  continues without it.
+- When fitting a long session to the context window rewrites earlier turns, Anthropic
+  may refuse the reasoning recorded after them: always for `claude-fable-5-2`, and for
+  the 5.5 models only on API keys of organizations created on or after August 31, 2026.
+  The harness then has the API drop that reasoning, re-sending a refused 5.5 request
+  once, and the model continues without it; older organizations keep it on the 5.5
+  models.
 - `ANTHROPIC_` variables and `CLAUDE_CODE_OAUTH_TOKEN` are removed from the `bash`
   environment.
 

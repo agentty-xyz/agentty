@@ -28,7 +28,7 @@ use crate::credential::CredentialSource;
 use crate::model::ReasoningEffort;
 use crate::provider_spec::{
     Auth, EffortNames, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
-    StructuredOutputMode, ThinkingOptions, WireProtocol,
+    StructuredOutputMode, ThinkingBinding, ThinkingOptions, WireProtocol,
 };
 
 /// The Anthropic API's `400` message for input over the window, as in
@@ -52,6 +52,21 @@ const ANTHROPIC_EFFORT_PREFIXES: [&str; 9] = [
 /// Prefixes of the Claude models whose efforts stop at `max` without
 /// `xhigh`, which arrived with Claude Opus 4.7.
 const ANTHROPIC_NO_XHIGH_PREFIXES: [&str; 2] = ["claude-opus-4-6", "claude-sonnet-4-6"];
+
+/// Prefixes of the Claude models whose thinking-binding check Anthropic
+/// enforces for every account; see [`ThinkingBinding::Always`].
+const ANTHROPIC_UNIVERSAL_BINDING_PREFIXES: [&str; 3] =
+    ["claude-fable-5-2", "claude-mythos-5-1", "claude-mythos-5-2"];
+
+/// Prefixes of the Claude models whose thinking-binding check Anthropic
+/// enforces only for accounts created on or after 2026-08-31; see
+/// [`ThinkingBinding::OnRejection`].
+const ANTHROPIC_ACCOUNT_BINDING_PREFIXES: [&str; 4] = [
+    "claude-fable-5-1",
+    "claude-haiku-5-5",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+];
 
 /// Kimi's `400` message for input over the window, as in "Your request
 /// exceeded model token limit: 262144 (requested: 422274)".
@@ -100,6 +115,13 @@ pub fn anthropic(
     } else {
         ReasoningMapping::Effort(EffortNames::default())
     };
+    let thinking_binding = if has_prefix(&ANTHROPIC_UNIVERSAL_BINDING_PREFIXES) {
+        ThinkingBinding::Always
+    } else if has_prefix(&ANTHROPIC_ACCOUNT_BINDING_PREFIXES) {
+        ThinkingBinding::OnRejection
+    } else {
+        ThinkingBinding::Unchecked
+    };
 
     ProviderSpec::new("anthropic", WireProtocol::AnthropicMessages, base_url)
         .for_model(model)
@@ -110,6 +132,7 @@ pub fn anthropic(
         .with_display_name("Anthropic")
         .with_overflow_marker(ANTHROPIC_CONTEXT_OVERFLOW)
         .with_reasoning(reasoning)
+        .with_thinking_binding(thinking_binding)
 }
 
 /// `OpenAI` models billed to the user's `ChatGPT` plan through "Sign in with

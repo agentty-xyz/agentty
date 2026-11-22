@@ -289,18 +289,17 @@ async fn replays_a_final_answer_after_its_thinking_and_omits_other_reasoning()
     Ok(())
 }
 
-#[tokio::test]
-async fn a_reduced_history_replaying_thinking_asks_to_drop_invalidated_blocks()
--> Result<(), Box<dyn Error>> {
-    // Arrange
+/// Returns a history whose first answer lost its reasoning to context
+/// fitting, an edit of an earlier message, while the later answer keeps
+/// its signed thinking.
+fn reduced_history() -> Vec<ModelMessage> {
     let thinking = json!([
         {"type": "thinking", "thinking": "", "signature": "sig-2"},
         {"type": "text"}
     ])
     .to_string();
-    // Context fitting cleared the first answer's reasoning, an edit of an
-    // earlier message, while the later answer keeps its signed thinking.
-    let history = vec![
+
+    vec![
         ModelMessage::User("Find the name".to_string()),
         ModelMessage::Assistant(r#"{"name":"Ada"}"#.to_string()),
         ModelMessage::User("And again".to_string()),
@@ -309,61 +308,170 @@ async fn a_reduced_history_replaying_thinking_asks_to_drop_invalidated_blocks()
             reasoning_content: thinking,
         },
         ModelMessage::User("Once more".to_string()),
+    ]
+}
+
+/// Returns the `anthropic-beta` header `request` sent, if any.
+fn beta(request: &wiremock::Request) -> Option<String> {
+    request
+        .headers
+        .get("anthropic-beta")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn replayed_thinking_drops_invalidated_blocks_up_front_only_where_every_account_is_checked()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let models = [
+        "claude-fable-5-2",
+        "claude-sonnet-5-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5",
     ];
-    let without_effort = server(400, "{}").await;
     let with_betas = server(400, "{}").await;
-    let without_mapping = server(400, "{}").await;
-    let mut with_effort = structured("anthropic/claude-fable-5-2", history.clone())?;
+    let mut with_effort = structured("anthropic/claude-fable-5-2", reduced_history())?;
     with_effort.options = conformance::options(Some(High), false, None);
 
     // Act
-    let _ = Router::new([anthropic(&without_effort, "claude-fable-5-2")])
-        .execute(structured("anthropic/claude-fable-5-2", history.clone())?)
-        .await;
+    let mut received = Vec::new();
+    for model in models {
+        let server = server(400, "{}").await;
+        let _ = Router::new([anthropic(&server, model)])
+            .execute(structured(
+                &format!("anthropic/{model}"),
+                reduced_history(),
+            )?)
+            .await;
+        received.push(conformance::only_request(&server).await?);
+    }
     let _ = Router::new([anthropic(&with_betas, "claude-fable-5-2")
         .with_header("anthropic-beta", "files-api-2025-04-14")])
     .execute(with_effort)
     .await;
-    let _ = Router::new([anthropic(&without_mapping, "claude-haiku-4-5")])
-        .execute(structured("anthropic/claude-haiku-4-5", history)?)
-        .await;
 
     // Assert
-    let drop_blocks = json!({
-        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
-        "display": "summarized",
-        "type": "adaptive"
-    });
-    let beta = |request: &wiremock::Request| {
-        request
-            .headers
-            .get("anthropic-beta")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
-    };
-    let request = conformance::only_request(&without_effort).await?;
-    let body: Value = serde_json::from_slice(&request.body)?;
-    assert_eq!(body["thinking"], drop_blocks);
-    assert_eq!(body["output_config"].get("effort"), None);
+    let bodies = received
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Claude Fable 5.2 checks every account, so a request without an effort
+    // still sends the thinking object that drops invalidated blocks.
     assert_eq!(
-        body["messages"][3]["content"][0],
+        bodies[0]["thinking"],
+        json!({
+            "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+            "display": "summarized",
+            "type": "adaptive"
+        })
+    );
+    assert_eq!(bodies[0]["output_config"].get("effort"), None);
+    assert_eq!(
+        bodies[0]["messages"][3]["content"][0],
         json!({"type": "thinking", "thinking": "", "signature": "sig-2"})
     );
     assert_eq!(
-        beta(&request).as_deref(),
+        beta(&received[0]).as_deref(),
         Some("thinking-binding-controls-2026-08-01")
     );
+    // Claude Sonnet 5.5 checks only newer accounts: older ones keep the
+    // blocks, so the request leaves the binding to the account.
+    assert_eq!(
+        bodies[1]["thinking"],
+        json!({"display": "summarized", "type": "adaptive"})
+    );
+    assert_eq!(beta(&received[1]), None);
+    // Claude Opus 4.8 runs no check and thinks only when asked, and Claude
+    // Haiku 4.5 takes no effort: neither turns thinking on for a replay.
+    for index in [2, 3] {
+        assert_eq!(bodies[index].get("thinking"), None, "{}", models[index]);
+        assert_eq!(beta(&received[index]), None, "{}", models[index]);
+    }
     let request = conformance::only_request(&with_betas).await?;
-    let body: Value = serde_json::from_slice(&request.body)?;
-    assert_eq!(body["thinking"], drop_blocks);
     assert_eq!(
         beta(&request).as_deref(),
         Some("files-api-2025-04-14,thinking-binding-controls-2026-08-01")
     );
-    let request = conformance::only_request(&without_mapping).await?;
-    let body: Value = serde_json::from_slice(&request.body)?;
-    assert_eq!(body.get("thinking"), None);
-    assert_eq!(beta(&request), None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rejected_thinking_binding_is_sent_once_more_dropping_invalidated_blocks()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let rejection = json!({
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "messages.3.content.0: Invalid `signature` in `thinking` block. The \
+                        block is bound to a different conversation."
+        }
+    })
+    .to_string();
+    let rejecting = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_raw(rejection.clone(), "application/json"),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&rejecting)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MESSAGE, "application/json"))
+        .with_priority(2)
+        .mount(&rejecting)
+        .await;
+    let other_rejection = server(400, "{}").await;
+    let already_dropping = server(400, &rejection).await;
+
+    // Act
+    let retried = Router::new([anthropic(&rejecting, "claude-sonnet-5-5")])
+        .execute(structured(
+            "anthropic/claude-sonnet-5-5",
+            reduced_history(),
+        )?)
+        .await;
+    let other = Router::new([anthropic(&other_rejection, "claude-sonnet-5-5")])
+        .execute(structured(
+            "anthropic/claude-sonnet-5-5",
+            reduced_history(),
+        )?)
+        .await;
+    let dropping = Router::new([anthropic(&already_dropping, "claude-fable-5-2")])
+        .execute(structured("anthropic/claude-fable-5-2", reduced_history())?)
+        .await;
+
+    // Assert
+    assert!(retried.is_ok(), "{retried:?}");
+    let requests = rejecting
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    assert_eq!(requests.len(), 2);
+    let first: Value = serde_json::from_slice(&requests[0].body)?;
+    let second: Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(first["thinking"].get("block_binding"), None);
+    assert_eq!(beta(&requests[0]), None);
+    assert_eq!(
+        second["thinking"]["block_binding"],
+        json!({"prefix_mismatch_behavior": "drop_block"})
+    );
+    assert_eq!(
+        beta(&requests[1]).as_deref(),
+        Some("thinking-binding-controls-2026-08-01")
+    );
+    assert_eq!(first["messages"], second["messages"]);
+    // Other rejections, and one for a request already dropping, fail as
+    // before after one request.
+    assert!(other.is_err());
+    conformance::only_request(&other_rejection).await?;
+    assert!(dropping.is_err());
+    conformance::only_request(&already_dropping).await?;
 
     Ok(())
 }
