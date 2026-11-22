@@ -52,7 +52,12 @@ pub(crate) fn keypair() -> TestResult<StaticKeypair> {
 
 /// Opens a WebSocket to `path` on the relay.
 pub(crate) async fn open(relay: &RelayHandle, path: &str) -> TestResult<Client> {
-    let (client, _) = connect_async(format!("ws://{}{path}", relay.local_addr())).await?;
+    open_at(relay.local_addr(), path).await
+}
+
+/// Opens a WebSocket to `path` on the relay listening at `address`.
+pub(crate) async fn open_at(address: SocketAddr, path: &str) -> TestResult<Client> {
+    let (client, _) = connect_async(format!("ws://{address}{path}")).await?;
 
     Ok(client)
 }
@@ -85,7 +90,15 @@ pub(crate) async fn prove_key(control: &mut Client, instance: &StaticKeypair) ->
 
 /// Registers `instance` and returns its confirmed control connection.
 pub(crate) async fn register(relay: &RelayHandle, instance: &StaticKeypair) -> TestResult<Client> {
-    let mut control = open(relay, REGISTER_PATH).await?;
+    register_at(relay.local_addr(), instance).await
+}
+
+/// Registers `instance` with the relay listening at `address`.
+pub(crate) async fn register_at(
+    address: SocketAddr,
+    instance: &StaticKeypair,
+) -> TestResult<Client> {
+    let mut control = open_at(address, REGISTER_PATH).await?;
     prove_key(&mut control, instance).await?;
     let confirmation = next_text(&mut control).await?;
     if confirmation != REGISTERED_MESSAGE {
@@ -93,6 +106,18 @@ pub(crate) async fn register(relay: &RelayHandle, instance: &StaticKeypair) -> T
     }
 
     Ok(control)
+}
+
+/// Proves `instance` to the relay listening at `address` and returns the
+/// code and reason of the close frame that refuses its registration.
+pub(crate) async fn refused_registration(
+    address: SocketAddr,
+    instance: &StaticKeypair,
+) -> TestResult<(u16, String)> {
+    let mut control = open_at(address, REGISTER_PATH).await?;
+    prove_key(&mut control, instance).await?;
+
+    next_close(&mut control).await
 }
 
 /// Opens a device stream toward `instance`.

@@ -3,10 +3,11 @@ use axum::extract::ws::close_code;
 use super::CloseReason;
 
 /// Every reason, in declaration order.
-const REASONS: [CloseReason; 13] = [
+const REASONS: [CloseReason; 14] = [
     CloseReason::HandshakeFailed,
     CloseReason::InstanceBusy,
     CloseReason::NoAnswer,
+    CloseReason::NotAdmitted,
     CloseReason::PeerLeft,
     CloseReason::RateLimited,
     CloseReason::RelayFull,

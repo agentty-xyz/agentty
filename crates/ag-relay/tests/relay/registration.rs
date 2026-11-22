@@ -8,8 +8,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
     TestResult, connect_device, keypair, next_binary, next_close, next_ping, next_stream_id,
-    next_text, open, open_control_from, prove_key, refused_status, register, send_binary, start,
-    start_with_header,
+    next_text, open, open_control_from, prove_key, refused_registration, refused_status, register,
+    send_binary, start, start_with_header,
 };
 
 #[tokio::test]
@@ -193,9 +193,7 @@ async fn instance_limits_close_extra_registrations() -> TestResult {
     let _first = register(&relay, &keypair()?).await?;
 
     // Act
-    let mut same_address = open(&relay, REGISTER_PATH).await?;
-    prove_key(&mut same_address, &keypair()?).await?;
-    let close = next_close(&mut same_address).await?;
+    let close = refused_registration(relay.local_addr(), &keypair()?).await?;
     let mut other_address = open_control_from(&relay, "203.0.113.9").await?;
     prove_key(&mut other_address, &keypair()?).await?;
     let confirmation = next_text(&mut other_address).await?;

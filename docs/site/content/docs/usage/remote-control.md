@@ -181,6 +181,21 @@ reach the same machine. `--ha=false` creates one instead of Fly's default two; d
 scale it up. Then start Agentty with `--remote-relay wss://<name>.fly.dev`. For your own
 domain, run `fly certs add <domain>` and add the DNS records it prints.
 
+### Admit Only Your Instances
+
+<a id="usage-remote-control-relay-admission"></a> A relay registers every Agentty that
+proves its key. To serve only your own, pass `--allow-instance` with each instance's
+identifier, repeated for several; on Fly.io, add it to the `app` line under
+`[processes]` in `relay.fly.toml`. The relay refuses any other instance, which then
+shows the relay as `Connecting` and keeps retrying, with waits that grow to 30 seconds.
+
+The identifier is the SHA-256 digest of the instance key that the pairing link carries
+after `key=`. This prints it:
+
+```sh
+printf '%s' <key> | xxd -r -p | shasum -a 256
+```
+
 ### Pair Through the Relay
 
 With a relay, the popup also shows the relay state, a pairing link, and a QR code of the

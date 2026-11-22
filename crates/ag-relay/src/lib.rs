@@ -13,7 +13,9 @@
 //!   text message of [`STREAM_MESSAGE_PREFIX`] followed by a stream identifier
 //!   for each device that connects. The instance identifier is the fingerprint
 //!   of the proven key. Registering again replaces the earlier control
-//!   connection.
+//!   connection. When the [`AdmissionPolicy`] passed to
+//!   [`start_with_admission`] refuses the identifier, the relay closes the
+//!   connection instead of confirming it; [`start`] admits every instance.
 //! - [`CONNECT_PATH_PREFIX`] followed by an instance identifier: a device opens
 //!   a stream. The upgrade is refused with `404` when no such instance is
 //!   registered.
@@ -36,6 +38,7 @@
 //! the relay speaks unencrypted HTTP: run it behind a reverse proxy that
 //! terminates TLS and limits connections.
 
+mod admission;
 mod close;
 mod control;
 mod limit;
@@ -45,8 +48,9 @@ mod registry;
 mod server;
 mod stream;
 
+pub use admission::{AdmissionError, AdmissionPolicy, InstanceAllowList};
 pub use limit::RelayLimits;
 pub use server::{
     ACCEPT_PATH_PREFIX, CONNECT_PATH_PREFIX, REGISTER_PATH, REGISTERED_MESSAGE, RelayConfig,
-    RelayError, RelayHandle, STREAM_MESSAGE_PREFIX, start,
+    RelayError, RelayHandle, STREAM_MESSAGE_PREFIX, start, start_with_admission,
 };

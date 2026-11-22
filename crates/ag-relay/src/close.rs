@@ -11,6 +11,8 @@ pub(crate) enum CloseReason {
     InstanceBusy,
     /// The instance did not answer the stream in time.
     NoAnswer,
+    /// The admission policy refused the instance.
+    NotAdmitted,
     /// The other end of the stream left.
     PeerLeft,
     /// The stream carried more bytes than its budget allows.
@@ -27,7 +29,8 @@ pub(crate) enum CloseReason {
     TooManyInstances,
     /// The instance holds as many streams as it may.
     TooManyStreams,
-    /// The relay could not create a stream identifier.
+    /// The relay could not create a stream identifier, or its admission
+    /// policy failed or did not decide in time.
     Unavailable,
     /// No instance is registered under the requested identifier.
     UnknownInstance,
@@ -40,6 +43,7 @@ impl CloseReason {
             Self::HandshakeFailed => "Handshake failed",
             Self::InstanceBusy => "Instance is busy",
             Self::NoAnswer => "Instance did not answer",
+            Self::NotAdmitted => "Instance is not admitted",
             Self::PeerLeft => "Peer left",
             Self::RateLimited => "Rate limit exceeded",
             Self::RelayFull => "Relay is full",
@@ -61,6 +65,7 @@ impl CloseReason {
             Self::NoAnswer | Self::RelayStopped | Self::Unavailable => close_code::AWAY,
             Self::HandshakeFailed
             | Self::InstanceBusy
+            | Self::NotAdmitted
             | Self::RateLimited
             | Self::RelayFull
             | Self::Replaced

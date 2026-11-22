@@ -15,7 +15,8 @@ use crate::server::{REGISTERED_MESSAGE, RelayState, STREAM_MESSAGE_PREFIX};
 
 /// Runs one control connection until the instance leaves, a newer
 /// registration replaces it, or the relay stops. `handshake` is held until
-/// the instance has proven its key.
+/// the instance has proven its key and been admitted, so admission
+/// decisions in progress count against the handshake limits.
 pub(crate) async fn serve(
     socket: WebSocket,
     state: Arc<RelayState>,
@@ -24,16 +25,13 @@ pub(crate) async fn serve(
 ) {
     let _open_socket = state.track_socket();
     let mut instance = Peer::new(socket, state.limits.write_timeout);
-    let authenticated = tokio::select! {
+    let admitted = tokio::select! {
         biased;
         () = state.stopping() => Err(CloseReason::RelayStopped),
-        key = timeout(state.limits.handshake_timeout, authenticate(&mut instance)) => {
-            key.ok().flatten().ok_or(CloseReason::HandshakeFailed)
-        }
+        admitted = authenticate_and_admit(&mut instance, &state) => admitted,
     };
     drop(handshake);
-    let registered = authenticated.and_then(|key| {
-        let instance_id = key.fingerprint();
+    let registered = admitted.and_then(|instance_id| {
         let registration = state
             .registry
             .register(&instance_id, address, &state.limits)?;
@@ -57,6 +55,36 @@ pub(crate) async fn serve(
         .unregister(&instance_id, registration.generation);
     if let Some(reason) = reason {
         instance.close(reason).await;
+    }
+}
+
+/// Proves the instance's key within [`crate::RelayLimits::handshake_timeout`]
+/// and asks the admission policy about its identifier within
+/// [`crate::RelayLimits::admission_timeout`]. Returns the admitted identifier.
+///
+/// A policy error or timeout refuses the instance as an unavailable relay,
+/// since a later attempt may succeed; an explicit refusal is reported as
+/// such.
+async fn authenticate_and_admit(
+    instance: &mut Peer,
+    state: &RelayState,
+) -> Result<String, CloseReason> {
+    let key = timeout(state.limits.handshake_timeout, authenticate(instance))
+        .await
+        .ok()
+        .flatten()
+        .ok_or(CloseReason::HandshakeFailed)?;
+    let instance_id = key.fingerprint();
+    let decision = timeout(
+        state.limits.admission_timeout,
+        state.admission.admit(&instance_id),
+    )
+    .await;
+
+    match decision {
+        Ok(Ok(true)) => Ok(instance_id),
+        Ok(Ok(false)) => Err(CloseReason::NotAdmitted),
+        Ok(Err(_)) | Err(_) => Err(CloseReason::Unavailable),
     }
 }
 

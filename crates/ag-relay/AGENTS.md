@@ -8,7 +8,9 @@ dials out, so the instance needs no open port.
 - Never read, decrypt, or log stream content. Devices and instances encrypt end to end;
   the relay only copies binary messages. Logs and metrics stay content-free.
 - Keep the relay stateless: registrations and streams live in memory, and a restart only
-  makes clients reconnect. Do not add accounts or a database.
+  makes clients reconnect. Do not add accounts or a database. Which instances may
+  register is decided by the `AdmissionPolicy` the embedder supplies; the relay stores
+  no decisions and fails closed when a policy errs or stalls.
 - Route only by instance identifier, the fingerprint of the key the instance proves with
   the `ag-noise` relay handshake. Stream identifiers are unguessable and reach only that
   instance's control connection.
