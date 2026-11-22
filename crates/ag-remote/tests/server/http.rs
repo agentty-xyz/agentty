@@ -39,12 +39,18 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // Act
     let page = get(addr, "/").await?;
     let script = get(addr, "/app.js").await?;
+    let device_key = get(addr, "/device_key.mjs").await?;
+    let noise = get(addr, "/noise.mjs").await?;
+    let relay = get(addr, "/relay.mjs").await?;
     let stylesheet = get(addr, "/app.css").await?;
 
     // Assert
     for (response, content_type) in [
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
+        (&device_key, "text/javascript; charset=utf-8"),
+        (&noise, "text/javascript; charset=utf-8"),
+        (&relay, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
     ] {
         assert!(response.starts_with("http/1.1 200 ok"));
@@ -58,7 +64,12 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         assert!(response.contains("referrer-policy: no-referrer"));
         assert!(response.contains("cache-control: no-store"));
     }
-    assert!(page.contains("<script src=\"/app.js\""));
+    assert!(page.contains("<script type=\"module\" src=\"app.js\""));
+    assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
+    assert!(script.contains("from \"./device_key.mjs\""));
+    assert!(script.contains("from \"./relay.mjs\""));
+    assert!(device_key.contains("from \"./noise.mjs\""));
+    assert!(relay.contains("from \"./noise.mjs\""));
 
     Ok(())
 }

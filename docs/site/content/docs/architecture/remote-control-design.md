@@ -25,8 +25,9 @@ flowchart LR
 - `ag-remote` owns the frame protocol, pairing, the loopback listener, the embedded web
   client, and the instance side of the relay link.
 - `ag-noise` owns the handshakes and encrypted sessions. It performs no I/O.
-- `ag-relay` joins a device's connection to one that an Agentty instance dials out. It
-  keeps no accounts and no database.
+- `ag-relay` joins a device's connection to one that an Agentty instance dials out, and
+  serves the web client so a pairing link opens it. It keeps no accounts and no
+  database.
 
 ## Trust model
 
@@ -34,9 +35,9 @@ The relay is untrusted. It learns which instance a device asks for, when they co
 and how much they send. It cannot read or change what they send, and it cannot pair a
 device: pairing still needs the one-time code and an approval in the terminal.
 
-Whoever serves the web client is trusted with the page's code. The relay will serve the
-pairing page, which has not shipped yet, so a malicious relay operator could serve an
-altered page. Running your own relay removes that party.
+Whoever serves the web client is trusted with the page's code. The relay serves it, so a
+malicious relay operator could serve an altered page. Running your own relay removes
+that party.
 
 ## Keys and handshakes
 
@@ -63,13 +64,11 @@ the code.
 
 ### The browser client is plain JavaScript on WebCrypto
 
-**Status:** decided; the relay pairing page that implements it has not shipped yet.
-
 **Context.** A browser that pairs through a relay must run the device side of the Noise
 handshake. It can do that with the Rust implementation compiled to WebAssembly, or with
 JavaScript that calls the browser's own cryptography (WebCrypto).
 
-**Decision.** The web client will implement the device handshake in plain JavaScript on
+**Decision.** The web client implements the device handshake in plain JavaScript on
 WebCrypto, with no build step.
 
 **Why.**
@@ -88,8 +87,8 @@ WebCrypto, with no build step.
 
 - The Noise patterns use AES-256-GCM, because browsers do not yet ship ChaCha20-Poly1305
   in WebCrypto by default. `ag-noise` must stay within what WebCrypto provides.
-- Two implementations of the device handshake will exist. A test must run the JavaScript
-  against `ag-noise` so they cannot drift apart.
+- Two implementations of the device handshake exist. An integration test runs the
+  JavaScript in Node.js against a real relay and server, so they cannot drift apart.
 - Relay pairing needs a browser with X25519 in WebCrypto, which the major browsers have
   shipped since early 2025, and a page served over HTTPS or from `localhost`. The
   loopback listener is unaffected.
@@ -101,6 +100,30 @@ readable device key, the weaker content security policy, and the extra toolchain
 **Revisit when** remote control needs an algorithm that browsers do not provide, such as
 a post-quantum key exchange. A small WebAssembly module for that one primitive would
 then be the narrower change.
+
+### Safari keeps the device key in a weaker form until it can store X25519 keys
+
+**Context.** Safari loses X25519 key objects that a page stores
+([WebKit bug 312279](https://bugs.webkit.org/show_bug.cgi?id=312279)), so a
+non-extractable device key would not survive a reload there. Every browser on iPhone and
+iPad uses Safari's engine.
+
+**Decision.** The Noise patterns stay on X25519. A browser that cannot read back a
+stored key object saves the private half encrypted under a second key that it can store.
+Page scripts could decrypt that copy, so those browsers get the protection the
+WebAssembly alternative would have given everywhere, not the non-extractable key.
+
+**Consequences.**
+
+- Nothing changes when Safari is fixed. The client checks at run time whether a stored
+  key object reads back, and on the first visit after the fix it moves the key to the
+  non-extractable form and deletes the weaker copy. The device stays paired.
+- The fallback can be removed once affected Safari versions are no longer in use.
+
+**Rejected: P-256 keys**, which Safari stores, either for the whole key exchange or as a
+separate signing key that proves the device. Both give Safari the non-extractable key
+now, but move remote control off the standard X25519 suite or add a signature step to
+the protocol for a browser bug that should be temporary.
 
 ### The relay is stateless and joins one connection per device
 

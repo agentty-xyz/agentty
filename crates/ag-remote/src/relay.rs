@@ -8,8 +8,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_noise::{Handshake, StaticKeypair};
+use ag_noise::{Handshake, PublicKey, StaticKeypair};
 use futures_util::{SinkExt, StreamExt};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rustls::{ClientConfig, RootCertStore};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
@@ -64,6 +65,26 @@ pub enum RelayStatus {
     Connected,
     /// Not registered: connecting, or waiting to retry.
     Connecting,
+}
+
+/// Builds the link a device opens to pair through the relay at `relay_url`.
+///
+/// `relay_url` is a `ws://` or `wss://` URL. The relay serves the web client
+/// at the same place over `http://` or `https://`, and the client reads the
+/// relay address, `instance_key`, and `pairing_code` from the fragment.
+/// Browsers keep the fragment to themselves, so the relay never sees the
+/// instance key or the one-time code.
+pub fn pairing_link(relay_url: &str, instance_key: &PublicKey, pairing_code: &str) -> String {
+    let relay_url = relay_url.trim_end_matches('/');
+    // `ws://` becomes `http://` and `wss://` becomes `https://`.
+    let page = format!("http{}", relay_url.get(2..).unwrap_or_default());
+
+    format!(
+        "{page}/#relay={}&key={}&code={}",
+        utf8_percent_encode(relay_url, NON_ALPHANUMERIC),
+        instance_key.to_hex(),
+        utf8_percent_encode(pairing_code, NON_ALPHANUMERIC),
+    )
 }
 
 /// Keeps this instance registered with the relay until the server stops,

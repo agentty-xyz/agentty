@@ -326,7 +326,8 @@ impl DeviceStore for MemoryDeviceStore {
     }
 }
 
-/// Session backend that records calls; `busy` sessions reject messages and
+/// Session backend that records calls; a session snapshot queues the
+/// messages sent to it, `busy` sessions reject messages, and
 /// every cancellation reports a missing session.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
@@ -361,7 +362,14 @@ impl SessionBackend for RecordingBackend {
             return Ok(None);
         }
 
-        Ok(Some(session(session_id)))
+        let prefix = format!("send:{session_id}:");
+        let sent = self
+            .calls()
+            .iter()
+            .filter_map(|call| call.strip_prefix(&prefix).map(str::to_string))
+            .collect();
+
+        Ok(Some(session(session_id, sent)))
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
@@ -435,8 +443,9 @@ impl SessionBackend for RecordingBackend {
     }
 }
 
-/// Builds a session with a hidden prompt, an answer, and one question.
-fn session(session_id: &SessionId) -> Session {
+/// Builds a session with a hidden prompt, an answer, one question, and
+/// `queued_messages` waiting behind its turn.
+fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
     Session {
         created_at: 10,
         draft_prompt: None,
@@ -451,7 +460,7 @@ fn session(session_id: &SessionId) -> Session {
             options: vec!["main".to_string()],
             text: "Which branch?".to_string(),
         }],
-        queued_messages: Vec::new(),
+        queued_messages,
         review_request: None,
         settings: SessionSettings {
             agent: ag_session::test_support::codex_selection(),

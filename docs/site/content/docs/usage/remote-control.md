@@ -63,18 +63,26 @@ over TLS.
 
 With a relay, the popup also shows the relay state, a pairing link, and a QR code of the
 link when the terminal is large enough. Scan the code or open the link on the other
-device, then approve the pairing as usual. On this computer, press `o` to open the link;
+device. The relay's pairing page opens with the code filled in: name the device, press
+`Pair`, then approve the pairing as usual. On this computer, press `o` to open the link;
 press `c` to copy it for another device. Copying uses the terminal clipboard, which
 `tmux` passes on only with `set-clipboard on`; otherwise select the link. The link
 carries the pairing code, so it works once.
 
-The relay pairing page is not available yet, so the link does not lead anywhere until it
-arrives in a later release.
+The browser remembers the pairing, so later visits to the relay's address connect
+without a link. Pairing through a relay needs an up-to-date browser, from 2025 or later,
+and a relay served over HTTPS.
 
 Traffic through the relay is encrypted between the device and Agentty. The relay sees
-when devices connect and how much they send, but not what they send. A device paired
-through a relay proves itself with its own key instead of a stored token. Agentty keeps
-its relay key in its database; removing it unpairs every relay device.
+when devices connect and how much they send, but not what they send. The relay also
+serves the pairing page, so use a relay you trust or run your own.
+
+A device paired through a relay proves itself with its own key instead of a stored
+token. The browser keeps that key where scripts on the page cannot read it. Safari,
+including every browser on iPhone and iPad, cannot store such a key yet, so there the
+key is kept in a form that a script running in the page could read; the page switches to
+the stronger form by itself once Safari supports it. Agentty keeps its relay key in its
+database; removing it unpairs every relay device.
 
 ## Security
 
@@ -101,3 +109,4 @@ run with the session's permissions, so treat a pairing like a login.
 - Remote devices see the sessions of the active project.
 - The transcript updates when a turn finishes; live streaming output is not shown.
 - Image attachments cannot be sent from a remote device.
+- A browser remembers one relay pairing for each relay address.

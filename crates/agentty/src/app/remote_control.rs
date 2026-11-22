@@ -10,10 +10,9 @@ use std::sync::Arc;
 
 use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
-    RemoteServerStatus, StaticKeypair,
+    RemoteServerStatus, StaticKeypair, pairing_link,
 };
 use ag_session::SessionService;
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use tokio::sync::{mpsc, watch};
 
 use crate::app::command_gateway::CommandInitiator;
@@ -398,29 +397,6 @@ impl App {
             }
         }
     }
-}
-
-/// Builds the link a device opens to pair through `relay_url`.
-///
-/// `relay_url` is a `ws://` or `wss://` URL, as `--remote-relay` requires.
-/// The relay serves the pairing page at the same place over `http://` or
-/// `https://`. Everything after `#` stays in the browser, so the relay never
-/// sees the instance key or the one-time code it carries.
-pub(crate) fn pairing_link(
-    relay_url: &str,
-    instance_key: &PublicKey,
-    pairing_code: &str,
-) -> String {
-    let relay_url = relay_url.trim_end_matches('/');
-    // `ws://` becomes `http://` and `wss://` becomes `https://`.
-    let page = format!("http{}", relay_url.get(2..).unwrap_or_default());
-
-    format!(
-        "{page}/#relay={}&key={}&code={}",
-        utf8_percent_encode(relay_url, NON_ALPHANUMERIC),
-        instance_key.to_hex(),
-        utf8_percent_encode(pairing_code, NON_ALPHANUMERIC),
-    )
 }
 
 /// Stored form of an instance key: its private and public halves as

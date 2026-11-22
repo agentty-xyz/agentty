@@ -64,7 +64,6 @@ crossterm.workspace = true
 hex.workspace = true
 ignore.workspace = true
 image.workspace = true
-percent-encoding.workspace = true
 qrcode.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true

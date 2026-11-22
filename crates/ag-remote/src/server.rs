@@ -35,6 +35,42 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; st
                                        connect-src 'self'; img-src 'self'; base-uri 'none'; \
                                        form-action 'none'; frame-ancestors 'none'";
 
+/// Web client files by request path, with their content types. The page
+/// refers to the others by relative path, so a relay can serve the same
+/// files under a path prefix.
+const WEB_ASSETS: [(&str, &str, &str); 6] = [
+    (
+        "/",
+        "text/html; charset=utf-8",
+        include_str!("../assets/index.html"),
+    ),
+    (
+        "/app.css",
+        "text/css; charset=utf-8",
+        include_str!("../assets/app.css"),
+    ),
+    (
+        "/app.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../assets/app.js"),
+    ),
+    (
+        "/device_key.mjs",
+        "text/javascript; charset=utf-8",
+        include_str!("../assets/device_key.mjs"),
+    ),
+    (
+        "/noise.mjs",
+        "text/javascript; charset=utf-8",
+        include_str!("../assets/noise.mjs"),
+    ),
+    (
+        "/relay.mjs",
+        "text/javascript; charset=utf-8",
+        include_str!("../assets/relay.mjs"),
+    ),
+];
+
 /// Host capabilities the server drives.
 pub struct RemoteHost {
     /// Paired-device persistence.
@@ -136,10 +172,11 @@ pub(crate) async fn start_with_entropy(
         shutdown_rx.clone(),
         config.allowed_hosts,
     ));
-    let router = Router::new()
-        .route("/", get(index))
-        .route("/app.css", get(stylesheet))
-        .route("/app.js", get(script))
+    let router = WEB_ASSETS
+        .into_iter()
+        .fold(Router::new(), |router, (path, content_type, body)| {
+            router.route(path, get(move || async move { asset(content_type, body) }))
+        })
         .route("/ws", get(upgrade))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -629,27 +666,6 @@ fn replace_status(status: &mut RemoteServerStatus, next: RemoteServerStatus) -> 
     *status = next;
 
     true
-}
-
-/// Serves the web client page.
-async fn index() -> Response {
-    asset(
-        "text/html; charset=utf-8",
-        include_str!("../assets/index.html"),
-    )
-}
-
-/// Serves the web client stylesheet.
-async fn stylesheet() -> Response {
-    asset("text/css; charset=utf-8", include_str!("../assets/app.css"))
-}
-
-/// Serves the web client script.
-async fn script() -> Response {
-    asset(
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/app.js"),
-    )
 }
 
 /// Builds one embedded asset response with restrictive headers.

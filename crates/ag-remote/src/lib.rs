@@ -32,7 +32,7 @@ mod transport;
 pub use ag_noise::{PublicKey, StaticKeypair};
 pub use device::{DeviceStore, DeviceStoreError, NewRemoteDevice, RemoteDevice};
 pub use pairing::PairingCode;
-pub use relay::{RelayStatus, RemoteRelayConfig};
+pub use relay::{RelayStatus, RemoteRelayConfig, pairing_link};
 pub use server::{
     PairingRequest, RemoteConnection, RemoteError, RemoteHost, RemoteServerConfig,
     RemoteServerHandle, RemoteServerStatus, start,

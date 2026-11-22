@@ -20,7 +20,11 @@ through `ag_session::SessionService`.
   from token digests.
 - Keep the web client in `crates/ag-remote/assets/` free of build steps and external
   resources, and render untrusted text with `textContent` so the content security policy
-  can stay strict.
+  can stay strict. Refer to its files by relative path: `ag-relay` serves the same files
+  and may sit under a path prefix.
+- Keep the relay device key non-extractable wherever the browser can store it. The
+  encrypted copy in `device_key.mjs` is only for browsers that cannot, and must keep
+  upgrading itself.
 
 ## Integration
 
@@ -28,6 +32,9 @@ through `ag_session::SessionService`.
   deny the pairing requests listed in `RemoteServerStatus`, revoke devices through
   `RemoteServerHandle`, and `shutdown` when remote control is disabled. Consult
   `crates/ag-remote/src/lib.rs` for the contract.
+- Change `crates/ag-remote/assets/noise.mjs` together with `ag-noise`. The tests in
+  `crates/ag-remote/tests/server/web_client.rs` run it in Node.js against a real relay
+  and server.
 - Bump `PROTOCOL_VERSION` for any incompatible frame change, and update the web client
   and `crates/ag-remote/tests/server/` together with `crates/ag-remote/src/protocol.rs`.
 

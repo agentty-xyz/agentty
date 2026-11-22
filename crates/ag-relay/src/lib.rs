@@ -25,6 +25,12 @@
 //! directions until either side leaves, and closes both sides with the same
 //! reason. `GET /healthz` answers `ok` for liveness probes.
 //!
+//! `GET /` serves the remote-control web client, so the pairing link an
+//! instance shows opens it. The client reads the instance key and the
+//! one-time code from the link's fragment, which browsers never send, and
+//! then opens a device stream. Whoever runs the relay controls the code
+//! this page runs.
+//!
 //! [`RelayLimits`] bounds what clients hold once a request reaches the
 //! relay. It does not cap plain TCP connections or slow request headers, and
 //! the relay speaks unencrypted HTTP: run it behind a reverse proxy that
@@ -33,6 +39,7 @@
 mod close;
 mod control;
 mod limit;
+mod page;
 mod peer;
 mod registry;
 mod server;

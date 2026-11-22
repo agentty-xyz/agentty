@@ -6,9 +6,10 @@
               content="width=device-width, initial-scale=1, viewport-fit=cover">
         <meta name="color-scheme" content="light dark">
         <meta name="referrer" content="no-referrer">
+        <meta name="agentty-transport" content="local">
         <title>Agentty Remote</title>
-        <link rel="stylesheet" href="/app.css">
-        <script src="/app.js" defer></script>
+        <link rel="stylesheet" href="app.css">
+        <script type="module" src="app.js"></script>
     </head>
     <body>
         <header class="bar">
@@ -23,8 +24,11 @@
         <main>
             <section id="pair-view" class="view" hidden>
                 <h2>Pair this device</h2>
-                <p class="muted">
+                <p id="pair-hint-local" class="muted">
                     Run <code>/remote-control</code> in Agentty and enter the code it shows.
+                </p>
+                <p id="pair-hint-relay" class="muted" hidden>
+                    Open the pairing link or scan the QR code that <code>/remote-control</code> shows in Agentty.
                 </p>
                 <form id="pair-form" class="stack" autocomplete="off">
                     <label>

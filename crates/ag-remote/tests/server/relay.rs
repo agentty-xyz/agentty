@@ -96,7 +96,7 @@ async fn stream_ends(socket: &mut Client) -> TestResult<bool> {
 }
 
 /// Starts a relay on a free loopback port.
-async fn start_relay() -> TestResult<RelayHandle> {
+pub(crate) async fn start_relay() -> TestResult<RelayHandle> {
     let relay = ag_relay::start(RelayConfig {
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         client_address_header: None,
@@ -117,7 +117,7 @@ fn relay_limits() -> RelayLimits {
 }
 
 /// Starts a server linked to `relay` and waits until it is registered.
-async fn start_linked_server(
+pub(crate) async fn start_linked_server(
     relay: &RelayHandle,
     instance: &StaticKeypair,
 ) -> TestResult<TestServer> {
