@@ -1,0 +1,224 @@
+name: Publish Relay Image
+
+# Publishes the remote-control relay's multi-architecture image to GHCR.
+# Pushes to `main` that touch the relay tag it `main` and `sha-<commit>`;
+# `.github/workflows/release.yml` calls it after publishing each GitHub release,
+# which tags it with the release version and `latest`. Each architecture builds
+# natively and passes the relay's health and pairing page probe before the
+# manifest is published.
+on:
+  push:
+    branches: [main]
+    # Matches the inputs of the `Relay Image` pull request check.
+    paths:
+      - .github/workflows/publish-relay-image.yml
+      - Cargo.lock
+      - Cargo.toml
+      - container/relay.Containerfile
+      - container/relay.containerignore
+      - crates/ag-noise/**
+      - crates/ag-relay/**
+      - crates/ag-remote/assets/**
+      - rust-toolchain.toml
+  workflow_call:
+    inputs:
+      plan:
+        description: The `ag-release plan` JSON, which names the release version.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  RELAY_REPOSITORY: ghcr.io/agentty-xyz/agentty-relay
+  # Empty on pushes to `main`.
+  PLAN: ${{ inputs.plan }}
+
+# A newer push to `main` supersedes an older one, so `main` never moves back to
+# an older build. Release runs keep independent groups.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'publish-relay-image-main' || format('publish-relay-image-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and probe (${{ matrix.platform }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            runner_arch: X64
+          - architecture: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            runner_arch: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    # Each matrix leg sets only its architecture's digest; matrix job outputs
+    # are combined, and the publish job asserts both are present.
+    outputs:
+      digest_amd64: ${{ steps.push.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.push.outputs.digest_arm64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.runner_arch }}
+        run: test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
+
+      - name: Build candidate image
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          candidate_image="${RELAY_REPOSITORY}:build-${ARCHITECTURE}"
+          labels=(--label "org.opencontainers.image.revision=${GITHUB_SHA}")
+          if [ -n "$PLAN" ]; then
+            version=$(jq --raw-output --exit-status .version <<< "$PLAN")
+            labels+=(--label "org.opencontainers.image.version=${version}")
+          fi
+          podman build \
+            --platform "$PLATFORM" \
+            "${labels[@]}" \
+            --file container/relay.Containerfile \
+            --ignorefile container/relay.containerignore \
+            --tag "$candidate_image" \
+            .
+          test "$(podman image inspect --format '{{.Architecture}}' "$candidate_image")" = "$ARCHITECTURE"
+          # Later steps run and push this exact build by ID instead of
+          # re-resolving the mutable tag.
+          candidate_image_id=$(podman image inspect --format '{{.Id}}' "$candidate_image")
+          test -n "$candidate_image_id"
+          echo "CANDIDATE_IMAGE_ID=$candidate_image_id" >> "$GITHUB_ENV"
+
+      - name: Probe candidate image
+        run: |
+          container=$(podman run --detach --rm --publish 127.0.0.1::8787 \
+            "$CANDIDATE_IMAGE_ID" --client-address-header X-Real-IP)
+          trap 'podman stop --time 2 "$container" >/dev/null' EXIT
+          address=$(podman port "$container" 8787/tcp)
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent --output /dev/null "http://$address/healthz"; then break; fi
+            sleep 1
+          done
+          test "$(curl --fail --silent "http://$address/healthz")" = ok
+          page=$(curl --fail --silent "http://$address/")
+          [[ "$page" == *'name="agentty-transport" content="relay"'* ]]
+
+      - name: Authenticate with GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Push candidate image
+        id: push
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          digest_file=$(mktemp)
+          trap 'rm -f "$digest_file"' EXIT
+          podman push --digestfile "$digest_file" \
+            "$CANDIDATE_IMAGE_ID" "docker://${RELAY_REPOSITORY}:build-${ARCHITECTURE}"
+          # The publish job assembles the manifest from the probed images by
+          # digest instead of re-resolving the mutable `build-*` tags.
+          digest=$(sed -n '1p' "$digest_file")
+          test -n "$digest"
+          echo "digest_${ARCHITECTURE}=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Log out of GHCR
+        if: ${{ always() }}
+        run: podman logout ghcr.io || true
+
+  publish:
+    name: Publish and verify manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Choose tags
+        run: |
+          if [ -n "$PLAN" ]; then
+            version=$(jq --raw-output --exit-status .version <<< "$PLAN")
+            tags="${version} latest"
+          else
+            tags="sha-${GITHUB_SHA} main"
+          fi
+          echo "RELAY_TAGS=$tags" >> "$GITHUB_ENV"
+
+      - name: Authenticate with GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Assemble manifest
+        env:
+          DIGEST_AMD64: ${{ needs.build.outputs.digest_amd64 }}
+          DIGEST_ARM64: ${{ needs.build.outputs.digest_arm64 }}
+        run: |
+          test -n "$DIGEST_AMD64"
+          test -n "$DIGEST_ARM64"
+          podman manifest create relay-release
+          podman manifest add relay-release "docker://${RELAY_REPOSITORY}@${DIGEST_AMD64}"
+          podman manifest add relay-release "docker://${RELAY_REPOSITORY}@${DIGEST_ARM64}"
+
+      - name: Publish manifest
+        id: publish
+        run: |
+          digest_file=$(mktemp)
+          trap 'rm -f "$digest_file"' EXIT
+          read -r -a tags <<< "$RELAY_TAGS"
+          # The first tag is immutable; record its digest for verification.
+          podman manifest push --all --digestfile "$digest_file" \
+            relay-release "docker://${RELAY_REPOSITORY}:${tags[0]}"
+          digest=$(sed -n '1p' "$digest_file")
+          test -n "$digest"
+          for tag in "${tags[@]:1}"; do
+            podman manifest push --all relay-release "docker://${RELAY_REPOSITORY}:${tag}"
+          done
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Log out before anonymous verification
+        run: podman logout ghcr.io
+
+      # Fails while the package is private: GHCR creates new packages
+      # private, so a maintainer makes it public once after its first push.
+      - name: Verify published manifest
+        env:
+          PUBLISHED_IMAGE: ${{ env.RELAY_REPOSITORY }}@${{ steps.publish.outputs.digest }}
+        run: |
+          skopeo inspect --raw "docker://${PUBLISHED_IMAGE}" | jq -e '
+            (.mediaType == "application/vnd.oci.image.index.v1+json"
+              or .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")
+            and ([
+              .manifests[].platform
+              | select(.os == "linux")
+              | .architecture
+            ] | unique | sort == ["amd64", "arm64"])
+          '
+          podman pull --platform linux/amd64 "$PUBLISHED_IMAGE"
+          podman pull --platform linux/arm64 "$PUBLISHED_IMAGE"
+
+      - name: Report published image
+        env:
+          PUBLISHED_IMAGE: ${{ env.RELAY_REPOSITORY }}@${{ steps.publish.outputs.digest }}
+        run: |
+          {
+            printf '## Published relay image\n\n'
+            for tag in $RELAY_TAGS; do
+              printf -- '- `%s:%s`\n' "$RELAY_REPOSITORY" "$tag"
+            done
+            printf '\n`%s`\n' "$PUBLISHED_IMAGE"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,10 @@
 #   podman build --file container/relay.Containerfile \
 #     --ignorefile container/relay.containerignore --tag agentty-relay .
 #
+# `.github/workflows/publish-relay-image.yml` publishes it as
+# `ghcr.io/agentty-xyz/agentty-relay`: tagged `main` and `sha-<commit>` on
+# pushes to `main`, and with the version and `latest` for each release.
+#
 # The relay listens on port 8787 inside the container; publish that port to
 # choose the outside one. Arguments after the image name go to the relay, such
 # as `--client-address-header X-Real-IP` behind a reverse proxy.
