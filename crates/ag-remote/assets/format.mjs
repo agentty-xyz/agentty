@@ -1,5 +1,6 @@
-// Pure helpers of the remote control client: status rules, session list
-// grouping and filtering, transcript parsing, and unread tracking. Nothing
+// Pure helpers of the remote control client: status rules, session
+// figures and settings, list grouping and filtering, transcript parsing,
+// and unread tracking. Nothing
 // here touches the DOM, storage, or the clock, so Node tests cover it
 // directly; see crates/ag-remote/tests/web/format.test.mjs.
 
@@ -101,6 +102,104 @@ export function relativeTime(unixSeconds, nowSeconds) {
   }
 
   return Math.round(seconds / 86400) + "d";
+}
+
+// Formats active-work seconds as the terminal's timer does: `12s`,
+// `4m 12s`, `1h 2m 3s`.
+export function formatTimer(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  let label = "";
+  if (hours > 0) {
+    label += hours + "h ";
+  }
+  if (minutes > 0) {
+    label += minutes + "m ";
+  }
+
+  return label + (total % 60) + "s";
+}
+
+// Active-work seconds of a listed session at `nowSeconds`, or `null` when
+// it is not running or the host does not say.
+export function activeSeconds(summary, nowSeconds) {
+  const startedAt = summary?.in_progress_started_at;
+  if (!Number.isFinite(startedAt)) {
+    return null;
+  }
+  const before = summary.in_progress_total_seconds;
+
+  return (Number.isFinite(before) ? before : 0) + Math.max(0, nowSeconds - startedAt);
+}
+
+// What a listed session's figures show: the host's size label, the line
+// counts (`null` when unknown or both zero), the compact model name, and
+// whether its pull request can merge. Older hosts omit every figure.
+export function sessionFigures(summary) {
+  const added = summary?.added_lines;
+  const deleted = summary?.deleted_lines;
+  const hasLines = Number.isFinite(added) && Number.isFinite(deleted) && added + deleted > 0;
+
+  return {
+    lines: hasLines ? { added: added, deleted: deleted } : null,
+    model: text(summary?.model_short_name) || text(summary?.model),
+    isPrReady: summary?.review_ready === "ready" || summary?.review_ready === "ready_with_bypass",
+    size: text(summary?.size),
+  };
+}
+
+// The model a session runs, as `claude/opus-5.5`: the agent, then the
+// compact name the listing gives for the same model, or the model id.
+// `null` when the host names no model.
+export function modelLabel(session, summary = null) {
+  const model = text(session?.model);
+  if (!model) {
+    return null;
+  }
+  const short = summary?.model === model ? text(summary.model_short_name) : null;
+  const agent = text(session.agent);
+
+  return short && agent ? agent + "/" + short : model;
+}
+
+// The session settings the composer line shows, in order: the model with
+// its reasoning level, the answer style, and the speed. Missing ones are
+// left out.
+export function settingsParts(session, summary = null) {
+  const parts = [];
+  const model = modelLabel(session, summary);
+  const reasoning = text(session?.reasoning);
+  if (model) {
+    parts.push({ label: model, reasoning: reasoning, type: "model" });
+  }
+  const style = text(session?.response_style);
+  if (style) {
+    parts.push({ label: style, type: "style" });
+  }
+  const speed = text(session?.speed_mode);
+  if (speed) {
+    parts.push({ label: speed + " speed", type: "speed" });
+  }
+
+  return parts;
+}
+
+// How the header names a linked review request: `#1261 open · PR ready`.
+export function reviewLabel(reviewRequest) {
+  const id = text(reviewRequest?.display_id);
+  if (!id) {
+    return null;
+  }
+  const state = text(reviewRequest.state);
+  const summary = text(reviewRequest.status_summary);
+
+  return [id + (state ? " " + state.toLowerCase() : ""), summary].filter(Boolean).join(" · ");
+}
+
+// `value` when it is a non-empty string, otherwise `null`.
+function text(value) {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 // Splits `sessions` into the populated groups of `GROUPS`, in that order,

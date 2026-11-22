@@ -5,6 +5,7 @@ import test from "node:test";
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
 import {
   DRAFT_KEY_PREFIX,
+  clockSkew,
   collectAnswers,
   composerKeyAction,
   composerRows,
@@ -31,6 +32,7 @@ const ELEMENT_IDS = {
   cancel: "cancel",
   cancelDialog: "cancel-dialog",
   composer: "composer",
+  composerHint: "composer-hint",
   composerMeta: "composer-meta",
   gone: "session-gone",
   goneHome: "session-gone-home",
@@ -38,6 +40,7 @@ const ELEMENT_IDS = {
   jump: "jump",
   merge: "merge",
   mergeDialog: "merge-dialog",
+  mergeLines: "merge-lines",
   mergeTarget: "merge-target",
   message: "message",
   more: "session-more",
@@ -79,6 +82,7 @@ function session(overrides = {}) {
 function mountChat({
   capabilities = [],
   isFinePointer = true,
+  now = () => 0,
   respond = () => ({ kind: "accepted" }),
   sessionStorage = new MemoryStorage(),
 } = {}) {
@@ -96,6 +100,7 @@ function mountChat({
   const chat = createChat({
     document: document,
     elements: elements,
+    now: now,
     onHome: () => {
       homes += 1;
     },
@@ -832,6 +837,225 @@ test("the header shows the title and status, and a missing session leads home", 
   assert.equal(byId("session-status").hidden, true);
   assert.equal(byId("transcript").children.length, 0);
   assert.equal(byId("heading-sub").textContent, "");
+});
+
+// A snapshot with every detail a current host sends, and its entry in the
+// listing.
+function detailedSession(overrides = {}) {
+  return session({
+    agent: "claude",
+    base_branch: "main",
+    branch: "wt/3f9a1c2e",
+    model: "claude-opus-5-5",
+    reasoning: "high",
+    response_style: "balanced",
+    review_request: {
+      display_id: "#1261",
+      source_branch: "wt/3f9a1c2e",
+      state: "Open",
+      status_summary: "PR ready",
+      target_branch: "main",
+      title: "Serve the page",
+      web_url: "https://github.com/example/project/pull/1261",
+    },
+    speed_mode: "normal",
+    ...overrides,
+  });
+}
+
+function detailedSummary(overrides = {}) {
+  return {
+    added_lines: 64,
+    deleted_lines: 9,
+    id: "s1",
+    model: "claude-opus-5-5",
+    model_short_name: "opus-5.5",
+    review_ready: "ready",
+    size: "M",
+    status: "Review",
+    updated_at: 10,
+    ...overrides,
+  };
+}
+
+// The text of each part of the header's sub-line, after the status.
+function subParts(byId) {
+  return byId("heading-sub")
+    .children.slice(1)
+    .map((node) => node.textContent);
+}
+
+test("the header shows size, lines, branches, model and the review request", () => {
+  const { byId, chat } = mountChat();
+  chat.render(detailedSession(), detailedSummary());
+
+  assert.deepEqual(subParts(byId), [
+    "[M]",
+    "+64 -9",
+    "wt/3f9a1c2e → main",
+    "claude/opus-5.5 [high]",
+    "#1261 open · PR ready",
+  ]);
+  const sub = byId("heading-sub");
+  assert.equal(sub.querySelector(".add").textContent, "+64");
+  assert.equal(sub.querySelector(".del").textContent, "-9");
+  // The branch and model give way on a phone; the status takes their place.
+  assert.equal(sub.children[3].className, "wide-only");
+  assert.equal(sub.querySelector(".model").classList.contains("wide-only"), true);
+  const link = sub.querySelector("a");
+  assert.equal(link.getAttribute("href"), "https://github.com/example/project/pull/1261");
+  assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(link.getAttribute("target"), "_blank");
+  assert.equal(link.title, "Serve the page");
+});
+
+test("the header hides whatever an older host omits", () => {
+  const { byId, chat } = mountChat();
+  chat.render(session(), null);
+  assert.deepEqual(subParts(byId), []);
+  assert.equal(byId("heading-sub").textContent, "Review");
+
+  // Without a listing entry the model shows by its id, and the summary of
+  // another session is not used.
+  chat.render(
+    detailedSession({ base_branch: undefined, review_request: undefined }),
+    detailedSummary({ id: "s2" }),
+  );
+  assert.deepEqual(subParts(byId), ["wt/3f9a1c2e", "claude-opus-5-5 [high]"]);
+
+  chat.render(detailedSession({ reasoning: undefined }), { id: "s1", status: "Review" });
+  assert.deepEqual(subParts(byId), [
+    "wt/3f9a1c2e → main",
+    "claude-opus-5-5",
+    "#1261 open · PR ready",
+  ]);
+});
+
+test("a review request links only through the Markdown link filter", () => {
+  const { byId, chat } = mountChat();
+  for (const webUrl of ["javascript:alert(1)", "data:text/html,x", "/relative", ""]) {
+    chat.render(
+      detailedSession({
+        review_request: { display_id: "#9", state: "Open", title: "", web_url: webUrl },
+      }),
+    );
+    const sub = byId("heading-sub");
+    assert.equal(sub.querySelector("a"), null, webUrl);
+    assert.equal(sub.querySelector(".review").textContent, "#9 open", webUrl);
+    assert.equal(sub.querySelector(".review").title, "", webUrl);
+  }
+});
+
+test("a refresh keeps the header parts that did not change, and the focus on the link", () => {
+  const { byId, chat, document } = mountChat();
+  chat.render(detailedSession(), detailedSummary());
+  const link = byId("heading-sub").querySelector("a");
+  const size = byId("heading-sub").querySelector(".size");
+  link.focus();
+
+  chat.render(detailedSession({ updated_at: 11 }), detailedSummary({ added_lines: 70 }));
+  assert.equal(byId("heading-sub").querySelector("a"), link);
+  assert.equal(byId("heading-sub").querySelector(".size"), size);
+  assert.equal(document.activeElement, link);
+  assert.equal(byId("heading-sub").querySelector(".add").textContent, "+70");
+
+  // Parts that go away are removed, and the timer stays last.
+  chat.render(
+    detailedSession({ review_request: undefined, status: "InProgress" }),
+    detailedSummary({ in_progress_started_at: 0, status: "InProgress" }),
+  );
+  const sub = byId("heading-sub");
+  assert.equal(sub.querySelector("a"), null);
+  assert.equal(sub.children[sub.children.length - 1].className, "timer");
+  chat.render(detailedSession({ status: "InProgress" }), detailedSummary({ in_progress_started_at: 0 }));
+  assert.equal(sub.children[sub.children.length - 1].className, "timer");
+  assert.equal(sub.querySelector("a").textContent, "#1261 open · PR ready");
+});
+
+test("the timer allows for a device clock behind the host's", () => {
+  let time = 100;
+  const { byId, chat } = mountChat({ now: () => time });
+  // The host started the turn at 200 by its clock, so this device is at
+  // least 100 seconds behind.
+  chat.render(
+    detailedSession({ status: "InProgress" }),
+    detailedSummary({ in_progress_started_at: 200, in_progress_total_seconds: 10, updated_at: 190 }),
+  );
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 10s");
+  time = 105;
+  chat.tick();
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 15s");
+
+  assert.equal(clockSkew({ updated_at: 50 }, 100), 0);
+  assert.equal(clockSkew({ updated_at: 150 }, 100), 50);
+  assert.equal(clockSkew(null, 100), 0);
+});
+
+test("the header's timer counts while the session runs and goes when it stops", () => {
+  let time = 1000;
+  const { byId, chat } = mountChat({ now: () => time });
+  const running = detailedSummary({
+    in_progress_started_at: 900,
+    in_progress_total_seconds: 152,
+    status: "InProgress",
+  });
+  chat.render(detailedSession({ status: "InProgress" }), running);
+  const timer = byId("heading-sub").querySelector(".timer");
+  assert.equal(timer.textContent, "Timer 4m 12s");
+
+  time = 1001;
+  chat.tick();
+  assert.equal(byId("heading-sub").querySelector(".timer"), timer);
+  assert.equal(timer.textContent, "Timer 4m 13s");
+
+  chat.render(detailedSession(), detailedSummary({ in_progress_total_seconds: 253 }));
+  assert.equal(byId("heading-sub").querySelector(".timer"), null);
+  chat.tick();
+  assert.equal(byId("heading-sub").querySelector(".timer"), null);
+
+  // Ticking with no session open does nothing.
+  chat.close();
+  chat.tick();
+  assert.equal(byId("heading-sub").textContent, "");
+});
+
+test("the composer line shows the settings, and the key hint moves below", () => {
+  const { byId, chat } = mountChat();
+  chat.render(detailedSession(), detailedSummary());
+  assert.equal(
+    byId("composer-meta").textContent,
+    "claude/opus-5.5 [high]·balanced·normal speed",
+  );
+  assert.equal(byId("composer-meta").querySelector("b").textContent, "claude/opus-5.5");
+  const separators = byId("composer-meta").querySelectorAll(".sep");
+  assert.equal(separators.length, 2);
+  assert.equal(separators[0].getAttribute("aria-hidden"), "true");
+  assert.equal(byId("composer-hint").textContent, "Enter sends · Shift+Enter adds a line");
+
+  // An agent without a speed control sends no speed.
+  chat.render(detailedSession({ speed_mode: undefined }), detailedSummary());
+  assert.equal(byId("composer-meta").textContent, "claude/opus-5.5 [high]·balanced");
+
+  // An older host names no settings, so the hint stays in the line.
+  chat.render(session());
+  assert.equal(byId("composer-meta").textContent, "Enter sends · Shift+Enter adds a line");
+  assert.equal(byId("composer-hint").textContent, "");
+
+  chat.render(detailedSession());
+  chat.close();
+  assert.equal(byId("composer-hint").textContent, "");
+});
+
+test("the merge confirmation names the base branch and the line counts", () => {
+  const { byId, chat } = mountChat({ capabilities: ["merge"] });
+  chat.render(detailedSession(), detailedSummary());
+  assert.equal(byId("merge-target").textContent, "main");
+  assert.equal(byId("merge-lines").textContent, " (+64 -9)");
+
+  chat.render(detailedSession(), detailedSummary({ added_lines: 0, deleted_lines: 0 }));
+  assert.equal(byId("merge-lines").textContent, "");
+  chat.render(session(), null);
+  assert.equal(byId("merge-lines").textContent, "");
 });
 
 // A window whose timers run only when the test says so, and a clock the

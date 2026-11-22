@@ -53,8 +53,15 @@ The list groups sessions as the terminal does, with the archive collapsed. Type 
 `Filter sessions`, or press `/` to reach it, to match titles; `Esc` clears it. The
 `All`, `Needs you`, and `Running` buttons narrow the list by status. A dot marks a
 session that changed since you last opened it. Each browser tracks what it has seen on
-its own, so another device or a private window shows its own dots. With no session open,
-the page offers the sessions waiting for you.
+its own, so another device or a private window shows its own dots. Each row also shows
+the session's size, changed lines, model, and `PR ready` when its pull request can
+merge. With no session open, the page offers the sessions waiting for you.
+
+The header of the open session shows its size and changed lines, the session branch and
+its base branch, the model and reasoning level, a link to its pull request, and the
+active time while a turn runs. The line under the message box shows the model, reasoning
+level, answer style, and speed. An older Agentty sends fewer details, and the page
+leaves out what it does not know.
 
 The open session shows its transcript, with each activity summary in a box you can open
 or close. When you scroll up, new messages leave your place alone and `Jump to latest`
@@ -70,7 +77,7 @@ The `⋯` button in the session header offers `Cancel session`. When this Agentt
 devices stop a turn or merge, the page also shows `Stop` next to the send button while a
 turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` returns the
 session to review and keeps its changes; `Merge` asks before it merges the session into
-its base branch.
+its base branch, and names that branch and the changed lines.
 
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button

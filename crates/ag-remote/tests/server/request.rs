@@ -138,7 +138,17 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         RemoteResult::Ok(RemoteResponse::Sessions {
             sessions: vec![
                 summary("session-1", "Review", "Build it", 20),
-                summary("session-2", "InProgress", "Plan it", 30),
+                RemoteSessionSummary {
+                    added_lines: Some(64),
+                    deleted_lines: Some(9),
+                    in_progress_started_at: Some(100),
+                    in_progress_total_seconds: Some(12),
+                    model: Some("gpt-6.1-sol".to_string()),
+                    model_short_name: Some("gpt-6.1-sol".to_string()),
+                    reasoning: Some("high".to_string()),
+                    size: Some("M".to_string()),
+                    ..summary("session-2", "InProgress", "Plan it", 30)
+                },
             ],
         })
     );

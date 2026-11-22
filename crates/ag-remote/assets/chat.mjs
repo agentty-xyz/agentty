@@ -7,8 +7,18 @@
 // Functions take `document` and `window` as parameters, so the Node tests
 // in crates/ag-remote/tests/web/chat.test.mjs pass the fake DOM.
 
-import { parseActivity, parseNotice, statusInfo } from "./format.mjs";
-import { parseInlineMarkdown, parseMarkdown, renderMarkdown } from "./markdown.mjs";
+import {
+  activeSeconds,
+  formatTimer,
+  parseActivity,
+  parseNotice,
+  reviewLabel,
+  sessionFigures,
+  settingsParts,
+  statusInfo,
+} from "./format.mjs";
+import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
+import { lineCounts, separator } from "./session_list.mjs";
 
 // Unsent text of one session, in `sessionStorage`, under this prefix and
 // the session id.
@@ -251,15 +261,27 @@ export function createDrafts(window) {
 
 // Wires the open session. `elements` holds the nodes with the ids named in
 // index.html, keyed as in `app.js`. `request(body)` sends one request and
-// resolves with its result; `onHome()` returns to home.
+// resolves with its result; `onHome()` returns to home. `now()` returns
+// the time in seconds, for the header's timer.
 //
-// Returns `open(sessionId)`, `close()`, `render(session)` for a snapshot
-// (`null` when the session is gone), `setConnected(isConnected)`,
-// `setCapabilities(list)`, and `showLoadError(sessionId, message)`.
-export function createChat({ document, window, elements, request, onHome }) {
+// Returns `open(sessionId)`, `close()`, `render(session, summary)` for a
+// snapshot and the session's entry in the listing (`session` is `null`
+// when the session is gone), `setConnected(isConnected)`,
+// `setCapabilities(list)`, `tick()`, and
+// `showLoadError(sessionId, message)`.
+export function createChat({
+  document,
+  window,
+  elements,
+  request,
+  onHome,
+  now = () => Date.now() / 1000,
+}) {
   const drafts = createDrafts(window);
   const state = {
     capabilities: [],
+    // Seconds this device's clock is known to run behind the host's.
+    clockSkew: 0,
     isAnswering: false,
     isCanceling: false,
     isConnected: false,
@@ -273,6 +295,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     questionsKey: null,
     rendered: [],
     session: null,
+    // The open session's entry in the listing, with its figures.
+    summary: null,
     sessionId: null,
   };
 
@@ -299,10 +323,51 @@ export function createChat({ document, window, elements, request, onHome }) {
     elements.badge.replaceChildren(element(document, "i"), info.label);
     const line = element(document, "span", "status narrow-only status--" + info.tone);
     line.append(element(document, "i"), info.label);
-    elements.sub.replaceChildren(line);
+    // Parts that did not change stay in place, so a focused review link
+    // keeps its focus through a refresh.
+    updateChildren(elements.sub, [line, ...headerDetails(document, session, state.summary)]);
+    renderTimer();
     elements.sheetTitle.textContent = session.title || "No title";
     elements.sheetSub.textContent = info.label;
     renderActions();
+  }
+
+  // Shows how long the session has worked while it runs.
+  function renderTimer() {
+    const timer = elements.sub.querySelector(".timer");
+    const seconds = activeSeconds(state.summary, now() + state.clockSkew);
+    if (seconds === null) {
+      timer?.remove();
+
+      return;
+    }
+    const label = "Timer " + formatTimer(seconds);
+    if (timer) {
+      timer.textContent = label;
+    } else {
+      elements.sub.append(element(document, "span", "timer", label));
+    }
+  }
+
+  // Shows the session settings in the composer's line, or the key hint
+  // when the host names none.
+  function renderMeta(hint) {
+    const parts = settingsParts(state.session, state.summary);
+    elements.composerHint.textContent = parts.length > 0 ? hint : "";
+    if (parts.length === 0) {
+      elements.composerMeta.textContent = hint;
+
+      return;
+    }
+    const nodes = parts.flatMap((part, index) => {
+      const node =
+        part.type === "model"
+          ? modelNode(document, part)
+          : element(document, "span", null, part.label);
+
+      return index === 0 ? [node] : [separator(document), node];
+    });
+    elements.composerMeta.replaceChildren(...nodes);
   }
 
   // Shows the actions the status and the host allow. Merge sits in the
@@ -324,6 +389,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     const target = mergeTarget(state.session);
     elements.sheetMergeLabel.textContent = target ? "Merge into " + target : "Merge";
     elements.mergeTarget.textContent = target || "its base branch";
+    const lines = sessionFigures(state.summary).lines;
+    elements.mergeLines.textContent = lines ? " (+" + lines.added + " -" + lines.deleted + ")" : "";
   }
 
   function renderTranscript(messages) {
@@ -539,7 +606,7 @@ export function createChat({ document, window, elements, request, onHome }) {
       return;
     }
     elements.message.placeholder = dock.placeholder;
-    elements.composerMeta.textContent = dock.hint;
+    renderMeta(dock.hint);
     elements.send.disabled = !state.isConnected || state.isSending;
     elements.send.setAttribute("aria-label", dock.isQueueing ? "Queue message" : "Send");
     elements.stop.hidden = !dock.showStop;
@@ -573,6 +640,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     elements.actionError.textContent = "";
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
+    elements.composerHint.textContent = "";
+    state.summary = null;
     elements.heading.textContent = "";
     state.isLoadError = false;
     // Nothing asked about the previous session may act once it is gone.
@@ -597,7 +666,7 @@ export function createChat({ document, window, elements, request, onHome }) {
     state.sessionId = null;
   }
 
-  function render(session) {
+  function render(session, summary = null) {
     if (!session) {
       reset();
       elements.heading.textContent = "Session not found";
@@ -610,6 +679,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     const isFirst = state.session === null;
     const wasNearEnd = isNearEnd();
     state.session = session;
+    state.summary = summary?.id === session.id ? summary : null;
+    state.clockSkew = clockSkew(state.summary, now());
     if (state.isLoadError) {
       // A snapshot arrived, so the earlier refresh failure is over.
       state.isLoadError = false;
@@ -812,6 +883,12 @@ export function createChat({ document, window, elements, request, onHome }) {
         elements.message.placeholder = "Offline. Your draft is kept.";
       }
     },
+    // Advances the header's timer, once a second.
+    tick: () => {
+      if (state.session) {
+        renderTimer();
+      }
+    },
     // Shows that refreshing `sessionId` failed, if it is still open. The
     // next snapshot clears it.
     showLoadError: (sessionId, message) => {
@@ -853,6 +930,114 @@ function keepSourceView(oldNode, newNode) {
   if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
     showSource(newNode, true);
   }
+}
+
+// How many seconds this device's clock runs behind the host's, as far as
+// `summary` shows: the host's times cannot lie in its future, so a time
+// ahead of `nowSeconds` reveals the gap. The protocol carries no host
+// clock, so a device clock that runs ahead stays unnoticed and the timer
+// then reads high by that much.
+export function clockSkew(summary, nowSeconds) {
+  const latest = Math.max(
+    Number.isFinite(summary?.updated_at) ? summary.updated_at : -Infinity,
+    Number.isFinite(summary?.in_progress_started_at) ? summary.in_progress_started_at : -Infinity,
+  );
+
+  return Math.max(0, latest - nowSeconds);
+}
+
+// Makes `container`'s children match `nodes`, leaving each child whose
+// class, text, link and title did not change in place, so it keeps focus.
+// A `.timer` child goes, and `renderTimer` adds it again last.
+function updateChildren(container, nodes) {
+  container.querySelector(".timer")?.remove();
+  const current = [...container.children];
+  nodes.forEach((node, index) => {
+    const old = current[index];
+    if (!old) {
+      container.append(node);
+    } else if (nodeKey(old) !== nodeKey(node)) {
+      old.replaceWith(node);
+    }
+  });
+  for (const extra of current.slice(nodes.length)) {
+    extra.remove();
+  }
+}
+
+function nodeKey(node) {
+  return [
+    node.tagName,
+    node.className,
+    node.textContent,
+    node.getAttribute("href") ?? "",
+    node.title ?? "",
+  ].join("\u0000");
+}
+
+// The header's details after the status: the size badge and line counts
+// from the listing, the branch and its base, the model, and the review
+// request as a link. Whatever the host omits is left out. The branch and
+// model give way first on a phone.
+function headerDetails(document, session, summary) {
+  const figures = sessionFigures(summary);
+  const nodes = [];
+  if (figures.size) {
+    nodes.push(element(document, "span", "size", "[" + figures.size + "]"));
+  }
+  if (figures.lines) {
+    nodes.push(lineCounts(document, figures.lines));
+  }
+  const branch = typeof session.branch === "string" ? session.branch : "";
+  const base = typeof session.base_branch === "string" ? session.base_branch : "";
+  if (branch) {
+    nodes.push(element(document, "span", "wide-only", base ? branch + " → " + base : branch));
+  }
+  const settings = settingsParts(session, summary).find((part) => part.type === "model");
+  if (settings) {
+    const model = modelNode(document, settings);
+    model.classList.add("wide-only");
+    nodes.push(model);
+  }
+  const review = reviewNode(document, session.review_request);
+  if (review) {
+    nodes.push(review);
+  }
+
+  return nodes;
+}
+
+// The model with its reasoning level, as `claude/opus-5.5 [high]`.
+function modelNode(document, part) {
+  const node = element(document, "span", "model");
+  node.append(element(document, "b", null, part.label));
+  if (part.reasoning) {
+    node.append(" [" + part.reasoning + "]");
+  }
+
+  return node;
+}
+
+// The linked review request as a link to the forge. Its address goes
+// through the same filter as Markdown links, so only an `http:`, `https:`
+// or `mailto:` address becomes a link; any other shows as text.
+function reviewNode(document, reviewRequest) {
+  const label = reviewLabel(reviewRequest);
+  if (!label) {
+    return null;
+  }
+  const href = safeLink(reviewRequest.web_url);
+  const node = element(document, href ? "a" : "span", "review", label);
+  if (href) {
+    node.setAttribute("href", href);
+    node.setAttribute("rel", "noopener noreferrer");
+    node.setAttribute("target", "_blank");
+  }
+  if (typeof reviewRequest.title === "string" && reviewRequest.title !== "") {
+    node.title = reviewRequest.title;
+  }
+
+  return node;
 }
 
 function element(document, tag, className, text) {

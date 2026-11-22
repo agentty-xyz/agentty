@@ -13,6 +13,7 @@ import {
   parseSeen,
   reconcileSeen,
   relativeTime,
+  sessionFigures,
   statusInfo,
   unreadIds,
 } from "./format.mjs";
@@ -175,9 +176,17 @@ export function createSessionList({
     if (session.id === state.openId) {
       row.setAttribute("aria-current", "page");
     }
+    const figures = sessionFigures(session);
     const meta = element(document, "span", "row-meta");
-    meta.append(statusLine(document, session.status), timeNode(session.updated_at, time));
-    row.append(element(document, "span", "row-title", displayTitle(session)), meta);
+    // A row has no room for the line counts; the card and header show them.
+    meta.append(
+      statusLine(document, session.status),
+      ...figureNodes(document, { ...figures, lines: null }),
+      timeNode(session.updated_at, time),
+    );
+    const title = element(document, "span", "row-title");
+    title.append(...sizeBadge(document, figures.size), displayTitle(session));
+    row.append(title, meta);
     if (isUnread) {
       const dot = element(document, "span", "unread");
       dot.append(element(document, "span", "visually-hidden", "Unread"));
@@ -226,9 +235,19 @@ export function createSessionList({
         const card = element(document, "button", "card");
         card.type = "button";
         card.dataset.sessionId = session.id;
+        const figures = sessionFigures(session);
         const line = element(document, "span", "card-meta");
         line.append(statusLine(document, session.status), timeNode(session.updated_at, time));
-        card.append(line, element(document, "strong", "card-title", displayTitle(session)));
+        const title = element(document, "strong", "card-title");
+        title.append(...sizeBadge(document, figures.size), displayTitle(session));
+        card.append(line, title);
+        const details = figureNodes(document, figures);
+        if (details.length > 0) {
+          const figuresLine = element(document, "span", "card-figures");
+          // The first separator leads nothing on its own line.
+          figuresLine.append(...details.slice(1));
+          card.append(figuresLine);
+        }
         card.addEventListener("click", () => onOpen(session.id));
         item.append(card);
 
@@ -304,6 +323,53 @@ export function createSessionList({
 // without one.
 export function displayTitle(session) {
   return session.title || "No title";
+}
+
+// The host's size label as a `[M]` badge before a title, or nothing when
+// the host sends none.
+export function sizeBadge(document, size) {
+  return size ? [element(document, "span", "size", "[" + size + "]"), " "] : [];
+}
+
+// The changed lines as `+64 -9`, added in the accent and removed in the
+// error tone.
+export function lineCounts(document, lines) {
+  const node = element(document, "span", "lines");
+  node.append(
+    element(document, "span", "add", "+" + lines.added),
+    " ",
+    element(document, "span", "del", "-" + lines.deleted),
+  );
+
+  return node;
+}
+
+// A `·` between two figures, which screen readers skip.
+export function separator(document) {
+  const node = element(document, "span", "sep", "·");
+  node.setAttribute("aria-hidden", "true");
+
+  return node;
+}
+
+// The line counts, the model and `PR ready` that a card shows from
+// `sessionFigures`, each after a `·` separator. Missing figures are left
+// out.
+function figureNodes(document, figures) {
+  const nodes = [];
+  if (figures.lines) {
+    nodes.push(lineCounts(document, figures.lines));
+  }
+  if (figures.model) {
+    const model = element(document, "span", "model", figures.model);
+    model.title = figures.model;
+    nodes.push(model);
+  }
+  if (figures.isPrReady) {
+    nodes.push(element(document, "span", "pr-ready", "PR ready"));
+  }
+
+  return nodes.flatMap((node) => [separator(document), node]);
 }
 
 // A status dot and label in the status's tone.
