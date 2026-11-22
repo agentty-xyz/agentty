@@ -48,6 +48,20 @@
             <circle cx="11" cy="11" r="7" />
             <line x1="16" y1="16" x2="21" y2="21" />
             </symbol>
+            <symbol id="i-down" viewBox="0 0 24 24">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <polyline points="6 13 12 19 18 13" />
+            </symbol>
+            <symbol id="i-stop" viewBox="0 0 24 24">
+            <rect x="6" y="6" width="12" height="12" rx="1.5" />
+            </symbol>
+            <symbol id="i-merge" viewBox="0 0 24 24">
+            <circle cx="6" cy="5" r="2" />
+            <circle cx="6" cy="19" r="2" />
+            <circle cx="18" cy="12" r="2" />
+            <path d="M6 7v10" />
+            <path d="M6 8c0 3 3 4 10 4" />
+            </symbol>
             <symbol id="i-device" viewBox="0 0 24 24">
             <rect x="7" y="2.5" width="10" height="19" rx="2" />
             <line x1="11" y1="18" x2="13" y2="18" />
@@ -208,9 +222,26 @@
                     </div>
                     <span id="session-status" class="status status-badge wide-only" hidden></span>
                     <div class="chat-actions">
-                        <button id="cancel" type="button" class="btn btn--danger" hidden>Cancel session</button>
+                        <button id="merge" type="button" class="btn btn--primary wide-only" hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-merge" />
+                            </svg>
+                            Merge
+                        </button>
+                        <button id="session-more"
+                                class="icon-btn"
+                                type="button"
+                                aria-label="Session actions"
+                                aria-haspopup="dialog"
+                                aria-controls="session-sheet"
+                                hidden>
+                            <svg class="icon" aria-hidden="true">
+                                <use href="#i-more" />
+                            </svg>
+                        </button>
                     </div>
                 </header>
+                <p id="action-error" class="error action-error" role="alert"></p>
                 <div id="banner" class="banner" hidden>
                     <i></i>
                     <span id="banner-text" class="banner-text"></span>
@@ -237,34 +268,95 @@
                     </div>
                 </section>
                 <section id="session-view" class="session-view" hidden>
+                    <div id="session-gone" class="empty" hidden>
+                        <p class="eyebrow">Session</p>
+                        <h2>This session no longer exists.</h2>
+                        <button id="session-gone-home" type="button" class="btn btn--lg">Back to home</button>
+                    </div>
                     <div id="chat-scroll" class="chat-scroll">
                         <div class="chat-column">
                             <ol id="transcript" class="transcript">
                             </ol>
-                            <form id="questions" class="questions" hidden>
+                            <form id="questions" class="questions" aria-label="Questions" hidden>
                             </form>
                         </div>
                     </div>
                     <footer class="dock">
+                        <button id="jump" type="button" class="jump" hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-down" />
+                            </svg>
+                            Jump to latest
+                        </button>
                         <div class="chat-column">
-                            <ul id="queued" class="queued">
-                            </ul>
-                            <p id="session-error" class="error" role="alert"></p>
+                            <div id="queued-box" class="queued-box" hidden>
+                                <p class="queued-label">Queued · runs after this turn</p>
+                                <ul id="queued" class="queued">
+                                </ul>
+                            </div>
                             <form id="composer" class="composer">
                                 <textarea id="message"
-                                          rows="2"
+                                          rows="1"
                                           placeholder="Reply to the agent"
                                           aria-label="Message"></textarea>
-                                <button id="send" type="submit" class="send" aria-label="Send">
-                                    <svg class="icon" aria-hidden="true">
-                                        <use href="#i-up" />
-                                    </svg>
-                                </button>
+                                <div class="composer-row">
+                                    <p id="composer-meta" class="composer-meta"></p>
+                                    <button id="stop" type="button" class="send stop" hidden>
+                                        <svg class="icon icon--sm" aria-hidden="true">
+                                            <use href="#i-stop" />
+                                        </svg>
+                                        Stop
+                                    </button>
+                                    <button id="send" type="submit" class="send" aria-label="Send">
+                                        <svg class="icon" aria-hidden="true">
+                                            <use href="#i-up" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </form>
+                            <p id="session-error" class="error" role="alert"></p>
+                            <div id="answer-bar" class="answer-bar" hidden>
+                                <p id="answer-count"></p>
+                                <button id="answer-send" type="button" class="btn btn--primary" disabled>Send answers</button>
+                            </div>
+                            <p id="answer-error" class="error" role="alert"></p>
+                            <p id="read-only" class="read-only" hidden></p>
                         </div>
                     </footer>
                 </section>
             </main>
+            <dialog id="session-sheet" class="sheet" aria-labelledby="sheet-title">
+                <form method="dialog">
+                    <h2 id="sheet-title"></h2>
+                    <p id="sheet-sub" class="sheet-sub"></p>
+                    <button id="sheet-merge" value="merge" class="sheet-item narrow-only" hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-merge" />
+                        </svg>
+                        <span id="sheet-merge-label">Merge</span>
+                        <small>asks first</small>
+                    </button>
+                    <button id="cancel" value="cancel" class="sheet-item is-danger" hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-x" />
+                        </svg>
+                        Cancel session
+                        <small>removes the worktree</small>
+                    </button>
+                </form>
+            </dialog>
+            <dialog id="merge-dialog" class="dialog" aria-labelledby="merge-dialog-title">
+                <form method="dialog">
+                    <h2 id="merge-dialog-title">Merge this session?</h2>
+                    <p>
+                        Agentty queues a squash merge of the session's changes into <code id="merge-target">its base branch</code> in the project's checkout, as <code>m</code> does in the terminal. A failed merge returns the session to review.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Not now</button>
+                        <button value="confirm" class="btn btn--lg btn--primary">Merge</button>
+                    </div>
+                </form>
+            </dialog>
             <dialog id="cancel-dialog"
                     class="dialog"
                     aria-labelledby="cancel-dialog-title">

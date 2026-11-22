@@ -165,11 +165,15 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     let mut app = WebDevice::run(APP_SCRIPT, &[&address, "session", &token])?;
     let listed = app.next_step().await?;
     let opened = app.next_step().await?;
-    let sent = app.next_step().await?;
+    let answered = app.next_step().await?;
     server.revisions_tx.send(2)?;
     let refreshed = app.next_step().await?;
     let canceled = app.next_step().await?;
     let closed = app.next_step().await?;
+    let running = app.next_step().await?;
+    let queued = app.next_step().await?;
+    server.revisions_tx.send(3)?;
+    let shown = app.next_step().await?;
     let forgot = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
@@ -182,34 +186,16 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     assert_eq!(listed["sessions"][0]["title"], "Build it");
     assert_eq!(listed["sessions"][0]["status"], "Review");
     assert_eq!(listed["sessions"][1]["title"], "Plan it");
-    assert_eq!(listed["sessions"][1]["status"], "Draft");
+    assert_eq!(listed["sessions"][1]["status"], "In progress");
     let time = listed["sessions"][0]["time"].as_str().unwrap_or_default();
     assert!(time.ends_with('d'), "{time}");
     // The first listing counts as seen, so nothing starts unread.
     assert_eq!(listed["unread"], json!([]));
-    assert_eq!(
-        opened,
-        json!({
-            "step": "opened",
-            "cancelHidden": false,
-            "current": "page",
-            "hash": "#s=session-1",
-            "heading": "Build it",
-            "questions": [{"options": ["main"], "text": "Which branch?"}],
-            "status": "Question",
-            "transcript": [
-                {"kind": "user", "text": "build it"},
-                {"kind": "assistant", "text": "which branch?"},
-            ],
-            "view": "session-view",
-        })
-    );
-    assert_eq!(sent, json!({"step": "sent", "error": ""}));
+    assert_question_answered(&opened, &answered);
     assert_eq!(
         refreshed,
         json!({
             "step": "refreshed",
-            "queued": ["Queued: Use the main branch"],
             // `changed` brought a newer `Plan it`; the open session stays read.
             "unread": ["session-2"],
             "unreadLabel": ["Unread"],
@@ -220,9 +206,10 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
         json!({
             "step": "canceled",
             "askedFirst": true,
-            "chosen": "true",
             "error": "Session not found",
             "isDialogOpen": false,
+            "isSheetOpen": false,
+            "sheetOpened": true,
         })
     );
     assert_eq!(
@@ -235,6 +222,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
             "view": "home-view",
         })
     );
+    assert_message_queued_while_running(&running, &queued, &shown);
     assert_eq!(
         forgot,
         json!({
@@ -256,13 +244,112 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     assert_eq!(
         mutations,
         [
-            "send:session-1:Use the main branch",
             "answer:session-1:Which branch?=main",
             "cancel:session-1",
+            "send:session-2:Use the main branch",
         ]
     );
 
     Ok(())
+}
+
+/// Checks the steps where the app opens `Build it`, which waits on a
+/// question, and answers it.
+fn assert_question_answered(opened: &Value, answered: &Value) {
+    assert_eq!(
+        opened,
+        &json!({
+            "step": "opened",
+            // A question replaces the composer with the answer bar.
+            "answerCount": "0 of 1 answered",
+            "answerSendDisabled": true,
+            "cancelHidden": false,
+            "composerHidden": true,
+            "current": "page",
+            "hash": "#s=session-1",
+            "heading": "Build it",
+            "mergeDisabled": true,
+            "mergeHidden": false,
+            "moreHidden": false,
+            "questions": [{
+                "eyebrow": "Question 1 of 1",
+                "options": ["main"],
+                "text": "Which branch?",
+            }],
+            "status": "Question",
+            "transcript": [
+                {"kind": "user", "text": "build it"},
+                {"kind": "assistant", "text": "which branch?"},
+            ],
+            "view": "session-view",
+        })
+    );
+    assert_eq!(
+        answered,
+        &json!({
+            "step": "answered",
+            "chosen": {
+                "answerCount": "1 of 1 answered",
+                "answerSendDisabled": false,
+                "pressed": "true",
+            },
+            "error": "",
+            "isSending": true,
+        })
+    );
+}
+
+/// Checks the steps where the app opens `Plan it`, which runs a turn,
+/// queues a message, and shows it once the host reports the change.
+fn assert_message_queued_while_running(running: &Value, queued: &Value, shown: &Value) {
+    assert_eq!(
+        running,
+        &json!({
+            "step": "running",
+            "activity": {
+                "isOpen": true,
+                "lines": [
+                    ["tone-success", "✓ Read plan.md"],
+                    ["tone-error", "✗ Run tests"],
+                    ["tone-info", "… Edit plan.md"],
+                ],
+                "summary": "Activity3 lines",
+            },
+            "answerBarHidden": true,
+            "composerHidden": false,
+            "hint": "Sending queues the message",
+            "notice": {"isError": true, "label": "Commit Error", "text": "hook failed"},
+            "placeholder": "Queue a message for the next turn",
+            "sendLabel": "Queue message",
+            "stopHidden": true,
+            "transcript": [
+                {"kind": "user", "text": "plan it"},
+                {
+                    "kind": "activity",
+                    "text": "Activity3 lines✓ Read plan.md✗ Run tests… Edit plan.md",
+                },
+                {"kind": "notice", "text": "Commit Errorhook failed"},
+            ],
+        })
+    );
+    assert_eq!(
+        queued,
+        &json!({
+            "step": "queued",
+            "enterPrevented": false,
+            "error": "",
+            "keptOnEnter": "Use the main branch",
+        })
+    );
+    assert_eq!(
+        shown,
+        &json!({
+            "step": "shown",
+            "keptActivity": true,
+            "queued": ["Use the main branch"],
+            "queuedBoxHidden": false,
+        })
+    );
 }
 
 #[tokio::test]

@@ -44,6 +44,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // Act
     let page = get(addr, "/").await?;
     let script = get(addr, "/app.js").await?;
+    let chat = get(addr, "/chat.mjs").await?;
     let device_key = get(addr, "/device_key.mjs").await?;
     let format = get(addr, "/format.mjs").await?;
     let noise = get(addr, "/noise.mjs").await?;
@@ -56,6 +57,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     for (response, content_type) in [
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
+        (&chat, "text/javascript; charset=utf-8"),
         (&device_key, "text/javascript; charset=utf-8"),
         (&format, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
@@ -81,14 +83,15 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // theme's background colour.
     assert!(page.contains("<meta name=\"color-scheme\" content=\"dark\""));
     assert!(page.contains("<meta name=\"theme-color\" content=\"#070b08\""));
+    assert!(script.contains("from \"./chat.mjs\""));
     assert!(script.contains("from \"./device_key.mjs\""));
-    assert!(script.contains("from \"./format.mjs\""));
     assert!(script.contains("from \"./relay.mjs\""));
     assert!(script.contains("from \"./session_list.mjs\""));
     assert!(script.contains("from \"./shell.mjs\""));
     assert!(device_key.contains("from \"./noise.mjs\""));
     assert!(relay.contains("from \"./noise.mjs\""));
     assert!(session_list.contains("from \"./format.mjs\""));
+    assert!(chat.contains("from \"./format.mjs\""));
 
     Ok(())
 }
@@ -172,6 +175,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/",
             "/app.css",
             "/app.js",
+            "/chat.mjs",
             "/device_key.mjs",
             "/format.mjs",
             "/noise.mjs",

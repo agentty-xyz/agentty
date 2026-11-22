@@ -98,7 +98,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         RemoteResult::Ok(RemoteResponse::Sessions {
             sessions: vec![
                 summary("session-1", "Review", "Build it", 20),
-                summary("session-2", "Draft", "Plan it", 30),
+                summary("session-2", "InProgress", "Plan it", 30),
             ],
         })
     );

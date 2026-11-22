@@ -2,8 +2,8 @@
 // WebSocket at /ws, or over an encrypted stream through the relay that
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
+import { createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
-import { statusInfo } from "./format.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
@@ -87,8 +87,18 @@ const elements = {
   heading: document.getElementById("heading"),
   "heading-sub": document.getElementById("heading-sub"),
   "session-status": document.getElementById("session-status"),
+  merge: document.getElementById("merge"),
+  "session-more": document.getElementById("session-more"),
+  "action-error": document.getElementById("action-error"),
+  "session-sheet": document.getElementById("session-sheet"),
+  "sheet-title": document.getElementById("sheet-title"),
+  "sheet-sub": document.getElementById("sheet-sub"),
+  "sheet-merge": document.getElementById("sheet-merge"),
+  "sheet-merge-label": document.getElementById("sheet-merge-label"),
   cancel: document.getElementById("cancel"),
   "cancel-dialog": document.getElementById("cancel-dialog"),
+  "merge-dialog": document.getElementById("merge-dialog"),
+  "merge-target": document.getElementById("merge-target"),
   banner: document.getElementById("banner"),
   "banner-text": document.getElementById("banner-text"),
   retry: document.getElementById("retry"),
@@ -102,14 +112,25 @@ const elements = {
   "home-waiting": document.getElementById("home-waiting"),
   "home-cards": document.getElementById("home-cards"),
   "session-view": document.getElementById("session-view"),
+  "session-gone": document.getElementById("session-gone"),
+  "session-gone-home": document.getElementById("session-gone-home"),
   "chat-scroll": document.getElementById("chat-scroll"),
   transcript: document.getElementById("transcript"),
-  queued: document.getElementById("queued"),
   questions: document.getElementById("questions"),
+  jump: document.getElementById("jump"),
+  "queued-box": document.getElementById("queued-box"),
+  queued: document.getElementById("queued"),
   composer: document.getElementById("composer"),
   message: document.getElementById("message"),
+  "composer-meta": document.getElementById("composer-meta"),
+  stop: document.getElementById("stop"),
   send: document.getElementById("send"),
   "session-error": document.getElementById("session-error"),
+  "answer-bar": document.getElementById("answer-bar"),
+  "answer-count": document.getElementById("answer-count"),
+  "answer-send": document.getElementById("answer-send"),
+  "answer-error": document.getElementById("answer-error"),
+  "read-only": document.getElementById("read-only"),
 };
 
 const state = {
@@ -122,7 +143,6 @@ const state = {
   // This browser's key pair for relay streams.
   deviceKey: null,
   isAuthenticated: false,
-  isRefreshing: false,
   // Whether the instance behind `relay` knows this browser's key.
   isRelayPaired: false,
   nextRequestId: 1,
@@ -133,12 +153,10 @@ const state = {
   // When the next reconnect attempt starts, in milliseconds since the epoch.
   reconnectAt: 0,
   reconnectTimer: null,
-  refreshAgain: false,
   // Why Agentty refused this device for good, until the page reloads.
   rejection: null,
   // Relay address and instance key that relay streams connect to.
   relay: null,
-  session: null,
   sessionCount: 0,
   stopReconnecting: false,
   // Ticks the banner's reconnect countdown.
@@ -269,9 +287,7 @@ function renderOffline() {
   } else {
     elements["banner-text"].textContent = "Offline";
   }
-  const canSend = kind === "connected";
-  elements.send.disabled = !canSend;
-  elements.message.placeholder = canSend ? "Reply to the agent" : "Offline. Your draft is kept.";
+  chat.setConnected(kind === "connected");
 }
 
 function tickCountdown() {
@@ -345,9 +361,8 @@ function renderMain() {
   elements["home-view"].hidden = Boolean(sessionId);
   elements["session-view"].hidden = !sessionId;
   if (!sessionId) {
+    chat.close();
     elements.heading.textContent = "agentty";
-    renderStatus(null);
-    elements.cancel.hidden = true;
     renderHome();
   }
 }
@@ -368,31 +383,6 @@ function renderHome() {
 
 function sessionCountText(count) {
   return count === 1 ? "1 session" : count + " sessions";
-}
-
-// Shows the session's status as a badge on wide screens and in the
-// header's sub-line on narrow ones, or neither for `null`.
-function renderStatus(statusName) {
-  const badge = elements["session-status"];
-  if (statusName === null) {
-    badge.hidden = true;
-    elements["heading-sub"].replaceChildren();
-
-    return;
-  }
-  badge.hidden = false;
-  fillStatus(badge, "status status-badge wide-only", statusName);
-  const line = element("span");
-  fillStatus(line, "status narrow-only", statusName);
-  elements["heading-sub"].replaceChildren(line);
-}
-
-// Gives `node` the classes in `className` plus the tone of `statusName`,
-// and shows its dot and label.
-function fillStatus(node, className, statusName) {
-  const info = statusInfo(statusName);
-  node.className = className + " status--" + info.tone;
-  node.replaceChildren(element("i"), info.label);
 }
 
 function send(frame) {
@@ -531,6 +521,7 @@ function onAuthenticated() {
   // Starting a session from the page comes with the `create_session`
   // capability; until a host lists it, the button stays away.
   elements["new-session"].hidden = !state.capabilities.includes("create_session");
+  chat.setCapabilities(state.capabilities);
   if (state.pendingPairing) {
     writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
     state.pendingPairing = null;
@@ -546,7 +537,7 @@ function onAuthenticated() {
   elements["pair-error"].textContent = "";
   setConnection("connected");
   showShell();
-  refresh();
+  refresh(true);
 }
 
 // Pairing failures, including a denial or a missed approval in the
@@ -600,54 +591,37 @@ function handleClose(transport) {
   setConnection("reconnecting");
 }
 
-// Reloads the list and the open session. Changes that arrive while a
-// reload runs coalesce into one more reload after it.
-function refresh() {
-  if (!state.isAuthenticated) {
-    return;
-  }
-  if (state.isRefreshing) {
-    state.refreshAgain = true;
-
-    return;
-  }
-  state.isRefreshing = true;
-  state.refreshAgain = false;
-  void loadSessions()
-    .catch((error) => {
-      elements["session-error"].textContent = error.message;
-    })
-    .finally(() => {
-      state.isRefreshing = false;
-      if (state.refreshAgain) {
-        refresh();
-      }
-    });
+// Reloads the list and the open session, at most once a second and not
+// while the page is hidden, since a relay limits how much a device reads.
+// Changes that arrive meanwhile coalesce into one more reload.
+// `refresh(true)` skips the wait, as when a session opens.
+function refresh(isUrgent = false) {
+  refreshGate.request(isUrgent);
 }
 
 async function loadSessions() {
-  const listed = await request({ method: "list_sessions" });
-  renderSessions(listed.sessions || []);
-  if (state.currentSessionId) {
-    const sessionId = state.currentSessionId;
-    const loaded = await request({ method: "get_session", session_id: sessionId });
-    // A session opened while the request ran is loaded by the next one.
-    if (sessionId === state.currentSessionId) {
-      renderSession(loaded.session);
+  if (!state.isAuthenticated) {
+    return;
+  }
+  try {
+    const listed = await request({ method: "list_sessions" });
+    renderSessions(listed.sessions || []);
+    elements["list-error"].textContent = "";
+    if (state.currentSessionId) {
+      const sessionId = state.currentSessionId;
+      const loaded = await request({ method: "get_session", session_id: sessionId });
+      // A session opened while the request ran is loaded by the next one.
+      if (sessionId === state.currentSessionId) {
+        chat.render(loaded.session);
+      }
+    }
+  } catch (error) {
+    if (state.currentSessionId) {
+      chat.showError(error.message);
+    } else {
+      elements["list-error"].textContent = error.message;
     }
   }
-}
-
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) {
-    node.className = className;
-  }
-  if (text !== undefined) {
-    node.textContent = text;
-  }
-
-  return node;
 }
 
 function renderSessions(sessions) {
@@ -664,17 +638,10 @@ function enterSession(sessionId) {
     return;
   }
   state.currentSessionId = sessionId;
-  state.session = null;
-  elements.heading.textContent = "";
-  renderStatus(null);
-  elements.cancel.hidden = true;
-  elements.transcript.replaceChildren();
-  elements.queued.replaceChildren();
-  elements.questions.hidden = true;
-  elements["session-error"].textContent = "";
+  chat.open(sessionId);
   markCurrentRow();
   renderMain();
-  refresh();
+  refresh(true);
 }
 
 // Returns to home. The caller has already routed there.
@@ -683,10 +650,9 @@ function leaveSession() {
     return;
   }
   state.currentSessionId = null;
-  state.session = null;
   markCurrentRow();
   renderMain();
-  refresh();
+  refresh(true);
 }
 
 // Marks the open session's row in the list and counts it as seen.
@@ -694,83 +660,53 @@ function markCurrentRow() {
   sessionList.setOpen(state.currentSessionId);
 }
 
-function renderSession(session) {
-  if (!session) {
-    elements["session-error"].textContent = "This session no longer exists.";
-    state.session = null;
+const chat = createChat({
+  document: document,
+  elements: {
+    actionError: elements["action-error"],
+    answerBar: elements["answer-bar"],
+    answerCount: elements["answer-count"],
+    answerError: elements["answer-error"],
+    answerSend: elements["answer-send"],
+    badge: elements["session-status"],
+    cancel: elements.cancel,
+    cancelDialog: elements["cancel-dialog"],
+    composer: elements.composer,
+    composerMeta: elements["composer-meta"],
+    gone: elements["session-gone"],
+    goneHome: elements["session-gone-home"],
+    heading: elements.heading,
+    jump: elements.jump,
+    merge: elements.merge,
+    mergeDialog: elements["merge-dialog"],
+    mergeTarget: elements["merge-target"],
+    message: elements.message,
+    more: elements["session-more"],
+    questions: elements.questions,
+    queued: elements.queued,
+    queuedBox: elements["queued-box"],
+    readonly: elements["read-only"],
+    scroller: elements["chat-scroll"],
+    send: elements.send,
+    sessionError: elements["session-error"],
+    sheet: elements["session-sheet"],
+    sheetMerge: elements["sheet-merge"],
+    sheetMergeLabel: elements["sheet-merge-label"],
+    sheetSub: elements["sheet-sub"],
+    sheetTitle: elements["sheet-title"],
+    stop: elements.stop,
+    sub: elements["heading-sub"],
+    transcript: elements.transcript,
+  },
+  onHome: () => {
+    shell.showSession(null);
+    leaveSession();
+  },
+  request: request,
+  window: window,
+});
 
-    return;
-  }
-  const isNewTranscript =
-    !state.session ||
-    state.session.id !== session.id ||
-    state.session.messages.length !== session.messages.length;
-  const questionsChanged =
-    !state.session || JSON.stringify(state.session.questions) !== JSON.stringify(session.questions);
-  state.session = session;
-  elements.heading.textContent = session.title || session.id;
-  renderStatus(session.status);
-  elements.cancel.hidden = !statusInfo(session.status).cancel;
-
-  // The transcript follows new content only while the reader is near its
-  // end.
-  const scroller = elements["chat-scroll"];
-  const nearBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 80;
-  if (isNewTranscript) {
-    elements.transcript.replaceChildren(
-      ...session.messages.map((message) => element("li", message.kind, message.content)),
-    );
-  }
-  elements.queued.replaceChildren(
-    ...session.queued_messages.map((message) => element("li", null, "Queued: " + message)),
-  );
-  if (questionsChanged) {
-    renderQuestions(session.questions);
-  }
-  if (nearBottom && (isNewTranscript || questionsChanged)) {
-    scroller.scrollTop = scroller.scrollHeight;
-  }
-}
-
-function renderQuestions(questions) {
-  const form = elements.questions;
-  form.replaceChildren();
-  form.hidden = questions.length === 0;
-  if (questions.length === 0) {
-    return;
-  }
-
-  questions.forEach((question, index) => {
-    const group = element("div");
-    group.dataset.question = question.text;
-    group.append(element("p", "question", question.text));
-    const options = element("div", "options");
-    for (const option of question.options) {
-      const button = element("button", null, option);
-      button.type = "button";
-      button.setAttribute("aria-pressed", "false");
-      button.addEventListener("click", () => {
-        for (const sibling of options.children) {
-          sibling.setAttribute("aria-pressed", String(sibling === button));
-        }
-        group.dataset.answer = option;
-      });
-      options.append(button);
-    }
-    if (question.options.length > 0) {
-      group.append(options);
-    }
-    const input = element("input");
-    input.placeholder = question.options.length > 0 ? "Or type an answer" : "Your answer";
-    input.setAttribute("aria-label", "Answer " + (index + 1));
-    group.append(input);
-    form.append(group);
-  });
-
-  const submit = element("button", null, "Answer");
-  submit.type = "submit";
-  form.append(submit);
-}
+const refreshGate = createRefreshGate({ document: document, run: loadSessions, window: window });
 
 const shell = createShell({
   document: document,
@@ -931,7 +867,7 @@ elements["forget-dialog"].addEventListener("close", () => {
   }
   forgetCredential();
   state.currentSessionId = null;
-  state.session = null;
+  chat.close();
   disconnect();
   if (usesRelay) {
     // Agentty lists the old key until it is removed there; a later pairing
@@ -957,80 +893,6 @@ elements.retry.addEventListener("click", () => {
 
 elements.reload.addEventListener("click", () => window.location.reload());
 
-elements.cancel.addEventListener("click", () => {
-  if (!state.currentSessionId) {
-    return;
-  }
-  elements["cancel-dialog"].returnValue = "";
-  elements["cancel-dialog"].showModal();
-});
-
-elements["cancel-dialog"].addEventListener("close", async () => {
-  const sessionId = state.currentSessionId;
-  if (elements["cancel-dialog"].returnValue !== "confirm" || !sessionId) {
-    return;
-  }
-  elements.cancel.disabled = true;
-  try {
-    await request({ method: "cancel_session", session_id: sessionId });
-    elements["session-error"].textContent = "";
-  } catch (error) {
-    elements["session-error"].textContent = error.message;
-  } finally {
-    elements.cancel.disabled = false;
-  }
-});
-
-elements.composer.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const message = elements.message.value;
-  if (!message.trim() || !state.currentSessionId || elements.send.disabled) {
-    return;
-  }
-  elements.send.disabled = true;
-  try {
-    await request({
-      method: "send_message",
-      session_id: state.currentSessionId,
-      message: message,
-    });
-    elements.message.value = "";
-    elements["session-error"].textContent = "";
-  } catch (error) {
-    elements["session-error"].textContent = error.message;
-  } finally {
-    elements.send.disabled = state.connection !== "connected";
-  }
-});
-
-elements.questions.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!state.currentSessionId) {
-    return;
-  }
-  const answers = [];
-  for (const group of elements.questions.querySelectorAll("[data-question]")) {
-    const typed = group.querySelector("input").value.trim();
-    const answer = typed || group.dataset.answer || "";
-    if (!answer) {
-      elements["session-error"].textContent = "Answer every question first.";
-
-      return;
-    }
-    answers.push({ question: group.dataset.question, answer: answer });
-  }
-  try {
-    await request({
-      method: "answer_questions",
-      session_id: state.currentSessionId,
-      answers: answers,
-    });
-    elements["session-error"].textContent = "";
-  } catch (error) {
-    elements["session-error"].textContent = error.message;
-  }
-});
-
 // Takes a pairing link from the address bar, if one is there, and removes
 // it so the one-time code stays out of the address bar and the history.
 function adoptPairingLink() {
@@ -1048,6 +910,9 @@ function adoptPairingLink() {
 function adoptSessionRoute() {
   const route = parseRoute(window.location.hash, parsePairingLink);
   state.currentSessionId = route.kind === "session" ? route.sessionId : null;
+  if (state.currentSessionId) {
+    chat.open(state.currentSessionId);
+  }
 }
 
 // Shows the app and connects with the saved credential.
@@ -1077,7 +942,7 @@ async function startThroughRelay() {
       // The link replaces whatever this tab was doing.
       disconnect();
       state.currentSessionId = null;
-      state.session = null;
+      chat.close();
       state.pendingPairing = null;
       elements["pair-error"].textContent = "";
       showPairing();
