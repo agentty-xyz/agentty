@@ -35,6 +35,7 @@ jobs:
         test-ag-git-src
         test-ag-harness-src
         test-ag-harness-cli-src
+        test-ag-noise-src
         test-ag-protocol-src
         test-ag-release-src
         test-ag-session-src
