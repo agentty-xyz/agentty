@@ -56,7 +56,7 @@ fn test_cached_antigravity_support_tracks_refreshed_executable() {
     fs::write(
         &antigravity_path,
         "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 0; fi\nif [ \"$1\" = \"--version\" ]; \
-         then printf 'agy 1.2.0\\n'; exit 0; fi\nexit 1\n",
+         then printf 'agy 1.6.0\\n'; exit 0; fi\nexit 1\n",
     )
     .expect("failed to create agy executable");
     fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o750))
@@ -76,7 +76,7 @@ fn test_cached_antigravity_support_tracks_refreshed_executable() {
         ensure_cached_antigravity_cli_supported_on_path(Some(path_value.as_os_str()));
 
     // Assert
-    assert_eq!(detected_version, Some("1.2.0".to_string()));
+    assert_eq!(detected_version, Some("1.6.0".to_string()));
     assert_eq!(cached_result, Ok(()));
     let changed_error =
         changed_result.expect_err("changed Antigravity executable should fail closed");
@@ -89,22 +89,22 @@ fn test_cached_antigravity_support_tracks_refreshed_executable() {
 /// compatibility check.
 fn test_validate_antigravity_cli_version_accepts_supported_versions() {
     // Arrange / Act / Assert
-    assert_eq!(validate_antigravity_cli_version(Some("1.1.18")), Ok(()));
-    assert_eq!(validate_antigravity_cli_version(Some("v1.2.0")), Ok(()));
+    assert_eq!(validate_antigravity_cli_version(Some("1.5.8")), Ok(()));
+    assert_eq!(validate_antigravity_cli_version(Some("v1.6.0")), Ok(()));
 }
 
 #[test]
 /// Ensures old Antigravity versions return an actionable upgrade error.
 fn test_validate_antigravity_cli_version_rejects_old_version() {
     // Arrange / Act
-    let error = validate_antigravity_cli_version(Some("1.1.17"))
+    let error = validate_antigravity_cli_version(Some("1.5.7"))
         .expect_err("old Antigravity should be rejected");
 
     // Assert
     assert_eq!(
         error,
-        "Antigravity CLI 1.1.18 or newer is required, but `1.1.17` is installed. Run `agy \
-         update`, then retry."
+        "Antigravity CLI 1.5.8 or newer is required, but `1.5.7` is installed. Run `agy update`, \
+         then retry."
     );
 }
 

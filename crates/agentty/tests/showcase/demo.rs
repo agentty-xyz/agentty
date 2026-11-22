@@ -294,7 +294,7 @@ async fn install_agent_availability_stubs(env: &DemoEnv) -> std::io::Result<()> 
     let stub_path = env.stub_bin.join("agy");
     fs::write(
         &stub_path,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 1.2.0'; fi\nexit 0\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 1.6.0'; fi\nexit 0\n",
     )
     .await?;
     #[cfg(unix)]

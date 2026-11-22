@@ -17,8 +17,8 @@ use semver::Version;
 use crate::model::agent::AgentCliInfo;
 
 /// Oldest Antigravity CLI release supported by Agentty's native stream
-/// protocol.
-const ANTIGRAVITY_MINIMUM_VERSION: Version = Version::new(1, 1, 18);
+/// protocol and the session-only `--settings` deny rules of read-only turns.
+const ANTIGRAVITY_MINIMUM_VERSION: Version = Version::new(1, 5, 8);
 /// Maximum time spent waiting for one provider CLI `--version` command.
 const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Maximum time spent waiting for one provider CLI `update` command.

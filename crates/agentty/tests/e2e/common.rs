@@ -110,12 +110,12 @@ impl BuilderEnv {
             let stub_agent_path = stub_bin.join(executable_name);
             let stub_version_path = stub_bin.join(format!("{executable_name}.version"));
             let initial_version = if executable_name == "agy" {
-                "1.2.0"
+                "1.6.0"
             } else {
                 "0.0.0-test"
             };
             let updated_version = if executable_name == "agy" {
-                "1.2.1"
+                "1.6.1"
             } else {
                 "0.0.1-updated"
             };

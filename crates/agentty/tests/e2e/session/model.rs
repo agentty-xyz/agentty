@@ -18,7 +18,7 @@ fn seed_failing_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std
     let stub_agent_path = env.stub_bin.join("agy");
     std::fs::write(
         &stub_agent_path,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.2.0\\n'; exit 0; fi\nexit \
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.6.0\\n'; exit 0; fi\nexit \
          1\n",
     )?;
 

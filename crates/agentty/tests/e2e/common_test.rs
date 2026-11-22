@@ -353,13 +353,13 @@ fn builder_env_keeps_antigravity_stub_supported_after_update() {
     assert!(initial_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&initial_output.stdout),
-        "agy 1.2.0\n"
+        "agy 1.6.0\n"
     );
     assert!(update_status.success());
     assert!(updated_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&updated_output.stdout),
-        "agy 1.2.1\n"
+        "agy 1.6.1\n"
     );
 }
 
