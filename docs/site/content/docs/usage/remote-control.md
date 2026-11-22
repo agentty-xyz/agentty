@@ -149,6 +149,8 @@ device can:
   settings, branches, and linked pull request;
 - see each listed session's diff size, changed lines, model, active time, merge
   conflicts, and pull request state;
+- read a session's diff against its base branch, which shows the repository content the
+  session changed;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions;

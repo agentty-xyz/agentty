@@ -449,6 +449,7 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
             SessionRuntimeCommand::Get { .. }
+            | SessionRuntimeCommand::GetDiff { .. }
             | SessionRuntimeCommand::List { .. }
             | SessionRuntimeCommand::HostContext { .. }
             | SessionRuntimeCommand::GetGraphProposal { .. }

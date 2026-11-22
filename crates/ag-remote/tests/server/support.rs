@@ -13,9 +13,9 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    HostContext, QuestionItem, ReviewRequest, Session, SessionBackend, SessionError, SessionId,
-    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
-    SessionStatus, SessionSummary,
+    HostContext, QuestionItem, ReviewRequest, Session, SessionBackend, SessionDiffFile,
+    SessionDiffFileStatus, SessionError, SessionId, SessionMessage, SessionMessageKind,
+    SessionOperation, SessionService, SessionSettings, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -373,11 +373,12 @@ impl DeviceStore for MemoryDeviceStore {
 /// messages sent to it, the message `busy` is rejected, the message `wait`
 /// is held, and recorded only once [`RecordingBackend::release`] is called,
 /// the message `panic` panics, every cancellation reports a missing
-/// session, every merge is refused, the host serves only regular sessions
-/// in project `1`, and every optional operation is served. It lists
-/// `session-1`, waiting on a question, and `session-2`, running a turn,
-/// which counts as updated once for every message sent and every answer
-/// given to any session, so a device sees another session change.
+/// session, every merge is refused, every diff adds one line to `a.rs`, the
+/// host serves only regular sessions in project `1`, and every optional
+/// operation is served. It lists `session-1`, waiting on a question, and
+/// `session-2`, running a turn, which counts as updated once for every
+/// message sent and every answer given to any session, so a device sees
+/// another session change.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -441,6 +442,22 @@ impl SessionBackend for RecordingBackend {
             .collect();
 
         Ok(Some(session(session_id, sent)))
+    }
+
+    async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
+        self.record(format!("diff:{session_id}"));
+
+        Ok(Some(vec![SessionDiffFile {
+            added_lines: 1,
+            deleted_lines: 0,
+            old_path: None,
+            patch: "diff --git a/a.rs b/a.rs\n+new\n".to_string(),
+            path: "a.rs".to_string(),
+            status: SessionDiffFileStatus::Added,
+        }]))
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {

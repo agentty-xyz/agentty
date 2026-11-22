@@ -34,6 +34,7 @@ impl SessionBackend for SessionRuntimeHandle {
             SessionOperation::CreateSession
                 | SessionOperation::HostContext
                 | SessionOperation::MergeSession
+                | SessionOperation::SessionDiff
         )
     }
 
@@ -179,6 +180,13 @@ impl SessionBackend for SessionRuntimeHandle {
         session_id: &SessionId,
     ) -> Result<Option<ag_session::Session>, ApiSessionError> {
         SessionRuntimeHandle::get_session(self, session_id).await
+    }
+
+    async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<ag_session::SessionDiffFile>>, ApiSessionError> {
+        SessionRuntimeHandle::get_session_diff(self, session_id).await
     }
 
     async fn list_sessions(&self) -> Result<Vec<ag_session::SessionSummary>, ApiSessionError> {
@@ -356,6 +364,10 @@ impl App {
             } => {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
+            SessionRuntimeCommand::GetDiff {
+                response_tx,
+                session_id,
+            } => self.start_api_session_diff(&session_id, response_tx),
             SessionRuntimeCommand::List { response_tx } => {
                 let _ = response_tx.send(Ok(self.list_api_session_entries()));
             }

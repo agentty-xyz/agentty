@@ -57,13 +57,14 @@ for its trust model.
 A paired device is an authenticated control surface, not a viewer. Within the sessions
 of the active project, it can do what the
 [usage page](https://agentty.xyz/docs/usage/remote-control/#usage-remote-control-device-access)
-lists under "What a paired device can do": today that is reading transcripts, sending
-prompts, answering questions, canceling a session, merging a session into its base
-branch, and creating sessions. The approved set also covers stopping a turn, publishing
-a session branch and opening its pull request with the user's forge credentials, syncing
-a session branch, and changing session settings, as each becomes available. With those,
-anyone holding a paired device can have code written, land it on the base branch, and
-push it to the Git remote, so remove a device you no longer control.
+lists under "What a paired device can do": today that is reading transcripts and diffs,
+sending prompts, answering questions, canceling a session, merging a session into its
+base branch, and creating sessions. The approved set also covers stopping a turn,
+publishing a session branch and opening its pull request with the user's forge
+credentials, syncing a session branch, and changing session settings, as each becomes
+available. With those, anyone holding a paired device can have code written, land it on
+the base branch, and push it to the Git remote, so remove a device you no longer
+control.
 
 Report these as vulnerabilities:
 

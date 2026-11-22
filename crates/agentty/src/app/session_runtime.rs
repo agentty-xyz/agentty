@@ -15,7 +15,8 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    ReviewRequest, Session, SessionError, SessionId, SessionListEntry, SessionSummary,
+    ReviewRequest, Session, SessionDiffFile, SessionError, SessionId, SessionListEntry,
+    SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -63,6 +64,10 @@ pub(crate) enum SessionRuntimeCommand {
     },
     Get {
         response_tx: oneshot::Sender<Result<Option<Session>, SessionError>>,
+        session_id: SessionId,
+    },
+    GetDiff {
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionDiffFile>>, SessionError>>,
         session_id: SessionId,
     },
     List {
@@ -358,6 +363,21 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::Get {
+            response_tx,
+            session_id,
+        })
+        .await
+    }
+
+    /// Loads the files one session changes through the runtime actor, which
+    /// computes the diff off the foreground loop.
+    pub(crate) async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
+        let session_id = session_id.clone();
+
+        self.request(|response_tx| SessionRuntimeCommand::GetDiff {
             response_tx,
             session_id,
         })

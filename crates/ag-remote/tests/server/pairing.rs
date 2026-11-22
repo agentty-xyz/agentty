@@ -24,7 +24,7 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
     assert_eq!(
         welcome,
         ServerFrame::Welcome {
-            capabilities: ["host", "create_session", "merge"]
+            capabilities: ["host", "create_session", "merge", "diff"]
                 .map(String::from)
                 .to_vec(),
             device_id: device_id.clone(),

@@ -12,7 +12,8 @@
 
 use ag_session::{
     AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary, Session,
-    SessionListEntry, SessionMessage, SessionMessageKind, session_branch,
+    SessionDiffFile, SessionDiffFileStatus, SessionListEntry, SessionMessage, SessionMessageKind,
+    session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +84,16 @@ pub enum RemoteRequest {
     /// Describes the host's active project. Offered through the `host`
     /// capability.
     GetHost,
+    /// Reads what a session changes against its base branch. Without `path`
+    /// the response lists the changed files; with `path` it also carries
+    /// that file's patch. Offered through the `diff` capability.
+    GetSessionDiff {
+        /// Changed file whose patch to return, as the file list names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Session to read.
+        session_id: String,
+    },
     /// Loads one session snapshot.
     GetSession {
         /// Session to load.
@@ -233,6 +244,20 @@ pub enum RemoteResponse {
         /// Identifier of the new session.
         session_id: String,
     },
+    /// What a session changes, answering `get_session_diff`.
+    Diff {
+        /// Changed files in diff order; only the requested file when the
+        /// request names one.
+        files: Vec<RemoteDiffFile>,
+        /// Unified patch of the requested file, cut at a line boundary when
+        /// it is too large.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        patch: Option<String>,
+        /// Whether the server left out the end of `files` or `patch` to
+        /// keep the response small.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
+    },
     /// The host's active project, where new sessions are created.
     Host {
         /// Branch new sessions start from.
@@ -256,6 +281,90 @@ pub enum RemoteResponse {
     },
 }
 
+impl RemoteResponse {
+    /// Builds the `diff` response for a session's changed `files`: the file
+    /// list, or with `path` that file and its patch. Returns `None` when
+    /// `path` names no changed file.
+    ///
+    /// The file list and the patch each stay within
+    /// [`MAX_DIFF_RESPONSE_BYTES`] once encoded, so a response stays well
+    /// under the frame limit; whatever is left out sets `truncated`.
+    pub(crate) fn from_diff(files: &[SessionDiffFile], path: Option<&str>) -> Option<Self> {
+        let Some(path) = path else {
+            let mut remaining = MAX_DIFF_RESPONSE_BYTES;
+            let mut listed = Vec::new();
+            for file in files {
+                let size = DIFF_FILE_ENTRY_BYTES
+                    + encoded_len(&file.path)
+                    + file.old_path.as_deref().map_or(0, encoded_len);
+                if size > remaining {
+                    return Some(Self::Diff {
+                        files: listed,
+                        patch: None,
+                        truncated: true,
+                    });
+                }
+                remaining -= size;
+                listed.push(RemoteDiffFile::from(file));
+            }
+
+            return Some(Self::Diff {
+                files: listed,
+                patch: None,
+                truncated: false,
+            });
+        };
+        let file = files.iter().find(|file| file.path == path)?;
+        let (kept_patch, truncated) = capped_patch(&file.patch);
+
+        Some(Self::Diff {
+            files: vec![RemoteDiffFile::from(file)],
+            patch: Some(kept_patch.to_string()),
+            truncated,
+        })
+    }
+}
+
+/// Most encoded bytes of file entries, or of patch text, that one `diff`
+/// response carries: a quarter of the 1 MiB frame limit.
+pub(crate) const MAX_DIFF_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Encoded bytes counted for one file entry besides its paths: field names,
+/// line counts, status, and punctuation.
+const DIFF_FILE_ENTRY_BYTES: usize = 128;
+
+/// Returns the length of `text` once escaped as a JSON string, without its
+/// quotes.
+fn encoded_len(text: &str) -> usize {
+    text.chars().map(encoded_char_len).sum()
+}
+
+/// Returns the length of `character` once escaped in a JSON string.
+fn encoded_char_len(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        character if character < ' ' => 6,
+        character => character.len_utf8(),
+    }
+}
+
+/// Returns `patch` cut to [`MAX_DIFF_RESPONSE_BYTES`] encoded bytes at the
+/// last whole line, and whether anything was cut.
+fn capped_patch(patch: &str) -> (&str, bool) {
+    let mut size = 0;
+    for (index, character) in patch.char_indices() {
+        size += encoded_char_len(character);
+        if size > MAX_DIFF_RESPONSE_BYTES {
+            let kept = &patch[..index];
+            let kept = kept.rfind('\n').map_or(kept, |end| &kept[..=end]);
+
+            return (kept, true);
+        }
+    }
+
+    (patch, false)
+}
+
 impl From<HostContext> for RemoteResponse {
     fn from(host: HostContext) -> Self {
         Self::Host {
@@ -269,6 +378,53 @@ impl From<HostContext> for RemoteResponse {
                 .collect(),
         }
     }
+}
+
+/// One file a session's diff changes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteDiffFile {
+    /// Lines the file's patch adds.
+    pub added_lines: u64,
+    /// Lines the file's patch removes.
+    pub deleted_lines: u64,
+    /// Path before a rename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+    /// Path after the change; a deleted file keeps its old path.
+    pub path: String,
+    /// How the change affects the file.
+    pub status: RemoteDiffFileStatus,
+}
+
+impl From<&SessionDiffFile> for RemoteDiffFile {
+    fn from(file: &SessionDiffFile) -> Self {
+        Self {
+            added_lines: file.added_lines,
+            deleted_lines: file.deleted_lines,
+            old_path: file.old_path.clone(),
+            path: file.path.clone(),
+            status: match file.status {
+                SessionDiffFileStatus::Added => RemoteDiffFileStatus::Added,
+                SessionDiffFileStatus::Deleted => RemoteDiffFileStatus::Deleted,
+                SessionDiffFileStatus::Modified => RemoteDiffFileStatus::Modified,
+                SessionDiffFileStatus::Renamed => RemoteDiffFileStatus::Renamed,
+            },
+        }
+    }
+}
+
+/// How a session's diff changes one file.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteDiffFileStatus {
+    /// The file is new.
+    Added,
+    /// The file is removed.
+    Deleted,
+    /// The file's contents or mode changed.
+    Modified,
+    /// The file moved, possibly with changes.
+    Renamed,
 }
 
 /// Listing entry for one session.

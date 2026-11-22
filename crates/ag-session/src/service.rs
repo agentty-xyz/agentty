@@ -94,6 +94,39 @@ pub enum SessionOperation {
     /// Merging a review-ready session through
     /// [`SessionBackend::merge_session`].
     MergeSession,
+    /// Reading a session's changes through
+    /// [`SessionBackend::get_session_diff`].
+    SessionDiff,
+}
+
+/// One file a session's diff changes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionDiffFile {
+    /// Lines the file's patch adds.
+    pub added_lines: u64,
+    /// Lines the file's patch removes.
+    pub deleted_lines: u64,
+    /// Path before a rename, or `None` when the path did not change.
+    pub old_path: Option<String>,
+    /// The file's unified diff, including its `diff --git` header.
+    pub patch: String,
+    /// Path after the change; a deleted file keeps its old path.
+    pub path: String,
+    /// How the change affects the file.
+    pub status: SessionDiffFileStatus,
+}
+
+/// How a session's diff changes one file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionDiffFileStatus {
+    /// The file is new.
+    Added,
+    /// The file is removed.
+    Deleted,
+    /// The file's contents or mode changed.
+    Modified,
+    /// The file moved, possibly with changes.
+    Renamed,
 }
 
 /// The project a host creates new sessions in, and how it creates them.
@@ -345,6 +378,20 @@ pub trait SessionBackend: Send + Sync {
 
     /// Loads one complete session aggregate, including settings and messages.
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError>;
+
+    /// Loads the files a session changes against its base branch, or `None`
+    /// when the host has not loaded the session. Hosts that do not serve
+    /// diffs report it as an error.
+    async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
+        let _ = session_id;
+
+        Err(SessionError::Operation(
+            "Host does not serve session diffs".to_string(),
+        ))
+    }
 
     /// Lists the host's loaded sessions in its display order. Older hosts
     /// may omit listing support.
@@ -726,6 +773,19 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<Option<Session>, SessionError> {
         self.backend.get_session(session_id).await
+    }
+
+    /// Loads the files one session changes against its base branch, or
+    /// `None` when the host has not loaded the session.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not serve diffs or cannot compute
+    /// or load this one.
+    pub async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
+        self.backend.get_session_diff(session_id).await
     }
 
     /// Lists the host's loaded sessions in its display order.

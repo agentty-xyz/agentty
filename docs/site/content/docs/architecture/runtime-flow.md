@@ -83,7 +83,9 @@ runtime's Tokio executor but owns no application state. It calls the session API
 the mailbox like any programmatic caller. The reducer advances the session-change
 revision after it applies session updates, reloads, or admitted mutations; connected
 clients then fetch the list and the open session again, so remote views converge on
-durable state instead of replaying events.
+durable state instead of replaying events. A session diff query captures its diff source
+in the mailbox and runs Git in a detached task that answers the caller directly, so it
+adds no reducer event.
 
 ## App Event Reducer
 
