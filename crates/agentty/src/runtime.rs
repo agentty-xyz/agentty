@@ -9,6 +9,7 @@ mod key_handler;
 mod latency;
 pub mod mode;
 mod presentation;
+mod screen_selection;
 mod terminal;
 mod timing;
 

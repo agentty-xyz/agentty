@@ -11,27 +11,30 @@ use mockall::predicate::eq;
 use tempfile::tempdir;
 
 use super::{
-    MockTmuxCommandRunner, MockTmuxOptionRunner, ProcessTmuxCommandRunner, ProcessTmuxOptionRunner,
-    RealTmuxClient, TmuxClient, TmuxCommandOutput, TmuxKeyReporting, has_tmux_environment,
-    is_mouse_enabled, prepare_key_reporting, prepare_key_reporting_with_runner,
+    MockTmuxCommandRunner, MockTmuxServerOptionRunner, ProcessTmuxCommandRunner,
+    ProcessTmuxServerOptionRunner, RealTmuxClient, TmuxClient, TmuxCommandOutput, TmuxKeyReporting,
+    copy_to_clipboard, copy_with_command, has_tmux_environment, load_clipboard_buffer_command,
+    prepare_key_reporting, prepare_key_reporting_with_runner,
 };
 
 /// Marks the child test process that runs [`RealTmuxClient`] against a fake
 /// `tmux` on an isolated `PATH`; its value is the session folder to open.
 const REAL_TMUX_CLIENT_CHILD_ENV: &str = "AGENTTY_TEST_REAL_TMUX_CLIENT_CHILD";
 /// Marks the child test process that runs [`prepare_key_reporting`] and
-/// [`is_mouse_enabled`] against a fake `tmux` on an isolated `PATH`; its value
-/// is the expected result.
-const OPTION_CHILD_ENV: &str = "AGENTTY_TEST_TMUX_OPTION_CHILD";
+/// [`copy_to_clipboard`] against a fake `tmux` on an isolated `PATH`; its
+/// value is the expected result.
+const SERVER_CHILD_ENV: &str = "AGENTTY_TEST_TMUX_SERVER_CHILD";
+/// Text the child test process copies through the fake `tmux`.
+const COPIED_TEXT: &str = "picked text";
 
-/// Fake `tmux` that logs its arguments and reports default options, with
-/// `mouse` taken from `AGENTTY_TEST_TMUX_MOUSE`, or fails every call when
-/// `AGENTTY_TEST_TMUX_FAIL` is set.
-const FAKE_OPTION_TMUX: &str = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$AGENTTY_TEST_TMUX_LOG\"\n[ \
-                                -n \"$AGENTTY_TEST_TMUX_FAIL\" ] && exit 1\ncase \"$*\" in\n  \
-                                'show-options -sv extended-keys') echo off ;;\n  'show-options \
-                                -sv extended-keys-format') echo xterm ;;\n  'show-options -Av \
-                                mouse') echo \"${AGENTTY_TEST_TMUX_MOUSE:-off}\" ;;\nesac\n";
+/// Fake `tmux` that logs its arguments, reports default server options, and
+/// saves a loaded buffer to `AGENTTY_TEST_TMUX_CLIPBOARD`, or fails every
+/// call when `AGENTTY_TEST_TMUX_FAIL` is set.
+const FAKE_SERVER_TMUX: &str =
+    "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$AGENTTY_TEST_TMUX_LOG\"\n[ -n \
+     \"$AGENTTY_TEST_TMUX_FAIL\" ] && exit 1\ncase \"$*\" in\n  'show-options -sv extended-keys') \
+     echo off ;;\n  'show-options -sv extended-keys-format') echo xterm ;;\n  'load-buffer -w -') \
+     IFS= read -r text; printf '%s' \"$text\" > \"$AGENTTY_TEST_TMUX_CLIPBOARD\" ;;\nesac\n";
 
 #[test]
 fn tmux_environment_detects_nonempty_tmux_variable() {
@@ -369,7 +372,7 @@ fn send_enter_key_command_builds_expected_tmux_invocation() {
 #[test]
 fn prepare_key_reporting_switches_default_tmux_options_to_csi_u() {
     // Arrange
-    let mut runner = MockTmuxOptionRunner::new();
+    let mut runner = MockTmuxServerOptionRunner::new();
     let mut sequence = Sequence::new();
     runner
         .expect_show_server_option()
@@ -406,7 +409,7 @@ fn prepare_key_reporting_switches_default_tmux_options_to_csi_u() {
 #[test]
 fn prepare_key_reporting_keeps_configured_csi_u_without_changes() {
     // Arrange
-    let mut runner = MockTmuxOptionRunner::new();
+    let mut runner = MockTmuxServerOptionRunner::new();
     runner
         .expect_show_server_option()
         .with(eq("extended-keys"))
@@ -429,7 +432,7 @@ fn prepare_key_reporting_keeps_configured_csi_u_without_changes() {
 #[test]
 fn prepare_key_reporting_reports_unsupported_when_format_change_fails() {
     // Arrange
-    let mut runner = MockTmuxOptionRunner::new();
+    let mut runner = MockTmuxServerOptionRunner::new();
     runner
         .expect_show_server_option()
         .with(eq("extended-keys"))
@@ -456,7 +459,7 @@ fn prepare_key_reporting_reports_unsupported_when_format_change_fails() {
 #[test]
 fn prepare_key_reporting_assumes_csi_u_without_format_option() {
     // Arrange
-    let mut runner = MockTmuxOptionRunner::new();
+    let mut runner = MockTmuxServerOptionRunner::new();
     runner
         .expect_show_server_option()
         .times(2)
@@ -473,10 +476,9 @@ fn prepare_key_reporting_assumes_csi_u_without_format_option() {
 #[test]
 fn server_option_commands_build_expected_tmux_invocations() {
     // Arrange, Act
-    let show_command = ProcessTmuxOptionRunner::show_server_option_command("extended-keys");
+    let show_command = ProcessTmuxServerOptionRunner::show_server_option_command("extended-keys");
     let set_command =
-        ProcessTmuxOptionRunner::set_server_option_command("extended-keys-format", "csi-u");
-    let show_session_command = ProcessTmuxOptionRunner::show_session_option_command("mouse");
+        ProcessTmuxServerOptionRunner::set_server_option_command("extended-keys-format", "csi-u");
 
     // Assert
     assert_eq!(
@@ -502,29 +504,45 @@ fn server_option_commands_build_expected_tmux_invocations() {
             ]
         )
     );
+}
+
+#[test]
+fn load_clipboard_buffer_command_builds_expected_tmux_invocation() {
+    // Arrange, Act
+    let command = load_clipboard_buffer_command();
+
+    // Assert
     assert_eq!(
-        std_command_parts(&show_session_command),
+        std_command_parts(&command),
         (
             "tmux".to_string(),
-            vec![
-                "show-options".to_string(),
-                "-Av".to_string(),
-                "mouse".to_string(),
-            ]
+            vec!["load-buffer".to_string(), "-w".to_string(), "-".to_string(),]
         )
     );
 }
 
 #[test]
-fn tmux_options_run_tmux_from_path_only_inside_tmux() {
-    if let Some(expected) = env::var_os(OPTION_CHILD_ENV) {
+fn copy_with_command_reports_a_command_that_cannot_start() {
+    // Arrange
+    let command = std::process::Command::new("/nonexistent/agentty-test-tmux");
+
+    // Act
+    let is_copied = copy_with_command(command, COPIED_TEXT);
+
+    // Assert
+    assert!(!is_copied);
+}
+
+#[test]
+fn tmux_server_calls_run_tmux_from_path_only_inside_tmux() {
+    if let Some(expected) = env::var_os(SERVER_CHILD_ENV) {
         // Arrange, Act
         let key_reporting = prepare_key_reporting();
-        let is_mouse_enabled = is_mouse_enabled();
+        let is_copied = copy_to_clipboard(COPIED_TEXT);
 
         // Assert
         assert_eq!(
-            format!("{key_reporting:?} mouse={is_mouse_enabled}"),
+            format!("{key_reporting:?} copied={is_copied}"),
             expected.to_string_lossy()
         );
 
@@ -534,64 +552,52 @@ fn tmux_options_run_tmux_from_path_only_inside_tmux() {
     // Arrange
     let command_dir = tempdir().expect("failed to create fake tmux directory");
     let tmux_path = command_dir.path().join("tmux");
-    fs::write(&tmux_path, FAKE_OPTION_TMUX).expect("failed to write fake tmux command");
+    fs::write(&tmux_path, FAKE_SERVER_TMUX).expect("failed to write fake tmux command");
     let mut permissions = fs::metadata(&tmux_path)
         .expect("failed to load fake tmux metadata")
         .permissions();
     permissions.set_mode(0o750);
     fs::set_permissions(&tmux_path, permissions).expect("failed to make fake tmux executable");
-    let default_log = "show-options -sv extended-keys\nset-option -s extended-keys \
-                       on\nshow-options -sv extended-keys-format\nset-option -s \
-                       extended-keys-format csi-u\nshow-options -Av mouse\n";
     let cases = [
-        ("outside", "", None, None, "Outside mouse=false", ""),
+        ("outside", "", None, "Outside copied=false", "", ""),
         (
             "default",
             "/tmp/tmux-501/default,1,0",
             None,
-            None,
-            "CsiU mouse=false",
-            default_log,
-        ),
-        (
-            "mouse",
-            "/tmp/tmux-501/default,1,0",
-            None,
-            Some("on"),
-            "CsiU mouse=true",
-            default_log,
+            "CsiU copied=true",
+            "show-options -sv extended-keys\nset-option -s extended-keys on\nshow-options -sv \
+             extended-keys-format\nset-option -s extended-keys-format csi-u\nload-buffer -w -\n",
+            COPIED_TEXT,
         ),
         (
             "failing",
             "/tmp/tmux-501/default,1,0",
             Some("1"),
-            Some("on"),
-            "CsiU mouse=false",
-            "show-options -sv extended-keys\nshow-options -sv extended-keys-format\nshow-options \
-             -Av mouse\n",
+            "CsiU copied=false",
+            "show-options -sv extended-keys\nshow-options -sv extended-keys-format\nload-buffer \
+             -w -\n",
+            "",
         ),
     ];
 
-    for (name, tmux_variable, fail, mouse, expected, expected_log) in cases {
+    for (name, tmux_variable, fail, expected, expected_log, expected_clipboard) in cases {
         let invocation_log = command_dir.path().join(format!("{name}.log"));
+        let clipboard = command_dir.path().join(format!("{name}.clipboard"));
         let mut child = std::process::Command::new(
             env::current_exe().expect("failed to resolve current test binary"),
         );
         child
             .arg("--exact")
-            .arg("infra::tmux::tests::tmux_options_run_tmux_from_path_only_inside_tmux")
+            .arg("infra::tmux::tests::tmux_server_calls_run_tmux_from_path_only_inside_tmux")
             .arg("--nocapture")
             .env("PATH", command_dir.path())
             .env("TMUX", tmux_variable)
             .env("AGENTTY_TEST_TMUX_LOG", &invocation_log)
-            .env(OPTION_CHILD_ENV, expected)
-            .env_remove("AGENTTY_TEST_TMUX_FAIL")
-            .env_remove("AGENTTY_TEST_TMUX_MOUSE");
+            .env("AGENTTY_TEST_TMUX_CLIPBOARD", &clipboard)
+            .env(SERVER_CHILD_ENV, expected)
+            .env_remove("AGENTTY_TEST_TMUX_FAIL");
         if let Some(fail) = fail {
             child.env("AGENTTY_TEST_TMUX_FAIL", fail);
-        }
-        if let Some(mouse) = mouse {
-            child.env("AGENTTY_TEST_TMUX_MOUSE", mouse);
         }
 
         // Act
@@ -600,12 +606,17 @@ fn tmux_options_run_tmux_from_path_only_inside_tmux() {
         // Assert
         assert!(
             output.status.success(),
-            "isolated {name} tmux option test failed: {}",
+            "isolated {name} tmux server test failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(
             fs::read_to_string(&invocation_log).unwrap_or_default(),
             expected_log,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&clipboard).unwrap_or_default(),
+            expected_clipboard,
             "{name}"
         );
     }

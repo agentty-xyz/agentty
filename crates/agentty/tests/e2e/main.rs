@@ -11,6 +11,7 @@
 
 mod common;
 mod confirmation;
+mod mouse;
 mod navigation;
 mod project;
 mod remote_control;

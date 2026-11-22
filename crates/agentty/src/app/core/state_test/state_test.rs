@@ -4,14 +4,17 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app::sync;
 use tempfile::tempdir;
 
 use super::super::{App, UpdateStatus};
-use super::support::{install_mock_git_client, known_session_diff_stats, test_turn_applied_state};
+use super::support::{
+    install_mock_git_client, known_session_diff_stats, test_turn_applied_state,
+    wait_for_app_condition,
+};
 use crate::app;
 use crate::app::core::event::{AppEvent, AppEventBatch};
 use crate::app::session_state::SessionGitStatus;
@@ -23,6 +26,7 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
+use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 
@@ -309,6 +313,48 @@ async fn apply_app_events_update_status_changed_updates_app_state() {
         })
     );
     assert!(app.needs_redraw());
+}
+
+/// Verifies selected screen text reaches the terminal only when `tmux` does
+/// not take it, and that the terminal is asked on the thread that applies
+/// app events, never on the background thread that asked `tmux`.
+#[tokio::test]
+async fn copy_screen_text_asks_the_terminal_on_the_foreground_when_tmux_declines() {
+    // Arrange
+    let terminal_copies = Arc::new(Mutex::new(Vec::new()));
+    let mut clipboard = MockTerminalClipboard::new();
+    clipboard
+        .expect_copy_through_tmux()
+        .returning(|text| text == "taken by tmux");
+    clipboard.expect_copy_through_terminal().returning({
+        let terminal_copies = Arc::clone(&terminal_copies);
+
+        move |text| {
+            terminal_copies
+                .lock()
+                .expect("copies lock")
+                .push((text.to_string(), std::thread::current().id()));
+
+            true
+        }
+    });
+    let clients =
+        crate::test_support::test_app_clients().with_terminal_clipboard(Arc::new(clipboard));
+    let (mut app, _base_dir) = crate::test_support::new_test_app_with_clients(clients).await;
+
+    // Act
+    app.copy_screen_text("taken by tmux");
+    app.copy_screen_text("declined by tmux");
+    wait_for_app_condition(&mut app, |_app| {
+        !terminal_copies.lock().expect("copies lock").is_empty()
+    })
+    .await;
+
+    // Assert
+    assert_eq!(
+        *terminal_copies.lock().expect("copies lock"),
+        vec![("declined by tmux".to_string(), std::thread::current().id())]
+    );
 }
 
 #[tokio::test]

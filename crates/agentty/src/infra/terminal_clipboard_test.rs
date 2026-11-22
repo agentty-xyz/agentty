@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{Osc52Clipboard, TerminalClipboard};
+use super::{Osc52Clipboard, TerminalClipboard, TmuxAwareClipboard};
+use crate::infra::tmux;
 
 /// Writer that keeps everything written in a shared buffer.
 #[derive(Clone, Default)]
@@ -80,4 +81,50 @@ fn stdout_clipboard_builds() {
 
     // Assert
     assert!(clipboard.writer.lock().is_ok());
+}
+
+#[test]
+fn tmux_step_reports_the_tmux_result_without_writing_to_the_terminal() {
+    // Arrange
+    let buffer = SharedBuffer::default();
+    let accepting =
+        TmuxAwareClipboard::new(Osc52Clipboard::new(Box::new(buffer.clone())), |_text| true);
+    let refusing =
+        TmuxAwareClipboard::new(Osc52Clipboard::new(Box::new(buffer.clone())), |_text| false);
+
+    // Act
+    let is_accepted = accepting.copy_through_tmux("text");
+    let is_refused = !refusing.copy_through_tmux("text");
+
+    // Assert
+    assert!(is_accepted);
+    assert!(is_refused);
+    assert_eq!(buffer.text(), "");
+}
+
+#[test]
+fn terminal_step_writes_an_osc52_request() {
+    // Arrange
+    let buffer = SharedBuffer::default();
+    let clipboard =
+        TmuxAwareClipboard::new(Osc52Clipboard::new(Box::new(buffer.clone())), |_text| false);
+
+    // Act
+    let is_copied = clipboard.copy_through_terminal("text");
+
+    // Assert
+    assert!(is_copied);
+    assert_eq!(buffer.text(), "\x1b]52;c;dGV4dA==\x07");
+}
+
+#[test]
+fn tmux_aware_stdout_clipboard_copies_through_the_tmux_boundary() {
+    // Arrange, Act
+    let clipboard = TmuxAwareClipboard::stdout();
+
+    // Assert
+    assert!(std::ptr::fn_addr_eq(
+        clipboard.tmux_copy,
+        tmux::copy_to_clipboard as fn(&str) -> bool
+    ));
 }

@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::future::Future;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::{Output, Stdio};
@@ -12,8 +13,6 @@ use std::{env, io};
 const EXTENDED_KEYS_OPTION: &str = "extended-keys";
 /// Server option that selects the modified-key report encoding.
 const EXTENDED_KEYS_FORMAT_OPTION: &str = "extended-keys-format";
-/// Session option that routes mouse input through `tmux` key bindings.
-const MOUSE_OPTION: &str = "mouse";
 
 /// How the enclosing `tmux` server reports modified keys to Agentty's pane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,17 +44,18 @@ pub(crate) fn prepare_key_reporting() -> TmuxKeyReporting {
         return TmuxKeyReporting::Outside;
     }
 
-    prepare_key_reporting_with_runner(&ProcessTmuxOptionRunner)
+    prepare_key_reporting_with_runner(&ProcessTmuxServerOptionRunner)
 }
 
-/// Returns whether Agentty runs inside a `tmux` session with `mouse` on.
+/// Copies `text` to the clipboard of the terminal attached to the enclosing
+/// `tmux` session and returns whether `tmux` accepted it; `false` outside
+/// `tmux`.
 ///
-/// With `mouse on`, `tmux` discards wheel input over an alternate-screen pane
-/// unless the pane requested mouse reports. With `mouse off`, the outer
-/// terminal already turns the wheel into arrow keys, so requesting reports
-/// would only take native text selection and link clicks away from it.
-pub(crate) fn is_mouse_enabled() -> bool {
-    is_tmux_session() && ProcessTmuxOptionRunner.is_session_option_on(MOUSE_OPTION)
+/// `tmux` drops OSC 52 requests from pane applications unless `set-clipboard`
+/// is `on`, while its own `load-buffer -w` reaches the terminal whatever that
+/// option says.
+pub(crate) fn copy_to_clipboard(text: &str) -> bool {
+    is_tmux_session() && copy_with_command(load_clipboard_buffer_command(), text)
 }
 
 /// Returns whether the `TMUX` pane environment variable is nonempty.
@@ -63,8 +63,39 @@ fn has_tmux_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> bo
     get_var("TMUX").is_some_and(|value| !value.is_empty())
 }
 
+/// Builds the `tmux load-buffer -w -` command, which reads the buffer from
+/// standard input and cannot draw on the TUI terminal.
+fn load_clipboard_buffer_command() -> std::process::Command {
+    let mut command = std::process::Command::new("tmux");
+    command
+        .arg("load-buffer")
+        .arg("-w")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    command
+}
+
+/// Feeds `text` to `command` on standard input and returns whether it was
+/// written and the command succeeded.
+fn copy_with_command(mut command: std::process::Command, text: &str) -> bool {
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    // Dropping the handle closes the pipe so the command sees end of input.
+    let is_written = child
+        .stdin
+        .take()
+        .is_some_and(|mut stdin| stdin.write_all(text.as_bytes()).is_ok());
+    let is_loaded = child.wait().is_ok_and(|status| status.success());
+
+    is_written && is_loaded
+}
+
 /// Applies the `tmux` server options needed for parseable modified keys.
-fn prepare_key_reporting_with_runner(runner: &dyn TmuxOptionRunner) -> TmuxKeyReporting {
+fn prepare_key_reporting_with_runner(runner: &dyn TmuxServerOptionRunner) -> TmuxKeyReporting {
     if runner.show_server_option(EXTENDED_KEYS_OPTION).as_deref() == Some("off") {
         // Best-effort: the outer terminal is asked for extended keys only on
         // the next attach, so this cannot change the current result.
@@ -87,39 +118,25 @@ fn prepare_key_reporting_with_runner(runner: &dyn TmuxOptionRunner) -> TmuxKeyRe
     }
 }
 
-/// Synchronous `tmux` option boundary used during terminal setup.
+/// Synchronous `tmux` server-option boundary used during terminal setup.
 #[cfg_attr(test, mockall::automock)]
-trait TmuxOptionRunner {
+trait TmuxServerOptionRunner {
     /// Returns one server option value, or `None` when `tmux` cannot report
     /// it.
     fn show_server_option(&self, name: &str) -> Option<String>;
 
     /// Sets one server option and returns whether `tmux` accepted it.
     fn set_server_option(&self, name: &str, value: &str) -> bool;
-
-    /// Returns whether one current-session flag option, including a value
-    /// inherited from global options, resolves to `on`; `false` when `tmux`
-    /// cannot report it.
-    fn is_session_option_on(&self, name: &str) -> bool;
 }
 
-/// Production option runner backed by `tmux` subprocess calls.
-struct ProcessTmuxOptionRunner;
+/// Production server-option runner backed by `tmux` subprocess calls.
+struct ProcessTmuxServerOptionRunner;
 
-impl ProcessTmuxOptionRunner {
+impl ProcessTmuxServerOptionRunner {
     /// Builds the `tmux show-options -sv` command for one server option.
     fn show_server_option_command(name: &str) -> std::process::Command {
         let mut command = Self::tmux_command();
         command.arg("show-options").arg("-sv").arg(name);
-
-        command
-    }
-
-    /// Builds the `tmux show-options -Av` command for one session option,
-    /// resolving inherited global values.
-    fn show_session_option_command(name: &str) -> std::process::Command {
-        let mut command = Self::tmux_command();
-        command.arg("show-options").arg("-Av").arg(name);
 
         command
     }
@@ -139,21 +156,16 @@ impl ProcessTmuxOptionRunner {
 
         command
     }
+}
 
-    /// Runs one `tmux show-options` command and returns its trimmed value.
-    fn option_value(mut command: std::process::Command) -> Option<String> {
-        let output = command.output().ok()?;
+impl TmuxServerOptionRunner for ProcessTmuxServerOptionRunner {
+    fn show_server_option(&self, name: &str) -> Option<String> {
+        let output = Self::show_server_option_command(name).output().ok()?;
         if !output.status.success() {
             return None;
         }
 
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    }
-}
-
-impl TmuxOptionRunner for ProcessTmuxOptionRunner {
-    fn show_server_option(&self, name: &str) -> Option<String> {
-        Self::option_value(Self::show_server_option_command(name))
     }
 
     fn set_server_option(&self, name: &str, value: &str) -> bool {
@@ -161,10 +173,6 @@ impl TmuxOptionRunner for ProcessTmuxOptionRunner {
             .stdout(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
-    }
-
-    fn is_session_option_on(&self, name: &str) -> bool {
-        Self::option_value(Self::show_session_option_command(name)).as_deref() == Some("on")
     }
 }
 

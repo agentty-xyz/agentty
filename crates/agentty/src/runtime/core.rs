@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use crate::app::{App, AppError, spawn};
 use crate::infra::clock::{self, Clock};
 use crate::runtime::latency::CycleTiming;
+use crate::runtime::screen_selection::ScreenAction;
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::style;
@@ -303,6 +304,11 @@ where
 /// stay current. Elapsed-time comparisons and the `last_draw` stamp read
 /// through the injected `Clock` so test runs can virtualize the
 /// render-throttle clock without mutating production timing behavior.
+///
+/// The mouse selection is highlighted on top of the frame. Gestures that
+/// ended since the last draw were resolved against that earlier frame when
+/// the button came up, and their copies and links are handed to the app
+/// after this draw.
 fn render_frame<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
@@ -337,14 +343,22 @@ where
     }
     let color_support =
         style::ColorSupport::from_colors_disabled(Colored::ansi_color_disabled_memoized());
+    let mut screen_actions = Vec::new();
     terminal
         .draw(|frame| {
             presentation.render(&snapshot, frame, color_support);
             style::prepare_terminal_frame(frame.buffer_mut(), snapshot.theme, color_support);
+            screen_actions = presentation.screen_selection().apply(frame.buffer_mut());
         })
         .map_err(backend_err)?;
     presentation.record_rendered_surface(&snapshot);
     app.clear_redraw();
+    for screen_action in screen_actions {
+        match screen_action {
+            ScreenAction::Copy(text) => app.copy_screen_text(&text),
+            ScreenAction::OpenLink(link) => app.open_screen_link(&link),
+        }
+    }
     *last_draw = DrawStamp {
         instant: clock.now_instant(),
         unix_millis: current_unix_millis,

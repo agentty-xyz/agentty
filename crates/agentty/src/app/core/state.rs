@@ -63,7 +63,7 @@ use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::remote_control::{RealRemoteControlLauncher, RemoteControlLauncher};
 use crate::infra::resource::{RealResourceClient, ResourceClient};
-use crate::infra::terminal_clipboard::{Osc52Clipboard, TerminalClipboard};
+use crate::infra::terminal_clipboard::{TerminalClipboard, TmuxAwareClipboard};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
@@ -130,7 +130,7 @@ pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     /// Whether startup should spawn background CLI version detection.
     pub(super) agent_cli_version_task_enabled: bool,
-    /// Opens sign-in pages in the user's browser.
+    /// Opens sign-in pages and clicked links in the user's browser.
     pub(super) browser_client: Arc<dyn BrowserClient>,
     /// Whether Agentty started with `--experimental-harness`.
     pub(super) experimental_harness: bool,
@@ -142,7 +142,8 @@ pub(crate) struct AppClients {
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     /// Starts the loopback listener behind the Remote tab.
     pub(super) remote_control_launcher: Arc<dyn RemoteControlLauncher>,
-    /// Copies remote-control pairing links through the terminal.
+    /// Copies remote-control pairing links and mouse selections through the
+    /// terminal.
     pub(super) terminal_clipboard: Arc<dyn TerminalClipboard>,
     /// Samples the host process table for the tab-bar resource stats.
     pub(super) resource_client: Arc<dyn ResourceClient>,
@@ -171,7 +172,7 @@ impl AppClients {
             project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             remote_control_launcher: Arc::new(RealRemoteControlLauncher),
-            terminal_clipboard: Arc::new(Osc52Clipboard::stdout()),
+            terminal_clipboard: Arc::new(TmuxAwareClipboard::stdout()),
             resource_client: Arc::new(RealResourceClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),
@@ -319,6 +320,10 @@ pub struct App {
     /// Tracks watched review requests, their attempted automatic follow-ups,
     /// and pending watch offers for newly created review requests.
     pub(crate) review_watch: crate::app::review_watch::ReviewWatchState,
+    /// Opens links the user clicks on screen.
+    pub(super) screen_browser: Arc<dyn BrowserClient>,
+    /// Copies screen text the user selects with the mouse.
+    pub(super) screen_clipboard: Arc<dyn TerminalClipboard>,
     /// Shares application-wide services and external clients across workflows.
     pub(crate) services: AppServices,
     /// Tracks per-session thinking text rendered while background work is
@@ -387,6 +392,40 @@ impl App {
     /// Returns whether tmux-only session actions are available.
     pub(crate) fn is_tmux_session(&self) -> bool {
         self.is_tmux_session
+    }
+
+    /// Copies screen text the user selected with the mouse.
+    ///
+    /// The `tmux` step runs in the background, because it waits for a `tmux`
+    /// command and this is called from the render loop. When `tmux` does not
+    /// take the text, [`AppEvent::ScreenCopyDeclined`] hands it back so the
+    /// foreground asks the terminal.
+    pub(crate) fn copy_screen_text(&self, text: &str) {
+        let clipboard = Arc::clone(&self.screen_clipboard);
+        let event_tx = self.services.event_sender();
+        let text = text.to_string();
+        spawn::spawn_blocking_detached(move || {
+            if !clipboard.copy_through_tmux(&text) {
+                // The app owns the event channel, so a closed one only drops
+                // the copy.
+                let _ = event_tx.send(AppEvent::ScreenCopyDeclined { text });
+            }
+        });
+    }
+
+    /// Asks the terminal to copy screen text that `tmux` did not take.
+    ///
+    /// Only the foreground calls this, between frames, because it writes to
+    /// the terminal.
+    pub(super) fn copy_screen_text_through_terminal(&self, text: &str) {
+        // Best-effort: a terminal that cannot copy leaves the text on screen
+        // to select again.
+        self.screen_clipboard.copy_through_terminal(text);
+    }
+
+    /// Opens a link the user clicked on screen.
+    pub(crate) fn open_screen_link(&self, link: &str) {
+        self.screen_browser.open(link);
     }
 
     /// Cycles the active list tab forward.

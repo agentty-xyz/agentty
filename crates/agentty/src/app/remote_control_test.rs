@@ -13,7 +13,7 @@ use mockall::predicate::eq;
 use tokio::sync::watch;
 
 use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
-use crate::app::{App, AppRuntimeEvent, Tab};
+use crate::app::{App, AppEvent, AppRuntimeEvent, Tab};
 use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
@@ -210,11 +210,25 @@ async fn pair_device(app: &App, id: &str, name: &str) {
 }
 
 /// Applies background app events until a paired device shows as connected.
-///
-/// Startup work may queue unrelated events ahead of the forwarded status.
 async fn apply_events_until_connected(app: &mut App) {
+    apply_events_until(app, |app| {
+        app.remote_control.view().connected_device_count() > 0
+    })
+    .await;
+}
+
+/// Applies background app events until a link copy shows its result.
+async fn apply_events_until_link_notice(app: &mut App) {
+    apply_events_until(app, |app| app.remote_control.view().notice.is_some()).await;
+}
+
+/// Applies background app events until `is_done` holds.
+///
+/// Startup work may queue unrelated events ahead of the awaited one, and
+/// one batch may apply several events, so this waits on the resulting state.
+async fn apply_events_until(app: &mut App, is_done: fn(&App) -> bool) {
     let wait = async {
-        while app.remote_control.view().connected_device_count() == 0 {
+        while !is_done(app) {
             match app.next_runtime_event().await {
                 AppRuntimeEvent::App(event) => app.apply_app_events(*event).await,
                 AppRuntimeEvent::Session(command) => {
@@ -226,7 +240,7 @@ async fn apply_events_until_connected(app: &mut App) {
 
     tokio::time::timeout(std::time::Duration::from_secs(5), wait)
         .await
-        .expect("forwarded status should mark a device connected");
+        .expect("background events should reach the awaited state");
 }
 
 /// Builds the status a listener reports for one connected device.
@@ -857,6 +871,9 @@ async fn invalid_saved_key_stops_the_listener_from_starting() {
     );
 }
 
+/// Verifies the link is opened in the browser and copied through `tmux`,
+/// through the terminal when `tmux` does not take it, and reported as not
+/// copied when neither does.
 #[tokio::test]
 async fn link_actions_open_and_copy_the_relay_link() {
     // Arrange
@@ -873,16 +890,28 @@ async fn link_actions_open_and_copy_the_relay_link() {
         .times(1)
         .return_const(());
     let mut clipboard = MockTerminalClipboard::new();
-    let mut copy_order = mockall::Sequence::new();
+    let mut tmux_order = mockall::Sequence::new();
     clipboard
-        .expect_copy()
+        .expect_copy_through_tmux()
         .times(1)
-        .in_sequence(&mut copy_order)
+        .in_sequence(&mut tmux_order)
         .return_const(true);
     clipboard
-        .expect_copy()
+        .expect_copy_through_tmux()
+        .times(2)
+        .in_sequence(&mut tmux_order)
+        .return_const(false);
+    let mut terminal_order = mockall::Sequence::new();
+    clipboard
+        .expect_copy_through_terminal()
+        .withf(|link| link.contains("code=CODE%2D0001"))
         .times(1)
-        .in_sequence(&mut copy_order)
+        .in_sequence(&mut terminal_order)
+        .return_const(true);
+    clipboard
+        .expect_copy_through_terminal()
+        .times(1)
+        .in_sequence(&mut terminal_order)
         .return_const(false);
     install_relay_launcher(&mut app, launcher, browser, clipboard).await;
     app.start_remote_control().await;
@@ -890,20 +919,74 @@ async fn link_actions_open_and_copy_the_relay_link() {
     // Act
     app.open_remote_link();
     app.copy_remote_link();
-    let copied = app.remote_control.view().notice.clone();
+    let pending = app.remote_control.view().notice.clone();
+    apply_events_until_link_notice(&mut app).await;
+    let copied_through_tmux = app.remote_control.view().notice.clone();
     app.copy_remote_link();
+    apply_events_until_link_notice(&mut app).await;
+    let copied_through_terminal = app.remote_control.view().notice.clone();
+    app.copy_remote_link();
+    apply_events_until_link_notice(&mut app).await;
     let not_copied = app.remote_control.view().notice.clone();
     app.stop_remote_control().await;
     app.open_remote_link();
     app.copy_remote_link();
 
     // Assert
-    assert_eq!(copied.as_deref(), Some("Link copied. It works once."));
+    assert_eq!(pending, None);
+    assert_eq!(
+        copied_through_tmux.as_deref(),
+        Some("Link copied. It works once.")
+    );
+    assert_eq!(
+        copied_through_terminal.as_deref(),
+        Some("Link copied. It works once.")
+    );
     assert_eq!(
         not_copied.as_deref(),
         Some("Could not copy the link; select it instead.")
     );
     assert_eq!(app.remote_control.view().notice, None);
+}
+
+/// Verifies a copy result that arrives after the pairing code changed is
+/// dropped, because the copied link no longer works. The late result is
+/// replayed through the reducer so its arrival order is deterministic. It
+/// reports that `tmux` did not copy, so a result that was not dropped would
+/// ask the terminal, which the clipboard here does not expect.
+#[tokio::test]
+async fn link_copy_result_is_dropped_once_the_link_changes() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, _probe) = fake_launcher(
+        DEFAULT_REMOTE_CONTROL_PORT,
+        vec![Some("CODE-0001".to_string()), Some("CODE-0002".to_string())],
+        Ok(()),
+    );
+    let mut clipboard = MockTerminalClipboard::new();
+    clipboard
+        .expect_copy_through_tmux()
+        .times(1)
+        .return_const(true);
+    install_relay_launcher(&mut app, launcher, MockBrowserClient::new(), clipboard).await;
+    app.start_remote_control().await;
+
+    // Act
+    app.copy_remote_link();
+    apply_events_until_link_notice(&mut app).await;
+    let replaced_request = app.remote_control.link_copy_request;
+    app.issue_remote_pairing_code();
+    let after_new_code = app.remote_control.view().notice.clone();
+    app.apply_app_events(AppEvent::RemoteLinkCopied {
+        is_copied: false,
+        request_id: replaced_request,
+    })
+    .await;
+
+    // Assert
+    assert_eq!(after_new_code, None);
+    assert_eq!(app.remote_control.view().notice, None);
+    app.stop_remote_control().await;
 }
 
 #[tokio::test]

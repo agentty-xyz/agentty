@@ -581,6 +581,25 @@ fn test_git_status_batch_keeps_newest_generation_when_older_arrives_later() {
 }
 
 #[test]
+fn remote_link_copy_batch_keeps_newest_request_when_older_arrives_later() {
+    // Arrange
+    let mut event_batch = AppEventBatch::default();
+
+    // Act
+    event_batch.collect_event(AppEvent::RemoteLinkCopied {
+        is_copied: false,
+        request_id: 2,
+    });
+    event_batch.collect_event(AppEvent::RemoteLinkCopied {
+        is_copied: true,
+        request_id: 1,
+    });
+
+    // Assert
+    assert_eq!(event_batch.remote_link_copy, Some((2, false)));
+}
+
+#[test]
 fn test_failed_branch_publish_batch_does_not_request_git_status_refresh() {
     // Arrange
     let mut event_batch = AppEventBatch::default();

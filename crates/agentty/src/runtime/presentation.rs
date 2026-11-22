@@ -1,5 +1,5 @@
-//! Runtime-owned presentation state: render caches, table selection, and
-//! terminal-clear tracking for frame drawing.
+//! Runtime-owned presentation state: render caches, table selection, mouse
+//! selection, and terminal-clear tracking for frame drawing.
 
 use std::cell::{Cell, RefCell};
 
@@ -7,6 +7,7 @@ use ratatui::Frame;
 use ratatui::widgets::TableState;
 
 use crate::app::AppViewSnapshot;
+use crate::runtime::screen_selection::ScreenSelection;
 use crate::ui::style::ColorSupport;
 use crate::ui::{self, RenderCacheStore};
 
@@ -23,6 +24,9 @@ pub(crate) struct PresentationState {
     /// draw to invalidate the terminal buffer when routing selects another
     /// page.
     rendered_surface: Cell<Option<ui::router::SurfaceKind>>,
+    /// Mouse selection drawn over each frame while Agentty takes mouse
+    /// reports.
+    screen_selection: ScreenSelection,
     session_table_state: RefCell<TableState>,
 }
 
@@ -77,5 +81,10 @@ impl PresentationState {
     /// Returns the UI cache collection shared by input metrics and rendering.
     pub(crate) fn render_cache_store(&self) -> &RenderCacheStore {
         &self.render_cache_store
+    }
+
+    /// Returns the mouse selection that input updates and drawing resolves.
+    pub(crate) fn screen_selection(&self) -> &ScreenSelection {
+        &self.screen_selection
     }
 }
