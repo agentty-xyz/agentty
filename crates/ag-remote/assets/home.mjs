@@ -158,8 +158,11 @@ export function createHome({ document, window, elements, request, onHost, onCrea
 
       return;
     }
-    // The new session holds the text from here on, sent or not.
-    drafts.clear(HOME_DRAFT_ID);
+    // The new session holds the text from here on, sent or not. Text typed
+    // while the session was being created stays.
+    if (drafts.get(HOME_DRAFT_ID) === text) {
+      drafts.clear(HOME_DRAFT_ID);
+    }
     if (elements.message.value === text) {
       elements.message.value = "";
       resize();

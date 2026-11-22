@@ -810,9 +810,18 @@ const home = createHome({
     modes: elements["home-modes"],
     send: elements["home-send"],
   },
+  // The new session opens only if the user is still on home; otherwise it
+  // shows up in the list, with an unsent first message kept as its draft.
   onCreated: (sessionId, failure) => {
-    shell.showSession(sessionId);
-    enterSession(sessionId, failure);
+    if (state.currentSessionId === null) {
+      shell.showSession(sessionId);
+      enterSession(sessionId, failure);
+    } else {
+      if (failure) {
+        chat.keepDraft(sessionId, failure.draft);
+      }
+      refresh(true);
+    }
   },
   onHost: (host) => {
     elements["new-session"].hidden = !host;

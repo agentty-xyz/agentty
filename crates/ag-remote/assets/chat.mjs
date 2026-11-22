@@ -267,7 +267,7 @@ export function createDrafts(window) {
 // Returns `open(sessionId, failure)`, `close()`, `render(session, summary)` for a
 // snapshot and the session's entry in the listing (`session` is `null`
 // when the session is gone), `setConnected(isConnected)`,
-// `setCapabilities(list)`, `tick()`, and
+// `setCapabilities(list)`, `keepDraft(sessionId, text)`, `tick()`, and
 // `showLoadError(sessionId, message)`.
 export function createChat({
   document,
@@ -873,6 +873,8 @@ export function createChat({
 
   return {
     close,
+    // Keeps `text` as the unsent message of `sessionId`, for when it opens.
+    keepDraft: (sessionId, text) => drafts.set(sessionId, text),
     open,
     render,
     setCapabilities: (capabilities) => {

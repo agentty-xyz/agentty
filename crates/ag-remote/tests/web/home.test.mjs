@@ -202,6 +202,31 @@ test("sending creates the session, sends the first message, then opens it", asyn
   assert.equal(page.byId("home-error").textContent, "");
 });
 
+test("text typed while the session is created stays on home, and in storage", async () => {
+  const sessionStorage = new MemoryStorage();
+  let release;
+  const page = mountHome({
+    respond: (body) =>
+      body.method === "create_session"
+        ? new Promise((resolve) => {
+            release = () => resolve({ kind: "created", session_id: "new" });
+          })
+        : { kind: "accepted" },
+    sessionStorage: sessionStorage,
+  });
+  await page.home.setCapabilities(CAPABILITIES);
+  type(page, "Fix the relay");
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+  type(page, "Then the docs");
+  release();
+  await settle();
+
+  assert.deepEqual(page.created, [["new", null]]);
+  assert.equal(page.byId("home-message").value, "Then the docs");
+  assert.equal(sessionStorage.getItem(DRAFT_KEY_PREFIX + HOME_DRAFT_ID), "Then the docs");
+});
+
 test("a failed first message still opens the new session with the text kept", async () => {
   const page = mountHome({
     respond: (body) => {
