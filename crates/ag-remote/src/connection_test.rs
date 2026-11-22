@@ -6,7 +6,7 @@ use tokio::sync::watch;
 use super::{
     Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, DeviceProof,
     MAX_DEVICE_NAME_CHARS, MessageOutcome, PairingDevice, complete_pairing, device_display_name,
-    handle_incoming,
+    execute, handle_incoming,
 };
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
@@ -76,14 +76,15 @@ fn request_message(request: RemoteRequest) -> Incoming {
     Incoming::Text(serde_json::to_string(&frame).expect("frame should encode"))
 }
 
-/// Returns the result of a response to request `9`.
-fn reply_result(outcome: MessageOutcome) -> RemoteResult {
-    let response = match outcome {
-        MessageOutcome::Reply(ServerFrame::Response { id: 9, result }) => Some(result),
+/// Sends `request` as request `9` and returns the result of running it.
+async fn reply_result(state: &ServerState, request: RemoteRequest) -> RemoteResult {
+    let request = match handle_incoming(request_message(request)) {
+        MessageOutcome::Request { id: 9, request } => Some(request),
         _ => None,
-    };
+    }
+    .expect("expected request 9");
 
-    response.expect("expected a response to request 9")
+    execute(state.sessions(), request).await
 }
 
 #[tokio::test]
@@ -458,9 +459,7 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
     // Act
     let mut results = Vec::new();
     for request in requests {
-        results.push(reply_result(
-            handle_incoming(&fixture.state, request_message(request)).await,
-        ));
+        results.push(reply_result(&fixture.state, request).await);
     }
 
     // Assert
@@ -523,9 +522,7 @@ async fn handle_incoming_refuses_mutations_of_unlisted_sessions() {
     // Act
     let mut results = Vec::new();
     for request in requests {
-        results.push(reply_result(
-            handle_incoming(&fixture.state, request_message(request)).await,
-        ));
+        results.push(reply_result(&fixture.state, request).await);
     }
 
     // Assert
@@ -544,18 +541,14 @@ async fn handle_incoming_reports_backend_errors_in_the_response() {
     );
 
     // Act
-    let listed = reply_result(
-        handle_incoming(&fixture.state, request_message(RemoteRequest::ListSessions)).await,
-    );
+    let listed = reply_result(&fixture.state, RemoteRequest::ListSessions).await;
     let loaded = reply_result(
-        handle_incoming(
-            &fixture.state,
-            request_message(RemoteRequest::GetSession {
-                session_id: "session-1".to_string(),
-            }),
-        )
-        .await,
-    );
+        &fixture.state,
+        RemoteRequest::GetSession {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await;
 
     // Assert
     assert_eq!(listed, RemoteResult::Error("backend failed".to_string()));
@@ -563,19 +556,18 @@ async fn handle_incoming_reports_backend_errors_in_the_response() {
     assert_eq!(fixture.backend.calls(), ["list", "list"]);
 }
 
-#[tokio::test]
-async fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
+#[test]
+fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
     // Arrange
-    let fixture = fixture(MemoryDeviceStore::default());
     let repeated_hello = serde_json::to_string(&hello("t")).expect("frame should encode");
 
     // Act
     let outcomes = [
-        handle_incoming(&fixture.state, Incoming::Text(repeated_hello)).await,
-        handle_incoming(&fixture.state, Incoming::Text("not json".to_string())).await,
-        handle_incoming(&fixture.state, Incoming::Binary).await,
-        handle_incoming(&fixture.state, Incoming::Control).await,
-        handle_incoming(&fixture.state, Incoming::Closed).await,
+        handle_incoming(Incoming::Text(repeated_hello)),
+        handle_incoming(Incoming::Text("not json".to_string())),
+        handle_incoming(Incoming::Binary),
+        handle_incoming(Incoming::Control),
+        handle_incoming(Incoming::Closed),
     ];
 
     // Assert
@@ -593,5 +585,4 @@ async fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames(
     ));
     assert!(matches!(outcomes[3], MessageOutcome::Ignored));
     assert!(matches!(outcomes[4], MessageOutcome::Closed));
-    assert_eq!(fixture.backend.calls(), Vec::<String>::new());
 }

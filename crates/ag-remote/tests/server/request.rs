@@ -179,6 +179,208 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
     Ok(())
 }
 
+/// Sends request `id`: a message the backend holds until it is released.
+async fn send_held_message(client: &mut Client, id: u64) -> TestResult {
+    let request = RemoteRequest::SendMessage {
+        message: "wait".to_string(),
+        session_id: "session-1".to_string(),
+    };
+
+    send(client, &ClientFrame::Request { id, request }).await
+}
+
+#[tokio::test]
+async fn a_slow_request_delays_neither_other_requests_nor_change_pushes() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    send_held_message(&mut client, 1).await?;
+    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    server.revisions_tx.send_replace(5);
+    let changed = next_frame(&mut client).await?;
+    server.backend.release();
+    let held = next_frame(&mut client).await?;
+
+    // Assert
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    assert_eq!(changed, ServerFrame::Changed { revision: 5 });
+    assert_eq!(
+        held,
+        ServerFrame::Response {
+            id: 1,
+            result: RemoteResult::Ok(RemoteResponse::Accepted),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_request_beyond_eight_in_progress_is_refused() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    for id in 1..=8 {
+        send_held_message(&mut client, id).await?;
+    }
+
+    // Act
+    let refused = call(&mut client, 9, RemoteRequest::ListSessions).await?;
+    server.backend.release();
+    let mut held_ids = Vec::new();
+    for _ in 1..=8 {
+        match next_frame(&mut client).await? {
+            ServerFrame::Response {
+                id,
+                result: RemoteResult::Ok(RemoteResponse::Accepted),
+            } => held_ids.push(id),
+            frame => return Err(format!("expected an accepted response, got {frame:?}").into()),
+        }
+    }
+    held_ids.sort_unstable();
+    let listed = call(&mut client, 10, RemoteRequest::ListSessions).await?;
+
+    // Assert
+    assert_eq!(
+        refused,
+        RemoteResult::Error("Too many requests in progress".to_string())
+    );
+    assert_eq!(held_ids, (1..=8).collect::<Vec<u64>>());
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+
+    Ok(())
+}
+
+/// Takes the next `count` frames as responses and returns them sorted by
+/// request id.
+async fn responses(client: &mut Client, count: usize) -> TestResult<Vec<(u64, RemoteResult)>> {
+    let mut responses = Vec::new();
+    for _ in 0..count {
+        match next_frame(client).await? {
+            ServerFrame::Response { id, result } => responses.push((id, result)),
+            frame => return Err(format!("expected a response, got {frame:?}").into()),
+        }
+    }
+    responses.sort_unstable_by_key(|(id, _)| *id);
+
+    Ok(responses)
+}
+
+#[tokio::test]
+async fn mutations_of_one_session_reach_the_host_in_arrival_order() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    send_held_message(&mut client, 1).await?;
+    let cancel = RemoteRequest::CancelSession {
+        session_id: "session-1".to_string(),
+    };
+    send(
+        &mut client,
+        &ClientFrame::Request {
+            id: 2,
+            request: cancel,
+        },
+    )
+    .await?;
+    let listed = call(&mut client, 3, RemoteRequest::ListSessions).await?;
+    let mutations_while_held = host_mutations(&server);
+    server.backend.release();
+    let replies = responses(&mut client, 2).await?;
+
+    // Assert
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    assert_eq!(mutations_while_held, Vec::<String>::new());
+    assert_eq!(
+        replies,
+        [
+            (1, RemoteResult::Ok(RemoteResponse::Accepted)),
+            (2, RemoteResult::Error("Session not found".to_string())),
+        ]
+    );
+    assert_eq!(
+        host_mutations(&server),
+        ["send:session-1:wait", "cancel:session-1"]
+    );
+
+    Ok(())
+}
+
+/// Returns the recorded backend calls other than the session listings that
+/// run concurrently with them.
+fn host_mutations(server: &TestServer) -> Vec<String> {
+    server
+        .backend
+        .calls()
+        .into_iter()
+        .filter(|call| call != "list")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let message = |id, message: &str| ClientFrame::Request {
+        id,
+        request: RemoteRequest::SendMessage {
+            message: message.to_string(),
+            session_id: "session-1".to_string(),
+        },
+    };
+
+    // Act
+    send(&mut client, &message(1, "panic")).await?;
+    send(&mut client, &message(2, "next")).await?;
+    let replies = responses(&mut client, 2).await?;
+
+    // Assert
+    assert_eq!(
+        replies,
+        [
+            (1, RemoteResult::Error("Request failed".to_string())),
+            (2, RemoteResult::Ok(RemoteResponse::Accepted)),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_requests_in_progress() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    send_held_message(&mut client, 1).await?;
+    // A reply to a later request shows the held one has started.
+    call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let TestServer {
+        backend,
+        devices: _devices,
+        handle,
+        revisions_tx: _revisions_tx,
+    } = server;
+
+    // Act
+    let mut shutdown = tokio::spawn(handle.shutdown());
+    let finished_while_held = tokio::time::timeout(Duration::from_millis(300), &mut shutdown)
+        .await
+        .is_ok();
+    backend.release();
+    shutdown.await?;
+
+    // Assert
+    assert!(!finished_while_held);
+    assert_eq!(backend.calls(), ["list", "list", "send:session-1:wait"]);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
     // Arrange
