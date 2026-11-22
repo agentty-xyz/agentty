@@ -126,6 +126,12 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 - Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
   writing guidance: follow them, but never copy them into commit messages or PR
   descriptions.
+- When a task includes merging a pull request that the agent's authenticated GitHub
+  account (`gh api user --jq .login`) authored, and that account is a code owner in
+  `.github/CODEOWNERS` on `origin/main`, the agent may bypass the missing approval
+  without asking again. Everything else still holds: every required check succeeded on
+  the head commit, with none pending or missing, and no requested changes or unresolved
+  review threads remain. Any other agent leaves merging to a maintainer.
 - Bring a branch up to date by rebasing it onto `origin/main` and pushing with
   `--force-with-lease`; never merge `main` into it.
 - Stack pull requests only when one needs another's code, and link them as a GitHub
