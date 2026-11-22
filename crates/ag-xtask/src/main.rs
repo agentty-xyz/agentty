@@ -8,10 +8,12 @@ mod check_instruction;
 mod check_manifest;
 mod check_migration;
 mod check_module_router;
+mod check_standard;
 mod e2e_container;
 mod file_system;
 mod format_changed;
 mod release_gate;
+mod repository;
 mod semver_check;
 mod slow_test;
 mod timing;
@@ -56,6 +58,11 @@ enum Command {
     /// declare child modules and re-exports.
     #[command(name = "check-module-routers")]
     ModuleRouters,
+    /// Validates that `standards.toml` names existing exports and that
+    /// exported instructions, skills, and rules name nothing only this
+    /// workspace has.
+    #[command(name = "check-standards")]
+    Standards,
     /// Compares repeated CI timing artifacts with matching provenance.
     CompareTimings(timing::Options),
     /// Runs Agentty E2E tests in the pinned image, one local run at a time.
@@ -88,6 +95,7 @@ fn main() -> ExitCode {
         Some(Command::Manifests) => check_manifest::run(),
         None | Some(Command::Migrations) => check_migration::run(),
         Some(Command::ModuleRouters) => check_module_router::run(),
+        Some(Command::Standards) => check_standard::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
         Some(Command::E2eContainer) => e2e_container::run(),
         Some(Command::Fmt(options)) => format_changed::run(&options),

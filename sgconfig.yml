@@ -1,6 +1,10 @@
 # ast-grep configuration for repository structure rules; see
-# `skills/enforce-rules/SKILL.md` for when a rule belongs here.
+# `skills/enforce-rules/SKILL.md` for when a rule belongs here. `standards.toml`
+# exports the `shared` rules and their tests to downstream workspaces;
+# `workspace` rules name this workspace's crates or paths.
 ruleDirs:
-  - lint/rules
+  - lint/rules/shared
+  - lint/rules/workspace
 testConfigs:
-  - testDir: lint/rule-tests
+  - testDir: lint/rule-tests/shared
+  - testDir: lint/rule-tests/workspace

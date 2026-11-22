@@ -47,7 +47,7 @@ one validation rung covering every touched file and all affected dependents:
 | Rust                                | `rustfmt-fix`, `clippy`, `ast-grep`, and unrestricted `test-focused` for changed packages and dependents |
 | Rustdoc or crate README examples    | Add `test-doc`, since nextest runs no doctests                                                           |
 | Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                                |
-| ast-grep rules (`lint/`)            | `ast-grep` and `ast-grep-test`                                                                           |
+| ast-grep rules (`lint/`)            | `ast-grep`, `ast-grep-test`, and `check-standards`                                                       |
 
 Final Rust selection must retain public-contract integration tests; source-only hooks do
 not replace them. Remove test-name restrictions for affected packages, or use

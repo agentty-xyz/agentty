@@ -8,7 +8,7 @@ note: |
   `cfg!(test)`. `#[cfg_attr(test, mockall::automock)]` and `extern crate self` stay
   available.
 files:
-  - crates/*/src/**/*.rs
+  - "**/src/**/*.rs"
 ignores:
   - "**/*_test.rs"
   - "**/*_test/**"

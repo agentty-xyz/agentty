@@ -5,13 +5,13 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use percent_encoding::percent_decode_str;
 use pulldown_cmark::{Event, Parser, Tag};
 use regex::Regex;
-use serde::Deserialize;
 use tracing::info;
+
+use crate::repository;
 
 /// Validates instructions using read-only Git inventory and filesystem
 /// operations.
@@ -71,14 +71,7 @@ impl<'host> InstructionCheck<'host> {
     }
 
     fn run(&self, root: &Path) -> Result<usize, String> {
-        let catalog = self.read(&root.join(".pre-commit-config.yaml"))?;
-        let catalog: Catalog = serde_yaml_ng::from_str(&catalog)
-            .map_err(|error| format!("Invalid hook catalog: {error}"))?;
-        let hook_ids = catalog
-            .repos
-            .into_iter()
-            .flat_map(|repo| repo.hooks.into_iter().map(|hook| hook.id))
-            .collect();
+        let hook_ids = repository::hook_ids(&self.read(&root.join(".pre-commit-config.yaml"))?)?;
         let documents = self.documents(root)?;
         let canonical_root = self
             .host
@@ -292,23 +285,6 @@ impl<'host> InstructionCheck<'host> {
     }
 }
 
-/// Required hook-catalog structure; other hook configuration is irrelevant
-/// here.
-#[derive(Deserialize)]
-struct Catalog {
-    repos: Vec<HookRepository>,
-}
-
-#[derive(Deserialize)]
-struct HookRepository {
-    hooks: Vec<Hook>,
-}
-
-#[derive(Deserialize)]
-struct Hook {
-    id: String,
-}
-
 /// Host adapter; policy stays in `InstructionCheck`.
 struct RealHost {
     git: PathBuf,
@@ -316,32 +292,7 @@ struct RealHost {
 
 impl Host for RealHost {
     fn inventory(&self, root: &Path) -> Result<Vec<PathBuf>, String> {
-        let output = Command::new(&self.git)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args([
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-                "-z",
-            ])
-            .current_dir(root)
-            .output()
-            .map_err(|error| format!("Failed to run git ls-files: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "git ls-files failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let listing = String::from_utf8(output.stdout)
-            .map_err(|error| format!("Invalid UTF-8 in git ls-files: {error}"))?;
-
-        Ok(listing
-            .split('\0')
-            .filter(|name| !name.is_empty())
-            .map(PathBuf::from)
-            .collect())
+        repository::git_files(&self.git, root)
     }
 
     fn read(&self, path: &Path) -> io::Result<String> {

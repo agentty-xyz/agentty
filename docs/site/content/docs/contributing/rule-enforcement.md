@@ -69,3 +69,19 @@ clearer" stays in `AGENTS.md`.
 The `enforce-rules` skill in `skills/enforce-rules/SKILL.md` walks through choosing the
 level, measuring existing violations, writing the check, and removing the instruction it
 replaces.
+
+## Reusable Standards
+
+<a id="rule-enforcement-reusable-standards"></a> `standards.toml` at the repository root
+names the part of these rules that holds in any Cargo workspace, so downstream
+workspaces that follow the same standards can vendor it at a pinned commit instead of
+copying it by hand. It exports the formatter and Clippy configuration, the pinned
+toolchain, the `[workspace.lints]` tables, the ast-grep rules in `lint/rules/shared/`
+with their tests, whole skills, and `AGENTS.md` sections named by heading. Rules that
+name this workspace's crates or paths stay in `lint/rules/workspace/`.
+
+Exported means portable. An exported section, skill, or rule names no crate, hook, or
+repository path that only this workspace has, unless the manifest exports that path too,
+and a shared rule selects files by pattern, such as `**/src/**/*.rs`, rather than by one
+of this workspace's directories. The `check-standards` hook enforces this and checks
+that every path, skill, and heading the manifest names exists.
