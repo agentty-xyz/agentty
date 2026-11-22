@@ -16,12 +16,13 @@ test("createDocument reads the client's page with its ids, attributes and text",
   // Assert
   const transport = document.querySelector('meta[name="agentty-transport"]');
   assert.equal(transport.content, "local");
-  assert.equal(document.getElementById("back").textContent, "←");
-  assert.equal(document.getElementById("back").hidden, true);
+  assert.equal(document.querySelector(".code-field span").textContent, ">");
+  assert.equal(document.getElementById("shell").hidden, true);
   assert.equal(document.getElementById("pair-code").getAttribute("maxlength"), "16");
   assert.equal(document.getElementById("message").value, "");
   assert.equal(document.querySelector("script").getAttribute("src"), "app.js");
-  assert.equal(document.body.querySelectorAll("section.view").length, 3);
+  assert.equal(document.querySelectorAll("symbol").length, 7);
+  assert.equal(document.querySelector("#menu use").getAttribute("href"), "#i-menu");
   assert.match(document.getElementById("pair-hint-local").textContent, /Run \/remote-control in Agentty/);
 });
 

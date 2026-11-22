@@ -38,6 +38,20 @@ Remote control stays off until you start it, and it stops when you press `s` in 
 popup or quit Agentty. It does not start again on the next launch. See
 [Keybindings](@/docs/usage/keybindings.md#remote-control-popup) for the popup keys.
 
+## Use the Page
+
+<a id="usage-remote-control-page"></a> The page lists sessions in a sidebar and shows
+the open session beside it. On a phone or a narrow window, the menu button opens the
+list; the back gesture, `Esc`, or a tap beside the list closes it. The address names the
+open session, so the back gesture returns to the previous one and a reload keeps it
+open.
+
+The sidebar footer shows this device and its connection. Its `green` / `dark` switch
+picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
+next to the device offers `Forget this device`. While the connection is down, a banner
+says when the page reconnects, and a message you are typing stays in the box until it is
+back.
+
 ## Reach Agentty From Another Device
 
 <a id="usage-remote-control-reach"></a> Agentty listens only on `127.0.0.1`, by default

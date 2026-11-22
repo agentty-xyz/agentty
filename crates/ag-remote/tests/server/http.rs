@@ -48,6 +48,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let format = get(addr, "/format.mjs").await?;
     let noise = get(addr, "/noise.mjs").await?;
     let relay = get(addr, "/relay.mjs").await?;
+    let shell = get(addr, "/shell.mjs").await?;
     let stylesheet = get(addr, "/app.css").await?;
 
     // Assert
@@ -58,6 +59,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&format, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
         (&relay, "text/javascript; charset=utf-8"),
+        (&shell, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
     ] {
         assert!(response.starts_with("http/1.1 200 ok"));
@@ -73,9 +75,14 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     }
     assert!(page.contains("<script type=\"module\" src=\"app.js\""));
     assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
+    // Both themes are dark; the browser's interface starts in the green
+    // theme's background colour.
+    assert!(page.contains("<meta name=\"color-scheme\" content=\"dark\""));
+    assert!(page.contains("<meta name=\"theme-color\" content=\"#070b08\""));
     assert!(script.contains("from \"./device_key.mjs\""));
     assert!(script.contains("from \"./format.mjs\""));
     assert!(script.contains("from \"./relay.mjs\""));
+    assert!(script.contains("from \"./shell.mjs\""));
     assert!(device_key.contains("from \"./noise.mjs\""));
     assert!(relay.contains("from \"./noise.mjs\""));
 
@@ -164,7 +171,8 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/device_key.mjs",
             "/format.mjs",
             "/noise.mjs",
-            "/relay.mjs"
+            "/relay.mjs",
+            "/shell.mjs"
         ]
     );
 
