@@ -30,4 +30,5 @@ dials out, so the instance needs no open port.
 ## Documentation
 
 Keep `docs/site/content/docs/usage/remote-control.md` aligned when relay behavior,
-limits, or what the relay can observe changes.
+limits, or what the relay can observe changes. `container/relay.Containerfile` builds
+the relay's image; the `relay-image` hook builds and probes it.
