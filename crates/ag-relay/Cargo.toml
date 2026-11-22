@@ -1,0 +1,27 @@
+[package]
+name = "ag-relay"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+# The relay ships as a container image, not as a crates.io release.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ag-noise.workspace = true
+axum.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+
+[dev-dependencies]
+futures-util.workspace = true
+tokio = { workspace = true, features = ["net", "test-util"] }
+tokio-tungstenite.workspace = true

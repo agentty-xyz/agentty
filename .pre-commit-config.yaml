@@ -253,6 +253,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-relay
+        name: cargo nextest ag-relay
+        description: Relay source tests, the public relay contract, and its binary.
+        entry: cargo nextest run --locked --timings --profile ci -p ag-relay
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-session-src
         name: cargo nextest ag-session src
         description: Source tests for `crates/ag-session/src`.
