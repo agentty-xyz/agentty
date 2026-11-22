@@ -34,9 +34,9 @@ The relay is untrusted. It learns which instance a device asks for, when they co
 and how much they send. It cannot read or change what they send, and it cannot pair a
 device: pairing still needs the one-time code and an approval in the terminal.
 
-Whoever serves the web client is trusted with the page's code. The relay serves it, so a
-malicious relay operator could serve an altered page. Running your own relay removes
-that party.
+Whoever serves the web client is trusted with the page's code. The relay will serve the
+pairing page, which has not shipped yet, so a malicious relay operator could serve an
+altered page. Running your own relay removes that party.
 
 ## Keys and handshakes
 
@@ -69,7 +69,7 @@ the code.
 handshake. It can do that with the Rust implementation compiled to WebAssembly, or with
 JavaScript that calls the browser's own cryptography (WebCrypto).
 
-**Decision.** The web client implements the device handshake in plain JavaScript on
+**Decision.** The web client will implement the device handshake in plain JavaScript on
 WebCrypto, with no build step.
 
 **Why.**
@@ -86,9 +86,9 @@ WebCrypto, with no build step.
 
 **Consequences.**
 
-- The Noise patterns use AES-256-GCM, because WebCrypto offers no ChaCha20-Poly1305.
-  `ag-noise` must stay within what WebCrypto provides.
-- Two implementations of the device handshake exist. A test must run the JavaScript
+- The Noise patterns use AES-256-GCM, because browsers do not yet ship ChaCha20-Poly1305
+  in WebCrypto by default. `ag-noise` must stay within what WebCrypto provides.
+- Two implementations of the device handshake will exist. A test must run the JavaScript
   against `ag-noise` so they cannot drift apart.
 - Relay pairing needs a browser with X25519 in WebCrypto, which the major browsers have
   shipped since early 2025, and a page served over HTTPS or from `localhost`. The
