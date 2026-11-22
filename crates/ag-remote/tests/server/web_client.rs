@@ -1,5 +1,6 @@
-//! The web client's relay modules, run in Node against a real relay and
-//! server, so the JavaScript handshake cannot drift from `ag-noise`.
+//! The web client's relay modules, run in Node: against a real relay and
+//! server, so the JavaScript handshake cannot drift from `ag-noise`, and
+//! against an in-memory key store with the faults a browser can show.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -9,30 +10,41 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 
-use crate::relay::{start_linked_server, start_relay};
-use crate::support::TestResult;
+use crate::support::{TestResult, start_linked_server, start_relay};
 
 /// Node script that drives the web client's relay modules.
 const DEVICE_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/relay_device.mjs");
+/// Node script that runs the client's key storage over a fake `IndexedDB`.
+const KEY_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/web/device_key_check.mjs"
+);
 /// Longest wait for the script's next step before a test fails.
 const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Message size that needs several Noise messages in each direction.
 const LARGE_MESSAGE_BYTES: usize = 200_000;
 
-/// A running device script and the steps it reports.
+/// A running Node script and the steps it reports.
 struct WebDevice {
     process: Child,
     steps: Lines<BufReader<ChildStdout>>,
 }
 
 impl WebDevice {
-    /// Starts the script in `mode` against the relay page `link` points at.
+    /// Starts the device script in `mode` against the relay page `link`
+    /// points at.
     fn start(mode: &str, link: &str) -> TestResult<Self> {
+        Self::run(
+            DEVICE_SCRIPT,
+            &[mode, link, &LARGE_MESSAGE_BYTES.to_string()],
+        )
+    }
+
+    /// Starts `script` with `arguments`.
+    fn run(script: &str, arguments: &[&str]) -> TestResult<Self> {
         let mut process = Command::new("node")
-            .arg(DEVICE_SCRIPT)
-            .arg(mode)
-            .arg(link)
-            .arg(LARGE_MESSAGE_BYTES.to_string())
+            .arg(script)
+            .args(arguments)
             .stdout(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
@@ -124,6 +136,94 @@ async fn web_client_with_an_unpaired_key_is_refused_through_the_relay() -> TestR
     assert_eq!(
         refused,
         json!({"type": "rejected", "reason": "Unknown device token"})
+    );
+    assert!(succeeded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_keeps_its_device_key_through_storage_faults() -> TestResult {
+    // Arrange
+    let mut storage = WebDevice::run(KEY_SCRIPT, &[])?;
+
+    // Act
+    let key_objects = storage.next_step().await?;
+    let fallback = storage.next_step().await?;
+    let write_failure = storage.next_step().await?;
+    let read_failure = storage.next_step().await?;
+    let upgrade = storage.next_step().await?;
+    let broken_copy = storage.next_step().await?;
+    let forget = storage.next_step().await?;
+    let unsaved = storage.next_step().await?;
+    let succeeded = storage.succeeded().await?;
+
+    // Assert
+    assert_eq!(
+        key_objects,
+        json!({
+            "scenario": "key_objects",
+            "extractable": false,
+            "origins": ["created", "saved"],
+            "sameKey": true,
+            "stored": ["device"],
+        })
+    );
+    assert_eq!(
+        fallback,
+        json!({
+            "scenario": "fallback",
+            "extractable": false,
+            "origins": ["created", "saved"],
+            "sameKey": true,
+            "stored": ["device-wrapped"],
+        })
+    );
+    assert_eq!(
+        write_failure,
+        json!({"scenario": "write_failure", "origin": "saved", "sameKey": true})
+    );
+    assert_eq!(
+        read_failure,
+        json!({
+            "scenario": "read_failure",
+            "origins": ["unreadable", "saved"],
+            "recoveredSameKey": true,
+            "stored": ["device-wrapped"],
+            "temporaryKeyDiffers": true,
+        })
+    );
+    assert_eq!(
+        upgrade,
+        json!({
+            "scenario": "upgrade",
+            "extractable": false,
+            "origin": "saved",
+            "sameKey": true,
+            "stored": ["device"],
+        })
+    );
+    assert_eq!(
+        broken_copy,
+        json!({
+            "scenario": "broken_copy",
+            "newKey": true,
+            "origins": ["created", "saved"],
+            "sameKey": true,
+        })
+    );
+    assert_eq!(
+        forget,
+        json!({
+            "scenario": "forget",
+            "newKey": true,
+            "origin": "created",
+            "storedAfterForget": [],
+        })
+    );
+    assert_eq!(
+        unsaved,
+        json!({"scenario": "unsaved", "origin": "created", "stored": []})
     );
     assert!(succeeded);
 

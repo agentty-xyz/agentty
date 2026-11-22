@@ -22,7 +22,7 @@ const elements = {};
 for (const id of [
   "back", "heading", "connection", "pair-view", "pair-hint-local", "pair-hint-relay",
   "pair-form", "pair-code", "pair-name", "pair-status", "pair-error", "list-view",
-  "sessions", "sessions-empty",
+  "sessions", "sessions-empty", "list-error",
   "forget", "session-view", "session-status", "cancel", "transcript",
   "queued", "questions", "composer", "message", "session-error",
 ]) {
@@ -320,6 +320,7 @@ function onAuthenticated() {
   state.isAuthenticated = true;
   state.backoffMs = 1000;
   setConnection("Connected", true);
+  elements["list-error"].textContent = "";
   elements["pair-error"].textContent = "";
   if (!state.currentSessionId) {
     show("list");
@@ -341,8 +342,9 @@ function onRejected(reason) {
     elements["pair-error"].textContent = reason;
     showPairing();
   } else {
-    // Other rejections, such as an unsupported protocol version, need a
-    // page reload after Agentty is updated.
+    // Other rejections, such as an unsupported protocol version, last
+    // until Agentty or the server of this page is updated.
+    elements["list-error"].textContent = reason;
     elements["session-error"].textContent = reason;
   }
   setConnection("Disconnected", false);
@@ -590,7 +592,7 @@ elements.forget.addEventListener("click", () => {
     void forgetDeviceKey()
       .then(loadDeviceKey)
       .then((deviceKey) => {
-        state.deviceKey = deviceKey;
+        state.deviceKey = deviceKey.keyPair;
       });
   }
   showPairing();
@@ -687,17 +689,36 @@ async function startThroughRelay() {
 
     return;
   }
-  state.deviceKey = await loadDeviceKey();
+  const deviceKey = await loadDeviceKey();
+  state.deviceKey = deviceKey.keyPair;
   // A link opened in a tab that already shows this page only changes the
   // fragment.
   window.addEventListener("hashchange", () => {
     if (adoptPairingLink()) {
+      // The link replaces whatever this tab was doing.
+      disconnect();
+      state.currentSessionId = null;
+      state.session = null;
       elements["pair-error"].textContent = "";
       showPairing();
     }
   });
   const relay = storedRelay();
   if (adoptPairingLink() || !relay) {
+    showPairing();
+
+    return;
+  }
+  if (deviceKey.origin !== "saved") {
+    // The key Agentty knows is not available, so connecting would only be
+    // refused. A key that is gone ends the pairing; storage that could not
+    // be read may work again after a reload, so the pairing stays.
+    if (deviceKey.origin === "created") {
+      forgetCredential();
+    } else {
+      elements["pair-error"].textContent =
+        "This browser's saved key could not be read. Reload the page to try again.";
+    }
     showPairing();
 
     return;

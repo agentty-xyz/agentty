@@ -12,6 +12,10 @@ import { openRelayTransport, parsePairingLink } from "../../assets/relay.mjs";
 const PROTOCOL_VERSION = 1;
 const SESSION_ID = "session-1";
 
+if (typeof WebSocket === "undefined") {
+  throw new Error("Node.js 22 or newer is required: this one has no WebSocket");
+}
+
 const [mode, link, messageBytes] = process.argv.slice(2);
 const pairing = parsePairingLink(new URL(link).hash);
 if (!pairing) {

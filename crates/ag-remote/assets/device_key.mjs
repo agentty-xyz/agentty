@@ -45,14 +45,18 @@ async function remove(id) {
 }
 
 // Saves `keyPair` as key objects and reports whether the browser can read
-// them back.
+// them back. A failure only means the key objects are not saved.
 async function saveKeyObjects(keyPair) {
-  await write(DEVICE_KEY_ID, keyPair);
-  const stored = await read(DEVICE_KEY_ID);
-  if (stored?.privateKey && stored?.publicKey) {
-    return true;
+  try {
+    await write(DEVICE_KEY_ID, keyPair);
+    const stored = await read(DEVICE_KEY_ID);
+    if (stored?.privateKey && stored?.publicKey) {
+      return true;
+    }
+    await remove(DEVICE_KEY_ID);
+  } catch (_error) {
+    // Reported as not saved below.
   }
-  await remove(DEVICE_KEY_ID);
 
   return false;
 }
@@ -99,44 +103,76 @@ async function unwrap(wrapped) {
   };
 }
 
-/**
- * Returns this browser's device key, creating and saving it on first use.
- * Without usable storage the key lasts for this page only.
- */
-export async function loadDeviceKey() {
+// Returns the saved key pair, or null when none is saved. Rejects when the
+// storage cannot be read, because a saved key may then still exist.
+async function readSaved() {
+  const stored = await read(DEVICE_KEY_ID);
+  if (stored?.privateKey && stored?.publicKey) {
+    return stored;
+  }
+  const wrapped = await read(WRAPPED_KEY_ID);
+  if (!wrapped) {
+    return null;
+  }
+  let keyPair;
   try {
-    const stored = await read(DEVICE_KEY_ID);
-    if (stored?.privateKey && stored?.publicKey) {
-      return stored;
-    }
-    const wrapped = await read(WRAPPED_KEY_ID);
-    if (wrapped) {
-      const keyPair = await unwrap(wrapped);
-      // A browser that has learned to store key objects takes the key
-      // over, and the weaker copy goes away.
-      if (await saveKeyObjects(keyPair)) {
-        await remove(WRAPPED_KEY_ID);
-      }
+    keyPair = await unwrap(wrapped);
+  } catch (_error) {
+    // A copy that cannot be decrypted is lost; a new key replaces it.
+    return null;
+  }
+  // A browser that has learned to store key objects takes the key over,
+  // and the weaker copy goes away. The key works either way.
+  if (await saveKeyObjects(keyPair)) {
+    await remove(WRAPPED_KEY_ID).catch(() => {});
+  }
 
-      return keyPair;
-    }
-    const created = await generateKeyPair();
-    if (await saveKeyObjects(created)) {
-      return created;
-    }
+  return keyPair;
+}
 
+// Creates a key pair and saves it in the strongest form the browser keeps.
+// Without usable storage the key lasts for this page only.
+async function create() {
+  const created = await generateKeyPair();
+  if (await saveKeyObjects(created)) {
+    return created;
+  }
+  try {
     return await createWrapped();
   } catch (_error) {
-    return generateKeyPair();
+    return created;
   }
+}
+
+/**
+ * Loads this browser's device key, creating and saving it on first use.
+ *
+ * Resolves to `{ keyPair, origin }`. The origin is `"saved"` for a key that
+ * was already stored, `"created"` when none was stored and a new one was
+ * made, and `"unreadable"` when the storage could not be read: the key is
+ * then a temporary one, and a saved key may still exist.
+ */
+export async function loadDeviceKey() {
+  let saved;
+  try {
+    saved = await readSaved();
+  } catch (_error) {
+    return { keyPair: await generateKeyPair(), origin: "unreadable" };
+  }
+  if (saved) {
+    return { keyPair: saved, origin: "saved" };
+  }
+
+  return { keyPair: await create(), origin: "created" };
 }
 
 /** Deletes the saved device key, which unpairs this browser for good. */
 export async function forgetDeviceKey() {
-  try {
-    await remove(DEVICE_KEY_ID);
-    await remove(WRAPPED_KEY_ID);
-  } catch (_error) {
-    // Nothing was saved when storage is unavailable.
+  for (const id of [DEVICE_KEY_ID, WRAPPED_KEY_ID]) {
+    try {
+      await remove(id);
+    } catch (_error) {
+      // Nothing was saved when storage is unavailable.
+    }
   }
 }

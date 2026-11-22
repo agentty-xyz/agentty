@@ -1,17 +1,19 @@
 //! Devices that reach the server through a relay, end to end encrypted.
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use ag_noise::{Handshake, Session};
-use ag_relay::{CONNECT_PATH_PREFIX, RelayConfig, RelayHandle, RelayLimits};
+use ag_relay::{CONNECT_PATH_PREFIX, RelayConfig, RelayHandle};
 use ag_remote::protocol::{ClientFrame, RemoteRequest, RemoteResult, ServerFrame};
 use ag_remote::{PROTOCOL_VERSION, RelayStatus, RemoteRelayConfig, StaticKeypair};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::support::{Client, TestResult, TestServer};
+use crate::support::{
+    Client, TestResult, TestServer, relay_limits, start_linked_server, start_relay,
+};
 
 /// Largest frame the test device accepts, in bytes.
 const MAX_FRAME_BYTES: usize = 1 << 20;
@@ -93,47 +95,6 @@ async fn stream_ends(socket: &mut Client) -> TestResult<bool> {
             Some(Ok(other)) => return Err(format!("unexpected message {other:?}").into()),
         }
     }
-}
-
-/// Starts a relay on a free loopback port.
-pub(crate) async fn start_relay() -> TestResult<RelayHandle> {
-    let relay = ag_relay::start(RelayConfig {
-        bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        client_address_header: None,
-        limits: relay_limits(),
-    })
-    .await?;
-
-    Ok(relay)
-}
-
-/// Relay limits with frequent keepalive pings, so the server's handling of
-/// them runs in every test.
-fn relay_limits() -> RelayLimits {
-    RelayLimits {
-        ping_interval: Duration::from_millis(50),
-        ..RelayLimits::default()
-    }
-}
-
-/// Starts a server linked to `relay` and waits until it is registered.
-pub(crate) async fn start_linked_server(
-    relay: &RelayHandle,
-    instance: &StaticKeypair,
-) -> TestResult<TestServer> {
-    let server = TestServer::start_linked(RemoteRelayConfig {
-        instance_key: instance.clone(),
-        url: format!("ws://{}/", relay.local_addr()),
-    })
-    .await?;
-    let mut status = server.handle.status();
-    tokio::time::timeout(
-        MESSAGE_TIMEOUT,
-        status.wait_for(|status| status.relay == Some(RelayStatus::Connected)),
-    )
-    .await??;
-
-    Ok(server)
 }
 
 #[tokio::test]

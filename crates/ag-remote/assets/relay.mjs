@@ -94,13 +94,16 @@ class RelayTransport {
       return;
     }
     if (!this.session) {
-      this.session = await this.handshake.finish(data);
-      this.onopen();
+      const session = await this.handshake.finish(data);
+      if (!this.isClosed) {
+        this.session = session;
+        this.onopen();
+      }
 
       return;
     }
     const frame = await this.session.open(data);
-    if (frame) {
+    if (frame && !this.isClosed) {
       this.onmessage(decoder.decode(frame));
     }
   }
