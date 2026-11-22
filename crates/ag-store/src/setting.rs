@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::DbError;
+use crate::connection::begin_write;
 
 /// Settings-focused persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
@@ -235,7 +236,7 @@ SET value = excluded.value
         project_id: i64,
         settings: Vec<(SettingName, String)>,
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
 
         for (name, value) in settings {
             sqlx::query!(

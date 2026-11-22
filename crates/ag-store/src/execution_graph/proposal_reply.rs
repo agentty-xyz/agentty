@@ -5,6 +5,7 @@ use sqlx::SqliteConnection;
 
 use super::{GraphProposalReplyRecord, SqliteGraphRepository};
 use crate::DbError;
+use crate::connection::begin_write;
 use crate::session_message::SessionMessageStore;
 
 /// Stored outcome identities; the table constraint admits only these.
@@ -29,7 +30,7 @@ impl SqliteGraphRepository {
             return Err(Self::invalid("Reply identity and message must be nonempty"));
         }
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::proposal_lock(&mut transaction, proposal_id).await?;
         if let Some(existing) = Self::proposal_reply(&mut transaction, reply_id).await? {
             if existing.proposal_id != proposal_id
@@ -81,7 +82,7 @@ impl SqliteGraphRepository {
             .iter()
             .find(|(_, candidate)| *candidate == outcome)
             .map(|(id, _)| *id);
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         sqlx::query("UPDATE graph_proposal_reply SET outcome = ? WHERE id = ? AND outcome IS NULL")
             .bind(outcome_id)
             .bind(reply_id)

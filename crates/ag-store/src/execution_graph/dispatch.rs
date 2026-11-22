@@ -19,6 +19,7 @@ use sqlx::SqliteConnection;
 
 use super::{GraphEvidence, SqliteGraphRepository, StoredGraphResult};
 use crate::DbError;
+use crate::connection::begin_write;
 use crate::task::SqliteTaskRepository;
 
 #[async_trait]
@@ -76,7 +77,7 @@ impl SqliteGraphRepository {
                 "Dispatch requires an execution identity and Env folder",
             ));
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, graph_id).await?;
         let graph = Self::current(&mut transaction, graph_id, revision).await?;
         let node = graph
@@ -474,7 +475,7 @@ impl SqliteGraphRepository {
     }
 
     async fn finish_node(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let record = &dispatch.record;
         Self::lock(&mut transaction, &record.graph_id).await?;
         let graph =
@@ -569,7 +570,7 @@ impl SqliteGraphRepository {
     }
 
     async fn fail_node(&self, record: &GraphExecutionRecord, error: &str) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, &record.graph_id).await?;
         let (_, existing) = Self::execution(&mut transaction, &record.execution)
             .await?

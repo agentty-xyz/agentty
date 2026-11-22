@@ -6,6 +6,7 @@ use sqlx::SqliteConnection;
 
 use super::{GraphEvidence, SqliteGraphRepository, StoredGraphEvidence, StoredGraphResult};
 use crate::DbError;
+use crate::connection::begin_write;
 
 impl SqliteGraphRepository {
     pub(super) async fn produce(
@@ -159,7 +160,7 @@ impl SqliteGraphRepository {
         if evidence.actor.trim().is_empty() || evidence.reason.trim().is_empty() {
             return Err(Self::invalid("Evidence requires an actor and reason"));
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, &reference.graph_id).await?;
         let graph = Self::current(
             &mut transaction,

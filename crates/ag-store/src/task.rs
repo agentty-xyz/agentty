@@ -9,6 +9,7 @@ use ag_session::{
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
+use crate::connection::begin_write;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
 use crate::task_plan::TaskPlanStore;
@@ -276,7 +277,7 @@ impl SqliteTaskRepository {
         agent_request: Option<&SubmitAgentTaskRequest>,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let claimed = Self::claim_attempt_in_transaction(
             &mut transaction,
             session_id,
@@ -392,7 +393,7 @@ impl TaskRepository for SqliteTaskRepository {
         request: &AcceptTaskPlanRequest,
     ) -> Result<AcceptedTaskPlan, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let plan = TaskPlanStore::accept(&mut transaction, session_id, request, now).await?;
         transaction.commit().await?;
 
@@ -428,7 +429,7 @@ impl TaskRepository for SqliteTaskRepository {
         metadata: &TaskAgentTurnMetadata,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let recorded =
             TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
         transaction.commit().await?;
@@ -485,7 +486,7 @@ impl TaskRepository for SqliteTaskRepository {
             return Err(Self::invalid("Task and objective must be nonempty"));
         }
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         sqlx::query!(
             "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
              CONFLICT(id) DO NOTHING",

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+use crate::connection::begin_write;
 use crate::session::ForkSessionSnapshot;
 use crate::timestamp::TimestampSource;
 use crate::{DbError, DbResultExt, status};
@@ -39,7 +40,7 @@ impl SessionSnapshotStore {
         } = snapshot;
         status::validate_session(status)?;
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await.db_context(FORK_SESSION_SNAPSHOT)?;
+        let mut transaction = begin_write(&self.pool).await?;
         let insert_result = sqlx::query(
             r"
 INSERT INTO session (

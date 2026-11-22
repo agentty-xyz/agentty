@@ -8,6 +8,7 @@ use sqlx::SqliteConnection;
 
 use super::SqliteGraphRepository;
 use crate::DbError;
+use crate::connection::begin_write;
 
 /// One budget's stored accounting.
 struct BudgetState {
@@ -34,7 +35,7 @@ impl SqliteGraphRepository {
         limits: &BTreeMap<String, usize>,
     ) -> Result<BTreeMap<String, usize>, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::save_in(&mut transaction, graph, None, now).await?;
         let remaining = Self::open_budgets(&mut transaction, &graph.id, limits, now).await?;
         transaction.commit().await?;
@@ -133,7 +134,7 @@ impl SqliteGraphRepository {
         // Bounded by `MAX_ADDITIONAL_CALLS`, so it fits.
         let calls = i64::try_from(request.additional_calls).unwrap_or(i64::MAX);
         let graph_id = &request.graph.graph_id;
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, graph_id).await?;
         let recorded: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT execution_graph_id, budget_id, additional_provider_call_count FROM \

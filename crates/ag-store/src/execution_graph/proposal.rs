@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use sqlx::{Row, SqliteConnection};
 
 use crate::DbError;
+use crate::connection::begin_write;
 use crate::execution_graph::{GraphProposalReplyRecord, SqliteGraphRepository};
 
 /// Narrow persistence boundary; querying never generates or dispatches work.
@@ -170,7 +171,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
         {
             return Err(Self::invalid("Invalid initial proposal capture"));
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let inserted = sqlx::query(
             "INSERT OR IGNORE INTO graph_proposal (id, session_id, version, capture, created_at) \
              VALUES (?, ?, 1, ?, ?)",
@@ -252,7 +253,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
         version: u32,
         action: &GraphProposalAction,
     ) -> Result<GraphProposalState, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::proposal_lock(&mut transaction, id).await?;
         let mut state = Self::proposal_current(&mut transaction, id, version).await?;
         if state.version.approval.is_some() || version >= state.limits.generations {
@@ -366,7 +367,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
         if matches!(outcome, GraphProposalVersionOutcome::Generating) {
             return Err(Self::invalid("Generation completion must be terminal"));
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::proposal_lock(&mut transaction, id).await?;
         let mut state = Self::proposal_current(&mut transaction, id, version).await?;
         if state.version.outcome != GraphProposalVersionOutcome::Generating {
@@ -399,7 +400,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
     }
 
     async fn approve(&self, id: &str, version: u32) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::proposal_lock(&mut transaction, id).await?;
         let state = Self::proposal_current(&mut transaction, id, version).await?;
         if state.version.approval.is_some() {
@@ -470,7 +471,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
     }
 
     async fn cancel(&self, id: &str, version: u32) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::proposal_lock(&mut transaction, id).await?;
         let state = Self::proposal_get(&mut transaction, id, None)
             .await?

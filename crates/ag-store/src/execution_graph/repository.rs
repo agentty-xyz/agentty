@@ -12,6 +12,7 @@ use super::{
     GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
     StoredGraphResult,
 };
+use crate::connection::begin_write;
 use crate::{DbError, TimestampSource};
 
 /// Persistence only: no dispatch, capacity allocation, or automatic replay.
@@ -399,7 +400,7 @@ impl GraphRepository for SqliteGraphRepository {
         graph: &ExecutionGraph,
         expected_revision: Option<NonZeroU64>,
     ) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         let saved = Self::save_in(
             &mut transaction,
             graph,
@@ -457,7 +458,7 @@ impl GraphRepository for SqliteGraphRepository {
     }
 
     async fn link_execution(&self, record: &GraphExecutionRecord) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, &record.graph_id).await?;
         let inserted = Self::link(
             &mut transaction,
@@ -515,7 +516,7 @@ impl GraphRepository for SqliteGraphRepository {
         reference: &GraphResultRef,
         body: &str,
     ) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool).await?;
         Self::lock(&mut transaction, &reference.graph_id).await?;
         let inserted = Self::produce(
             &mut transaction,

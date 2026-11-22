@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::DbError;
+use crate::connection::begin_write;
 
 /// Durable input for one review-comment resolution operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -247,7 +248,7 @@ impl ReviewRepository for SqliteReviewRepository {
         id: &str,
         thread_ids: &[String],
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
         for thread_id in thread_ids {
             let inserted = sqlx::query!(
                 "INSERT INTO session_review_comment_target
@@ -306,7 +307,7 @@ impl ReviewRepository for SqliteReviewRepository {
         resolutions: &[NewSessionReviewCommentResolution],
         commit_hash: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
         for resolution in resolutions {
             sqlx::query!(
                 r"
@@ -333,7 +334,7 @@ WHERE session_id = ?
         id: &str,
         resolutions: &[NewSessionReviewCommentResolution],
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
         for resolution in resolutions {
             sqlx::query!(
                 r"
@@ -371,7 +372,7 @@ WHERE session_id = ?
         id: &str,
         resolutions: &[NewSessionReviewCommentResolution],
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
         insert_review_comment_resolutions(&mut transaction, id, resolutions).await?;
         transaction.commit().await?;
 
@@ -524,7 +525,7 @@ WHERE session_id = ?
         id: &str,
         reply_token: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0).await?;
         sqlx::query!(
             "DELETE FROM session_review_comment_target
              WHERE session_id = ? AND (review_request_display_id, thread_id) IN
