@@ -7,6 +7,9 @@
 - binary: ag-harness::sandbox
   test: lifecycle::output_flood_cannot_prevent_deadline_cleanup
   reason: Runs a flooding command to its 5 s deadline once per conformance executor.
+- binary: ag-harness::sandbox
+  test: access::native_inherited_descriptors_and_environment_are_not_command_capabilities
+  reason: Usually the first test in the serial sandbox group to run the C compiler; about 0.3 s warm, up to 6 s when a CI runner starts the compiler cold. This depends on nextest's unguaranteed test order, and warming the compiler in a nextest setup script needs an experimental feature, so allowlist another compiling sandbox test if it starts first.
 - binary: agentty
   test: app::execution_graph::tests::task_graph_preserves_context_and_waits_for_acceptance_and_ordered_effects
   reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.
