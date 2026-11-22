@@ -16,10 +16,11 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::connection;
+use crate::connection::{self, DeviceProof};
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::entropy::{Entropy, OsEntropy};
 use crate::pairing::{PairingCode, PairingState};
+use crate::relay::{self, RelayStatus, RemoteRelayConfig};
 
 /// Largest accepted WebSocket message or frame, in bytes.
 const MAX_MESSAGE_SIZE: usize = 1 << 20;
@@ -54,6 +55,10 @@ pub struct RemoteServerConfig {
     pub allowed_hosts: Vec<String>,
     /// Address to bind; port `0` selects a free port.
     pub bind_addr: SocketAddr,
+    /// Relay to register with, so devices can also connect without reaching
+    /// the listener. Those devices encrypt end to end and pair with their
+    /// own key.
+    pub relay: Option<RemoteRelayConfig>,
 }
 
 /// Failure starting or controlling the server.
@@ -78,6 +83,8 @@ pub struct RemoteServerStatus {
     /// Devices that redeemed a pairing code and wait for approval, in
     /// arrival order.
     pub pairing_requests: Vec<PairingRequest>,
+    /// State of the relay link; `None` when no relay is configured.
+    pub relay: Option<RelayStatus>,
 }
 
 /// One device waiting for the host to approve its pairing.
@@ -148,6 +155,9 @@ pub(crate) async fn start_with_entropy(
             .with_graceful_shutdown(shutdown)
             .await;
     });
+    if let Some(relay) = config.relay {
+        tokio::spawn(relay::run(Arc::clone(&state), relay));
+    }
 
     Ok(RemoteServerHandle {
         local_addr,
@@ -253,9 +263,11 @@ pub(crate) struct ServerState {
     open_sockets_tx: watch::Sender<usize>,
     pairing: Mutex<PairingState>,
     pairing_requests: Mutex<PairingRequestRegistry>,
+    /// State of the relay link, once a relay task reports it.
+    relay_status: Mutex<Option<RelayStatus>>,
     status_tx: watch::Sender<RemoteServerStatus>,
-    /// Sockets holding a [`HandshakeSlot`].
-    unauthenticated_sockets: Mutex<usize>,
+    /// Sockets holding a [`HandshakeSlot`], counted per [`ConnectionOrigin`].
+    unauthenticated_sockets: Mutex<[usize; 2]>,
 }
 
 impl ServerState {
@@ -275,9 +287,10 @@ impl ServerState {
             open_sockets_tx: watch::Sender::new(0),
             pairing: Mutex::new(PairingState::default()),
             pairing_requests: Mutex::new(PairingRequestRegistry::default()),
+            relay_status: Mutex::new(None),
             shutdown_rx,
             status_tx: watch::Sender::new(RemoteServerStatus::default()),
-            unauthenticated_sockets: Mutex::new(0),
+            unauthenticated_sockets: Mutex::new([0; 2]),
         }
     }
 
@@ -296,25 +309,49 @@ impl ServerState {
         self.host.revisions.clone()
     }
 
+    /// Resolves once the server starts stopping or its handle is gone.
+    pub(crate) fn stopping(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
+        async move {
+            let _ = shutdown_rx.wait_for(|is_stopping| *is_stopping).await;
+        }
+    }
+
+    /// Records the state of the relay link and publishes it.
+    pub(crate) fn set_relay_status(&self, status: RelayStatus) {
+        *self
+            .relay_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(status);
+        self.publish_status();
+    }
+
     /// Locks the pairing state, recovering it after a panic elsewhere.
     pub(crate) fn pairing(&self) -> MutexGuard<'_, PairingState> {
         self.pairing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots for a
-    /// socket that has not authenticated, or returns `None` when all are
-    /// taken.
-    pub(crate) fn reserve_handshake(self: &Arc<Self>) -> Option<HandshakeSlot> {
+    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots of `origin`
+    /// for a connection that has not authenticated, or returns `None` when
+    /// all are taken. Each origin has its own slots, so relay traffic cannot
+    /// lock out the local listener.
+    pub(crate) fn reserve_handshake(
+        self: &Arc<Self>,
+        origin: ConnectionOrigin,
+    ) -> Option<HandshakeSlot> {
         let mut unauthenticated = self
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if *unauthenticated >= MAX_UNAUTHENTICATED_SOCKETS {
+        let count = &mut unauthenticated[origin.index()];
+        if *count >= MAX_UNAUTHENTICATED_SOCKETS {
             return None;
         }
-        *unauthenticated += 1;
+        *count += 1;
 
         Some(HandshakeSlot {
+            origin,
             state: Arc::clone(self),
         })
     }
@@ -462,9 +499,14 @@ impl ServerState {
             .values()
             .map(|pending| pending.request.clone())
             .collect();
+        let relay = *self
+            .relay_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let next = RemoteServerStatus {
             connections,
             pairing_requests,
+            relay,
         };
         self.status_tx
             .send_if_modified(|status| replace_status(status, next));
@@ -516,8 +558,28 @@ struct RegisteredConnection {
     connection: RemoteConnection,
 }
 
+/// Where an unauthenticated connection came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConnectionOrigin {
+    /// The loopback listener.
+    Local,
+    /// A stream announced by the relay.
+    Relay,
+}
+
+impl ConnectionOrigin {
+    /// Position of this origin's count in the slot counts.
+    fn index(self) -> usize {
+        match self {
+            Self::Local => 0,
+            Self::Relay => 1,
+        }
+    }
+}
+
 /// Keeps one unauthenticated socket counted until it authenticates or ends.
 pub(crate) struct HandshakeSlot {
+    origin: ConnectionOrigin,
     state: Arc<ServerState>,
 }
 
@@ -528,7 +590,8 @@ impl Drop for HandshakeSlot {
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        *unauthenticated = unauthenticated.saturating_sub(1);
+        let count = &mut unauthenticated[self.origin.index()];
+        *count = count.saturating_sub(1);
     }
 }
 
@@ -614,14 +677,14 @@ async fn upgrade(
     if !origin_matches_host(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(handshake) = state.reserve_handshake() else {
+    let Some(handshake) = state.reserve_handshake(ConnectionOrigin::Local) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
     upgrade
         .max_message_size(MAX_MESSAGE_SIZE)
         .max_frame_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| connection::serve(socket, state, handshake))
+        .on_upgrade(move |socket| connection::serve(socket, state, handshake, DeviceProof::Token))
 }
 
 /// Refuses every request whose `Host` is neither loopback nor allowed.

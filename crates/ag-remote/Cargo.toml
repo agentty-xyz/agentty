@@ -11,20 +11,24 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+ag-noise.workspace = true
 ag-session.workspace = true
 async-trait.workspace = true
 axum.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+ag-relay.workspace = true
 ag-session = { workspace = true, features = ["test-utils"] }
-futures-util.workspace = true
 tokio = { workspace = true, features = ["net", "test-util"] }
-tokio-tungstenite.workspace = true

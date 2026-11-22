@@ -8,7 +8,7 @@ use std::time::Duration;
 use ag_remote::protocol::{ClientFrame, ServerFrame};
 use ag_remote::{
     DeviceStore, DeviceStoreError, NewRemoteDevice, PROTOCOL_VERSION, RemoteDevice, RemoteHost,
-    RemoteServerConfig, RemoteServerHandle,
+    RemoteRelayConfig, RemoteServerConfig, RemoteServerHandle,
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
@@ -51,6 +51,26 @@ impl TestServer {
         devices: MemoryDeviceStore,
         backend: RecordingBackend,
     ) -> TestResult<Self> {
+        Self::start_configured(devices, backend, None).await
+    }
+
+    /// Starts a server that also registers with `relay`.
+    pub(crate) async fn start_linked(relay: RemoteRelayConfig) -> TestResult<Self> {
+        Self::start_configured(
+            MemoryDeviceStore::default(),
+            RecordingBackend::default(),
+            Some(relay),
+        )
+        .await
+    }
+
+    /// Starts a server over `devices` and `backend`, linked to `relay` when
+    /// given.
+    async fn start_configured(
+        devices: MemoryDeviceStore,
+        backend: RecordingBackend,
+        relay: Option<RemoteRelayConfig>,
+    ) -> TestResult<Self> {
         let backend = Arc::new(backend);
         let devices = Arc::new(devices);
         let (revisions_tx, revisions) = watch::channel(1);
@@ -63,6 +83,7 @@ impl TestServer {
             RemoteServerConfig {
                 allowed_hosts: vec!["box.tailnet.ts.net".to_string()],
                 bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                relay,
             },
             host,
         )

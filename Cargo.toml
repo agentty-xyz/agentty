@@ -22,7 +22,8 @@ ag-git = { path = "crates/ag-git", version = "0.19.7" }
 ag-harness = { path = "crates/ag-harness", version = "0.19.7", default-features = false }
 ag-noise = { path = "crates/ag-noise", version = "0.19.7" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.19.7" }
-ag-remote = { path = "crates/ag-remote", version = "0.19.7" }
+ag-relay = { path = "crates/ag-relay" }
+ag-remote ={ path = "crates/ag-remote", version = "0.19.7" }
 ag-runtime = { path = "crates/ag-runtime", version = "0.19.7" }
 ag-router = { path = "crates/ag-router", version = "0.19.7" }
 ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.7" }
@@ -71,6 +72,7 @@ regex = "1"
 roxmltree = "0.21"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 rustc-demangle = "0.1.28"
 rustc-hash = "2"
 rustix = { version = "1.1", features = ["event", "fs", "process"] }
@@ -88,7 +90,7 @@ tempfile = "3.27"
 thiserror = "2"
 time = { version = "0.3", default-features = false, features = ["local-offset", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["__rustls-tls", "connect", "handshake"] }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "1.2", default-features = false, features = ["parse", "serde"] }
 tracing = "0.1"

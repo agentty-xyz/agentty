@@ -147,6 +147,7 @@ impl RemoteControlLauncher for RealRemoteControlLauncher {
         let config = RemoteServerConfig {
             allowed_hosts,
             bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            relay: None,
         };
         let handle = ag_remote::start(config, host)
             .await

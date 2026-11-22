@@ -4,8 +4,8 @@ use std::sync::Arc;
 use axum::http::{HeaderMap, HeaderValue, header};
 
 use super::{
-    MAX_UNAUTHENTICATED_SOCKETS, PairingRequest, RemoteConnection, RemoteServerStatus,
-    host_is_allowed, origin_matches_host, replace_status,
+    ConnectionOrigin, MAX_UNAUTHENTICATED_SOCKETS, PairingRequest, RemoteConnection,
+    RemoteServerStatus, host_is_allowed, origin_matches_host, replace_status,
 };
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::server::{RemoteError, RemoteHost, RemoteServerConfig, start_with_entropy};
@@ -83,21 +83,23 @@ fn host_check_refuses_other_hosts_and_missing_host() {
 }
 
 #[test]
-fn handshake_slots_stop_at_the_cap_and_free_on_drop() {
+fn handshake_slots_stop_at_the_cap_per_origin_and_free_on_drop() {
     // Arrange
     let fixture = state_fixture();
     let mut slots: Vec<_> = (0..MAX_UNAUTHENTICATED_SOCKETS)
-        .map(|_| fixture.state.reserve_handshake())
+        .map(|_| fixture.state.reserve_handshake(ConnectionOrigin::Relay))
         .collect();
 
     // Act
-    let over_cap = fixture.state.reserve_handshake();
+    let over_cap = fixture.state.reserve_handshake(ConnectionOrigin::Relay);
+    let local = fixture.state.reserve_handshake(ConnectionOrigin::Local);
     slots.pop();
-    let after_release = fixture.state.reserve_handshake();
+    let after_release = fixture.state.reserve_handshake(ConnectionOrigin::Relay);
 
     // Assert
     assert!(slots.iter().all(Option::is_some));
     assert!(over_cap.is_none());
+    assert!(local.is_some());
     assert!(after_release.is_some());
 }
 
@@ -235,6 +237,7 @@ fn replace_status_reports_only_real_changes() {
             device_name: "Phone".to_string(),
         }],
         pairing_requests: Vec::new(),
+        relay: None,
     };
     let mut status = RemoteServerStatus::default();
 
@@ -283,6 +286,7 @@ async fn issue_pairing_code_reports_missing_entropy() {
     let config = RemoteServerConfig {
         allowed_hosts: Vec::new(),
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        relay: None,
     };
     let handle = start_with_entropy(config, host, Arc::new(FailingEntropy))
         .await

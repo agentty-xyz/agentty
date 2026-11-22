@@ -175,6 +175,7 @@ async fn start_reports_an_address_that_is_already_bound() -> TestResult {
         RemoteServerConfig {
             allowed_hosts: Vec::new(),
             bind_addr: occupied.local_addr()?,
+            relay: None,
         },
         host,
     )

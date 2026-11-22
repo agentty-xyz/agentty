@@ -4,12 +4,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_noise::PublicKey;
 use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
 use tokio::sync::{oneshot, watch};
 use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
-use crate::device::{NewRemoteDevice, token_hash};
+use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
@@ -44,11 +45,12 @@ const SERVER_STOPPED: &str = "Server stopped";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
-/// until a device authenticates on it.
+/// until a device authenticates on it, and `proof` says how it does so.
 pub(crate) async fn serve<T: FrameTransport>(
     mut transport: T,
     state: Arc<ServerState>,
     handshake: HandshakeSlot,
+    proof: DeviceProof,
 ) {
     let _open_socket = state.track_socket();
     let mut revisions = state.revisions();
@@ -73,7 +75,7 @@ pub(crate) async fn serve<T: FrameTransport>(
 
         return;
     };
-    let authenticated = match authenticate(&state, frame, &mut revisions).await {
+    let authenticated = match authenticate(&state, frame, &mut revisions, &proof).await {
         Ok(Authentication::Authenticated { connection, reply }) => Ok((connection, reply)),
         Ok(Authentication::PairingRequested(device)) => {
             let Some(decision) = await_approval(
@@ -108,6 +110,16 @@ pub(crate) async fn serve<T: FrameTransport>(
     run(transport, &state, revisions, shutdown_rx, close_rx).await;
 }
 
+/// How a connection proves which device it is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeviceProof {
+    /// The transport's encrypted channel was opened with this device key.
+    /// The proof holds once the first frame has arrived over that channel.
+    Key(PublicKey),
+    /// The first frame carries the device token.
+    Token,
+}
+
 /// Outcome of a valid first frame.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Authentication {
@@ -127,23 +139,27 @@ pub(crate) enum Authentication {
 pub(crate) struct PairingDevice {
     /// Code the device and the terminal both show.
     pub(crate) confirmation: String,
+    /// Digest stored for the device: of its token, or of its key.
+    pub(crate) credential_hash: String,
     /// Identifier the device receives on approval.
     pub(crate) device_id: String,
     /// Bounded, trimmed device name.
     pub(crate) device_name: String,
-    /// Secret token the device receives on approval.
+    /// Secret token the device receives on approval; empty for a device
+    /// that authenticates with its key.
     pub(crate) token: String,
 }
 
 /// Authenticates the first frame.
 ///
-/// Token authentication marks the current host revision as reported. A
-/// redeemed pairing code only prepares credentials; nothing is stored until
-/// the host approves the request.
+/// A known device marks the current host revision as reported. A redeemed
+/// pairing code only prepares credentials; nothing is stored until the host
+/// approves the request.
 pub(crate) async fn authenticate(
     state: &ServerState,
     frame: ClientFrame,
     revisions: &mut watch::Receiver<u64>,
+    proof: &DeviceProof,
 ) -> Result<Authentication, &'static str> {
     match frame {
         ClientFrame::Hello {
@@ -151,30 +167,15 @@ pub(crate) async fn authenticate(
             token,
         } => {
             check_protocol_version(protocol_version)?;
-            let device = state
-                .devices()
-                .find_device_by_token_hash(&token_hash(&token))
-                .await
-                .map_err(|_| DEVICE_STORE_UNAVAILABLE)?
+            let credential_hash = match proof {
+                DeviceProof::Key(public_key) => key_hash(public_key),
+                DeviceProof::Token => token_hash(&token),
+            };
+            let device = find_device(state, &credential_hash)
+                .await?
                 .ok_or("Unknown device token")?;
-            state
-                .devices()
-                .touch_device(&device.id)
-                .await
-                .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
-            let revision = *revisions.borrow_and_update();
 
-            Ok(Authentication::Authenticated {
-                connection: RemoteConnection {
-                    device_id: device.id.clone(),
-                    device_name: device.name,
-                },
-                reply: ServerFrame::Welcome {
-                    device_id: device.id,
-                    protocol_version: PROTOCOL_VERSION,
-                    revision,
-                },
-            })
+            welcome(state, device, revisions).await
         }
         ClientFrame::Pair {
             code,
@@ -182,6 +183,13 @@ pub(crate) async fn authenticate(
             protocol_version,
         } => {
             check_protocol_version(protocol_version)?;
+            // A key device that already paired, for example after its
+            // `Paired` frame was lost, is welcomed without spending the code.
+            if let DeviceProof::Key(public_key) = proof
+                && let Some(device) = find_device(state, &key_hash(public_key)).await?
+            {
+                return welcome(state, device, revisions).await;
+            }
             let entropy = state.entropy.as_ref();
             let (Some(device_id), Some(token), Some(confirmation)) = (
                 random_hex(entropy, 16),
@@ -193,9 +201,14 @@ pub(crate) async fn authenticate(
             if !state.pairing().redeem(&code) {
                 return Err("Invalid or expired pairing code");
             }
+            let (credential_hash, token) = match proof {
+                DeviceProof::Key(public_key) => (key_hash(public_key), String::new()),
+                DeviceProof::Token => (token_hash(&token), token),
+            };
 
             Ok(Authentication::PairingRequested(PairingDevice {
                 confirmation,
+                credential_hash,
                 device_id,
                 device_name: device_display_name(&device_name),
                 token,
@@ -203,6 +216,45 @@ pub(crate) async fn authenticate(
         }
         ClientFrame::Request { .. } => Err("Authenticate before sending requests"),
     }
+}
+
+/// Finds the paired device stored under `credential_hash`.
+async fn find_device(
+    state: &ServerState,
+    credential_hash: &str,
+) -> Result<Option<RemoteDevice>, &'static str> {
+    state
+        .devices()
+        .find_device_by_token_hash(credential_hash)
+        .await
+        .map_err(|_| DEVICE_STORE_UNAVAILABLE)
+}
+
+/// Records that `device` authenticated and returns its welcome, marking the
+/// current host revision as reported.
+async fn welcome(
+    state: &ServerState,
+    device: RemoteDevice,
+    revisions: &mut watch::Receiver<u64>,
+) -> Result<Authentication, &'static str> {
+    state
+        .devices()
+        .touch_device(&device.id)
+        .await
+        .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
+    let revision = *revisions.borrow_and_update();
+
+    Ok(Authentication::Authenticated {
+        connection: RemoteConnection {
+            device_id: device.id.clone(),
+            device_name: device.name,
+        },
+        reply: ServerFrame::Welcome {
+            device_id: device.id,
+            protocol_version: PROTOCOL_VERSION,
+            revision,
+        },
+    })
 }
 
 /// Lists the pairing request, tells the device to wait, and returns the
@@ -262,7 +314,7 @@ pub(crate) async fn complete_pairing(
         .insert_device(NewRemoteDevice {
             id: device.device_id.clone(),
             name: device.device_name.clone(),
-            token_hash: token_hash(&device.token),
+            token_hash: device.credential_hash,
         })
         .await
         .map_err(|_| DEVICE_STORE_UNAVAILABLE)?;
