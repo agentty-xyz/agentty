@@ -128,6 +128,14 @@ Follow the nearest documentation guide for exact routing and integrity rules.
   descriptions.
 - Bring a branch up to date by rebasing it onto `origin/main` and pushing with
   `--force-with-lease`; never merge `main` into it.
+- Stack pull requests only when one needs another's code, and link them as a GitHub
+  stack with the `gh stack` extension (`github/gh-stack`) instead of leaving separate
+  pull requests with hand-set bases. Open each layer with its own filled template
+  (`gh pr create --base <parent branch>`), then run `gh stack link` with the pull
+  request numbers from bottom to top. `link` records no local stack, so run
+  `gh stack checkout <pull request>` before any other `gh stack` command. Merge a stack
+  from the bottom, one pull request at a time. If the extension is missing, say so and
+  ask for it; do not leave the stack unlinked silently.
 - Use `skills/bump-version/SKILL.md` for release preparation. Local work stops at the
   ordinary version-bump change; create and publish no release tags locally.
 - After that change lands, create its `v`-prefixed tag for the exact commit in the
