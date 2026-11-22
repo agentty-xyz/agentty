@@ -136,8 +136,8 @@ pub(crate) fn output_tail(session: &Session, active_progress: Option<&str>) -> S
     session_tail_lines(
         session.status,
         active_progress,
-        review_loading_message(session),
-        generated_turn_progress_message(session),
+        session.review_loading_message(),
+        session.generated_turn_progress_message(),
     )
 }
 
@@ -329,8 +329,8 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             &mut self.lines,
             self.status,
             self.active_progress,
-            review_loading_message(self.session),
-            generated_turn_progress_message(self.session),
+            self.session.review_loading_message(),
+            self.session.generated_turn_progress_message(),
         );
     }
 }
@@ -433,30 +433,6 @@ fn session_tail_lines(
         lines,
         trim_body,
     }
-}
-
-fn review_loading_message(session: &Session) -> Option<&str> {
-    session
-        .transient_messages
-        .get(TransientMessageSlot::Review)
-        .and_then(|message| match &message.body {
-            TransientMessageBody::Loading(message) => Some(message.as_str()),
-            TransientMessageBody::Markdown(_)
-            | TransientMessageBody::Plain(_)
-            | TransientMessageBody::Queued(_) => None,
-        })
-}
-
-fn generated_turn_progress_message(session: &Session) -> Option<&str> {
-    session
-        .transient_messages
-        .get(TransientMessageSlot::GeneratedTurnProgress)
-        .and_then(|message| match &message.body {
-            TransientMessageBody::Loading(message) => Some(message.as_str()),
-            TransientMessageBody::Markdown(_)
-            | TransientMessageBody::Plain(_)
-            | TransientMessageBody::Queued(_) => None,
-        })
 }
 
 fn append_transient_message(

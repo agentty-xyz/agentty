@@ -75,6 +75,7 @@ const ELEMENT_IDS = {
   sheetSync: "sheet-sync",
   sheetSyncLabel: "sheet-sync-label",
   sheetTitle: "sheet-title",
+  statusLine: "status-line",
   stop: "stop",
   sub: "heading-sub",
   syncDialog: "sync-dialog",
@@ -343,6 +344,71 @@ test("the transcript only appends when it grows, and keeps the nodes on screen",
   // A refresh keeps focus and the text being typed.
   assert.equal(composer.value, "typing");
   assert.equal(composer.ownerDocument.activeElement, composer);
+});
+
+test("the transcript ends with what a working session does, and drops it when the turn ends", () => {
+  // Arrange
+  const { byId, chat } = mountChat();
+  const line = byId("status-line");
+
+  // Act
+  chat.render(session({ status: "InProgress" }));
+  const marker = line.querySelector("i");
+  const grown = [...session().messages, { content: "More", kind: "user" }];
+  chat.render(session({ messages: grown, status: "InProgress" }));
+  const working = { className: line.className, hidden: line.hidden, text: line.textContent };
+  const keptMarker = line.querySelector("i") === marker;
+  chat.render(session({ status: "Rebasing" }));
+  const rebasing = { className: line.className, text: line.textContent };
+  chat.render(session({ status: "Review" }));
+  const reviewHidden = line.hidden;
+  chat.render(session({ status: "Queued" }));
+  const queued = { className: line.className, text: line.textContent };
+  chat.close();
+
+  // Assert
+  assert.deepEqual(working, {
+    className: "status status-line status--working is-loading",
+    hidden: false,
+    text: "Working...",
+  });
+  // A refresh in the same status keeps the node, so the loader animates on.
+  assert.equal(keptMarker, true);
+  assert.deepEqual(rebasing, {
+    className: "status status-line status--queue is-loading",
+    text: "Rebasing...",
+  });
+  assert.equal(reviewHidden, true);
+  assert.deepEqual(queued, {
+    className: "status status-line status--queue",
+    text: "Waiting in merge queue...",
+  });
+  assert.equal(line.hidden, true);
+  assert.equal(line.textContent, "");
+});
+
+test("the status line follows the host's progress and keeps its loader while the text changes", () => {
+  // Arrange
+  const { byId, chat } = mountChat();
+  const line = byId("status-line");
+
+  // Act
+  chat.render(session({ status: "InProgress" }));
+  const marker = line.querySelector("i");
+  chat.render(session({ progress: "Working... Reading files", status: "InProgress" }));
+  const thinking = line.textContent;
+  chat.render(session({ progress: "Resolving 3 review comments...\n  src/app.rs\n", status: "InProgress" }));
+  const rows = [...line.querySelectorAll("span span")].map((row) => [row.className, row.textContent]);
+  const keptMarker = line.querySelector("i") === marker;
+  chat.close();
+
+  // Assert
+  assert.equal(thinking, "Working... Reading files");
+  assert.deepEqual(rows, [
+    ["", "Resolving 3 review comments..."],
+    ["status-line-detail", "src/app.rs"],
+  ]);
+  assert.equal(keptMarker, true);
 });
 
 test("an activity box the reader toggled stays that way when it changes", () => {

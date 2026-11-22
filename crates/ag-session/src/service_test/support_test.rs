@@ -179,6 +179,7 @@ pub(super) fn session_fixture() -> Session {
             SessionMessageKind::UserPrompt,
             "build it",
         )],
+        progress: None,
         published_upstream_ref: None,
         questions: Vec::new(),
         queued_messages: Vec::new(),

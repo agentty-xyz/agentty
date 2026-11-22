@@ -1512,6 +1512,38 @@ kbd {
   list-style: none;
 }
 
+/* What the session is doing, after the last message, as in the terminal */
+.status-line {
+  display: flex;
+  align-items: flex-start;
+  margin: 1.1rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/* Centred on the first line, above any detail rows */
+.status-line i {
+  margin-top: calc((1.4em - 0.45rem) / 2);
+}
+
+.status-line-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-line-detail {
+  color: var(--color-muted);
+}
+
+.status-line.is-loading i {
+  box-shadow: 0 0 10px var(--tone);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 /* ---- Messages ----------------------------------------------------- */
 .msg {
   min-width: 0;
@@ -2584,7 +2616,8 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status--working i {
+  .status--working i,
+  .status-line.is-loading i {
     animation: none;
   }
 

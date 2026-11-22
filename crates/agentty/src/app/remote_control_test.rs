@@ -14,6 +14,7 @@ use tokio::sync::watch;
 
 use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
 use crate::app::{App, AppRuntimeEvent};
+use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
@@ -703,6 +704,35 @@ async fn publish_session_change_advances_the_remote_revision() {
             .expect("revision sender should live")
     );
     assert_eq!(*revisions.borrow(), initial_revision + 1);
+}
+
+#[tokio::test]
+async fn status_line_changes_advance_the_remote_revision_once_each() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.sessions.push_session(test_support::session_fixture(
+        "session-1",
+        Status::InProgress,
+    ));
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.publish_status_line_changes();
+    let after_first_line = *revisions.borrow_and_update();
+    app.publish_status_line_changes();
+    let unchanged = revisions
+        .has_changed()
+        .expect("revision sender should live");
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_status_line_changes();
+    let after_progress = *revisions.borrow_and_update();
+
+    // Assert
+    assert_eq!(after_first_line, initial_revision + 1);
+    assert!(!unchanged);
+    assert_eq!(after_progress, initial_revision + 2);
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
 use crate::domain::review;
-use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
+use crate::domain::session::{self, Session, Status};
 use crate::presentation::frame_time::FrameTime;
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
@@ -18,9 +18,6 @@ const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
-/// Status row shown while a session watches its linked review request.
-const WATCHING_STATUS_MESSAGE: &str =
-    "Watching review request for failing checks, comments, and conflicts...";
 
 /// Formats active-work duration alongside the session age, omitting the age
 /// when the combined label exceeds the available footer width.
@@ -272,7 +269,7 @@ pub fn session_output_status_lines(
         return Vec::new();
     }
 
-    let status_message = session_output_status_message(
+    let status_message = session::status_message(
         status,
         active_progress,
         review_status_message,
@@ -356,55 +353,6 @@ pub(crate) fn session_output_steer_hint_line(inner_width: usize) -> Option<Line<
         text_util::truncate_with_ellipsis(STEER_HINT_TEXT, inner_width),
         Style::default().fg(style::palette::text_subtle()),
     ))
-}
-
-/// Returns the loader label for active session states.
-///
-/// Most in-progress details are agent thinking snippets appended to the
-/// generic working label. Post-turn auto-commit sends a complete loader label
-/// so commit-message generation and git commit work render as committing.
-fn session_output_status_message(
-    status: Status,
-    active_progress: Option<&str>,
-    review_status_message: Option<&str>,
-    review_comment_resolution_message: Option<&str>,
-) -> String {
-    match status {
-        Status::InProgress => review_comment_resolution_message
-            .map(str::trim)
-            .filter(|message| !message.is_empty())
-            .map_or_else(
-                || {
-                    active_progress
-                        .map(str::trim)
-                        .filter(|progress| !progress.is_empty())
-                        .map_or_else(
-                            || "Working...".to_string(),
-                            |progress| {
-                                if progress == COMMITTING_PROGRESS_LABEL {
-                                    progress.to_string()
-                                } else {
-                                    format!("Working... {progress}")
-                                }
-                            },
-                        )
-                },
-                ToString::to_string,
-            ),
-        Status::AgentReview => review_status_message
-            .map(str::trim)
-            .filter(|status_message| !status_message.is_empty())
-            .unwrap_or("Reviewing changes...")
-            .to_string(),
-        Status::Queued => "Waiting in merge queue...".to_string(),
-        Status::Rebasing => "Rebasing...".to_string(),
-        Status::Merging => "Merging...".to_string(),
-        Status::Merged => "Waiting for manual local target sync...".to_string(),
-        Status::Watching => WATCHING_STATUS_MESSAGE.to_string(),
-        Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
-            String::new()
-        }
-    }
 }
 
 /// Returns the status indicator icon used for inline session-output messages.

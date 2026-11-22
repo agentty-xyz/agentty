@@ -109,7 +109,44 @@ async fn runtime_backend_creates_and_loads_complete_sessions() {
         loaded_session.settings.project_id,
         app.projects.active_project_id()
     );
+    assert_eq!(loaded_session.progress, None);
     assert_eq!(missing_session, None);
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_the_status_line_of_a_working_session() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Regular,
+            project_id,
+        },
+    )
+    .await
+    .expect("regular session should be created");
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &session_id,
+        SessionStatus::InProgress,
+    );
+    app.session_progress_messages
+        .insert(session_id.clone(), "Reading files".to_string());
+
+    // Act
+    let session = request_session(&mut app, session_id)
+        .await
+        .expect("session should load")
+        .expect("session should exist");
+
+    // Assert
+    assert_eq!(
+        session.progress.as_deref(),
+        Some("Working... Reading files")
+    );
 }
 
 #[tokio::test]

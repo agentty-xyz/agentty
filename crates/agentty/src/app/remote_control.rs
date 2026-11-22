@@ -6,13 +6,14 @@
 //! session-runtime mailbox, so their commands share terminal admission and
 //! model work stays behind the worker boundary.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
     RemoteServerStatus, StaticKeypair, pairing_link,
 };
-use ag_session::SessionService;
+use ag_session::{SessionId, SessionService};
 use tokio::sync::{mpsc, watch};
 
 use crate::app::command_gateway::CommandInitiator;
@@ -67,6 +68,9 @@ pub(crate) struct RemoteControl {
     relay_url: Option<String>,
     revision_tx: watch::Sender<u64>,
     server: Option<Box<dyn RemoteControlServer>>,
+    /// Status line of each session showing one, as remote clients last
+    /// learned of it.
+    status_lines: HashMap<SessionId, String>,
     view: RemoteControlView,
 }
 
@@ -95,6 +99,7 @@ impl RemoteControl {
             relay_url: None,
             revision_tx,
             server: None,
+            status_lines: HashMap::new(),
             view: RemoteControlView::default(),
         }
     }
@@ -144,6 +149,28 @@ impl App {
         self.remote_control
             .revision_tx
             .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    /// Tells connected remote clients when a session's status line changed,
+    /// such as a new thought after `Working...` or a review step, which no
+    /// session event marks.
+    pub(crate) fn publish_status_line_changes(&mut self) {
+        let status_lines = self
+            .sessions
+            .sessions()
+            .iter()
+            .filter_map(|session| {
+                session
+                    .status_line(self.session_progress_message(&session.id))
+                    .map(|line| (session.id.clone(), line))
+            })
+            .collect::<HashMap<_, _>>();
+        if status_lines == self.remote_control.status_lines {
+            return;
+        }
+
+        self.remote_control.status_lines = status_lines;
+        self.publish_session_change();
     }
 
     /// Starts the listener when it is off, then issues a fresh pairing code.

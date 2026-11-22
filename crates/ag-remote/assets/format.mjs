@@ -85,6 +85,43 @@ export function statusInfo(statusName) {
     : status(String(statusName), "idle", "active", {});
 }
 
+// The line the terminal's session chat ends the transcript with while the
+// session works or waits, and whether its marker animates as a loader. The
+// host's `progress` replaces the text; these defaults serve older servers.
+// `status_message` in crates/agentty/src/domain/session.rs owns the same text.
+const STATUS_LINES = {
+  InProgress: { isLoading: true, text: "Working..." },
+  AgentReview: { isLoading: true, text: "Reviewing changes..." },
+  Watching: {
+    isLoading: false,
+    text: "Watching review request for failing checks, comments, and conflicts...",
+  },
+  Queued: { isLoading: false, text: "Waiting in merge queue..." },
+  Rebasing: { isLoading: true, text: "Rebasing..." },
+  Merging: { isLoading: true, text: "Merging..." },
+  Merged: { isLoading: true, text: "Waiting for manual local target sync..." },
+};
+
+// Returns the transcript's closing status line for `statusName` as
+// `{ details, isLoading, text }`, or `null` when the status shows none. A
+// non-blank `progress` from the host gives the text in its first line and
+// the detail rows in the rest, as the terminal shows them.
+export function statusLine(statusName, progress) {
+  if (!Object.hasOwn(STATUS_LINES, statusName)) {
+    return null;
+  }
+  const { isLoading, text } = STATUS_LINES[statusName];
+  const [heading = "", ...rest] = String(progress ?? "")
+    .trim()
+    .split("\n")
+    .map((row) => row.trim());
+  if (!heading) {
+    return { details: [], isLoading, text };
+  }
+
+  return { details: rest.filter(Boolean), isLoading, text: heading };
+}
+
 // Formats how long ago `unixSeconds` was, as seen at `nowSeconds`, in the
 // list's short form: `now`, then minutes, hours and days such as `3m`.
 export function relativeTime(unixSeconds, nowSeconds) {

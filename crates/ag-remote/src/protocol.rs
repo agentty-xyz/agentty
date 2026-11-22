@@ -748,6 +748,11 @@ pub struct RemoteSession {
     /// `set_session_settings` accepts it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Live line describing the session's current work, such as
+    /// `Working... Reading files`, while it works or waits. Further lines add
+    /// detail. Absent from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
     /// Upstream branch the session branch was published to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_upstream_ref: Option<String>,
@@ -789,6 +794,7 @@ impl From<Session> for RemoteSession {
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
             model_id: Some(agent.model().as_str().to_string()),
+            progress: session.progress,
             published_upstream_ref: session.published_upstream_ref,
             reasoning: Some(settings.reasoning_level.as_str().to_string()),
             response_style: Some(settings.response_style.as_str().to_string()),

@@ -28,6 +28,10 @@ use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 /// generation and git commit orchestration are running.
 pub(crate) const COMMITTING_PROGRESS_LABEL: &str = "Committing...";
 
+/// Status line shown while a session watches its linked review request.
+const WATCHING_STATUS_MESSAGE: &str =
+    "Watching review request for failing checks, comments, and conflicts...";
+
 /// Lead sentence used when seeding a follow-on prompt from a terminal session.
 const TERMINAL_CONTINUATION_PROMPT_INTRO: &str =
     "Continue the work from this previous Agentty session.";
@@ -593,6 +597,46 @@ impl Session {
             .find(|task| task.position == position)
     }
 
+    /// Returns the line that ends the transcript while the session works or
+    /// waits, such as `Working... Reading files`, or `None` when its status
+    /// shows none.
+    ///
+    /// `active_progress` is the running turn's latest compact thought.
+    pub(crate) fn status_line(&self, active_progress: Option<&str>) -> Option<String> {
+        let message = status_message(
+            self.status,
+            active_progress,
+            self.review_loading_message(),
+            self.generated_turn_progress_message(),
+        );
+        let message = message.trim();
+
+        (!message.is_empty()).then(|| message.to_string())
+    }
+
+    /// Returns the loading text of a running review, when one runs.
+    pub(crate) fn review_loading_message(&self) -> Option<&str> {
+        self.loading_message(TransientMessageSlot::Review)
+    }
+
+    /// Returns the loading text of a generated turn, such as a review-comment
+    /// resolution, when one runs.
+    pub(crate) fn generated_turn_progress_message(&self) -> Option<&str> {
+        self.loading_message(TransientMessageSlot::GeneratedTurnProgress)
+    }
+
+    /// Returns the loading text held in `slot`, when it holds one.
+    fn loading_message(&self, slot: TransientMessageSlot) -> Option<&str> {
+        self.transient_messages
+            .get(slot)
+            .and_then(|message| match &message.body {
+                TransientMessageBody::Loading(message) => Some(message.as_str()),
+                TransientMessageBody::Markdown(_)
+                | TransientMessageBody::Plain(_)
+                | TransientMessageBody::Queued(_) => None,
+            })
+    }
+
     /// Returns the best persisted context section for a continuation prompt.
     fn continuation_context(&self) -> Option<(&'static str, String)> {
         self.non_empty_transcript()
@@ -622,6 +666,56 @@ impl Session {
     fn trimmed_non_empty_text(value: &str) -> Option<&str> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
+    }
+}
+
+/// Returns the status text for active session states, or an empty string for
+/// states that show none.
+///
+/// Most in-progress details are agent thinking snippets appended to the
+/// generic working label. Post-turn auto-commit sends a complete loader label
+/// so commit-message generation and git commit work render as committing.
+pub(crate) fn status_message(
+    status: Status,
+    active_progress: Option<&str>,
+    review_status_message: Option<&str>,
+    review_comment_resolution_message: Option<&str>,
+) -> String {
+    match status {
+        Status::InProgress => review_comment_resolution_message
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map_or_else(
+                || {
+                    active_progress
+                        .map(str::trim)
+                        .filter(|progress| !progress.is_empty())
+                        .map_or_else(
+                            || "Working...".to_string(),
+                            |progress| {
+                                if progress == COMMITTING_PROGRESS_LABEL {
+                                    progress.to_string()
+                                } else {
+                                    format!("Working... {progress}")
+                                }
+                            },
+                        )
+                },
+                ToString::to_string,
+            ),
+        Status::AgentReview => review_status_message
+            .map(str::trim)
+            .filter(|status_message| !status_message.is_empty())
+            .unwrap_or("Reviewing changes...")
+            .to_string(),
+        Status::Queued => "Waiting in merge queue...".to_string(),
+        Status::Rebasing => "Rebasing...".to_string(),
+        Status::Merging => "Merging...".to_string(),
+        Status::Merged => "Waiting for manual local target sync...".to_string(),
+        Status::Watching => WATCHING_STATUS_MESSAGE.to_string(),
+        Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
+            String::new()
+        }
     }
 }
 

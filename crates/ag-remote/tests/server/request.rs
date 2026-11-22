@@ -70,6 +70,7 @@ fn expected_session() -> RemoteSession {
         ],
         model: Some("gpt-6.1-sol".to_string()),
         model_id: Some("gpt-6.1-sol".to_string()),
+        progress: None,
         published_upstream_ref: None,
         questions: vec![RemoteQuestion {
             options: vec!["main".to_string()],

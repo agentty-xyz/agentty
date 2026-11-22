@@ -1281,6 +1281,7 @@ impl App {
             .await;
         self.reconcile_review_watch_statuses().await;
         self.retain_valid_session_progress_messages();
+        self.publish_status_line_changes();
         self.sessions.retain_active_prompt_outputs();
 
         if should_mark_dirty {
