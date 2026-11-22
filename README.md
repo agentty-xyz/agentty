@@ -189,8 +189,9 @@ agentty --version    # Show the installed Agentty version
   approve before any node runs. See the
   [workflow guide](https://agentty.xyz/docs/usage/workflow/).
 - **Remote control**: `--experimental-remote` adds a preview `/remote-control` command
-  that pairs a phone or browser to follow and reply to sessions through a tunnel you
-  provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
+  that pairs a phone or browser to start, follow, reply to, and merge sessions through a
+  tunnel you provide. See
+  [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
 - **Harness**: `--experimental-harness` adds a preview session type that runs Agentty's
   built-in agent loop against local or hosted models. Its edit mode runs unsandboxed
   shell commands. See

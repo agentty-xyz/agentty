@@ -13,8 +13,8 @@ for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
 change a session's settings, create sessions in the active project, merge a session into
-its base branch, and publish its branch, though the web page has no buttons for them
-yet.
+its base branch, and publish its branch. The web page offers stopping, creating, and
+merging; syncing, settings, and publishing have no buttons yet.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -56,6 +56,13 @@ session that changed since you last opened it. Each browser tracks what it has s
 its own, so another device or a private window shows its own dots. Each row also shows
 the session's size, changed lines, model, and `PR ready` when its pull request can
 merge. With no session open, the page offers the sessions waiting for you.
+
+When this Agentty lets devices create sessions, the sidebar names the active project and
+offers `New session`. Home then asks what the agent should work on, with the project,
+base branch, and default model below the box, and a choice of session type when Agentty
+offers more than one. Sending creates the session, sends your text as its first message,
+and opens it. If the message does not go through, the new session opens with your text
+still in its box.
 
 The header of the open session shows its size and changed lines, the session branch and
 its base branch, the model and reasoning level, a link to its pull request, and the
