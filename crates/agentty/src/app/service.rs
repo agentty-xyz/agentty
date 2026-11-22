@@ -593,7 +593,6 @@ impl AppServices {
             AppEvent::ChatGptSignInUpdated { .. } => "ChatGptSignInUpdated",
             AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
             AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
-            AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",
             AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
             AppEvent::SessionResponseStyleUpdated { .. } => "SessionResponseStyleUpdated",
             AppEvent::SessionSpeedModeUpdated { .. } => "SessionSpeedModeUpdated",

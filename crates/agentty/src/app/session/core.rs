@@ -53,8 +53,6 @@ pub(crate) struct SessionDefaults {
 pub(crate) struct SessionCreationSettings {
     /// Agent provider and model assigned to the session.
     pub(crate) agent: AgentSelection,
-    /// Provider permission mode assigned to future turns.
-    pub(crate) permission_mode: crate::domain::permission::PermissionMode,
     /// Session-scoped reasoning level.
     pub(crate) reasoning_level: ReasoningLevel,
     /// Session-scoped response style.
@@ -479,23 +477,6 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.response_style = response_style;
-        }
-    }
-
-    /// Applies one persisted provider permission update to the matching
-    /// in-memory session snapshot.
-    pub(crate) fn apply_session_permission_mode_updated(
-        &mut self,
-        session_id: &str,
-        permission_mode: crate::domain::permission::PermissionMode,
-    ) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.permission_mode = permission_mode;
         }
     }
 

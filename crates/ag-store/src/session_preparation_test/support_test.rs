@@ -1,6 +1,6 @@
 //! Saved-operation and reservation fixtures for session preparation tests.
 
-use ag_session::{PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode};
+use ag_session::{ReasoningLevel, ResponseStyle, SpeedMode};
 
 use crate::AppRepositories;
 use crate::session::PersistedSessionCreation;
@@ -39,7 +39,6 @@ pub(super) fn reservation(id: &str, project_id: i64) -> PersistedSessionCreation
         id,
         is_draft: false,
         model: "gpt-5.6-sol",
-        permission_mode: PermissionMode::AutoEdit,
         project_id,
         reasoning_level: ReasoningLevel::default(),
         response_style: ResponseStyle::default(),

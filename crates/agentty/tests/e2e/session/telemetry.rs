@@ -341,18 +341,14 @@ fn assert_usage_events(events: &[LogRecord]) {
                     .attributes
                     .iter()
                     .any(|attribute| attribute.key == "agent");
-                let permission_mode = event
+                let has_permission_mode = event
                     .attributes
                     .iter()
-                    .find(|attribute| attribute.key == "permission_mode")
-                    .and_then(|attribute| attribute.value.as_ref())
-                    .and_then(|value| value.value.as_ref());
+                    .any(|attribute| attribute.key == "permission_mode");
 
-                has_agent
-                    && permission_mode
-                        == Some(&any_value::Value::StringValue("auto_edit".to_string()))
+                has_agent && !has_permission_mode
             }),
-        "turn events report the agent and the session's default permission mode"
+        "turn events report the agent without a permission mode"
     );
     assert!(!format!("{events:?}").contains("Private timing prompt"));
 }

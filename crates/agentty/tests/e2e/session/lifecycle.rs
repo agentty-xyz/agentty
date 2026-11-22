@@ -523,7 +523,7 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
                     let inactive_frame = common::frame_from_capture(&report.captures[0]);
                     let active_frame = common::frame_from_capture(&report.captures[1]);
                     let settings = format!(
-                        "codex/{} [high] · Concise · Normal · Auto Edit",
+                        "codex/{} [high] · Concise · Normal",
                         model_fixture::CODEX_MODEL_ID
                     );
                     for captured_frame in [&inactive_frame, &active_frame, frame] {

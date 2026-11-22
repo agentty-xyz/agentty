@@ -1334,52 +1334,24 @@ async fn test_clear_blank_archived_diff_keeps_only_real_diffs() {
     }
 }
 
-/// Verifies sessions saved with the retired automatic review-addressing
-/// permission mode reload as Auto Edit while other modes stay untouched.
+/// Verifies the current schema no longer persists a session permission mode,
+/// so every chat turn edits with the default Auto Edit policy.
 #[tokio::test]
-async fn test_retire_auto_address_permission_mode_restores_auto_edit() {
+async fn test_session_schema_omits_permission_mode_column() {
     // Arrange
     let database = Database::open_in_memory()
         .await
         .expect("database should open");
-    let project_id = database
-        .projects()
-        .upsert_project("/tmp/auto-address", None)
-        .await
-        .expect("project should exist");
-    let stored_modes = [
-        ("address", "auto_edit_address_comments"),
-        ("edit", "auto_edit"),
-        ("inspect", "read_only"),
-    ];
-    for (session_id, permission_mode) in stored_modes {
-        insert_session_fixture(&database, session_id, "main", "Review", project_id).await;
-        sqlx::query("UPDATE session SET permission_mode = ? WHERE id = ?")
-            .bind(permission_mode)
-            .bind(session_id)
-            .execute(database.pool())
-            .await
-            .expect("legacy permission mode should be stored");
-    }
 
     // Act
-    rerun_embedded_migration(database.pool(), 122).await;
-    let migrated_modes = sqlx::query_as::<_, (String, String)>(
-        "SELECT id, permission_mode FROM session ORDER BY id",
-    )
-    .fetch_all(database.pool())
-    .await
-    .expect("permission modes should load");
+    let column_names =
+        sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('session')")
+            .fetch_all(database.pool())
+            .await
+            .expect("session columns should load");
 
     // Assert
-    assert_eq!(
-        migrated_modes,
-        vec![
-            ("address".to_string(), "auto_edit".to_string()),
-            ("edit".to_string(), "auto_edit".to_string()),
-            ("inspect".to_string(), "read_only".to_string()),
-        ]
-    );
+    assert!(!column_names.iter().any(|name| name == "permission_mode"));
 }
 
 /// Verifies stack removal retargets unfinished former children to their root

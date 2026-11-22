@@ -29,7 +29,6 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _, ServedModel,
 };
-use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
 use crate::infra::db::{AppRepositories, DbError};
 
@@ -84,10 +83,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
         ..Analytics::mirror(None, export.event_log()).expect("mirror-only sender")
     };
     let agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
-    let turn = TurnSelection {
-        agent,
-        permission_mode: PermissionMode::ReadOnly,
-    };
+    let turn = TurnSelection { agent };
 
     // Act
     analytics.record_launch().await;
@@ -130,7 +126,6 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     let selection = [
         ("agent", agent.kind().name()),
         ("model", agent.model().as_str()),
-        ("permission_mode", "read_only"),
     ];
     let environment = [("ci", "true"), ("interactive", "false")];
     assert_eq!(

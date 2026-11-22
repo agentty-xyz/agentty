@@ -28,11 +28,10 @@ use super::super::{
 use super::support::{
     apply_worker_turn_result, auto_commit_run_client, default_turn_metadata, empty_transcript,
     expect_clean_main_checkout_snapshot, expect_safe_auto_push_state,
-    insert_in_progress_read_only_session, insert_in_progress_test_session,
-    mock_fs_client_with_existing_directories, mock_git_client_detecting_main_repo,
-    queue_test_context, queued_message, read_only_title_run_client, resume_command,
-    seed_recovery_test_operation, successful_turn_result, transcript_text,
-    turn_prompt_with_attachment,
+    insert_in_progress_test_session, mock_fs_client_with_existing_directories,
+    mock_git_client_detecting_main_repo, queue_test_context, queued_message,
+    read_only_title_run_client, resume_command, seed_recovery_test_operation,
+    successful_turn_result, transcript_text, turn_prompt_with_attachment,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
@@ -457,12 +456,10 @@ fn test_preparation_reservation_tracks_command_lifetime_and_overlapping_claims()
 }
 
 #[tokio::test]
-async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
+async fn test_run_channel_turn_finalizes_workspace_setup_failure() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
-    let (db, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/project", Some("main".to_string()))
@@ -476,10 +473,6 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
         .update_session_questions("sess1", r#"[{"text":"Continue?"}]"#)
         .await
         .expect("failed to persist questions");
-    sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'sess1'")
-        .execute(&pool)
-        .await
-        .expect("failed to corrupt permission mode");
 
     let attachment_path = crate::app::agentty_home()
         .join("tmp")
@@ -504,7 +497,13 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
         .returning(|_| Box::pin(async { Ok(()) }));
 
     let mut mock_git_client = MockGitClient::new();
-    expect_clean_main_checkout_snapshot(&mut mock_git_client, base_dir.path().join("main"));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/other".to_string()) }));
+    mock_git_client
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     let mut mock_channel = MockAgentChannel::new();
     mock_channel.expect_run_turn().times(0);
     let transcript = empty_transcript();
@@ -551,13 +550,9 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
         .expect("session should exist");
 
     // Assert
-    let error = result.expect_err("invalid permission mode should fail the turn");
-    assert!(
-        error
-            .to_string()
-            .contains("Unknown permission mode: invalid")
-    );
-    assert!(transcript_text(&transcript).contains("Unknown permission mode: invalid"));
+    let error = result.expect_err("a misplaced worktree should fail the turn");
+    assert!(error.to_string().contains("Session isolation violation"));
+    assert!(transcript_text(&transcript).contains("Session isolation violation"));
     assert_eq!(
         *status.lock().expect("status lock poisoned"),
         Status::Review
@@ -573,20 +568,17 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_in_progress_read_only_session(&db).await;
+    insert_in_progress_test_session(&db).await;
     db.sessions()
         .update_session_provisional_title("sess1", "test prompt")
         .await
-        .expect("failed to persist provisional read-only title");
+        .expect("failed to persist provisional title");
 
     let turn_started = Arc::new(Notify::new());
     let mut mock_channel = MockAgentChannel::new();
     mock_channel
         .expect_run_turn()
-        .withf(|_session_id, request, _events| {
-            request.permission_mode == PermissionMode::ReadOnly
-                && request.prompt.text.contains("# Read Only Mode")
-        })
+        .withf(|_session_id, request, _events| request.permission_mode == PermissionMode::AutoEdit)
         .returning({
             let turn_started = Arc::clone(&turn_started);
 
@@ -681,9 +673,9 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
 }
 
 #[tokio::test]
-/// Verifies a read-only chat turn carries its persisted permission after a
+/// Verifies a chat turn runs with Auto Edit permissions after a
 /// previous turn's cancelled token is replaced.
-async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() {
+async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
     // Arrange — pre-cancel the token to simulate a previous turn's
     // cancellation. `run_channel_turn` swaps in a fresh token so the
     // stale cancellation is discarded.
@@ -704,19 +696,12 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
         )
         .await
         .expect("failed to insert session");
-    db.sessions()
-        .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
-        .await
-        .expect("failed to set read-only permission mode");
 
     let mut mock_channel = MockAgentChannel::new();
     mock_channel
         .expect_run_turn()
         .once()
-        .withf(|_session_id, request, _events| {
-            request.permission_mode == PermissionMode::ReadOnly
-                && request.prompt.text.contains("# Read Only Mode")
-        })
+        .withf(|_session_id, request, _events| request.permission_mode == PermissionMode::AutoEdit)
         .returning(|_session_id, _req, _events| {
             Box::pin(async {
                 Ok(TurnResult {

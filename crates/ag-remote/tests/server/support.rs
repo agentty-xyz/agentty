@@ -457,7 +457,6 @@ fn session(session_id: &SessionId) -> Session {
             agent: ag_session::test_support::codex_selection(),
             base_branch: "main".to_string(),
             is_draft: false,
-            permission_mode: ag_session::PermissionMode::AutoEdit,
             project_id: 1,
             reasoning_level: ag_session::ReasoningLevel::High,
             response_style: ag_session::ResponseStyle::Balanced,

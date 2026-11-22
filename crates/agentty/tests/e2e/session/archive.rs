@@ -83,9 +83,7 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         assertion::assert_text_in_region(&archived, "?: help", &status_bar);
                         let timing_row = archived.row_text(archived.rows() - 2);
                         assert!(timing_row.contains("Timer: 2m 5s · Started"));
-                        for text in ["Auto Edit", "╭"] {
-                            assertion::assert_not_visible(&archived, text);
-                        }
+                        assertion::assert_not_visible(&archived, "╭");
                         let help = common::frame_from_capture(&report.captures[1]);
                         let help_full = Region::full(help.cols(), help.rows());
                         for text in [
@@ -234,85 +232,4 @@ fn assert_archive_load_more_and_show_less(report: &ProofReport) {
     assertion::assert_text_in_region(&last, "ARCHIVE —— 23", &full);
     assertion::assert_text_in_region(&last, "Show less...", &full);
     assertion::assert_not_visible(&last, "Load more...");
-}
-
-#[tokio::test]
-async fn session_archive_total_survives_skipped_permission_modes() -> E2eResult {
-    // Arrange
-    for archive_count in [2, 11] {
-        FeatureTest::new(format!("session_archive_skipped_modes_{archive_count}"))
-            .with_git()
-            .setup(move |env| {
-                Box::pin(async move {
-                    common::seed_active_project_setting(env).await?;
-                    let database = common::open_database(env).await?;
-                    for index in 0..archive_count {
-                        let id = format!("archive-{index:02}");
-                        common::seed_session(
-                            env,
-                            SessionSeed::regular(&id, "gpt-5.6-sol", "main", "Done")
-                                .with_title(&id),
-                        )
-                        .await?;
-                        database
-                            .sessions()
-                            .update_session_updated_at(&id, 100 - index)
-                            .await?;
-                        if index < 10 {
-                            sqlx::query(
-                                "UPDATE session SET permission_mode = 'unsupported' WHERE id = ?",
-                            )
-                            .bind(&id)
-                            .execute(database.pool())
-                            .await?;
-                        }
-                    }
-
-                    Ok(())
-                })
-            })
-            .run(
-                move |scenario| {
-                    // Act
-                    let scenario = scenario
-                        .compose(&common::wait_for_agentty_startup())
-                        .wait_for_text(format!("ARCHIVE —— {archive_count}"), 5000)
-                        .capture_labeled("skipped", "Archive total without loadable rows");
-                    if archive_count > 10 {
-                        scenario
-                            .press_key("j")
-                            .press_key("Enter")
-                            .wait_for_text("archive-10", 5000)
-                            .capture_labeled("loaded", "Next page restores a loadable archive")
-                    } else {
-                        scenario
-                    }
-                },
-                move |frame, report| {
-                    Box::pin(async move {
-                        // Assert
-                        let skipped = common::frame_from_capture(&report.captures[0]);
-                        let full = Region::full(skipped.cols(), skipped.rows());
-                        assertion::assert_text_in_region(
-                            &skipped,
-                            &format!("ARCHIVE —— {archive_count}"),
-                            &full,
-                        );
-                        assertion::assert_not_visible(&skipped, "archive-00");
-                        assertion::assert_not_visible(&skipped, "No sessions.");
-                        if archive_count > 10 {
-                            let full = Region::full(frame.cols(), frame.rows());
-                            assertion::assert_text_in_region(frame, "ARCHIVE —— 11", &full);
-                            assertion::assert_text_in_region(frame, "archive-10", &full);
-                            assertion::assert_not_visible(frame, "Load more...");
-                        } else {
-                            assertion::assert_not_visible(&skipped, "Load more...");
-                        }
-                    })
-                },
-            )
-            .await?;
-    }
-
-    Ok(())
 }

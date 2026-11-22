@@ -13,8 +13,6 @@ fn build_api_session_rejects_invalid_persisted_data() {
     missing_project.project_id = None;
     let mut invalid_status = session_row();
     invalid_status.status = "Unknown".to_string();
-    let mut invalid_permission_mode = session_row();
-    invalid_permission_mode.permission_mode = "invalid".to_string();
     let invalid_message = SessionMessageRow {
         content: "content".to_string(),
         kind: "unknown".to_string(),
@@ -34,9 +32,6 @@ fn build_api_session_rejects_invalid_persisted_data() {
         .expect_err("project is required");
     let invalid_status_error = build_api_session(invalid_status, Vec::new(), Vec::new())
         .expect_err("status should be validated");
-    let invalid_permission_mode_error =
-        build_api_session(invalid_permission_mode, Vec::new(), Vec::new())
-            .expect_err("permission mode should be validated");
     let invalid_message_error = build_api_session(session_row(), vec![invalid_message], Vec::new())
         .expect_err("message kind should be validated");
     let invalid_review_error = build_api_session(invalid_review, Vec::new(), Vec::new())
@@ -55,10 +50,6 @@ fn build_api_session_rejects_invalid_persisted_data() {
     ));
     assert!(matches!(
         invalid_status_error,
-        ApiSessionError::InvalidData(_)
-    ));
-    assert!(matches!(
-        invalid_permission_mode_error,
         ApiSessionError::InvalidData(_)
     ));
     assert!(matches!(

@@ -685,10 +685,7 @@ impl App {
 
         let completed_auto_address_iterations = if auto_address {
             let auto_address_is_enabled = self.settings.auto_address_review_comments()
-                && self
-                    .sessions
-                    .session_for_id(session_id)
-                    .is_some_and(|session| !session.permission_mode.is_read_only());
+                && self.sessions.session_for_id(session_id).is_some();
             let completed_iterations = self
                 .auto_address_review_iterations
                 .get(session_id)

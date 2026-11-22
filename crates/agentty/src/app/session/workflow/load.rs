@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use ag_git::GitClient;
-use tracing::warn;
 
 use super::{draft, session_folder};
 use crate::app::session::SessionError;
@@ -13,7 +12,6 @@ use crate::domain::agent::{
     AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
     parse_persisted_session_agent_model,
 };
-use crate::domain::permission::PermissionMode;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, QueuedMessage, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
@@ -91,7 +89,6 @@ struct LoadedSessionInput {
     draft_attachments: Vec<crate::domain::turn_prompt::TurnPromptAttachment>,
     folder: std::path::PathBuf,
     follow_up_tasks: Vec<SessionFollowUpTask>,
-    permission_mode: PermissionMode,
     project_name: String,
     reasoning_level_override: Option<ReasoningLevel>,
     response_style: ResponseStyle,
@@ -180,10 +177,6 @@ impl SessionManager {
             .load_session(session_id)
             .await?
             .ok_or(SessionError::NotFound)?;
-        let permission_mode = row
-            .permission_mode
-            .parse()
-            .map_err(|_| SessionError::Workflow("Invalid session permission mode".to_string()))?;
         let preparation = services
             .db()
             .sessions()
@@ -213,7 +206,6 @@ impl SessionManager {
                 sessions: &mut sessions,
             },
             row.into(),
-            permission_mode,
         )
         .await;
         for session in sessions {
@@ -299,9 +291,6 @@ impl SessionManager {
     /// rows receive empty detail fields until the session is opened. Saved
     /// messages are read only while that session's handle is unhydrated,
     /// because a hydrated handle's live transcript is authoritative.
-    ///
-    /// Rows with unsupported permission modes are logged and skipped so one
-    /// corrupt session cannot hide valid siblings or appear write-capable.
     ///
     /// Returns loaded sessions, local-day activity counts aggregated from
     /// persisted session-creation activity history, cached worktree
@@ -389,16 +378,7 @@ impl SessionManager {
             session_worktree_availability: &mut session_worktree_availability,
         };
         for row in db_rows {
-            let Ok(permission_mode) = row.permission_mode.parse() else {
-                warn!(
-                    session_id = %row.id,
-                    permission_mode = %row.permission_mode,
-                    "skipping session with unsupported permission mode"
-                );
-
-                continue;
-            };
-            Self::push_loaded_session_row(&mut load_context, row, permission_mode).await;
+            Self::push_loaded_session_row(&mut load_context, row).await;
         }
 
         Ok((
@@ -441,7 +421,6 @@ impl SessionManager {
     async fn push_loaded_session_row(
         load_context: &mut LoadSessionContext<'_>,
         row: SessionListRow,
-        permission_mode: PermissionMode,
     ) {
         let LoadSessionContext {
             base,
@@ -514,7 +493,6 @@ impl SessionManager {
             draft_attachments,
             follow_up_tasks: Vec::new(),
             folder,
-            permission_mode,
             project_name: (*project_name).to_string(),
             reasoning_level_override,
             response_style,
@@ -670,7 +648,6 @@ impl SessionManager {
             in_progress_started_at: input.row.in_progress_started_at,
             in_progress_total_seconds: input.row.in_progress_total_seconds,
             is_draft: input.row.is_draft,
-            permission_mode: input.permission_mode,
             project_name: input.project_name,
             prompt: input.session_prompt,
             queued_messages: input.session_queued_messages,

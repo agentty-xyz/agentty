@@ -647,8 +647,8 @@ impl SessionTaskService {
     /// Appends the notice that focused-review suggestions are addressed
     /// automatically, directly after a session's first prompt.
     ///
-    /// Stays silent when the session's project disables automatic addressing
-    /// or the session is read-only, because no remediation turn would run.
+    /// Stays silent when the session's project disables automatic addressing,
+    /// because no remediation turn would run.
     pub(crate) async fn append_auto_address_notice(
         transcript: &Arc<Mutex<SessionTranscript>>,
         db: &AppRepositories,
@@ -666,10 +666,7 @@ impl SessionTaskService {
             true,
         )
         .await;
-        let can_edit = super::turn::load_session_permission_mode(db, session_id)
-            .await
-            .is_ok_and(|permission_mode| !permission_mode.is_read_only());
-        if !is_enabled || !can_edit {
+        if !is_enabled {
             return;
         }
 

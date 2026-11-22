@@ -27,7 +27,7 @@ use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, LEGACY_SESSION_AGENT_CLEAR_MARKER};
 
 /// Maximum ready turn events folded into one progress app-event emission.
@@ -36,8 +36,6 @@ use crate::infra::db::{AppRepositories, LEGACY_SESSION_AGENT_CLEAR_MARKER};
 /// into an unbounded drain. Events beyond this budget remain queued for the
 /// consumer's next await/try-receive cycle.
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
-/// Agent-facing behavior appended to ordinary read-only chat turns.
-const READ_ONLY_CHAT_PROMPT: &str = include_str!("../../template/read_only_chat_prompt.md");
 
 /// Host-owned inputs shared by ordinary turns and graph proposal title
 /// generation.
@@ -221,7 +219,7 @@ pub(super) async fn run_channel_turn(
             }
         };
 
-    let prepared = match prepare_turn_request(
+    let prepared = prepare_turn_request(
         context,
         &turn_metadata,
         request_kind,
@@ -229,20 +227,7 @@ pub(super) async fn run_channel_turn(
         &prompt,
         &workspace.env,
     )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            return finalize_turn_setup_failure(
-                context,
-                &post_turn_context,
-                turn_metadata,
-                &prompt,
-                &error,
-            )
-            .await;
-        }
-    };
+    .await;
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let consumer = spawn::spawn_traced(consume_turn_events(
         event_rx,
@@ -339,7 +324,6 @@ async fn prepare_turn_workspace(
 /// lifetimes and deliberately remain outside this value.
 struct ResolvedTurnSettings {
     agent_profile: AgentDefinitionPrompt,
-    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     response_style: ResponseStyle,
     speed_mode: SpeedMode,
@@ -354,15 +338,9 @@ struct ResolvedTurnContext {
 
 impl ResolvedTurnContext {
     /// Reads the existing sources in order without persisting a configuration
-    /// snapshot. Permission failures stop preparation; other loaders retain
-    /// their existing defaults.
-    async fn load(
-        context: &SessionWorkerContext,
-        replay_transcript: Option<String>,
-    ) -> Result<Self, SessionError> {
+    /// snapshot. Loaders that fail retain their existing defaults.
+    async fn load(context: &SessionWorkerContext, replay_transcript: Option<String>) -> Self {
         let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
-        let permission_mode =
-            load_session_permission_mode(&context.db, &context.session_id).await?;
         let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
         let response_style = load_session_response_style(&context.db, &context.session_id).await;
         let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
@@ -372,17 +350,16 @@ impl ResolvedTurnContext {
                 == Some(LEGACY_SESSION_AGENT_CLEAR_MARKER),
         );
 
-        Ok(Self {
+        Self {
             continuation,
             session_project_id,
             settings: ResolvedTurnSettings {
                 agent_profile,
-                permission_mode,
                 reasoning_level,
                 response_style,
                 speed_mode,
             },
-        })
+        }
     }
 }
 
@@ -392,7 +369,7 @@ struct PreparedTurnRequest {
     session_project_id: Option<i64>,
 }
 
-/// Measures configuration and prompt preparation, preserving setup failures.
+/// Measures configuration and prompt preparation for one editing chat turn.
 async fn prepare_turn_request(
     context: &SessionWorkerContext,
     turn_metadata: &TurnMetadata,
@@ -400,56 +377,36 @@ async fn prepare_turn_request(
     replay_transcript: Option<String>,
     prompt: &TurnPrompt,
     env: &ResolvedEnv,
-) -> Result<PreparedTurnRequest, SessionError> {
+) -> PreparedTurnRequest {
     Span::child("context.prepare")
-        .run(
-            async {
-                let ResolvedTurnContext {
+        .scope(async {
+            let ResolvedTurnContext {
+                continuation,
+                session_project_id,
+                settings,
+            } = ResolvedTurnContext::load(context, replay_transcript).await;
+            let model = turn_metadata.session_agent.model().provider_model_str();
+
+            PreparedTurnRequest {
+                request: TurnRequest {
+                    provider_call_budget: None,
+                    execution_policy: ag_contracts::ExecutionPolicy::default(),
                     continuation,
-                    session_project_id,
-                    settings,
-                } = ResolvedTurnContext::load(context, replay_transcript).await?;
-                let agent_prompt =
-                    apply_read_only_chat_prompt(prompt.clone(), settings.permission_mode);
-                let model = turn_metadata.session_agent.model().provider_model_str();
-
-                Ok(PreparedTurnRequest {
-                    request: TurnRequest {
-                        provider_call_budget: None,
-                        execution_policy: ag_contracts::ExecutionPolicy::default(),
-                        continuation,
-                        folder: env.folder.clone(),
-                        main_checkout_root: env.main_checkout.clone(),
-                        model: model.to_string(),
-                        permission_mode: settings.permission_mode,
-                        agent_profile: settings.agent_profile,
-                        prompt: agent_prompt,
-                        reasoning_level: settings.reasoning_level,
-                        request_kind,
-                        response_style: settings.response_style,
-                        speed_mode: settings.speed_mode,
-                    },
-                    session_project_id,
-                })
-            },
-            |_| Outcome::Failed,
-        )
+                    folder: env.folder.clone(),
+                    main_checkout_root: env.main_checkout.clone(),
+                    model: model.to_string(),
+                    permission_mode: PermissionMode::AutoEdit,
+                    agent_profile: settings.agent_profile,
+                    prompt: prompt.clone(),
+                    reasoning_level: settings.reasoning_level,
+                    request_kind,
+                    response_style: settings.response_style,
+                    speed_mode: settings.speed_mode,
+                },
+                session_project_id,
+            }
+        })
         .await
-}
-
-/// Adds mode-switch guidance only to user-owned read-only chat sessions.
-fn apply_read_only_chat_prompt(prompt: TurnPrompt, permission_mode: PermissionMode) -> TurnPrompt {
-    if permission_mode != PermissionMode::ReadOnly {
-        return prompt;
-    }
-
-    let agent_prompt = prompt.agent_text();
-
-    TurnPrompt {
-        attachments: prompt.attachments,
-        text: format!("{READ_ONLY_CHAT_PROMPT}\n\n{agent_prompt}"),
-        text_source: TurnPromptTextSource::AgentData,
-    }
 }
 
 /// Cleans up and reports a failure that occurs after turn setup has started
@@ -508,29 +465,6 @@ async fn load_turn_continuation(
         provider_conversation_id,
         replay_transcript,
     )
-}
-
-/// Returns the provider permission mode enforced for one persisted session.
-///
-/// # Errors
-/// Returns an error when the session cannot be loaded or its persisted role
-/// or permission mode is invalid.
-pub(super) async fn load_session_permission_mode(
-    db: &AppRepositories,
-    session_id: &str,
-) -> Result<PermissionMode, SessionError> {
-    let row = db
-        .sessions()
-        .load_session(session_id)
-        .await?
-        .ok_or(SessionError::NotFound)?;
-    row.permission_mode
-        .parse()
-        .map_err(|reason| crate::infra::db::DbError::InvalidData {
-            entity: "session permission mode",
-            reason,
-        })
-        .map_err(SessionError::from)
 }
 
 /// Marks an executing session turn in progress and clears resumed questions.

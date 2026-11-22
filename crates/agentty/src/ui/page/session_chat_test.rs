@@ -469,7 +469,7 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         // Assert
         let buffer = terminal.backend().buffer();
         let settings = format!(
-            "codex/{} [high] · Concise · Normal · Auto Edit",
+            "codex/{} [high] · Concise · Normal",
             model_fixture::CODEX_MODEL_ID
         );
         let composer_row = (0..height)
@@ -559,11 +559,11 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
 
     // Assert
     assert!(text.contains(&format!(
-        "codex/{} [high] · Concise · Normal · Auto Edit",
+        "codex/{} [high] · Concise · Normal",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains(&format!(
-        "codex/{} [high]  · Concise · Normal · Auto Edit",
+        "codex/{} [high]  · Concise · Normal",
         model_fixture::CODEX_MODEL_ID
     )));
 }
@@ -580,7 +580,7 @@ fn test_render_prompt_composer_shows_saved_reasoning_level() {
 
     // Assert
     assert!(text.contains(&format!(
-        "codex/{} [low] · Concise · Normal · Auto Edit",
+        "codex/{} [low] · Concise · Normal",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains("Reasoning:"));
@@ -619,7 +619,7 @@ fn test_render_prompt_footer_shows_loader_while_pasting_image() {
 }
 
 #[test]
-fn test_prompt_footer_shows_permission_mode_shortcut() {
+fn test_prompt_footer_omits_permission_mode_shortcut() {
     // Arrange
     let session = session_fixture();
 
@@ -627,25 +627,25 @@ fn test_prompt_footer_shows_permission_mode_shortcut() {
     let footer = prompt_format::prompt_footer_line(&session, 0, ChatFocus::Input, false);
 
     // Assert
-    assert!(footer.to_string().contains("Shift+Tab: switch mode"));
+    assert!(!footer.to_string().contains("Shift+Tab"));
 }
 
 #[test]
-fn test_render_prompt_composer_shows_read_only_after_speed_status() {
+fn test_render_prompt_composer_shows_speed_without_permission_mode() {
     // Arrange
     let mut session = session_fixture();
     session.agent = model_fixture::codex_selection();
-    session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
 
     // Act
     let text = rendered_prompt_mode_text(&session);
 
     // Assert
-    assert!(text.contains("· Normal · Read Only"));
+    assert!(text.contains("· Concise · Normal"));
+    assert!(!text.contains("Auto Edit"));
 }
 
 #[test]
-fn test_render_prompt_composer_shows_auto_edit_without_unsupported_speed_status() {
+fn test_render_prompt_composer_omits_unsupported_speed_status() {
     // Arrange
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
@@ -657,26 +657,9 @@ fn test_render_prompt_composer_shows_auto_edit_without_unsupported_speed_status(
     let text = rendered_prompt_mode_text(&session);
 
     // Assert
-    assert!(text.contains("· Auto Edit"));
+    assert!(text.contains("· Concise"));
     assert!(!text.contains("· Normal"));
-}
-
-#[test]
-fn test_render_prompt_composer_shows_read_only_without_speed_status() {
-    // Arrange
-    let mut session = session_fixture();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Antigravity,
-        crate::domain::agent::AgentModel::Gemini4Argon,
-    );
-    session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
-
-    // Act
-    let text = rendered_prompt_mode_text(&session);
-
-    // Assert
-    assert!(text.contains("· Read Only"));
-    assert!(!text.contains("· Normal"));
+    assert!(!text.contains("Auto Edit"));
 }
 
 #[test]

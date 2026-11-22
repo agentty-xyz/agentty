@@ -1,5 +1,5 @@
 //! Graph turn unit tests covering image marker disambiguation, continuation
-//! prompts, permission intersection, and effect budgets.
+//! prompts, and effect budgets.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use ag_contracts::{
 use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
 use ag_worker::{MockRunClient, RunClient};
 
-use super::{GraphEffectClient, graph_prompt, intersect_permissions};
+use super::{GraphEffectClient, graph_prompt};
 use crate::app::execution_graph::tests::run_request;
 
 #[test]
@@ -78,21 +78,6 @@ fn graph_continuations_are_current_instructions_with_literal_user_guidance() {
             .text
             .contains("Prior responses are historical evidence")
     );
-}
-
-#[test]
-fn graph_permissions_never_exceed_captured_or_current_permissions() {
-    // Arrange / Act / Assert
-    for captured in PermissionMode::ALL {
-        for current in PermissionMode::ALL {
-            let expected = if captured.is_read_only() || current.is_read_only() {
-                PermissionMode::ReadOnly
-            } else {
-                PermissionMode::AutoEdit
-            };
-            assert_eq!(intersect_permissions(captured, current), expected);
-        }
-    }
 }
 
 #[tokio::test]

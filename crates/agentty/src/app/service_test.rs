@@ -300,7 +300,6 @@ fn app_event_label_names_turn_starts() {
         session_id: "session-id".into(),
         turn: TurnSelection {
             agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
-            permission_mode: PermissionMode::AutoEdit,
         },
     };
 
@@ -1034,7 +1033,6 @@ fn app_event_label_names_turn_ends() {
         outcome: TurnOutcome::Finished,
         turn: TurnSelection {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            permission_mode: PermissionMode::AutoEdit,
         },
     };
 

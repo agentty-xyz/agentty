@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, AgentError, MockAgentChannel, PermissionMode,
-    TurnEvent, TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, MockAgentChannel, TurnEvent,
+    TurnResult,
 };
 use ag_forge as forge;
 use ag_git::MockGitClient;
@@ -385,10 +385,6 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     write_rebase_conflict_file(base_dir.path());
     let db = AppRepositories::in_memory().await.expect("db should open");
     seed_existing_session_rebase_metadata(&db).await;
-    db.sessions()
-        .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
-        .await
-        .expect("failed to set chat permission mode");
     let harness = rebase_assist_worker_harness(
         base_dir.path().to_path_buf(),
         db,
@@ -438,10 +434,6 @@ async fn test_session_sync_root_parents_its_conflicted_rebase_step() {
     write_rebase_conflict_file(base_dir.path());
     let db = AppRepositories::in_memory().await.expect("db should open");
     seed_existing_session_rebase_metadata(&db).await;
-    db.sessions()
-        .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
-        .await
-        .expect("failed to set chat permission mode");
     db.operations()
         .insert_session_operation("op-traced-sync", "sess1", REBASE_OPERATION_KIND)
         .await

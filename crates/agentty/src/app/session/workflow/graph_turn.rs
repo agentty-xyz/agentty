@@ -339,11 +339,6 @@ async fn prepare(
     )
     .await?;
     let node = &request.dispatch.node;
-    let permission = turn::load_session_permission_mode(&context.db, &context.session_id).await?;
-    let permission_mode = intersect_permissions(
-        request.permission_mode,
-        node.execution.permission_mode(&node.definition, permission),
-    );
     let history = context
         .db
         .graphs()
@@ -368,7 +363,7 @@ async fn prepare(
         folder: env.folder,
         main_checkout_root: env.main_checkout,
         model: node.agent.model().provider_model_str().to_string(),
-        permission_mode,
+        permission_mode: request.permission_mode,
         prompt,
         provider_call_budget: request.provider_call_budget.clone(),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,
@@ -378,14 +373,6 @@ async fn prepare(
         response_style: turn::load_session_response_style(&context.db, &context.session_id).await,
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
     })
-}
-
-fn intersect_permissions(captured: PermissionMode, current: PermissionMode) -> PermissionMode {
-    if captured.is_read_only() || current.is_read_only() {
-        PermissionMode::ReadOnly
-    } else {
-        PermissionMode::AutoEdit
-    }
 }
 
 /// Places every image after the JSON data with unique transport placeholders.

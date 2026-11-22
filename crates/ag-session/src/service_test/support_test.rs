@@ -9,9 +9,7 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::message::{SessionMessage, SessionMessageKind};
-use crate::model::{
-    PermissionMode, ReviewRequest, Session, SessionId, SessionSettings, SessionStatus,
-};
+use crate::model::{ReviewRequest, Session, SessionId, SessionSettings, SessionStatus};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, SessionBackend,
 };
@@ -189,7 +187,6 @@ pub(super) fn session_fixture() -> Session {
             agent: model_fixture::codex_selection(),
             base_branch: "main".to_string(),
             is_draft: false,
-            permission_mode: PermissionMode::AutoEdit,
             project_id: 7,
             reasoning_level: ReasoningLevel::High,
             response_style: ResponseStyle::Balanced,

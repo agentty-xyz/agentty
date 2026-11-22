@@ -17,7 +17,6 @@ use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
@@ -199,13 +198,9 @@ async fn prompt_setting_updates_ignore_missing_session() {
     let switched_model = app
         .update_prompt_session_model(&missing_session_id, model_fixture::codex_selection())
         .await;
-    let permission_result = app
-        .update_prompt_session_permission_mode(&missing_session_id, PermissionMode::AutoEdit)
-        .await;
 
     // Assert
     assert_eq!(switched_model, PromptModelChange::Failed);
-    assert!(permission_result.is_err());
     assert!(app.sessions.sessions().is_empty());
 }
 
@@ -967,32 +962,11 @@ async fn test_submit_prompt_reports_queue_failure_without_session_handles() {
 }
 
 #[tokio::test]
-async fn test_submit_prompt_posts_auto_address_notice_only_after_first_editing_message() {
-    for (session_mode, is_auto_address_enabled, permission_mode, expects_notice) in [
-        (
-            PromptSessionMode::NewDeletable,
-            true,
-            PermissionMode::AutoEdit,
-            true,
-        ),
-        (
-            PromptSessionMode::NewDeletable,
-            false,
-            PermissionMode::AutoEdit,
-            false,
-        ),
-        (
-            PromptSessionMode::NewDeletable,
-            true,
-            PermissionMode::ReadOnly,
-            false,
-        ),
-        (
-            PromptSessionMode::Existing,
-            true,
-            PermissionMode::AutoEdit,
-            false,
-        ),
+async fn test_submit_prompt_posts_auto_address_notice_only_after_first_message() {
+    for (session_mode, is_auto_address_enabled, expects_notice) in [
+        (PromptSessionMode::NewDeletable, true, true),
+        (PromptSessionMode::NewDeletable, false, false),
+        (PromptSessionMode::Existing, true, false),
     ] {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
@@ -1006,9 +980,6 @@ async fn test_submit_prompt_posts_auto_address_notice_only_after_first_editing_m
                 is_auto_address_enabled,
             ))
             .await;
-        app.update_prompt_session_permission_mode(&session_id, permission_mode)
-            .await
-            .expect("permission mode should persist");
 
         // Act
         let outcome = app
@@ -1039,7 +1010,7 @@ async fn test_submit_prompt_posts_auto_address_notice_only_after_first_editing_m
                  times per message."
             ),
             expects_notice,
-            "{session_mode:?} {is_auto_address_enabled} {permission_mode:?}: {transcript}"
+            "{session_mode:?} {is_auto_address_enabled}: {transcript}"
         );
         if expects_notice {
             let prompt_index = transcript
@@ -1127,11 +1098,8 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
         },
     );
 
-    app.sessions.sessions_mut()[0].permission_mode = PermissionMode::ReadOnly;
-
     // Act
-    app.auto_address_focused_reviews(vec![SessionId::from("missing-session"), session_id.clone()]);
-    app.sessions.sessions_mut()[0].permission_mode = PermissionMode::AutoEdit;
+    app.auto_address_focused_reviews(vec![SessionId::from("missing-session")]);
     app.settings
         .apply_operation(SettingsOperation::AutoAddressReviewComments(false))
         .await;

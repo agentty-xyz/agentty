@@ -861,7 +861,7 @@ async fn review_request_closure_leaves_focused_reply_composer() -> E2eResult {
                     // Assert
                     let archived = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_not_visible(&archived, "unfinished reply");
-                    assertion::assert_not_visible(&archived, "Auto Edit");
+                    assertion::assert_not_visible(&archived, "╭");
                     assertion::assert_text_in_region(
                         frame,
                         "Canceled",

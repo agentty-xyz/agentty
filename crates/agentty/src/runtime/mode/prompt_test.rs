@@ -6,9 +6,6 @@ pub(crate) mod support;
 #[path = "prompt_test/lifecycle_test.rs"]
 mod lifecycle;
 
-#[path = "prompt_test/persistence_test.rs"]
-mod persistence;
-
 #[path = "prompt_test/prompt_test.rs"]
 mod prompt;
 

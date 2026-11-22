@@ -29,13 +29,8 @@ use crate::infra::db::{Database, DbError};
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
 
 #[tokio::test]
-async fn graph_launch_propagates_storage_and_permission_failures_without_dispatch() {
-    for scenario in [
-        "missing-row",
-        "closed-pool",
-        "invalid-permissions",
-        "conflicting-snapshot",
-    ] {
+async fn graph_launch_propagates_storage_failures_without_dispatch() {
+    for scenario in ["missing-row", "closed-pool", "conflicting-snapshot"] {
         // Arrange
         let (mut app, pool, _directory) = app_with_pool().await;
         let mut snapshot = graph();
@@ -48,12 +43,6 @@ async fn graph_launch_propagates_storage_and_permission_failures_without_dispatc
                 .await
                 .expect("remove row"),
             "closed-pool" => pool.close().await,
-            "invalid-permissions" => {
-                sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'sess'")
-                    .execute(&pool)
-                    .await
-                    .expect("corrupt stored permission");
-            }
             _ => {
                 app.services
                     .db()
@@ -333,9 +322,6 @@ async fn graph_lifecycle_storage_errors_do_not_signal_or_admit_work() {
         app.resume_api_execution_graph(ResumeExecutionGraphRequest { graph: control })
             .await,
         app.continue_api_execution_graph_node(continuation).await,
-        app.services
-            .validate_graph_session_permissions("sess")
-            .await,
     ];
 
     // Assert

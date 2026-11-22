@@ -76,8 +76,6 @@ fn list_and_detail_mappings_preserve_all_shared_columns() {
         assert!(!row.is_draft);
         assert_eq!(row.model, "gpt-5.6-sol");
         assert_eq!(row.output_tokens, 29);
-        assert_eq!(row.permission_mode, "read_only");
-
         assert_eq!(row.project_id, Some(7));
         assert_eq!(
             row.published_upstream_ref.as_deref(),
@@ -128,7 +126,6 @@ impl SessionJoinRow {
             is_draft: false,
             model: "gpt-5.6-sol".to_string(),
             output_tokens: 29,
-            permission_mode: "read_only".to_string(),
             project_id: Some(7),
             prompt: "Implement feature".to_string(),
             published_upstream_ref: Some("origin/session-a".to_string()),

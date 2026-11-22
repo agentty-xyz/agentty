@@ -291,10 +291,7 @@ fn test_session_header_keeps_speed_in_prompt_only() {
         // Assert
         assert!(header[0].to_string().ends_with("(+0 -0)"));
         assert!(!header[0].to_string().contains("Speed:"));
-        assert_eq!(
-            prompt_status,
-            format!("Concise · {} · Auto Edit", speed.name())
-        );
+        assert_eq!(prompt_status, format!("Concise · {}", speed.name()));
     }
 }
 
@@ -333,8 +330,8 @@ fn test_prompt_status_shows_every_response_style() {
         let prompt_status = prompt_session_status(&session);
 
         // Assert
-        assert_eq!(prompt_status_without_speed, format!("{label} · Auto Edit"));
-        assert_eq!(prompt_status, format!("{label} · Normal · Auto Edit"));
+        assert_eq!(prompt_status_without_speed, label);
+        assert_eq!(prompt_status, format!("{label} · Normal"));
     }
 }
 

@@ -271,8 +271,6 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
-    /// Provider permission mode selected through the prompt shortcut.
-    pub permission_mode: crate::domain::permission::PermissionMode,
     /// Workspace agent selected for future turns, when present.
     /// Human-readable project name associated with the session.
     pub project_name: String,

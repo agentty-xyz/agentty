@@ -1223,23 +1223,6 @@ impl App {
         Ok(())
     }
 
-    /// Persists and applies a provider permission mode for a session.
-    ///
-    /// # Errors
-    /// Returns an error if persistence fails.
-    pub async fn set_session_permission_mode(
-        &mut self,
-        session_id: &str,
-        permission_mode: crate::domain::permission::PermissionMode,
-    ) -> Result<(), AppError> {
-        self.sessions
-            .set_session_permission_mode(&self.services, session_id, permission_mode)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
-    }
-
     /// Returns the currently selected session, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.sessions.selected_session()

@@ -195,95 +195,6 @@ async fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify `Shift+Tab` toggles the session between Auto Edit and Read Only
-/// without changing the draft.
-#[tokio::test]
-async fn session_permission_mode_selection() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("session_permission_mode_selection")
-        .with_git()
-        .with_terminal_size(180, 24)
-        .setup(|env| Box::pin(async move { seed_review_ready_session_on_sessions_tab(env).await }))
-        .zola(
-            "Switch session mode",
-            "Toggle between auto-edit and read-only from the composer with Shift+Tab.",
-            43,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::open_selected_session_view())
-                    .press_key("Enter")
-                    .wait_for_text("] · Concise · Normal · Auto Edit", 5000)
-                    .wait_for_text("Shift+Tab: switch mode", 5000)
-                    .write_text("Keep this draft")
-                    .wait_for_text("Keep this draft", 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "initial_permission_mode",
-                        "Prompt title shows the current session permission mode",
-                    )
-                    .press_key("BackTab")
-                    .wait_for_text("] · Concise · Normal · Read Only", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "read_only_permission_mode",
-                        "Shift+Tab switches the session to Read Only",
-                    )
-                    .press_key("BackTab")
-                    .wait_for_text("] · Concise · Normal · Auto Edit", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "auto_edit_permission_mode",
-                        "Shift+Tab switches the session back to Auto Edit",
-                    )
-            },
-            |frame, report| {
-                Box::pin(async move {
-                    let initial_frame = common::frame_from_capture(&report.captures[0]);
-                    let initial_full = Region::full(initial_frame.cols(), initial_frame.rows());
-                    assertion::assert_text_in_region(
-                        &initial_frame,
-                        "] · Concise · Normal · Auto Edit",
-                        &initial_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &initial_frame,
-                        "Shift+Tab: switch mode",
-                        &initial_full,
-                    );
-                    let read_only_frame = common::frame_from_capture(&report.captures[1]);
-                    let read_only_full =
-                        Region::full(read_only_frame.cols(), read_only_frame.rows());
-                    assertion::assert_text_in_region(
-                        &read_only_frame,
-                        "] · Concise · Normal · Read Only",
-                        &read_only_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &read_only_frame,
-                        "Keep this draft",
-                        &read_only_full,
-                    );
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "] · Concise · Normal · Auto Edit",
-                        &full,
-                    );
-                    assertion::assert_text_in_region(frame, "Keep this draft", &full);
-                    assertion::assert_not_visible(frame, "Auto Address");
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
 /// Verify a submitted Codex Auto Edit turn receives unrestricted app-server
 /// policies and completes visibly through the real session runtime boundary.
 #[tokio::test]
@@ -300,7 +211,7 @@ async fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
                     .press_key("a")
                     .wait_for_text("Regular", 5000)
                     .press_key("Enter")
-                    .wait_for_text("· Normal · Auto Edit", 5000)
+                    .wait_for_text("· Normal", 5000)
                     .write_text("Verify Codex Auto Edit permissions")
                     .press_key("Enter")
                     .wait_for_text(CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT, 30000)
@@ -342,7 +253,7 @@ async fn claude_auto_edit_disables_command_sandbox() -> E2eResult {
                     .press_key("a")
                     .wait_for_text("Regular", 5000)
                     .press_key("Enter")
-                    .wait_for_text("· Normal · Auto Edit", 5000)
+                    .wait_for_text("· Normal", 5000)
                     .write_text("Verify Claude Auto Edit permissions")
                     .press_key("Enter")
                     .wait_for_text(CLAUDE_AUTO_EDIT_POLICY_CONFIRMED_TEXT, 30000)
@@ -455,17 +366,17 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     .write_text("fast")
                     .wait_for_text("Toggle between normal and fast responses", 3000)
                     .press_key("Enter")
-                    .wait_for_text("· Concise · Fast · Auto Edit", 5000)
+                    .wait_for_text("· Concise · Fast", 5000)
                     .capture_labeled("fast_mode_selected", "Composer reflects fast mode")
                     .write_text("/fast")
                     .wait_for_text("Toggle between normal and fast responses", 3000)
                     .press_key("Enter")
-                    .wait_for_text("· Concise · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Concise · Normal", 5000)
                     .capture_labeled("normal_mode_selected", "Composer reflects normal mode")
                     .write_text("/fast")
                     .wait_for_text("Toggle between normal and fast responses", 3000)
                     .press_key("Enter")
-                    .wait_for_text("· Concise · Fast · Auto Edit", 5000)
+                    .wait_for_text("· Concise · Fast", 5000)
                     .press_key("/")
                     .write_text("model")
                     .wait_for_text("/model", 3000)
@@ -484,11 +395,7 @@ async fn session_fast_mode_toggle() -> E2eResult {
                 Box::pin(async move {
                     let fast_frame = common::frame_from_capture(&report.captures[0]);
                     let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
-                    assertion::assert_text_in_region(
-                        &fast_frame,
-                        "· Concise · Fast · Auto Edit",
-                        &fast_full,
-                    );
+                    assertion::assert_text_in_region(&fast_frame, "· Concise · Fast", &fast_full);
                     assertion::assert_text_in_region(
                         &fast_frame,
                         &format!("codex/{} [high]", model_fixture::CODEX_MODEL_ID),
@@ -502,7 +409,7 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     let normal_full = Region::full(normal_frame.cols(), normal_frame.rows());
                     assertion::assert_text_in_region(
                         &normal_frame,
-                        "· Concise · Normal · Auto Edit",
+                        "· Concise · Normal",
                         &normal_full,
                     );
                     assertion::assert_not_visible(&normal_frame, "/fast");
@@ -598,7 +505,7 @@ async fn test_session_response_style() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
-                    .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Detailed · Normal", 5000)
                     .write_text("/style")
                     .wait_for_text("/style", 3000)
                     .press_key("Enter")
@@ -611,7 +518,7 @@ async fn test_session_response_style() -> E2eResult {
                         "Response style picker explains all three choices",
                     )
                     .press_key("Enter")
-                    .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Detailed · Normal", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -633,11 +540,7 @@ async fn test_session_response_style() -> E2eResult {
                     );
 
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "· Detailed · Normal · Auto Edit",
-                        &full,
-                    );
+                    assertion::assert_text_in_region(frame, "· Detailed · Normal", &full);
                     assertion::assert_not_visible(frame, "Style:");
                 })
             },
@@ -662,27 +565,23 @@ async fn test_balanced_response_style_remains_visible() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
-                    .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Detailed · Normal", 5000)
                     .write_text("/style")
                     .wait_for_text("/style", 3000)
                     .press_key("Enter")
                     .wait_for_text("/style Response style", 3000)
                     .press_key("Up")
                     .press_key("Enter")
-                    .wait_for_text("· Balanced · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Balanced · Normal", 5000)
                     .press_key("Escape")
                     .press_key("Enter")
-                    .wait_for_text("· Balanced · Normal · Auto Edit", 5000)
+                    .wait_for_text("· Balanced · Normal", 5000)
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "· Balanced · Normal · Auto Edit",
-                        &full,
-                    );
+                    assertion::assert_text_in_region(frame, "· Balanced · Normal", &full);
                     assertion::assert_not_visible(frame, "Style:");
                 })
             },
@@ -732,7 +631,7 @@ async fn test_narrow_session_preserves_style_totals_and_permission() -> E2eResul
                     .wait_for_text("Timer: 1h 1m 0s", 5000)
                     .capture_labeled("view", "Timer while viewing a narrow session")
                     .press_key("Enter")
-                    .wait_for_text("Concise · Normal · Auto Edit", 5000)
+                    .wait_for_text("Concise · Normal", 5000)
                     .wait_for_text("(+12 -3)", 5000)
                     .capture_labeled("reply", "Timer while replying in a narrow session")
                     .press_key("Tab")
@@ -742,7 +641,7 @@ async fn test_narrow_session_preserves_style_totals_and_permission() -> E2eResul
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Concise · Normal · Auto Edit", &full);
+                    assertion::assert_text_in_region(frame, "Concise · Normal", &full);
                     assertion::assert_text_in_region(frame, "(+12 -3)", &full);
                     assertion::assert_not_visible(frame, "Tokens:");
                     let view_frame = common::frame_from_capture(&report.captures[0]);

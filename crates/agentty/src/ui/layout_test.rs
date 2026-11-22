@@ -366,7 +366,7 @@ fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
     assert_eq!(
         footer_line.to_string(),
         "Tab: focus | Enter: send | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel \
-         | Shift+Tab: switch mode | 2 images ready"
+         | 2 images ready"
     );
     assert_eq!(
         footer_line.spans[0].style,

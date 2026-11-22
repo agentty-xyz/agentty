@@ -1062,11 +1062,9 @@ async fn implementer_projects_diff_before_commit_finishes_and_refreshes_afterwar
 async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_context() {
     for scenario in [
         "writable",
-        "read-only",
         "questions",
         "persist-failure",
         "stale-plan",
-        "invalid-permission",
         "stateless",
         "commit-failure",
         "canceled",
@@ -1103,13 +1101,7 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         .await;
 
         // Assert
-        let should_fail = [
-            "persist-failure",
-            "stale-plan",
-            "invalid-permission",
-            "commit-failure",
-        ]
-        .contains(&scenario);
+        let should_fail = ["persist-failure", "stale-plan", "commit-failure"].contains(&scenario);
         let canceled = scenario == "canceled";
         assert_eq!(
             result.is_err(),
@@ -1144,7 +1136,7 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
                 .is_empty()
         );
         if let Ok(turn) = request_rx.try_recv() {
-            assert_implementation_request(&turn, scenario);
+            assert_implementation_request(&turn);
         }
         let expected_status = if canceled {
             TaskAttemptStatus::Canceled
@@ -1170,13 +1162,7 @@ async fn assert_implementation_records(
         .await
         .expect("history")
         .expect("context");
-    let response_saved = ![
-        "persist-failure",
-        "stale-plan",
-        "invalid-permission",
-        "canceled",
-    ]
-    .contains(&scenario);
+    let response_saved = !["persist-failure", "stale-plan", "canceled"].contains(&scenario);
     assert_eq!(
         history.turns.len(),
         usize::from(response_saved),
@@ -1258,7 +1244,7 @@ fn implementation_factory(
     cancellation: &CancellationToken,
 ) -> MockSessionRunFactory {
     let mut factory = MockSessionRunFactory::new();
-    if !["stale-plan", "invalid-permission"].contains(&scenario) {
+    if scenario != "stale-plan" {
         let cleanup_cancellation = cancellation.clone();
         let mut channel = MockAgentChannel::new();
         channel
@@ -1306,19 +1292,7 @@ async fn prepare_implementation_scenario(
     if scenario == "commit-failure" {
         context.git_client = Arc::new(execution_git_client(true));
     }
-    if scenario == "read-only" {
-        context
-            .db
-            .sessions()
-            .update_session_permission_mode("sess", PermissionMode::ReadOnly)
-            .await
-            .expect("permission");
-    } else if scenario == "invalid-permission" {
-        sqlx::query("UPDATE session SET permission_mode='invalid' WHERE id='sess'")
-            .execute(pool)
-            .await
-            .expect("corrupt permission");
-    } else if scenario == "persist-failure" {
+    if scenario == "persist-failure" {
         sqlx::query(
             "CREATE TRIGGER reject_task_turn BEFORE INSERT ON task_agent_turn WHEN \
              NEW.task_attempt_id='execute' BEGIN SELECT RAISE(ABORT,'failed task persistence'); \
@@ -1345,15 +1319,8 @@ async fn prepare_implementation_scenario(
     }
 }
 
-fn assert_implementation_request(turn: &TurnRequest, scenario: &str) {
-    assert_eq!(
-        turn.permission_mode,
-        if scenario == "read-only" {
-            PermissionMode::ReadOnly
-        } else {
-            PermissionMode::AutoEdit
-        }
-    );
+fn assert_implementation_request(turn: &TurnRequest) {
+    assert_eq!(turn.permission_mode, PermissionMode::AutoEdit);
     assert_eq!(
         turn.agent_profile.current(),
         Some(

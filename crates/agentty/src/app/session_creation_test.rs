@@ -365,7 +365,7 @@ async fn workspace_preparation_refresh_tracks_unloaded_sessions_and_ignores_read
 }
 
 #[tokio::test]
-async fn incremental_registration_is_idempotent_and_rejects_invalid_metadata() {
+async fn incremental_registration_is_idempotent_and_rejects_missing_metadata() {
     // Arrange
     let (mut app, directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
     let id = app.create_session().await.expect("session");
@@ -391,24 +391,22 @@ async fn incremental_registration_is_idempotent_and_rejects_invalid_metadata() {
         .get(crate::domain::transient_message::TransientMessageSlot::WorkspacePreparation)
         .cloned();
     app.sessions.state_mut().replace_sessions(Vec::new());
-    sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = ?")
+    sqlx::query("DELETE FROM session WHERE id = ?")
         .bind(&id)
         .execute(&pool)
         .await
         .expect("metadata");
-    let invalid = app
+    let missing = app
         .sessions
         .register_created_session(&app.services, &id, directory.path())
         .await;
 
     // Assert
     assert!(notice.is_some());
-    assert!(
-        invalid
-            .expect_err("invalid metadata")
-            .to_string()
-            .contains("permission")
-    );
+    assert!(matches!(
+        missing,
+        Err(crate::app::session::SessionError::NotFound)
+    ));
     assert!(app.sessions.sessions().is_empty());
 }
 

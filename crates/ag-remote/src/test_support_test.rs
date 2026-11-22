@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, PermissionMode,
-    QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend,
-    SessionError, SessionId, SessionMessage, SessionMessageKind, SessionService, SessionSettings,
-    SessionStatus, SessionSummary, SpeedMode,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
+    ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend, SessionError, SessionId,
+    SessionMessage, SessionMessageKind, SessionService, SessionSettings, SessionStatus,
+    SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -317,7 +317,6 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
             agent: ag_session::test_support::codex_selection(),
             base_branch: "main".to_string(),
             is_draft: false,
-            permission_mode: PermissionMode::AutoEdit,
             project_id: 7,
             reasoning_level: ReasoningLevel::High,
             response_style: ResponseStyle::Balanced,

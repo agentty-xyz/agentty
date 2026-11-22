@@ -1,7 +1,7 @@
 //! Fork session snapshot tests that verify source-specific state is reset.
 
 use ag_session as agent;
-use ag_session::{FocusedReviewStatus, PermissionMode, ResponseStyle, SessionStats};
+use ag_session::{FocusedReviewStatus, ResponseStyle, SessionStats};
 use sqlx::SqlitePool;
 
 use crate::AppRepositories;
@@ -54,18 +54,12 @@ async fn test_fork_session_snapshot_resets_source_specific_state() {
         .load_session_review_request("fork-session")
         .await
         .expect("failed to load fork review request");
-    let fork_permission_mode = database
-        .sessions()
-        .load_session_permission_mode("fork-session")
-        .await
-        .expect("failed to load fork permission mode");
     assert_source_reset_state(
         source_row,
         &source_reset_row,
         source_review_request.as_ref(),
     );
     assert_fork_reset_state(fork_row, &fork_reset_row, fork_review_request.as_ref());
-    assert_eq!(fork_permission_mode, PermissionMode::ReadOnly);
     assert_eq!(fork_row.response_style, ResponseStyle::Detailed.as_str());
 }
 
@@ -147,7 +141,6 @@ async fn seed_fork_snapshot_source(
 
 /// Persists source-only linkage and counters on the fork source row.
 async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
-    seed_fork_snapshot_source_settings(database).await;
     database
         .sessions()
         .persist_session_turn_metadata(
@@ -234,15 +227,6 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
         .expect("failed to update review request");
 }
 
-/// Persists the session settings that a fork must inherit.
-async fn seed_fork_snapshot_source_settings(database: &AppRepositories) {
-    database
-        .sessions()
-        .update_session_permission_mode("source-session", PermissionMode::ReadOnly)
-        .await
-        .expect("failed to update permission mode");
-}
-
 /// Persists active-work timing fields on the fork source row.
 async fn seed_fork_snapshot_source_timing(database: &AppRepositories, pool: &SqlitePool) {
     database
@@ -275,11 +259,6 @@ fn assert_source_reset_state(
     assert_eq!(source_row.deleted_lines, 3);
     assert_eq!(source_row.has_diff, Some(true));
     assert_eq!(source_row.size, "S");
-    assert_eq!(source_row.permission_mode, "read_only");
-    assert_eq!(
-        source_row.permission_mode.parse::<PermissionMode>(),
-        Ok(PermissionMode::ReadOnly)
-    );
     assert!(source_reset_row.is_draft);
     assert_eq!(
         source_reset_row.provider_conversation_id.as_deref(),
@@ -334,7 +313,6 @@ fn assert_fork_reset_state(
     assert_eq!(fork_row.deleted_lines, 0);
     assert_eq!(fork_row.has_diff, None);
     assert_eq!(fork_row.size, "XS");
-    assert_eq!(fork_row.permission_mode, "read_only");
     assert_eq!(fork_row.questions, None);
     assert_eq!(fork_row.published_upstream_ref, None);
     assert_eq!(fork_row.review_request, None);

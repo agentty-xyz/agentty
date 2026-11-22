@@ -33,7 +33,6 @@ use crate::domain::agent::{
 use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -1058,31 +1057,21 @@ fn test_prompt_input_command_ignores_non_prompt_mode() {
 }
 
 #[test]
-fn test_backtab_toggles_permission_modes_and_preserves_input() {
-    for (current_permission_mode, expected_permission_mode) in [
-        (PermissionMode::AutoEdit, PermissionMode::ReadOnly),
-        (PermissionMode::ReadOnly, PermissionMode::AutoEdit),
-    ] {
-        // Arrange
-        let mut mode = new_test_prompt_mode("draft text");
-        let mut prompt_context = new_test_prompt_context();
-        prompt_context.permission_mode = current_permission_mode;
+fn test_backtab_leaves_prompt_unchanged() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("draft text");
+    let mut prompt_context = new_test_prompt_context();
 
-        // Act
-        let effects = expect_prompt_effects(reduce_test_prompt_key(
-            &mut mode,
-            &mut prompt_context,
-            KeyEvent::new(KeyCode::BackTab, event::KeyModifiers::NONE),
-        ));
+    // Act
+    let effects = expect_prompt_effects(reduce_test_prompt_key(
+        &mut mode,
+        &mut prompt_context,
+        KeyEvent::new(KeyCode::BackTab, event::KeyModifiers::SHIFT),
+    ));
 
-        // Assert
-        assert_eq!(mode_input(&mode).0, "draft text");
-        assert!(matches!(
-            effects.as_slice(),
-            [PromptEffect::PersistPermissionMode(permission_mode)]
-                if *permission_mode == expected_permission_mode
-        ));
-    }
+    // Assert
+    assert_eq!(mode_input(&mode).0, "draft text");
+    assert!(effects.is_empty());
 }
 
 #[test]

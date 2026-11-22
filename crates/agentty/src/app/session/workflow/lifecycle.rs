@@ -26,7 +26,6 @@ use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, Session, SessionHandles, SessionId, Status,
 };
@@ -500,7 +499,6 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: true,
                 model: session_model.as_str(),
-                permission_mode: creation_settings.permission_mode,
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
@@ -722,7 +720,6 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: false,
                 model: creation_settings.agent.model().as_str(),
-                permission_mode: creation_settings.permission_mode,
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
@@ -1891,33 +1888,6 @@ impl SessionManager {
 
         services.emit_app_event(AppEvent::SessionResponseStyleUpdated {
             response_style,
-            session_id: SessionId::from(session_id),
-        });
-
-        Ok(())
-    }
-
-    /// Updates and persists the provider permission mode for a single
-    /// session.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing or persistence fails.
-    pub async fn set_session_permission_mode(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        permission_mode: PermissionMode,
-    ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
-
-        services
-            .db()
-            .sessions()
-            .update_session_permission_mode(session_id, permission_mode)
-            .await?;
-
-        services.emit_app_event(AppEvent::SessionPermissionModeUpdated {
-            permission_mode,
             session_id: SessionId::from(session_id),
         });
 
@@ -3342,7 +3312,6 @@ impl SessionManager {
 
         Ok(SessionCreationSettings {
             agent,
-            permission_mode: PermissionMode::AutoEdit,
             reasoning_level,
             response_style,
             speed_mode,
