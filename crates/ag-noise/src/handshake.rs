@@ -20,8 +20,12 @@ const RELAY_PROLOGUE: &[u8] = b"agentty-remote-relay/1";
 ///
 /// Call [`Handshake::write_message`] and [`Handshake::read_message`] in the
 /// order the crate documentation gives for the pattern, then turn a finished
-/// handshake into a [`Session`].
+/// handshake into a [`Session`]. A handshake that fails to read a message is
+/// spent: every later call fails and it reports no peer key.
 pub struct Handshake {
+    /// Set once a received message failed; the state may then hold a peer
+    /// key that was never proven.
+    is_failed: bool,
     state: Box<snow::HandshakeState>,
 }
 
@@ -89,8 +93,10 @@ impl Handshake {
     ///
     /// # Errors
     ///
-    /// Returns [`NoiseError::Protocol`] when it is not this side's turn.
+    /// Returns [`NoiseError::Protocol`] when it is not this side's turn or
+    /// the handshake already failed.
     pub fn write_message(&mut self) -> Result<Vec<u8>, NoiseError> {
+        self.check_usable()?;
         let mut message = vec![0; MAX_MESSAGE_BYTES];
         let length = self.state.write_message(&[], &mut message)?;
         message.truncate(length);
@@ -102,11 +108,15 @@ impl Handshake {
     ///
     /// # Errors
     ///
-    /// Returns [`NoiseError::Protocol`] when the message fails authentication
-    /// or it is not the peer's turn.
+    /// Returns [`NoiseError::Protocol`] when the message fails authentication,
+    /// it is not the peer's turn, or the handshake already failed. A failed
+    /// read spends the handshake.
     pub fn read_message(&mut self, message: &[u8]) -> Result<(), NoiseError> {
+        self.check_usable()?;
         let mut payload = vec![0; MAX_MESSAGE_BYTES];
-        self.state.read_message(message, &mut payload)?;
+        let read = self.state.read_message(message, &mut payload);
+        self.is_failed = read.is_err();
+        read?;
 
         Ok(())
     }
@@ -116,8 +126,16 @@ impl Handshake {
         self.state.is_handshake_finished()
     }
 
-    /// The peer's static key, once the handshake has revealed it.
+    /// The peer's static key, once a successfully read message has revealed
+    /// it; `None` after any failed read.
+    ///
+    /// In the device pattern the instance learns this key from the first
+    /// message, which a third party can replay. Treat the device as present
+    /// only after the first [`Session::open`] succeeds.
     pub fn remote_public_key(&self) -> Option<PublicKey> {
+        if self.is_failed {
+            return None;
+        }
         let key = self.state.get_remote_static()?;
 
         PublicKey::from_bytes(key).ok()
@@ -128,8 +146,10 @@ impl Handshake {
     ///
     /// # Errors
     ///
-    /// Returns [`NoiseError::Protocol`] when the handshake is not finished.
+    /// Returns [`NoiseError::Protocol`] when the handshake is not finished or
+    /// already failed.
     pub fn into_session(self, max_frame_bytes: usize) -> Result<Session, NoiseError> {
+        self.check_usable()?;
         let transport = self.state.into_transport_mode()?;
 
         Ok(Session::new(transport, max_frame_bytes))
@@ -139,7 +159,19 @@ impl Handshake {
     fn new(state: Result<snow::HandshakeState, snow::Error>) -> Result<Self, NoiseError> {
         let state = Box::new(state?);
 
-        Ok(Self { state })
+        Ok(Self {
+            is_failed: false,
+            state,
+        })
+    }
+
+    /// Refuses to continue a handshake that failed to read a message.
+    fn check_usable(&self) -> Result<(), NoiseError> {
+        if self.is_failed {
+            return Err(NoiseError::Protocol);
+        }
+
+        Ok(())
     }
 }
 

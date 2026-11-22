@@ -10,7 +10,9 @@
 //!   [`Handshake::device_responder`]) uses Noise `IK`. The device already knows
 //!   the instance key. The device writes one message, the instance reads it and
 //!   writes one back, and both sides then hold a [`Session`]. The instance
-//!   learns the device key from the first message.
+//!   learns the device key from the first message, but a third party can replay
+//!   that message: the device is proven present only once the instance opens
+//!   the first frame it sends.
 //! - **Instance to relay** ([`Handshake::relay_initiator`],
 //!   [`Handshake::relay_responder`]) uses Noise `XN`. The instance writes, the
 //!   relay answers, and the instance writes again. After reading that third
