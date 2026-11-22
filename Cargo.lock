@@ -187,6 +187,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-relay"
+version = "0.19.7"
+dependencies = [
+ "ag-noise",
+ "axum",
+ "clap",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hex",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "ag-release"
 version = "0.19.7"
 dependencies = [

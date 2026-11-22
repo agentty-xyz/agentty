@@ -27,6 +27,7 @@ the module docstrings directly.
 | `ag-harness-cli` | Companion harness CLI                                            |
 | `ag-noise`       | Noise handshakes and encrypted sessions for remote control       |
 | `ag-protocol`    | Response schemas, parsing, prompt envelopes                      |
+| `ag-relay`       | Remote-control relay that joins devices to instances             |
 | `ag-remote`      | Remote-control server, pairing, and embedded web client          |
 | `ag-router`      | Structured chat routing and provider transports                  |
 | `ag-session`     | Session models, policies, catalog, lifecycle API                 |
