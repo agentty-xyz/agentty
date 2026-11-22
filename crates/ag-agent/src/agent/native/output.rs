@@ -228,7 +228,7 @@ pub(crate) fn turn_notice(event: &RunEventKind) -> Option<TurnNotice> {
         CompactionOutcome::Failed(failure) => {
             // The notice names only the failure's kind; its message can be a
             // long provider response.
-            tracing::warn!(kind = %failure.kind, message = %failure.message, "compaction failed");
+            tracing::warn!(kind = %failure.kind, detail = %failure.message, "compaction failed");
 
             Some(TurnNotice::ContextCompactionFailed {
                 reason: failure.kind.as_str().replace('_', " "),
