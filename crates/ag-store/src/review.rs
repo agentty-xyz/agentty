@@ -248,7 +248,7 @@ impl ReviewRepository for SqliteReviewRepository {
         id: &str,
         thread_ids: &[String],
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "prepare review comment turn").await?;
         for thread_id in thread_ids {
             let inserted = sqlx::query!(
                 "INSERT INTO session_review_comment_target
@@ -307,7 +307,8 @@ impl ReviewRepository for SqliteReviewRepository {
         resolutions: &[NewSessionReviewCommentResolution],
         commit_hash: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction =
+            begin_write(&self.0, "bind review comment resolutions to commit").await?;
         for resolution in resolutions {
             sqlx::query!(
                 r"
@@ -334,7 +335,7 @@ WHERE session_id = ?
         id: &str,
         resolutions: &[NewSessionReviewCommentResolution],
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "discard review comment resolutions").await?;
         for resolution in resolutions {
             sqlx::query!(
                 r"
@@ -372,7 +373,7 @@ WHERE session_id = ?
         id: &str,
         resolutions: &[NewSessionReviewCommentResolution],
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "insert review comment resolutions").await?;
         insert_review_comment_resolutions(&mut transaction, id, resolutions).await?;
         transaction.commit().await?;
 
@@ -525,7 +526,7 @@ WHERE session_id = ?
         id: &str,
         reply_token: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "remove review comment resolution").await?;
         sqlx::query!(
             "DELETE FROM session_review_comment_target
              WHERE session_id = ? AND (review_request_display_id, thread_id) IN

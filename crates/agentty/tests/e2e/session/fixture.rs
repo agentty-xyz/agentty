@@ -9,7 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ag_session::test_support as model_fixture;
-use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -19,8 +18,7 @@ use agentty::domain::session_message::SessionMessageKind;
 use image::codecs::png::PngEncoder;
 #[cfg(target_os = "linux")]
 use image::{ExtendedColorType, ImageEncoder};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, Executor};
+use sqlx::Executor;
 
 use crate::common::{BuilderEnv, SessionSeed};
 use crate::{common, test_support};
@@ -399,8 +397,7 @@ pub(super) async fn seed_project_settings(
     settings: &[(&str, &str)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     (async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         let canonical_workdir = env.workdir.canonicalize()?;
         let project_id = database
             .projects()
@@ -413,12 +410,7 @@ pub(super) async fn seed_project_settings(
             .projects()
             .touch_project_last_opened(project_id)
             .await?;
-        drop(database);
 
-        let mut connection = SqliteConnectOptions::new()
-            .filename(&db_path)
-            .connect()
-            .await?;
         for (setting_name, setting_value) in settings {
             let query = sqlx::query!(
                 r"
@@ -430,9 +422,8 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
                 setting_name,
                 setting_value
             );
-            connection.execute(query).await?;
+            database.pool().execute(query).await?;
         }
-        connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
     })
@@ -681,21 +672,14 @@ pub(super) async fn seed_sessions_startup_tab(
 ) -> Result<(), Box<dyn std::error::Error>> {
     (async {
         // Opening the database applies the migrations that create `setting`.
-        common::open_database(env).await?;
-
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let mut connection = SqliteConnectOptions::new()
-            .filename(&db_path)
-            .connect()
-            .await?;
+        let database = common::open_database(env).await?;
         let query = sqlx::query!(
             r"
 INSERT INTO setting (name, value) VALUES ('ActiveTab', 'Sessions')
 ON CONFLICT(name) DO UPDATE SET value = excluded.value
 "
         );
-        connection.execute(query).await?;
-        connection.close().await?;
+        database.pool().execute(query).await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
     })

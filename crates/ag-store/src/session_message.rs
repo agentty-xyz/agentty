@@ -41,7 +41,7 @@ impl SessionMessageStore {
         }
 
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, APPEND_SESSION_MESSAGE).await?;
         Self::append_normalized_in_transaction(&mut transaction, id, kind, &content, now).await?;
 
         transaction

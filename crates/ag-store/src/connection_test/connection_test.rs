@@ -4,7 +4,7 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use crate::connection::{DB_POOL_MAX_CONNECTIONS, Database, SQLITE_BUSY_TIMEOUT};
+use crate::connection::{DB_POOL_MAX_CONNECTIONS, Database, INTERACTIVE_BUSY_TIMEOUT};
 use crate::error::DbError;
 
 /// Verifies `open()` creates missing parent directories before opening the
@@ -139,7 +139,7 @@ FROM pragma_busy_timeout
     assert_eq!(busy_timeout, expected_busy_timeout_millis());
     assert_eq!(
         database.pool().options().get_acquire_timeout(),
-        SQLITE_BUSY_TIMEOUT
+        INTERACTIVE_BUSY_TIMEOUT
     );
 }
 
@@ -174,7 +174,7 @@ FROM pragma_busy_timeout
     assert_eq!(busy_timeout, expected_busy_timeout_millis());
 }
 
-/// Returns `SQLITE_BUSY_TIMEOUT` as `PRAGMA busy_timeout` reports it.
+/// Returns `INTERACTIVE_BUSY_TIMEOUT` as `PRAGMA busy_timeout` reports it.
 fn expected_busy_timeout_millis() -> i64 {
-    i64::try_from(SQLITE_BUSY_TIMEOUT.as_millis()).expect("busy timeout fits in i64")
+    i64::try_from(INTERACTIVE_BUSY_TIMEOUT.as_millis()).expect("busy timeout fits in i64")
 }

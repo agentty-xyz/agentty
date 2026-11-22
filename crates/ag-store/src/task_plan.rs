@@ -16,14 +16,6 @@ impl TaskPlanStore {
         request: &AcceptTaskPlanRequest,
         now: i64,
     ) -> Result<AcceptedTaskPlan, DbError> {
-        // Take the writer lock before reading the latest version. A concurrent
-        // revision cannot slip between eligibility and acceptance.
-        sqlx::query!(
-            "UPDATE task SET objective = objective WHERE id = ?",
-            request.task_id
-        )
-        .execute(&mut *connection)
-        .await?;
         let (_, plan) = Self::eligible(connection, session_id, request).await?;
         sqlx::query!(
             "INSERT INTO task_plan_acceptance (task_attempt_id, plan, accepted_at) VALUES (?, ?, \

@@ -13,23 +13,29 @@ use sqlx::{Connection as _, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use crate::timestamp::system_timestamp_source;
 use crate::{AppRepositories, DbError, DbResultExt as _, TimestampSource};
 
+/// How long [`Database::open`] connections wait for another connection's lock,
+/// and for a pooled connection, before failing with `database is locked`.
+///
+/// The TUI awaits some writes on its event loop, and four writers waiting for
+/// the lock fill the pool so reads wait for a connection too. This bound is
+/// therefore the longest the interface can stall behind a lock another
+/// process holds. It still outlasts the multi-second fsync stall of a commit
+/// or closing checkpoint on a loaded disk.
+pub const INTERACTIVE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Busy and pool-acquire timeout for openers that block no interface, such as
+/// fixtures, scripts, and tools; pass it to
+/// [`Database::open_with_busy_timeout`].
+///
+/// A slow lock holder then delays these openers instead of failing them.
+pub const BACKGROUND_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Maximum number of pooled `SQLite` connections for the on-disk database.
 ///
 /// `SQLite` still serializes writes in WAL mode, so the pool stays small and
 /// biased toward a handful of concurrent readers instead of a large number of
 /// queued writer contenders.
 pub(crate) const DB_POOL_MAX_CONNECTIONS: u32 = 4;
-
-/// How long a connection waits for another connection's lock before failing
-/// with `database is locked`, and how long a caller waits for a pooled
-/// connection.
-///
-/// Several processes and pools share the database file: the TUI, a second
-/// instance, and tools that seed or inspect it. A commit, or the checkpoint a
-/// closing pool runs, holds the lock while it fsyncs, which can stall for many
-/// seconds on a loaded disk. A slow lock holder therefore delays other
-/// writers instead of failing them.
-pub(crate) const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Embedded schema migrations applied to every database.
 pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -42,16 +48,18 @@ pub struct Database {
 }
 
 impl Database {
-    /// Opens the `SQLite` database and runs embedded migrations.
+    /// Opens the `SQLite` database for an interactive host and runs embedded
+    /// migrations.
     ///
     /// Uses up to `DB_POOL_MAX_CONNECTIONS` pooled connections so UI reads can
     /// stay responsive without oversizing the `SQLite` pool beyond what WAL
-    /// can use effectively. Writers wait up to `SQLITE_BUSY_TIMEOUT` for the
-    /// single `SQLite` writer instead of failing with `SQLITE_BUSY`.
+    /// can use effectively. Writers, and callers waiting for a pooled
+    /// connection, wait up to [`INTERACTIVE_BUSY_TIMEOUT`].
     ///
     /// Other processes and pools may open the same file concurrently, even
     /// before it exists: a missing database is created already in WAL mode,
-    /// and pending migrations are applied once under the write lock.
+    /// and pending migrations are applied once under the write lock. An empty
+    /// path or `:memory:` opens a temporary database on one connection.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created, the database
@@ -60,8 +68,8 @@ impl Database {
         Self::open_with_timestamp_source(db_path, system_timestamp_source()).await
     }
 
-    /// Opens the `SQLite` database with an injected persistence timestamp
-    /// source.
+    /// Opens the `SQLite` database like [`Database::open`] with an injected
+    /// persistence timestamp source.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created, the database
@@ -70,22 +78,23 @@ impl Database {
         db_path: &Path,
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, DbError> {
-        // A path without a parent creates nothing: `create_dir_all("")` is a
-        // successful no-op.
-        tokio::fs::create_dir_all(db_path.parent().unwrap_or(Path::new(""))).await?;
-        if !tokio::fs::try_exists(db_path).await? {
-            create_wal_database(db_path).await?;
-        }
+        Self::open_with(db_path, timestamp_source, INTERACTIVE_BUSY_TIMEOUT).await
+    }
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(DB_POOL_MAX_CONNECTIONS)
-            .acquire_timeout(SQLITE_BUSY_TIMEOUT)
-            .connect_with(on_disk_connect_options(db_path))
-            .await?;
-
-        migrate(&pool, &MIGRATOR).await?;
-
-        Ok(Self::from_pool(pool, timestamp_source))
+    /// Opens the `SQLite` database like [`Database::open`], waiting up to
+    /// `busy_timeout` for locks and pooled connections.
+    ///
+    /// Pass [`BACKGROUND_BUSY_TIMEOUT`] when no interface waits on the
+    /// database.
+    ///
+    /// # Errors
+    /// Returns an error if the directory cannot be created, the database
+    /// cannot be opened, or migrations fail.
+    pub async fn open_with_busy_timeout(
+        db_path: &Path,
+        busy_timeout: Duration,
+    ) -> Result<Self, DbError> {
+        Self::open_with(db_path, system_timestamp_source(), busy_timeout).await
     }
 
     /// Opens an in-memory `SQLite` database and runs migrations.
@@ -93,8 +102,8 @@ impl Database {
     /// This is primarily used by tests and any ephemeral workflows that need
     /// an isolated database instance while keeping the same durability and
     /// foreign-key settings as the on-disk database. Applies the same busy
-    /// timeout as the on-disk configuration so tests exercise the same writer
-    /// wait policy.
+    /// timeout as [`Database::open`] so tests exercise the same writer wait
+    /// policy.
     ///
     /// # Errors
     /// Returns an error if the database connection or migrations fail.
@@ -127,6 +136,41 @@ impl Database {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Opens `db_path` with `busy_timeout` for locks and pooled connections.
+    async fn open_with(
+        db_path: &Path,
+        timestamp_source: Arc<dyn TimestampSource>,
+        busy_timeout: Duration,
+    ) -> Result<Self, DbError> {
+        // A path without a parent creates nothing: `create_dir_all("")` is a
+        // successful no-op.
+        tokio::fs::create_dir_all(db_path.parent().unwrap_or(Path::new(""))).await?;
+
+        let temporary = db_path.as_os_str().is_empty() || db_path == Path::new(":memory:");
+        if !temporary && !tokio::fs::try_exists(db_path).await? {
+            create_wal_database(db_path, busy_timeout).await?;
+        }
+        let pool_options = SqlitePoolOptions::new().acquire_timeout(busy_timeout);
+        // SQLite temporary databases belong to one connection. Additional
+        // pooled connections or eviction would lose their schema and data.
+        let pool_options = if temporary {
+            pool_options
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .test_before_acquire(false)
+        } else {
+            pool_options.max_connections(DB_POOL_MAX_CONNECTIONS)
+        };
+        let pool = pool_options
+            .connect_with(on_disk_connect_options(db_path, busy_timeout))
+            .await?;
+
+        migrate(&pool, &MIGRATOR).await?;
+
+        Ok(Self::from_pool(pool, timestamp_source))
+    }
 }
 
 impl Deref for Database {
@@ -143,29 +187,33 @@ impl From<Database> for AppRepositories {
     }
 }
 
-/// Begins a transaction that takes the database write lock up front.
+/// Begins a transaction that takes the database write lock up front, and
+/// labels a failure with `operation`.
 ///
 /// Use it for every transaction that may write. A deferred transaction that
 /// reads before its first write upgrades its read snapshot to the write lock
 /// at that write; when another connection committed in between, `SQLite`
 /// fails the upgrade at once with `database is locked`, without waiting for
 /// the busy timeout. `BEGIN IMMEDIATE` waits for the lock (up to the busy
-/// timeout) before the first read instead.
+/// timeout) before the first read instead, so lock waits now fail here.
 ///
 /// # Errors
-/// Returns an error if no pooled connection is available or the write lock
-/// cannot be taken within the busy timeout.
+/// Returns [`DbError::QueryContext`] if no pooled connection is available or
+/// the write lock cannot be taken within the busy timeout.
 pub(crate) async fn begin_write(
     pool: &SqlitePool,
+    operation: &'static str,
 ) -> Result<Transaction<'static, Sqlite>, DbError> {
-    Ok(pool.begin_with("BEGIN IMMEDIATE").await?)
+    pool.begin_with("BEGIN IMMEDIATE")
+        .await
+        .db_context(operation)
 }
 
 /// Opens an in-memory `SQLite` pool with migrations applied.
 ///
 /// The caller chooses the connection cap so tests and runtime code can share
 /// the same setup logic while keeping their own concurrency requirements.
-/// Applies the same busy timeout as the on-disk database so pooled test
+/// Applies the same busy timeout as [`Database::open`] so pooled test
 /// connections exercise the same writer wait policy.
 ///
 /// # Errors
@@ -173,7 +221,7 @@ pub(crate) async fn begin_write(
 pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
-        .acquire_timeout(SQLITE_BUSY_TIMEOUT)
+        .acquire_timeout(INTERACTIVE_BUSY_TIMEOUT)
         .connect_with(in_memory_connect_options())
         .await?;
 
@@ -182,12 +230,12 @@ pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePo
     Ok(pool)
 }
 
-/// Returns in-memory connection settings matching the on-disk busy timeout,
-/// durability, and foreign-key policy.
+/// Returns in-memory connection settings matching the interactive busy
+/// timeout, durability, and foreign-key policy.
 pub(crate) fn in_memory_connect_options() -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(":memory:")
-        .busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .busy_timeout(INTERACTIVE_BUSY_TIMEOUT)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
@@ -202,7 +250,7 @@ pub(crate) fn in_memory_connect_options() -> SqliteConnectOptions {
 /// locked`. Switching a private file and moving it into place without
 /// replacing anything gives every connection to `db_path` a file that is
 /// already in WAL mode.
-async fn create_wal_database(db_path: &Path) -> Result<(), DbError> {
+async fn create_wal_database(db_path: &Path, busy_timeout: Duration) -> Result<(), DbError> {
     let operation = "create app database";
     let directory = db_path
         .parent()
@@ -213,7 +261,7 @@ async fn create_wal_database(db_path: &Path) -> Result<(), DbError> {
         .suffix(".db")
         .tempfile_in(directory)?
         .into_temp_path();
-    SqliteConnection::connect_with(&on_disk_connect_options(&staged))
+    SqliteConnection::connect_with(&on_disk_connect_options(&staged, busy_timeout))
         .await
         .db_context(operation)?
         .close()
@@ -230,12 +278,12 @@ async fn create_wal_database(db_path: &Path) -> Result<(), DbError> {
 }
 
 /// Returns the on-disk connection settings: WAL, `NORMAL` durability,
-/// foreign keys, and the shared busy timeout.
-fn on_disk_connect_options(db_path: &Path) -> SqliteConnectOptions {
+/// foreign keys, and `busy_timeout`.
+fn on_disk_connect_options(db_path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
-        .busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .busy_timeout(busy_timeout)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
@@ -270,7 +318,7 @@ async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), DbError> 
     }
 
     let operation = "migrate app database";
-    let mut transaction = begin_write(pool).await?;
+    let mut transaction = begin_write(pool, operation).await?;
     // `run_direct` is hidden from `SQLx`'s docs and semver. The public
     // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
     // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx`

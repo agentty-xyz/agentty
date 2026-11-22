@@ -233,21 +233,6 @@ impl SqliteGraphRepository {
             .map_err(|_| Self::invalid("Revision or version exceeds SQLite range"))
     }
 
-    /// The first statement takes SQLite's writer lock before eligibility reads.
-    pub(super) async fn lock(
-        connection: &mut SqliteConnection,
-        graph_id: &str,
-    ) -> Result<(), DbError> {
-        sqlx::query!(
-            "UPDATE execution_graph SET revision = revision WHERE id = ?",
-            graph_id
-        )
-        .execute(connection)
-        .await?;
-
-        Ok(())
-    }
-
     pub(super) async fn graph(
         connection: &mut SqliteConnection,
         graph_id: &str,
@@ -400,7 +385,7 @@ impl GraphRepository for SqliteGraphRepository {
         graph: &ExecutionGraph,
         expected_revision: Option<NonZeroU64>,
     ) -> Result<bool, DbError> {
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, "save graph").await?;
         let saved = Self::save_in(
             &mut transaction,
             graph,
@@ -458,8 +443,7 @@ impl GraphRepository for SqliteGraphRepository {
     }
 
     async fn link_execution(&self, record: &GraphExecutionRecord) -> Result<bool, DbError> {
-        let mut transaction = begin_write(&self.pool).await?;
-        Self::lock(&mut transaction, &record.graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "link graph execution").await?;
         let inserted = Self::link(
             &mut transaction,
             record,
@@ -516,8 +500,7 @@ impl GraphRepository for SqliteGraphRepository {
         reference: &GraphResultRef,
         body: &str,
     ) -> Result<bool, DbError> {
-        let mut transaction = begin_write(&self.pool).await?;
-        Self::lock(&mut transaction, &reference.graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "produce graph result").await?;
         let inserted = Self::produce(
             &mut transaction,
             reference,
@@ -617,7 +600,6 @@ impl SqliteGraphRepository {
             .validate()
             .map_err(|error| Self::invalid(error.to_string()))?;
         let revision = Self::integer(graph.revision)?;
-        Self::lock(&mut *transaction, &graph.id).await?;
         if let Some(existing) =
             Self::graph(&mut *transaction, &graph.id, Some(graph.revision)).await?
         {

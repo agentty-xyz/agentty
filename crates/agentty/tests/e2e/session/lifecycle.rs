@@ -13,8 +13,7 @@ use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection, Executor};
+use sqlx::Executor;
 use testty::assertion;
 use testty::frame::CellColor;
 use testty::region::Region;
@@ -72,11 +71,7 @@ async fn seed_sessions_with_matching_update_times(
     .await?;
 
     (async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let mut connection = SqliteConnectOptions::new()
-            .filename(&db_path)
-            .connect()
-            .await?;
+        let database = common::open_database(env).await?;
         let query = sqlx::query!(
             r"
 UPDATE session
@@ -85,8 +80,7 @@ SET created_at = CASE id WHEN 'a-older' THEN 100 ELSE 200 END,
 WHERE id IN ('a-older', 'z-newer')
 "
         );
-        connection.execute(query).await?;
-        connection.close().await?;
+        database.pool().execute(query).await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
     })
@@ -287,8 +281,11 @@ async fn test_session_title_uses_stable_context() -> E2eResult {
         .setup(move |env| {
             Box::pin(async move {
                 seed_session_title_candidate_project(env).await?;
+                // The assertion reads this pool after the shared fixture
+                // pool closes, so it keeps its own.
+                let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
                 *setup_database.lock().expect("database slot") =
-                    Some(common::open_database(env).await?);
+                    Some(common::open_fixture_database(&db_path).await?);
                 Ok(())
             })
         })
@@ -1110,26 +1107,18 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
             Box::pin(async move {
                 seed_delayed_session_creation(env, &hold_checkout).await?;
                 seed_claude_structured_output_project(env).await?;
-                (async {
-                    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-                    let mut connection = SqliteConnectOptions::new()
-                        .filename(db_path)
-                        .connect()
-                        .await?;
-                    connection
-                        .execute(
-                            "CREATE TABLE reject_first_handoff (pending INTEGER); INSERT INTO \
-                             reject_first_handoff VALUES (1); CREATE TRIGGER reject_start BEFORE \
-                             INSERT ON session_operation WHEN EXISTS (SELECT 1 FROM \
-                             reject_first_handoff) BEGIN SELECT RAISE(ABORT, 'handoff rejected'); \
-                             END; CREATE TRIGGER allow_retry AFTER UPDATE ON session_preparation \
-                             WHEN NEW.state = 'failed' BEGIN DELETE FROM reject_first_handoff; \
-                             END;",
-                        )
-                        .await?;
-                    connection.close().await
-                })
-                .await?;
+                common::open_database(env)
+                    .await?
+                    .pool()
+                    .execute(
+                        "CREATE TABLE reject_first_handoff (pending INTEGER); INSERT INTO \
+                         reject_first_handoff VALUES (1); CREATE TRIGGER reject_start BEFORE \
+                         INSERT ON session_operation WHEN EXISTS (SELECT 1 FROM \
+                         reject_first_handoff) BEGIN SELECT RAISE(ABORT, 'handoff rejected'); \
+                         END; CREATE TRIGGER allow_retry AFTER UPDATE ON session_preparation WHEN \
+                         NEW.state = 'failed' BEGIN DELETE FROM reject_first_handoff; END;",
+                    )
+                    .await?;
 
                 Ok(())
             })

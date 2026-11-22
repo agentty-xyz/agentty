@@ -236,7 +236,7 @@ SET value = excluded.value
         project_id: i64,
         settings: Vec<(SettingName, String)>,
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "upsert project settings").await?;
 
         for (name, value) in settings {
             sqlx::query!(

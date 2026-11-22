@@ -1,9 +1,7 @@
 //! Navigation E2E tests: tab cycling, reverse tab cycling, and help overlay.
 
 use ag_session::test_support as model_fixture;
-use agentty::infra::db::{
-    DB_DIR, DB_FILE, Database, SessionPreparationState, acquire_instance_lock,
-};
+use agentty::infra::db::{DB_DIR, DB_FILE, SessionPreparationState, acquire_instance_lock};
 use testty::assertion;
 use testty::region::Region;
 
@@ -18,7 +16,7 @@ async fn second_instance_preserves_live_operations() -> E2eResult {
     // Arrange
     let root = tempfile::tempdir()?;
     let _owner = acquire_instance_lock(root.path()).await?;
-    let database = Database::open(&root.path().join(DB_DIR).join(DB_FILE)).await?;
+    let database = common::open_fixture_database(&root.path().join(DB_DIR).join(DB_FILE)).await?;
     let project_id = database
         .projects()
         .upsert_project("live-project", None)

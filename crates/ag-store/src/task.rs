@@ -277,7 +277,7 @@ impl SqliteTaskRepository {
         agent_request: Option<&SubmitAgentTaskRequest>,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, "claim task attempt").await?;
         let claimed = Self::claim_attempt_in_transaction(
             &mut transaction,
             session_id,
@@ -393,7 +393,7 @@ impl TaskRepository for SqliteTaskRepository {
         request: &AcceptTaskPlanRequest,
     ) -> Result<AcceptedTaskPlan, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, "accept task plan").await?;
         let plan = TaskPlanStore::accept(&mut transaction, session_id, request, now).await?;
         transaction.commit().await?;
 
@@ -429,7 +429,7 @@ impl TaskRepository for SqliteTaskRepository {
         metadata: &TaskAgentTurnMetadata,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, "persist task agent turn").await?;
         let recorded =
             TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
         transaction.commit().await?;
@@ -486,7 +486,7 @@ impl TaskRepository for SqliteTaskRepository {
             return Err(Self::invalid("Task and objective must be nonempty"));
         }
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = begin_write(&self.pool).await?;
+        let mut transaction = begin_write(&self.pool, "create task").await?;
         sqlx::query!(
             "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
              CONFLICT(id) DO NOTHING",

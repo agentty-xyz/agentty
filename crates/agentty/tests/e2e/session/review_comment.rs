@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::frame::TerminalFrame;
@@ -1101,7 +1102,10 @@ async fn test_review_comment_clarification_retains_target() -> E2eResult {
             let setup_db = Arc::clone(&setup_db);
             Box::pin(async move {
                 seed_review_comment_agent_resolution(env).await?;
-                let database = common::open_database(env).await?;
+                // The assertion reads this pool after the shared fixture
+                // pool closes, so it keeps its own.
+                let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+                let database = common::open_fixture_database(&db_path).await?;
                 assert!(setup_db.set(database).is_ok());
                 let claude_path = env.stub_bin.join("claude");
                 std::fs::write(&claude_path, r#"#!/bin/sh

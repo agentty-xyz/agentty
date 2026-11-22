@@ -80,8 +80,7 @@ impl SqliteGraphRepository {
     }
 
     pub(super) async fn cancel_graph(&self, request: &GraphControlRequest) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.pool).await?;
-        Self::lock(&mut transaction, &request.graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "cancel graph").await?;
         let graph = Self::current(&mut transaction, &request.graph_id, request.revision).await?;
         let mut completed = true;
         for node in &graph.nodes {
@@ -129,8 +128,7 @@ impl SqliteGraphRepository {
         if uuid::Uuid::parse_str(&request.action_id).is_err() {
             return Err(Self::invalid("Continuation requires a new execution UUID"));
         }
-        let mut transaction = begin_write(&self.pool).await?;
-        Self::lock(&mut transaction, &request.graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "continue graph node").await?;
         let graph = Self::current(&mut transaction, &request.graph_id, request.revision).await?;
         let encoded = serde_json::json!(request).to_string();
         let existing: Option<String> =

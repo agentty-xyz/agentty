@@ -1637,7 +1637,7 @@ WHERE id = ?
         turn_metadata: &SessionTurnMetadata,
     ) -> Result<(), DbError> {
         let now = self.now();
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "persist session turn metadata").await?;
 
         let session_update = sqlx::query!(
             r"
@@ -1830,7 +1830,7 @@ WHERE id = ?
         let agent = selection.kind().to_string();
         let model = selection.model().as_str();
         let now = self.now();
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "apply session agent model").await?;
         sqlx::query!(
             r"
 UPDATE session
@@ -2279,7 +2279,7 @@ WHERE id = ?
         text: Option<String>,
     ) -> Result<(), DbError> {
         let now = self.now();
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "update session focused review").await?;
 
         if status.is_none() {
             sqlx::query(
@@ -2334,7 +2334,8 @@ WHERE id = ?
         diff_hash: Option<String>,
         text: Option<String>,
     ) -> Result<bool, DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction =
+            begin_write(&self.0, "update session focused review for generation").await?;
         let updated = sqlx::query(
             "UPDATE session SET focused_review_status = ?, focused_review_diff_hash = ?, \
              focused_review_text = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM \
@@ -2377,7 +2378,7 @@ WHERE id = ?
         generation: &str,
         request_id: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "begin review generation").await?;
         sqlx::query(
             "INSERT INTO session_review_generation (session_id, generation, request_id) SELECT \
              id, ?, ? FROM session WHERE id = ? ON CONFLICT(session_id) DO UPDATE SET generation \
@@ -2481,7 +2482,7 @@ WHERE id = ?
         diff_hash: &str,
         claim_review: bool,
     ) -> Result<(), DbError> {
-        let mut transaction = begin_write(&self.0).await?;
+        let mut transaction = begin_write(&self.0, "update session review diff hash").await?;
         sqlx::query!(
             "UPDATE session SET review_diff_hash = ? WHERE id = ?",
             diff_hash,
