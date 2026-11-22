@@ -486,17 +486,25 @@ impl App {
             .resolve_session_creation_settings(&self.services, project_id, None)
             .await
             .map_err(api_error_from_session)?;
+        let harness_model = self.services.harness_availability().default_model();
         let mut session_modes = Vec::new();
         if self.services.has_agent_cli() {
             session_modes.push(CreateSessionMode::Regular);
         }
-        if self.services.harness_availability().is_available() {
+        if harness_model.is_some() {
             session_modes.push(CreateSessionMode::Harness);
         }
+        // A host that offers only Harness sessions starts them on the harness
+        // model, not on the regular agent's default.
+        let default_model = match session_modes.first() {
+            Some(CreateSessionMode::Harness) => harness_model,
+            _ => None,
+        }
+        .unwrap_or_else(|| settings.agent.model());
 
         Ok(HostContext {
             base_branch: project.base_branch,
-            default_model: settings.agent.model(),
+            default_model,
             project_id,
             project_name: self.projects.project_name().to_string(),
             session_modes,

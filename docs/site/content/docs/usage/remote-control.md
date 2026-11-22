@@ -155,7 +155,9 @@ control.
 <a id="usage-remote-control-limitations"></a>
 
 - Remote control works only while Agentty is open in a terminal.
-- Remote devices see and create the sessions of the active project.
+- Remote devices see and create the sessions of the active project. A project without a
+  current Git branch, such as a detached `HEAD`, cannot take new sessions; a device's
+  request for the host details or a new session then fails.
 - The transcript updates when a turn finishes; live streaming output is not shown.
 - Image attachments cannot be sent from a remote device.
 - A browser remembers one relay pairing for each relay address.
