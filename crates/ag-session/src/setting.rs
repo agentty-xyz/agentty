@@ -55,6 +55,9 @@ pub enum SettingName {
     ProjectCatalogVisible,
     /// Records dismissal of the one-time project discovery suggestion.
     ProjectDiscoveryPromptSeen,
+    /// Persists the long-term key that identifies this installation to remote
+    /// devices paired through a relay. Replacing it unpairs those devices.
+    RemoteInstanceKey,
     /// Persists the random installation ID attached to telemetry events.
     TelemetryInstallationId,
     /// Persists the active terminal color theme.
@@ -88,6 +91,7 @@ impl SettingName {
             Self::MaxConcurrentSubagents => "MaxConcurrentSubagents",
             Self::ProjectCatalogVisible => "ProjectCatalogVisible",
             Self::ProjectDiscoveryPromptSeen => "ProjectDiscoveryPromptSeen",
+            Self::RemoteInstanceKey => "RemoteInstanceKey",
             Self::TelemetryInstallationId => "TelemetryInstallationId",
             Self::Theme => "Theme",
         }

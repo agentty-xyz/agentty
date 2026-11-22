@@ -2362,7 +2362,7 @@ fn graph_subcommands_do_not_bypass_the_mode_selector() {
 async fn remote_control_slash_command_starts_listener_and_opens_popup() {
     // Arrange
     let (mut app, _root) = new_test_prompt_app("/remote-control", None).await;
-    app.enable_remote_control(0, Vec::new());
+    app.enable_remote_control(0, Vec::new(), None);
     let context = prompt_context(&mut app).expect("context");
     let enabled_slash_state = app.prompt_slash_state(&context.session_id);
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {

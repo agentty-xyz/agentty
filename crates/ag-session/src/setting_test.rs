@@ -61,6 +61,7 @@ fn test_as_str_returns_persisted_keys() {
             "ProjectDiscoveryPromptSeen",
         ),
         (SettingName::ProjectCatalogVisible, "ProjectCatalogVisible"),
+        (SettingName::RemoteInstanceKey, "RemoteInstanceKey"),
         (SettingName::Theme, "Theme"),
     ];
 
@@ -96,6 +97,7 @@ fn test_display_matches_as_str() {
         SettingName::LastUsedModelAsDefault,
         SettingName::MaxConcurrentSubagents,
         SettingName::ProjectCatalogVisible,
+        SettingName::RemoteInstanceKey,
         SettingName::TelemetryInstallationId,
         SettingName::Theme,
     ];

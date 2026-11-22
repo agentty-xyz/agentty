@@ -25,6 +25,8 @@ pub(crate) mod remote_control;
 pub(crate) mod resource;
 /// Total provider-call deadline for focused reviews.
 pub(crate) mod review_deadline;
+/// Terminal clipboard boundary for copying text with OSC 52.
+pub(crate) mod terminal_clipboard;
 /// Tmux process boundary used by app orchestration.
 pub mod tmux;
 pub mod version;

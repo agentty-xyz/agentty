@@ -53,6 +53,11 @@ struct Cli {
     /// accepted.
     #[arg(long, value_name = "HOST", requires = "remote")]
     remote_control_host: Vec<String>,
+    /// Relay that `/remote-control` registers with, such as
+    /// `wss://relay.example`, so devices can pair and connect without a
+    /// tunnel. Traffic through it is encrypted end to end.
+    #[arg(long, value_name = "URL", requires = "remote", value_parser = parse_relay_url)]
+    remote_relay: Option<String>,
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
@@ -102,6 +107,28 @@ async fn run(
     let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
 
     run_application(cli, runtime).with_context(context).await
+}
+
+/// Accepts a relay base URL: `ws://` or `wss://`, a host without
+/// credentials, and no query or fragment, since the pairing link appends its
+/// own fragment. A trailing slash is dropped.
+fn parse_relay_url(value: &str) -> Result<String, String> {
+    let url = value.trim().trim_end_matches('/');
+    let host = url
+        .strip_prefix("wss://")
+        .or_else(|| url.strip_prefix("ws://"))
+        .unwrap_or_default();
+    let authority = host.split('/').next().unwrap_or_default();
+    // Credentials would end up in the pairing link and its QR code.
+    let is_valid = !authority.is_empty()
+        && !authority.contains('@')
+        && !host.contains(['?', '#'])
+        && !host.contains(char::is_whitespace);
+    if !is_valid {
+        return Err("expected a relay URL such as wss://relay.example".to_string());
+    }
+
+    Ok(url.to_string())
 }
 
 /// Reports an OTLP setup failure using its bounded, credential-free message.
@@ -222,7 +249,11 @@ async fn run_application(
             let mut app = app?;
             app.set_analytics(analytics.clone());
             if cli.experimental.remote {
-                app.enable_remote_control(cli.remote_control_port, cli.remote_control_host);
+                app.enable_remote_control(
+                    cli.remote_control_port,
+                    cli.remote_control_host,
+                    cli.remote_relay,
+                );
             }
 
             runtime(&mut app).await

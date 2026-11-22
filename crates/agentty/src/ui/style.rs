@@ -389,6 +389,14 @@ pub fn selection_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Dark-on-light colors for codes a camera scans, such as QR codes. They stay
+/// fixed across themes, because most scanners need dark modules on a light
+/// background.
+#[must_use]
+pub fn scannable_code_style() -> Style {
+    Style::default().fg(Color::Black).bg(Color::White)
+}
+
 /// Prepares a frame for the backend's color support before serialization.
 ///
 /// Crossterm's suppressed color commands reset attributes. Resetting every

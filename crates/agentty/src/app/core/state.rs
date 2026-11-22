@@ -63,6 +63,7 @@ use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::remote_control::{RealRemoteControlLauncher, RemoteControlLauncher};
 use crate::infra::resource::{RealResourceClient, ResourceClient};
+use crate::infra::terminal_clipboard::{Osc52Clipboard, TerminalClipboard};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
@@ -141,6 +142,8 @@ pub(crate) struct AppClients {
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     /// Starts the loopback listener behind `/remote-control`.
     pub(super) remote_control_launcher: Arc<dyn RemoteControlLauncher>,
+    /// Copies remote-control pairing links through the terminal.
+    pub(super) terminal_clipboard: Arc<dyn TerminalClipboard>,
     /// Samples the host process table for the tab-bar resource stats.
     pub(super) resource_client: Arc<dyn ResourceClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
@@ -168,6 +171,7 @@ impl AppClients {
             project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             remote_control_launcher: Arc::new(RealRemoteControlLauncher),
+            terminal_clipboard: Arc::new(Osc52Clipboard::stdout()),
             resource_client: Arc::new(RealResourceClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),

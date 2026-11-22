@@ -19,7 +19,7 @@ use prost::Message as _;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::{Cli, ExperimentalFeatures, run, run_with_analytics};
+use super::{Cli, ExperimentalFeatures, parse_relay_url, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
 const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
@@ -104,8 +104,27 @@ fn cli_gates_remote_control_behind_experimental_remote() {
         "localhost.example",
     ])
     .expect("repeated hosts should parse");
+    let relay_without_flag =
+        Cli::try_parse_from(["agentty", "--remote-relay", "wss://relay.example"])
+            .expect_err("a relay needs --experimental-remote");
+    let with_relay = Cli::try_parse_from([
+        "agentty",
+        "--experimental-remote",
+        "--remote-relay",
+        "wss://relay.example",
+    ])
+    .expect("a relay should parse");
 
     // Assert
+    assert_eq!(
+        relay_without_flag.kind(),
+        ErrorKind::MissingRequiredArgument
+    );
+    assert_eq!(
+        with_relay.remote_relay.as_deref(),
+        Some("wss://relay.example")
+    );
+    assert_eq!(enabled.remote_relay, None);
     assert!(!disabled.experimental.remote);
     assert_eq!(disabled.remote_control_port, DEFAULT_REMOTE_CONTROL_PORT);
     assert!(enabled.experimental.remote);
@@ -116,6 +135,47 @@ fn cli_gates_remote_control_behind_experimental_remote() {
         with_hosts.remote_control_host,
         ["box.tailnet.ts.net", "localhost.example"]
     );
+}
+
+#[test]
+fn relay_url_needs_a_websocket_scheme_and_a_host() {
+    // Arrange
+    let accepted = [
+        ("wss://relay.example/", "wss://relay.example"),
+        ("ws://127.0.0.1:8787", "ws://127.0.0.1:8787"),
+        (" wss://relay.example/base ", "wss://relay.example/base"),
+    ];
+    let rejected = [
+        "https://relay.example",
+        "relay.example",
+        "wss://",
+        "wss:///path",
+        "wss://relay.example/?token=1",
+        "wss://relay.example/#x",
+        "wss://relay example",
+        "wss://user:token@relay.example",
+    ];
+
+    // Act
+    let parsed: Vec<_> = accepted
+        .iter()
+        .map(|(value, _)| parse_relay_url(value))
+        .collect();
+    let refused: Vec<_> = rejected
+        .iter()
+        .map(|value| parse_relay_url(value))
+        .collect();
+
+    // Assert
+    for ((_, expected), parsed) in accepted.iter().zip(parsed) {
+        assert_eq!(parsed.as_deref(), Ok(*expected));
+    }
+    for refused in refused {
+        assert_eq!(
+            refused,
+            Err("expected a relay URL such as wss://relay.example".to_string())
+        );
+    }
 }
 
 #[test]
@@ -259,6 +319,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
             otlp_endpoint: None,
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             remote_control_host: Vec::new(),
+            remote_relay: None,
         };
 
         // Act
@@ -310,6 +371,7 @@ async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
         otlp_endpoint: Some("http://localhost:4318".to_string()),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
+        remote_relay: None,
     };
 
     // Act
@@ -334,6 +396,7 @@ async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
             otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             remote_control_host: Vec::new(),
+            remote_relay: None,
         };
 
         // Act
@@ -398,6 +461,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
+                remote_relay: None,
             },
             closed_runtime,
         )
@@ -453,6 +517,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
+                remote_relay: None,
             },
             closed_runtime,
         )
@@ -506,6 +571,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
+                remote_relay: None,
             },
             root_working_dir_runtime,
         )
@@ -562,6 +628,7 @@ fn telemetry_child_cli() -> Cli {
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
+        remote_relay: None,
     }
 }
 
