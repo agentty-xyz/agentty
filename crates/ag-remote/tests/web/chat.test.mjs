@@ -1025,7 +1025,7 @@ test("a publish stays pending across session switches and is never sent twice", 
   assert.equal(byId("publish-label").textContent, "Publish");
 });
 
-test("a failed publish shows the host's error under the header, also after coming back", async () => {
+test("a failed publish shows the host's error once, until the publication changes", async () => {
   const { byId, chat } = mountChat({
     capabilities: ["publish"],
     respond: () => {
@@ -1039,10 +1039,100 @@ test("a failed publish shows the host's error under the header, also after comin
   assert.equal(byId("action-error").textContent, "Forge authentication failed");
   assert.equal(byId("action-note").textContent, "");
   assert.equal(byId("publish").disabled, false);
+  // Refreshes that change nothing about the publication keep it.
+  chat.render(session({ updated_at: 11 }));
+  assert.equal(byId("action-error").textContent, "Forge authentication failed");
+  // A publish from the terminal makes it stale.
+  chat.render(session({ published_upstream_ref: "origin/wt/s1", review_request: REVIEW_REQUEST }));
+  assert.equal(byId("action-error").textContent, "");
+
+  // A failure that arrives while another session is open shows on return,
+  // and only then.
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
   chat.open("s2");
+  await settle();
   assert.equal(byId("action-error").textContent, "");
   chat.open("s1");
   assert.equal(byId("action-error").textContent, "Forge authentication failed");
+  chat.render(session());
+  assert.equal(byId("action-error").textContent, "Forge authentication failed");
+  chat.open("s2");
+  chat.open("s1");
+  assert.equal(byId("action-error").textContent, "");
+});
+
+test("a publish note goes once the review request is no longer the one published", async () => {
+  const { byId, chat } = mountChat({
+    capabilities: ["publish"],
+    respond: () => ({ kind: "review_request", review_request: REVIEW_REQUEST }),
+  });
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+  // The snapshot catching up with the publish keeps the note.
+  chat.render(session({ review_request: REVIEW_REQUEST }));
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+  // Once the pull request merges, the note is out of date.
+  chat.render(session({ review_request: { ...REVIEW_REQUEST, state: "Merged" } }));
+  assert.equal(byId("action-note").textContent, "");
+  // Coming back does not announce it again.
+  chat.open("s2");
+  chat.open("s1");
+  assert.equal(byId("action-note").textContent, "");
+});
+
+test("actions run per session: one session's action neither blocks nor answers for another", async () => {
+  const answers = [];
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["sync", "merge"],
+    respond: () => {
+      const answer = deferred();
+      answers.push(answer);
+
+      return answer.promise;
+    },
+  });
+  const confirmSync = () => {
+    byId("session-more").click();
+    byId("sheet-sync").click();
+    byId("sync-dialog").querySelector('button[value="confirm"]').click();
+  };
+  chat.render(session());
+  confirmSync();
+  await settle();
+  assert.equal(byId("sheet-sync").disabled, true);
+
+  // Another session can sync and merge while the first sync runs.
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  assert.equal(byId("sheet-sync").disabled, false);
+  assert.equal(byId("merge").disabled, false);
+  confirmSync();
+  await settle();
+  assert.deepEqual(requests, [
+    { method: "sync_session", session_id: "s1" },
+    { method: "sync_session", session_id: "s2" },
+  ]);
+  // The second session's refusal stays when the first one's sync succeeds.
+  answers[1].reject(new Error("Session is not ready to sync"));
+  await settle();
+  assert.equal(byId("action-error").textContent, "Session is not ready to sync");
+  answers[0].resolve({ kind: "accepted" });
+  await settle();
+  assert.equal(byId("action-error").textContent, "Session is not ready to sync");
+
+  // A merge in flight for this session disables only its own Merge.
+  byId("merge").click();
+  byId("merge-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("merge").disabled, true);
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("merge").disabled, false);
+  assert.equal(byId("sheet-sync").disabled, false);
 });
 
 test("a review request link from a publish goes through the link filter", async () => {

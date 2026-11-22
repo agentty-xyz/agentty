@@ -274,3 +274,56 @@ test("a newer snapshot updates the running note, and a closed sheet ignores late
   settings.close();
   assert.equal(byId("settings-dialog").open, false);
 });
+
+test("a snapshot arriving during a save still lets the sheet close or show the error", async () => {
+  for (const outcome of ["accepted", "refused"]) {
+    let answer;
+    const { byId, settings } = mountSettings({
+      respond: (body) =>
+        body.method === "get_host"
+          ? HOST
+          : new Promise((resolve, reject) => {
+              answer = outcome === "accepted" ? () => resolve({ kind: "accepted" }) : () => reject(new Error("Busy"));
+            }),
+    });
+    settings.open(session({ status: "InProgress" }), { isRunning: true });
+    await settle();
+    choose(byId, "settings-reasoning", "low");
+    byId("settings-apply").click();
+    // The running session's next snapshot is a new object for the same
+    // session.
+    settings.update(session({ status: "InProgress", updated_at: 2 }), { isRunning: true });
+    answer();
+    await settle();
+    if (outcome === "accepted") {
+      assert.equal(byId("settings-dialog").open, false);
+    } else {
+      assert.equal(byId("settings-dialog").open, true);
+      assert.equal(byId("settings-error").textContent, "Busy");
+    }
+  }
+});
+
+test("snapshots and choices update the sheet in place, so the focus stays", async () => {
+  const { byId, settings } = mountSettings();
+  settings.open(session());
+  await settle();
+  const reasoning = byId("settings-reasoning").querySelector('[data-value="medium"]');
+  const options = Array.from(byId("settings-model").children);
+  reasoning.focus();
+  reasoning.click();
+  settings.update(session({ updated_at: 3 }), { isRunning: true });
+  assert.equal(byId("settings-reasoning").querySelector('[data-value="medium"]'), reasoning);
+  assert.equal(reasoning.ownerDocument.activeElement, reasoning);
+  assert.equal(reasoning.isConnected, true);
+  assert.equal(reasoning.getAttribute("aria-pressed"), "true");
+  assert.deepEqual(Array.from(byId("settings-model").children), options);
+  assert.equal(byId("settings-model").children[0], options[0]);
+  // A snapshot with a level this page does not know adds a button.
+  settings.update(session({ reasoning: "turbo" }), { isRunning: false });
+  assert.deepEqual(
+    Array.from(byId("settings-reasoning").children, (button) => button.dataset.value),
+    [...REASONING_LEVELS, "turbo"],
+  );
+  assert.deepEqual(pressed(byId, "settings-reasoning"), ["medium"]);
+});

@@ -311,9 +311,14 @@ export function createChat({
     // Sessions with a publish in flight. A publish can take long and
     // outlasts switching sessions, so this outlives `reset`.
     publishing: new Set(),
-    // How the last publish of each session ended: `{ reviewRequest }` or
-    // `{ error }`, shown whenever that session is open.
+    // How the last publish of each session ended, `{ reviewRequest }` or
+    // `{ error }`, until it shows once with that session open.
     published: new Map(),
+    // The outcome on screen for the open session; see `expirePublished`.
+    shownPublish: null,
+    // Requests in flight, as `actionKey(method, sessionId)`, so an action
+    // on one session never blocks or answers for another.
+    acting: new Set(),
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
     // Where the transcript was when the diff replaced it.
@@ -321,14 +326,10 @@ export function createChat({
     // What the open diff was loaded for; see `diffKey`.
     diffKey: null,
     isAnswering: false,
-    isCanceling: false,
     isConnected: false,
     // Whether the header's error says a refresh failed.
     isLoadError: false,
-    isMerging: false,
     isSending: false,
-    isStopping: false,
-    isSyncing: false,
     picks: [],
     questions: [],
     questionsKey: null,
@@ -439,14 +440,14 @@ export function createChat({
     elements.sheetDiff.disabled = elements.diff.disabled;
     elements.sheetDiffLabel.textContent = isDiffOpen ? "Back to chat" : "Diff";
     elements.merge.hidden = !actions.merge;
-    elements.merge.disabled = !actions.mergeEnabled || state.isMerging || !state.isConnected;
+    elements.merge.disabled = !actions.mergeEnabled || isActing("merge_session") || !state.isConnected;
     elements.sheetMerge.hidden = !actions.merge;
     elements.sheetMerge.disabled = elements.merge.disabled;
     renderPublish(actions);
     elements.sheetSync.hidden = !actions.sync;
-    elements.sheetSync.disabled = state.isSyncing || !state.isConnected;
+    elements.sheetSync.disabled = isActing("sync_session") || !state.isConnected;
     elements.cancel.hidden = !actions.cancel;
-    elements.cancel.disabled = state.isCanceling || !state.isConnected;
+    elements.cancel.disabled = isActing("cancel_session") || !state.isConnected;
     elements.more.hidden =
       !actions.cancel && !actions.merge && !actions.diff && !actions.publish && !actions.sync;
     // With only Diff, Publish and Merge in it, the sheet adds nothing to
@@ -486,18 +487,53 @@ export function createChat({
       : "opens a pull request for it";
   }
 
-  // Says how the open session's last publish ended: a link to the review
-  // request, or the host's error.
-  function renderPublished() {
+  // Says once how the open session's last publish ended: a link to the
+  // review request, or the host's error. The outcome is then forgotten,
+  // so coming back later does not announce it again; the header's review
+  // link stays as the lasting record.
+  function showPublished() {
     const outcome = state.published.get(state.sessionId);
-    const link = outcome?.reviewRequest ? reviewNode(document, outcome.reviewRequest) : null;
+    if (!outcome) {
+      return;
+    }
+    state.published.delete(state.sessionId);
+    state.shownPublish = {
+      error: outcome.error ?? null,
+      // What the snapshot said about publishing when the outcome showed.
+      publication: publicationKey(state.session),
+      review: outcome.reviewRequest ? reviewKey(outcome.reviewRequest) : null,
+    };
+    const link = outcome.reviewRequest ? reviewNode(document, outcome.reviewRequest) : null;
     if (link) {
       elements.actionNote.replaceChildren("Published · ", link);
-    } else {
-      elements.actionNote.replaceChildren();
     }
-    if (outcome?.error) {
+    if (outcome.error) {
       elements.actionError.textContent = outcome.error;
+    }
+  }
+
+  // Takes a shown outcome away once a snapshot tells a newer story: the
+  // review request is no longer the one published, or, after a failure,
+  // the session was published or its review request changed since.
+  function expirePublished(session) {
+    const shown = state.shownPublish;
+    if (!shown) {
+      return;
+    }
+    const isStale = shown.review
+      ? Boolean(session.review_request) && reviewKey(session.review_request) !== shown.review
+      : shown.publication !== null && publicationKey(session) !== shown.publication;
+    if (shown.publication === null) {
+      // The outcome showed before the first snapshot; this one is the basis.
+      shown.publication = publicationKey(session);
+    }
+    if (!isStale) {
+      return;
+    }
+    state.shownPublish = null;
+    elements.actionNote.replaceChildren();
+    if (shown.error && elements.actionError.textContent === shown.error) {
+      elements.actionError.textContent = "";
     }
   }
 
@@ -511,7 +547,8 @@ export function createChat({
     state.published.delete(sessionId);
     if (state.sessionId === sessionId) {
       elements.actionError.textContent = "";
-      renderPublished();
+      elements.actionNote.replaceChildren();
+      state.shownPublish = null;
     }
     renderActions();
     try {
@@ -522,7 +559,7 @@ export function createChat({
     } finally {
       state.publishing.delete(sessionId);
       if (state.sessionId === sessionId) {
-        renderPublished();
+        showPublished();
       }
       renderActions();
     }
@@ -783,7 +820,7 @@ export function createChat({
     elements.send.disabled = !state.isConnected || state.isSending;
     elements.send.setAttribute("aria-label", dock.isQueueing ? "Queue message" : "Send");
     elements.stop.hidden = !dock.showStop;
-    elements.stop.disabled = !state.isConnected || state.isStopping;
+    elements.stop.disabled = !state.isConnected || isActing("stop_turn");
   }
 
   function resizeComposer() {
@@ -815,6 +852,7 @@ export function createChat({
     elements.answerError.textContent = "";
     elements.actionError.textContent = "";
     elements.actionNote.replaceChildren();
+    state.shownPublish = null;
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
     elements.composerHint.textContent = "";
@@ -844,7 +882,7 @@ export function createChat({
   function open(sessionId, failure = null) {
     reset();
     state.sessionId = sessionId;
-    renderPublished();
+    showPublished();
     if (failure) {
       drafts.set(sessionId, failure.draft);
       elements.sessionError.textContent = failure.error;
@@ -877,6 +915,7 @@ export function createChat({
       state.isLoadError = false;
       elements.actionError.textContent = "";
     }
+    expirePublished(session);
     elements.gone.hidden = true;
     // The header closes the diff when the new status allows none.
     renderHeader(session);
@@ -968,23 +1007,33 @@ export function createChat({
     }
   }
 
-  // Runs one action on `sessionId` and shows its error in `errorNode`.
-  async function runAction(sessionId, flag, body, errorNode) {
-    if (!sessionId || state[flag]) {
+  // Whether request `method` runs for the open session.
+  function isActing(method) {
+    return state.acting.has(actionKey(method, state.sessionId));
+  }
+
+  // Sends request `method` for `sessionId`, at most once at a time per
+  // session, and shows its outcome in `errorNode` only while that session
+  // is open.
+  async function runAction(sessionId, method, errorNode) {
+    const key = actionKey(method, sessionId);
+    if (!sessionId || state.acting.has(key)) {
       return;
     }
-    state[flag] = true;
+    state.acting.add(key);
     renderActions();
     renderDock();
     try {
-      await request({ ...body, session_id: sessionId });
-      errorNode.textContent = "";
+      await request({ method: method, session_id: sessionId });
+      if (state.sessionId === sessionId) {
+        errorNode.textContent = "";
+      }
     } catch (error) {
       if (state.sessionId === sessionId) {
         errorNode.textContent = error.message;
       }
     } finally {
-      state[flag] = false;
+      state.acting.delete(key);
       renderActions();
       renderDock();
     }
@@ -1026,7 +1075,7 @@ export function createChat({
     void sendMessage();
   });
   elements.stop.addEventListener("click", () => {
-    void runAction(state.sessionId, "isStopping", { method: "stop_turn" }, elements.sessionError);
+    void runAction(state.sessionId, "stop_turn", elements.sessionError);
   });
   elements.questions.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1076,20 +1125,20 @@ export function createChat({
   elements.syncDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.syncDialog, "confirm");
     if (sessionId) {
-      void runAction(sessionId, "isSyncing", { method: "sync_session" }, elements.actionError);
+      void runAction(sessionId, "sync_session", elements.actionError);
     }
   });
   elements.composerSettings.addEventListener("click", openSettings);
   elements.cancelDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.cancelDialog, "confirm");
     if (sessionId) {
-      void runAction(sessionId, "isCanceling", { method: "cancel_session" }, elements.actionError);
+      void runAction(sessionId, "cancel_session", elements.actionError);
     }
   });
   elements.mergeDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.mergeDialog, "confirm");
     if (sessionId) {
-      void runAction(sessionId, "isMerging", { method: "merge_session" }, elements.actionError);
+      void runAction(sessionId, "merge_session", elements.actionError);
     }
   });
 
@@ -1160,6 +1209,26 @@ function keepSourceView(oldNode, newNode) {
   if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
     showSource(newNode, true);
   }
+}
+
+// The key of a request `method` in flight for `sessionId`.
+function actionKey(method, sessionId) {
+  return method + "\u0000" + sessionId;
+}
+
+// What identifies a review request for the publish outcome: its id, state
+// and address.
+function reviewKey(reviewRequest) {
+  return reviewRequest
+    ? JSON.stringify([reviewRequest.display_id, reviewRequest.state, reviewRequest.web_url])
+    : "";
+}
+
+// What `session` says about its publication, or `null` before a snapshot.
+function publicationKey(session) {
+  return session
+    ? JSON.stringify([session.published_upstream_ref ?? null, reviewKey(session.review_request)])
+    : null;
 }
 
 // What says a session's changes may differ: the listing's line counts,

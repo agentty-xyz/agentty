@@ -119,37 +119,53 @@ export function createSettings({ document, elements, request }) {
     if (current && !options.some((option) => option.id === current)) {
       options.unshift({ id: current, name: text(state.session.model) || current });
     }
-    elements.model.replaceChildren(
-      ...options.map((option) => {
-        const node = document.createElement("option");
-        node.value = option.id;
-        node.textContent = option.name;
+    // The options are rebuilt only when they change, so an open picker
+    // and the focus stay where they are.
+    const listed = Array.from(elements.model.children, (node) => [node.value, node.textContent]);
+    const wanted = options.map((option) => [option.id, option.name]);
+    if (JSON.stringify(listed) !== JSON.stringify(wanted)) {
+      elements.model.replaceChildren(
+        ...options.map((option) => {
+          const node = document.createElement("option");
+          node.value = option.id;
+          node.textContent = option.name;
 
-        return node;
-      }),
-    );
-    elements.model.value = state.choice.model ?? "";
+          return node;
+        }),
+      );
+    }
+    if (elements.model.value !== (state.choice.model ?? "")) {
+      elements.model.value = state.choice.model ?? "";
+    }
     elements.model.disabled = options.length < 2 || state.isApplying;
     elements.model.setAttribute("aria-busy", String(state.isLoading));
   }
 
+  // Shows `values` as toggle buttons for `key`. The buttons are rebuilt
+  // only when the values change; otherwise they are updated in place, so
+  // the focused one keeps its focus.
   function renderChoices(group, values, key) {
-    group.replaceChildren(
-      ...values.map((value) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = value;
-        button.dataset.value = value;
-        button.disabled = state.isApplying;
-        button.setAttribute("aria-pressed", String(value === state.choice[key]));
-        button.addEventListener("click", () => {
-          state.choice[key] = value;
-          render();
-        });
+    const shown = Array.from(group.children, (button) => button.dataset.value);
+    if (shown.join("\u0000") !== values.join("\u0000")) {
+      group.replaceChildren(
+        ...values.map((value) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = value;
+          button.dataset.value = value;
+          button.addEventListener("click", () => {
+            state.choice[key] = value;
+            render();
+          });
 
-        return button;
-      }),
-    );
+          return button;
+        }),
+      );
+    }
+    for (const button of group.children) {
+      button.disabled = state.isApplying;
+      button.setAttribute("aria-pressed", String(button.dataset.value === state.choice[key]));
+    }
   }
 
   function renderApply() {
@@ -191,11 +207,11 @@ export function createSettings({ document, elements, request }) {
     render();
     try {
       await request({ method: "set_session_settings", session_id: session.id, ...change });
-      if (state.session === session) {
+      if (state.session?.id === session.id) {
         close();
       }
     } catch (error) {
-      if (state.session === session) {
+      if (state.session?.id === session.id) {
         elements.error.textContent = error.message;
       }
     } finally {
