@@ -13,9 +13,10 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    ForgeKind, HostContext, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
-    ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
-    SessionError, SessionFileEntry, SessionId, SessionListEntry, SessionListStats, SessionMessage,
+    ForgeKind, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
+    HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError,
+    SessionFileEntry, SessionId, SessionListEntry, SessionListStats, SessionMessage,
     SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
     SessionStatus, SessionSummary,
 };
@@ -377,6 +378,8 @@ impl DeviceStore for MemoryDeviceStore {
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
+    /// Whether a project sync was requested.
+    is_project_syncing: Mutex<bool>,
     released: watch::Sender<bool>,
 }
 
@@ -429,6 +432,30 @@ impl SessionBackend for RecordingBackend {
                 speed_mode: ag_session::SpeedMode::Normal,
             }],
         })
+    }
+
+    // The project is `agentty` on `main`, two commits behind its upstream,
+    // and syncing once a sync was requested. Listing it is not recorded.
+    async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        let is_syncing = *locked(&self.is_project_syncing);
+
+        Ok(HostProjectStatus {
+            ahead_behind: Some((0, 2)),
+            branch: Some("main".to_string()),
+            project_name: "agentty".to_string(),
+            sync: is_syncing.then(|| HostProjectSync {
+                branch: "main".to_string(),
+                phase: HostProjectSyncPhase::Running,
+            }),
+        })
+    }
+
+    // Every project sync starts.
+    async fn sync_project(&self) -> Result<(), SessionError> {
+        self.record("sync_project".to_string());
+        *locked(&self.is_project_syncing) = true;
+
+        Ok(())
     }
 
     // A snapshot queues the messages sent to its session; `missing` is

@@ -8,10 +8,11 @@ use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, HostContext, HostSessionMode, QuestionAnswer, ReviewRequest,
-    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionFileEntry,
-    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
-    SessionSettings, SessionSettingsChange, SessionStatus, parse_persisted_session_agent_model,
+    DurableMessageVisibility, HostContext, HostProjectStatus, HostProjectSync,
+    HostProjectSyncPhase, HostSessionMode, QuestionAnswer, ReviewRequest, ReviewRequestState,
+    SessionBackend, SessionError as ApiSessionError, SessionFileEntry, SessionId, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 use tokio::sync::oneshot;
@@ -22,7 +23,8 @@ use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_m
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
 use crate::app::{
-    App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle, spawn,
+    App, AppError, AppEvent, ProjectSyncPhase, ProjectSyncStatus, SessionError,
+    SessionRuntimeCommand, SessionRuntimeHandle, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::domain::file_entry::FileEntry;
@@ -45,6 +47,8 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
                 | SessionOperation::PublishSession
+                | SessionOperation::ProjectStatus
+                | SessionOperation::SyncProject
         )
     }
 
@@ -176,6 +180,14 @@ impl SessionBackend for SessionRuntimeHandle {
 
     async fn host_context(&self) -> Result<HostContext, ApiSessionError> {
         SessionRuntimeHandle::host_context(self).await
+    }
+
+    async fn project_status(&self) -> Result<HostProjectStatus, ApiSessionError> {
+        SessionRuntimeHandle::project_status(self).await
+    }
+
+    async fn sync_project(&self) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::sync_project(self).await
     }
 
     async fn create_session(
@@ -419,6 +431,9 @@ impl App {
             }
             SessionRuntimeCommand::HostContext { response_tx } => {
                 let _ = response_tx.send(self.api_host_context().await);
+            }
+            SessionRuntimeCommand::ProjectStatus { response_tx } => {
+                let _ = response_tx.send(Ok(self.api_project_status()));
             }
             SessionRuntimeCommand::Mutation(command) => {
                 let _ = self.admit_session_command(command).await;
@@ -664,6 +679,48 @@ impl App {
             project_name: self.projects.project_name().to_string(),
             session_modes,
         })
+    }
+
+    /// Reports the active project's branch, its ahead and behind counts from
+    /// the latest background fetch, and the explicit sync the status bar
+    /// shows for it. A sync of another project is left out.
+    fn api_project_status(&self) -> HostProjectStatus {
+        let project_id = self.active_project_id();
+        let project = self.projects.render_parts();
+
+        HostProjectStatus {
+            ahead_behind: project.git_status,
+            branch: project.git_branch.map(str::to_string),
+            project_name: self.projects.project_name().to_string(),
+            sync: self
+                .project_sync_status
+                .as_ref()
+                .filter(|status| status.context.project_id == project_id)
+                .map(api_project_sync),
+        }
+    }
+
+    /// Starts or queues a sync of the active project's branch through the
+    /// same workflow as the terminal's `s`, and reports a sync that the
+    /// project policy refused to start.
+    pub(super) fn sync_api_project(&mut self) -> Result<(), ApiSessionError> {
+        let project_id = self.active_project_id();
+        self.start_sync_main();
+        let blocked_message = self
+            .project_sync_status
+            .as_ref()
+            .filter(|status| status.context.project_id == project_id)
+            .and_then(|status| match &status.phase {
+                ProjectSyncPhase::Blocked { message } => Some(message),
+                _ => None,
+            });
+        if let Some(message) = blocked_message {
+            return Err(ApiSessionError::Operation(format!(
+                "Sync is blocked: {message}"
+            )));
+        }
+
+        Ok(())
     }
 
     /// Lists the agents and models a session can switch to now: every model
@@ -1337,6 +1394,38 @@ struct InheritedCreationSettings {
 
 /// Converts indexed worktree entries into the session API's file entries,
 /// keeping their order.
+/// Converts the status bar's project sync into its programmatic form.
+fn api_project_sync(status: &ProjectSyncStatus) -> HostProjectSync {
+    let phase = match &status.phase {
+        ProjectSyncPhase::Running => HostProjectSyncPhase::Running,
+        ProjectSyncPhase::ResolvingConflicts {
+            conflicted_file_count,
+        } => HostProjectSyncPhase::ResolvingConflicts {
+            conflicted_file_count: *conflicted_file_count,
+        },
+        ProjectSyncPhase::Complete {
+            pulled_commits,
+            pushed_commits,
+            resolved_conflict_count,
+        } => HostProjectSyncPhase::Complete {
+            pulled_commits: *pulled_commits,
+            pushed_commits: *pushed_commits,
+            resolved_conflict_count: *resolved_conflict_count,
+        },
+        ProjectSyncPhase::Blocked { message } => HostProjectSyncPhase::Blocked {
+            message: message.clone(),
+        },
+        ProjectSyncPhase::Failed { message } => HostProjectSyncPhase::Failed {
+            message: message.clone(),
+        },
+    };
+
+    HostProjectSync {
+        branch: status.context.default_branch.clone(),
+        phase,
+    }
+}
+
 fn api_file_entries(entries: Vec<FileEntry>) -> Vec<SessionFileEntry> {
     entries
         .into_iter()

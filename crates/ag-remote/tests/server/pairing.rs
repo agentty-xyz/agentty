@@ -34,7 +34,8 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
                 "stop_turn",
                 "sync",
                 "settings",
-                "publish"
+                "publish",
+                "sync_project"
             ]
             .map(String::from)
             .to_vec(),

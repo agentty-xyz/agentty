@@ -170,20 +170,147 @@ export function activeSeconds(summary, nowSeconds) {
   return (Number.isFinite(before) ? before : 0) + Math.max(0, nowSeconds - startedAt);
 }
 
+// How the list labels a pull request that can merge, as the terminal's
+// `[ready]` and `[ready (bypass)]` do.
+const PR_READY_LABELS = { ready: "PR ready", ready_with_bypass: "PR ready (bypass)" };
+// How the list labels a session branch that conflicts with its base, as
+// the terminal's `[merge conflict]` does.
+export const MERGE_CONFLICT_LABEL = "merge conflict";
+
 // What a listed session's figures show: the host's size label, the line
-// counts (`null` when unknown or both zero), the compact model name, and
-// whether its pull request can merge. Older hosts omit every figure.
+// counts (`null` when unknown or both zero), the compact model name,
+// whether its branch conflicts with its base, and the label of a pull
+// request that can merge (`null` when it cannot or the forge does not
+// say). Older hosts omit every figure.
 export function sessionFigures(summary) {
   const added = summary?.added_lines;
   const deleted = summary?.deleted_lines;
   const hasLines = Number.isFinite(added) && Number.isFinite(deleted) && added + deleted > 0;
+  const readiness = summary?.review_ready;
 
   return {
+    hasConflict: summary?.has_merge_conflict === true,
     lines: hasLines ? { added: added, deleted: deleted } : null,
     model: text(summary?.model_short_name) || text(summary?.model),
-    isPrReady: summary?.review_ready === "ready" || summary?.review_ready === "ready_with_bypass",
+    prReady: Object.hasOwn(PR_READY_LABELS, readiness) ? PR_READY_LABELS[readiness] : null,
     size: text(summary?.size),
   };
+}
+
+// The active project a listing names, with the fields the sidebar shows,
+// or `null` when the host does not report it. `ahead` and `behind` are
+// `null` until the host has compared the branch with its upstream.
+export function parseProject(listed) {
+  const project = listed?.project;
+  const name = text(project?.name);
+  if (!name) {
+    return null;
+  }
+
+  return {
+    ahead: count(project.ahead),
+    behind: count(project.behind),
+    branch: text(project.branch),
+    name: name,
+    sync: parseProjectSync(project.sync),
+  };
+}
+
+// The phases of a project sync, with the tone of each one's line and
+// whether the sync still runs.
+const SYNC_PHASES = {
+  blocked: { isRunning: false, tone: "asking" },
+  complete: { isRunning: false, tone: "ready" },
+  failed: { isRunning: false, tone: "failed" },
+  resolving_conflicts: { isRunning: true, tone: "working" },
+  running: { isRunning: true, tone: "working" },
+};
+
+// A project's latest sync, or `null` when it has none or a newer host
+// reports a phase this page does not know.
+function parseProjectSync(sync) {
+  const phase = sync?.phase;
+  if (!Object.hasOwn(SYNC_PHASES, phase)) {
+    return null;
+  }
+
+  return {
+    branch: text(sync.branch),
+    conflicts: count(sync.conflicts),
+    isRunning: SYNC_PHASES[phase].isRunning,
+    message: text(sync.message),
+    phase: phase,
+    pulled: count(sync.pulled_commits),
+    pushed: count(sync.pushed_commits),
+    tone: SYNC_PHASES[phase].tone,
+  };
+}
+
+// How far the branch of `project` is from its upstream, as the terminal's
+// footer shows it: `✓` when even, or `↓2 ↑1` for two commits behind and
+// one ahead. `null` when the project has no branch or the host has not
+// compared it.
+export function projectCounts(project) {
+  if (!project?.branch || project.ahead === null || project.behind === null) {
+    return null;
+  }
+  if (project.ahead === 0 && project.behind === 0) {
+    return "✓";
+  }
+
+  return "↓" + project.behind + " ↑" + project.ahead;
+}
+
+// What the sync of `project` is called: the project and the branch it
+// updates, such as `agentty/main`.
+export function projectSyncTarget(project) {
+  const branch = project?.sync?.branch ?? project?.branch;
+
+  return branch ? project.name + "/" + branch : (project?.name ?? "");
+}
+
+// The line that reports the latest sync of `project`, as the terminal's
+// status bar words it, or `null` when the project has none.
+export function projectSyncLine(project) {
+  const sync = project?.sync;
+  if (!sync) {
+    return null;
+  }
+  const target = projectSyncTarget(project);
+  switch (sync.phase) {
+    case "running":
+      return "Syncing " + target + "...";
+    case "resolving_conflicts":
+      return "Resolving " + countLabel(sync.conflicts ?? 0, "conflict") + " for " + target + "...";
+    case "complete": {
+      const parts = [];
+      if (sync.pulled !== null) {
+        parts.push(sync.pulled + " pulled");
+      }
+      if (sync.pushed !== null) {
+        parts.push(sync.pushed + " pushed");
+      }
+      if (sync.conflicts) {
+        parts.push(countLabel(sync.conflicts, "conflict") + " resolved");
+      }
+
+      return "Synced " + target + (parts.length > 0 ? ": " + parts.join(", ") : "");
+    }
+    case "blocked":
+      return "Sync blocked for " + target + (sync.message ? ": " + sync.message : "");
+    default:
+      return "Sync failed for " + target + (sync.message ? ": " + sync.message : "");
+  }
+}
+
+// `1 conflict`, `2 conflicts`.
+function countLabel(value, singular) {
+  return value + " " + singular + (value === 1 ? "" : "s");
+}
+
+// `value` when it is a whole number of zero or more, otherwise `null`.
+function count(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 // The model a session runs, as `claude/opus-5.5`: the agent, then the

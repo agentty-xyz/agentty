@@ -240,6 +240,7 @@ impl App {
                 self.update_api_session_settings(&session_id, change).await
             }
             SessionMutation::Merge { session_id } => self.merge_api_session(&session_id).await,
+            SessionMutation::SyncProject => self.sync_api_project(),
         }
     }
 

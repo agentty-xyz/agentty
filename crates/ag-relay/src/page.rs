@@ -40,7 +40,7 @@ macro_rules! script {
 }
 
 /// Files the page loads, by request path, with their content types.
-const FILES: [(&str, &str, &str); 17] = [
+const FILES: [(&str, &str, &str); 18] = [
     // The generated design tokens and shared base styles come first, as
     // Agentty's listener serves them.
     (
@@ -62,6 +62,7 @@ const FILES: [(&str, &str, &str); 17] = [
     script!("markdown.mjs"),
     script!("mention.mjs"),
     script!("noise.mjs"),
+    script!("project.mjs"),
     script!("relay.mjs"),
     script!("session_list.mjs"),
     script!("settings.mjs"),

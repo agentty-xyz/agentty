@@ -13,8 +13,9 @@ use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteModeModel,
-    RemoteModelOption, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase,
+    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -479,6 +480,7 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
         results,
         [
             RemoteResult::Ok(RemoteResponse::Sessions {
+                project: None,
                 sessions: vec![RemoteSessionSummary {
                     id: "session-1".to_string(),
                     status: "InProgress".to_string(),
@@ -1148,4 +1150,63 @@ async fn publish_returns_host_refusals_and_needs_the_host_to_serve_it() {
     );
     assert_eq!(serving.backend.calls(), ["list", "review:session-1"]);
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn sync_project_reaches_the_host_only_when_the_host_serves_it() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::SyncProject],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+
+    // Act
+    let synced = reply_result(&serving.state, RemoteRequest::SyncProject).await;
+    let unsupported = reply_result(&not_serving.state, RemoteRequest::SyncProject).await;
+
+    // Assert
+    assert_eq!(synced, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["sync_project"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn list_sessions_describes_the_project_when_the_host_reports_it() {
+    // Arrange
+    let reporting = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::ProjectStatus],
+    );
+
+    // Act
+    let listed = reply_result(&reporting.state, RemoteRequest::ListSessions).await;
+
+    // Assert
+    let project = match listed {
+        RemoteResult::Ok(RemoteResponse::Sessions { project, .. }) => project,
+        _ => None,
+    };
+    assert_eq!(
+        project,
+        Some(RemoteProject {
+            ahead: Some(1),
+            behind: Some(2),
+            branch: Some("main".to_string()),
+            name: "agentty".to_string(),
+            sync: Some(RemoteProjectSync {
+                branch: "main".to_string(),
+                conflicts: Some(3),
+                message: None,
+                phase: RemoteProjectSyncPhase::ResolvingConflicts,
+                pulled_commits: None,
+                pushed_commits: None,
+            }),
+        })
+    );
+    assert_eq!(reporting.backend.calls(), ["list", "project"]);
 }

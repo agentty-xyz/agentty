@@ -67,6 +67,7 @@ const ELEMENT_IDS = {
   sheetDiffLabel: "sheet-diff-label",
   sheetMerge: "sheet-merge",
   sheetMergeLabel: "sheet-merge-label",
+  sheetMergeNote: "sheet-merge-note",
   sheetPublish: "sheet-publish",
   sheetPublishNote: "sheet-publish-note",
   sheetSub: "sheet-sub",
@@ -773,6 +774,13 @@ test("header actions appear only with their capability and status", () => {
   assert.deepEqual(sessionActions("Done", ["merge"]), {
     ...none,
     cancel: false,
+    merge: true,
+    mergeEnabled: false,
+  });
+  // A session with a review request merges on the forge.
+  assert.deepEqual(sessionActions("Review", ["merge"], true), {
+    ...none,
+    cancel: true,
     merge: true,
     mergeEnabled: false,
   });
@@ -1797,6 +1805,37 @@ function detailedSummary(overrides = {}) {
 function subParts(byId) {
   return Array.from(byId("heading-sub").children, (node) => node.textContent).slice(1);
 }
+
+test("Merge is off for a session with a review request, and says why", () => {
+  const { byId, chat } = mountChat({ capabilities: ["merge"] });
+
+  chat.render(detailedSession({ review_request: undefined }), detailedSummary());
+  assert.equal(byId("merge").disabled, false);
+  assert.equal(byId("merge").title, "");
+  assert.equal(byId("sheet-merge-note").textContent, "asks first");
+
+  chat.render(detailedSession(), detailedSummary());
+  assert.equal(byId("merge").hidden, false);
+  assert.equal(byId("merge").disabled, true);
+  assert.equal(byId("sheet-merge").disabled, true);
+  assert.equal(byId("merge").title, "Merge is off: merge its pull request instead");
+  assert.equal(byId("sheet-merge-note").textContent, "merge its pull request instead");
+});
+
+test("the header names a merge conflict with the base branch", () => {
+  const { byId, chat } = mountChat();
+
+  chat.render(detailedSession(), detailedSummary({ has_merge_conflict: true }));
+  assert.deepEqual(subParts(byId).slice(0, 3), ["[M]", "+64 -9", "Merge conflict with main"]);
+  assert.equal(byId("heading-sub").querySelector(".conflict").textContent, "Merge conflict with main");
+
+  // An older host names no base branch.
+  chat.render(session(), detailedSummary({ has_merge_conflict: true }));
+  assert.equal(byId("heading-sub").querySelector(".conflict").textContent, "Merge conflict");
+
+  chat.render(detailedSession(), detailedSummary());
+  assert.equal(byId("heading-sub").querySelector(".conflict"), null);
+});
 
 test("the header shows size, lines, branches, model and the review request", () => {
   const { byId, chat } = mountChat();

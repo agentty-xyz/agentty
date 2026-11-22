@@ -119,6 +119,12 @@ pub enum SessionOperation {
     /// the first time, and creating or refreshing its review request through
     /// [`SessionBackend::create_review_request`].
     PublishSession,
+    /// Reporting the active project's branch, its distance from upstream,
+    /// and its latest sync through [`SessionBackend::project_status`].
+    ProjectStatus,
+    /// Syncing the active project's branch with its upstream through
+    /// [`SessionBackend::sync_project`].
+    SyncProject,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
@@ -211,6 +217,63 @@ pub struct HostSessionMode {
     pub response_style: ResponseStyle,
     /// Response-speed preference a new session in this mode starts with.
     pub speed_mode: SpeedMode,
+}
+
+/// The host's active project as a session list shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostProjectStatus {
+    /// Commits the branch is ahead of and behind its upstream, in that
+    /// order, as of the host's latest fetch; `None` when the host has not
+    /// compared them.
+    pub ahead_behind: Option<(u32, u32)>,
+    /// Branch the project's checkout is on, which new sessions start from;
+    /// `None` when it has none, such as a detached `HEAD`.
+    pub branch: Option<String>,
+    /// Display name of the active project.
+    pub project_name: String,
+    /// Latest explicit sync of this project, while the host still shows it.
+    pub sync: Option<HostProjectSync>,
+}
+
+/// One explicit sync of the active project's branch with its upstream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostProjectSync {
+    /// Branch the sync updates.
+    pub branch: String,
+    /// How far the sync has come.
+    pub phase: HostProjectSyncPhase,
+}
+
+/// How far an explicit project sync has come.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HostProjectSyncPhase {
+    /// The host is pulling, rebasing, or pushing.
+    Running,
+    /// An agent is resolving the conflicts of this many files.
+    ResolvingConflicts {
+        /// Files the rebase left in conflict.
+        conflicted_file_count: usize,
+    },
+    /// The branch matches its upstream.
+    Complete {
+        /// Commits pulled from upstream, when the host counted them.
+        pulled_commits: Option<u32>,
+        /// Local commits pushed upstream, when the host counted them.
+        pushed_commits: Option<u32>,
+        /// Files whose conflicts the agent resolved.
+        resolved_conflict_count: usize,
+    },
+    /// The host did not start the sync, such as while a merge runs or the
+    /// checkout has uncommitted changes.
+    Blocked {
+        /// Why the sync could not start.
+        message: String,
+    },
+    /// Git, authentication, or conflict resolution failed.
+    Failed {
+        /// Why the sync failed.
+        message: String,
+    },
 }
 
 /// Host implementation boundary for session persistence and workflows.
@@ -433,6 +496,25 @@ pub trait SessionBackend: Send + Sync {
     async fn host_context(&self) -> Result<HostContext, SessionError> {
         Err(SessionError::Operation(
             "Host does not describe its project".to_string(),
+        ))
+    }
+
+    /// Reports the active project's branch, its distance from upstream, and
+    /// its latest explicit sync. Older hosts may omit it.
+    async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not report its project status".to_string(),
+        ))
+    }
+
+    /// Starts or queues a sync of the active project's branch with its
+    /// upstream: a pull with rebase, then a push, with agent-assisted
+    /// conflict resolution. The host acknowledges admission and reports
+    /// progress through [`Self::project_status`]. Older hosts may omit
+    /// support.
+    async fn sync_project(&self) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support syncing its project".to_string(),
         ))
     }
 
@@ -876,6 +958,26 @@ impl SessionService {
     /// cannot load its defaults.
     pub async fn host_context(&self) -> Result<HostContext, SessionError> {
         self.backend.host_context().await
+    }
+
+    /// Reports the active project's branch, its distance from upstream, and
+    /// its latest explicit sync.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not report its project status.
+    pub async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        self.backend.project_status().await
+    }
+
+    /// Starts or queues a sync of the active project's branch with its
+    /// upstream. The host acknowledges admission; [`Self::project_status`]
+    /// reports the progress and the outcome.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot start the sync now, such as
+    /// while a merge runs, or does not support syncing its project.
+    pub async fn sync_project(&self) -> Result<(), SessionError> {
+        self.backend.sync_project().await
     }
 
     /// Creates one session and returns its stable identifier.

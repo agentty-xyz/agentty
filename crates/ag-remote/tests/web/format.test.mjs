@@ -5,6 +5,7 @@ import {
   FILTERS,
   GROUPS,
   MAX_SEEN,
+  MERGE_CONFLICT_LABEL,
   activeSeconds,
   filterCounts,
   filterSessions,
@@ -14,7 +15,11 @@ import {
   modelLabel,
   parseActivity,
   parseNotice,
+  parseProject,
   parseSeen,
+  projectCounts,
+  projectSyncLine,
+  projectSyncTarget,
   reconcileSeen,
   relativeTime,
   reviewLabel,
@@ -492,12 +497,19 @@ test("sessionFigures reads the listing's figures and hides what an older host om
       review_ready: "ready",
       size: "M",
     }),
-    { isPrReady: true, lines: { added: 64, deleted: 9 }, model: "opus-5.5", size: "M" },
+    {
+      hasConflict: false,
+      lines: { added: 64, deleted: 9 },
+      model: "opus-5.5",
+      prReady: "PR ready",
+      size: "M",
+    },
   );
   assert.deepEqual(sessionFigures({ id: "old", status: "Review" }), {
-    isPrReady: false,
+    hasConflict: false,
     lines: null,
     model: null,
+    prReady: null,
     size: null,
   });
   assert.equal(sessionFigures(null).size, null);
@@ -505,8 +517,123 @@ test("sessionFigures reads the listing's figures and hides what an older host om
   const fresh = sessionFigures({ added_lines: 0, deleted_lines: 0, model: "gpt-5.4", size: "XS" });
   assert.equal(fresh.lines, null);
   assert.equal(fresh.model, "gpt-5.4");
-  assert.equal(sessionFigures({ review_ready: "ready_with_bypass" }).isPrReady, true);
-  assert.equal(sessionFigures({ review_ready: "blocked" }).isPrReady, false);
+  assert.equal(sessionFigures({ review_ready: "ready_with_bypass" }).prReady, "PR ready (bypass)");
+  // A readiness this page does not know, or a property of every object,
+  // labels nothing.
+  assert.equal(sessionFigures({ review_ready: "blocked" }).prReady, null);
+  assert.equal(sessionFigures({ review_ready: "toString" }).prReady, null);
+  assert.equal(sessionFigures({ has_merge_conflict: true }).hasConflict, true);
+  assert.equal(sessionFigures({ has_merge_conflict: "yes" }).hasConflict, false);
+  assert.equal(MERGE_CONFLICT_LABEL, "merge conflict");
+});
+
+test("parseProject reads the project a listing names and drops what it cannot use", () => {
+  assert.deepEqual(
+    parseProject({
+      project: {
+        ahead: 1,
+        behind: 2,
+        branch: "main",
+        name: "agentty",
+        sync: { branch: "main", conflicts: 3, phase: "resolving_conflicts" },
+      },
+    }),
+    {
+      ahead: 1,
+      behind: 2,
+      branch: "main",
+      name: "agentty",
+      sync: {
+        branch: "main",
+        conflicts: 3,
+        isRunning: true,
+        message: null,
+        phase: "resolving_conflicts",
+        pulled: null,
+        pushed: null,
+        tone: "working",
+      },
+    },
+  );
+  // A host that has not compared the branch yet, or has none.
+  assert.deepEqual(parseProject({ project: { name: "agentty" } }), {
+    ahead: null,
+    behind: null,
+    branch: null,
+    name: "agentty",
+    sync: null,
+  });
+  // Counts must be whole numbers of zero or more.
+  const odd = parseProject({ project: { ahead: -1, behind: 1.5, name: "agentty" } });
+  assert.equal(odd.ahead, null);
+  assert.equal(odd.behind, null);
+  // A phase from a newer host shows no sync.
+  assert.equal(parseProject({ project: { name: "agentty", sync: { phase: "paused" } } }).sync, null);
+  assert.equal(parseProject({ project: { name: "agentty", sync: { phase: "toString" } } }).sync, null);
+  // An older host names no project.
+  assert.equal(parseProject({ sessions: [] }), null);
+  assert.equal(parseProject({ project: { name: "" } }), null);
+  assert.equal(parseProject(null), null);
+});
+
+test("projectCounts shows the branch's distance from upstream as the terminal does", () => {
+  const project = (fields) => parseProject({ project: { name: "agentty", ...fields } });
+
+  assert.equal(projectCounts(project({ ahead: 1, behind: 2, branch: "main" })), "↓2 ↑1");
+  assert.equal(projectCounts(project({ ahead: 0, behind: 0, branch: "main" })), "✓");
+  // Not compared yet, or only half reported.
+  assert.equal(projectCounts(project({ branch: "main" })), null);
+  assert.equal(projectCounts(project({ ahead: 1, branch: "main" })), null);
+  assert.equal(projectCounts(project({ behind: 1, branch: "main" })), null);
+  // No branch to compare.
+  assert.equal(projectCounts(project({ ahead: 1, behind: 2 })), null);
+  assert.equal(projectCounts(null), null);
+});
+
+test("projectSyncLine words each phase as the terminal's status bar does", () => {
+  const line = (sync, branch = "main") =>
+    projectSyncLine(parseProject({ project: { branch: branch, name: "agentty", sync: sync } }));
+
+  assert.equal(line({ branch: "main", phase: "running" }), "Syncing agentty/main...");
+  assert.equal(
+    line({ branch: "main", conflicts: 1, phase: "resolving_conflicts" }),
+    "Resolving 1 conflict for agentty/main...",
+  );
+  assert.equal(
+    line({ branch: "main", conflicts: 2, phase: "resolving_conflicts" }),
+    "Resolving 2 conflicts for agentty/main...",
+  );
+  assert.equal(
+    line({ branch: "main", phase: "resolving_conflicts" }),
+    "Resolving 0 conflicts for agentty/main...",
+  );
+  assert.equal(
+    line({ branch: "main", conflicts: 2, phase: "complete", pulled_commits: 3, pushed_commits: 1 }),
+    "Synced agentty/main: 3 pulled, 1 pushed, 2 conflicts resolved",
+  );
+  assert.equal(line({ branch: "main", phase: "complete" }), "Synced agentty/main");
+  assert.equal(
+    line({ branch: "main", message: "a merge is active", phase: "blocked" }),
+    "Sync blocked for agentty/main: a merge is active",
+  );
+  assert.equal(line({ branch: "main", phase: "blocked" }), "Sync blocked for agentty/main");
+  assert.equal(
+    line({ branch: "main", message: "push rejected", phase: "failed" }),
+    "Sync failed for agentty/main: push rejected",
+  );
+  assert.equal(line({ branch: "main", phase: "failed" }), "Sync failed for agentty/main");
+  // The sync names the branch it updates, also after the project moved on.
+  assert.equal(line({ branch: "release", phase: "running" }), "Syncing agentty/release...");
+  assert.equal(line({ phase: "running" }), "Syncing agentty/main...");
+  assert.equal(line({ phase: "running" }, null), "Syncing agentty...");
+  assert.equal(line(undefined), null);
+  assert.equal(projectSyncLine(null), null);
+});
+
+test("projectSyncTarget names the project and the branch a sync updates", () => {
+  assert.equal(projectSyncTarget(parseProject({ project: { branch: "main", name: "agentty" } })), "agentty/main");
+  assert.equal(projectSyncTarget(parseProject({ project: { name: "agentty" } })), "agentty");
+  assert.equal(projectSyncTarget(null), "");
 });
 
 test("modelLabel joins the agent and the listing's short name for the same model", () => {

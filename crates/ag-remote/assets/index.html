@@ -160,9 +160,22 @@
                     </button>
                 </div>
                 <div class="sidebar-actions">
-                    <p id="project" class="project" hidden>
-                        project <b id="project-name"></b>
-                    </p>
+                    <div id="project" class="project" hidden>
+                        <p class="project-line">
+                            <span class="visually-hidden">Project</span>
+                            <b id="project-name"></b>
+                            <span id="project-branch" class="project-branch" hidden></span>
+                            <span id="project-counts" class="project-counts" hidden></span>
+                        </p>
+                        <button id="project-sync" class="project-sync" type="button" hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-sync" />
+                            </svg>
+                            <span id="project-sync-label">Sync</span>
+                        </button>
+                        <output id="project-status" class="project-status" hidden></output>
+                        <p id="project-error" class="error" role="alert"></p>
+                    </div>
                     <button id="new-session" class="new-session" type="button" hidden>
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-plus" />
@@ -438,7 +451,7 @@
                             <use href="#i-merge" />
                         </svg>
                         <span id="sheet-merge-label">Merge</span>
-                        <small>asks first</small>
+                        <small id="sheet-merge-note">asks first</small>
                     </button>
                     <button id="cancel" value="cancel" class="sheet-item is-danger" hidden>
                         <svg class="icon" aria-hidden="true">
@@ -480,6 +493,22 @@
                     <h2 id="sync-dialog-title">Sync this session?</h2>
                     <p>
                         Agentty rebases the session branch onto <code id="sync-target">its base branch</code>, after the running turn if there is one. A conflict starts a turn that resolves it.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Not now</button>
+                        <button value="confirm" class="btn btn--lg btn--primary">Sync</button>
+                    </div>
+                </form>
+            </dialog>
+            <dialog id="project-sync-dialog"
+                    class="dialog"
+                    aria-labelledby="project-sync-dialog-title">
+                <form method="dialog">
+                    <h2 id="project-sync-dialog-title">
+                        Sync <span id="project-sync-target">the project</span>?
+                    </h2>
+                    <p>
+                        Agentty pulls <code id="project-sync-branch">its branch</code> from its remote, rebases your local commits onto it, and pushes them, with your Git credentials, as <code>s</code> does in the terminal. A conflict starts an agent that resolves it.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>

@@ -132,7 +132,7 @@ test("a row shows its title, status in its tone, time and whether it is open", (
   assert.notEqual(row("done").querySelector(".time").title, "");
 });
 
-test("rows show size, model and PR ready, and cards add the line counts, when the host sends them", () => {
+test("rows show size and the model or its labels, and cards add the line counts, when the host sends them", () => {
   // Arrange
   const page = mountList();
   const figures = {
@@ -160,31 +160,55 @@ test("rows show size, model and PR ready, and cards add the line counts, when th
     updated_at: NOW - 720,
   };
   const old = { id: "old", status: "Watching", title: "From an older host", updated_at: NOW };
+  const conflicted = {
+    has_merge_conflict: true,
+    id: "conflicted",
+    model_short_name: "opus-5.5",
+    review_ready: "ready_with_bypass",
+    status: "Review",
+    title: "Rebase me",
+    updated_at: NOW,
+  };
 
   // Act
-  page.list.update([figures, fresh, old], null);
+  page.list.update([figures, fresh, old, conflicted], null);
   const row = (id) => page.byId("sessions").querySelector('[data-session-id="' + id + '"]');
   const card = (id) => page.byId("home-cards").querySelector('[data-session-id="' + id + '"]');
 
   // Assert
   assert.equal(row("review").querySelector(".row-title").textContent, "[M] Serve the pairing page");
   assert.equal(row("review").querySelector(".size").textContent, "[M]");
-  // A row leaves the line counts to the card and the header.
-  assert.equal(row("review").querySelector(".row-meta").textContent, "Review·opus-5.5·PR ready3m");
-  assert.equal(row("review").querySelector(".model").title, "opus-5.5");
+  // A row leaves the line counts to the card and the header, and the
+  // model gives its place to `PR ready`.
+  assert.equal(row("review").querySelector(".row-meta").textContent, "Review·PR ready3m");
+  assert.equal(row("review").querySelector(".pr-ready").title, "PR ready");
+  assert.equal(row("review").querySelector(".model"), null);
   // Screen readers skip the separators.
   assert.equal(row("review").querySelector(".sep").getAttribute("aria-hidden"), "true");
-  // A pull request that cannot merge shows nothing.
+  // A pull request that cannot merge shows nothing, so the model stays.
   assert.equal(row("fresh").querySelector(".row-meta").textContent, "Question·gpt-5.412m");
+  assert.equal(row("fresh").querySelector(".model").title, "gpt-5.4");
   assert.equal(row("old").querySelector(".row-title").textContent, "From an older host");
   assert.equal(row("old").querySelector(".row-meta").textContent, "Watchingnow");
   assert.equal(card("review").querySelector(".card-title").textContent, "[M] Serve the pairing page");
-  assert.equal(card("review").querySelector(".card-figures").textContent, "+64 -9·opus-5.5·PR ready");
+  assert.equal(card("review").querySelector(".card-figures").textContent, "+64 -9·PR ready");
   assert.equal(card("review").querySelector(".add").textContent, "+64");
   assert.equal(card("review").querySelector(".del").textContent, "-9");
   // No changes yet, so no counts.
   assert.equal(card("fresh").querySelector(".card-figures").textContent, "gpt-5.4");
   assert.equal(card("old").querySelector(".card-figures"), null);
+  // A conflict with the base branch and a bypass-only pull request are
+  // labelled as in the terminal.
+  assert.equal(
+    row("conflicted").querySelector(".row-meta").textContent,
+    "Review·merge conflict·PR ready (bypass)now",
+  );
+  assert.equal(row("conflicted").querySelector(".conflict").textContent, "merge conflict");
+  assert.equal(row("review").querySelector(".conflict"), null);
+  assert.equal(
+    card("conflicted").querySelector(".card-figures").textContent,
+    "merge conflict·PR ready (bypass)",
+  );
 });
 
 test("a row renders a hostile title only as a text node", () => {

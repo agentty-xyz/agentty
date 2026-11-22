@@ -1835,6 +1835,7 @@ impl App {
             });
             self.schedule_project_sync_status_expiry();
             self.mark_dirty();
+            self.publish_session_change();
 
             return;
         }
@@ -1876,6 +1877,7 @@ impl App {
             phase: ProjectSyncPhase::Running,
         });
         self.mark_dirty();
+        self.publish_session_change();
 
         self.sync_main_runner.start_sync_main(
             request.app_event_tx,
@@ -1903,6 +1905,7 @@ impl App {
         self.project_sync_status = None;
         self.project_sync_status_expires_at = None;
         self.mark_dirty();
+        self.publish_session_change();
     }
 
     /// Starts the oldest queued project sync when base-checkout mutation is

@@ -5,8 +5,10 @@
 import { createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
+import { parseProject } from "./format.mjs";
 import { createHome } from "./home.mjs";
 import { isSupported } from "./noise.mjs";
+import { createProject } from "./project.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
 import { createSettings } from "./settings.mjs";
@@ -72,6 +74,15 @@ const elements = {
   "drawer-close": document.getElementById("drawer-close"),
   project: document.getElementById("project"),
   "project-name": document.getElementById("project-name"),
+  "project-branch": document.getElementById("project-branch"),
+  "project-counts": document.getElementById("project-counts"),
+  "project-sync": document.getElementById("project-sync"),
+  "project-sync-label": document.getElementById("project-sync-label"),
+  "project-status": document.getElementById("project-status"),
+  "project-error": document.getElementById("project-error"),
+  "project-sync-dialog": document.getElementById("project-sync-dialog"),
+  "project-sync-target": document.getElementById("project-sync-target"),
+  "project-sync-branch": document.getElementById("project-sync-branch"),
   "new-session": document.getElementById("new-session"),
   filter: document.getElementById("filter"),
   "filter-key": document.getElementById("filter-key"),
@@ -106,6 +117,7 @@ const elements = {
   "sheet-diff-label": document.getElementById("sheet-diff-label"),
   "sheet-merge": document.getElementById("sheet-merge"),
   "sheet-merge-label": document.getElementById("sheet-merge-label"),
+  "sheet-merge-note": document.getElementById("sheet-merge-note"),
   "sheet-sync": document.getElementById("sheet-sync"),
   "sheet-sync-label": document.getElementById("sheet-sync-label"),
   "sheet-publish": document.getElementById("sheet-publish"),
@@ -197,6 +209,8 @@ const state = {
   pairingLink: null,
   pendingPairing: null,
   pending: new Map(),
+  // Name of the project the last listing named, if any did.
+  projectName: null,
   // When the next reconnect attempt starts, in milliseconds since the epoch.
   reconnectAt: 0,
   reconnectTimer: null,
@@ -336,6 +350,7 @@ function renderOffline() {
   }
   chat.setConnected(kind === "connected");
   home.setConnected(kind === "connected");
+  project.setConnected(kind === "connected");
 }
 
 function tickCountdown() {
@@ -577,6 +592,7 @@ function handleFrame(data) {
 
 function onAuthenticated() {
   chat.setCapabilities(state.capabilities);
+  project.setCapabilities(state.capabilities);
   if (state.pendingPairing) {
     writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
     state.pendingPairing = null;
@@ -668,6 +684,7 @@ async function loadSessions() {
     const listed = await request({ method: "list_sessions" });
     const sessions = listed.sessions || [];
     renderSessions(sessions);
+    showProject(parseProject(listed));
     elements["list-error"].textContent = "";
     if (sessionId) {
       const loaded = await request({ method: "get_session", session_id: sessionId });
@@ -684,6 +701,16 @@ async function loadSessions() {
       elements["list-error"].textContent = error.message;
     }
   }
+}
+
+// Shows the project a listing names. When the terminal switched to another
+// project, home describes the host again: new sessions start there.
+function showProject(listed) {
+  project.update(listed);
+  if (listed && state.projectName !== null && listed.name !== state.projectName) {
+    void home.setCapabilities(state.capabilities);
+  }
+  state.projectName = listed?.name ?? state.projectName;
 }
 
 function renderSessions(sessions) {
@@ -796,6 +823,7 @@ const chat = createChat({
     sheetDiffLabel: elements["sheet-diff-label"],
     sheetMerge: elements["sheet-merge"],
     sheetMergeLabel: elements["sheet-merge-label"],
+    sheetMergeNote: elements["sheet-merge-note"],
     sheetPublish: elements["sheet-publish"],
     sheetPublishNote: elements["sheet-publish-note"],
     sheetSub: elements["sheet-sub"],
@@ -884,6 +912,24 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+// The sidebar's project line and its sync.
+const project = createProject({
+  elements: {
+    branch: elements["project-branch"],
+    counts: elements["project-counts"],
+    dialog: elements["project-sync-dialog"],
+    dialogBranch: elements["project-sync-branch"],
+    dialogTarget: elements["project-sync-target"],
+    error: elements["project-error"],
+    line: elements.project,
+    name: elements["project-name"],
+    status: elements["project-status"],
+    sync: elements["project-sync"],
+    syncLabel: elements["project-sync-label"],
+  },
+  request: request,
+});
+
 const home = createHome({
   document: document,
   elements: {
@@ -911,8 +957,7 @@ const home = createHome({
   },
   onHost: (host) => {
     elements["new-session"].hidden = !host;
-    elements.project.hidden = !host;
-    elements["project-name"].textContent = host?.project ?? "";
+    project.setHostName(host?.project ?? null);
     if (!state.currentSessionId) {
       renderHome();
     }

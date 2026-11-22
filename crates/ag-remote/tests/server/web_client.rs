@@ -329,9 +329,30 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     let diff = app.next_step().await?;
     let settings = app.next_step().await?;
     let sync = app.next_step().await?;
+    let project = app.next_step().await?;
+    server.revisions_tx.send(2)?;
+    let syncing = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
+    assert_eq!(
+        project,
+        json!({
+            "step": "project",
+            "askedFirst": true,
+            "branch": "main ↓2 ↑0",
+            "error": "",
+            "target": "agentty/main",
+        })
+    );
+    assert_eq!(
+        syncing,
+        json!({
+            "step": "syncing",
+            "status": "Syncing agentty/main...",
+            "syncDisabled": true,
+        })
+    );
     assert_eq!(
         settings,
         json!({
@@ -382,6 +403,7 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
         "send:session-2:Resume the plan",
         "settings:session-2:low",
         "sync:session-2",
+        "sync_project",
     ] {
         assert!(
             calls.iter().any(|call| call == expected),

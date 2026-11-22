@@ -81,13 +81,14 @@ not execution ownership.
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
 runtime's Tokio executor but owns no application state. It calls the session API through
 the mailbox like any programmatic caller. The reducer advances the session-change
-revision after it applies session updates, reloads, admitted mutations, or a change to a
-session's live status line; connected clients then fetch the list and the open session
-again, so remote views converge on durable state instead of replaying events. A session
-diff query captures its diff source in the mailbox and runs Git in a detached task that
-answers the caller directly, so it adds no reducer event. A session file listing works
-the same way: the mailbox captures the worktree folder, or answers from the `@`-mention
-index cache, and a blocking worker walks the worktree.
+revision after it applies session updates, reloads, admitted mutations, a change to a
+session's live status line, a step of a project sync, or new Git status of the project
+or its sessions; connected clients then fetch the list and the open session again, so
+remote views converge on durable state instead of replaying events. A session diff query
+captures its diff source in the mailbox and runs Git in a detached task that answers the
+caller directly, so it adds no reducer event. A session file listing works the same way:
+the mailbox captures the worktree folder, or answers from the `@`-mention index cache,
+and a blocking worker walks the worktree.
 
 ## App Event Reducer
 

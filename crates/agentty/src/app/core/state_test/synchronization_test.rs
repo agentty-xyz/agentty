@@ -796,6 +796,47 @@ async fn project_sync_is_blocked_while_merge_work_is_pending() {
 }
 
 #[tokio::test]
+async fn programmatic_project_sync_is_refused_while_merge_work_is_pending() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
+    sync_main_runner.expect_start_sync_main().times(0);
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    app.merge_queue.enqueue("pending-merge".into());
+    let blocked_message = "a merge is active or queued; try again after it finishes";
+    let service = app.session_service();
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    let synced = app
+        .drive_session_request({
+            let service = service.clone();
+            async move { service.sync_project().await }
+        })
+        .await;
+    let blocked = app
+        .drive_session_request(async move { service.project_status().await })
+        .await
+        .map(|project| project.sync.map(|sync| sync.phase));
+
+    // Assert
+    assert_eq!(
+        synced,
+        Err(ag_session::SessionError::Operation(format!(
+            "Sync is blocked: {blocked_message}"
+        )))
+    );
+    assert_eq!(
+        blocked,
+        Ok(Some(ag_session::HostProjectSyncPhase::Blocked {
+            message: blocked_message.to_string(),
+        }))
+    );
+    assert!(*revisions.borrow_and_update() > initial_revision);
+}
+
+#[tokio::test]
 async fn project_sync_scheduler_keeps_requests_queued_while_slots_are_occupied() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;

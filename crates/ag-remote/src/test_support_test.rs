@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
-    DurableMessageRequest, HostContext, HostSessionMode, QuestionItem, ReasoningLevel,
-    ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile, SessionError,
-    SessionFileEntry, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
-    SpeedMode,
+    DurableMessageRequest, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
+    HostSessionMode, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
+    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionId, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -272,6 +272,14 @@ impl SessionBackend for RecordingBackend {
         self.record("host".to_string(), host_fixture())
     }
 
+    async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        self.record("project".to_string(), project_status_fixture())
+    }
+
+    async fn sync_project(&self) -> Result<(), SessionError> {
+        self.record("sync_project".to_string(), ())
+    }
+
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError> {
         let session = (session_id.as_str() != "missing").then(|| session_fixture(session_id));
 
@@ -418,6 +426,22 @@ pub(crate) fn host_fixture() -> HostContext {
                 speed_mode: SpeedMode::Fast,
             },
         ],
+    }
+}
+
+/// Describes project `agentty` on `main`, one commit ahead of and two
+/// behind its upstream, while a sync resolves three conflicted files.
+pub(crate) fn project_status_fixture() -> HostProjectStatus {
+    HostProjectStatus {
+        ahead_behind: Some((1, 2)),
+        branch: Some("main".to_string()),
+        project_name: "agentty".to_string(),
+        sync: Some(HostProjectSync {
+            branch: "main".to_string(),
+            phase: HostProjectSyncPhase::ResolvingConflicts {
+                conflicted_file_count: 3,
+            },
+        }),
     }
 }
 

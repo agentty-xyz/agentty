@@ -1,18 +1,19 @@
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
-    HostSessionMode, ReasoningLevel, ResponseStyle, ReviewRequest, ReviewRequestState,
-    ReviewRequestSummary, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionId,
-    SessionListEntry, SessionListStats, SessionStatus, SessionSummary, SpeedMode,
+    HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, ReasoningLevel,
+    ResponseStyle, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionDiffFile,
+    SessionDiffFileStatus, SessionFileEntry, SessionId, SessionListEntry, SessionListStats,
+    SessionStatus, SessionSummary, SpeedMode,
 };
 use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
-    RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteModeModel, RemoteModelOption, RemoteProject, RemoteQuestion, RemoteQuestionAnswer,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest,
+    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
-use crate::test_support::{host_fixture, session_fixture};
+use crate::test_support::{host_fixture, project_status_fixture, session_fixture};
 
 #[test]
 fn client_frames_use_snake_case_type_and_method_tags() {
@@ -34,7 +35,8 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         {"type": "request", "id": 6, "request": {"method": "merge_session", "session_id": "s"}},
         {"type": "request", "id": 7, "request": {"method": "stop_turn", "session_id": "s"}},
         {"type": "request", "id": 8, "request": {"method": "sync_session", "session_id": "s"}},
-        {"type": "request", "id": 9, "request": {"method": "publish_session", "session_id": "s"}}
+        {"type": "request", "id": 9, "request": {"method": "publish_session", "session_id": "s"}},
+        {"type": "request", "id": 10, "request": {"method": "sync_project"}}
     ]);
 
     // Act
@@ -111,6 +113,10 @@ fn client_frames_use_snake_case_type_and_method_tags() {
                 request: RemoteRequest::PublishSession {
                     session_id: "s".to_string(),
                 },
+            },
+            ClientFrame::Request {
+                id: 10,
+                request: RemoteRequest::SyncProject,
             },
         ]
     );
@@ -236,6 +242,7 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
         ServerFrame::Response {
             id: 4,
             result: RemoteResult::Ok(RemoteResponse::Sessions {
+                project: None,
                 sessions: Vec::new(),
             }),
         },
@@ -967,4 +974,123 @@ fn long_session_file_lists_stop_within_the_encoded_budget() {
     assert!(truncated);
     assert!(!files.is_empty() && files.len() < entries.len());
     assert!(encoded.len() <= MAX_FILE_RESPONSE_BYTES);
+}
+
+/// The project a host reports while `phase` is its latest sync.
+fn project_with_sync(phase: HostProjectSyncPhase) -> HostProjectStatus {
+    HostProjectStatus {
+        sync: Some(HostProjectSync {
+            branch: "main".to_string(),
+            phase,
+        }),
+        ..project_status_fixture()
+    }
+}
+
+#[test]
+fn project_frames_carry_the_branch_counts_and_each_sync_phase() {
+    // Arrange
+    let idle = HostProjectStatus {
+        ahead_behind: None,
+        branch: None,
+        sync: None,
+        ..project_status_fixture()
+    };
+    let projects = [
+        idle,
+        project_with_sync(HostProjectSyncPhase::Running),
+        project_status_fixture(),
+        project_with_sync(HostProjectSyncPhase::Complete {
+            pulled_commits: Some(4),
+            pushed_commits: None,
+            resolved_conflict_count: 0,
+        }),
+        project_with_sync(HostProjectSyncPhase::Complete {
+            pulled_commits: None,
+            pushed_commits: Some(1),
+            resolved_conflict_count: 2,
+        }),
+        project_with_sync(HostProjectSyncPhase::Blocked {
+            message: "a merge is active".to_string(),
+        }),
+        project_with_sync(HostProjectSyncPhase::Failed {
+            message: "push rejected".to_string(),
+        }),
+    ];
+
+    // Act
+    let remote: Vec<RemoteProject> = projects.into_iter().map(RemoteProject::from).collect();
+    let encoded = serde_json::to_value(&remote).expect("projects should encode");
+    let decoded: Vec<RemoteProject> =
+        serde_json::from_value(encoded.clone()).expect("projects should decode");
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!([
+            {"name": "agentty"},
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {"branch": "main", "phase": "running"}
+            },
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {"branch": "main", "conflicts": 3, "phase": "resolving_conflicts"}
+            },
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {"branch": "main", "phase": "complete", "pulled_commits": 4}
+            },
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {
+                    "branch": "main", "conflicts": 2, "phase": "complete", "pushed_commits": 1
+                }
+            },
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {"branch": "main", "message": "a merge is active", "phase": "blocked"}
+            },
+            {
+                "ahead": 1, "behind": 2, "branch": "main", "name": "agentty",
+                "sync": {"branch": "main", "message": "push rejected", "phase": "failed"}
+            }
+        ])
+    );
+    assert_eq!(decoded, remote);
+}
+
+#[test]
+fn session_lists_name_the_project_only_when_the_host_reports_it() {
+    // Arrange
+    let listed = RemoteResponse::Sessions {
+        project: Some(RemoteProject::from(HostProjectStatus {
+            sync: None,
+            ..project_status_fixture()
+        })),
+        sessions: Vec::new(),
+    };
+    let from_older_server = json!({"kind": "sessions", "sessions": []});
+
+    // Act
+    let encoded = serde_json::to_value(&listed).expect("list should encode");
+    let decoded: RemoteResponse =
+        serde_json::from_value(from_older_server).expect("list should decode");
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "kind": "sessions",
+            "project": {"ahead": 1, "behind": 2, "branch": "main", "name": "agentty"},
+            "sessions": []
+        })
+    );
+    assert_eq!(
+        decoded,
+        RemoteResponse::Sessions {
+            project: None,
+            sessions: Vec::new(),
+        }
+    );
 }

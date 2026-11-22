@@ -1,12 +1,251 @@
-//! Session API project tests covering retired-model migration and rejection
-//! of cross-project inheritance.
+//! Session API project tests covering retired-model migration, rejection
+//! of cross-project inheritance, and the active project's status and sync.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use ag_session::{
-    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest,
-    SessionError as ApiSessionError, SessionId, test_support as model_fixture,
+    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, HostProjectStatus,
+    HostProjectSync, HostProjectSyncPhase, SessionError as ApiSessionError, SessionId,
+    SessionOperation, test_support as model_fixture,
 };
 
-use super::support::{request_session, request_session_creation};
+use super::support::{
+    request_project_status, request_project_sync, request_session, request_session_creation,
+};
+use crate::app::session::SessionGitStatus;
+use crate::app::test_support::{
+    MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
+    SyncSessionStartError,
+};
+use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
+
+/// Lets `app` start project syncs without running Git.
+fn accept_project_syncs(app: &mut App, expected_starts: usize) {
+    let mut sync_main_runner = MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(expected_starts)
+        .returning(|_, _, _, _| {});
+    app.sync_main_runner = Arc::new(sync_main_runner);
+}
+
+/// Returns the operation of the project sync `app` shows.
+fn shown_sync_operation(app: &App) -> ProjectSyncContext {
+    app.project_sync_status
+        .as_ref()
+        .map(|status| status.context.clone())
+        .expect("a project sync should be shown")
+}
+
+/// Builds the completion of `operation` with `result`.
+fn sync_completed(
+    operation: ProjectSyncContext,
+    result: Result<SyncMainOutcome, SyncSessionStartError>,
+) -> AppEvent {
+    AppEvent::SyncMainCompleted {
+        completion: SyncMainCompletion {
+            operation,
+            result,
+            review_request_updates: Vec::new(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    accept_project_syncs(&mut app, 1);
+    app.projects.set_git_status(Some((1, 2)));
+    let branch = app.projects.git_branch().map(str::to_string);
+    let sync_branch = branch.clone().expect("test project should have a branch");
+    let idle_project = HostProjectStatus {
+        ahead_behind: Some((1, 2)),
+        branch,
+        project_name: app.projects.project_name().to_string(),
+        sync: None,
+    };
+    let project_with = |phase: HostProjectSyncPhase| HostProjectStatus {
+        sync: Some(HostProjectSync {
+            branch: sync_branch.clone(),
+            phase,
+        }),
+        ..idle_project.clone()
+    };
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let mut revision_changed = || {
+        let is_changed = revisions
+            .has_changed()
+            .expect("revision sender should live");
+        revisions.borrow_and_update();
+
+        is_changed
+    };
+
+    // Act
+    let service = app.session_service();
+    let supports_status = service.supports(SessionOperation::ProjectStatus);
+    let supports_sync = service.supports(SessionOperation::SyncProject);
+    let idle = request_project_status(&mut app).await;
+    let synced = request_project_sync(&mut app).await;
+    let started_changed = revision_changed();
+    let running = request_project_status(&mut app).await;
+    let repeated = request_project_sync(&mut app).await;
+    let operation = shown_sync_operation(&app);
+    app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
+        conflicted_files: vec!["src/lib.rs".to_string(), "README.md".to_string()],
+        operation: operation.clone(),
+    })
+    .await;
+    let conflict_changed = revision_changed();
+    let resolving = request_project_status(&mut app).await;
+    app.apply_app_events(sync_completed(
+        operation,
+        Ok(SyncMainOutcome {
+            default_branch: sync_branch.clone(),
+            pulled_commit_titles: Vec::new(),
+            pulled_commits: Some(3),
+            pushed_commit_titles: Vec::new(),
+            pushed_commits: Some(1),
+            resolved_conflict_files: vec!["src/lib.rs".to_string(), "README.md".to_string()],
+        }),
+    ))
+    .await;
+    let completion_changed = revision_changed();
+    let complete = request_project_status(&mut app).await;
+    let expires_at = app
+        .project_sync_status_expires_at
+        .expect("a finished sync should expire");
+    app.expire_project_sync_status(expires_at);
+    let expiry_changed = revision_changed();
+    let expired = request_project_status(&mut app).await;
+
+    // Assert
+    assert!(supports_status);
+    assert!(supports_sync);
+    assert_eq!(idle, Ok(idle_project.clone()));
+    assert_eq!(synced, Ok(()));
+    assert_eq!(repeated, Ok(()));
+    assert_eq!(running, Ok(project_with(HostProjectSyncPhase::Running)));
+    assert_eq!(
+        resolving,
+        Ok(project_with(HostProjectSyncPhase::ResolvingConflicts {
+            conflicted_file_count: 2,
+        }))
+    );
+    assert_eq!(
+        complete,
+        Ok(project_with(HostProjectSyncPhase::Complete {
+            pulled_commits: Some(3),
+            pushed_commits: Some(1),
+            resolved_conflict_count: 2,
+        }))
+    );
+    assert_eq!(expired, Ok(idle_project));
+    assert_eq!(
+        [
+            started_changed,
+            conflict_changed,
+            completion_changed,
+            expiry_changed
+        ],
+        [true; 4]
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_a_failed_project_sync() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    accept_project_syncs(&mut app, 1);
+
+    // Act
+    let synced = request_project_sync(&mut app).await;
+    let operation = shown_sync_operation(&app);
+    app.apply_app_events(sync_completed(
+        operation,
+        Err(SyncSessionStartError::Other(
+            "remote rejected the push".to_string(),
+        )),
+    ))
+    .await;
+    let failed = request_project_status(&mut app)
+        .await
+        .map(|project| project.sync.map(|sync| sync.phase));
+
+    // Assert
+    assert_eq!(synced, Ok(()));
+    assert_eq!(
+        failed,
+        Ok(Some(HostProjectSyncPhase::Failed {
+            message: "remote rejected the push".to_string(),
+        }))
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_leaves_out_the_sync_of_another_project() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    accept_project_syncs(&mut app, 0);
+    app.project_sync_status = Some(ProjectSyncStatus {
+        context: ProjectSyncContext {
+            default_branch: "develop".to_string(),
+            operation_id: 1,
+            project_id: app.active_project_id() + 1,
+            project_name: "other".to_string(),
+        },
+        phase: ProjectSyncPhase::Running,
+    });
+
+    // Act
+    let queued = request_project_sync(&mut app).await;
+    let project = request_project_status(&mut app).await;
+
+    // Assert
+    assert_eq!(queued, Ok(()));
+    assert_eq!(project.map(|project| project.sync), Ok(None));
+    assert_eq!(app.pending_project_sync_requests.len(), 1);
+}
+
+#[tokio::test]
+async fn git_status_updates_advance_the_remote_revision_only_when_they_change() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let generation = app.sync_handle.current_generation();
+    let update = |status| AppEvent::GitStatusUpdated {
+        generation,
+        session_statuses: HashMap::new(),
+        status,
+    };
+    let conflict_update = AppEvent::GitStatusUpdated {
+        generation,
+        session_statuses: HashMap::from([(
+            SessionId::from("session-1"),
+            SessionGitStatus {
+                has_merge_conflict: Some(true),
+                ..SessionGitStatus::default()
+            },
+        )]),
+        status: Some((0, 2)),
+    };
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.apply_app_events(update(Some((0, 2)))).await;
+    let after_counts = *revisions.borrow_and_update();
+    app.apply_app_events(update(Some((0, 2)))).await;
+    let after_same_counts = *revisions.borrow_and_update();
+    app.apply_app_events(conflict_update).await;
+    let after_conflict = *revisions.borrow_and_update();
+
+    // Assert
+    assert_eq!(after_counts, initial_revision + 1);
+    assert_eq!(after_same_counts, after_counts);
+    assert_eq!(after_conflict, after_counts + 1);
+}
 
 #[tokio::test]
 async fn runtime_backend_migrates_retired_model_for_inactive_project_lookup() {

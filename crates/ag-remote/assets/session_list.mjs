@@ -6,6 +6,7 @@
 
 import {
   FILTERS,
+  MERGE_CONFLICT_LABEL,
   filterCounts,
   filterSessions,
   groupSessions,
@@ -352,24 +353,38 @@ export function separator(document) {
   return node;
 }
 
-// The line counts, the model and `PR ready` that a card shows from
-// `sessionFigures`, each after a `·` separator. Missing figures are left
-// out.
+// The line counts, then `merge conflict` and `PR ready`, or else the
+// model, that a row or a card shows from `sessionFigures`, each after a
+// `·` separator. Missing figures are left out. A label takes the model's
+// place: both do not fit a row, and the open session's header names the
+// model.
 function figureNodes(document, figures) {
   const nodes = [];
   if (figures.lines) {
     nodes.push(lineCounts(document, figures.lines));
   }
-  if (figures.model) {
+  if (figures.hasConflict) {
+    nodes.push(conflictLabel(document));
+  }
+  if (figures.prReady) {
+    const ready = element(document, "span", "pr-ready", figures.prReady);
+    // A narrow row may cut the label short.
+    ready.title = figures.prReady;
+    nodes.push(ready);
+  }
+  if (figures.model && !figures.hasConflict && !figures.prReady) {
     const model = element(document, "span", "model", figures.model);
     model.title = figures.model;
     nodes.push(model);
   }
-  if (figures.isPrReady) {
-    nodes.push(element(document, "span", "pr-ready", "PR ready"));
-  }
 
   return nodes.flatMap((node) => [separator(document), node]);
+}
+
+// The `merge conflict` label of a session whose branch conflicts with its
+// base, in the error tone.
+export function conflictLabel(document, text = MERGE_CONFLICT_LABEL) {
+  return element(document, "span", "conflict", text);
 }
 
 // A status dot and label in the status's tone.

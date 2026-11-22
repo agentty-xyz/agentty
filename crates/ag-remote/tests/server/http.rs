@@ -53,6 +53,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let markdown = get(addr, "/markdown.mjs").await?;
     let mention = get(addr, "/mention.mjs").await?;
     let noise = get(addr, "/noise.mjs").await?;
+    let project = get(addr, "/project.mjs").await?;
     let relay = get(addr, "/relay.mjs").await?;
     let session_list = get(addr, "/session_list.mjs").await?;
     let settings = get(addr, "/settings.mjs").await?;
@@ -74,6 +75,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&markdown, "text/javascript; charset=utf-8"),
         (&mention, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
+        (&project, "text/javascript; charset=utf-8"),
         (&relay, "text/javascript; charset=utf-8"),
         (&session_list, "text/javascript; charset=utf-8"),
         (&settings, "text/javascript; charset=utf-8"),
@@ -113,6 +115,8 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(script.contains("from \"./diff.mjs\""));
     assert!(script.contains("from \"./home.mjs\""));
     assert!(home.contains("from \"./chat.mjs\""));
+    assert!(script.contains("from \"./project.mjs\""));
+    assert!(project.contains("from \"./format.mjs\""));
     assert!(script.contains("from \"./relay.mjs\""));
     assert!(script.contains("from \"./session_list.mjs\""));
     assert!(script.contains("from \"./settings.mjs\""));
@@ -221,6 +225,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/markdown.mjs",
             "/mention.mjs",
             "/noise.mjs",
+            "/project.mjs",
             "/relay.mjs",
             "/session_list.mjs",
             "/settings.mjs",

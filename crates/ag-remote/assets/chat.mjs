@@ -20,7 +20,7 @@ import {
   statusLine,
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
-import { lineCounts } from "./session_list.mjs";
+import { conflictLabel, lineCounts } from "./session_list.mjs";
 
 // Shortest time between two refreshes.
 export const REFRESH_INTERVAL_MS = 1000;
@@ -35,6 +35,8 @@ const QUEUEING_STATUSES = new Set(["InProgress", "Rebasing"]);
 // What a read-only status says instead of the composer, when its label
 // alone would not.
 const READ_ONLY_LABELS = { Queued: "Queued to merge" };
+// Why Merge is off for a session with a linked review request.
+const MERGE_ON_FORGE_HINT = "merge its pull request instead";
 
 // The kind a message renders as. A kind this client does not know, from a
 // newer Agentty, renders as a notice.
@@ -122,8 +124,11 @@ export function collectAnswers(questions, picks, typed) {
 
 // Which header actions a session in `statusName` shows, and which of them
 // are enabled. Diff, Merge and Publish appear only with their capability,
-// and Sync only with its capability in a status that allows it.
-export function sessionActions(statusName, capabilities = []) {
+// and Sync only with its capability in a status that allows it. A session
+// with a linked review request merges on the forge, so the host refuses
+// to merge it and `hasReviewRequest` disables Merge, as the terminal
+// hides `m`.
+export function sessionActions(statusName, capabilities = [], hasReviewRequest = false) {
   const info = statusInfo(statusName);
 
   return {
@@ -131,7 +136,7 @@ export function sessionActions(statusName, capabilities = []) {
     diff: capabilities.includes("diff"),
     diffEnabled: capabilities.includes("diff") && info.diff,
     merge: capabilities.includes("merge"),
-    mergeEnabled: capabilities.includes("merge") && info.review,
+    mergeEnabled: capabilities.includes("merge") && info.review && !hasReviewRequest,
     publish: capabilities.includes("publish"),
     publishEnabled: capabilities.includes("publish") && info.review,
     sync: capabilities.includes("sync") && info.sync,
@@ -353,8 +358,9 @@ export function createChat({
   // `Cancel session` everywhere.
   function renderActions() {
     // Without a session, no capability offers anything.
+    const hasReviewRequest = Boolean(reviewLabel(state.session?.review_request));
     const actions = state.session
-      ? sessionActions(state.session.status, state.capabilities)
+      ? sessionActions(state.session.status, state.capabilities, hasReviewRequest)
       : sessionActions(null, []);
     if (!actions.diffEnabled && diff?.isOpen()) {
       showDiff(false);
@@ -368,6 +374,8 @@ export function createChat({
     elements.sheetDiffLabel.textContent = isDiffOpen ? "Back to chat" : "Diff";
     elements.merge.hidden = !actions.merge;
     elements.merge.disabled = !actions.mergeEnabled || isActing("merge_session") || !state.isConnected;
+    elements.merge.title = hasReviewRequest ? "Merge is off: " + MERGE_ON_FORGE_HINT : "";
+    elements.sheetMergeNote.textContent = hasReviewRequest ? MERGE_ON_FORGE_HINT : "asks first";
     elements.sheetMerge.hidden = !actions.merge;
     elements.sheetMerge.disabled = elements.merge.disabled;
     renderPublish(actions);
@@ -1227,9 +1235,9 @@ function nodeKey(node) {
 }
 
 // The header's details after the status: the size badge and line counts
-// from the listing, the branch and its base, the model, and the review
-// request as a link. Whatever the host omits is left out. The branch and
-// model give way first on a phone.
+// from the listing, a merge conflict with the base branch, the branch and
+// its base, the model, and the review request as a link. Whatever the
+// host omits is left out. The branch and model give way first on a phone.
 function headerDetails(document, session, summary) {
   const figures = sessionFigures(summary);
   const nodes = [];
@@ -1241,6 +1249,9 @@ function headerDetails(document, session, summary) {
   }
   const branch = typeof session.branch === "string" ? session.branch : "";
   const base = typeof session.base_branch === "string" ? session.base_branch : "";
+  if (figures.hasConflict) {
+    nodes.push(conflictLabel(document, base ? "Merge conflict with " + base : "Merge conflict"));
+  }
   if (branch) {
     nodes.push(element(document, "span", "wide-only", base ? branch + " → " + base : branch));
   }
