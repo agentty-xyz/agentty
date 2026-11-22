@@ -83,16 +83,37 @@ async fn next_binary(socket: &mut Client) -> TestResult<Vec<u8>> {
     }
 }
 
+/// Waits until `socket` is closed or ends, and fails on a timeout, so a
+/// stream the server keeps open cannot pass for a dropped one.
+async fn stream_ends(socket: &mut Client) -> TestResult<bool> {
+    loop {
+        match tokio::time::timeout(MESSAGE_TIMEOUT, socket.next()).await? {
+            Some(Ok(Message::Close(_)) | Err(_)) | None => return Ok(true),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            Some(Ok(other)) => return Err(format!("unexpected message {other:?}").into()),
+        }
+    }
+}
+
 /// Starts a relay on a free loopback port.
 async fn start_relay() -> TestResult<RelayHandle> {
     let relay = ag_relay::start(RelayConfig {
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         client_address_header: None,
-        limits: RelayLimits::default(),
+        limits: relay_limits(),
     })
     .await?;
 
     Ok(relay)
+}
+
+/// Relay limits with frequent keepalive pings, so the server's handling of
+/// them runs in every test.
+fn relay_limits() -> RelayLimits {
+    RelayLimits {
+        ping_interval: Duration::from_millis(50),
+        ..RelayLimits::default()
+    }
 }
 
 /// Starts a server linked to `relay` and waits until it is registered.
@@ -216,7 +237,7 @@ async fn broken_device_handshake_is_dropped_and_others_still_connect() -> TestRe
     // Act
     let (mut broken, _) = connect_async(url).await?;
     broken.send(Message::Binary(vec![1, 2, 3].into())).await?;
-    let broken_ended = next_binary(&mut broken).await.is_err();
+    let broken_ended = stream_ends(&mut broken).await?;
     let mut device = RelayDevice::connect(&relay, &instance, &StaticKeypair::generate()?).await?;
     device
         .send(&ClientFrame::Hello {
@@ -255,10 +276,12 @@ async fn server_reconnects_after_the_relay_restarts() -> TestResult {
         status.wait_for(|status| status.relay == Some(RelayStatus::Connecting)),
     )
     .await??;
+    // Stay down long enough for at least one reconnect attempt to fail.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     let restarted = ag_relay::start(RelayConfig {
         bind_addr: address,
         client_address_header: None,
-        limits: RelayLimits::default(),
+        limits: relay_limits(),
     })
     .await?;
     let reconnected = tokio::time::timeout(

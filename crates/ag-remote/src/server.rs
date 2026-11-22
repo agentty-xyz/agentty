@@ -266,8 +266,8 @@ pub(crate) struct ServerState {
     /// State of the relay link, once a relay task reports it.
     relay_status: Mutex<Option<RelayStatus>>,
     status_tx: watch::Sender<RemoteServerStatus>,
-    /// Sockets holding a [`HandshakeSlot`].
-    unauthenticated_sockets: Mutex<usize>,
+    /// Sockets holding a [`HandshakeSlot`], counted per [`ConnectionOrigin`].
+    unauthenticated_sockets: Mutex<[usize; 2]>,
 }
 
 impl ServerState {
@@ -290,7 +290,7 @@ impl ServerState {
             relay_status: Mutex::new(None),
             shutdown_rx,
             status_tx: watch::Sender::new(RemoteServerStatus::default()),
-            unauthenticated_sockets: Mutex::new(0),
+            unauthenticated_sockets: Mutex::new([0; 2]),
         }
     }
 
@@ -332,20 +332,26 @@ impl ServerState {
         self.pairing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots for a
-    /// socket that has not authenticated, or returns `None` when all are
-    /// taken.
-    pub(crate) fn reserve_handshake(self: &Arc<Self>) -> Option<HandshakeSlot> {
+    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots of `origin`
+    /// for a connection that has not authenticated, or returns `None` when
+    /// all are taken. Each origin has its own slots, so relay traffic cannot
+    /// lock out the local listener.
+    pub(crate) fn reserve_handshake(
+        self: &Arc<Self>,
+        origin: ConnectionOrigin,
+    ) -> Option<HandshakeSlot> {
         let mut unauthenticated = self
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if *unauthenticated >= MAX_UNAUTHENTICATED_SOCKETS {
+        let count = &mut unauthenticated[origin.index()];
+        if *count >= MAX_UNAUTHENTICATED_SOCKETS {
             return None;
         }
-        *unauthenticated += 1;
+        *count += 1;
 
         Some(HandshakeSlot {
+            origin,
             state: Arc::clone(self),
         })
     }
@@ -552,8 +558,28 @@ struct RegisteredConnection {
     connection: RemoteConnection,
 }
 
+/// Where an unauthenticated connection came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConnectionOrigin {
+    /// The loopback listener.
+    Local,
+    /// A stream announced by the relay.
+    Relay,
+}
+
+impl ConnectionOrigin {
+    /// Position of this origin's count in the slot counts.
+    fn index(self) -> usize {
+        match self {
+            Self::Local => 0,
+            Self::Relay => 1,
+        }
+    }
+}
+
 /// Keeps one unauthenticated socket counted until it authenticates or ends.
 pub(crate) struct HandshakeSlot {
+    origin: ConnectionOrigin,
     state: Arc<ServerState>,
 }
 
@@ -564,7 +590,8 @@ impl Drop for HandshakeSlot {
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        *unauthenticated = unauthenticated.saturating_sub(1);
+        let count = &mut unauthenticated[self.origin.index()];
+        *count = count.saturating_sub(1);
     }
 }
 
@@ -650,7 +677,7 @@ async fn upgrade(
     if !origin_matches_host(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(handshake) = state.reserve_handshake() else {
+    let Some(handshake) = state.reserve_handshake(ConnectionOrigin::Local) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 

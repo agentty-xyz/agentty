@@ -183,6 +183,49 @@ fn pairing_device(device_name: &str) -> PairingDevice {
 }
 
 #[tokio::test]
+async fn paired_key_device_that_pairs_again_is_welcomed_without_spending_the_code() {
+    // Arrange
+    let fixture =
+        fixture(MemoryDeviceStore::default().with_device("phone", &key_hash(&device_key())));
+    let code = issue_code(&fixture);
+    let proof = DeviceProof::Key(device_key());
+
+    // Act
+    let repaired = super::authenticate(
+        &fixture.state,
+        pair(&code, "Phone"),
+        &mut fixture.state.revisions(),
+        &proof,
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(repaired, Ok(Authentication::Authenticated { .. })));
+    assert_eq!(fixture.devices.touched(), ["phone"]);
+    assert!(fixture.state.pairing().redeem(&code));
+}
+
+#[tokio::test]
+async fn key_device_pairing_reports_store_failures() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::failing(&[FIND]));
+    let code = issue_code(&fixture);
+
+    // Act
+    let result = super::authenticate(
+        &fixture.state,
+        pair(&code, "Phone"),
+        &mut fixture.state.revisions(),
+        &DeviceProof::Key(device_key()),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(result, Err(DEVICE_STORE_UNAVAILABLE));
+    assert!(fixture.state.pairing().redeem(&code));
+}
+
+#[tokio::test]
 async fn key_device_pairs_and_authenticates_without_a_token() {
     // Arrange
     let fixture = fixture(MemoryDeviceStore::default());
