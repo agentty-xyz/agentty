@@ -2453,7 +2453,7 @@ impl SessionManager {
             session
                 .transcript
                 .as_ref()
-                .and_then(SessionTranscript::replay_text)
+                .and_then(SessionTranscript::provider_replay_text)
         } else {
             None
         };

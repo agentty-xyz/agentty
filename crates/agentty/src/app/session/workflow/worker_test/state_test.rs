@@ -598,7 +598,7 @@ async fn test_run_channel_turn_saves_compaction_notices_before_the_answer() {
                     }),
                     TurnEvent::ThoughtDelta("Thinking".to_string()),
                     TurnEvent::Notice(TurnNotice::ContextCompactionFailed {
-                        reason: "summary rejected".to_string(),
+                        reason: "invalid output".to_string(),
                     }),
                     TurnEvent::Notice(TurnNotice::ContextCompacted { model: None }),
                 ] {
@@ -638,8 +638,8 @@ async fn test_run_channel_turn_saves_compaction_notices_before_the_answer() {
         notices,
         [
             "[Context] Summarized earlier turns with `qwen3.8-flash` to fit the context window.",
-            "[Context Warning] Could not summarize earlier turns, so the oldest were left out of \
-             this turn: summary rejected",
+            "[Context Warning] Could not summarize earlier turns (invalid output); the oldest no \
+             longer fit and were dropped from the context.",
             "[Context] Summarized earlier turns to fit the context window.",
         ]
     );

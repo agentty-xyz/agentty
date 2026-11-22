@@ -1,12 +1,13 @@
 //! `SettingsManager` tests for settings rows, defaults, persisted values, and
 //! role model selection.
 
+use ag_contracts::ContextCompaction;
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
     SettingsManager, load_default_fast_agent_setting, load_default_smart_agent_setting,
-    load_default_smart_model_setting, load_harness_compaction_model,
-    load_max_concurrent_subagents_setting, normalized_speed_mode, selectable_model_options,
+    load_default_smart_model_setting, load_max_concurrent_subagents_setting,
+    load_session_context_compaction, normalized_speed_mode, selectable_model_options,
 };
 use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
@@ -1163,7 +1164,10 @@ async fn harness_sessions_compact_on_a_harness_fast_default_only() {
         test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
     let harness_session = AgentSelection::new(AgentKind::Harness, AgentModel::MuseSpark13);
     let compaction_model = |project_id, session_agent| {
-        load_harness_compaction_model(services.db(), project_id, session_agent)
+        load_session_context_compaction(services.db(), project_id, session_agent)
+    };
+    let automatic = |summary_model: Option<&str>| ContextCompaction::Automatic {
+        summary_model: summary_model.map(str::to_string),
     };
 
     // Act
@@ -1193,15 +1197,16 @@ async fn harness_sessions_compact_on_a_harness_fast_default_only() {
     let cli_fast = compaction_model(Some(project_id), harness_session).await;
 
     // Assert
-    assert_eq!(unset, None);
+    assert_eq!(unset, automatic(None));
     assert_eq!(
-        harness_fast.as_deref(),
-        Some(AgentModel::Qwen38Flash.provider_model_str())
+        harness_fast,
+        automatic(Some(AgentModel::Qwen38Flash.provider_model_str()))
     );
-    assert_eq!(without_project, None);
-    assert_eq!(cli_session, None);
-    // A Fast default on an agent CLI never compacts a Harness session.
-    assert_eq!(cli_fast, None);
+    assert_eq!(without_project, automatic(None));
+    // Other agents manage their own context.
+    assert_eq!(cli_session, ContextCompaction::Off);
+    // A Fast default on an agent CLI never summarizes a Harness session.
+    assert_eq!(cli_fast, automatic(None));
 }
 
 #[tokio::test]

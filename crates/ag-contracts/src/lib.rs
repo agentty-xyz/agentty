@@ -19,8 +19,8 @@ pub use activity::{ActivityEvent, ActivityKind, ActivityStatus};
 pub use contract::MockAgentChannel;
 pub use contract::{
     AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
-    AgentRequestKind, LiveTranscript, SessionRef, StartSessionRequest, TurnContinuation,
-    TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
+    AgentRequestKind, ContextCompaction, LiveTranscript, SessionRef, StartSessionRequest,
+    TurnContinuation, TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
     normalize_instruction_conversation_id,
 };
 pub use execution_policy::{ExecutionPolicy, McpPolicy, ToolPolicy};

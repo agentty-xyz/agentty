@@ -934,11 +934,11 @@ fn external_consumer_names_the_summary_model_of_a_registered_harness() -> Result
     let mut registry = ModelRegistry::new();
     registry.register_catalog_entry(&entry("host/text")?, "host-1")?;
 
+    let mut harness = Harness::from_registry(&registry, "host/text")?;
+
     // Act
-    let summarizing =
-        Harness::from_registry(&registry, "host/text")?.summary_model(&entry("host/summary")?);
-    let unsupported =
-        Harness::from_registry(&registry, "host/text")?.summary_model(&entry("host/plain")?);
+    let summarizing = harness.set_summary_model(&entry("host/summary")?);
+    let unsupported = harness.set_summary_model(&entry("host/plain")?);
 
     // Assert
     assert!(summarizing.is_ok());
@@ -946,6 +946,10 @@ fn external_consumer_names_the_summary_model_of_a_registered_harness() -> Result
         unsupported.err().map(|error| error.kind()),
         Some(ErrorKind::Config)
     ));
+    assert_eq!(
+        harness.summary_model().map(ModelId::as_str),
+        Some("host/summary")
+    );
 
     Ok(())
 }

@@ -1756,7 +1756,7 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
                     assertion::assert_text_in_region(frame, COMPACTION_NOTICE, &full);
                     assertion::assert_text_in_region(
                         frame,
-                        "qwen3:latest to fit the context window.",
+                        "openai-compatible/qwen3:latest to fit the context window.",
                         &full,
                     );
                     assertion::assert_text_in_region(
@@ -1776,7 +1776,7 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
             String::from_utf8_lossy(&request.body).contains("Conversation source to summarize")
         })
         .count();
-    assert!(compactions >= 1, "the session should compact once");
+    assert_eq!(compactions, 1, "the session should compact once");
 
     Ok(())
 }

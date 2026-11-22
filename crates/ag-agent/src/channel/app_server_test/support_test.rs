@@ -11,7 +11,7 @@ use crate::app_server::AppServerTurnResponse;
 
 pub(super) fn make_turn_request() -> TurnRequest {
     TurnRequest {
-        compaction_model: None,
+        context_compaction: ag_contracts::ContextCompaction::Off,
         provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: ag_contracts::TurnContinuation::fresh(),

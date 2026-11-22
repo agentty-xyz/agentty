@@ -273,12 +273,10 @@ pub struct TurnContinuationParts {
 /// Input payload for one provider-agnostic agent turn.
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
-    /// Model that summarizes the session's earlier turns once its context
-    /// grows long, such as the user's Default Fast Model, or `None` to
-    /// summarize on [`Self::model`]. Only in-process harness turns compact
-    /// this way; they also use [`Self::model`] when this model cannot serve
-    /// summaries, and other agents ignore it.
-    pub compaction_model: Option<String>,
+    /// Whether the turn compacts the session's earlier turns once they nearly
+    /// fill the model's context window. Only in-process harness turns
+    /// compact; other agents manage their own context and ignore it.
+    pub context_compaction: ContextCompaction,
     /// Prior context needed to continue this turn.
     pub continuation: TurnContinuation,
     /// Resolved harness policy. The worker replaces this with its configured
@@ -310,6 +308,24 @@ pub struct TurnRequest {
     pub response_style: ResponseStyle,
     /// Response-speed preference for the turn.
     pub speed_mode: SpeedMode,
+}
+
+/// How a turn handles a session context that outgrows the model's window.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextCompaction {
+    /// The turn never compacts; history that no longer fits is left out of
+    /// its requests, oldest first.
+    #[default]
+    Off,
+    /// The turn first summarizes earlier turns into a checkpoint that later
+    /// requests carry in their place.
+    Automatic {
+        /// Model that writes the summary, such as the user's Default Fast
+        /// Model, or `None` for [`TurnRequest::model`]. Harness turns also
+        /// use [`TurnRequest::model`] when this model cannot serve
+        /// summaries.
+        summary_model: Option<String>,
+    },
 }
 
 /// Incremental event emitted during one agent turn.

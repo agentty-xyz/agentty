@@ -87,8 +87,8 @@ impl TurnActivity {
                 .format("Summarized earlier turns to fit the context window."),
             TurnNotice::ContextCompactionFailed { reason } => TranscriptNotice::ContextWarning
                 .format(format_args!(
-                    "Could not summarize earlier turns, so the oldest were left out of this turn: \
-                     {reason}"
+                    "Could not summarize earlier turns ({reason}); the oldest no longer fit and \
+                     were dropped from the context."
                 )),
         };
         self.notices.push(text);

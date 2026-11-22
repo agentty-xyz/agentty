@@ -8,6 +8,8 @@ use ag_harness::event::{CompactionOutcome, Delta, Item, ItemKind};
 use ag_harness::{RunEventKind, RunOutput};
 use serde_json::Value;
 
+use super::config::ModelSelection;
+
 /// Field of the protocol response that carries the user-facing answer.
 const ANSWER_FIELD: &str = "answer";
 
@@ -219,17 +221,19 @@ pub(crate) fn turn_notice(event: &RunEventKind) -> Option<TurnNotice> {
 
     match &report.outcome {
         CompactionOutcome::Compacted { model, .. } => Some(TurnNotice::ContextCompacted {
-            // Catalog identifiers name the provider first, as in
-            // `qwen/qwen3.8-flash`; users know the model by the rest.
-            model: model.as_ref().map(|model| {
-                let id = model.as_str();
+            model: model
+                .as_ref()
+                .map(|model| ModelSelection::model_id_of(model.as_str())),
+        }),
+        CompactionOutcome::Failed(failure) => {
+            // The notice names only the failure's kind; its message can be a
+            // long provider response.
+            tracing::warn!(kind = %failure.kind, message = %failure.message, "compaction failed");
 
-                id.split_once('/').map_or(id, |(_, name)| name).to_string()
-            }),
-        }),
-        CompactionOutcome::Failed(failure) => Some(TurnNotice::ContextCompactionFailed {
-            reason: failure.message.clone(),
-        }),
+            Some(TurnNotice::ContextCompactionFailed {
+                reason: failure.kind.as_str().replace('_', " "),
+            })
+        }
         _ => None,
     }
 }

@@ -59,19 +59,23 @@ events, including repairs. Hosts own persistence and rendering.
 
 ## Context Compaction
 
-Native session turns compact their durable history automatically
-(`ContextPolicy::auto_compact`). `TurnRequest::compaction_model` carries the host's
-choice of summary model, Agentty's Default Fast Model on a Harness session; the adapter
-hands it to the harness with `Harness::summary_model` only when it resolves to another
-ready harness model with structured output, and otherwise lets the session's model
-summarize. The summary model is not part of the recorded registration, so sessions
-recorded before or without it resume unchanged. Compaction requests run inside the
-turn's harness run, so they stay on the Run Worker, Agent Runtime, Harness, LLM path,
-count toward the turn's usage, and are priced at the summary model. A failed compaction
-never fails the turn: the harness evicts the oldest turns instead. The adapter reports a
-published checkpoint or a failure as `TurnEvent::Notice`, which the host saves as a
-transcript notice before the turn's answer; a compaction with nothing to cover reports
-none.
+`TurnRequest::context_compaction` decides whether a native turn compacts its durable
+history (`ContextPolicy::auto_compact`) or evicts it. Agentty compacts its own session
+turns and keeps task agents, graph nodes, and assist turns on eviction, since no
+transcript shows their notices. `ContextCompaction::Automatic` carries the summary
+model, Agentty's Default Fast Model on a Harness session; the adapter sets it with
+`Harness::set_summary_model`, or `Session::set_summary_model` after a model switch, only
+when it resolves to another ready harness model with structured output, and otherwise
+logs why and lets the session's model summarize. The summary model is not part of the
+recorded registration, so sessions recorded before or without it resume unchanged.
+Compaction requests run inside the turn's harness run, so they stay on the Run Worker,
+Agent Runtime, Harness, LLM path, count toward the turn's usage, and are priced at the
+summary model. A failed summary request never fails the turn, which evicts the oldest
+turns instead; the run's budget ledger refusing a request, its wall-time limit, and
+session store failures still fail it. The adapter reports a published checkpoint or a
+failed summary as `TurnEvent::Notice`, which the host saves as a transcript notice
+before the turn's answer and leaves out of provider replay; a compaction with nothing to
+cover reports none.
 
 ## Streamed Output
 

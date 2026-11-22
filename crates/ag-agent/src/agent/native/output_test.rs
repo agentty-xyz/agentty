@@ -448,12 +448,14 @@ fn compactions_that_changed_the_context_are_noted_once() {
         compacted(&json!({
             "status": "compacted", "covered_through": 2, "model": "qwen/qwen3.8-flash"
         })),
-        compacted(&json!({"status": "compacted", "covered_through": 2, "model": "local"})),
+        compacted(&json!({
+            "status": "compacted", "covered_through": 2, "model": "chatgpt/gpt-6-luna"
+        })),
         compacted(&json!({"status": "compacted", "covered_through": 2, "model": null})),
         compacted(&json!({
             "status": "failed",
             "kind": "invalid_output",
-            "message": "summary rejected",
+            "message": "provider body\nwith many lines",
             "retryable": false
         })),
         compacted(&json!({"status": "nothing_to_cover"})),
@@ -470,12 +472,15 @@ fn compactions_that_changed_the_context_are_noted_once() {
             Some(TurnNotice::ContextCompacted {
                 model: Some("qwen3.8-flash".to_string())
             }),
+            // A plan model keeps the prefix that sets it apart from the
+            // API-billed model of the same name.
             Some(TurnNotice::ContextCompacted {
-                model: Some("local".to_string())
+                model: Some("chatgpt/gpt-6-luna".to_string())
             }),
             Some(TurnNotice::ContextCompacted { model: None }),
+            // Only the failure's kind, never the provider's text.
             Some(TurnNotice::ContextCompactionFailed {
-                reason: "summary rejected".to_string()
+                reason: "invalid output".to_string()
             }),
             None,
             None,

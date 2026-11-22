@@ -1131,7 +1131,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
     };
 
     let req = TurnRequest {
-        compaction_model: None,
+        context_compaction: ag_contracts::ContextCompaction::Off,
         provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
@@ -1249,7 +1249,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
         };
 
         let req = TurnRequest {
-            compaction_model: None,
+            context_compaction: ag_contracts::ContextCompaction::Off,
             provider_call_budget: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::fresh(),

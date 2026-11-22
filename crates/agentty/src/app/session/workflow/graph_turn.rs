@@ -356,7 +356,9 @@ async fn prepare(
     );
     Ok(TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
-        compaction_model: None,
+        // Graph nodes run bounded work whose results their graph keeps, and
+        // no transcript shows their compaction notices.
+        context_compaction: ag_contracts::ContextCompaction::Off,
         continuation: history.map_or_else(TurnContinuation::fresh, |history| {
             TurnContinuation::replaying(history.text)
         }),

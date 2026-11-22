@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
+use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{
     ModelCapabilities, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ReasoningEffort,
@@ -15,7 +16,9 @@ use ag_harness::model::{
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionStore};
-use ag_harness::{Harness, ImageContent, ImageMediaType, InputBlock, Model, TurnInput};
+use ag_harness::{
+    Harness, HarnessBuildError, ImageContent, ImageMediaType, InputBlock, Model, TurnInput,
+};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::json;
@@ -113,10 +116,10 @@ fn chatgpt_registry_reads_the_sign_in_under_agentty_root() {
 }
 
 #[test]
-/// Compacts on the requested model only when it is another harness model
+/// Summarizes on the requested model only when it is another harness model
 /// that is ready now and declares structured output; every other request
 /// falls back to the session's model.
-fn compaction_model_falls_back_to_the_session_model() {
+fn summary_model_falls_back_to_the_session_model() {
     // Arrange
     let environment = environment(&[
         ("DASHSCOPE_API_KEY", "key"),
@@ -149,11 +152,11 @@ fn compaction_model_falls_back_to_the_session_model() {
 
     for (requested, signed_in, expected) in cases {
         // Act
-        let compaction = session.compaction_model(requested, &environment, |_| signed_in);
+        let summary = session.summary_model(requested, &environment, |_| signed_in);
 
         // Assert
         assert_eq!(
-            compaction.as_ref().map(ModelSelection::key).as_deref(),
+            summary.as_ref().map(ModelSelection::key).as_deref(),
             expected,
             "{requested:?}"
         );
@@ -161,10 +164,40 @@ fn compaction_model_falls_back_to_the_session_model() {
 }
 
 #[test]
-/// Builds a harness that compacts on a usable compaction model, and one that
-/// compacts on its own model when the compaction model's client cannot be
-/// built, without failing either.
-fn harness_compacts_on_a_usable_compaction_model() {
+/// Names a model as users pick it: `ChatGPT` plan and local server models
+/// with their provider, other cataloged models bare, and unknown keys as
+/// given.
+fn model_ids_keep_the_provider_users_pick_them_by() {
+    // Arrange
+    let keys = [
+        "chatgpt/gpt-6-luna",
+        "openai/gpt-6-luna",
+        "openai-compatible/qwen3:latest",
+        "muse/muse-spark-1.3",
+        "host/unknown",
+    ];
+
+    // Act
+    let ids = keys.map(ModelSelection::model_id_of);
+
+    // Assert
+    assert_eq!(
+        ids,
+        [
+            "chatgpt/gpt-6-luna",
+            "gpt-6-luna",
+            "openai-compatible/qwen3:latest",
+            "muse-spark-1.3",
+            "host/unknown",
+        ]
+    );
+}
+
+#[test]
+/// Builds a harness that summarizes on a usable summary model, and one that
+/// summarizes on its own model when the summary model's client cannot be
+/// built or a session refuses it, without failing either.
+fn harness_summarizes_on_a_usable_summary_model() {
     // Arrange
     let worktree = tempfile::tempdir().expect("worktree");
     let real_path = std::env::var("PATH").expect("test PATH should be set");
@@ -178,17 +211,24 @@ fn harness_compacts_on_a_usable_compaction_model() {
     let session = ModelSelection::resolve("muse-spark-1.3", &keyed).expect("session");
     let summary = ModelSelection::resolve("gpt-5.6-terra", &keyed).expect("summary");
     let context = |environment| HarnessContext {
-        compaction_model: Some(&summary),
+        compacts: true,
         environment,
         provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
         repository: &repository,
         running_context_window: None,
+        summary_model: Some(&summary),
     };
 
     // Act
     let summarizing = session.harness(&context(&keyed), |_: LifecycleEvent| {});
     let unsummarized = session.harness(&context(&unkeyed_summary), |_: LifecycleEvent| {});
+    let mut refused = false;
+    context(&keyed).apply_summary_model(|_| {
+        refused = true;
+
+        Err(HarnessBuildError::ModelRequired.into())
+    });
     let unlisted = ModelSelection::resolve("openai-compatible/local", &keyed)
         .expect("served model")
         .summary_entry(&keyed, None);
@@ -196,6 +236,12 @@ fn harness_compacts_on_a_usable_compaction_model() {
     // Assert
     let summarizing = summarizing.expect("harness with a summary model");
     let unsummarized = unsummarized.expect("harness without a summary model");
+    assert_eq!(
+        summarizing.summary_model().map(ModelId::as_str),
+        Some("openai/gpt-5.6-terra")
+    );
+    assert_eq!(unsummarized.summary_model(), None);
+    assert!(refused);
     let key = |harness: &Harness| {
         harness
             .model_registration()
@@ -774,7 +820,8 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
     let selection =
         ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("plan model");
     let context = HarnessContext {
-        compaction_model: None,
+        compacts: false,
+        summary_model: None,
         environment: &environment,
         provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
@@ -1120,7 +1167,8 @@ fn claude_models_register_on_the_anthropic_provider() {
             .expect("client should build"),
     };
     let context = HarnessContext {
-        compaction_model: None,
+        compacts: false,
+        summary_model: None,
         environment: &unkeyed,
         provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,

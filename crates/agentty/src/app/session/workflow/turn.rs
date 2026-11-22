@@ -84,7 +84,7 @@ impl LiveTranscript for LiveSessionTranscript {
         self.transcript
             .lock()
             .ok()
-            .and_then(|transcript| transcript.replay_text())
+            .and_then(|transcript| transcript.provider_replay_text())
     }
 }
 
@@ -390,7 +390,7 @@ async fn prepare_turn_request(
                 settings,
             } = ResolvedTurnContext::load(context, replay_transcript).await;
             let model = turn_metadata.session_agent.model().provider_model_str();
-            let compaction_model = setting::load_harness_compaction_model(
+            let context_compaction = setting::load_session_context_compaction(
                 &context.db,
                 session_project_id,
                 turn_metadata.session_agent,
@@ -399,7 +399,7 @@ async fn prepare_turn_request(
 
             PreparedTurnRequest {
                 request: TurnRequest {
-                    compaction_model,
+                    context_compaction,
                     provider_call_budget: None,
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
                     continuation,

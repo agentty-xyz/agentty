@@ -1,6 +1,7 @@
 //! Application settings manager and loaders for persisted defaults such as
 //! role models, speed mode, theme, and launch configurations.
 
+use ag_contracts::ContextCompaction;
 use tracing::warn;
 
 use crate::app::AppServices;
@@ -210,22 +211,25 @@ pub(crate) async fn load_session_utility_agent_selection_from_repositories(
     session_agent
 }
 
-/// Loads the model that compacts a session's earlier context: for a Harness
-/// `session_agent`, the project's Default Fast Model when it names a Harness
-/// model, and otherwise `None`. A Fast default on an agent CLI never
-/// compacts a Harness session, and the harness compacts on the session's own
-/// model when this model cannot serve summaries.
-pub(crate) async fn load_harness_compaction_model(
+/// Loads how a session turn compacts the session's earlier context: a
+/// Harness `session_agent` compacts automatically, summarizing on the
+/// project's Default Fast Model when it names a Harness model, and other
+/// agents manage their own context. A Fast default on an agent CLI never
+/// summarizes a Harness session, and the harness summarizes on the session's
+/// own model when the Fast model cannot serve summaries.
+pub(crate) async fn load_session_context_compaction(
     repositories: &AppRepositories,
     project_id: Option<i64>,
     session_agent: AgentSelection,
-) -> Option<String> {
+) -> ContextCompaction {
     if session_agent.kind() != AgentKind::Harness {
-        return None;
+        return ContextCompaction::Off;
     }
-    let selection = load_harness_fast_selection(repositories, project_id).await?;
+    let summary_model = load_harness_fast_selection(repositories, project_id)
+        .await
+        .map(|selection| selection.model().provider_model_str().to_string());
 
-    Some(selection.model().provider_model_str().to_string())
+    ContextCompaction::Automatic { summary_model }
 }
 
 /// Loads the persisted smart-model default from repositories as an agent/model

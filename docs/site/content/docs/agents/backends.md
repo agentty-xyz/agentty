@@ -265,20 +265,21 @@ disabling the other session types.
   earlier turns nearly fill the model's context window, the harness summarizes them
   before the turn and later turns carry the summary instead. The session view then shows
   a `[Context]` notice naming the model that wrote the summary, or a `[Context Warning]`
-  when summarizing failed and the turn continued without its oldest turns. The summary
-  runs on the
+  when summarizing failed and the oldest turns were dropped instead; these notices are
+  never sent to models. The summary runs on the
   [Default Fast Model](@/docs/agents/backends.md#backends-harness-fast-model) when it is
   a ready harness model with structured output, such as `muse-spark-1.3-contributor`,
   `gpt-6-luna`, `claude-haiku-5-5`, or a `chatgpt/` model, and otherwise on the
-  session's own model. Its tokens count toward the session's usage, and its report entry
-  is priced at the summarizing model's prices.
+  session's own model; Qwen, Kimi, and local models declare no structured output. Its
+  tokens count toward the session's usage, and its report entry is priced at the
+  summarizing model's prices. Task agents and graph nodes do not compact.
 
 <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
 Model** also lists every ready harness model with its price class, such as
 `harness/qwen3.8-flash · cheap`, to run commit messages and titles for every session
-type, and to summarize long Harness sessions when it can. Agentty never picks a harness
-model for this itself; while the chosen model is not ready, or without the flag, the
-Fast default falls back as if unset.
+type, and to summarize long Harness sessions when it has structured output, which this
+Qwen example lacks. Agentty never picks a harness model for this itself; while the
+chosen model is not ready, or without the flag, the Fast default falls back as if unset.
 
 ### Choosing a Model
 

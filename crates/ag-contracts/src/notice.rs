@@ -11,10 +11,11 @@ pub enum TurnNotice {
         /// Model that wrote the summary, when known.
         model: Option<String>,
     },
-    /// Summarizing earlier turns failed, so the turn continued with the
-    /// oldest turns left out of its requests instead.
+    /// Summarizing earlier turns failed, so the oldest turns that no longer
+    /// fit were dropped from the context instead.
     ContextCompactionFailed {
-        /// Why the summary failed.
+        /// Short, one-line category of the failure, such as `invalid
+        /// output`; never a provider's response text.
         reason: String,
     },
 }

@@ -283,6 +283,25 @@ impl Session {
         self.checkpoint.as_ref()
     }
 
+    /// Chooses the cataloged model `summary` to write this handle's
+    /// compaction checkpoints and round summaries, like
+    /// [`Harness::set_summary_model`], such as after
+    /// [`Self::switch_model`] dropped the previous choice. It applies to
+    /// turns this handle starts afterwards and is never recorded.
+    ///
+    /// # Errors
+    /// Returns the errors of [`Harness::set_summary_model`], keeping the
+    /// previous summary model.
+    pub fn set_summary_model(&mut self, summary: &ModelHandle) -> Result<(), HarnessError> {
+        self.harness.set_summary_model(summary)
+    }
+
+    /// Returns the catalog identifier of the model that writes this handle's
+    /// compaction checkpoints, like [`Harness::summary_model`].
+    pub fn summary_model(&self) -> Option<&ModelId> {
+        self.harness.summary_model()
+    }
+
     /// Generates and publishes a compaction checkpoint with
     /// `summary_model`, or the session's model when `None`.
     async fn compact_using(
@@ -1663,21 +1682,28 @@ impl Harness {
     /// sizes it. The choice applies to sessions created or resumed afterwards
     /// and leaves durable sessions' recorded registration unchanged, so they
     /// resume with or without it. [`Session::switch_model`] drops it, and
-    /// summaries then follow the new model.
+    /// [`Session::set_summary_model`] chooses one for the new model.
     ///
     /// # Errors
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping [`HarnessBuildError::SummaryModelUnsupported`] when
-    /// `summary` lacks structured output or rejects the summary schema,
-    /// leaving the harness unchanged.
-    pub fn summary_model(mut self, summary: &ModelHandle) -> Result<Self, HarnessError> {
+    /// `summary` lacks structured output or rejects the summary schema; the
+    /// harness then keeps its previous summary model.
+    pub fn set_summary_model(&mut self, summary: &ModelHandle) -> Result<(), HarnessError> {
         let summary = self
             .inner
             .supported_summary_model(summary)
             .map_err(|id| HarnessBuildError::SummaryModelUnsupported { id })?;
         self.config_mut().summary_model = summary;
 
-        Ok(self)
+        Ok(())
+    }
+
+    /// Returns the catalog identifier of the model that writes compaction
+    /// checkpoints and round summaries in place of the harness's model, or
+    /// `None` when the harness's model writes them.
+    pub fn summary_model(&self) -> Option<&ModelId> {
+        self.inner.summary_model.as_ref().map(|summary| &summary.id)
     }
 
     /// Configures the validated repository root and Git executable used by

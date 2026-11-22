@@ -2597,7 +2597,7 @@ async fn scripted_switching_provider() -> MockServer {
 fn switching_turn(folder: &Path, model: &str, prompt: &str) -> ag_contracts::TurnRequest {
     ag_contracts::TurnRequest {
         agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
-        compaction_model: None,
+        context_compaction: ag_contracts::ContextCompaction::Off,
         continuation: ag_contracts::TurnContinuation::fresh(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: folder.to_path_buf(),

@@ -121,12 +121,13 @@ pub(crate) async fn run_one_shot(
     let activity_tx = request.activity_tx.clone();
     let harness = selection.harness(
         &HarnessContext {
-            compaction_model: None,
+            compacts: false,
             environment: &environment,
             provider_call_budget: request.provider_call_budget.as_ref(),
             reasoning_level: request.reasoning_level,
             repository: &repository,
             running_context_window,
+            summary_model: None,
         },
         ActivityBridge::new(move |event| {
             if let (TurnEvent::Activity(activity), Some(activity_tx)) = (event, &activity_tx) {

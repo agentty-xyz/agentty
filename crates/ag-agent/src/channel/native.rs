@@ -17,8 +17,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_contracts::{
-    AgentChannel, AgentError, AgentFuture, ReasoningLevel, SessionRef, StartSessionRequest,
-    TurnEvent, TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, ContextCompaction, ReasoningLevel, SessionRef,
+    StartSessionRequest, TurnEvent, TurnRequest, TurnResult,
 };
 use ag_harness::provider::chatgpt_is_signed_in;
 use ag_harness::transcript::TranscriptInput;
@@ -131,11 +131,13 @@ async fn run_session_turn(
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
     let selection = ModelSelection::resolve(&req.model, &environment)?;
-    let compaction_model = selection.compaction_model(
-        req.compaction_model.as_deref(),
-        &environment,
-        chatgpt_is_signed_in,
-    );
+    let (compacts, summary_model) = match &req.context_compaction {
+        ContextCompaction::Off => (false, None),
+        ContextCompaction::Automatic { summary_model } => (
+            true,
+            selection.summary_model(summary_model.as_deref(), &environment, chatgpt_is_signed_in),
+        ),
+    };
     let profile = req.request_kind.protocol_profile();
     let options = RunOptions::new(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;
@@ -154,7 +156,7 @@ async fn run_session_turn(
     let running_context_window = running_context_window(&selection, &environment).await?;
     let database = config.session_database(&session_id).await?;
     let opener = SessionOpener {
-        compaction_model: compaction_model.as_ref(),
+        compacts,
         database: &database,
         environment: &environment,
         events: &events,
@@ -164,6 +166,7 @@ async fn run_session_turn(
         repository: &repository,
         running_context_window,
         session_id: &session_id,
+        summary_model: summary_model.as_ref(),
     };
     let (session, history) = opener.open(&selection).await?;
     // Turns since the last full contract, counting its own turn; `None` once
@@ -406,7 +409,7 @@ fn lock(active: &ActiveTurns) -> MutexGuard<'_, HashMap<String, ActiveRun>> {
 
 /// Inputs needed to create, resume, or switch one durable harness session.
 struct SessionOpener<'a> {
-    compaction_model: Option<&'a ModelSelection>,
+    compacts: bool,
     database: &'a Path,
     environment: &'a BTreeMap<String, String>,
     events: &'a mpsc::UnboundedSender<TurnEvent>,
@@ -416,6 +419,7 @@ struct SessionOpener<'a> {
     repository: &'a Repository,
     running_context_window: Option<u64>,
     session_id: &'a str,
+    summary_model: Option<&'a ModelSelection>,
 }
 
 impl SessionOpener<'_> {
@@ -483,6 +487,10 @@ impl SessionOpener<'_> {
             .map_err(NativeTurnError::session_operation(
                 "Failed to switch the harness model",
             ))?;
+        // The switch drops the summary model the stored model had, so the
+        // new model gets its own for this turn.
+        self.context()
+            .apply_summary_model(|summary| session.set_summary_model(summary));
 
         Ok(session)
     }
@@ -511,20 +519,26 @@ impl SessionOpener<'_> {
     ) -> Result<Harness, String> {
         let events = self.events.clone();
         let harness = build(
-            &HarnessContext {
-                compaction_model: self.compaction_model,
-                environment: self.environment,
-                provider_call_budget: self.provider_call_budget,
-                running_context_window: self.running_context_window,
-                reasoning_level: self.reasoning_level,
-                repository: self.repository,
-            },
+            &self.context(),
             ActivityBridge::new(move |event| {
                 let _ = events.send(event);
             }),
         )?;
 
         Ok(harness.database(self.database))
+    }
+
+    /// Returns this turn's harness context.
+    fn context(&self) -> HarnessContext<'_> {
+        HarnessContext {
+            compacts: self.compacts,
+            environment: self.environment,
+            provider_call_budget: self.provider_call_budget,
+            reasoning_level: self.reasoning_level,
+            repository: self.repository,
+            running_context_window: self.running_context_window,
+            summary_model: self.summary_model,
+        }
     }
 }
 

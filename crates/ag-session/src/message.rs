@@ -7,6 +7,8 @@ use std::str::FromStr;
 
 use rustc_hash::FxHasher;
 
+use crate::transcript_notice::TranscriptNotice;
+
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessageKind {
@@ -116,6 +118,17 @@ impl SessionMessage {
             kind,
             position,
         }
+    }
+
+    /// Returns whether this is a workflow notice only the user reads, such as
+    /// a context compaction notice.
+    fn is_user_only_notice(&self) -> bool {
+        let content = self.content.trim_start();
+
+        self.kind == SessionMessageKind::WorkflowNotice
+            && [TranscriptNotice::Context, TranscriptNotice::ContextWarning]
+                .iter()
+                .any(|notice| content.starts_with(&format!("{} ", notice.prefix())))
     }
 
     /// Appends this message to a formatted transcript display buffer.
@@ -292,6 +305,24 @@ impl SessionTranscript {
     /// marker and transcript spacing only for display and provider replay.
     pub fn replay_text(&self) -> Option<String> {
         let output = Self::display_text_for_messages(&self.messages);
+        if output.trim().is_empty() {
+            return None;
+        }
+
+        Some(output)
+    }
+
+    /// Returns [`Self::replay_text`] for a provider: without the notices that
+    /// only tell the user how Agentty ran a turn, such as context compaction
+    /// notices, which would mislead a model reading the full history.
+    pub fn provider_replay_text(&self) -> Option<String> {
+        let messages = self
+            .messages
+            .iter()
+            .filter(|message| !message.is_user_only_notice())
+            .cloned()
+            .collect::<Vec<_>>();
+        let output = Self::display_text_for_messages(&messages);
         if output.trim().is_empty() {
             return None;
         }

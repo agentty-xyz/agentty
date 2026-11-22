@@ -1314,26 +1314,33 @@ async fn run_failures_during_compaction_fail_the_turn_without_backing_off() {
     }
 }
 
-/// Returns a catalog of an unpriced session model `host/smart` and a
-/// cheap model `host/cheap` priced at `cheap_pricing`, declaring
-/// structured output when `cheap_summarizes`.
+/// Returns a catalog of unpriced session models `host/smart` and
+/// `host/next`, a cheap model `host/cheap` priced at `cheap_pricing` that
+/// declares structured output, and `host/plain`, which declares none.
 fn registry_catalog(
     smart: CompactingModel,
     cheap: CompactingModel,
     cheap_pricing: Pricing,
-    cheap_summarizes: bool,
 ) -> ModelCatalog {
+    let (next, _) = CompactingModel::new(Vec::new());
+    let (plain, _) = CompactingModel::new(Vec::new());
+
     ModelCatalog::builder()
         .model(
             ModelSpec::new("host/smart").with_profile(ModelProfile::new(BUDGET)),
             Arc::new(smart.named("smart")),
         )
         .model(
+            ModelSpec::new("host/next").with_profile(ModelProfile::new(BUDGET)),
+            Arc::new(next.named("next")),
+        )
+        .model(
             ModelSpec::new("host/cheap")
-                .with_capabilities(Capabilities::NONE.with_structured_output(cheap_summarizes))
+                .with_capabilities(Capabilities::NONE.with_structured_output(true))
                 .with_pricing(cheap_pricing),
             Arc::new(cheap.named("cheap")),
         )
+        .model(ModelSpec::new("host/plain"), Arc::new(plain.named("plain")))
         .build()
         .expect("catalog builds")
 }
@@ -1345,18 +1352,35 @@ fn entry(catalog: &ModelCatalog, id: &str) -> ModelHandle {
         .expect("entry resolves")
 }
 
+/// Returns the registrations of `catalog`'s session models.
+fn session_registry(catalog: &ModelCatalog) -> ModelRegistry {
+    let mut registry = ModelRegistry::new();
+    for id in ["host/smart", "host/next"] {
+        registry
+            .register_catalog_entry(&entry(catalog, id), "host-1")
+            .expect("entry registers");
+    }
+
+    registry
+}
+
 /// Returns an automatically compacting harness over the registration of
 /// `catalog`'s session model, storing sessions in `store`.
 fn registered_harness(catalog: &ModelCatalog, store: &Arc<MemoryStore>) -> Harness {
-    let mut registry = ModelRegistry::new();
-    registry
-        .register_catalog_entry(&entry(catalog, "host/smart"), "host-1")
-        .expect("entry registers");
-
-    Harness::from_registry(&registry, "host/smart")
+    Harness::from_registry(&session_registry(catalog), "host/smart")
         .expect("registration resolves")
         .store(Arc::clone(store) as Arc<dyn SessionStore>)
         .context_policy(ContextPolicy::auto_compact())
+}
+
+/// Returns [`registered_harness`] summarizing on `catalog`'s entry `id`.
+fn summarizing_harness(catalog: &ModelCatalog, store: &Arc<MemoryStore>, id: &str) -> Harness {
+    let mut harness = registered_harness(catalog, store);
+    harness
+        .set_summary_model(&entry(catalog, id))
+        .expect("summary model accepted");
+
+    harness
 }
 
 #[tokio::test]
@@ -1365,11 +1389,9 @@ async fn a_registered_harness_compacts_on_its_summary_model_at_its_prices() {
     let (smart, smart_requests) = CompactingModel::new(Vec::new());
     let (cheap, cheap_requests) = CompactingModel::new(Vec::new());
     let cheap_pricing = Pricing::new(3_000_000, 0);
-    let catalog = registry_catalog(smart, cheap, cheap_pricing, true);
+    let catalog = registry_catalog(smart, cheap, cheap_pricing);
     let store = Arc::new(MemoryStore::new());
-    let harness = registered_harness(&catalog, &store)
-        .summary_model(&entry(&catalog, "host/cheap"))
-        .expect("summary model accepted");
+    let harness = summarizing_harness(&catalog, &store, "host/cheap");
     let mut session = harness
         .session("registered", object_schema())
         .create()
@@ -1405,7 +1427,7 @@ async fn a_summary_model_leaves_the_registration_sessions_resume_with() {
     // Arrange
     let (smart, smart_requests) = CompactingModel::new(Vec::new());
     let (cheap, _) = CompactingModel::new(Vec::new());
-    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0), true);
+    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0));
     let store = Arc::new(MemoryStore::new());
     let mut recorded = registered_harness(&catalog, &store)
         .context_policy(ContextPolicy::Evict)
@@ -1414,9 +1436,7 @@ async fn a_summary_model_leaves_the_registration_sessions_resume_with() {
         .await
         .expect("session created");
     send_turns(&mut recorded, 1).await;
-    let harness = registered_harness(&catalog, &store)
-        .summary_model(&entry(&catalog, "host/cheap"))
-        .expect("summary model accepted");
+    let harness = summarizing_harness(&catalog, &store, "host/cheap");
 
     // Act
     let mut resumed = harness.resume("recorded").await.expect("session resumes");
@@ -1424,7 +1444,54 @@ async fn a_summary_model_leaves_the_registration_sessions_resume_with() {
 
     // Assert
     assert!(outcome.is_ok());
+    assert_eq!(
+        resumed.summary_model().map(ModelId::as_str),
+        Some("host/cheap")
+    );
     assert!(carries(&last_turn_request(&smart_requests), "turn-1"));
+}
+
+#[tokio::test]
+async fn a_switched_session_compacts_on_the_summary_model_it_sets_again() {
+    // Arrange
+    let (smart, _) = CompactingModel::new(Vec::new());
+    let (cheap, cheap_requests) = CompactingModel::new(Vec::new());
+    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0));
+    let store = Arc::new(MemoryStore::new());
+    let mut session = summarizing_harness(&catalog, &store, "host/cheap")
+        .session("switched", object_schema())
+        .create()
+        .await
+        .expect("session created");
+    send_turns(&mut session, 3).await;
+
+    // Act
+    session
+        .switch_model(&session_registry(&catalog), "host/next")
+        .await
+        .expect("model switches");
+    let dropped = session.summary_model().cloned();
+    let refused = session.set_summary_model(&entry(&catalog, "host/plain"));
+    session
+        .set_summary_model(&entry(&catalog, "host/cheap"))
+        .expect("summary model accepted");
+    let (events, _) = streamed_turn(&session, 4).await;
+
+    // Assert
+    assert_eq!(dropped, None);
+    assert_eq!(
+        refused.err().map(|error| error.kind()),
+        Some(ErrorKind::Config)
+    );
+    assert_eq!(
+        session.summary_model().map(ModelId::as_str),
+        Some("host/cheap")
+    );
+    assert!(matches!(
+        compaction_report(&events).outcome,
+        CompactionOutcome::Compacted { model: Some(model), .. } if model.as_str() == "host/cheap"
+    ));
+    assert_eq!(compactions(&cheap_requests).len(), 1);
 }
 
 #[tokio::test]
@@ -1432,11 +1499,9 @@ async fn the_session_model_as_summary_model_compacts_on_itself() {
     // Arrange
     let (smart, smart_requests) = CompactingModel::new(Vec::new());
     let (cheap, cheap_requests) = CompactingModel::new(Vec::new());
-    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0), true);
+    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0));
     let store = Arc::new(MemoryStore::new());
-    let harness = registered_harness(&catalog, &store)
-        .summary_model(&entry(&catalog, "host/smart"))
-        .expect("own model accepted");
+    let harness = summarizing_harness(&catalog, &store, "host/smart");
     let mut session = harness
         .session("own", object_schema())
         .create()
@@ -1448,6 +1513,7 @@ async fn the_session_model_as_summary_model_compacts_on_itself() {
     let (events, _) = streamed_turn(&session, 4).await;
 
     // Assert
+    assert_eq!(harness.summary_model(), None);
     assert!(matches!(
         compaction_report(&events).outcome,
         CompactionOutcome::Compacted { model: Some(model), .. } if model.as_str() == "host/smart"
@@ -1457,22 +1523,26 @@ async fn the_session_model_as_summary_model_compacts_on_itself() {
 }
 
 #[test]
-fn a_summary_model_without_structured_output_is_refused() {
+fn a_refused_summary_model_keeps_the_previous_one() {
     // Arrange
     let (smart, _) = CompactingModel::new(Vec::new());
     let (cheap, _) = CompactingModel::new(Vec::new());
-    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0), false);
+    let catalog = registry_catalog(smart, cheap, Pricing::new(0, 0));
     let store = Arc::new(MemoryStore::new());
+    let mut harness = summarizing_harness(&catalog, &store, "host/cheap");
 
     // Act
-    let error = registered_harness(&catalog, &store)
-        .summary_model(&entry(&catalog, "host/cheap"))
-        .err()
-        .expect("summary model refused");
+    let error = harness
+        .set_summary_model(&entry(&catalog, "host/plain"))
+        .expect_err("summary model refused");
 
     // Assert
     assert_eq!(error.kind(), ErrorKind::Config);
-    assert!(error.to_string().contains("host/cheap"), "{error}");
+    assert!(error.to_string().contains("host/plain"), "{error}");
+    assert_eq!(
+        harness.summary_model().map(ModelId::as_str),
+        Some("host/cheap")
+    );
 }
 
 /// Ledger that admits a fixed number of model requests and refuses every
