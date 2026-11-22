@@ -31,6 +31,6 @@ dials out, so the instance needs no open port.
 
 Keep `docs/site/content/docs/usage/remote-control.md` aligned when relay behavior,
 limits, or what the relay can observe changes. `container/relay.Containerfile` builds
-the relay's image; the `relay-image` hook builds and probes it, and
-`.github/workflows/publish-relay-image.yml` publishes it on pushes to `main` and for
-each release. Keep that workflow's probe aligned with the hook.
+the relay's image, and `container/relay-probe.sh` probes it for the `relay-image` hook
+and for `.github/workflows/publish-relay-image.yml`, which publishes it on pushes to
+`main` and for each release.

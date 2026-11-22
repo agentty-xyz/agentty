@@ -92,18 +92,7 @@ jobs:
           echo "CANDIDATE_IMAGE_ID=$candidate_image_id" >> "$GITHUB_ENV"
 
       - name: Probe candidate image
-        run: |
-          container=$(podman run --detach --rm --publish 127.0.0.1::8787 \
-            "$CANDIDATE_IMAGE_ID" --client-address-header X-Real-IP)
-          trap 'podman stop --time 2 "$container" >/dev/null' EXIT
-          address=$(podman port "$container" 8787/tcp)
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            if curl --fail --silent --output /dev/null "http://$address/healthz"; then break; fi
-            sleep 1
-          done
-          test "$(curl --fail --silent "http://$address/healthz")" = ok
-          page=$(curl --fail --silent "http://$address/")
-          [[ "$page" == *'name="agentty-transport" content="relay"'* ]]
+        run: bash container/relay-probe.sh "$CANDIDATE_IMAGE_ID"
 
       - name: Authenticate with GHCR
         env:
@@ -136,7 +125,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read
       packages: write
 
     steps:

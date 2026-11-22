@@ -12,6 +12,7 @@ on:
       - .pre-commit-config.yaml
       - Cargo.lock
       - Cargo.toml
+      - container/relay-probe.sh
       - container/relay.Containerfile
       - container/relay.containerignore
       - crates/ag-noise/**
