@@ -235,6 +235,7 @@ impl App {
             } => self.answer_api_questions(&session_id, request).await,
             SessionMutation::Cancel { session_id } => self.cancel_api_session(&session_id).await,
             SessionMutation::StopTurn { session_id } => self.stop_api_turn(&session_id).await,
+            SessionMutation::Rebase { session_id } => self.rebase_api_session(&session_id).await,
             SessionMutation::Merge { session_id } => self.merge_api_session(&session_id).await,
         }
     }

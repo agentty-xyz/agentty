@@ -99,6 +99,9 @@ pub enum SessionOperation {
     SessionDiff,
     /// Stopping a running turn through [`SessionBackend::stop_turn`].
     StopTurn,
+    /// Rebasing a session branch onto its base branch through
+    /// [`SessionBackend::rebase_session`].
+    RebaseSession,
 }
 
 /// One file a session's diff changes.
@@ -444,6 +447,17 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not support stopping a turn".to_string(),
+        ))
+    }
+
+    /// Starts or queues a rebase of the session branch onto its base
+    /// branch; a conflict starts an agent-assisted resolution turn. Older
+    /// hosts may omit support.
+    async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        let _ = session_id;
+
+        Err(SessionError::Operation(
+            "Host does not support syncing a session branch".to_string(),
         ))
     }
 
@@ -874,6 +888,17 @@ impl SessionService {
     /// turn, or the host does not support stopping a turn.
     pub async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.backend.stop_turn(session_id).await
+    }
+
+    /// Starts or queues a rebase of the session branch onto its base branch.
+    /// The host acknowledges admission; a conflict starts an agent-assisted
+    /// resolution turn.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist, cannot be rebased in
+    /// its current state, or the host does not support syncing.
+    pub async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.backend.rebase_session(session_id).await
     }
 
     /// Requests merge processing for one session.

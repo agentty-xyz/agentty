@@ -121,6 +121,13 @@ pub enum RemoteRequest {
         /// Session whose turn stops.
         session_id: String,
     },
+    /// Rebases the session branch onto its base branch, or queues the rebase
+    /// behind a running turn. A conflict starts an agent-assisted resolution
+    /// turn. Offered through the `sync` capability.
+    SyncSession {
+        /// Session whose branch is synced.
+        session_id: String,
+    },
     /// Any method this server does not know, such as one a newer client
     /// sends. The server answers it with an error and keeps the connection.
     #[serde(other)]

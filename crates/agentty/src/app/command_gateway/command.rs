@@ -186,6 +186,10 @@ pub(crate) enum SessionMutation {
     StopTurn {
         session_id: SessionId,
     },
+    /// Rebases the session branch onto its base branch.
+    Rebase {
+        session_id: SessionId,
+    },
     /// Enqueues one session for merge.
     Merge {
         session_id: SessionId,
@@ -222,6 +226,7 @@ impl SessionMutation {
             Self::AnswerQuestions { session_id, .. } => ("answer_questions", Some(session_id)),
             Self::Cancel { session_id, .. } => ("cancel", Some(session_id)),
             Self::StopTurn { session_id } => ("stop_turn", Some(session_id)),
+            Self::Rebase { session_id } => ("rebase", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),
         }
     }

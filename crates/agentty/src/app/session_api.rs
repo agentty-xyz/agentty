@@ -36,6 +36,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::MergeSession
                 | SessionOperation::SessionDiff
                 | SessionOperation::StopTurn
+                | SessionOperation::RebaseSession
         )
     }
 
@@ -230,6 +231,10 @@ impl SessionBackend for SessionRuntimeHandle {
 
     async fn stop_turn(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::stop_turn(self, session_id).await
+    }
+
+    async fn rebase_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::rebase_session(self, session_id).await
     }
 
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
@@ -915,6 +920,17 @@ impl App {
         session_id: &SessionId,
     ) -> Result<(), ApiSessionError> {
         self.stop_session_turn(session_id)
+            .await
+            .map_err(api_error_from_app)
+    }
+
+    /// Starts or queues a session branch rebase through the same workflow as
+    /// the terminal's `r`.
+    pub(super) async fn rebase_api_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
+        self.rebase_session(session_id)
             .await
             .map_err(api_error_from_app)
     }
