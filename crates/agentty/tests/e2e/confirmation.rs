@@ -52,6 +52,34 @@ async fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds one session waiting on clarification questions for list-mode cancel
+/// confirmation.
+async fn seed_cancelable_question_session(env: &BuilderEnv) -> E2eResult {
+    let session_id = "question-cancel-0001";
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(
+            session_id,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Question",
+        )
+        .with_title("Cancel question session"),
+    )
+    .await?;
+    common::open_database(env)
+        .await?
+        .sessions()
+        .update_session_questions(session_id, r#"[{"text":"Which file?","options":[]}]"#)
+        .await?;
+
+    let worktree_name = &session_id[..8];
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
+
+    Ok(())
+}
+
 /// Verify that confirming quit with `y` causes the process to exit with
 /// code 0.
 ///
@@ -269,6 +297,59 @@ async fn running_session_cancel_confirmation() -> E2eResult {
                         "Cancel running session",
                         &list_full,
                     );
+
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
+
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
+                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that a session waiting on clarification questions can be canceled
+/// directly from the session list.
+#[tokio::test]
+async fn question_session_cancel_confirmation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("question_session_cancel")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_cancelable_question_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Cancel question session", 5000)
+                    .capture_labeled(
+                        "question_row",
+                        "Question session visible in the session list",
+                    )
+                    .press_key("c")
+                    .wait_for_text("Confirm Cancel", 3000)
+                    .capture_labeled(
+                        "confirm_cancel",
+                        "Cancel confirmation for the selected question session",
+                    )
+                    .press_key("y")
+                    .wait_for_text("Canceled", 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(&list_frame, "Question", &list_full);
 
                     let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                     let confirmation_full =

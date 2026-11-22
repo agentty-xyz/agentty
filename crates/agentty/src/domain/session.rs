@@ -453,11 +453,11 @@ impl Session {
     /// Returns whether the session can be canceled by the user.
     ///
     /// Running sessions can be canceled from the list after their active turn
-    /// is signaled to stop. Review-oriented sessions remain cancelable, and
-    /// unstarted draft sessions can also be canceled before they materialize a
-    /// worktree.
+    /// is signaled to stop. Review-oriented sessions and sessions waiting on
+    /// clarification questions remain cancelable, and unstarted draft sessions
+    /// can also be canceled before they materialize a worktree.
     pub fn allows_cancel_action(&self) -> bool {
-        self.status == Status::InProgress
+        matches!(self.status, Status::InProgress | Status::Question)
             || self.status.allows_review_actions()
             || (self.status == Status::Draft
                 && (self.is_draft_session()
