@@ -420,6 +420,44 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
 }
 
 #[tokio::test]
+async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let refused = call(
+        &mut client,
+        1,
+        RemoteRequest::MergeSession {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+    let unlisted = call(
+        &mut client,
+        2,
+        RemoteRequest::MergeSession {
+            session_id: "other-project-session".to_string(),
+        },
+    )
+    .await?;
+
+    // Assert
+    assert_eq!(
+        refused,
+        RemoteResult::Error("Session is not ready to merge".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(server.backend.calls(), ["list", "merge:session-1", "list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn pings_are_ignored_between_requests() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;

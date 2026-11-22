@@ -77,6 +77,12 @@ pub enum RemoteRequest {
     },
     /// Lists the host's loaded sessions.
     ListSessions,
+    /// Merges a review-ready session into its base branch in the host's
+    /// checkout. Offered through the `merge` capability.
+    MergeSession {
+        /// Session to merge.
+        session_id: String,
+    },
     /// Sends one chat message, starting, resuming, or queueing a turn.
     SendMessage {
         /// Message text.

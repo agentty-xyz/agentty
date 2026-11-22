@@ -9,8 +9,9 @@ use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
-    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind, SessionService,
-    SessionSettings, SessionStatus, parse_persisted_session_agent_model,
+    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
+    SessionOperation, SessionService, SessionSettings, SessionStatus,
+    parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 
@@ -27,6 +28,10 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    fn supports(&self, operation: SessionOperation) -> bool {
+        matches!(operation, SessionOperation::MergeSession)
+    }
+
     async fn generate_graph_proposal(
         &self,
         request: ag_session::GenerateGraphProposalRequest,

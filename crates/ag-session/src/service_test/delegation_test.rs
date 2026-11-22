@@ -8,7 +8,7 @@ use crate::error::SessionError;
 use crate::model::SessionId;
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, QuestionAnswer, SessionService,
+    DurableMessageVisibility, QuestionAnswer, SessionOperation, SessionService,
 };
 
 #[tokio::test]
@@ -124,4 +124,16 @@ async fn existing_hosts_report_unsupported_session_listing() {
             "Host does not support session listing".to_string()
         ))
     );
+}
+
+#[test]
+fn existing_hosts_serve_no_optional_operations() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let supports_merge = service.supports(SessionOperation::MergeSession);
+
+    // Assert
+    assert!(!supports_merge);
 }

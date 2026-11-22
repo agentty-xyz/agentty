@@ -84,7 +84,7 @@ pub use review::{
 };
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionService,
+    DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionOperation, SessionService,
     StartExecutionGraphRequest,
 };
 pub use setting::SettingName;

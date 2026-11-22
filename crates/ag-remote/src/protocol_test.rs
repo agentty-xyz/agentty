@@ -23,7 +23,8 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             "session_id": "s",
             "answers": [{"question": "Which?", "answer": "main"}]
         }},
-        {"type": "request", "id": 5, "request": {"method": "cancel_session", "session_id": "s"}}
+        {"type": "request", "id": 5, "request": {"method": "cancel_session", "session_id": "s"}},
+        {"type": "request", "id": 6, "request": {"method": "merge_session", "session_id": "s"}}
     ]);
 
     // Act
@@ -77,6 +78,12 @@ fn client_frames_use_snake_case_type_and_method_tags() {
                     session_id: "s".to_string(),
                 },
             },
+            ClientFrame::Request {
+                id: 6,
+                request: RemoteRequest::MergeSession {
+                    session_id: "s".to_string(),
+                },
+            },
         ]
     );
     assert_eq!(encoded, wire);
@@ -86,9 +93,9 @@ fn client_frames_use_snake_case_type_and_method_tags() {
 fn unknown_methods_parse_as_unsupported_requests() {
     // Arrange
     let with_fields = json!({"type": "request", "id": 1, "request": {
-        "method": "merge_session", "session_id": "s"
+        "method": "fork_session", "session_id": "s"
     }});
-    let bare = json!({"type": "request", "id": 2, "request": {"method": "get_host"}});
+    let bare = json!({"type": "request", "id": 2, "request": {"method": "list_projects"}});
 
     // Act
     let with_fields = serde_json::from_value::<ClientFrame>(with_fields);

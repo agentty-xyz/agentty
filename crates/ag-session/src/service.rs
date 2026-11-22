@@ -76,12 +76,34 @@ pub enum DurableMessageVisibility {
     Visible,
 }
 
+/// Operation a host may choose to serve to frontends that check
+/// [`SessionService::supports`] first, such as remote control.
+///
+/// A frontend offers an operation only when the host reports it, so adding a
+/// variant never exposes an operation that an existing host has not opted
+/// into.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum SessionOperation {
+    /// Merging a review-ready session through
+    /// [`SessionBackend::merge_session`].
+    MergeSession,
+}
+
 /// Host implementation boundary for session persistence and workflows.
 ///
 /// The trait is object-safe so agent loops and background workflows can hold a
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Reports whether the host serves `operation` to frontends that ask
+    /// first. Hosts serve none unless they opt in.
+    fn supports(&self, operation: SessionOperation) -> bool {
+        let _ = operation;
+
+        false
+    }
+
     /// Reserves generation without waiting for model completion.
     async fn generate_graph_proposal(
         &self,
@@ -625,6 +647,13 @@ impl SessionService {
     /// the host cannot persist completion.
     pub async fn complete_task(&self, task_id: &str) -> Result<(), SessionError> {
         self.backend.complete_task(task_id).await
+    }
+
+    /// Reports whether the host serves `operation` to frontends that ask
+    /// first.
+    #[must_use]
+    pub fn supports(&self, operation: SessionOperation) -> bool {
+        self.backend.supports(operation)
     }
 
     /// Creates one session and returns its stable identifier.

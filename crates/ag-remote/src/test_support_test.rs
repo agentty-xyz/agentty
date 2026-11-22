@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
     ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend, SessionError, SessionId,
-    SessionMessage, SessionMessageKind, SessionService, SessionSettings, SessionStatus,
-    SessionSummary, SpeedMode,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -182,9 +182,18 @@ impl DeviceStore for MemoryDeviceStore {
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
     is_failing: bool,
+    supported: Vec<SessionOperation>,
 }
 
 impl RecordingBackend {
+    /// Creates a backend that serves the optional `operations`.
+    pub(crate) fn supporting(operations: &[SessionOperation]) -> Self {
+        Self {
+            supported: operations.to_vec(),
+            ..Self::default()
+        }
+    }
+
     /// Creates a backend whose every operation fails.
     pub(crate) fn failing() -> Self {
         Self {
@@ -210,6 +219,10 @@ impl RecordingBackend {
 
 #[async_trait]
 impl SessionBackend for RecordingBackend {
+    fn supports(&self, operation: SessionOperation) -> bool {
+        self.supported.contains(&operation)
+    }
+
     async fn create_session(
         &self,
         _request: CreateSessionRequest,

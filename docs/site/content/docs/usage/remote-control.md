@@ -10,8 +10,9 @@ transcripts, send messages, answer questions, and cancel a session. Canceling a 
 stops its agent and deletes its worktree and branch, so changes that are not merged or
 published are lost; the device asks before it cancels. While an execution graph waits
 for you, a message replies to it as a terminal reply would; see
-[Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
-Merging, publishing, and session settings stay in the terminal.
+[Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
+paired device can also merge a session into its base branch, though the web page has no
+merge button yet. The page does not offer publishing or session settings yet.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -109,8 +110,9 @@ device can:
 - list sessions and read their transcripts, questions, and queued messages;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
-- answer an agent's questions; and
-- cancel a session, which deletes its worktree and branch.
+- answer an agent's questions;
+- cancel a session, which deletes its worktree and branch; and
+- merge a session, which lands its changes on the base branch.
 
 Anyone holding a paired device can do the same, so remove a device you no longer
 control.
