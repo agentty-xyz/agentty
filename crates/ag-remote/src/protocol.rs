@@ -197,6 +197,21 @@ impl RemoteSessionMode {
     }
 }
 
+/// The agent and model a new session of one mode starts with, as
+/// `get_host` lists it. A device picks another model for the new session
+/// among the `models` of the same `agent`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteModeModel {
+    /// Agent that runs the session, as `models` names it.
+    pub agent: String,
+    /// Creation mode, one of `session_modes`.
+    pub mode: RemoteSessionMode,
+    /// Model identifier, as `models` lists it.
+    pub model: String,
+    /// Display name of the model.
+    pub name: String,
+}
+
 /// One model a session can switch to, as `get_host` lists it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteModelOption {
@@ -340,6 +355,10 @@ pub enum RemoteResponse {
         base_branch: String,
         /// Model a new session starts with.
         default_model: String,
+        /// Agent and model a new session of each of `session_modes` starts
+        /// with, in the same order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mode_models: Vec<RemoteModeModel>,
         /// Models a session can switch to now, in display order.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         models: Vec<RemoteModelOption>,
@@ -451,6 +470,22 @@ fn capped_patch(patch: &str) -> (&str, bool) {
 
 impl From<HostContext> for RemoteResponse {
     fn from(host: HostContext) -> Self {
+        let mode_models: Vec<RemoteModeModel> = host
+            .session_modes
+            .iter()
+            .filter_map(|session_mode| {
+                let mode = RemoteSessionMode::from_session_mode(&session_mode.mode)?;
+                let option = RemoteModelOption::from(session_mode.agent);
+
+                Some(RemoteModeModel {
+                    agent: option.agent,
+                    mode,
+                    model: option.model,
+                    name: option.name,
+                })
+            })
+            .collect();
+
         Self::Host {
             base_branch: host.base_branch,
             default_model: host.default_model.name().to_string(),
@@ -460,11 +495,11 @@ impl From<HostContext> for RemoteResponse {
                 .map(RemoteModelOption::from)
                 .collect(),
             project: host.project_name,
-            session_modes: host
-                .session_modes
+            session_modes: mode_models
                 .iter()
-                .filter_map(RemoteSessionMode::from_session_mode)
+                .map(|mode_model| mode_model.mode)
                 .collect(),
+            mode_models,
         }
     }
 }

@@ -8,6 +8,7 @@ import {
   HOME_DRAFT_ID,
   createHome,
   modeLabel,
+  modelChoices,
   offersCreation,
   parseHost,
 } from "../../assets/home.mjs";
@@ -92,12 +93,14 @@ test("parseHost keeps what home shows and refuses other answers", () => {
   assert.deepEqual(parseHost({ ...HOST, session_modes: ["regular", "harness", 3] }), {
     baseBranch: "main",
     model: "claude-opus-5-5",
+    modeModels: {},
     modes: ["regular", "harness"],
     project: "agentty",
   });
   assert.deepEqual(parseHost({ kind: "host", project: "p" }), {
     baseBranch: "",
     model: "",
+    modeModels: {},
     modes: [],
     project: "p",
   });
@@ -310,4 +313,179 @@ test("only the latest host load counts, and focus goes to the composer", async (
   await page.home.setCapabilities(CAPABILITIES);
   page.home.focus();
   assert.equal(page.document.activeElement, page.byId("home-message"));
+});
+
+// A host that starts regular sessions on Claude and harness ones on Kimi,
+// with two Claude models and one harness model to pick from.
+const PICKING_HOST = {
+  ...HOST,
+  mode_models: [
+    { agent: "claude", mode: "regular", model: "claude-opus-5-5", name: "Opus 5.5" },
+    { agent: "harness", mode: "harness", model: "kimi-k3", name: "Kimi K3" },
+    { agent: "claude", mode: "draft", model: "claude-opus-5-5", name: "Opus 5.5" },
+    { agent: "claude", mode: "regular", model: "" },
+    null,
+  ],
+  models: [
+    { agent: "claude", model: "claude-opus-5-5", name: "Opus 5.5" },
+    { agent: "claude", model: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+    { agent: "codex", model: "gpt-6.1-sol", name: "gpt-6.1-sol" },
+    { agent: "harness", model: "kimi-k3", name: "Kimi K3" },
+  ],
+  session_modes: ["regular", "harness"],
+};
+const PICKING_CAPABILITIES = [...CAPABILITIES, "settings"];
+
+function createdThen(respond = () => ({ kind: "accepted" })) {
+  return (body) => (body.method === "create_session" ? { kind: "created", session_id: "new" } : respond(body));
+}
+
+function pick(page, model) {
+  const picker = page.byId("home-chips").querySelector("select");
+  picker.value = model;
+  picker.dispatchEvent(new FakeEvent("change"));
+}
+
+test("parseHost keeps each mode's starting model and the models of its agent", () => {
+  const host = parseHost(PICKING_HOST);
+
+  assert.deepEqual(host.modeModels, {
+    harness: { id: "kimi-k3", name: "Kimi K3", options: [{ id: "kimi-k3", name: "Kimi K3", supportsFast: false }] },
+    regular: {
+      id: "claude-opus-5-5",
+      name: "Opus 5.5",
+      options: [
+        { id: "claude-opus-5-5", name: "Opus 5.5", supportsFast: false },
+        { id: "claude-sonnet-5-5", name: "Sonnet 5.5", supportsFast: false },
+      ],
+    },
+  });
+  assert.deepEqual(modelChoices(host, "regular"), [
+    { id: "claude-opus-5-5", name: "Opus 5.5" },
+    { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+  ]);
+  assert.deepEqual(modelChoices(host, "draft"), []);
+  assert.deepEqual(modelChoices(null, "regular"), []);
+  // A starting model the host does not list stays first, by its id when
+  // it has no name.
+  const unlisted = parseHost({
+    ...HOST,
+    mode_models: [{ agent: "claude", mode: "regular", model: "claude-haiku-5-5" }],
+    models: PICKING_HOST.models,
+  });
+  assert.deepEqual(modelChoices(unlisted, "regular"), [
+    { id: "claude-haiku-5-5", name: "claude-haiku-5-5" },
+    { id: "claude-opus-5-5", name: "Opus 5.5" },
+    { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+  ]);
+});
+
+test("the model chip picks among the starting agent's models", async () => {
+  const page = mountHome({ host: PICKING_HOST });
+  await page.home.setCapabilities(PICKING_CAPABILITIES);
+  const chips = page.byId("home-chips");
+  const picker = chips.querySelector("select");
+
+  assert.ok(picker);
+  assert.equal(picker.getAttribute("aria-label"), "Model");
+  assert.deepEqual(
+    Array.from(picker.children, (option) => [option.value, option.textContent]),
+    [
+      ["claude-opus-5-5", "Opus 5.5"],
+      ["claude-sonnet-5-5", "Sonnet 5.5"],
+    ],
+  );
+  assert.equal(picker.value, "claude-opus-5-5");
+  // The chips and the picker's options stay the same nodes while nothing
+  // they show changes, so an open picker keeps its place.
+  const projectChip = chips.firstChild;
+  const firstOption = picker.children[0];
+  page.home.setConnected(false);
+  assert.equal(chips.firstChild, projectChip);
+  assert.equal(picker.children[0], firstOption);
+  // Losing the settings capability rebuilds them, with the model as text.
+  await page.home.setCapabilities(CAPABILITIES);
+  assert.notEqual(chips.firstChild, projectChip);
+  assert.equal(chips.querySelector("select"), null);
+  await page.home.setCapabilities(PICKING_CAPABILITIES);
+  assert.equal(chips.querySelector("select"), picker);
+
+  // Harness sessions start on another agent, with nothing else to pick.
+  pick(page, "claude-sonnet-5-5");
+  page.byId("home-modes").querySelector('[data-mode="harness"]').click();
+  assert.equal(chips.querySelector("select"), null);
+  assert.equal(chips.lastChild.textContent, "Kimi K3");
+  // Back on regular, the earlier pick is gone.
+  page.byId("home-modes").querySelector('[data-mode="regular"]').click();
+  assert.equal(chips.querySelector("select").value, "claude-opus-5-5");
+});
+
+test("without the settings capability the model chip is text", async () => {
+  const page = mountHome({ host: PICKING_HOST });
+  await page.home.setCapabilities(CAPABILITIES);
+
+  assert.equal(page.byId("home-chips").querySelector("select"), null);
+  assert.equal(page.byId("home-chips").lastChild.textContent, "Opus 5.5");
+});
+
+test("a picked model is set before the first message is sent", async () => {
+  const page = mountHome({ host: PICKING_HOST, respond: createdThen() });
+  await page.home.setCapabilities(PICKING_CAPABILITIES);
+  pick(page, "claude-sonnet-5-5");
+  type(page, "Fix the relay");
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  assert.equal(page.byId("home-chips").querySelector("select").disabled, true);
+  await settle();
+
+  assert.deepEqual(page.requests.slice(1), [
+    { method: "create_session", mode: "regular" },
+    { method: "set_session_settings", model: "claude-sonnet-5-5", session_id: "new" },
+    { method: "send_message", message: "Fix the relay", session_id: "new" },
+  ]);
+  assert.deepEqual(page.created, [["new", null]]);
+  assert.equal(page.byId("home-chips").querySelector("select").disabled, false);
+});
+
+test("keeping the starting model sends no settings change", async () => {
+  const page = mountHome({ host: PICKING_HOST, respond: createdThen() });
+  await page.home.setCapabilities(PICKING_CAPABILITIES);
+  pick(page, "claude-sonnet-5-5");
+  pick(page, "claude-opus-5-5");
+  type(page, "Fix the relay");
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+
+  assert.deepEqual(
+    page.requests.slice(1).map((body) => body.method),
+    ["create_session", "send_message"],
+  );
+});
+
+test("a failed model switch opens the session with the message unsent", async () => {
+  const page = mountHome({
+    host: PICKING_HOST,
+    respond: createdThen((body) => {
+      if (body.method === "set_session_settings") {
+        throw new Error("Model `claude-sonnet-5-5` is not available");
+      }
+
+      return { kind: "accepted" };
+    }),
+  });
+  await page.home.setCapabilities(PICKING_CAPABILITIES);
+  pick(page, "claude-sonnet-5-5");
+  type(page, "Fix the relay");
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+
+  assert.deepEqual(
+    page.requests.slice(1).map((body) => body.method),
+    ["create_session", "set_session_settings"],
+  );
+  assert.deepEqual(page.created, [
+    [
+      "new",
+      { draft: "Fix the relay", error: "Could not switch the model: Model `claude-sonnet-5-5` is not available" },
+    ],
+  ]);
 });

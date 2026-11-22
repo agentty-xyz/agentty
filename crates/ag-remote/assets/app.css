@@ -1180,6 +1180,34 @@ kbd {
   font-weight: 400;
 }
 
+/* The model chip, when the user may pick the new session's model. */
+.chip-select {
+  appearance: none;
+  max-width: 100%;
+  padding-right: 1.5rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-muted) 50%),
+    linear-gradient(135deg, var(--color-muted) 50%, transparent 50%);
+  background-position:
+    right 0.75rem center,
+    right 0.5rem center;
+  background-size: 0.25rem 0.25rem;
+  background-repeat: no-repeat;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.chip-select:hover:not(:disabled),
+.chip-select:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.chip-select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .home-modes {
   width: auto;
 }

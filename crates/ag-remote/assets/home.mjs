@@ -1,12 +1,16 @@
 // Home composer of the remote control client: with the `host` and
 // `create_session` capabilities, home asks what the agent should work on,
 // creates a session in the host's active project, sends it the first
-// message, and opens it. The project name, base branch and model come from
-// `get_host` and only ever become text nodes. Functions take `document`
-// and `window` as parameters, so the Node tests in
+// message, and opens it. The project name, base branch and models come
+// from `get_host` and only ever become text nodes. With the `settings`
+// capability too, the model chip picks among the models of the agent the
+// chosen mode starts on; the pick is applied with `set_session_settings`
+// before the first message goes out. Functions take `document` and
+// `window` as parameters, so the Node tests in
 // crates/ag-remote/tests/web/home.test.mjs pass the fake DOM.
 
 import { composerKeyAction, composerRows, createDrafts } from "./chat.mjs";
+import { offersSettings, parseModels } from "./settings.mjs";
 
 // Where the unsent first message waits, among the per-session drafts.
 export const HOME_DRAFT_ID = "home";
@@ -27,13 +31,47 @@ export function parseHost(result) {
   const modes = Array.isArray(result.session_modes)
     ? result.session_modes.filter((mode) => typeof mode === "string")
     : [];
+  // What each mode starts on, from a host that names it.
+  const modeModels = {};
+  for (const entry of Array.isArray(result.mode_models) ? result.mode_models : []) {
+    if (
+      !modes.includes(entry?.mode) ||
+      typeof entry.agent !== "string" ||
+      typeof entry.model !== "string" ||
+      entry.model === ""
+    ) {
+      continue;
+    }
+    modeModels[entry.mode] = {
+      id: entry.model,
+      name: typeof entry.name === "string" && entry.name !== "" ? entry.name : entry.model,
+      options: parseModels(result, entry.agent),
+    };
+  }
 
   return {
     baseBranch: typeof result.base_branch === "string" ? result.base_branch : "",
     model: typeof result.default_model === "string" ? result.default_model : "",
+    modeModels: modeModels,
     modes: modes,
     project: result.project,
   };
+}
+
+// The models a new session in `mode` can start on, as `{ id, name }`: the
+// mode's own model first when the host does not list it among the
+// options. Empty when the host names no model for the mode.
+export function modelChoices(host, mode) {
+  const start = host?.modeModels[mode];
+  if (!start) {
+    return [];
+  }
+  const options = start.options.map((option) => ({ id: option.id, name: option.name }));
+  if (!options.some((option) => option.id === start.id)) {
+    options.unshift({ id: start.id, name: start.name });
+  }
+
+  return options;
 }
 
 // The label of session mode `mode`; a mode from a newer host shows as it
@@ -62,10 +100,32 @@ export function createHome({ document, window, elements, request, onHost, onCrea
     // Counts host loads, so an answer for an older one is dropped.
     loads: 0,
     mode: null,
+    // Model picked for the new session, or `null` for the mode's own.
+    model: null,
+    // What the chips show, so they are rebuilt only when it changes and
+    // an open model picker keeps its place.
+    shownChips: null,
   };
+  const modelPicker = element(document, "select", "chip chip-select");
+  modelPicker.setAttribute("aria-label", "Model");
 
   function isFinePointer() {
     return Boolean(window.matchMedia?.("(pointer: fine)").matches);
+  }
+
+  // The models the user may pick among now; fewer than two offer no
+  // choice. Picking needs the `settings` capability, which applies it.
+  function choices() {
+    return offersSettings(state.capabilities) ? modelChoices(state.host, state.mode) : [];
+  }
+
+  // The model the new session should switch to, or `null` to keep the
+  // one its mode starts on.
+  function pickedModel() {
+    const start = state.host?.modeModels[state.mode];
+    const isOffered = choices().some((option) => option.id === state.model);
+
+    return start && isOffered && state.model !== start.id ? state.model : null;
   }
 
   function render() {
@@ -74,16 +134,41 @@ export function createHome({ document, window, elements, request, onHost, onCrea
     elements.modes.hidden = !host || host.modes.length < 2;
     elements.send.disabled = !state.isConnected || state.isCreating;
     if (!host) {
+      state.shownChips = null;
+
       return;
     }
-    const chips = [chip("project", host.project), chip("base", host.baseBranch)];
-    if (host.model) {
-      chips.push(chip(null, host.model));
-    }
-    elements.chips.replaceChildren(...chips.filter(Boolean));
+    renderChips(host);
     elements.modes.replaceChildren(
       ...(host.modes.length < 2 ? [] : host.modes.map((mode) => modeButton(mode))),
     );
+  }
+
+  function renderChips(host) {
+    const options = choices();
+    const start = host.modeModels[state.mode];
+    const modelName = start?.name || host.model;
+    const shown = JSON.stringify([host.project, host.baseBranch, modelName, options]);
+    if (shown !== state.shownChips) {
+      state.shownChips = shown;
+      const chips = [chip("project", host.project), chip("base", host.baseBranch)];
+      if (options.length >= 2) {
+        modelPicker.replaceChildren(
+          ...options.map((option) => {
+            const node = element(document, "option", null, option.name);
+            node.value = option.id;
+
+            return node;
+          }),
+        );
+        chips.push(modelPicker);
+      } else {
+        chips.push(chip(null, modelName));
+      }
+      elements.chips.replaceChildren(...chips.filter(Boolean));
+    }
+    modelPicker.value = pickedModel() ?? start?.id ?? "";
+    modelPicker.disabled = state.isCreating;
   }
 
   // A chip such as `project agentty`, or `null` without a value.
@@ -106,6 +191,11 @@ export function createHome({ document, window, elements, request, onHost, onCrea
     button.dataset.mode = mode;
     button.setAttribute("aria-pressed", String(mode === state.mode));
     button.addEventListener("click", () => {
+      // Another mode may start on another agent, so a pick does not carry
+      // over.
+      if (mode !== state.mode) {
+        state.model = null;
+      }
       state.mode = mode;
       render();
     });
@@ -141,6 +231,7 @@ export function createHome({ document, window, elements, request, onHost, onCrea
     if (!text.trim() || !state.host || state.isCreating || !state.isConnected) {
       return;
     }
+    const model = pickedModel();
     state.isCreating = true;
     elements.error.textContent = "";
     render();
@@ -167,11 +258,22 @@ export function createHome({ document, window, elements, request, onHost, onCrea
       elements.message.value = "";
       resize();
     }
+    // The first message waits for the picked model, so the first turn
+    // runs on it; when the switch fails, the message stays unsent.
     let failure = null;
-    try {
-      await request({ method: "send_message", session_id: sessionId, message: text });
-    } catch (error) {
-      failure = { draft: text, error: error.message };
+    if (model) {
+      try {
+        await request({ method: "set_session_settings", session_id: sessionId, model: model });
+      } catch (error) {
+        failure = { draft: text, error: "Could not switch the model: " + error.message };
+      }
+    }
+    if (!failure) {
+      try {
+        await request({ method: "send_message", session_id: sessionId, message: text });
+      } catch (error) {
+        failure = { draft: text, error: error.message };
+      }
     }
     state.isCreating = false;
     render();
@@ -184,6 +286,10 @@ export function createHome({ document, window, elements, request, onHost, onCrea
 
   elements.message.value = drafts.get(HOME_DRAFT_ID);
   resize();
+  modelPicker.addEventListener("change", () => {
+    state.model = modelPicker.value;
+    render();
+  });
   elements.message.addEventListener("input", () => {
     drafts.set(HOME_DRAFT_ID, elements.message.value);
     resize();

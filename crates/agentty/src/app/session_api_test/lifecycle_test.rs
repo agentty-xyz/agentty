@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_session::{
-    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, SessionError as ApiSessionError, SessionId, SessionMessageKind,
-    SessionStatus, test_support as model_fixture,
+    AgentKind, AgentModel, AgentSelection, CreateSessionMode, CreateSessionRequest,
+    DurableMessageRequest, DurableMessageVisibility, HostSessionMode,
+    SessionError as ApiSessionError, SessionId, SessionMessageKind, SessionStatus,
+    test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
@@ -43,12 +44,22 @@ async fn runtime_backend_describes_the_project_new_sessions_join() {
     )
     .await
     .expect("a regular session should be created in the described project");
+    let session = request_session(&mut app, session_id.clone())
+        .await
+        .expect("the regular session should load")
+        .expect("the regular session should exist");
 
     // Assert
     assert_eq!(Some(host.base_branch), base_branch);
     assert_eq!(host.project_id, project_id);
     assert_eq!(host.project_name, project_name);
-    assert_eq!(host.session_modes, [CreateSessionMode::Regular]);
+    assert_eq!(
+        host.session_modes,
+        [HostSessionMode {
+            agent: session.settings.agent,
+            mode: CreateSessionMode::Regular,
+        }]
+    );
     assert_eq!(host.default_model, app.sessions.default_session_model());
     assert!(
         app.sessions
@@ -283,8 +294,15 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
     assert_eq!(session.settings.agent.kind(), AgentKind::Harness);
     assert_eq!(session.settings.agent.model(), AgentModel::KimiK3);
     assert_eq!(
-        host.session_modes,
+        host.session_modes
+            .iter()
+            .map(|session_mode| session_mode.mode.clone())
+            .collect::<Vec<_>>(),
         [CreateSessionMode::Regular, CreateSessionMode::Harness]
+    );
+    assert_eq!(
+        host.session_modes[1].agent,
+        AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3)
     );
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
 }
@@ -323,7 +341,13 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
         ApiSessionError::Operation(message) if message.contains("only Harness sessions")
     ));
     assert!(harness_result.is_ok());
-    assert_eq!(host.session_modes, [CreateSessionMode::Harness]);
+    assert_eq!(
+        host.session_modes,
+        [HostSessionMode {
+            agent: AgentSelection::new(AgentKind::Harness, host.default_model),
+            mode: CreateSessionMode::Harness,
+        }]
+    );
     assert_eq!(
         Some(host.default_model),
         app.services.harness_availability().default_model()

@@ -176,8 +176,18 @@ pub struct HostContext {
     pub project_id: i64,
     /// Display name of the active project.
     pub project_name: String,
-    /// Creation modes the host can serve now, in display order.
-    pub session_modes: Vec<CreateSessionMode>,
+    /// Creation modes the host can serve now, in display order, each with
+    /// the agent and model its new sessions start with.
+    pub session_modes: Vec<HostSessionMode>,
+}
+
+/// One creation mode a host serves, and how its new sessions start.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostSessionMode {
+    /// Agent and model a new session in this mode starts with.
+    pub agent: AgentSelection,
+    /// Creation mode.
+    pub mode: CreateSessionMode,
 }
 
 /// Host implementation boundary for session persistence and workflows.

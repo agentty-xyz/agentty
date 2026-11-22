@@ -8,10 +8,10 @@ use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, HostContext, QuestionAnswer, ReviewRequest, ReviewRequestState,
-    SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
-    parse_persisted_session_agent_model,
+    DurableMessageVisibility, HostContext, HostSessionMode, QuestionAnswer, ReviewRequest,
+    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 
@@ -551,18 +551,23 @@ impl App {
         let harness_model = self.services.harness_availability().default_model();
         let mut session_modes = Vec::new();
         if self.services.has_agent_cli() {
-            session_modes.push(CreateSessionMode::Regular);
+            session_modes.push(HostSessionMode {
+                agent: settings.agent,
+                mode: CreateSessionMode::Regular,
+            });
         }
-        if harness_model.is_some() {
-            session_modes.push(CreateSessionMode::Harness);
+        if let Some(harness_model) = harness_model {
+            session_modes.push(HostSessionMode {
+                agent: AgentSelection::new(AgentKind::Harness, harness_model),
+                mode: CreateSessionMode::Harness,
+            });
         }
         // A host that offers only Harness sessions starts them on the harness
         // model, not on the regular agent's default.
-        let default_model = match session_modes.first() {
-            Some(CreateSessionMode::Harness) => harness_model,
-            _ => None,
-        }
-        .unwrap_or_else(|| settings.agent.model());
+        let default_model = session_modes
+            .first()
+            .map_or(settings.agent, |session_mode| session_mode.agent)
+            .model();
 
         Ok(HostContext {
             base_branch: project.base_branch,
