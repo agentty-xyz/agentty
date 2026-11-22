@@ -5,10 +5,11 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use ag_relay::{RelayConfig, RelayHandle, RelayLimits};
 use ag_remote::protocol::{ClientFrame, ServerFrame};
 use ag_remote::{
-    DeviceStore, DeviceStoreError, NewRemoteDevice, PROTOCOL_VERSION, RemoteDevice, RemoteHost,
-    RemoteRelayConfig, RemoteServerConfig, RemoteServerHandle,
+    DeviceStore, DeviceStoreError, NewRemoteDevice, PROTOCOL_VERSION, RelayStatus, RemoteDevice,
+    RemoteHost, RemoteRelayConfig, RemoteServerConfig, RemoteServerHandle, StaticKeypair,
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
@@ -169,6 +170,47 @@ impl TestServer {
     }
 }
 
+/// Starts a relay on a free loopback port.
+pub(crate) async fn start_relay() -> TestResult<RelayHandle> {
+    let relay = ag_relay::start(RelayConfig {
+        bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        client_address_header: None,
+        limits: relay_limits(),
+    })
+    .await?;
+
+    Ok(relay)
+}
+
+/// Relay limits with frequent keepalive pings, so the server's handling of
+/// them runs in every test.
+pub(crate) fn relay_limits() -> RelayLimits {
+    RelayLimits {
+        ping_interval: Duration::from_millis(50),
+        ..RelayLimits::default()
+    }
+}
+
+/// Starts a server linked to `relay` and waits until it is registered.
+pub(crate) async fn start_linked_server(
+    relay: &RelayHandle,
+    instance: &StaticKeypair,
+) -> TestResult<TestServer> {
+    let server = TestServer::start_linked(RemoteRelayConfig {
+        instance_key: instance.clone(),
+        url: format!("ws://{}/", relay.local_addr()),
+    })
+    .await?;
+    let mut status = server.handle.status();
+    tokio::time::timeout(
+        FRAME_TIMEOUT,
+        status.wait_for(|status| status.relay == Some(RelayStatus::Connected)),
+    )
+    .await??;
+
+    Ok(server)
+}
+
 /// Builds a hello frame for the current protocol.
 pub(crate) fn hello_frame(token: &str) -> ClientFrame {
     ClientFrame::Hello {
@@ -326,7 +368,8 @@ impl DeviceStore for MemoryDeviceStore {
     }
 }
 
-/// Session backend that records calls; `busy` sessions reject messages and
+/// Session backend that records calls; a session snapshot queues the
+/// messages sent to it, `busy` sessions reject messages, and
 /// every cancellation reports a missing session.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
@@ -361,7 +404,14 @@ impl SessionBackend for RecordingBackend {
             return Ok(None);
         }
 
-        Ok(Some(session(session_id)))
+        let prefix = format!("send:{session_id}:");
+        let sent = self
+            .calls()
+            .iter()
+            .filter_map(|call| call.strip_prefix(&prefix).map(str::to_string))
+            .collect();
+
+        Ok(Some(session(session_id, sent)))
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
@@ -435,8 +485,9 @@ impl SessionBackend for RecordingBackend {
     }
 }
 
-/// Builds a session with a hidden prompt, an answer, and one question.
-fn session(session_id: &SessionId) -> Session {
+/// Builds a session with a hidden prompt, an answer, one question, and
+/// `queued_messages` waiting behind its turn.
+fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
     Session {
         created_at: 10,
         draft_prompt: None,
@@ -451,7 +502,7 @@ fn session(session_id: &SessionId) -> Session {
             options: vec!["main".to_string()],
             text: "Which branch?".to_string(),
         }],
-        queued_messages: Vec::new(),
+        queued_messages,
         review_request: None,
         settings: SessionSettings {
             agent: ag_session::test_support::codex_selection(),

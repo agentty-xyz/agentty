@@ -6,3 +6,4 @@ mod pairing;
 mod relay;
 mod request;
 mod support;
+mod web_client;

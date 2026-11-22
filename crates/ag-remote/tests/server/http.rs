@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
-use crate::support::{TestResult, TestServer};
+use crate::support::{TestResult, TestServer, start_relay};
 
 /// Sends one HTTP/1.1 `GET` naming the listener as `Host` and returns the
 /// lowercased raw response.
@@ -39,12 +39,18 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // Act
     let page = get(addr, "/").await?;
     let script = get(addr, "/app.js").await?;
+    let device_key = get(addr, "/device_key.mjs").await?;
+    let noise = get(addr, "/noise.mjs").await?;
+    let relay = get(addr, "/relay.mjs").await?;
     let stylesheet = get(addr, "/app.css").await?;
 
     // Assert
     for (response, content_type) in [
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
+        (&device_key, "text/javascript; charset=utf-8"),
+        (&noise, "text/javascript; charset=utf-8"),
+        (&relay, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
     ] {
         assert!(response.starts_with("http/1.1 200 ok"));
@@ -58,7 +64,100 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         assert!(response.contains("referrer-policy: no-referrer"));
         assert!(response.contains("cache-control: no-store"));
     }
-    assert!(page.contains("<script src=\"/app.js\""));
+    assert!(page.contains("<script type=\"module\" src=\"app.js\""));
+    assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
+    assert!(script.contains("from \"./device_key.mjs\""));
+    assert!(script.contains("from \"./relay.mjs\""));
+    assert!(device_key.contains("from \"./noise.mjs\""));
+    assert!(relay.contains("from \"./noise.mjs\""));
+
+    Ok(())
+}
+
+/// Splits a raw response into the headers that protect the web client and
+/// its body.
+fn guarded_headers_and_body(response: &str) -> (Vec<&str>, &str) {
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((response, ""));
+    let headers = head
+        .lines()
+        .filter(|line| {
+            [
+                "http/1.1",
+                "content-type:",
+                "content-security-policy:",
+                "x-content-type-options:",
+                "referrer-policy:",
+                "cache-control:",
+            ]
+            .iter()
+            .any(|name| line.starts_with(name))
+        })
+        .collect();
+
+    (headers, body)
+}
+
+/// Returns the request paths of the scripts and stylesheets `body` names.
+fn referenced_paths(body: &str) -> Vec<String> {
+    body.split('"')
+        .filter(|quoted| {
+            [".css", ".js", ".mjs"]
+                .iter()
+                .any(|extension| quoted.ends_with(extension))
+                && !quoted.contains(char::is_whitespace)
+        })
+        .map(|quoted| format!("/{}", quoted.trim_start_matches("./")))
+        .collect()
+}
+
+#[tokio::test]
+async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let relay = start_relay().await?;
+    let mut paths = vec!["/".to_string()];
+    let mut compared: Vec<(String, String, String)> = Vec::new();
+
+    // Act: follow every file the page and its scripts name, on both.
+    while let Some(path) = paths.pop() {
+        if compared.iter().any(|(seen, ..)| *seen == path) {
+            continue;
+        }
+        let local = get(server.handle.local_addr(), &path).await?;
+        let relayed = get(relay.local_addr(), &path).await?;
+        paths.extend(referenced_paths(&local));
+        compared.push((path, local, relayed));
+    }
+
+    // Assert
+    for (path, local, relayed) in &compared {
+        let relayed = relayed.replace(
+            "name=\"agentty-transport\" content=\"relay\"",
+            "name=\"agentty-transport\" content=\"local\"",
+        );
+        let (local_headers, local_body) = guarded_headers_and_body(local);
+        let (relay_headers, relay_body) = guarded_headers_and_body(&relayed);
+        assert!(
+            local.starts_with("http/1.1 200 ok"),
+            "listener lacks {path}"
+        );
+        assert_eq!(local_headers.len(), 6, "listener headers for {path}");
+        assert_eq!(relay_headers, local_headers, "headers for {path}");
+        assert_eq!(relay_body, local_body, "body of {path}");
+    }
+    let mut files: Vec<&str> = compared.iter().map(|(path, ..)| path.as_str()).collect();
+    files.sort_unstable();
+    assert_eq!(
+        files,
+        [
+            "/",
+            "/app.css",
+            "/app.js",
+            "/device_key.mjs",
+            "/noise.mjs",
+            "/relay.mjs"
+        ]
+    );
 
     Ok(())
 }

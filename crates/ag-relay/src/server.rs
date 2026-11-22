@@ -16,7 +16,7 @@ use tokio::time::timeout;
 
 use crate::limit::{HandshakeLimiter, RelayLimits};
 use crate::registry::Registry;
-use crate::{control, stream};
+use crate::{control, page, stream};
 
 /// Path of the instance control connection.
 pub const REGISTER_PATH: &str = "/v1/register";
@@ -86,7 +86,7 @@ pub async fn start(config: RelayConfig) -> Result<RelayHandle, RelayError> {
         registry: Registry::new(),
         shutdown_rx,
     });
-    let router = Router::new()
+    let router = page::routes(Router::new())
         .route("/healthz", get(health))
         .route(REGISTER_PATH, get(register))
         .route("/v1/connect/{instance_id}", get(connect))

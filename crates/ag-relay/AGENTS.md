@@ -17,7 +17,9 @@ dials out, so the instance needs no open port.
 - Plain TCP connections and slow request headers are not limited here; the relay is
   meant to run behind a reverse proxy that terminates TLS. Say so wherever deployment is
   documented.
-- Keep the crate independent of Agentty application crates.
+- Keep the crate independent of Agentty application crates. It embeds the web client
+  files from `crates/ag-remote/assets/` by path and only marks the page for the relay
+  transport; change the client there.
 
 ## Integration
 

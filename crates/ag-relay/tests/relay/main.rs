@@ -2,6 +2,7 @@
 
 mod binary;
 mod lifecycle;
+mod page;
 mod registration;
 mod stream;
 mod support;

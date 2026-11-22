@@ -4,15 +4,15 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use ag_remote::{
-    DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, PublicKey, RelayStatus,
-    RemoteConnection, RemoteDevice, RemoteError, RemoteHost, RemoteRelayConfig, RemoteServerStatus,
-    StaticKeypair,
+    DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, RelayStatus, RemoteConnection,
+    RemoteDevice, RemoteError, RemoteHost, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
+    pairing_link,
 };
 use async_trait::async_trait;
 use mockall::predicate::eq;
 use tokio::sync::watch;
 
-use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl, pairing_link};
+use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
 use crate::app::{App, AppRuntimeEvent};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
@@ -703,31 +703,6 @@ async fn publish_session_change_advances_the_remote_revision() {
             .expect("revision sender should live")
     );
     assert_eq!(*revisions.borrow(), initial_revision + 1);
-}
-
-/// Public key of the instance in the link tests.
-fn instance_key() -> PublicKey {
-    PublicKey::from_bytes(&[0xAB; 32]).expect("key should load")
-}
-
-#[test]
-fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {
-    // Arrange
-    let key = instance_key();
-
-    // Act
-    let secure = pairing_link("wss://relay.example/", &key, "ABCD-EFGH");
-    let plain = pairing_link("ws://127.0.0.1:8787", &key, "ABCD-EFGH");
-
-    // Assert
-    assert_eq!(
-        secure,
-        format!(
-            "https://relay.example/#relay=wss%3A%2F%2Frelay%2Eexample&key={}&code=ABCD%2DEFGH",
-            "ab".repeat(32)
-        )
-    );
-    assert!(plain.starts_with("http://127.0.0.1:8787/#relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A8787&"));
 }
 
 #[tokio::test]
