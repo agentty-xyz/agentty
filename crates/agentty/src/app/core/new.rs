@@ -26,7 +26,6 @@ use crate::domain::setting::SettingName;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
-use crate::infra::resource::ResourceClient;
 use crate::presentation::graph_chat::GraphChatCache;
 use crate::presentation::setting::SettingsPresentationState;
 
@@ -137,24 +136,18 @@ impl App {
             clock,
         )
         .await?;
+        let settings =
+            Self::load_settings(&repositories, &services, startup.active_project_id).await;
+        let (sessions, review_cache, recoverable, review_watch) =
+            Self::load_startup_sessions_and_reviews(&services, &clients, &startup).await?;
         let projects = crate::app::project::ProjectManager::new(
             startup.active_project_id,
             startup.active_project_name,
             startup.startup_git_branch,
             startup.startup_git_upstream_ref,
             startup.project_items,
-            startup.startup_working_dir.clone(),
+            startup.startup_working_dir,
         );
-        let settings =
-            Self::load_settings(&repositories, &services, startup.active_project_id).await;
-        let (sessions, review_cache, recoverable, review_watch) =
-            Self::load_startup_sessions_and_reviews(
-                &services,
-                Arc::clone(&clients.resource_client),
-                startup.active_project_id,
-                startup.startup_working_dir.as_path(),
-            )
-            .await?;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let (sync_handle, sync_task) = sync::SyncHandle::unstarted(event_tx.clone(), sync_context);
@@ -239,16 +232,15 @@ impl App {
     }
 
     /// Loads sessions, focused-review recovery state, and review-request
-    /// watches for the launch project, sampling tab-bar resource stats through
-    /// `resource_client`.
+    /// watches for the launch project in `startup`, sampling tab-bar resource
+    /// stats through the `resource_client` in `clients`.
     ///
     /// Everything is read before startup background tasks spawn, so no task
     /// can emit an event while the app is still being assembled.
     async fn load_startup_sessions_and_reviews(
         services: &AppServices,
-        resource_client: Arc<dyn ResourceClient>,
-        active_project_id: i64,
-        working_dir: &Path,
+        clients: &AppClients,
+        startup: &StartupProjectContext,
     ) -> Result<
         (
             SessionManager,
@@ -258,6 +250,9 @@ impl App {
         ),
         AppError,
     > {
+        let active_project_id = startup.active_project_id;
+        let working_dir = startup.startup_working_dir.as_path();
+        let resource_client = Arc::clone(&clients.resource_client);
         let phase = Span::child("sessions.load");
         let mut sessions =
             Self::load_active_project_startup_sessions(services, active_project_id, working_dir)

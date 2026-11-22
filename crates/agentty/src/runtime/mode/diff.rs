@@ -73,6 +73,28 @@ pub(crate) fn apply_refreshed_diff(app: &mut App, render_cache_store: &RenderCac
     let Some(refreshed) = app.take_refreshed_session_diff() else {
         return;
     };
+    // The preview reload reads `app` while it rewrites the Diff page, so the
+    // mode is detached for the update and always restored afterwards.
+    let mut mode = std::mem::replace(&mut app.mode, AppMode::List);
+    apply_refreshed_diff_to_mode(
+        app,
+        render_cache_store,
+        &mut mode,
+        refreshed.session_id,
+        refreshed.diff,
+    );
+    app.mode = mode;
+}
+
+/// Applies one refreshed diff to the detached `mode` when it is the Diff page
+/// of `refreshed_session_id`, queueing it while comment interaction is active.
+fn apply_refreshed_diff_to_mode(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    mode: &mut AppMode,
+    refreshed_session_id: SessionId,
+    refreshed_diff: String,
+) {
     let AppMode::Diff {
         diff,
         file_explorer_selected_index,
@@ -83,25 +105,25 @@ pub(crate) fn apply_refreshed_diff(app: &mut App, render_cache_store: &RenderCac
         selected_diff_line_index,
         session_id,
         ..
-    } = &mut app.mode
+    } = mode
     else {
         return;
     };
-    if *session_id != refreshed.session_id {
+    if *session_id != refreshed_session_id {
         return;
     }
     if line_comments.is_editing()
         || line_comments.is_selecting()
         || line_comments.submit_confirmation_index.is_some()
     {
-        app.queue_refreshed_session_diff(refreshed.session_id, refreshed.diff);
+        app.queue_refreshed_session_diff(refreshed_session_id, refreshed_diff);
 
         return;
     }
 
     let diff_layout_cache = render_cache_store.diff_layout_cache();
     let visible_content = diff_layout_cache.content(diff);
-    let refreshed_content = diff_layout_cache.content(&refreshed.diff);
+    let refreshed_content = diff_layout_cache.content(&refreshed_diff);
     let visible_index = *file_explorer_selected_index;
     let refreshed_index = visible_content
         .tree_item(visible_index)
@@ -132,28 +154,17 @@ pub(crate) fn apply_refreshed_diff(app: &mut App, render_cache_store: &RenderCac
     }
     let should_reload_preview =
         preview.is_enabled() && (refreshed_index.is_none() || previewed_lines_changed);
-    *diff = refreshed.diff;
+    *diff = refreshed_diff;
     *scroll_cache = None;
-    if should_reload_preview
-        && let AppMode::Diff {
-            diff,
-            file_explorer_selected_index,
-            preview,
-            session_id,
-            ..
-        } = &app.mode
-    {
-        let reloaded_preview = start_selected_preview_load(
+    if should_reload_preview {
+        *preview = start_selected_preview_load(
             app,
-            render_cache_store.diff_layout_cache(),
+            diff_layout_cache,
             diff,
             *file_explorer_selected_index,
             preview,
             session_id,
         );
-        if let AppMode::Diff { preview, .. } = &mut app.mode {
-            *preview = reloaded_preview;
-        }
     }
 
     app.mark_dirty();
