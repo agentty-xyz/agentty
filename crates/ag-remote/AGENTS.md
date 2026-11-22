@@ -35,8 +35,13 @@ through `ag_session::SessionService`.
 - Change `crates/ag-remote/assets/noise.mjs` together with `ag-noise`. The tests in
   `crates/ag-remote/tests/server/web_client.rs` run it in Node.js against a real relay
   and server.
-- Bump `PROTOCOL_VERSION` for any incompatible frame change, and update the web client
-  and `crates/ag-remote/tests/server/` together with `crates/ag-remote/src/protocol.rs`.
+- Keep frame changes additive: a self-hosted relay serves its own copy of the web
+  client, so the page and Agentty may differ in version. Give new frame fields a
+  default, omit them when empty, and offer each new request only through a
+  `capabilities` entry. Bump `PROTOCOL_VERSION` only when a frame changes meaning or
+  loses a field.
+- Update the web client and `crates/ag-remote/tests/server/` together with
+  `crates/ag-remote/src/protocol.rs`.
 
 ## Documentation
 

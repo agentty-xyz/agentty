@@ -82,6 +82,10 @@ pub enum RemoteRequest {
         /// Session that receives the message.
         session_id: String,
     },
+    /// Any method this server does not know, such as one a newer client
+    /// sends. The server answers it with an error and keeps the connection.
+    #[serde(other)]
+    Unsupported,
 }
 
 /// One answer to a pending clarification question.
@@ -110,6 +114,10 @@ pub enum ServerFrame {
     },
     /// Pairing succeeded; the client keeps `token` for later connections.
     Paired {
+        /// Optional requests the server supports, as in
+        /// [`ServerFrame::Welcome`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
         /// Identifier of the new device.
         device_id: String,
         /// Protocol version the server speaks.
@@ -136,6 +144,11 @@ pub enum ServerFrame {
     },
     /// Authentication with an existing token succeeded.
     Welcome {
+        /// Optional requests the server supports. A client offers a feature
+        /// only when its capability is listed, so it never sends a request
+        /// an older server lacks. Absent when empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
         /// Identifier of the authenticated device.
         device_id: String,
         /// Protocol version the server speaks.

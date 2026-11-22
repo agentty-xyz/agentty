@@ -125,6 +125,23 @@ separate signing key that proves the device. Both give Safari the non-extractabl
 now, but move remote control off the standard X25519 suite or add a signature step to
 the protocol for a browser bug that should be temporary.
 
+### Capabilities instead of version bumps
+
+**Context.** The relay binary embeds its own copy of the web client, and a self-hosted
+relay updates separately from Agentty. A device can therefore load a page that is older
+or newer than the Agentty it talks to. The server refuses any other `protocol_version`,
+so a version bump would lock out every relay device until both sides match.
+
+**Decision.** Frame changes stay additive. New fields default when missing and are
+omitted when empty. `welcome` and `paired` carry a `capabilities` list of the optional
+requests the server supports, and the client offers a feature only when its capability
+is listed. A request with an unknown `method` gets `Unsupported request` and the
+connection stays open; malformed frames still close it.
+
+**Consequences.** An older page ignores fields and capabilities it does not know. A
+newer page hides what an older server lacks. `PROTOCOL_VERSION` changes only when a
+frame changes meaning or loses a field.
+
 ### The relay is stateless and joins one connection per device
 
 The relay keeps only open connections in memory, and a restart only makes clients

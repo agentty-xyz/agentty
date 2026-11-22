@@ -254,6 +254,33 @@ async fn protocol_violations_after_authentication_close_the_connection() -> Test
 }
 
 #[tokio::test]
+async fn unknown_methods_get_an_error_and_keep_the_connection() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let unknown =
+        r#"{"type":"request","id":1,"request":{"method":"stop_turn","session_id":"session-1"}}"#;
+
+    // Act
+    client.send(Message::Text(unknown.into())).await?;
+    let refused = next_frame(&mut client).await?;
+    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+
+    // Assert
+    assert_eq!(
+        refused,
+        ServerFrame::Response {
+            id: 1,
+            result: RemoteResult::Error("Unsupported request".to_string()),
+        }
+    );
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    assert_eq!(server.backend.calls(), ["list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn bursts_of_host_changes_push_one_changed_frame() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
