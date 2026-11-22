@@ -170,6 +170,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     let refreshed = app.next_step().await?;
     let canceled = app.next_step().await?;
     let closed = app.next_step().await?;
+    let forgot = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
@@ -222,6 +223,17 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
             "view": "home-view",
         })
     );
+    assert_eq!(
+        forgot,
+        json!({
+            "step": "forgot",
+            "hash": "",
+            "isMainInert": false,
+            "routed": "#s=session-1",
+            "token": null,
+            "view": "pair-view",
+        })
+    );
     assert!(succeeded);
     let mutations: Vec<String> = server
         .backend
@@ -271,6 +283,12 @@ async fn web_client_app_shows_the_confirmation_code_then_the_denial_through_the_
             "step": "awaiting",
             "cancelHidden": false,
             "confirmation": request.confirmation,
+            "connecting": {
+                "cancelHidden": false,
+                "label": "Connecting to Agentty",
+                "submitHidden": true,
+            },
+            "label": "Waiting for approval in Agentty",
             "connection": "Waiting for approval",
             "submitHidden": true,
             "view": "pair-view",

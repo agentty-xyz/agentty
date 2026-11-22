@@ -48,6 +48,8 @@ const elements = {
   "pair-name": document.getElementById("pair-name"),
   "pair-confirm": document.getElementById("pair-confirm"),
   "pair-confirmation": document.getElementById("pair-confirmation"),
+  "pair-wait-label": document.getElementById("pair-wait-label"),
+  "pair-wait-hint": document.getElementById("pair-wait-hint"),
   "pair-error": document.getElementById("pair-error"),
   "pair-submit": document.getElementById("pair-submit"),
   "pair-cancel": document.getElementById("pair-cancel"),
@@ -264,6 +266,9 @@ function tickCountdown() {
 // comes from the pairing link, so the fields appear only once a link was
 // opened.
 function showPairing() {
+  // The drawer and the session route belong to the app this card replaces.
+  shell.reset();
+  clearSessionRoute();
   setPairingWait(null);
   if (usesRelay) {
     const link = state.pairingLink;
@@ -290,11 +295,31 @@ function showShell() {
 // Shows the confirmation code while Agentty waits for approval, or the
 // form when `confirmation` is null.
 function setPairingWait(confirmation) {
-  const isWaiting = confirmation !== null;
-  elements["pair-confirm"].hidden = !isWaiting;
+  setPairingPhase(confirmation === null ? "idle" : "waiting", confirmation);
+}
+
+// Shows the pairing form in `phase`: `idle` offers Pair; `connecting`
+// and `waiting` offer Cancel instead, and `waiting` adds the confirmation
+// code Agentty shows.
+function setPairingPhase(phase, confirmation = null) {
+  const isBusy = phase !== "idle";
+  const isWaiting = phase === "waiting";
+  elements["pair-confirm"].hidden = !isBusy;
+  elements["pair-wait-label"].textContent = isWaiting
+    ? "Waiting for approval in Agentty"
+    : "Connecting to Agentty";
   elements["pair-confirmation"].textContent = confirmation || "";
-  elements["pair-submit"].hidden = isWaiting;
-  elements["pair-cancel"].hidden = !isWaiting;
+  elements["pair-confirmation"].hidden = !isWaiting;
+  elements["pair-wait-hint"].hidden = !isWaiting;
+  elements["pair-submit"].hidden = isBusy;
+  elements["pair-cancel"].hidden = !isBusy;
+}
+
+// Removes a session route from the address without a new history entry.
+function clearSessionRoute() {
+  if (parseRoute(window.location.hash, parsePairingLink).kind === "session") {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
 }
 
 // Shows home or the open session in the main area.
@@ -768,7 +793,10 @@ const shell = createShell({
     sidebar: elements.sidebar,
   },
   onRoute: (route) => {
-    if (route.kind === "session") {
+    if (!elements["pair-view"].hidden) {
+      // An unpaired page has no sessions to route to.
+      clearSessionRoute();
+    } else if (route.kind === "session") {
       enterSession(route.sessionId);
     } else {
       leaveSession();
@@ -799,6 +827,8 @@ elements["pair-form"].addEventListener("submit", (event) => {
   const deviceName = elements["pair-name"].value.trim();
   elements["pair-error"].textContent = "";
   state.pendingPairing = { code: code, deviceName: deviceName };
+  // Cancel shows at once, so a connection that hangs can be abandoned.
+  setPairingPhase("connecting");
   connect({
     type: "pair",
     code: code,
@@ -843,8 +873,12 @@ document.addEventListener("click", (event) => {
   }
 });
 
-document.addEventListener("keydown", (event) => {
+// `Esc` closes the device menu first. Handling it on the sidebar, before
+// it reaches the document, keeps the same key from also closing the
+// drawer, so focus returns to the visible menu button.
+elements.sidebar.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements["device-menu"].hidden) {
+    event.preventDefault();
     setDeviceMenu(false);
     elements["device-more"].focus();
   }

@@ -242,6 +242,80 @@ test("the close button, the scrim and Escape each close the drawer through histo
   }
 });
 
+test("Escape leaves the drawer to a modal dialog open over it", () => {
+  // Arrange
+  const { document, elements, shell, window } = mountShell();
+  elements.menu.click();
+  const dialog = document.getElementById("forget-dialog");
+  dialog.showModal();
+  const event = new FakeEvent("keydown", { key: "Escape" });
+
+  // Act
+  document.dispatchEvent(event);
+
+  // Assert
+  assert.equal(shell.isOpen(), true);
+  assert.equal(event.defaultPrevented, false);
+  assert.deepEqual(window.history.state, { drawer: true });
+  assert.equal(elements.main.hasAttribute("inert"), true);
+});
+
+test("Escape that something inside the drawer handled does not close it", () => {
+  // Arrange
+  const { document, elements, shell, window } = mountShell();
+  elements.menu.click();
+  const menuButton = document.getElementById("device-more");
+  // As app.js does for the device menu: close it, keep focus on its button.
+  elements.sidebar.addEventListener("keydown", (event) => {
+    event.preventDefault();
+    menuButton.focus();
+  });
+
+  // Act
+  menuButton.dispatchEvent(new FakeEvent("keydown", { key: "Escape" }));
+
+  // Assert
+  assert.equal(shell.isOpen(), true);
+  assert.deepEqual(window.history.state, { drawer: true });
+  assert.equal(document.activeElement, menuButton);
+});
+
+test("closing the drawer by the back gesture or a choice moves focus to the menu button", () => {
+  // Arrange
+  const popped = mountShell();
+  const chosen = mountShell();
+  for (const mounted of [popped, chosen]) {
+    mounted.elements.menu.click();
+  }
+
+  // Act
+  popped.window.history.back();
+  chosen.shell.showSession("two");
+
+  // Assert
+  for (const mounted of [popped, chosen]) {
+    assert.equal(mounted.shell.isOpen(), false);
+    assert.equal(mounted.document.activeElement, mounted.elements.menu);
+  }
+});
+
+test("reset closes the drawer and drops its history entry", () => {
+  // Arrange
+  const { elements, shell, window } = mountShell({ url: "http://127.0.0.1/#s=one" });
+  elements.menu.click();
+
+  // Act
+  shell.reset();
+  shell.reset();
+
+  // Assert
+  assert.equal(shell.isOpen(), false);
+  assert.equal(elements.main.hasAttribute("inert"), false);
+  assert.equal(elements.scrim.hidden, true);
+  assert.equal(window.history.state, null);
+  assert.equal(window.location.hash, "#s=one");
+});
+
 test("choosing a session replaces the drawer's entry, so back returns to the last session", () => {
   // Arrange
   const { elements, routes, shell, window } = mountShell({ url: "http://127.0.0.1/#s=one" });

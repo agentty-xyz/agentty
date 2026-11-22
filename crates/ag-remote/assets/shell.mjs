@@ -106,7 +106,7 @@ const CLOSED = Object.freeze({ hasEntry: false, isOpen: false });
 // the back or forward gesture changes it.
 //
 // Returns `showSession(sessionId)`, which routes to a session chosen in
-// the list (or home with `null`), and `isOpen()`.
+// the list (or home with `null`), `reset()`, and `isOpen()`.
 export function createShell({ document, window, elements, parsePairingLink, onRoute }) {
   const narrow = window.matchMedia(NARROW_QUERY);
   let drawer = CLOSED;
@@ -146,15 +146,17 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
       navigate(next.history, hash);
     }
     render();
+    // Focus follows the drawer, so it never stays inside a hidden one.
     if (drawer.isOpen && !wasOpen) {
       elements.close.focus();
+    } else if (wasOpen && !drawer.isOpen && narrow.matches) {
+      elements.menu.focus();
     }
   }
 
   function dismiss() {
     if (drawer.isOpen) {
       apply("dismiss");
-      elements.menu.focus();
     }
   }
 
@@ -173,11 +175,19 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
   });
   elements.close.addEventListener("click", dismiss);
   elements.scrim.addEventListener("click", dismiss);
+  // `Esc` belongs to a modal dialog open over the drawer, and to anything
+  // inside the drawer that already handled it, such as a menu.
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && drawer.isOpen) {
-      event.preventDefault();
-      dismiss();
+    if (
+      event.key !== "Escape" ||
+      !drawer.isOpen ||
+      event.defaultPrevented ||
+      document.querySelector("dialog[open]")
+    ) {
+      return;
     }
+    event.preventDefault();
+    dismiss();
   });
   narrow.addEventListener("change", () => {
     if (!narrow.matches) {
@@ -198,6 +208,9 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
 
   return {
     isOpen: () => drawer.isOpen,
+    // Closes the drawer and drops its history entry, as when the app gives
+    // way to the pairing card.
+    reset: dismiss,
     showSession: (sessionId) => apply("choose", routeHash(sessionId)),
   };
 }

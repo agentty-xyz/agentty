@@ -143,6 +143,21 @@ async function sessionFlow() {
     heading: byId("heading").textContent,
     view: visibleView(),
   });
+
+  // Forgetting the device from an open session drops its route.
+  byId("sessions").querySelector("button").click();
+  const routed = window.location.hash;
+  byId("device-more").click();
+  byId("forget").click();
+  byId("forget-dialog").querySelector('button[value="confirm"]').click();
+  report({
+    step: "forgot",
+    hash: window.location.hash,
+    isMainInert: byId("main").hasAttribute("inert"),
+    routed: routed,
+    token: window.localStorage.getItem(TOKEN_KEY),
+    view: visibleView(),
+  });
 }
 
 async function pairFlow() {
@@ -150,11 +165,19 @@ async function pairFlow() {
   byId("pair-code").value = secret;
   byId("pair-name").value = "Node browser";
   byId("pair-submit").click();
-  await waitFor("the confirmation code", () => !byId("pair-confirm").hidden);
+  // Before the connection opens, Cancel already replaces Pair.
+  const connecting = {
+    cancelHidden: byId("pair-cancel").hidden,
+    label: byId("pair-wait-label").textContent,
+    submitHidden: byId("pair-submit").hidden,
+  };
+  await waitFor("the confirmation code", () => byId("pair-confirmation").textContent !== "");
   report({
     step: "awaiting",
     cancelHidden: byId("pair-cancel").hidden,
     confirmation: byId("pair-confirmation").textContent,
+    connecting: connecting,
+    label: byId("pair-wait-label").textContent,
     connection: byId("connection").textContent,
     submitHidden: byId("pair-submit").hidden,
     view: visibleView(),
