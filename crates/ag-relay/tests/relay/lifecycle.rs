@@ -12,6 +12,31 @@ use crate::support::{
 };
 
 #[tokio::test]
+async fn shutdown_does_not_wait_for_an_unfinished_request() -> TestResult {
+    // Arrange
+    let limits = RelayLimits {
+        shutdown_timeout: Duration::from_millis(50),
+        ..RelayLimits::default()
+    };
+    let relay = start(limits).await?;
+    let address = relay.local_addr();
+    let mut unfinished = TcpStream::connect(address).await?;
+    unfinished.write_all(b"GET /healthz HT").await?;
+    unfinished.flush().await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Act
+    let stopped = tokio::time::timeout(Duration::from_secs(10), relay.shutdown()).await;
+    let rebound = TcpListener::bind(address).await;
+
+    // Assert
+    assert!(stopped.is_ok());
+    assert!(rebound.is_ok());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn health_endpoint_answers_ok() -> TestResult {
     // Arrange
     let relay = start(RelayLimits::default()).await?;

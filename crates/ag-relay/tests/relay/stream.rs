@@ -12,6 +12,40 @@ use crate::support::{
 };
 
 #[tokio::test]
+async fn peer_that_stops_reading_ends_the_stream() -> TestResult {
+    // Arrange: the instance never reads, so its buffers fill and the relay
+    // can no longer hand it messages.
+    let limits = RelayLimits {
+        max_bytes_per_minute: usize::MAX,
+        write_timeout: Duration::from_millis(100),
+        ..RelayLimits::default()
+    };
+    let relay = start(limits).await?;
+    let (_control, mut device, _stalled_instance) = joined_stream(&relay).await?;
+    let chunk = vec![0; 60_000];
+
+    // Act
+    let flood = async {
+        let mut sent_messages = 0_u32;
+        while device
+            .send(Message::Binary(chunk.clone().into()))
+            .await
+            .is_ok()
+        {
+            sent_messages += 1;
+        }
+
+        sent_messages
+    };
+    let sent_messages = tokio::time::timeout(Duration::from_secs(30), flood).await?;
+
+    // Assert
+    assert!(sent_messages > 0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn joined_stream_forwards_binary_messages_both_ways() -> TestResult {
     // Arrange
     let relay = start(RelayLimits::default()).await?;

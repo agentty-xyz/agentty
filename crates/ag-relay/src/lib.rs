@@ -24,10 +24,16 @@
 //! Once a stream is answered the relay forwards binary messages in both
 //! directions until either side leaves, and closes both sides with the same
 //! reason. `GET /healthz` answers `ok` for liveness probes.
+//!
+//! [`RelayLimits`] bounds what clients hold once a request reaches the
+//! relay. It does not cap plain TCP connections or slow request headers, and
+//! the relay speaks unencrypted HTTP: run it behind a reverse proxy that
+//! terminates TLS and limits connections.
 
 mod close;
 mod control;
 mod limit;
+mod peer;
 mod registry;
 mod server;
 mod stream;

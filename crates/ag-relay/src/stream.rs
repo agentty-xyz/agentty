@@ -8,6 +8,7 @@ use tokio::time::{interval, timeout};
 
 use crate::close::CloseReason;
 use crate::limit::ByteBudget;
+use crate::peer::Peer;
 use crate::server::RelayState;
 
 /// Random bytes in a stream identifier.
@@ -18,16 +19,13 @@ const STREAM_ID_BYTES: usize = 16;
 ///
 /// Messages the device sends before the answer stay in its socket and are
 /// forwarded once the stream is joined.
-pub(crate) async fn serve_device(
-    mut device: WebSocket,
-    state: Arc<RelayState>,
-    instance_id: String,
-) {
+pub(crate) async fn serve_device(device: WebSocket, state: Arc<RelayState>, instance_id: String) {
     let _open_socket = state.track_socket();
+    let mut device = Peer::new(device, state.limits.write_timeout);
     let (_open_stream, answer) = match OpenStream::open(&state, instance_id) {
         Ok(opened) => opened,
         Err(reason) => {
-            reason.close(&mut device).await;
+            device.close(reason).await;
 
             return;
         }
@@ -41,8 +39,11 @@ pub(crate) async fn serve_device(
     };
 
     match answered {
-        Ok(instance) => splice(device, instance, &state).await,
-        Err(reason) => reason.close(&mut device).await,
+        Ok(instance) => {
+            let instance = Peer::new(instance, state.limits.write_timeout);
+            splice(device, instance, &state).await;
+        }
+        Err(reason) => device.close(reason).await,
     }
 }
 
@@ -94,37 +95,38 @@ impl Drop for OpenStream {
     }
 }
 
-/// Forwards binary messages between the two sockets until one side leaves,
-/// breaks a rule, or the relay stops, then closes both with the same reason.
-async fn splice(mut device: WebSocket, mut instance: WebSocket, state: &RelayState) {
+/// Forwards binary messages between the two peers until one side leaves,
+/// stops reading, breaks a rule, or the relay stops, then closes both with
+/// the same reason.
+async fn splice(mut device: Peer, mut instance: Peer, state: &RelayState) {
     let mut budget = ByteBudget::new(state.limits.max_bytes_per_minute);
     let mut ping = interval(state.limits.ping_interval);
     let reason = loop {
         let ended = tokio::select! {
             () = state.stopping() => Some(CloseReason::RelayStopped),
             _ = ping.tick() => {
-                let _ = device.send(Message::Ping(Vec::new().into())).await;
-                let _ = instance.send(Message::Ping(Vec::new().into())).await;
+                device.send(Message::Ping(Vec::new().into())).await;
+                instance.send(Message::Ping(Vec::new().into())).await;
 
                 None
             }
-            message = device.recv() => forward(message, &mut instance, &mut budget).await,
-            message = instance.recv() => forward(message, &mut device, &mut budget).await,
+            message = device.receive() => forward(message, &mut instance, &mut budget).await,
+            message = instance.receive() => forward(message, &mut device, &mut budget).await,
         };
         if let Some(reason) = ended {
             break reason;
         }
     };
-    reason.close(&mut device).await;
-    reason.close(&mut instance).await;
+    device.close(reason).await;
+    instance.close(reason).await;
 }
 
 /// Forwards one received message to the other side. Returns the reason to
-/// end the stream, if any. A failed send needs no handling here: the other
-/// side's next receive then reports that it left.
+/// end the stream, if any. A peer that does not take the message in time
+/// counts as gone.
 async fn forward(
     message: Option<Result<Message, axum::Error>>,
-    to: &mut WebSocket,
+    to: &mut Peer,
     budget: &mut ByteBudget,
 ) -> Option<CloseReason> {
     match message {
@@ -132,7 +134,9 @@ async fn forward(
             if !budget.spend(bytes.len()) {
                 return Some(CloseReason::RateLimited);
             }
-            let _ = to.send(Message::Binary(bytes)).await;
+            if !to.send(Message::Binary(bytes)).await {
+                return Some(CloseReason::PeerLeft);
+            }
 
             None
         }

@@ -12,9 +12,11 @@ dials out, so the instance needs no open port.
 - Route only by instance identifier, the fingerprint of the key the instance proves with
   the `ag-noise` relay handshake. Stream identifiers are unguessable and reach only that
   instance's control connection.
-- Keep every limit in `RelayLimits`: handshakes in progress, instances in total and per
-  address, streams per instance, bytes per minute, and the handshake and answer
-  timeouts. A new resource a client can hold needs a limit.
+- Keep every limit in `RelayLimits`. A new resource a client can hold needs a limit, and
+  every send goes through `Peer` so a client that stops reading cannot hold a task.
+- Plain TCP connections and slow request headers are not limited here; the relay is
+  meant to run behind a reverse proxy that terminates TLS. Say so wherever deployment is
+  documented.
 - Keep the crate independent of Agentty application crates.
 
 ## Integration

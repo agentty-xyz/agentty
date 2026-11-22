@@ -1,6 +1,6 @@
 //! Reasons the relay ends a connection.
 
-use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
+use axum::extract::ws::close_code;
 
 /// Why the relay closes a connection, reported in the close frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,16 +69,6 @@ impl CloseReason {
             | Self::TooManyStreams
             | Self::UnknownInstance => close_code::POLICY,
         }
-    }
-
-    /// Starts the closing handshake on `socket` with this reason.
-    pub(crate) async fn close(self, socket: &mut WebSocket) {
-        let _ = socket
-            .send(Message::Close(Some(CloseFrame {
-                code: self.code(),
-                reason: self.text().into(),
-            })))
-            .await;
     }
 }
 

@@ -10,10 +10,11 @@ use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tokio::net::TcpListener;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
-use crate::limit::RelayLimits;
+use crate::limit::{HandshakeLimiter, RelayLimits};
 use crate::registry::Registry;
 use crate::{control, stream};
 
@@ -43,7 +44,8 @@ pub struct RelayConfig {
     /// behind a reverse proxy that overwrites the header on every request;
     /// otherwise clients choose the address their limits count against.
     /// Without it, or when the header is missing or not one address, the
-    /// connection's peer address is used.
+    /// connection's peer address is used. Limits count an IPv6 client by its
+    /// `/64` network, because one host usually holds a whole one.
     pub client_address_header: Option<String>,
     /// Resources clients may hold.
     pub limits: RelayLimits,
@@ -78,7 +80,7 @@ pub async fn start(config: RelayConfig) -> Result<RelayHandle, RelayError> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = Arc::new(RelayState {
         client_address_header,
-        handshakes: Arc::new(Semaphore::new(config.limits.max_handshakes)),
+        handshakes: Arc::new(HandshakeLimiter::new(&config.limits)),
         limits: config.limits,
         open_sockets_tx: watch::Sender::new(0),
         registry: Registry::new(),
@@ -122,10 +124,15 @@ impl RelayHandle {
     }
 
     /// Stops accepting connections, closes every open one, and waits until
-    /// the listener port is released.
-    pub async fn shutdown(self) {
+    /// the listener port is released. Requests that have not become
+    /// connections within [`RelayLimits::shutdown_timeout`] are dropped.
+    pub async fn shutdown(mut self) {
         self.stop_signal.stop();
-        let _ = self.server.await;
+        let stopped = timeout(self.state.limits.shutdown_timeout, &mut self.server).await;
+        if stopped.is_err() {
+            self.server.abort();
+            let _ = self.server.await;
+        }
         let mut open_sockets = self.state.open_sockets_tx.subscribe();
         let _ = open_sockets.wait_for(|count| *count == 0).await;
     }
@@ -155,8 +162,8 @@ pub(crate) struct RelayState {
     pub(crate) registry: Registry<WebSocket>,
     /// Header a trusted proxy sets to the client address.
     client_address_header: Option<HeaderName>,
-    /// Permits for registration handshakes in progress.
-    handshakes: Arc<Semaphore>,
+    /// Registration handshakes in progress.
+    handshakes: Arc<HandshakeLimiter>,
     /// Count of open connections, for [`RelayHandle::shutdown`].
     open_sockets_tx: watch::Sender<usize>,
     /// Becomes true once the relay stops.
@@ -182,21 +189,32 @@ impl RelayState {
         }
     }
 
-    /// Reserves one registration handshake; `None` when as many as allowed
-    /// are in progress.
-    fn reserve_handshake(&self) -> Option<OwnedSemaphorePermit> {
-        Arc::clone(&self.handshakes).try_acquire_owned().ok()
-    }
-
     /// Address that limits count a client against: the configured header
-    /// when it holds one address, and the peer address otherwise.
+    /// when it holds one address and the peer address otherwise, reduced to
+    /// its `/64` network for IPv6.
     fn client_address(&self, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
-        self.client_address_header
+        let address = self
+            .client_address_header
             .as_ref()
             .and_then(|name| headers.get(name))
             .and_then(|value| value.to_str().ok())
             .and_then(|text| text.trim().parse().ok())
-            .unwrap_or(peer.ip())
+            .unwrap_or(peer.ip());
+
+        limit_address(address)
+    }
+}
+
+/// Reduces `address` to what limits count: an IPv4-mapped address becomes
+/// its IPv4 address, and any other IPv6 address becomes its `/64` network.
+fn limit_address(address: IpAddr) -> IpAddr {
+    match address.to_canonical() {
+        IpAddr::V4(address) => IpAddr::V4(address),
+        IpAddr::V6(address) => {
+            let network = u128::from(address) & !u128::from(u64::MAX);
+
+            IpAddr::V6(network.into())
+        }
     }
 }
 
@@ -216,18 +234,19 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// Upgrades an instance's control connection, unless too many registration
-/// handshakes are already in progress.
+/// Upgrades an instance's control connection, unless the relay or the
+/// client's address already has as many registration handshakes in progress
+/// as allowed.
 async fn register(
     State(state): State<Arc<RelayState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let Some(handshake) = state.reserve_handshake() else {
+    let address = state.client_address(peer, &headers);
+    let Some(handshake) = state.handshakes.reserve(address) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let address = state.client_address(peer, &headers);
 
     upgrade
         .max_message_size(CONTROL_MESSAGE_BYTES)

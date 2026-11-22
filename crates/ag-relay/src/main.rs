@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use ag_relay::{RelayConfig, RelayLimits};
 use clap::Parser;
 #[cfg(unix)]
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 /// Command-line options.
 #[derive(Parser)]
@@ -38,7 +38,11 @@ async fn main() -> ExitCode {
 }
 
 /// Serves until the process is told to stop, then closes every connection.
+///
+/// Stop signals are listened for before the startup line is written, so a
+/// supervisor that signals right after reading it still gets a clean stop.
 async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+    let mut stop_signals = StopSignals::listen()?;
     let relay = ag_relay::start(RelayConfig {
         bind_addr: cli.listen,
         client_address_header: cli.client_address_header,
@@ -46,25 +50,54 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     })
     .await?;
     writeln!(std::io::stdout(), "listening on {}", relay.local_addr())?;
-    wait_for_stop().await?;
+    stop_signals.wait().await;
     relay.shutdown().await;
 
     Ok(())
 }
 
-/// Resolves on an interrupt or a termination signal.
+/// Signals that stop the relay: interrupt and termination.
 #[cfg(unix)]
-async fn wait_for_stop() -> std::io::Result<()> {
-    let mut terminate = signal(SignalKind::terminate())?;
+struct StopSignals {
+    interrupt: Signal,
+    terminate: Signal,
+}
 
-    tokio::select! {
-        _ = terminate.recv() => Ok(()),
-        interrupted = tokio::signal::ctrl_c() => interrupted,
+#[cfg(unix)]
+impl StopSignals {
+    /// Starts listening for both signals.
+    fn listen() -> std::io::Result<Self> {
+        let interrupt = signal(SignalKind::interrupt())?;
+        let terminate = signal(SignalKind::terminate())?;
+
+        Ok(Self {
+            interrupt,
+            terminate,
+        })
+    }
+
+    /// Resolves when either signal arrives.
+    async fn wait(&mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+        }
     }
 }
 
-/// Resolves on an interrupt.
+/// Signal that stops the relay: interrupt.
 #[cfg(not(unix))]
-async fn wait_for_stop() -> std::io::Result<()> {
-    tokio::signal::ctrl_c().await
+struct StopSignals;
+
+#[cfg(not(unix))]
+impl StopSignals {
+    /// The interrupt handler is installed when [`Self::wait`] first runs.
+    fn listen() -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    /// Resolves when the interrupt arrives.
+    async fn wait(&mut self) {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
