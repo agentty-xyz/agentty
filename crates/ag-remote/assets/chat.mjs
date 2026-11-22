@@ -150,6 +150,8 @@ export function sessionActions(statusName, capabilities = []) {
 
   return {
     cancel: info.cancel,
+    diff: capabilities.includes("diff"),
+    diffEnabled: capabilities.includes("diff") && info.diff,
     merge: capabilities.includes("merge"),
     mergeEnabled: capabilities.includes("merge") && info.review,
   };
@@ -275,6 +277,7 @@ export function createChat({
   elements,
   request,
   onHome,
+  diff = null,
   now = () => Date.now() / 1000,
 }) {
   const drafts = createDrafts(window);
@@ -376,21 +379,51 @@ export function createChat({
   function renderActions() {
     const actions = state.session
       ? sessionActions(state.session.status, state.capabilities)
-      : { cancel: false, merge: false, mergeEnabled: false };
+      : { cancel: false, diff: false, diffEnabled: false, merge: false, mergeEnabled: false };
+    if (!actions.diffEnabled && diff?.isOpen()) {
+      showDiff(false);
+    }
+    const isDiffOpen = Boolean(diff?.isOpen());
+    elements.diff.hidden = !actions.diff;
+    elements.diff.disabled = !actions.diffEnabled || !state.isConnected;
+    elements.diff.setAttribute("aria-pressed", String(isDiffOpen));
+    elements.sheetDiff.hidden = !actions.diff;
+    elements.sheetDiff.disabled = elements.diff.disabled;
+    elements.sheetDiffLabel.textContent = isDiffOpen ? "Back to chat" : "Diff";
     elements.merge.hidden = !actions.merge;
     elements.merge.disabled = !actions.mergeEnabled || state.isMerging || !state.isConnected;
     elements.sheetMerge.hidden = !actions.merge;
     elements.sheetMerge.disabled = elements.merge.disabled;
     elements.cancel.hidden = !actions.cancel;
     elements.cancel.disabled = state.isCanceling || !state.isConnected;
-    elements.more.hidden = !actions.cancel && !actions.merge;
-    // With only Merge in it, the sheet adds nothing to the wide header.
+    elements.more.hidden = !actions.cancel && !actions.merge && !actions.diff;
+    // With only Diff and Merge in it, the sheet adds nothing to the wide
+    // header.
     elements.more.classList.toggle("narrow-only", !actions.cancel);
     const target = mergeTarget(state.session);
     elements.sheetMergeLabel.textContent = target ? "Merge into " + target : "Merge";
     elements.mergeTarget.textContent = target || "its base branch";
     const lines = sessionFigures(state.summary).lines;
     elements.mergeLines.textContent = lines ? " (+" + lines.added + " -" + lines.deleted + ")" : "";
+  }
+
+  // Shows the session's diff in place of the transcript and the dock, or
+  // the chat again.
+  function showDiff(isOpen) {
+    elements.scroller.hidden = isOpen;
+    elements.dock.hidden = isOpen;
+    if (isOpen) {
+      void diff.open(state.sessionId);
+    } else {
+      diff.close();
+    }
+    renderActions();
+  }
+
+  function toggleDiff() {
+    if (diff && state.session) {
+      showDiff(!diff.isOpen());
+    }
   }
 
   function renderTranscript(messages) {
@@ -631,6 +664,8 @@ export function createChat({
     elements.jump.hidden = true;
     elements.gone.hidden = true;
     elements.scroller.hidden = false;
+    elements.dock.hidden = false;
+    diff?.close();
     elements.composer.hidden = false;
     elements.answerBar.hidden = true;
     elements.readonly.hidden = true;
@@ -684,6 +719,7 @@ export function createChat({
     }
     const isFirst = state.session === null;
     const wasNearEnd = isNearEnd();
+    const isChanged = state.session?.updated_at !== session.updated_at;
     state.session = session;
     state.summary = summary?.id === session.id ? summary : null;
     state.clockSkew = clockSkew(state.summary, now());
@@ -693,12 +729,17 @@ export function createChat({
       elements.actionError.textContent = "";
     }
     elements.gone.hidden = true;
-    elements.scroller.hidden = false;
+    const isDiffOpen = Boolean(diff?.isOpen());
+    elements.scroller.hidden = isDiffOpen;
     renderHeader(session);
     const transcriptChanged = renderTranscript(session.messages || []);
     const questionsChanged = renderQuestions(session.questions || []);
     renderQueued(session.queued_messages || []);
     renderDock();
+    // A session that changed may have changed its files too.
+    if (isDiffOpen && isChanged && diff.isOpen()) {
+      void diff.refresh();
+    }
     if (isFirst || (wasNearEnd && (transcriptChanged || questionsChanged))) {
       scrollToEnd();
     } else if (transcriptChanged || questionsChanged) {
@@ -855,8 +896,11 @@ export function createChat({
       confirmWith(elements.cancelDialog);
     } else if (choice === "merge") {
       confirmWith(elements.mergeDialog);
+    } else if (choice === "diff") {
+      toggleDiff();
     }
   });
+  elements.diff.addEventListener("click", toggleDiff);
   elements.merge.addEventListener("click", () => confirmWith(elements.mergeDialog));
   elements.cancelDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.cancelDialog, "confirm");

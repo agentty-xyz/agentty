@@ -4,6 +4,7 @@
 
 import { createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
+import { createDiff } from "./diff.mjs";
 import { createHome } from "./home.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
@@ -90,12 +91,15 @@ const elements = {
   heading: document.getElementById("heading"),
   "heading-sub": document.getElementById("heading-sub"),
   "session-status": document.getElementById("session-status"),
+  diff: document.getElementById("diff"),
   merge: document.getElementById("merge"),
   "session-more": document.getElementById("session-more"),
   "action-error": document.getElementById("action-error"),
   "session-sheet": document.getElementById("session-sheet"),
   "sheet-title": document.getElementById("sheet-title"),
   "sheet-sub": document.getElementById("sheet-sub"),
+  "sheet-diff": document.getElementById("sheet-diff"),
+  "sheet-diff-label": document.getElementById("sheet-diff-label"),
   "sheet-merge": document.getElementById("sheet-merge"),
   "sheet-merge-label": document.getElementById("sheet-merge-label"),
   cancel: document.getElementById("cancel"),
@@ -124,6 +128,11 @@ const elements = {
   "session-gone": document.getElementById("session-gone"),
   "session-gone-home": document.getElementById("session-gone-home"),
   "chat-scroll": document.getElementById("chat-scroll"),
+  "diff-view": document.getElementById("diff-view"),
+  "diff-summary": document.getElementById("diff-summary"),
+  "diff-error": document.getElementById("diff-error"),
+  "diff-files": document.getElementById("diff-files"),
+  dock: document.getElementById("dock"),
   transcript: document.getElementById("transcript"),
   questions: document.getElementById("questions"),
   jump: document.getElementById("jump"),
@@ -687,6 +696,16 @@ function markCurrentRow() {
 }
 
 const chat = createChat({
+  diff: createDiff({
+    document: document,
+    elements: {
+      error: elements["diff-error"],
+      files: elements["diff-files"],
+      summary: elements["diff-summary"],
+      view: elements["diff-view"],
+    },
+    request: request,
+  }),
   document: document,
   elements: {
     actionError: elements["action-error"],
@@ -700,6 +719,8 @@ const chat = createChat({
     composer: elements.composer,
     composerHint: elements["composer-hint"],
     composerMeta: elements["composer-meta"],
+    diff: elements.diff,
+    dock: elements.dock,
     gone: elements["session-gone"],
     goneHome: elements["session-gone-home"],
     heading: elements.heading,
@@ -718,6 +739,8 @@ const chat = createChat({
     send: elements.send,
     sessionError: elements["session-error"],
     sheet: elements["session-sheet"],
+    sheetDiff: elements["sheet-diff"],
+    sheetDiffLabel: elements["sheet-diff-label"],
     sheetMerge: elements["sheet-merge"],
     sheetMergeLabel: elements["sheet-merge-label"],
     sheetSub: elements["sheet-sub"],

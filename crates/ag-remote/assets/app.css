@@ -1324,6 +1324,137 @@ kbd {
   margin: 0 auto;
 }
 
+.btn--ghost[aria-pressed="true"] {
+  border-color: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+/* ---- Diff: replaces the transcript and the dock ------------------- */
+.diff-view {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 1.5rem var(--gutter) 2rem;
+}
+
+.diff-summary {
+  margin: 0 0 0.8rem;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+/* One column that never grows past the screen; a long patch line scrolls
+   inside its own box. */
+.diff-files {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diff-file details {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.diff-file summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.75rem;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.diff-status {
+  flex: none;
+  width: 1.1rem;
+  color: var(--color-accent-dim);
+  font-weight: 600;
+  text-align: center;
+}
+
+.diff-status--A {
+  color: var(--color-accent);
+}
+
+.diff-status--D {
+  color: var(--color-error);
+}
+
+.diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file .lines {
+  flex: none;
+  font-size: 0.74rem;
+}
+
+.diff-body {
+  border-top: 1px solid var(--color-border);
+}
+
+.diff-note {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.diff-body .error {
+  padding: 0.6rem 0.75rem;
+}
+
+.patch {
+  max-height: 32rem;
+  margin: 0;
+  padding: 0.4rem 0;
+  overflow: auto;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.patch-line {
+  display: block;
+  min-width: max-content;
+  padding: 0 0.75rem;
+  white-space: pre;
+}
+
+.patch-line--add {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.patch-line--del {
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  color: var(--color-error);
+}
+
+.patch-line--hunk {
+  color: var(--color-accent-dim);
+}
+
+.patch-line--meta {
+  color: var(--color-dim);
+}
+
 .transcript {
   display: flex;
   flex-direction: column;

@@ -62,6 +62,11 @@
             <path d="M6 7v10" />
             <path d="M6 8c0 3 3 4 10 4" />
             </symbol>
+            <symbol id="i-diff" viewBox="0 0 24 24">
+            <line x1="12" y1="4" x2="12" y2="12" />
+            <line x1="8" y1="8" x2="16" y2="8" />
+            <line x1="8" y1="18" x2="16" y2="18" />
+            </symbol>
             <symbol id="i-device" viewBox="0 0 24 24">
             <rect x="7" y="2.5" width="10" height="19" rx="2" />
             <line x1="11" y1="18" x2="13" y2="18" />
@@ -225,6 +230,16 @@
                     </div>
                     <span id="session-status" class="status status-badge wide-only" hidden></span>
                     <div class="chat-actions">
+                        <button id="diff"
+                                type="button"
+                                class="btn btn--ghost wide-only"
+                                aria-pressed="false"
+                                hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-diff" />
+                            </svg>
+                            Diff
+                        </button>
                         <button id="merge" type="button" class="btn btn--primary wide-only" hidden>
                             <svg class="icon icon--sm" aria-hidden="true">
                                 <use href="#i-merge" />
@@ -304,7 +319,15 @@
                             </form>
                         </div>
                     </div>
-                    <footer class="dock">
+                    <div id="diff-view" class="diff-view" hidden>
+                        <div class="chat-column">
+                            <p id="diff-summary" class="diff-summary"></p>
+                            <p id="diff-error" class="error" role="alert"></p>
+                            <ul id="diff-files" class="diff-files">
+                            </ul>
+                        </div>
+                    </div>
+                    <footer id="dock" class="dock">
                         <button id="jump" type="button" class="jump" hidden>
                             <svg class="icon icon--sm" aria-hidden="true">
                                 <use href="#i-down" />
@@ -353,6 +376,13 @@
                 <form method="dialog">
                     <h2 id="sheet-title">Session actions</h2>
                     <p id="sheet-sub" class="sheet-sub"></p>
+                    <button id="sheet-diff" value="diff" class="sheet-item narrow-only" hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-diff" />
+                        </svg>
+                        <span id="sheet-diff-label">Diff</span>
+                        <small>read only</small>
+                    </button>
                     <button id="sheet-merge" value="merge" class="sheet-item narrow-only" hidden>
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-merge" />
