@@ -369,7 +369,7 @@ impl DeviceStore for MemoryDeviceStore {
 }
 
 /// Session backend that records calls; a session snapshot queues the
-/// messages sent to it, `busy` sessions reject messages, and
+/// messages sent to it, the message `busy` is rejected, and
 /// every cancellation reports a missing session.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
@@ -431,7 +431,7 @@ impl SessionBackend for RecordingBackend {
         message: String,
     ) -> Result<(), SessionError> {
         self.record(format!("send:{session_id}:{message}"));
-        if session_id.as_str() == "busy" {
+        if message == "busy" {
             return Err(SessionError::Operation("Session is busy".to_string()));
         }
 

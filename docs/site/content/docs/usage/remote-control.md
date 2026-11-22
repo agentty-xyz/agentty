@@ -108,6 +108,8 @@ run with the session's permissions, so treat a pairing like a login.
 - Each device gets its own key, which Agentty stores only as a hash. Remove a device in
   the popup with `d`; its open connection closes at once. Keys do not expire, so remove
   a device you no longer control.
+- A device can read and act on only the sessions it lists, which are the sessions of the
+  active project. Agentty refuses a request for any other session.
 - Web pages from other sites cannot connect, including pages that point their own domain
   at this computer.
 - Agentty does not encrypt the connection itself. Use a tunnel that does, such as

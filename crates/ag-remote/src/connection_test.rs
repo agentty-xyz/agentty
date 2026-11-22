@@ -490,11 +490,46 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
             "list",
             "get:session-1",
             "list",
+            "list",
             "send:session-1:hi",
+            "list",
             "answer:session-1:Which branch?=main:0",
+            "list",
             "cancel:session-1"
         ]
     );
+}
+
+#[tokio::test]
+async fn handle_incoming_refuses_mutations_of_unlisted_sessions() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::default());
+    let requests = vec![
+        RemoteRequest::SendMessage {
+            message: "hi".to_string(),
+            session_id: "other-project".to_string(),
+        },
+        RemoteRequest::AnswerQuestions {
+            answers: Vec::new(),
+            session_id: "other-project".to_string(),
+        },
+        RemoteRequest::CancelSession {
+            session_id: "other-project".to_string(),
+        },
+    ];
+
+    // Act
+    let mut results = Vec::new();
+    for request in requests {
+        results.push(reply_result(
+            handle_incoming(&fixture.state, request_message(request)).await,
+        ));
+    }
+
+    // Assert
+    let not_found = RemoteResult::Error("Session not found".to_string());
+    assert_eq!(results, [not_found.clone(), not_found.clone(), not_found]);
+    assert_eq!(fixture.backend.calls(), ["list", "list", "list"]);
 }
 
 #[tokio::test]
