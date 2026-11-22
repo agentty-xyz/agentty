@@ -46,6 +46,14 @@ jobs:
     secrets:
       TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
 
+  # Release preparation: a version bump packages every published crate and
+  # checks its API against crates.io before the release tag exists. The job
+  # always runs, so `Published crates / Package and semver checks` can be a
+  # required check; other changes pass it after a quick decision step.
+  published-crates:
+    name: Published crates
+    uses: $/.github/workflows/published-crates.yml
+
   validate:
     name: Workspace checks
     uses: $/.github/workflows/workspace-validation.yml

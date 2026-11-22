@@ -65,6 +65,15 @@ jobs:
           AGENTTY_MIGRATION_BASE: HEAD^1
         run: prek run --all-files
 
+      # Nextest runs no doctests, so rustdoc and README examples run here:
+      # for pull requests and `main` only when the last commit touches a path
+      # the hook's `files` pattern selects, and every time in release
+      # validation.
+      - name: Documentation examples
+        env:
+          DOCTEST_SCOPE: ${{ inputs['workspace-tests'] && '--all-files' || '--last-commit' }}
+        run: prek run test-doc --hook-stage manual "$DOCTEST_SCOPE"
+
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}
         run: prek run cargo-audit --all-files --hook-stage manual

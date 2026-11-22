@@ -1,0 +1,69 @@
+name: Published Crates
+
+on:
+  workflow_call:
+    inputs:
+      always:
+        description: Run the checks even when the change neither moves the workspace version nor edits their inputs.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Runs on every call so its check name stays stable and can be required:
+  # it passes when the checks are skipped and fails when they fail.
+  check:
+    name: Package and semver checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The first parent is the target branch for a pull request's merge
+          # commit and for a merge-queue candidate.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Setup Rust and `prek`
+        uses: $/.github/actions/setup-rust-prek
+        with:
+          cargo-semver-checks: "true"
+
+      # Release preparation moves the workspace version; a change to the
+      # toolchain or to these checks' own tooling must prove they still run.
+      - name: Decide whether the checks run
+        id: gate
+        env:
+          ALWAYS: ${{ inputs.always }}
+        run: |
+          if [ "$ALWAYS" = "true" ]; then
+            printf 'run=true\npackage=true\n' >> "$GITHUB_OUTPUT"
+          else
+            cargo run -q --locked -p ag-xtask -- release-gate --base HEAD^1 --output "$GITHUB_OUTPUT"
+          fi
+
+      # Builds each crate from its `.crate` tarball, so a file the package
+      # leaves out fails here instead of in `cargo publish`. Only a version
+      # crates.io does not hold yet verifies against the workspace's own
+      # sibling crates, so tooling changes skip it.
+      - name: Package published crates
+        if: ${{ steps.gate.outputs.package == 'true' }}
+        run: prek run package-crates --all-files --hook-stage manual
+
+      # Workspace crates depend on each other with caret requirements, so a
+      # break in any published library can break dependents already released.
+      # A version bump and a release tag enforce the bump; a tooling change
+      # assumes `major`, which still builds the current and baseline rustdoc
+      # of every crate but runs no lint.
+      - name: Check semver against crates.io
+        if: ${{ steps.gate.outputs.run == 'true' }}
+        env:
+          AGENTTY_SEMVER_RELEASE_TYPE: ${{ steps.gate.outputs.release-type }}
+        run: prek run cargo-semver-checks --all-files --hook-stage manual

@@ -31,6 +31,11 @@ pub mod vhs;
 
 pub(crate) mod renderer;
 
+/// Compiles the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 #[cfg(test)]
 #[path = "support_test.rs"]
 mod test_support;

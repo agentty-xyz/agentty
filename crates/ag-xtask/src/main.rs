@@ -11,6 +11,8 @@ mod check_module_router;
 mod e2e_container;
 mod file_system;
 mod format_changed;
+mod release_gate;
+mod semver_check;
 mod slow_test;
 mod timing;
 mod validation;
@@ -60,6 +62,12 @@ enum Command {
     E2eContainer,
     /// Formats Rust files changed since the branch fork point.
     Fmt(format_changed::Options),
+    /// Writes whether a change moves the workspace version or edits an input
+    /// of the published-crate release checks.
+    ReleaseGate(release_gate::Options),
+    /// Runs `cargo semver-checks` for the published library crates that have
+    /// a crates.io release.
+    SemverChecks(semver_check::Options),
     /// Reports slow tests in a nextest `JUnit` report and checks a duration
     /// threshold against an allowlist.
     SlowTests(slow_test::Options),
@@ -83,6 +91,8 @@ fn main() -> ExitCode {
         Some(Command::CompareTimings(options)) => timing::run(&options),
         Some(Command::E2eContainer) => e2e_container::run(),
         Some(Command::Fmt(options)) => format_changed::run(&options),
+        Some(Command::ReleaseGate(options)) => release_gate::run(&options),
+        Some(Command::SemverChecks(options)) => semver_check::run(&options),
         Some(Command::SlowTests(options)) => slow_test::run(&options),
         Some(Command::Validate(options)) => validation::run(options),
     };

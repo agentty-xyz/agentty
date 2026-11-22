@@ -19,17 +19,21 @@ use ag_harness::provider::{GPT_6_LUNA, ModelConfiguration, ModelProvider};
 use ag_harness::{Harness, OutputSchema};
 use serde_json::json;
 
-let schema = OutputSchema::new(json!({
-    "type": "object",
-    "properties": { "summary": { "type": "string" } },
-    "required": ["summary"],
-}))?;
-let model = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_LUNA)
-    .client_from_environment(|name| env::var(name))?;
-let harness = Harness::builder().model(Arc::new(model)).build()?;
+async fn summarize() -> Result<(), Box<dyn std::error::Error>> {
+    let schema = OutputSchema::new(json!({
+        "type": "object",
+        "properties": { "summary": { "type": "string" } },
+        "required": ["summary"],
+    }))?;
+    let model = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_LUNA)
+        .client_from_environment(|name| env::var(name))?;
+    let harness = Harness::builder().model(Arc::new(model)).build()?;
 
-let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
-println!("{}", outcome.output()["summary"]);
+    let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
+    println!("{}", outcome.output()["summary"]);
+
+    Ok(())
+}
 ```
 
 Every harness needs a `ContextBudget`: the approximate request weight the model's
@@ -65,7 +69,7 @@ The native Bash sandbox runs each command through a helper executable of the sam
   When the harness starts your executable as the helper, `dispatch` runs it and returns
   its exit code, which `main` returns at once; otherwise it returns `None`.
 
-  ```rust,ignore
+  ```rust,no_run
   fn main() -> std::process::ExitCode {
       if let Some(helper) = ag_harness::sandbox::dispatch() {
           return helper;
@@ -93,26 +97,39 @@ otherwise; see [Bash](#bash).
 ## Sessions
 
 ```rust
-use ag_harness::{Harness, Repository, ToolSet};
+use std::path::Path;
+use std::sync::Arc;
 
-let harness = Harness::builder()
-    .model(model)
-    .context_budget(budget)
-    .sqlite("harness.db")
-    .repository(Repository::new(".", git_executable)?)
-    .tools(ToolSet::empty().with_read())
-    .build()?;
+use ag_harness::model::ContextBudget;
+use ag_harness::{Harness, Model, OutputSchema, Repository, ToolSet};
 
-let mut session = harness
-    .session("review-42", schema)
-    .system_prompt("Keep the review concise.")
-    .create()
-    .await?;
-let outcome = session.send("Review the current changes").await?;
+async fn review(
+    model: Arc<dyn Model>,
+    budget: ContextBudget,
+    git_executable: &Path,
+    schema: OutputSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::builder()
+        .model(model)
+        .context_budget(budget)
+        .sqlite("harness.db")
+        .repository(Repository::new(".", git_executable)?)
+        .tools(ToolSet::empty().with_read())
+        .build()?;
 
-// Later, in the same or another process:
-let mut session = harness.resume("review-42").await?;
-let outcome = session.send("Now focus on error handling").await?;
+    let mut session = harness
+        .session("review-42", schema)
+        .system_prompt("Keep the review concise.")
+        .create()
+        .await?;
+    let outcome = session.send("Review the current changes").await?;
+
+    // Later, in the same or another process:
+    let mut session = harness.resume("review-42").await?;
+    let outcome = session.send("Now focus on error handling").await?;
+
+    Ok(())
+}
 ```
 
 Every request replays finished turns within the context budget and the history byte
@@ -136,12 +153,16 @@ location for you.
 
 ```rust
 use ag_harness::event::{SessionId, TurnIndex};
-use ag_harness::TurnRange;
+use ag_harness::{Harness, Session, TurnRange};
 
-let turns = session.transcript(TurnRange::Last(5)).await?;
-let retry = harness
-    .fork(&SessionId::new("review-42"), TurnIndex::new(1), SessionId::new("review-42b"))
-    .await?;
+async fn retry(harness: &Harness, session: &Session) -> Result<(), Box<dyn std::error::Error>> {
+    let turns = session.transcript(TurnRange::Last(5)).await?;
+    let retry = harness
+        .fork(&SessionId::new("review-42"), TurnIndex::new(1), SessionId::new("review-42b"))
+        .await?;
+
+    Ok(())
+}
 ```
 
 `Session::transcript` returns settled turns as serializable `TurnRecord`s: status, the
@@ -178,7 +199,7 @@ use std::sync::Arc;
 use ag_harness::tool::{
     ToolContext, ToolDefinition, ToolDefinitionError, ToolEffects, ToolError, ToolOutput,
 };
-use ag_harness::{Harness, ToolHandler, ToolSet};
+use ag_harness::{Harness, Model, ToolHandler, ToolSet};
 use serde_json::{Value, json};
 
 struct Clock(ToolDefinition);
@@ -204,8 +225,11 @@ impl ToolHandler for Clock {
     }
 }
 
-let tools = ToolSet::builder().handler(Arc::new(Clock::new()?)).build()?;
-let harness = Harness::builder().model(model).tools(tools).build()?;
+fn clock_harness(model: Arc<dyn Model>) -> Result<Harness, Box<dyn std::error::Error>> {
+    let tools = ToolSet::builder().handler(Arc::new(Clock::new()?)).build()?;
+
+    Ok(Harness::builder().model(model).tools(tools).build()?)
+}
 ```
 
 - `HarnessBuilder::tools` sets the default set, `RunRequest::tools` replaces it for one
@@ -241,8 +265,11 @@ let harness = Harness::builder().model(model).tools(tools).build()?;
 `ReadOnly`, such as the built-in `write` and `bash`, behind your `ApprovalHandler`;
 read-only calls never ask. Without a handler, every tool in the set runs unasked.
 
-```rust,ignore
-use ag_harness::{ApprovalHandler, ApprovalRequest, Decision};
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use ag_harness::{ApprovalHandler, ApprovalRequest, Decision, Harness, Model, ToolSet};
 
 struct AskTheUser;
 
@@ -256,12 +283,17 @@ impl ApprovalHandler for AskTheUser {
     }
 }
 
-let harness = Harness::builder()
-    .model(model)
-    .tools(tools)
-    .approval(Arc::new(AskTheUser))
-    .approval_timeout(Duration::from_secs(60))
-    .build()?;
+fn approved_harness(
+    model: Arc<dyn Model>,
+    tools: ToolSet,
+) -> Result<Harness, Box<dyn std::error::Error>> {
+    Ok(Harness::builder()
+        .model(model)
+        .tools(tools)
+        .approval(Arc::new(AskTheUser))
+        .approval_timeout(Duration::from_secs(60))
+        .build()?)
+}
 ```
 
 - A run emits `RunEventKind::ApprovalRequested` for the call, then asks the handler.
@@ -281,11 +313,20 @@ let harness = Harness::builder()
 and chain what you need before awaiting it:
 
 ```rust
-let outcome = session
-    .turn("Review against main")
-    .options(TurnOptions::from_output(schema).with_tools(ToolSet::empty().with_read()))
-    .host_id("request-7")
-    .await?;
+use ag_harness::{OutputSchema, Session, ToolSet, TurnOptions};
+
+async fn review(
+    session: &mut Session,
+    schema: OutputSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let outcome = session
+        .turn("Review against main")
+        .options(TurnOptions::from_output(schema).with_tools(ToolSet::empty().with_read()))
+        .host_id("request-7")
+        .await?;
+
+    Ok(())
+}
 ```
 
 | Need                                    | Chain                                       |
@@ -608,10 +649,13 @@ For any built-in provider selected at runtime, use `provider::ModelConfiguration
 reads the provider's key and endpoint through an injected environment lookup:
 
 ```rust
+use ag_harness::model::ModelClient;
 use ag_harness::provider::{KIMI_K3, ModelConfiguration, ModelProvider};
 
-let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K3)
-    .client_from_environment(|name| std::env::var(name))?;
+fn kimi() -> Result<ModelClient, Box<dyn std::error::Error>> {
+    Ok(ModelConfiguration::new(ModelProvider::Kimi, KIMI_K3)
+        .client_from_environment(|name| std::env::var(name))?)
+}
 ```
 
 `ModelProvider::OpenAiCompatible` serves any model of a local or self-hosted
@@ -629,18 +673,24 @@ under the default estimator with a 50% margin. `ModelProvider::local_server` ret
 declared one:
 
 ```rust
-let local = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
-    .client_from_environment(|name| std::env::var(name))?;
-let server = ModelProvider::OpenAiCompatible
-    .local_server(|name| std::env::var(name))?
-    .expect("OpenAI-compatible models have a local server");
-let profile = match server.running_context_window("qwen3:latest").await? {
-    Some(window) => ModelProvider::OpenAiCompatible
-        .running_profile(|name| std::env::var(name), window)?,
-    None => ModelProvider::OpenAiCompatible
-        .declared_profile("qwen3:latest", |name| std::env::var(name))?,
+use ag_harness::provider::{ModelConfiguration, ModelProvider};
+
+async fn local_model() -> Result<(), Box<dyn std::error::Error>> {
+    let local = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+        .client_from_environment(|name| std::env::var(name))?;
+    let server = ModelProvider::OpenAiCompatible
+        .local_server(|name| std::env::var(name))?
+        .expect("OpenAI-compatible models have a local server");
+    let profile = match server.running_context_window("qwen3:latest").await? {
+        Some(window) => ModelProvider::OpenAiCompatible
+            .running_profile(|name| std::env::var(name), window)?,
+        None => ModelProvider::OpenAiCompatible
+            .declared_profile("qwen3:latest", |name| std::env::var(name))?,
+    }
+    .expect("OpenAI-compatible models declare their profile");
+
+    Ok(())
 }
-.expect("OpenAI-compatible models declare their profile");
 ```
 
 Its requests carry only portable fields plus the quirks local servers need: the schema
@@ -666,13 +716,17 @@ documented window under an estimator fitted to the provider's reported tokens, a
 Kimi defaults to `https://api.moonshot.ai/v1` (override with `KIMI_BASE_URL`):
 
 ```rust
-use ag_harness::provider::GPT_6_1_SOL;
+use ag_harness::provider::{GPT_6_1_SOL, ModelConfiguration, ModelProvider};
 
-let openai = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_1_SOL)
-    .client_from_environment(|name| std::env::var(name))?;
-let profile = ModelProvider::OpenAi
-    .declared_profile(GPT_6_1_SOL, |name| std::env::var(name))?
-    .expect("cataloged OpenAI models declare their profile");
+fn openai() -> Result<(), Box<dyn std::error::Error>> {
+    let openai = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_1_SOL)
+        .client_from_environment(|name| std::env::var(name))?;
+    let profile = ModelProvider::OpenAi
+        .declared_profile(GPT_6_1_SOL, |name| std::env::var(name))?
+        .expect("cataloged OpenAI models declare their profile");
+
+    Ok(())
+}
 ```
 
 `ModelProvider::ChatGpt` serves the same Responses API billed to the user's ChatGPT plan
@@ -716,18 +770,21 @@ it; a custom specification names its model with `ProviderSpec::for_model`:
 use ag_harness::model::ModelClient;
 use ag_harness::provider::{Auth, ProviderSpec, WireProtocol};
 
-let spec = ProviderSpec::new(
-    "azure_openai",
-    WireProtocol::Responses,
-    "https://example.openai.azure.com/openai/v1",
-)
-.with_auth(Auth::Header {
-    name: "api-key".to_string(),
-    value: std::env::var("AZURE_OPENAI_API_KEY")?,
-})
-.with_query("api-version", "preview")
-.for_model("gpt-6-luna");
-let model = ModelClient::from_spec(spec)?;
+fn azure_openai() -> Result<ModelClient, Box<dyn std::error::Error>> {
+    let spec = ProviderSpec::new(
+        "azure_openai",
+        WireProtocol::Responses,
+        "https://example.openai.azure.com/openai/v1",
+    )
+    .with_auth(Auth::Header {
+        name: "api-key".to_string(),
+        value: std::env::var("AZURE_OPENAI_API_KEY")?,
+    })
+    .with_query("api-version", "preview")
+    .for_model("gpt-6-luna");
+
+    Ok(ModelClient::from_spec(spec)?)
+}
 ```
 
 `ProviderSpec::with_retry` sets the specification's `RetryPolicy`. The default, which
@@ -764,10 +821,13 @@ built-in prices with Anthropic's cache-read and 5-minute cache-write rates. Clau
 single price per token understates:
 
 ```rust
+use ag_harness::model::ModelClient;
 use ag_harness::provider::{CLAUDE_OPUS_5_5, ModelConfiguration, ModelProvider};
 
-let model = ModelConfiguration::new(ModelProvider::Anthropic, CLAUDE_OPUS_5_5)
-    .client_from_environment(|name| std::env::var(name))?;
+fn claude() -> Result<ModelClient, Box<dyn std::error::Error>> {
+    Ok(ModelConfiguration::new(ModelProvider::Anthropic, CLAUDE_OPUS_5_5)
+        .client_from_environment(|name| std::env::var(name))?)
+}
 ```
 
 `ModelClient::anthropic` builds the same client from an `AnthropicConfig` (the API key,
@@ -816,7 +876,7 @@ private-network endpoint and `None` for a hosted one, such as OpenRouter.
 that let the provider train on requests:
 
 ```rust
-use ag_harness::provider::{CostTier, QWEN3_8_FLASH};
+use ag_harness::provider::{CostTier, ModelProvider, QWEN3_8_FLASH};
 
 assert_eq!(
     ModelProvider::Qwen.cost_tier(QWEN3_8_FLASH),
@@ -845,12 +905,15 @@ documented on `ModelCatalog`, are only models with a declared context profile;
 use ag_harness::Harness;
 use ag_harness::catalog::{Capabilities, ModelCatalog, ModelSelector, Role};
 
-let catalog = ModelCatalog::from_environment()?;
-let vision = catalog.resolve(&ModelSelector::Require {
-    role: Role::SMART,
-    needs: Capabilities::NONE.with_image_input(true),
-})?;
-let harness = Harness::builder().model(vision.model()).build()?;
+fn vision_harness() -> Result<Harness, Box<dyn std::error::Error>> {
+    let catalog = ModelCatalog::from_environment()?;
+    let vision = catalog.resolve(&ModelSelector::Require {
+        role: Role::SMART,
+        needs: Capabilities::NONE.with_image_input(true),
+    })?;
+
+    Ok(Harness::builder().model(vision.model()).build()?)
+}
 ```
 
 The catalog is optional. `HarnessBuilder::catalog` with `model_selector` (default
@@ -883,19 +946,26 @@ it `registration_revision` to record the selected entry as a registration keyed 
 context profile cannot be registered, so the example skips them:
 
 ```rust
-use ag_harness::catalog::ModelSelector;
+use std::sync::Arc;
+
+use ag_harness::Harness;
+use ag_harness::catalog::{ModelCatalog, ModelSelector};
 use ag_harness::model::ModelRegistry;
 
-let catalog = Arc::new(ModelCatalog::from_environment()?);
-let harness = Harness::builder()
-    .catalog(Arc::clone(&catalog))
-    .registration_revision("config-v1")
-    .sqlite("harness.db")
-    .build()?;
-let mut models = ModelRegistry::new();
-for spec in catalog.specs().filter(|spec| spec.profile().is_some()) {
-    let entry = catalog.resolve(&ModelSelector::Id(spec.id().clone()))?;
-    models.register_catalog_entry(&entry, "config-v1")?;
+fn registered_catalog() -> Result<(Harness, ModelRegistry), Box<dyn std::error::Error>> {
+    let catalog = Arc::new(ModelCatalog::from_environment()?);
+    let harness = Harness::builder()
+        .catalog(Arc::clone(&catalog))
+        .registration_revision("config-v1")
+        .sqlite("harness.db")
+        .build()?;
+    let mut models = ModelRegistry::new();
+    for spec in catalog.specs().filter(|spec| spec.profile().is_some()) {
+        let entry = catalog.resolve(&ModelSelector::Id(spec.id().clone()))?;
+        models.register_catalog_entry(&entry, "config-v1")?;
+    }
+
+    Ok((harness, models))
 }
 ```
 
@@ -914,21 +984,26 @@ protocol no `ProviderSpec` describes into `ag-harness`.
 `model::ModelRegistry` selects models by stable host keys with declared capabilities:
 
 ```rust
+use ag_harness::Harness;
 use ag_harness::model::{ModelCapabilities, ModelProfile, ModelRegistry};
+use ag_harness::provider::{MUSE_SPARK_1_3, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 
-let mut models = ModelRegistry::new();
-models.register(
-    ExecutionIdentity::new("review-model", "config-v1")?,
-    ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
-        .client_from_environment(|name| std::env::var(name))?,
-    ModelCapabilities {
-        image_input: true,
-        tool_calls: true,
-        ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
-    },
-)?;
-let harness = Harness::from_registry(&models, "review-model")?;
+fn review_harness() -> Result<Harness, Box<dyn std::error::Error>> {
+    let mut models = ModelRegistry::new();
+    models.register(
+        ExecutionIdentity::new("review-model", "config-v1")?,
+        ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
+            .client_from_environment(|name| std::env::var(name))?,
+        ModelCapabilities {
+            image_input: true,
+            tool_calls: true,
+            ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
+        },
+    )?;
+
+    Ok(Harness::from_registry(&models, "review-model")?)
+}
 ```
 
 - Capabilities are host declarations, not detection. The required `ModelProfile`
