@@ -86,7 +86,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     let agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
     let turn = TurnSelection {
         agent,
-        permission_mode: PermissionMode::AutoEditAddressComments,
+        permission_mode: PermissionMode::ReadOnly,
     };
 
     // Act
@@ -130,7 +130,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     let selection = [
         ("agent", agent.kind().name()),
         ("model", agent.model().as_str()),
-        ("permission_mode", "auto_edit_address_comments"),
+        ("permission_mode", "read_only"),
     ];
     let environment = [("ci", "true"), ("interactive", "false")];
     assert_eq!(

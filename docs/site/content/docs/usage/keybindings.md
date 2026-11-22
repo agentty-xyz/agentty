@@ -293,14 +293,13 @@ Prompt input also supports
 | `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`             |
 | `Esc` / `Ctrl+C`                    | Cancel                                  |
 | `Tab`                               | Focus chat output for scrolling         |
-| `Shift+Tab`                         | Cycle the session permission mode       |
+| `Shift+Tab`                         | Toggle the session permission mode      |
 | `@`                                 | Open file picker                        |
 | `/`                                 | Open slash commands                     |
 | `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu            |
 
-`Shift+Tab` cycles `Auto Edit`, `Auto Edit + Auto Address Comments`, and `Read Only`.
-`/graph` arms the composer: `Enter` submits your task and `Esc` disarms it, keeping the
-draft. See
+`Shift+Tab` toggles between `Auto Edit` and `Read Only`. `/graph` arms the composer:
+`Enter` submits your task and `Esc` disarms it, keeping the draft. See
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
 
 With chat focused, scroll with `j` / `k` or arrows, jump with `g` / `G`, or move half a

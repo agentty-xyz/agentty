@@ -13,6 +13,8 @@ use std::fmt;
 pub enum TranscriptNotice {
     /// Prompt `/apply` command status.
     Apply,
+    /// Automatic focused-review addressing status.
+    AutoAddress,
     /// Automatic published-branch push result.
     BranchPush,
     /// Automatic published-branch push failure.
@@ -72,6 +74,7 @@ impl TranscriptNotice {
     pub const fn prefix(self) -> &'static str {
         match self {
             Self::Apply => "[Apply]",
+            Self::AutoAddress => "[Auto Address]",
             Self::BranchPush => "[Branch Push]",
             Self::BranchPushError => "[Branch Push Error]",
             Self::Commit => "[Commit]",

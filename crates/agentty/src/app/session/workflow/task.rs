@@ -644,6 +644,51 @@ impl SessionTaskService {
         }
     }
 
+    /// Appends the notice that focused-review suggestions are addressed
+    /// automatically, directly after a session's first prompt.
+    ///
+    /// Stays silent when the session's project disables automatic addressing
+    /// or the session is read-only, because no remediation turn would run.
+    pub(crate) async fn append_auto_address_notice(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        session_id: &str,
+    ) {
+        let Ok(Some(project_id)) = db.sessions().load_session_project_id(session_id).await else {
+            return;
+        };
+        let is_enabled = setting::load_project_bool_setting_from_repositories(
+            db,
+            project_id,
+            SettingName::AutoAddressReviewComments,
+            true,
+        )
+        .await;
+        let can_edit = super::turn::load_session_permission_mode(db, session_id)
+            .await
+            .is_ok_and(|permission_mode| !permission_mode.is_read_only());
+        if !is_enabled || !can_edit {
+            return;
+        }
+
+        let notice = TranscriptNotice::AutoAddress.format(format!(
+            "Agentty applies focused-review suggestions automatically, up to {} times per \
+             message. Turn off Auto Address Comments in Settings to disable this for the project.",
+            crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS
+        ));
+        Self::append_workflow_notice(
+            transcript,
+            db,
+            app_event_tx,
+            session_update_versions,
+            session_id,
+            &notice,
+        )
+        .await;
+    }
+
     /// Loads the agent/model selection used by auto-commit utility prompts for
     /// one session.
     ///

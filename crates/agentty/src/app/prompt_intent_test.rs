@@ -23,6 +23,7 @@ use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::presentation::app_mode::ReviewCommentSelection;
+use crate::presentation::setting::SettingsOperation;
 use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
@@ -966,6 +967,94 @@ async fn test_submit_prompt_reports_queue_failure_without_session_handles() {
 }
 
 #[tokio::test]
+async fn test_submit_prompt_posts_auto_address_notice_only_after_first_editing_message() {
+    for (session_mode, is_auto_address_enabled, permission_mode, expects_notice) in [
+        (
+            PromptSessionMode::NewDeletable,
+            true,
+            PermissionMode::AutoEdit,
+            true,
+        ),
+        (
+            PromptSessionMode::NewDeletable,
+            false,
+            PermissionMode::AutoEdit,
+            false,
+        ),
+        (
+            PromptSessionMode::NewDeletable,
+            true,
+            PermissionMode::ReadOnly,
+            false,
+        ),
+        (
+            PromptSessionMode::Existing,
+            true,
+            PermissionMode::AutoEdit,
+            false,
+        ),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        app.settings
+            .apply_operation(SettingsOperation::AutoAddressReviewComments(
+                is_auto_address_enabled,
+            ))
+            .await;
+        app.update_prompt_session_permission_mode(&session_id, permission_mode)
+            .await
+            .expect("permission mode should persist");
+
+        // Act
+        let outcome = app
+            .submit_prompt(PromptSubmission {
+                prompt: TurnPrompt::from_text("First message".to_string()),
+                session_id: session_id.clone(),
+                session_mode,
+            })
+            .await;
+        app.sessions.sync_from_handles();
+        let transcript = app
+            .sessions
+            .session_for_id(&session_id)
+            .and_then(|session| session.transcript.as_ref())
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(
+            outcome,
+            PromptWorkflowOutcome::ShowSession {
+                session_id: session_id.clone(),
+            }
+        );
+        assert_eq!(
+            transcript.contains(
+                "[Auto Address] Agentty applies focused-review suggestions automatically, up to 3 \
+                 times per message."
+            ),
+            expects_notice,
+            "{session_mode:?} {is_auto_address_enabled} {permission_mode:?}: {transcript}"
+        );
+        if expects_notice {
+            let prompt_index = transcript
+                .find("First message")
+                .expect("prompt is recorded");
+            let notice_index = transcript.find("[Auto Address]").expect("notice is posted");
+            assert!(
+                prompt_index < notice_index,
+                "notice should follow the first prompt: {transcript}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_apply_focused_review_returns_validation_outcomes() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
@@ -1038,9 +1127,19 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
         },
     );
 
+    app.sessions.sessions_mut()[0].permission_mode = PermissionMode::ReadOnly;
+
     // Act
     app.auto_address_focused_reviews(vec![SessionId::from("missing-session"), session_id.clone()]);
-    app.sessions.sessions_mut()[0].permission_mode = PermissionMode::AutoEditAddressComments;
+    app.sessions.sessions_mut()[0].permission_mode = PermissionMode::AutoEdit;
+    app.settings
+        .apply_operation(SettingsOperation::AutoAddressReviewComments(false))
+        .await;
+    app.auto_address_focused_reviews(vec![session_id.clone()]);
+    assert!(app.pending_session_diff_requests.is_empty());
+    app.settings
+        .apply_operation(SettingsOperation::AutoAddressReviewComments(true))
+        .await;
     app.review_cache
         .insert(session_id.clone(), ReviewCacheEntry::Suppressed);
     app.auto_address_focused_reviews(vec![session_id.clone()]);

@@ -8,7 +8,7 @@ use testty::assertion;
 use testty::region::Region;
 
 use super::fixture::{
-    E2eResult, seed_auto_address_review_mode, seed_project_settings, seed_review_ready_session,
+    E2eResult, seed_project_settings, seed_review_ready_session,
     seed_review_ready_session_on_sessions_tab,
 };
 use crate::common;
@@ -195,17 +195,18 @@ async fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify `/mode` selects a session permission mode from the composer.
+/// Verify `Shift+Tab` toggles the session between Auto Edit and Read Only
+/// without changing the draft.
 #[tokio::test]
 async fn session_permission_mode_selection() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_permission_mode_selection")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(|env| Box::pin(async move { seed_auto_address_review_mode(env).await }))
+        .setup(|env| Box::pin(async move { seed_review_ready_session_on_sessions_tab(env).await }))
         .zola(
             "Switch session mode",
-            "Choose auto-edit, auto-address, or read-only from the composer.",
+            "Toggle between auto-edit and read-only from the composer with Shift+Tab.",
             43,
         )
         .run(
@@ -214,23 +215,30 @@ async fn session_permission_mode_selection() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
-                    .wait_for_text("] · Balanced · Normal ·", 5000)
+                    .wait_for_text("] · Balanced · Normal · Auto Edit", 5000)
                     .wait_for_text("Shift+Tab: switch mode", 5000)
+                    .write_text("Keep this draft")
+                    .wait_for_text("Keep this draft", 3000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled(
                         "initial_permission_mode",
                         "Prompt title shows the current session permission mode",
                     )
-                    .write_text("/mode")
-                    .wait_for_text("Choose editing permissions", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("Auto Edit + Auto Address Comments", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
+                    .press_key("BackTab")
+                    .wait_for_text("] · Balanced · Normal · Read Only", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "permission_mode_selected",
-                        "The selected permission mode appears in the composer title",
+                        "read_only_permission_mode",
+                        "Shift+Tab switches the session to Read Only",
+                    )
+                    .press_key("BackTab")
+                    .wait_for_text("] · Balanced · Normal · Auto Edit", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "auto_edit_permission_mode",
+                        "Shift+Tab switches the session back to Auto Edit",
                     )
             },
             |frame, report| {
@@ -239,7 +247,7 @@ async fn session_permission_mode_selection() -> E2eResult {
                     let initial_full = Region::full(initial_frame.cols(), initial_frame.rows());
                     assertion::assert_text_in_region(
                         &initial_frame,
-                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
+                        "] · Balanced · Normal · Auto Edit",
                         &initial_full,
                     );
                     assertion::assert_text_in_region(
@@ -247,12 +255,27 @@ async fn session_permission_mode_selection() -> E2eResult {
                         "Shift+Tab: switch mode",
                         &initial_full,
                     );
+                    let read_only_frame = common::frame_from_capture(&report.captures[1]);
+                    let read_only_full =
+                        Region::full(read_only_frame.cols(), read_only_frame.rows());
+                    assertion::assert_text_in_region(
+                        &read_only_frame,
+                        "] · Balanced · Normal · Read Only",
+                        &read_only_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &read_only_frame,
+                        "Keep this draft",
+                        &read_only_full,
+                    );
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
+                        "] · Balanced · Normal · Auto Edit",
                         &full,
                     );
+                    assertion::assert_text_in_region(frame, "Keep this draft", &full);
+                    assertion::assert_not_visible(frame, "Auto Address");
                 })
             },
         )

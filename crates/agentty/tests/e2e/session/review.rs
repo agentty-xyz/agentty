@@ -14,14 +14,15 @@ use tokio::process::Command;
 
 use super::fixture::{
     E2eResult, MISSING_DECISION_CONTEXT_POLICY_TEXT, MISSING_RESOLVED_DECISION_HISTORY_TEXT,
-    RESOLVED_DECISION_REVIEW_TEXT, seed_auto_address_review_mode,
-    seed_linked_review_worktree_with_diff, seed_project_settings, seed_review_ready_session,
-    seed_review_ready_session_on_sessions_tab, seed_review_with_resolved_decision,
-    seed_review_worktree_with_diff,
+    RESOLVED_DECISION_REVIEW_TEXT, seed_linked_review_worktree_with_diff, seed_project_settings,
+    seed_review_ready_session, seed_review_ready_session_on_sessions_tab,
+    seed_review_with_resolved_decision, seed_review_worktree_with_diff,
 };
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
+/// Reply the auto-address notice stub returns for every request.
+const AUTO_ADDRESS_NOTICE_ANSWER: &str = "Greeting added to the project.";
 /// Holds review completion until release, or exits when scenario cleanup
 /// removes the gate.
 const SYNC_FOCUSED_REVIEW_PROVIDER_SCRIPT: &str = r#"#!/bin/sh
@@ -97,7 +98,7 @@ esac
             std::fs::write(&path, script)?;
             #[cfg(unix)]
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
-            seed_project_settings(env, &[("DefaultReviewAgent", "claude"), ("DefaultReviewModel", "claude-haiku-5-5")]).await
+            seed_project_settings(env, &[("AutoAddressReviewComments", "false"), ("DefaultReviewAgent", "claude"), ("DefaultReviewModel", "claude-haiku-5-5")]).await
         }))
         .run(|scenario| scenario
             .compose(&common::wait_for_agentty_startup())
@@ -267,9 +268,11 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
+    // Keep the finished review visible instead of applying its suggestions.
     seed_project_settings(
         env,
         &[
+            ("AutoAddressReviewComments", "false"),
             ("DefaultReviewAgent", "claude"),
             ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
@@ -615,7 +618,7 @@ done
 async fn seed_auto_address_review_lifecycle(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_auto_address_review_mode(env).await?;
+    seed_review_ready_session_on_sessions_tab(env).await?;
     seed_linked_review_worktree_with_diff(env)?;
     install_auto_address_review_lifecycle_stub(env).await?;
 
@@ -1448,35 +1451,70 @@ async fn seed_apply_slash_recording(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
-/// Verify `Shift+Tab` reaches automatic review addressing without changing the
-/// draft.
+/// Verify a new session's first message posts the automatic review-addressing
+/// notice and the project setting that disables it.
 #[tokio::test]
-async fn shift_tab_auto_address_mode() -> E2eResult {
+async fn auto_address_review_comments() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("shift_tab_auto_address_mode")
+    FeatureTest::new("auto_address_review_comments")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(|env| Box::pin(async move { seed_review_ready_session_on_sessions_tab(env).await }))
+        .setup(|env| Box::pin(async move { seed_auto_address_notice_project(env).await }))
+        .zola(
+            "Automatically address review suggestions",
+            "Apply focused-review suggestions for up to three iterations, or turn it off in \
+             project Settings.",
+            44,
+        )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::open_selected_session_view())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_new_session_prompt())
+                    .write_text("Add a greeting")
                     .press_key("Enter")
-                    .wait_for_text("] · Balanced · Normal · Auto Edit", 5000)
-                    .write_text("Keep this draft")
-                    .press_key("BackTab")
-                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
+                    .wait_for_text("[Auto Address]", 10000)
+                    .wait_for_text(AUTO_ADDRESS_NOTICE_ANSWER, 30000)
+                    .wait_for_stable_frame(500, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "auto_address_notice",
+                        "The first message explains automatic review addressing",
+                    )
+                    .press_key("q")
+                    .step(common::wait_for_session_list())
+                    .compose(&common::switch_to_tab_reverse("Projects"))
+                    .compose(&common::switch_to_tab_reverse("Settings"))
+                    .compose(&common::move_to_settings_row(
+                        common::SettingsRow::AutoAddressComments,
+                    ))
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "auto_address_setting",
+                        "Project Settings show automatic review addressing enabled",
+                    )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
+                    let notice_frame = common::frame_from_capture(&report.captures[0]);
+                    let notice_full = Region::full(notice_frame.cols(), notice_frame.rows());
                     assertion::assert_text_in_region(
-                        frame,
-                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
-                        &full,
+                        &notice_frame,
+                        "[Auto Address] Agentty applies focused-review suggestions automatically",
+                        &notice_full,
                     );
-                    assertion::assert_text_in_region(frame, "Keep this draft", &full);
+                    assertion::assert_text_in_region(
+                        &notice_frame,
+                        "up to 3 times per message",
+                        &notice_full,
+                    );
+                    assertion::assert_not_visible(&notice_frame, "Auto Edit + Auto Address");
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Auto Address Comments", &full);
+                    assertion::assert_text_in_region(frame, "Enabled", &full);
                 })
             },
         )
@@ -1485,72 +1523,36 @@ async fn shift_tab_auto_address_mode() -> E2eResult {
     Ok(())
 }
 
-/// Verify `/mode` exposes and selects bounded focused-review automation.
-#[tokio::test]
-async fn auto_address_review_mode() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("auto_address_review_mode")
-        .with_git()
-        .with_terminal_size(180, 24)
-        .setup(|env| Box::pin(async move { seed_auto_address_review_mode(env).await }))
-        .zola(
-            "Automatically address review suggestions",
-            "Enable auto-edit and apply focused-review suggestions for up to three iterations.",
-            44,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::open_selected_session_view())
-                    .press_key("Enter")
-                    .wait_for_text("Type your message", 5000)
-                    .write_text("/mode")
-                    .wait_for_text("Choose editing permissions", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("Auto Edit + Auto Address Comments", 3000)
-                    .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "auto_address_mode_option",
-                        "The mode picker explains bounded automatic review remediation",
-                    )
-                    .press_key("Enter")
-                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "auto_address_mode_selected",
-                        "The composer shows automatic review addressing is enabled",
-                    )
-            },
-            |frame, report| {
-                Box::pin(async move {
-                    let picker_frame = common::frame_from_capture(&report.captures[0]);
-                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                    assertion::assert_text_in_region(
-                        &picker_frame,
-                        "Auto Edit + Auto Address Comments",
-                        &picker_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &picker_frame,
-                        "address focused-review suggestions up to 3 times",
-                        &picker_full,
-                    );
+/// Seeds the current project with a Claude stub that answers every request
+/// with one fixed reply and leaves the worktree unchanged.
+async fn seed_auto_address_notice_project(env: &BuilderEnv) -> E2eResult {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+IFS= read -r prompt
 
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
-                        &full,
-                    );
-                })
-            },
-        )
-        .await?;
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{AUTO_ADDRESS_NOTICE_ANSWER}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    Ok(())
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
+        ],
+    )
+    .await
 }
 
 /// Verify automatic focused-review remediation stops without suggestions and

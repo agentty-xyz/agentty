@@ -124,7 +124,11 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
         .map(|kind| AgentSelection::new(kind, kind.default_model()));
     let turns = agents
         .into_iter()
-        .zip(PermissionMode::ALL)
+        .zip([
+            PermissionMode::AutoEdit,
+            PermissionMode::ReadOnly,
+            PermissionMode::AutoEdit,
+        ])
         .map(|(agent, permission_mode)| TurnSelection {
             agent,
             permission_mode,

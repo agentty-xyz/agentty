@@ -28,6 +28,7 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
     );
 
     SettingsView {
+        auto_address_review_comments: true,
         available_model_selections: vec![
             smart_selection,
             model_fixture::codex_selection(),

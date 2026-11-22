@@ -340,6 +340,11 @@ pub struct SettingsManager {
     pub max_concurrent_subagents: SubagentLimit,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
+    /// Whether completed turns automatically address focused-review
+    /// suggestions, up to the iteration limit, for the active project.
+    ///
+    /// New projects start with this enabled until the user disables it.
+    auto_address_review_comments: bool,
     available_agent_kinds: Vec<AgentKind>,
     /// Harness models this launch lists; ready ones are Fast-model choices.
     harness_models: Vec<HarnessModelOption>,
@@ -425,20 +430,7 @@ impl SettingsManager {
             .unwrap_or(None)
             .unwrap_or_default();
 
-        let include_coauthored_by_agentty = load_project_bool_setting_from_repositories(
-            &repositories,
-            project_id,
-            SettingName::IncludeCoauthoredByAgentty,
-            false,
-        )
-        .await;
-        let use_last_used_model_as_default = load_project_bool_setting_from_repositories(
-            &repositories,
-            project_id,
-            SettingName::LastUsedModelAsDefault,
-            false,
-        )
-        .await;
+        let toggles = ProjectToggles::load(&repositories, project_id).await;
         let theme = load_theme_setting_from_repositories(&repositories).await;
         let max_concurrent_subagents = load_max_concurrent_subagents_setting(&repositories).await;
 
@@ -456,12 +448,13 @@ impl SettingsManager {
             launch_configuration,
             max_concurrent_subagents,
             theme,
+            auto_address_review_comments: toggles.auto_address_review_comments,
             available_agent_kinds,
             harness_models,
-            include_coauthored_by_agentty,
+            include_coauthored_by_agentty: toggles.include_coauthored_by_agentty,
             project_id,
             repositories,
-            use_last_used_model_as_default,
+            use_last_used_model_as_default: toggles.use_last_used_model_as_default,
         }
     }
 
@@ -492,9 +485,16 @@ impl SettingsManager {
         self.default_fast_selection = selection;
     }
 
+    /// Returns whether completed turns automatically address focused-review
+    /// suggestions for the active project.
+    pub(crate) fn auto_address_review_comments(&self) -> bool {
+        self.auto_address_review_comments
+    }
+
     /// Returns an immutable projection for the settings screen.
     pub(crate) fn view(&self) -> SettingsView {
         SettingsView {
+            auto_address_review_comments: self.auto_address_review_comments,
             available_model_selections: selectable_model_options(&self.available_agent_kinds)
                 .into_iter()
                 .map(ModelSelectorOption::selection)
@@ -526,6 +526,10 @@ impl SettingsManager {
     /// Applies and persists one value change requested by the settings screen.
     pub(crate) async fn apply_operation(&mut self, operation: SettingsOperation) {
         match operation {
+            SettingsOperation::AutoAddressReviewComments(value) => {
+                self.auto_address_review_comments = value;
+                self.persist_auto_address_review_comments_setting().await;
+            }
             SettingsOperation::DefaultFastSelection {
                 reasoning_level,
                 selection,
@@ -753,6 +757,22 @@ impl SettingsManager {
         }
     }
 
+    /// Persists the automatic focused-review addressing toggle.
+    async fn persist_auto_address_review_comments_setting(&self) {
+        let auto_address_review_comments = self.auto_address_review_comments.to_string();
+
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::AutoAddressReviewComments,
+                &auto_address_review_comments,
+            )
+            .await;
+    }
+
     /// Persists the coauthor-trailer toggle for generated session commit
     /// messages.
     async fn persist_include_coauthored_by_agentty_setting(&self) {
@@ -794,6 +814,36 @@ impl SettingsManager {
     }
 }
 
+/// Project-scoped on/off settings loaded together with their defaults.
+struct ProjectToggles {
+    auto_address_review_comments: bool,
+    include_coauthored_by_agentty: bool,
+    use_last_used_model_as_default: bool,
+}
+
+impl ProjectToggles {
+    /// Loads each toggle, using its default when the persisted value is
+    /// missing or invalid: automatic review addressing starts enabled and
+    /// the others start disabled.
+    async fn load(repositories: &AppRepositories, project_id: i64) -> Self {
+        let load = |setting_name, default_value| {
+            load_project_bool_setting_from_repositories(
+                repositories,
+                project_id,
+                setting_name,
+                default_value,
+            )
+        };
+
+        Self {
+            auto_address_review_comments: load(SettingName::AutoAddressReviewComments, true).await,
+            include_coauthored_by_agentty: load(SettingName::IncludeCoauthoredByAgentty, false)
+                .await,
+            use_last_used_model_as_default: load(SettingName::LastUsedModelAsDefault, false).await,
+        }
+    }
+}
+
 /// One provider-owned model option shown by settings selectors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ModelSelectorOption {
@@ -822,7 +872,7 @@ fn parse_launch_configurations(launch_configuration_setting: &str) -> Vec<String
 
 /// Loads one project-scoped boolean setting through the narrow repository
 /// dependency used by [`SettingsManager`].
-async fn load_project_bool_setting_from_repositories(
+pub(crate) async fn load_project_bool_setting_from_repositories(
     repositories: &AppRepositories,
     project_id: i64,
     setting_name: SettingName,

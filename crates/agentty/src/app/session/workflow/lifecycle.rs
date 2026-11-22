@@ -1377,18 +1377,13 @@ impl SessionManager {
             .await;
 
         if !has_saved_prompt {
-            let prompt_transcript_text = prompt.transcript_text();
             let initial_output = Self::formatted_prompt_output(&prompt, false);
-            SessionTaskService::append_session_transcript_message(
+            Self::record_first_prompt(
+                services,
                 &transcript,
-                services.db(),
                 &app_event_tx,
-                &services.session_update_versions(),
                 &persisted_session_id,
-                SessionTranscriptMessageAppend {
-                    kind: SessionMessageKind::UserPrompt,
-                    raw_content: &prompt_transcript_text,
-                },
+                &prompt,
             )
             .await;
             self.set_active_prompt_output(&persisted_session_id, initial_output);
@@ -1417,6 +1412,39 @@ impl SessionManager {
         let _ = ready_tx.send(());
 
         Ok(())
+    }
+
+    /// Records a session's first prompt in its transcript, followed by the
+    /// automatic review-addressing notice when that applies.
+    async fn record_first_prompt(
+        services: &AppServices,
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &str,
+        prompt: &TurnPrompt,
+    ) {
+        let prompt_transcript_text = prompt.transcript_text();
+        let session_update_versions = services.session_update_versions();
+        SessionTaskService::append_session_transcript_message(
+            transcript,
+            services.db(),
+            app_event_tx,
+            &session_update_versions,
+            session_id,
+            SessionTranscriptMessageAppend {
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: &prompt_transcript_text,
+            },
+        )
+        .await;
+        SessionTaskService::append_auto_address_notice(
+            transcript,
+            services.db(),
+            app_event_tx,
+            &session_update_versions,
+            session_id,
+        )
+        .await;
     }
 
     /// Submits a follow-up prompt to an existing session.

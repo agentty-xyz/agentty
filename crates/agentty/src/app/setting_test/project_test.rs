@@ -39,13 +39,14 @@ fn settings_rows_split_theme_into_global_and_project_sections() {
     assert_eq!(global_rows[0].0, "Theme");
     assert_eq!(global_rows[1].0, "Max Subagents");
     assert_eq!(global_rows[1].1, "2 (applies after restart)");
-    assert_eq!(project_rows.len(), 6);
+    assert_eq!(project_rows.len(), 7);
     assert_eq!(project_rows[0].0, "Default Smart Model");
     assert_eq!(project_rows[1].0, "Default Fast Model");
     assert_eq!(project_rows[2].0, "Default Review Model");
     assert_eq!(project_rows[3].0, "Coauthored by Agentty");
     assert_eq!(project_rows[4].0, "Launch Configurations");
     assert_eq!(project_rows[5].0, "Default Response Style");
+    assert_eq!(project_rows[6].0, "Auto Address Comments");
 }
 
 #[tokio::test]

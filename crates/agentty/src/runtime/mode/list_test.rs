@@ -74,6 +74,7 @@ impl SettingsFixture {
     fn new(launch_configuration: Option<&str>) -> Self {
         let selection = AgentSelection::new(AgentKind::Claude, AgentKind::Claude.default_model());
         let view = SettingsView {
+            auto_address_review_comments: true,
             available_model_selections: vec![selection],
             default_fast_reasoning_level: ReasoningLevel::Low,
             default_fast_selection: selection,
@@ -756,7 +757,7 @@ async fn test_handle_enter_key_opens_launch_configuration_list_editor_in_setting
 }
 
 #[tokio::test]
-async fn test_settings_previous_key_wraps_to_default_response_style_row() {
+async fn test_settings_previous_key_wraps_to_auto_address_comments_row() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     app.tabs.set(Tab::Settings);
@@ -775,7 +776,7 @@ async fn test_settings_previous_key_wraps_to_default_response_style_row() {
         app.settings_presentation
             .snapshot(&app.settings.view())
             .selected_row_index,
-        Some(7)
+        Some(8)
     );
 }
 

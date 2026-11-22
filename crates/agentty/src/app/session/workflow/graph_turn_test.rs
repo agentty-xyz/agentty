@@ -87,10 +87,8 @@ fn graph_permissions_never_exceed_captured_or_current_permissions() {
         for current in PermissionMode::ALL {
             let expected = if captured.is_read_only() || current.is_read_only() {
                 PermissionMode::ReadOnly
-            } else if captured == PermissionMode::AutoEdit || current == PermissionMode::AutoEdit {
-                PermissionMode::AutoEdit
             } else {
-                PermissionMode::AutoEditAddressComments
+                PermissionMode::AutoEdit
             };
             assert_eq!(intersect_permissions(captured, current), expected);
         }

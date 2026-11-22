@@ -684,19 +684,17 @@ impl App {
         }
 
         let completed_auto_address_iterations = if auto_address {
-            let auto_address_mode_is_current = self
-                .sessions
-                .session_for_id(session_id)
-                .is_some_and(|session| {
-                    session.permission_mode
-                        == crate::domain::permission::PermissionMode::AutoEditAddressComments
-                });
+            let auto_address_is_enabled = self.settings.auto_address_review_comments()
+                && self
+                    .sessions
+                    .session_for_id(session_id)
+                    .is_some_and(|session| !session.permission_mode.is_read_only());
             let completed_iterations = self
                 .auto_address_review_iterations
                 .get(session_id)
                 .copied()
                 .unwrap_or(0);
-            if !auto_address_mode_is_current
+            if !auto_address_is_enabled
                 || completed_iterations
                     >= crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS
             {

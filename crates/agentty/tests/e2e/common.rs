@@ -1537,12 +1537,13 @@ pub(crate) enum SettingsRow {
     CoauthoredByAgentty,
     LaunchConfigurations,
     DefaultResponseStyle,
+    AutoAddressComments,
 }
 
 impl SettingsRow {
     /// Rows in on-screen order, global rows first. Keep aligned with the
     /// Settings tab.
-    const ORDER: [Self; 8] = [
+    const ORDER: [Self; 9] = [
         Self::Theme,
         Self::MaxSubagents,
         Self::DefaultSmartModel,
@@ -1551,6 +1552,7 @@ impl SettingsRow {
         Self::CoauthoredByAgentty,
         Self::LaunchConfigurations,
         Self::DefaultResponseStyle,
+        Self::AutoAddressComments,
     ];
 
     /// Returns the `snake_case` name used for this row's journey.
@@ -1564,6 +1566,7 @@ impl SettingsRow {
             Self::CoauthoredByAgentty => "coauthored_by_agentty",
             Self::LaunchConfigurations => "launch_configurations",
             Self::DefaultResponseStyle => "default_response_style",
+            Self::AutoAddressComments => "auto_address_comments",
         }
     }
 }

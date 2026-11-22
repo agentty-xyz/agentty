@@ -87,6 +87,7 @@ impl SettingsTestHarness {
             manager: None,
             presentation: SettingsPresentationState::default(),
             view: SettingsView {
+                auto_address_review_comments: true,
                 available_model_selections: selectable_model_options(AgentKind::ALL)
                     .into_iter()
                     .map(ModelSelectorOption::selection)

@@ -1238,7 +1238,7 @@ fn composer_shows_the_session_settings_title_while_replying_and_viewing() {
     assert!(replying_text.contains(&title));
     assert!(replying_text.contains("Type your message"));
     assert!(viewing_text.contains(&title));
-    assert!(slash_text.contains("/mode"));
+    assert!(slash_text.contains("/model"));
 }
 
 #[test]
@@ -1326,7 +1326,7 @@ fn slash_leading_drafts_keep_active_file_mentions_visible() {
 
         // Assert
         assert_eq!(text.contains("src/session_chat.rs"), active_mention);
-        assert_eq!(text.contains("/mode"), !active_mention);
+        assert_eq!(text.contains("/model"), !active_mention);
     }
 }
 

@@ -677,7 +677,11 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
         (AgentKind::Codex, AgentModel::Gpt61Sol),
     ]
     .into_iter()
-    .zip(PermissionMode::ALL)
+    .zip([
+        PermissionMode::AutoEdit,
+        PermissionMode::ReadOnly,
+        PermissionMode::AutoEdit,
+    ])
     .map(|((kind, model), permission_mode)| TurnSelection {
         agent: AgentSelection::new(kind, model),
         permission_mode,

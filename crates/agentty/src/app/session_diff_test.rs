@@ -24,6 +24,7 @@ use crate::presentation::app_mode::{
     AppMode, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+use crate::presentation::setting::SettingsOperation;
 
 /// Builds one Git-backed review session for diff-request state tests.
 async fn review_app() -> (App, tempfile::TempDir, SessionId) {
@@ -1342,8 +1343,6 @@ async fn automatic_apply_completion_counts_enqueued_remediation_turn() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
     crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
-    app.sessions.sessions_mut()[0].permission_mode =
-        crate::domain::permission::PermissionMode::AutoEditAddressComments;
     let current_diff = String::new();
     let diff_hash = review::diff_content_hash(&current_diff);
     app.review_cache.insert(
@@ -1397,8 +1396,6 @@ async fn automatic_apply_completion_accepts_rebased_diff_and_rejects_changed_dif
     {
         let (mut app, _base_dir, session_id) = review_app().await;
         crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
-        app.sessions.sessions_mut()[0].permission_mode =
-            crate::domain::permission::PermissionMode::AutoEditAddressComments;
         let diff_hash = review::diff_content_hash(reviewed_diff);
         app.review_cache.insert(
             session_id.clone(),
@@ -1440,8 +1437,6 @@ async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() 
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;
     crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
-    app.sessions.sessions_mut()[0].permission_mode =
-        crate::domain::permission::PermissionMode::AutoEditAddressComments;
     app.auto_address_review_iterations
         .insert(session_id.clone(), 2);
     let current_diff = String::new();
@@ -1564,17 +1559,28 @@ async fn seed_completed_review_audit(
 }
 
 #[tokio::test]
-async fn automatic_apply_completion_revalidates_mode_and_iteration_limit() {
+async fn automatic_apply_completion_revalidates_setting_mode_and_iteration_limit() {
     // Arrange, Act, Assert
-    for (permission_mode, completed_iterations) in [
-        (crate::domain::permission::PermissionMode::AutoEdit, 0),
+    for (is_auto_address_enabled, permission_mode, completed_iterations) in [
         (
-            crate::domain::permission::PermissionMode::AutoEditAddressComments,
+            false,
+            crate::domain::permission::PermissionMode::AutoEdit,
+            0,
+        ),
+        (true, crate::domain::permission::PermissionMode::ReadOnly, 0),
+        (
+            true,
+            crate::domain::permission::PermissionMode::AutoEdit,
             crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS,
         ),
     ] {
         let (mut app, _base_dir, session_id) = review_app().await;
         crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+        app.settings
+            .apply_operation(SettingsOperation::AutoAddressReviewComments(
+                is_auto_address_enabled,
+            ))
+            .await;
         app.sessions.sessions_mut()[0].permission_mode = permission_mode;
         app.auto_address_review_iterations
             .insert(session_id.clone(), completed_iterations);

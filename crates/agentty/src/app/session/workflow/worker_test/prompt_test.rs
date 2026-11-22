@@ -2,17 +2,20 @@
 //! restart recovery.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use ag_contracts::AgentRequestKind;
+use ag_contracts::{AgentRequestKind, MockAgentChannel};
 use tokio::sync::mpsc;
 
 use super::super::{SessionCommand, SessionWorkerService};
 use super::support::{
     assert_first_prompt_remains_retryable, assert_first_prompt_was_accepted,
     assert_preparation_publication_failure_is_retryable, inject_handoff_failure,
-    managed_first_prompt, resume_command,
+    managed_first_prompt, resume_command, successful_turn_result,
 };
+use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::session::Status;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::test_support::enable_tracing_log_fallback;
 
 #[tokio::test]
@@ -299,4 +302,69 @@ async fn test_restart_retains_unreleased_first_prompt_and_reclaims_its_operation
             .expect("operation")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn test_saved_first_prompt_posts_auto_address_notice_after_the_prompt() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
+    let session_id = app.create_draft_session().await.expect("draft");
+    let prompt = TurnPrompt::from_text("saved first prompt".to_string());
+    app.stage_draft_message(&session_id, prompt.text.as_str())
+        .await
+        .expect("stage");
+    app.services
+        .db()
+        .sessions()
+        .insert_session_preparation(&session_id, "main")
+        .await
+        .expect("prepare");
+    app.services
+        .db()
+        .sessions()
+        .save_preparation_prompt(&session_id, &serde_json::to_string(&prompt).expect("JSON"))
+        .await
+        .expect("save");
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .returning(|_, _, _| Box::pin(async { Ok(successful_turn_result("done")) }));
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, Arc::new(channel));
+
+    // Act
+    app.retry_workspace_preparation(&session_id, "session.create")
+        .await
+        .expect("submit");
+    crate::test_support::finish_session_creation_tasks(&mut app).await;
+    let messages = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let messages = app
+                .services
+                .db()
+                .sessions()
+                .load_session_messages(&session_id)
+                .await
+                .expect("messages");
+            if messages
+                .iter()
+                .any(|message| message.content.contains("[Auto Address]"))
+            {
+                break messages;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("worker posts the notice");
+
+    // Assert
+    let prompt_index = messages
+        .iter()
+        .position(|message| message.kind == "user_prompt")
+        .expect("prompt is recorded");
+    let notice_index = messages
+        .iter()
+        .position(|message| message.content.contains("[Auto Address]"))
+        .expect("notice is recorded");
+    assert!(prompt_index < notice_index, "{messages:?}");
 }

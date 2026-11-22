@@ -148,13 +148,13 @@ accept stays queued with a notice. Stopping the turn discards them like the rest
 queue. Other harnesses keep queued chat for the next turn, and so do task and graph
 runs, which work in their own conversations.
 
-While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/remote-control`,
-`/style`, and `/fast`. `/model` and `/fast` changes wait until the active work and queue
-finish and appear as the last queued action; choosing the current value cancels the
-change. Pending changes are lost on restart.
+While work runs, `/` offers only `/model`, `/reasoning`, `/remote-control`, `/style`,
+and `/fast`. `/model` and `/fast` changes wait until the active work and queue finish
+and appear as the last queued action; choosing the current value cancels the change.
+Pending changes are lost on restart.
 
 While composing, `Tab` focuses chat for scrolling; from there, `d` previews changes and
-`q` returns to the list with the draft kept. `Shift+Tab` cycles permission modes.
+`q` returns to the list with the draft kept. `Shift+Tab` toggles the permission mode.
 
 In Diff mode, add file, line, or range comments and press `s` to submit them with the
 draft and images. Leaving Diff mode with unsent comments asks whether to submit them;
@@ -469,25 +469,26 @@ draft.
 | ----------------- | ------------------------------------------------------------ |
 | `/apply`          | Verify and apply valid focused-review suggestions.           |
 | `/graph`          | Request a graph proposal.                                    |
-| `/mode`           | Choose permissions and review automation.                    |
 | `/model`          | Choose a backend and model; local or paid models in Harness. |
 | `/reasoning`      | Set reasoning effort for this session.                       |
 | `/remote-control` | Control sessions from another device.                        |
 | `/style`          | Choose concise, balanced, or detailed answers.               |
 | `/fast`           | Toggle normal or fast responses for Claude or Codex.         |
 
-`/apply` requires a completed focused review. `/mode` selects:
+`/apply` requires a completed focused review. `Shift+Tab` toggles the session permission
+mode while composing:
 
 - **Auto Edit**: Standard editing permissions. Codex and Claude have full command
   access, so commands are not confined to the worktree.
-- **Auto Edit + Auto Address Comments**: The same permissions, plus automatic
-  verification and application of focused-review suggestions, for up to three turns. A
-  new prompt or mode selection resets that limit.
 - **Read Only**: Prevents filesystem writes during chat turns.
 
-`Shift+Tab` cycles these modes while composing. See
-[Agents & Models](@/docs/agents/backends.md#switching-models) for speed costs and model
-compatibility.
+See [Agents & Models](@/docs/agents/backends.md#switching-models) for speed costs and
+model compatibility.
+
+In Auto Edit sessions, Agentty verifies and applies focused-review suggestions
+automatically, for up to three turns per message; a new prompt or mode change resets
+that limit. A notice in the chat explains this after a session's first message. Turn off
+`Auto Address Comments` in the project's Settings to disable it.
 
 `/remote-control` appears only with `agentty --experimental-remote` and pairs a phone or
 browser with this Agentty; see [Remote Control](@/docs/usage/remote-control.md).
@@ -534,8 +535,8 @@ Move the selection with `j` / `k`, then press `Enter` to open or edit a setting.
 <a id="usage-settings-scope"></a> **Global settings** control the theme and the
 [subagent limit](@/docs/agents/backends.md#subagent-limits), which applies after
 restart. **Project settings** include model, reasoning, speed, and style defaults,
-commit trailers, and launch configurations. Defaults affect new sessions; use slash
-commands to change an existing one. See
+commit trailers, launch configurations, and automatic review addressing. Defaults affect
+new sessions; use slash commands to change an existing one. See
 [Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for the Smart, Fast,
 and Review roles.
 
@@ -678,7 +679,7 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 - `session_type` is `regular`, `draft`, or `fork`.
 - `agent` and `model` identify the selected provider and model; any local model is sent
   as `openai-compatible`, never by name.
-- `permission_mode` is `auto_edit`, `auto_edit_address_comments`, or `read_only`.
+- `permission_mode` is `auto_edit` or `read_only`.
 
 Each event carries a random installation ID, created on the first launch with telemetry
 or `--otlp-endpoint` enabled and stored in Agentty's database, and sets

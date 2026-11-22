@@ -10,7 +10,6 @@ use crate::domain::agent::{
     HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost, ReasoningLevel, ResponseStyle,
 };
 use crate::domain::input::{InputCommand, InputEffect, InputState};
-use crate::domain::permission::PermissionMode;
 
 /// One selectable row in the prompt slash-command menu.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,8 +47,6 @@ pub enum PromptSuggestionSelection {
     /// Harness model selected during `/model` that needs a provider sign-in
     /// before it can run.
     SignIn(AgentSelection),
-    /// Session mode selected during `/mode` selection.
-    Mode(PermissionMode),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
     /// Session-scoped response style chosen during `/style`.
@@ -454,8 +451,6 @@ pub enum PromptSlashStage {
     Command,
     /// Selecting a model after choosing an agent.
     Model,
-    /// Selecting a session permission and automation mode.
-    Mode,
     /// Selecting a session-specific reasoning level override.
     Reasoning,
     /// Selecting a session-specific response style.
@@ -1170,10 +1165,6 @@ fn build_slash_suggestion_list(
 
             (title, models)
         }
-        PromptSlashStage::Mode => (
-            "/mode (j/k move, Enter select)",
-            permission_mode_suggestion_items(),
-        ),
         PromptSlashStage::Reasoning => (
             "/reasoning Level (j/k move, Enter select)",
             reasoning_suggestion_items(),
@@ -1246,16 +1237,6 @@ fn selected_slash_action(
                 )),
                 ModelRowChoice::Unavailable => None,
             }
-        }
-        PromptSlashStage::Mode => {
-            let selected_permission_mode = PermissionMode::ALL
-                .get(clamp_selected_index(
-                    slash_state.selected_index,
-                    PermissionMode::ALL.len(),
-                ))
-                .copied()?;
-
-            Some(PromptSuggestionSelection::Mode(selected_permission_mode))
         }
         PromptSlashStage::Reasoning => {
             let options = reasoning_options();
@@ -1459,7 +1440,6 @@ fn token_count_label(tokens: u64) -> String {
 fn command_description(command: &str) -> &'static str {
     match command {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
-        "/mode" => "Choose editing permissions and focused-review automation.",
         "/model" => "Choose an agent and model for this session.",
         "/graph" => "Discuss a task with its execution graph beside the chat.",
         "/reasoning" => "Override the reasoning level for this session.",
@@ -1481,7 +1461,6 @@ fn prompt_slash_commands(
     let mut commands = vec![
         "/apply",
         "/graph",
-        "/mode",
         "/model",
         "/reasoning",
         "/remote-control",
@@ -1583,19 +1562,6 @@ fn response_style_suggestion_items() -> Vec<PromptSuggestionItem> {
             badge: None,
             detail: Some(response_style.description().to_string()),
             label: response_style.name().to_string(),
-            metadata: None,
-        })
-        .collect()
-}
-
-/// Returns the render-ready dropdown rows for `/mode`.
-fn permission_mode_suggestion_items() -> Vec<PromptSuggestionItem> {
-    PermissionMode::ALL
-        .into_iter()
-        .map(|permission_mode| PromptSuggestionItem {
-            badge: None,
-            detail: Some(permission_mode.description().to_string()),
-            label: permission_mode.display_label().to_string(),
             metadata: None,
         })
         .collect()
