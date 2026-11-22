@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionAnswer,
-    ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
+    QuestionAnswer, ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
     test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
@@ -21,6 +21,13 @@ pub(super) async fn request_session_creation(
     let service = app.session_service();
 
     app.drive_session_request(async move { service.create_session(request).await })
+        .await
+}
+
+pub(super) async fn request_host_context(app: &mut App) -> Result<HostContext, ApiSessionError> {
+    let service = app.session_service();
+
+    app.drive_session_request(async move { service.host_context().await })
         .await
 }
 

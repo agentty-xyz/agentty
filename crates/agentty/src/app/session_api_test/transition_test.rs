@@ -341,15 +341,19 @@ async fn durable_messages_require_content_and_operation_id() {
 }
 
 #[tokio::test]
-async fn runtime_backend_serves_merge_to_frontends_that_ask() {
+async fn runtime_backend_serves_its_optional_operations_to_frontends_that_ask() {
     // Arrange
     let (app, _temp_dir) = crate::test_support::new_test_app().await;
+    let service = app.session_service();
 
     // Act
-    let supports_merge = app
-        .session_service()
-        .supports(SessionOperation::MergeSession);
+    let supported = [
+        SessionOperation::CreateSession,
+        SessionOperation::HostContext,
+        SessionOperation::MergeSession,
+    ]
+    .map(|operation| service.supports(operation));
 
     // Assert
-    assert!(supports_merge);
+    assert_eq!(supported, [true; 3]);
 }

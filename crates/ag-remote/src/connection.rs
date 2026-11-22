@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{
-    AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionOperation,
-    SessionService,
+    AnswerQuestionsRequest, CreateSessionRequest, QuestionAnswer, SessionError, SessionId,
+    SessionOperation, SessionService,
 };
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
@@ -20,8 +20,8 @@ use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
-    ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionSummary,
-    ServerFrame,
+    ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 use crate::transport::{CloseCause, FrameTransport, Incoming};
@@ -58,7 +58,14 @@ pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
 const REQUEST_FAILED: &str = "Request failed";
 /// Optional requests, each named by the capability that offers it and served
 /// only when the host supports its operation.
-const CAPABILITIES: &[(SessionOperation, &str)] = &[(SessionOperation::MergeSession, "merge")];
+const CAPABILITIES: &[(SessionOperation, &str)] = &[
+    (SessionOperation::HostContext, "host"),
+    (SessionOperation::CreateSession, "create_session"),
+    (SessionOperation::MergeSession, "merge"),
+];
+/// Error returned when a device asks for a creation mode the host does not
+/// serve now.
+const UNAVAILABLE_SESSION_MODE: &str = "Session mode is not available";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -575,14 +582,17 @@ impl RequestTasks {
     }
 }
 
-/// Returns the session a request changes, or `None` for reads.
+/// Returns the session a request changes, or `None` for reads and for
+/// creation, which changes no existing session.
 fn mutated_session(request: &RemoteRequest) -> Option<&str> {
     match request {
         RemoteRequest::AnswerQuestions { session_id, .. }
         | RemoteRequest::CancelSession { session_id }
         | RemoteRequest::MergeSession { session_id }
         | RemoteRequest::SendMessage { session_id, .. } => Some(session_id),
-        RemoteRequest::GetSession { .. }
+        RemoteRequest::CreateSession { .. }
+        | RemoteRequest::GetHost
+        | RemoteRequest::GetSession { .. }
         | RemoteRequest::ListSessions
         | RemoteRequest::Unsupported => None,
     }
@@ -663,6 +673,12 @@ async fn respond(
 
             Ok(RemoteResponse::Accepted)
         }
+        RemoteRequest::CreateSession { mode } => create_session(sessions, mode).await,
+        RemoteRequest::GetHost => {
+            require_operation(sessions, SessionOperation::HostContext)?;
+
+            Ok(RemoteResponse::from(sessions.host_context().await?))
+        }
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::ListSessions => {
             let summaries = sessions.list_sessions().await?;
@@ -692,6 +708,33 @@ async fn respond(
         }
         RemoteRequest::Unsupported => Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string())),
     }
+}
+
+/// Creates a session in the host's active project, the only project the
+/// host accepts, and only in a mode the host serves now.
+async fn create_session(
+    sessions: &SessionService,
+    mode: RemoteSessionMode,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::CreateSession)?;
+    let host = sessions.host_context().await?;
+    let mode = mode.session_mode();
+    if !host.session_modes.contains(&mode) {
+        return Err(SessionError::Operation(
+            UNAVAILABLE_SESSION_MODE.to_string(),
+        ));
+    }
+    let session_id = sessions
+        .create_session(CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode,
+            project_id: host.project_id,
+        })
+        .await?;
+
+    Ok(RemoteResponse::Created {
+        session_id: session_id.to_string(),
+    })
 }
 
 /// Loads one session only when the host lists it, so remote clients read

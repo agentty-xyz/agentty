@@ -13,7 +13,7 @@ use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
     ClientFrame, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
-    RemoteSessionSummary, ServerFrame,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -655,5 +655,73 @@ async fn merge_reaches_the_host_only_for_listed_sessions_it_serves() {
         RemoteResult::Error("Unsupported request".to_string())
     );
     assert_eq!(serving.backend.calls(), ["list", "merge:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn get_host_describes_the_project_and_only_remote_modes() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::HostContext],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+
+    // Act
+    let host = reply_result(&serving.state, RemoteRequest::GetHost).await;
+    let unsupported = reply_result(&not_serving.state, RemoteRequest::GetHost).await;
+
+    // Assert
+    assert_eq!(
+        host,
+        RemoteResult::Ok(RemoteResponse::Host {
+            base_branch: "main".to_string(),
+            default_model: "gpt-6.1-sol".to_string(),
+            project: "agentty".to_string(),
+            session_modes: vec![RemoteSessionMode::Regular],
+        })
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["host"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn create_session_uses_the_active_project_and_a_served_mode() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::CreateSession],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let create = |mode| RemoteRequest::CreateSession { mode };
+
+    // Act
+    let created = reply_result(&serving.state, create(RemoteSessionMode::Regular)).await;
+    let harness = reply_result(&serving.state, create(RemoteSessionMode::Harness)).await;
+    let unsupported = reply_result(&not_serving.state, create(RemoteSessionMode::Regular)).await;
+
+    // Assert
+    assert_eq!(
+        created,
+        RemoteResult::Ok(RemoteResponse::Created {
+            session_id: "created".to_string(),
+        })
+    );
+    assert_eq!(
+        harness,
+        RemoteResult::Error("Session mode is not available".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        ["host", "create:Regular:1", "host"]
+    );
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }

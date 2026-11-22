@@ -450,6 +450,7 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
             SessionRuntimeCommand::Get { .. }
             | SessionRuntimeCommand::List { .. }
+            | SessionRuntimeCommand::HostContext { .. }
             | SessionRuntimeCommand::GetGraphProposal { .. }
             | SessionRuntimeCommand::GetExecutionGraph { .. }
             | SessionRuntimeCommand::RunGraphNode { .. }

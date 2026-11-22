@@ -11,8 +11,9 @@ stops its agent and deletes its worktree and branch, so changes that are not mer
 published are lost; the device asks before it cancels. While an execution graph waits
 for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
-paired device can also merge a session into its base branch, though the web page has no
-merge button yet. The page does not offer publishing or session settings yet.
+paired device can also create sessions in the active project and merge a session into
+its base branch, though the web page has no buttons for them yet. The page does not
+offer publishing or session settings yet.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -125,8 +126,9 @@ device can:
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions;
-- cancel a session, which deletes its worktree and branch; and
-- merge a session, which lands its changes on the base branch.
+- cancel a session, which deletes its worktree and branch;
+- merge a session, which lands its changes on the base branch; and
+- create a session in the active project, which adds a worktree and branch.
 
 Anyone holding a paired device can do the same, so remove a device you no longer
 control.
@@ -141,7 +143,8 @@ control.
   the popup with `d`; its open connection closes at once. Keys do not expire, so remove
   a device you no longer control.
 - A device can read and act on only the sessions it lists, which are the sessions of the
-  active project. Agentty refuses a request for any other session.
+  active project, and creates sessions only in that project. Agentty refuses a request
+  for any other session.
 - Web pages from other sites cannot connect, including pages that point their own domain
   at this computer.
 - Agentty does not encrypt the connection itself. Use a tunnel that does, such as
@@ -152,7 +155,7 @@ control.
 <a id="usage-remote-control-limitations"></a>
 
 - Remote control works only while Agentty is open in a terminal.
-- Remote devices see the sessions of the active project.
+- Remote devices see and create the sessions of the active project.
 - The transcript updates when a turn finishes; live streaming output is not shown.
 - Image attachments cannot be sent from a remote device.
 - A browser remembers one relay pairing for each relay address.

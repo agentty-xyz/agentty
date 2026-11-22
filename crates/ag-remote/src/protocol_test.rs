@@ -1,11 +1,12 @@
-use ag_session::{SessionId, SessionStatus, SessionSummary};
+use ag_session::{CreateSessionMode, SessionId, SessionStatus, SessionSummary};
 use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, RemoteMessage, RemoteMessageKind, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionSummary, ServerFrame,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
-use crate::test_support::session_fixture;
+use crate::test_support::{host_fixture, session_fixture};
 
 #[test]
 fn client_frames_use_snake_case_type_and_method_tags() {
@@ -241,6 +242,88 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
         ])
     );
     assert_eq!(decoded, frames);
+}
+
+#[test]
+fn session_creation_frames_default_to_regular_mode() {
+    // Arrange
+    let requests = json!([
+        {"method": "get_host"},
+        {"method": "create_session"},
+        {"method": "create_session", "mode": "harness"}
+    ]);
+    let responses = vec![
+        RemoteResponse::Host {
+            base_branch: "main".to_string(),
+            default_model: "gpt-6.1-sol".to_string(),
+            project: "agentty".to_string(),
+            session_modes: vec![RemoteSessionMode::Regular, RemoteSessionMode::Harness],
+        },
+        RemoteResponse::Created {
+            session_id: "s".to_string(),
+        },
+    ];
+
+    // Act
+    let decoded: Vec<RemoteRequest> =
+        serde_json::from_value(requests).expect("requests should parse");
+    let encoded = serde_json::to_value(&responses).expect("responses should encode");
+
+    // Assert
+    assert_eq!(
+        decoded,
+        [
+            RemoteRequest::GetHost,
+            RemoteRequest::CreateSession {
+                mode: RemoteSessionMode::Regular,
+            },
+            RemoteRequest::CreateSession {
+                mode: RemoteSessionMode::Harness,
+            },
+        ]
+    );
+    assert_eq!(
+        encoded,
+        json!([
+            {
+                "kind": "host",
+                "base_branch": "main",
+                "default_model": "gpt-6.1-sol",
+                "project": "agentty",
+                "session_modes": ["regular", "harness"]
+            },
+            {"kind": "created", "session_id": "s"}
+        ])
+    );
+}
+
+#[test]
+fn host_context_converts_modes_remote_devices_may_request() {
+    // Arrange
+    let mut host = host_fixture();
+    host.session_modes = vec![
+        CreateSessionMode::Draft,
+        CreateSessionMode::Harness,
+        CreateSessionMode::Regular,
+    ];
+
+    // Act
+    let response = RemoteResponse::from(host);
+
+    // Assert
+    assert_eq!(
+        response,
+        RemoteResponse::Host {
+            base_branch: "main".to_string(),
+            default_model: "gpt-6.1-sol".to_string(),
+            project: "agentty".to_string(),
+            session_modes: vec![RemoteSessionMode::Harness, RemoteSessionMode::Regular],
+        }
+    );
+    assert_eq!(
+        RemoteSessionMode::Harness.session_mode(),
+        CreateSessionMode::Harness
+    );
 }
 
 #[test]

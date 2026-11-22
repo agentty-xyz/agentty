@@ -12,11 +12,48 @@ use ag_session::{
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
 use super::support::{
-    persist_inherited_launch_settings, request_durable_message, request_message, request_session,
-    request_session_creation,
+    persist_inherited_launch_settings, request_durable_message, request_host_context,
+    request_message, request_session, request_session_creation,
 };
 use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentCliInfo;
+
+#[tokio::test]
+async fn runtime_backend_describes_the_project_new_sessions_join() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let base_branch = app.git_branch().map(str::to_string);
+    let project_name = app.projects.project_name().to_string();
+
+    // Act
+    let host = request_host_context(&mut app)
+        .await
+        .expect("host context should load");
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Regular,
+            project_id: host.project_id,
+        },
+    )
+    .await
+    .expect("a regular session should be created in the described project");
+
+    // Assert
+    assert_eq!(Some(host.base_branch), base_branch);
+    assert_eq!(host.project_id, project_id);
+    assert_eq!(host.project_name, project_name);
+    assert_eq!(host.session_modes, [CreateSessionMode::Regular]);
+    assert_eq!(host.default_model, app.sessions.default_session_model());
+    assert!(
+        app.sessions
+            .sessions()
+            .iter()
+            .any(|session| session.id == session_id.as_str())
+    );
+}
 
 #[tokio::test]
 async fn runtime_backend_creates_and_loads_complete_sessions() {
@@ -150,6 +187,9 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
         .await
         .expect_err("hidden harness should reject creation");
     crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
+    let host = request_host_context(&mut app)
+        .await
+        .expect("host context should load");
     let session_id = request_session_creation(&mut app, request)
         .await
         .expect("available harness should create a session");
@@ -165,6 +205,10 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
     ));
     assert_eq!(session.settings.agent.kind(), AgentKind::Harness);
     assert_eq!(session.settings.agent.model(), AgentModel::KimiK3);
+    assert_eq!(
+        host.session_modes,
+        [CreateSessionMode::Regular, CreateSessionMode::Harness]
+    );
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
 }
 
@@ -192,6 +236,9 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
         .expect_err("regular sessions need an agent CLI");
     let harness_result =
         request_session_creation(&mut app, request(CreateSessionMode::Harness)).await;
+    let host = request_host_context(&mut app)
+        .await
+        .expect("host context should load");
 
     // Assert
     assert!(matches!(
@@ -199,6 +246,7 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
         ApiSessionError::Operation(message) if message.contains("only Harness sessions")
     ));
     assert!(harness_result.is_ok());
+    assert_eq!(host.session_modes, [CreateSessionMode::Harness]);
 }
 
 #[tokio::test]

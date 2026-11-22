@@ -8,8 +8,8 @@ use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
-    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
+    DurableMessageVisibility, HostContext, QuestionAnswer, ReviewRequest, ReviewRequestState,
+    SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
     SessionOperation, SessionService, SessionSettings, SessionStatus,
     parse_persisted_session_agent_model,
 };
@@ -29,7 +29,12 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
     fn supports(&self, operation: SessionOperation) -> bool {
-        matches!(operation, SessionOperation::MergeSession)
+        matches!(
+            operation,
+            SessionOperation::CreateSession
+                | SessionOperation::HostContext
+                | SessionOperation::MergeSession
+        )
     }
 
     async fn generate_graph_proposal(
@@ -156,6 +161,10 @@ impl SessionBackend for SessionRuntimeHandle {
 
     async fn complete_task(&self, task_id: &str) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::complete_task(self, task_id).await
+    }
+
+    async fn host_context(&self) -> Result<HostContext, ApiSessionError> {
+        SessionRuntimeHandle::host_context(self).await
     }
 
     async fn create_session(
@@ -344,6 +353,9 @@ impl App {
             SessionRuntimeCommand::List { response_tx } => {
                 let _ = response_tx.send(Ok(self.list_api_sessions()));
             }
+            SessionRuntimeCommand::HostContext { response_tx } => {
+                let _ = response_tx.send(self.api_host_context().await);
+            }
             SessionRuntimeCommand::Mutation(command) => {
                 let _ = self.admit_session_command(command).await;
                 self.publish_session_change();
@@ -461,6 +473,33 @@ impl App {
             base_branch: project.base_branch,
             project_id: request.project_id,
             settings,
+        })
+    }
+
+    /// Describes the active project, its base branch and default model, and
+    /// the creation modes [`Self::validate_api_session_request`] accepts now.
+    async fn api_host_context(&mut self) -> Result<HostContext, ApiSessionError> {
+        let project_id = self.active_project_id();
+        let project = self.api_project_creation_context(None)?;
+        let settings = self
+            .sessions
+            .resolve_session_creation_settings(&self.services, project_id, None)
+            .await
+            .map_err(api_error_from_session)?;
+        let mut session_modes = Vec::new();
+        if self.services.has_agent_cli() {
+            session_modes.push(CreateSessionMode::Regular);
+        }
+        if self.services.harness_availability().is_available() {
+            session_modes.push(CreateSessionMode::Harness);
+        }
+
+        Ok(HostContext {
+            base_branch: project.base_branch,
+            default_model: settings.agent.model(),
+            project_id,
+            project_name: self.projects.project_name().to_string(),
+            session_modes,
         })
     }
 
