@@ -101,6 +101,22 @@ database; removing it unpairs every relay device.
 <a id="usage-remote-control-security"></a> A paired device can send prompts that agents
 run with the session's permissions, so treat a pairing like a login.
 
+### What a paired device can do
+
+<a id="usage-remote-control-device-access"></a> Within the sessions it lists, a paired
+device can:
+
+- list sessions and read their transcripts, questions, and queued messages;
+- send messages, which start, resume, or queue a turn that agents run with edit
+  permissions;
+- answer an agent's questions; and
+- cancel a session, which deletes its worktree and branch.
+
+Anyone holding a paired device can do the same, so remove a device you no longer
+control.
+
+### Protections
+
 - A pairing code works once, expires after 10 minutes, and stops working after five
   wrong attempts. Press `n` in the popup for a new code.
 - A device becomes paired only after you approve it in the terminal; an unanswered

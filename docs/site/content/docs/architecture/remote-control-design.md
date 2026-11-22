@@ -142,6 +142,32 @@ connection stays open; malformed frames still close it.
 newer page hides what an older server lacks. `PROTOCOL_VERSION` changes only when a
 frame changes meaning or loses a field.
 
+### Remote devices may create, merge, and publish
+
+**Context.** Remote control started as a way to follow sessions and reply to them, and
+every new mutation was a separate security decision. Users want a paired device to cover
+the main session features of the terminal, and a paired device can already send prompts
+that agents run with edit permissions.
+
+**Decision.** A paired device may stop a turn, create sessions, merge a session into its
+base branch, publish a session branch and open or refresh its review request, sync a
+session branch, and change session settings. Each operation is a separate request with
+its own capability, reaches only sessions the host lists, and creates sessions only in
+the active project. Merge and publish ask for confirmation on the device, not in the
+terminal, and Agentty keeps no audit trail of remote actions yet. Running host commands,
+opening worktrees, changing Agentty settings, managing projects, and choosing the remote
+branch name stay out of reach.
+
+**Consequences.**
+
+- A paired device is close to a full operator: whoever holds one can land changes on the
+  base branch and push to the Git remote with the user's credentials. Pairing
+  protections stay the same, and the usage page and `SECURITY.md` say so.
+- Any other mutation, host command, or read outside the listed sessions still needs its
+  own decision.
+- The capability list leaves room for per-device permissions or a terminal approval
+  later without a protocol change.
+
 ### The relay is stateless and joins one connection per device
 
 The relay keeps only open connections in memory, and a restart only makes clients

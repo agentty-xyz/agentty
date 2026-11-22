@@ -54,11 +54,22 @@ may do, and the encryption between a device and Agentty are security boundaries.
 [Remote Control Design](https://agentty.xyz/docs/architecture/remote-control-design/)
 for its trust model.
 
+A paired device is an authenticated control surface, not a viewer. Within the sessions
+of the active project, it can do what the
+[usage page](https://agentty.xyz/docs/usage/remote-control/#usage-remote-control-device-access)
+lists under "What a paired device can do": today that is reading transcripts, sending
+prompts, answering questions, and canceling a session. The approved set also covers
+stopping a turn, creating sessions, merging a session into its base branch, publishing a
+session branch and opening its pull request with the user's forge credentials, syncing a
+session branch, and changing session settings, as each becomes available. With those,
+anyone holding a paired device can have code written, land it on the base branch, and
+push it to the Git remote, so remove a device you no longer control.
+
 Report these as vulnerabilities:
 
 - pairing a device without the one-time code or without approval in the terminal;
-- a paired device doing more than listing sessions, reading their transcripts, sending
-  messages, answering questions, and stopping a turn;
+- a paired device doing more than the usage page lists, or reaching a session outside
+  the active project;
 - a removed device still connecting;
 - a relay that serves the web client unchanged, or anyone on the network path to a relay
   served over TLS, reading or changing what a device and Agentty exchange, or learning
