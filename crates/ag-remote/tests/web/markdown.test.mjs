@@ -6,6 +6,7 @@ import {
   MARKDOWN_TAGS,
   MAX_MARKDOWN_LENGTH,
   MAX_NESTING,
+  lookAheadReadCount,
   parseInlineMarkdown,
   parseMarkdown,
   renderMarkdown,
@@ -267,7 +268,7 @@ test("links, autolinks and bare URLs open in a new tab without a referrer", () =
   // A link inside a link text is only its text.
   const nested = render("[see https://example.com/x](https://example.com)").root;
   assert.deepEqual(
-    nested.querySelectorAll("a").map((link) => [link.getAttribute("href"), link.textContent]),
+    Array.from(nested.querySelectorAll("a"), (link) => [link.getAttribute("href"), link.textContent]),
     [["https://example.com/", "see https://example.com/x"]],
   );
 });
@@ -367,12 +368,16 @@ test("ten thousand nested emphasis runs and brackets stop at the nesting limit",
 });
 
 test("link attempts that never close read the text about once", () => {
-  // Each `](` once read up to 2,048 characters ahead, about 375 ms for
-  // the first case; now each case takes a few milliseconds.
+  // Each `](` once read up to 2,048 characters ahead, hundreds of times
+  // the text's length for the first case. Now the look-ahead reads each
+  // character a few times at most, which a count shows without timing
+  // the parser on a busy machine.
   for (const text of ["[](".repeat(85_000), '[](x "'.repeat(40_000), "[](<".repeat(60_000), "[](()".repeat(50_000)]) {
     assert.ok(text.length < MAX_MARKDOWN_LENGTH);
-    const { elapsed, result } = timed(() => parseMarkdown(text));
-    assert.ok(elapsed < 150, "took " + elapsed + " ms");
+    const before = lookAheadReadCount();
+    const result = parseMarkdown(text);
+    const reads = lookAheadReadCount() - before;
+    assert.ok(reads <= 16 * text.length, "read " + reads + " characters of " + text.length);
     assert.equal(result.children.length, 1);
   }
   // Nested parentheses and an angle-bracket destination still link.
@@ -409,7 +414,7 @@ test("a message over the size limit renders as plain text", () => {
   const { elapsed, result } = timed(() => render(text));
   assert.ok(elapsed < 1000, "took " + elapsed + " ms");
   assert.deepEqual(
-    result.root.children.map((child) => [child.localName, child.className]),
+    Array.from(result.root.children, (child) => [child.localName, child.className]),
     [["div", "md-plain"]],
   );
   assert.equal(result.root.textContent, text);
