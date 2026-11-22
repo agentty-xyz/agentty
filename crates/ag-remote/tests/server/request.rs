@@ -3,10 +3,10 @@
 use std::time::Duration;
 
 use ag_remote::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteMessage, RemoteMessageKind,
-    RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteMessage,
+    RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -215,6 +215,45 @@ async fn session_diffs_reach_only_listed_sessions() -> TestResult {
         RemoteResult::Error("Session not found".to_string())
     );
     assert_eq!(server.backend.calls(), ["list", "diff:session-1", "list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_file_listings_reach_only_listed_sessions() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let files = |session_id: &str| RemoteRequest::ListSessionFiles {
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let listed = call(&mut client, 1, files("session-1")).await?;
+    let unlisted = call(&mut client, 2, files("other-project-session")).await?;
+
+    // Assert
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::SessionFiles {
+            files: vec![
+                RemoteFileEntry {
+                    is_dir: true,
+                    path: "src".to_string(),
+                },
+                RemoteFileEntry {
+                    is_dir: false,
+                    path: "src/lib.rs".to_string(),
+                },
+            ],
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(server.backend.calls(), ["list", "files:session-1", "list"]);
 
     Ok(())
 }

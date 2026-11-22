@@ -40,7 +40,7 @@ macro_rules! script {
 }
 
 /// Files the page loads, by request path, with their content types.
-const FILES: [(&str, &str, &str); 15] = [
+const FILES: [(&str, &str, &str); 16] = [
     (
         "/app.css",
         "text/css; charset=utf-8",
@@ -53,6 +53,7 @@ const FILES: [(&str, &str, &str); 15] = [
     script!("format.mjs"),
     script!("home.mjs"),
     script!("markdown.mjs"),
+    script!("mention.mjs"),
     script!("noise.mjs"),
     script!("relay.mjs"),
     script!("session_list.mjs"),

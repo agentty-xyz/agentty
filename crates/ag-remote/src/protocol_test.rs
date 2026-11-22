@@ -1,13 +1,13 @@
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
     HostSessionMode, ReasoningLevel, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SessionDiffFile, SessionDiffFileStatus, SessionId, SessionListEntry, SessionListStats,
-    SessionStatus, SessionSummary,
+    SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionId, SessionListEntry,
+    SessionListStats, SessionStatus, SessionSummary,
 };
 use serde_json::json;
 
 use crate::protocol::{
-    ClientFrame, MAX_DIFF_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
+    ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
     RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
     RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
     RemoteSessionMode, RemoteSessionSummary, ServerFrame,
@@ -740,8 +740,8 @@ fn diff_frames_encode_the_file_list_and_one_patch() {
 fn large_patches_are_cut_at_a_line_boundary_within_the_encoded_budget() {
     // Arrange
     let line = format!("+{}\n", "\u{1}".repeat(99));
-    let patch = line.repeat(MAX_DIFF_RESPONSE_BYTES / 100);
-    let unbroken = "x".repeat(MAX_DIFF_RESPONSE_BYTES + 1);
+    let patch = line.repeat(MAX_FILE_RESPONSE_BYTES / 100);
+    let unbroken = "x".repeat(MAX_FILE_RESPONSE_BYTES + 1);
     let files = vec![
         diff_file("big.rs", SessionDiffFileStatus::Modified, &patch),
         diff_file("long.rs", SessionDiffFileStatus::Modified, &unbroken),
@@ -761,13 +761,13 @@ fn large_patches_are_cut_at_a_line_boundary_within_the_encoded_budget() {
         serde_json::to_string(&big_patch)
             .expect("patch should encode")
             .len()
-            <= MAX_DIFF_RESPONSE_BYTES + 2
+            <= MAX_FILE_RESPONSE_BYTES + 2
     );
     let (_, long_patch, long_truncated) = diff_parts(long);
     assert!(long_truncated);
     assert_eq!(
         long_patch.map(|long_patch| long_patch.len()),
-        Some(MAX_DIFF_RESPONSE_BYTES)
+        Some(MAX_FILE_RESPONSE_BYTES)
     );
 }
 
@@ -800,7 +800,7 @@ fn long_file_lists_stop_within_the_encoded_budget() {
     let (listed_files, _, truncated) = diff_parts(listed);
     assert!(truncated);
     assert!(!listed_files.is_empty() && listed_files.len() < files.len());
-    assert!(encoded.len() <= MAX_DIFF_RESPONSE_BYTES);
+    assert!(encoded.len() <= MAX_FILE_RESPONSE_BYTES);
 }
 
 #[test]
@@ -882,4 +882,63 @@ fn model_options_describe_the_model_and_its_fast_mode() {
     assert_eq!(option.supports_fast, selection.supports_fast_mode());
     assert_ne!(option.name, "");
     assert_ne!(option.description, "");
+}
+
+/// Returns one worktree entry at `path`.
+fn file_entry(is_dir: bool, path: &str) -> SessionFileEntry {
+    SessionFileEntry {
+        is_dir,
+        path: path.to_string(),
+    }
+}
+
+#[test]
+fn session_file_frames_encode_entries_in_host_order() {
+    // Arrange
+    let request = json!({"method": "list_session_files", "session_id": "s"});
+    let entries = vec![
+        file_entry(true, "src"),
+        file_entry(false, "README.md"),
+        file_entry(false, "src/lib.rs"),
+    ];
+
+    // Act
+    let request: RemoteRequest = serde_json::from_value(request).expect("request should parse");
+    let listed = RemoteResponse::from_session_files(&entries);
+
+    // Assert
+    assert_eq!(
+        request,
+        RemoteRequest::ListSessionFiles {
+            session_id: "s".to_string(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&listed).expect("list should encode"),
+        json!({"kind": "session_files", "files": [
+            {"is_dir": true, "path": "src"},
+            {"is_dir": false, "path": "README.md"},
+            {"is_dir": false, "path": "src/lib.rs"}
+        ]})
+    );
+}
+
+#[test]
+fn long_session_file_lists_stop_within_the_encoded_budget() {
+    // Arrange
+    let path = format!("dir/\"{}\"", "\\".repeat(1000));
+    let entries: Vec<SessionFileEntry> = (0..200).map(|_| file_entry(false, &path)).collect();
+
+    // Act
+    let listed = RemoteResponse::from_session_files(&entries);
+
+    // Assert
+    let encoded = serde_json::to_string(&listed).expect("list should encode");
+    let (files, truncated) = match listed {
+        RemoteResponse::SessionFiles { files, truncated } => (files, truncated),
+        _ => (Vec::new(), false),
+    };
+    assert!(truncated);
+    assert!(!files.is_empty() && files.len() < entries.len());
+    assert!(encoded.len() <= MAX_FILE_RESPONSE_BYTES);
 }

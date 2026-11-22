@@ -15,7 +15,7 @@ use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     ForgeKind, HostContext, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
     ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
-    SessionError, SessionId, SessionListEntry, SessionListStats, SessionMessage,
+    SessionError, SessionFileEntry, SessionId, SessionListEntry, SessionListStats, SessionMessage,
     SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
     SessionStatus, SessionSummary,
 };
@@ -461,6 +461,25 @@ impl SessionBackend for RecordingBackend {
             path: "a.rs".to_string(),
             status: SessionDiffFileStatus::Added,
         }]))
+    }
+
+    // Every worktree holds the directory `src` and the file `src/lib.rs`.
+    async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
+        self.record(format!("files:{session_id}"));
+
+        Ok(Some(vec![
+            SessionFileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            SessionFileEntry {
+                is_dir: false,
+                path: "src/lib.rs".to_string(),
+            },
+        ]))
     }
 
     /// Lists `session-2` with the figures of a running turn, and every

@@ -1423,6 +1423,93 @@ test("the slash menu closes on blur, offline, in a read-only session, and on a s
   assert.equal(isOpen(), false);
 });
 
+test("@ in the composer lists the session's files, and Enter inserts one instead of sending", async () => {
+  const storage = new MemoryStorage();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings", "files"],
+    respond: (body) =>
+      body.method === "list_session_files"
+        ? {
+            files: [
+              { is_dir: true, path: "src" },
+              { is_dir: false, path: "src/main.rs" },
+            ],
+            kind: "session_files",
+          }
+        : { kind: "accepted" },
+    sessionStorage: storage,
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const message = byId("message");
+
+  typeMessage(byId, "Fix @mai");
+  await settle();
+  assert.deepEqual(suggested(byId), ["src/main.rs"]);
+  assert.equal(pressKey(byId, "Enter").defaultPrevented, true);
+
+  assert.equal(message.value, "Fix @src/main.rs ");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "Fix @src/main.rs ");
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+  // With the list closed, Enter sends the message with the file in it.
+  pressKey(byId, "Enter");
+  await settle();
+  assert.deepEqual(requests, [
+    { method: "list_session_files", session_id: "s1" },
+    { method: "send_message", message: "Fix @src/main.rs ", session_id: "s1" },
+  ]);
+});
+
+test("slash commands take the composer first, and @ closes on blur and on a session switch", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings", "files"],
+    respond: (body) => {
+      if (body.method === "get_host") {
+        return HOST;
+      }
+
+      return { files: [{ is_dir: false, path: "a.rs" }], kind: "session_files" };
+    },
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const message = byId("message");
+  const isOpen = () => message.getAttribute("aria-expanded") === "true";
+
+  typeMessage(byId, "/");
+  await settle();
+  assert.deepEqual(suggested(byId), ["/model", "/reasoning", "/style", "/fast"]);
+  // Leaving the command for a file closes the commands and lists files.
+  typeMessage(byId, "/model @");
+  await settle();
+  assert.deepEqual(suggested(byId), ["a.rs"]);
+  assert.deepEqual(
+    requests.map((body) => body.method),
+    ["get_host", "list_session_files"],
+  );
+
+  message.dispatchEvent(new FakeEvent("blur", { bubbles: false }));
+  assert.equal(isOpen(), false);
+  message.focus();
+  assert.equal(isOpen(), true);
+  chat.render(session(SETTINGS_SESSION));
+  assert.equal(isOpen(), true);
+  // Going back from files to a command keeps the commands through a
+  // refresh.
+  typeMessage(byId, "/");
+  chat.render(session(SETTINGS_SESSION));
+  assert.deepEqual(suggested(byId), ["/model", "/reasoning", "/style", "/fast"]);
+  chat.open("s2");
+  assert.equal(isOpen(), false);
+});
+
+test("without the files capability, @ is plain text", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["host", "settings"] });
+  chat.render(session(SETTINGS_SESSION));
+  typeMessage(byId, "@src");
+
+  assert.equal(byId("message").getAttribute("aria-expanded"), "false");
+  assert.deepEqual(requests, []);
+});
+
 test("Cancel session asks first and shows the host's refusal under the header", async () => {
   const { byId, chat, requests } = mountChat({
     respond: () => {

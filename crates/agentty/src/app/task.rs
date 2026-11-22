@@ -300,15 +300,25 @@ impl TaskService {
         let handle = spawn::spawn_detached(async move {
             tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
 
-            let load_handle =
-                spawn::spawn_blocking_detached(move || file_index::list_files(&lookup_root));
-            let entries = Self::join_at_mention_entries(load_handle, &session_id).await;
+            let entries = Self::load_at_mention_entries(lookup_root, &session_id).await;
 
             Self::publish_at_mention_entries(&app_event_tx, entries, &session_id, "loaded");
             at_mention_task::finish_pending_load(&task_session_id, request_id);
         });
 
         at_mention_task::track_pending_load(tracked_session_id, request_id, handle);
+    }
+
+    /// Lists the files and directories under `lookup_root` on a blocking
+    /// worker, so the filesystem walk never blocks the async runtime.
+    pub(super) async fn load_at_mention_entries(
+        lookup_root: PathBuf,
+        session_id: &SessionId,
+    ) -> Vec<FileEntry> {
+        let load_handle =
+            spawn::spawn_blocking_detached(move || file_index::list_files(&lookup_root));
+
+        Self::join_at_mention_entries(load_handle, session_id).await
     }
 
     /// Resolves one blocking file-index task, falling back to an empty index

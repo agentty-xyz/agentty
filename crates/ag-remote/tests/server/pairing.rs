@@ -29,6 +29,7 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
                 "create_session",
                 "merge",
                 "diff",
+                "files",
                 "stop_turn",
                 "sync",
                 "settings",

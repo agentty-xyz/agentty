@@ -29,6 +29,9 @@ export const SLASH_COMMANDS = [
   { description: "Toggle between normal and fast responses for this session.", name: "/fast" },
 ];
 
+// Names the menu's lists in the popup it shares with the `@` file lookup.
+const OWNER = "slash";
+
 // What each command with a value list chooses, as `currentChoice` names
 // it, and the list's title.
 const VALUE_COMMANDS = {
@@ -129,7 +132,7 @@ export function createSlashCommands({ input, suggestions, request, context, setT
     if (state.stage !== null) {
       state.stage = null;
       state.text = null;
-      suggestions.close();
+      suggestions.close(OWNER);
     }
   }
 
@@ -165,7 +168,7 @@ export function createSlashCommands({ input, suggestions, request, context, setT
   function show(stage, session) {
     state.stage = stage;
     state.text = input.value;
-    const options = { onDismiss: dismiss, onPick: (item) => pick(stage, item.key) };
+    const options = { onDismiss: dismiss, onPick: (item) => pick(stage, item.key), owner: OWNER };
     if (stage === "commands") {
       const query = slashQuery(input.value) ?? "";
       const canFast = offersSpeed(state.models, currentChoice(session).model);
@@ -213,7 +216,7 @@ export function createSlashCommands({ input, suggestions, request, context, setT
       show("commands", session);
     }
 
-    return suggestions.isOpen();
+    return suggestions.isOpen(OWNER);
   }
 
   // Shows what is on screen again for a newer snapshot, or closes the menu

@@ -105,6 +105,10 @@ what you changed; during a running turn, the changes apply from the next turn. T
 when the model can run fast, `/fast`, as in the terminal: pick one with the arrow keys
 and `Enter`, or tap it, then pick a value; `/fast` toggles the speed at once.
 
+When this Agentty lets devices list a session's files, typing `@` at the start of a word
+lists the files and directories in the session's worktree, best match first, as in the
+terminal. Picking one puts `@path` in the message for the agent to read.
+
 When this Agentty lets devices read diffs, `Diff` in the header, or in the `⋯` sheet on
 a phone, shows the session's changed files in place of the chat, each with its status
 letter and changed lines. Open a file to read its patch; press `Diff` again to return to
@@ -190,6 +194,8 @@ device can:
   conflicts, and pull request state;
 - read a session's diff against its base branch, which shows the repository content the
   session changed;
+- list the names of the files and directories in a session's worktree, as `@` lookup in
+  the terminal does, without reading their contents;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions;

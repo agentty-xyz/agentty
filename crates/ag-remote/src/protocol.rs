@@ -12,8 +12,8 @@
 
 use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary,
-    Session, SessionDiffFile, SessionDiffFileStatus, SessionListEntry, SessionMessage,
-    SessionMessageKind, session_branch,
+    Session, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionListEntry,
+    SessionMessage, SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -97,6 +97,13 @@ pub enum RemoteRequest {
     /// Loads one session snapshot.
     GetSession {
         /// Session to load.
+        session_id: String,
+    },
+    /// Lists the names of the files and directories in a session's worktree,
+    /// directories first, without their contents. A session without a
+    /// worktree lists nothing. Offered through the `files` capability.
+    ListSessionFiles {
+        /// Session whose worktree to list.
         session_id: String,
     },
     /// Lists the host's loaded sessions.
@@ -372,6 +379,16 @@ pub enum RemoteResponse {
         /// Loaded session, boxed to keep other responses small.
         session: Option<Box<RemoteSession>>,
     },
+    /// The files and directories in a session's worktree, answering
+    /// `list_session_files`.
+    SessionFiles {
+        /// Worktree entries, directories first, then by path.
+        files: Vec<RemoteFileEntry>,
+        /// Whether the server left out the end of `files` to keep the
+        /// response small.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
+    },
     /// The review request a publish created or refreshed.
     ReviewRequest {
         /// Review request as the forge reported it.
@@ -390,11 +407,11 @@ impl RemoteResponse {
     /// `path` names no changed file.
     ///
     /// The file list and the patch each stay within
-    /// [`MAX_DIFF_RESPONSE_BYTES`] once encoded, so a response stays well
+    /// [`MAX_FILE_RESPONSE_BYTES`] once encoded, so a response stays well
     /// under the frame limit; whatever is left out sets `truncated`.
     pub(crate) fn from_diff(files: &[SessionDiffFile], path: Option<&str>) -> Option<Self> {
         let Some(path) = path else {
-            let mut remaining = MAX_DIFF_RESPONSE_BYTES;
+            let mut remaining = MAX_FILE_RESPONSE_BYTES;
             let mut listed = Vec::new();
             for file in files {
                 let size = DIFF_FILE_ENTRY_BYTES
@@ -426,15 +443,49 @@ impl RemoteResponse {
             truncated,
         })
     }
+
+    /// Builds the `session_files` response for a session's worktree
+    /// `entries`, in the host's order.
+    ///
+    /// The entries stay within [`MAX_FILE_RESPONSE_BYTES`] once encoded, so
+    /// a response stays well under the frame limit; leaving out the rest
+    /// sets `truncated`.
+    pub(crate) fn from_session_files(entries: &[SessionFileEntry]) -> Self {
+        let mut remaining = MAX_FILE_RESPONSE_BYTES;
+        let mut files = Vec::new();
+        for entry in entries {
+            let size = FILE_ENTRY_BYTES + encoded_len(&entry.path);
+            if size > remaining {
+                return Self::SessionFiles {
+                    files,
+                    truncated: true,
+                };
+            }
+            remaining -= size;
+            files.push(RemoteFileEntry {
+                is_dir: entry.is_dir,
+                path: entry.path.clone(),
+            });
+        }
+
+        Self::SessionFiles {
+            files,
+            truncated: false,
+        }
+    }
 }
 
-/// Most encoded bytes of file entries, or of patch text, that one `diff`
-/// response carries: a quarter of the 1 MiB frame limit.
-pub(crate) const MAX_DIFF_RESPONSE_BYTES: usize = 256 * 1024;
+/// Most encoded bytes of file entries, or of patch text, that one `diff` or
+/// `session_files` response carries: a quarter of the 1 MiB frame limit.
+pub(crate) const MAX_FILE_RESPONSE_BYTES: usize = 256 * 1024;
 
 /// Encoded bytes counted for one file entry besides its paths: field names,
 /// line counts, status, and punctuation.
 const DIFF_FILE_ENTRY_BYTES: usize = 128;
+
+/// Encoded bytes counted for one worktree entry besides its path: field
+/// names, the directory flag, and punctuation.
+const FILE_ENTRY_BYTES: usize = 32;
 
 /// Returns the length of `text` once escaped as a JSON string, without its
 /// quotes.
@@ -451,13 +502,13 @@ fn encoded_char_len(character: char) -> usize {
     }
 }
 
-/// Returns `patch` cut to [`MAX_DIFF_RESPONSE_BYTES`] encoded bytes at the
+/// Returns `patch` cut to [`MAX_FILE_RESPONSE_BYTES`] encoded bytes at the
 /// last whole line, and whether anything was cut.
 fn capped_patch(patch: &str) -> (&str, bool) {
     let mut size = 0;
     for (index, character) in patch.char_indices() {
         size += encoded_char_len(character);
-        if size > MAX_DIFF_RESPONSE_BYTES {
+        if size > MAX_FILE_RESPONSE_BYTES {
             let kept = &patch[..index];
             let kept = kept.rfind('\n').map_or(kept, |end| &kept[..=end]);
 
@@ -549,6 +600,15 @@ pub enum RemoteDiffFileStatus {
     Modified,
     /// The file moved, possibly with changes.
     Renamed,
+}
+
+/// One file or directory in a session's worktree.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteFileEntry {
+    /// Whether the entry is a directory.
+    pub is_dir: bool,
+    /// Path relative to the worktree root.
+    pub path: String,
 }
 
 /// Listing entry for one session.

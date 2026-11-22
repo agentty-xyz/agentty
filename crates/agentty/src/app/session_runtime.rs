@@ -15,8 +15,8 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    ReviewRequest, Session, SessionDiffFile, SessionError, SessionId, SessionListEntry,
-    SessionSummary,
+    ReviewRequest, Session, SessionDiffFile, SessionError, SessionFileEntry, SessionId,
+    SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -72,6 +72,10 @@ pub(crate) enum SessionRuntimeCommand {
     },
     List {
         response_tx: oneshot::Sender<Result<Vec<SessionListEntry>, SessionError>>,
+    },
+    ListFiles {
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionFileEntry>>, SessionError>>,
+        session_id: SessionId,
     },
     HostContext {
         response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
@@ -378,6 +382,21 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::GetDiff {
+            response_tx,
+            session_id,
+        })
+        .await
+    }
+
+    /// Lists the files and directories in one session's worktree through
+    /// the runtime actor, which walks the worktree off the foreground loop.
+    pub(crate) async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
+        let session_id = session_id.clone();
+
+        self.request(|response_tx| SessionRuntimeCommand::ListFiles {
             response_tx,
             session_id,
         })
