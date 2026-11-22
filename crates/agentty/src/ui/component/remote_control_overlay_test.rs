@@ -2,7 +2,7 @@
 
 use super::RemoteControlOverlay;
 use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView,
+    RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
 };
 use crate::ui::render::Component;
 use crate::ui::style;
@@ -53,6 +53,7 @@ fn running_listener_shows_address_code_devices_and_hints() {
             pairing_code: "ABCD-EFGH".to_string(),
             url: "http://127.0.0.1:4646/".to_string(),
         }),
+        pairing_requests: Vec::new(),
     };
     let overlay = RemoteControlOverlay::new(&view).selected_device_index(1);
 
@@ -67,6 +68,59 @@ fn running_listener_shows_address_code_devices_and_hints() {
     assert!(text.contains("Phone"));
     assert!(text.contains("connected"));
     assert!(text.contains("n: new code | s: stop | j/k: move | d: remove | Esc: close"));
+    assert!(!text.contains("Pairing request"));
+}
+
+#[test]
+fn pending_pairing_shows_device_confirmation_and_approval_hints() {
+    // Arrange
+    let request = |id: u64| RemotePairingRequestView {
+        confirmation: format!("K7Q{id}"),
+        device_name: format!("Laptop {id}"),
+        id,
+    };
+    let view = RemoteControlView {
+        devices: Vec::new(),
+        error: None,
+        listener: Some(RemoteListenerView {
+            pairing_code: "ABCD-EFGH".to_string(),
+            url: "http://127.0.0.1:4646/".to_string(),
+        }),
+        pairing_requests: vec![request(1), request(2)],
+    };
+    let overlay = RemoteControlOverlay::new(&view);
+
+    // Act
+    let text = rendered_text(&overlay);
+
+    // Assert
+    assert!(text.contains("Pairing request"));
+    assert!(text.contains("Laptop 1"));
+    assert!(text.contains("K7Q1"));
+    assert!(!text.contains("Laptop 2"));
+    assert!(text.contains("1 more waiting"));
+    assert!(text.contains("y: approve | x: deny | n: new code | s: stop | Esc: close"));
+}
+
+#[test]
+fn single_pending_pairing_omits_the_waiting_count() {
+    // Arrange
+    let view = RemoteControlView {
+        pairing_requests: vec![RemotePairingRequestView {
+            confirmation: "K7QX".to_string(),
+            device_name: "Laptop".to_string(),
+            id: 1,
+        }],
+        ..RemoteControlView::default()
+    };
+    let overlay = RemoteControlOverlay::new(&view);
+
+    // Act
+    let text = rendered_text(&overlay);
+
+    // Assert
+    assert!(text.contains("K7QX"));
+    assert!(!text.contains("more waiting"));
 }
 
 #[test]
@@ -102,6 +156,7 @@ fn stopped_listener_shows_error_empty_devices_and_start_hint() {
         devices: Vec::new(),
         error: Some("Port 4646 is in use".to_string()),
         listener: None,
+        pairing_requests: Vec::new(),
     };
     let overlay = RemoteControlOverlay::new(&view);
 

@@ -179,7 +179,7 @@ pub fn render(frame: &mut Frame, context: RenderContext<'_>) {
             context.projects,
         ))
         .project_sync_status(context.project_sync_status.cloned())
-        .remote_control_connections(context.remote_control.status_bar_connections())
+        .remote_control(context.remote_control.status_bar_notice())
         .update_status(context.update_status.cloned())
         .render(frame, status_bar_area);
     render_footer_bar(

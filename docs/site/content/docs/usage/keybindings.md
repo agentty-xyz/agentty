@@ -271,6 +271,8 @@ Opens from `/remote-control`. See [Remote Control](@/docs/usage/remote-control.m
 
 | Key         | Action                                          |
 | ----------- | ----------------------------------------------- |
+| `y`         | Approve the oldest pairing request              |
+| `x`         | Deny the oldest pairing request                 |
 | `n`         | Replace the pairing code                        |
 | `s`         | Stop remote control, or start it when it is off |
 | `j` / `k`   | Move between paired devices                     |

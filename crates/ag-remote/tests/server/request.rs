@@ -51,11 +51,11 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         },
     )
     .await?;
-    let missing = call(
+    let unlisted = call(
         &mut client,
         3,
         RemoteRequest::GetSession {
-            session_id: "missing".to_string(),
+            session_id: "other-project-session".to_string(),
         },
     )
     .await?;
@@ -120,7 +120,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         })
     );
     assert_eq!(
-        missing,
+        unlisted,
         RemoteResult::Ok(RemoteResponse::Session { session: None })
     );
     assert_eq!(sent, RemoteResult::Ok(RemoteResponse::Accepted));
@@ -129,8 +129,9 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         server.backend.calls(),
         [
             "list",
+            "list",
             "get:session-1",
-            "get:missing",
+            "list",
             "send:session-1:continue",
             "answer:session-1:Which branch?=main"
         ]
@@ -212,11 +213,14 @@ async fn protocol_violations_after_authentication_close_the_connection() -> Test
     assert_rejected(&mut binary, "Binary frames are not supported").await
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn bursts_of_host_changes_push_one_changed_frame() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    // Pausing only after pairing keeps the clock from skipping past the
+    // pairing round trips while loopback I/O is in flight.
+    tokio::time::pause();
     let started = tokio::time::Instant::now();
 
     // Act

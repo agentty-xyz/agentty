@@ -4,8 +4,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use ag_remote::{
-    DeviceStore, DeviceStoreError, NewRemoteDevice, RemoteConnection, RemoteDevice, RemoteError,
-    RemoteHost, RemoteServerStatus,
+    DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, RemoteConnection, RemoteDevice,
+    RemoteError, RemoteHost, RemoteServerStatus,
 };
 use async_trait::async_trait;
 use mockall::predicate::eq;
@@ -14,11 +14,16 @@ use tokio::sync::watch;
 use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
 use crate::app::{App, AppRuntimeEvent};
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
-use crate::presentation::remote_control::{RemoteDeviceView, RemoteListenerView};
+use crate::presentation::remote_control::{
+    RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
+};
 use crate::test_support;
 
 /// Calls the fake listener received, in order.
 type CallLog = Arc<Mutex<Vec<String>>>;
+
+/// Pairing request the fake listener reports as already settled.
+const GONE_REQUEST_ID: u64 = 99;
 
 /// Scripted listener that records calls and publishes test-driven status.
 struct FakeServer {
@@ -45,6 +50,24 @@ impl RemoteControlServer for FakeServer {
 
     fn status(&self) -> watch::Receiver<RemoteServerStatus> {
         self.status_tx.subscribe()
+    }
+
+    fn approve_pairing(&self, request_id: u64) -> bool {
+        self.calls
+            .lock()
+            .expect("calls lock")
+            .push(format!("approve:{request_id}"));
+
+        request_id != GONE_REQUEST_ID
+    }
+
+    fn deny_pairing(&self, request_id: u64) -> bool {
+        self.calls
+            .lock()
+            .expect("calls lock")
+            .push(format!("deny:{request_id}"));
+
+        request_id != GONE_REQUEST_ID
     }
 
     async fn revoke_device(&self, device_id: &str) -> Result<(), String> {
@@ -91,9 +114,13 @@ fn fake_launcher(
     let mut launcher = MockRemoteControlLauncher::new();
     launcher
         .expect_start()
-        .with(eq(port), mockall::predicate::always())
+        .with(
+            eq(port),
+            mockall::predicate::always(),
+            mockall::predicate::always(),
+        )
         .times(1)
-        .return_once(move |_, host| {
+        .return_once(move |_, _, host| {
             *captured_host.lock().expect("host lock") = Some(host);
 
             Ok(Box::new(server) as Box<dyn RemoteControlServer>)
@@ -112,7 +139,7 @@ fn fake_launcher(
 /// Replaces the app's remote control with `launcher` over the app database.
 fn install_launcher(app: &mut App, launcher: MockRemoteControlLauncher) {
     app.remote_control = RemoteControl::new(Arc::new(launcher), app.services.db());
-    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT);
+    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new());
 }
 
 /// Stores one paired device directly in the app database.
@@ -152,6 +179,22 @@ fn connected(device_id: &str) -> RemoteServerStatus {
             device_id: device_id.to_string(),
             device_name: device_id.to_string(),
         }],
+        pairing_requests: Vec::new(),
+    }
+}
+
+/// Builds the status a listener reports while devices wait to pair.
+fn pairing(request_ids: &[u64]) -> RemoteServerStatus {
+    RemoteServerStatus {
+        connections: Vec::new(),
+        pairing_requests: request_ids
+            .iter()
+            .map(|id| PairingRequest {
+                confirmation: format!("C{id}"),
+                device_name: format!("Device {id}"),
+                id: *id,
+            })
+            .collect(),
     }
 }
 
@@ -215,7 +258,7 @@ async fn open_remote_control_reports_start_failure() {
     launcher
         .expect_start()
         .times(1)
-        .return_once(|_, _| Err("Port 4646 is in use".to_string()));
+        .return_once(|_, _, _| Err("Port 4646 is in use".to_string()));
     install_launcher(&mut app, launcher);
 
     // Act
@@ -233,13 +276,125 @@ async fn enable_remote_control_selects_the_listener_port() {
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let (launcher, _probe) = fake_launcher(0, Vec::new(), Ok(()));
     install_launcher(&mut app, launcher);
-    app.enable_remote_control(0);
+    app.enable_remote_control(0, Vec::new());
 
     // Act
     app.open_remote_control().await;
 
     // Assert
     assert!(app.remote_control.view().listener.is_some());
+}
+
+#[tokio::test]
+async fn enable_remote_control_passes_allowed_hosts_to_the_listener() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let mut launcher = MockRemoteControlLauncher::new();
+    launcher
+        .expect_start()
+        .with(
+            eq(DEFAULT_REMOTE_CONTROL_PORT),
+            eq(vec!["box.tailnet.ts.net".to_string()]),
+            mockall::predicate::always(),
+        )
+        .times(1)
+        .return_once(|_, _, _| Err("stop here".to_string()));
+    install_launcher(&mut app, launcher);
+    app.enable_remote_control(
+        DEFAULT_REMOTE_CONTROL_PORT,
+        vec!["box.tailnet.ts.net".to_string()],
+    );
+
+    // Act
+    app.open_remote_control().await;
+
+    // Assert
+    assert_eq!(
+        app.remote_control.view().error.as_deref(),
+        Some("stop here")
+    );
+}
+
+#[tokio::test]
+async fn pending_pairings_are_shown_then_approved_or_denied_oldest_first() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
+    app.open_remote_control().await;
+    let generation = app.remote_control.generation;
+    app.apply_remote_control_status(generation, pairing(&[1, 2]))
+        .await;
+    let shown = app.remote_control.view().pairing_requests.clone();
+
+    // Act
+    app.settle_remote_pairing(true);
+    app.settle_remote_pairing(false);
+    app.settle_remote_pairing(true);
+
+    // Assert
+    assert_eq!(
+        shown,
+        vec![
+            RemotePairingRequestView {
+                confirmation: "C1".to_string(),
+                device_name: "Device 1".to_string(),
+                id: 1,
+            },
+            RemotePairingRequestView {
+                confirmation: "C2".to_string(),
+                device_name: "Device 2".to_string(),
+                id: 2,
+            },
+        ]
+    );
+    assert_eq!(app.remote_control.view().pairing_requests, []);
+    assert_eq!(app.remote_control.view().error, None);
+    assert_eq!(
+        *probe.calls.lock().expect("calls lock"),
+        ["approve:1", "deny:2"]
+    );
+}
+
+#[tokio::test]
+async fn settling_a_pairing_that_already_ended_reports_it() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.settle_remote_pairing(true);
+    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
+    app.open_remote_control().await;
+    let generation = app.remote_control.generation;
+    app.apply_remote_control_status(generation, pairing(&[GONE_REQUEST_ID]))
+        .await;
+
+    // Act
+    app.settle_remote_pairing(true);
+
+    // Assert
+    assert_eq!(
+        app.remote_control.view().error.as_deref(),
+        Some("That pairing request is no longer pending.")
+    );
+    assert_eq!(app.remote_control.view().pairing_requests, []);
+}
+
+#[tokio::test]
+async fn stopping_clears_pending_pairings() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
+    app.open_remote_control().await;
+    let generation = app.remote_control.generation;
+    app.apply_remote_control_status(generation, pairing(&[1]))
+        .await;
+
+    // Act
+    app.stop_remote_control().await;
+
+    // Assert
+    assert_eq!(app.remote_control.view().pairing_requests, []);
 }
 
 #[tokio::test]

@@ -37,7 +37,7 @@ impl PairingState {
     /// Replaces any active code with a fresh one, or returns `None` when the
     /// entropy source fails.
     pub(crate) fn issue(&mut self, entropy: &dyn Entropy) -> Option<PairingCode> {
-        let code = random_code(entropy)?;
+        let code = random_code(entropy, PAIRING_CODE_LENGTH)?;
         let display_code = format!(
             "{}-{}",
             &code[..PAIRING_CODE_LENGTH / 2],
@@ -90,17 +90,18 @@ struct ActivePairingCode {
     failures: u32,
 }
 
-/// Draws an unbiased code from the alphabet.
-fn random_code(entropy: &dyn Entropy) -> Option<String> {
-    let mut code = String::with_capacity(PAIRING_CODE_LENGTH);
-    let mut bytes = [0; PAIRING_CODE_LENGTH * 2];
+/// Draws an unbiased code of `length` characters from the alphabet, or
+/// returns `None` when the entropy source fails.
+pub(crate) fn random_code(entropy: &dyn Entropy, length: usize) -> Option<String> {
+    let mut code = String::with_capacity(length);
+    let mut bytes = vec![0; length * 2];
 
-    while code.len() < PAIRING_CODE_LENGTH {
+    while code.len() < length {
         if !entropy.fill(&mut bytes) {
             return None;
         }
-        for byte in bytes {
-            if usize::from(byte) < UNBIASED_BYTE_LIMIT && code.len() < PAIRING_CODE_LENGTH {
+        for &byte in &bytes {
+            if usize::from(byte) < UNBIASED_BYTE_LIMIT && code.len() < length {
                 let index = usize::from(byte) % PAIRING_CODE_ALPHABET.len();
                 code.push(char::from(PAIRING_CODE_ALPHABET[index]));
             }

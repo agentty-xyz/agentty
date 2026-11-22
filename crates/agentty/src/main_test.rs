@@ -92,6 +92,18 @@ fn cli_gates_remote_control_behind_experimental_remote() {
     .expect("--experimental-remote with a port should parse");
     let port_without_flag = Cli::try_parse_from(["agentty", "--remote-control-port", "0"])
         .expect_err("a port needs --experimental-remote");
+    let host_without_flag =
+        Cli::try_parse_from(["agentty", "--remote-control-host", "box.tailnet.ts.net"])
+            .expect_err("a host needs --experimental-remote");
+    let with_hosts = Cli::try_parse_from([
+        "agentty",
+        "--experimental-remote",
+        "--remote-control-host",
+        "box.tailnet.ts.net",
+        "--remote-control-host",
+        "localhost.example",
+    ])
+    .expect("repeated hosts should parse");
 
     // Assert
     assert!(!disabled.experimental.remote);
@@ -99,6 +111,11 @@ fn cli_gates_remote_control_behind_experimental_remote() {
     assert!(enabled.experimental.remote);
     assert_eq!(enabled.remote_control_port, 0);
     assert_eq!(port_without_flag.kind(), ErrorKind::MissingRequiredArgument);
+    assert_eq!(host_without_flag.kind(), ErrorKind::MissingRequiredArgument);
+    assert_eq!(
+        with_hosts.remote_control_host,
+        ["box.tailnet.ts.net", "localhost.example"]
+    );
 }
 
 #[test]
@@ -241,6 +258,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
             otlp_capture_content: false,
             otlp_endpoint: None,
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+            remote_control_host: Vec::new(),
         };
 
         // Act
@@ -291,6 +309,7 @@ async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
         otlp_capture_content: false,
         otlp_endpoint: Some("http://localhost:4318".to_string()),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+        remote_control_host: Vec::new(),
     };
 
     // Act
@@ -314,6 +333,7 @@ async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
             otlp_capture_content: false,
             otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+            remote_control_host: Vec::new(),
         };
 
         // Act
@@ -377,6 +397,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
                 otlp_capture_content: false,
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+                remote_control_host: Vec::new(),
             },
             closed_runtime,
         )
@@ -431,6 +452,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
                 otlp_capture_content: false,
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+                remote_control_host: Vec::new(),
             },
             closed_runtime,
         )
@@ -483,6 +505,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
                 otlp_capture_content: false,
                 otlp_endpoint: None,
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+                remote_control_host: Vec::new(),
             },
             root_working_dir_runtime,
         )
@@ -538,6 +561,7 @@ fn telemetry_child_cli() -> Cli {
         otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+        remote_control_host: Vec::new(),
     }
 }
 

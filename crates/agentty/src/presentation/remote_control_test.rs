@@ -1,10 +1,12 @@
 //! Tests for the remote-control frame projection.
 
 use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView,
+    RemoteControlNotice, RemoteControlView, RemoteDeviceView, RemoteListenerView,
+    RemotePairingRequestView,
 };
 
-/// Builds a view with one connected and one idle device.
+/// Builds a view with one connected device, one idle device, and one
+/// pending pairing.
 fn view_with_devices(listener: Option<RemoteListenerView>) -> RemoteControlView {
     RemoteControlView {
         devices: vec![
@@ -21,6 +23,11 @@ fn view_with_devices(listener: Option<RemoteListenerView>) -> RemoteControlView 
         ],
         error: None,
         listener,
+        pairing_requests: vec![RemotePairingRequestView {
+            confirmation: "K7QX".to_string(),
+            device_name: "Laptop".to_string(),
+            id: 1,
+        }],
     }
 }
 
@@ -37,7 +44,7 @@ fn connected_device_count_counts_only_connected_devices() {
 }
 
 #[test]
-fn status_bar_connections_appear_only_while_listening() {
+fn status_bar_notice_appears_only_while_listening() {
     // Arrange
     let stopped = view_with_devices(None);
     let listening = view_with_devices(Some(RemoteListenerView {
@@ -46,10 +53,16 @@ fn status_bar_connections_appear_only_while_listening() {
     }));
 
     // Act
-    let stopped_connections = stopped.status_bar_connections();
-    let listening_connections = listening.status_bar_connections();
+    let stopped_notice = stopped.status_bar_notice();
+    let listening_notice = listening.status_bar_notice();
 
     // Assert
-    assert_eq!(stopped_connections, None);
-    assert_eq!(listening_connections, Some(1));
+    assert_eq!(stopped_notice, None);
+    assert_eq!(
+        listening_notice,
+        Some(RemoteControlNotice {
+            connected_devices: 1,
+            pairing_requests: 1,
+        })
+    );
 }

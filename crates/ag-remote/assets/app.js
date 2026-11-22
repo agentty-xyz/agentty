@@ -13,7 +13,7 @@
   const elements = {};
   for (const id of [
     "back", "heading", "connection", "pair-view", "pair-form", "pair-code",
-    "pair-name", "pair-error", "list-view", "sessions", "sessions-empty",
+    "pair-name", "pair-status", "pair-error", "list-view", "sessions", "sessions-empty",
     "forget", "session-view", "session-status", "cancel", "transcript",
     "queued", "questions", "composer", "message", "session-error",
   ]) {
@@ -163,9 +163,15 @@
     }
 
     switch (frame.type) {
+      case "awaiting_approval":
+        elements["pair-status"].textContent =
+          "Waiting for approval in Agentty. Confirm the code matches: " + frame.confirmation;
+        setConnection("Waiting for approval", false);
+        break;
       case "paired":
         setToken(frame.token);
         state.pendingPairing = null;
+        elements["pair-status"].textContent = "";
         onAuthenticated();
         break;
       case "welcome":
@@ -206,12 +212,16 @@
     refresh();
   }
 
+  // Pairing failures, including a denial or a missed approval in the
+  // terminal, return to the pair form with the reason.
   function onRejected(reason) {
     state.stopReconnecting = true;
+    elements["pair-status"].textContent = "";
     if (state.pendingPairing || TOKEN_REJECTIONS.has(reason)) {
       if (TOKEN_REJECTIONS.has(reason)) {
         setToken(null);
       }
+      state.pendingPairing = null;
       state.currentSessionId = null;
       elements["pair-error"].textContent = reason;
       show("pair");
@@ -229,6 +239,7 @@
     }
     state.isAuthenticated = false;
     state.socket = null;
+    elements["pair-status"].textContent = "";
     failPending("Disconnected");
     setConnection("Offline", false);
     if (state.stopReconnecting || !token()) {
@@ -427,6 +438,7 @@
       return;
     }
     elements["pair-error"].textContent = "";
+    elements["pair-status"].textContent = "";
     state.pendingPairing = code;
     connect({
       type: "pair",

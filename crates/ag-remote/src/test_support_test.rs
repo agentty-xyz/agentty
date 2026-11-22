@@ -356,6 +356,7 @@ impl StateFixture {
             },
             entropy,
             shutdown_rx,
+            Vec::new(),
         ));
 
         Self {

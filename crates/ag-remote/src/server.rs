@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_session::SessionService;
 use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tokio::net::TcpListener;
@@ -22,6 +23,12 @@ use crate::pairing::{PairingCode, PairingState};
 
 /// Largest accepted WebSocket message or frame, in bytes.
 const MAX_MESSAGE_SIZE: usize = 1 << 20;
+/// Sockets that may be open without an authenticated device, including
+/// pairing requests that wait for approval.
+pub(crate) const MAX_UNAUTHENTICATED_SOCKETS: usize = 8;
+/// Host names every listener answers, regardless of the configured
+/// allowlist.
+const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 /// Content security policy for every embedded asset.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
                                        connect-src 'self'; img-src 'self'; base-uri 'none'; \
@@ -38,8 +45,13 @@ pub struct RemoteHost {
 }
 
 /// Listener settings.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteServerConfig {
+    /// Host names, without ports, that requests may name in `Host` besides
+    /// `localhost`, `127.0.0.1`, and `::1`, such as a tunnel's host name.
+    /// Matching ignores ASCII case. Any other `Host` is refused, which keeps
+    /// DNS-rebinding pages away from the listener.
+    pub allowed_hosts: Vec<String>,
     /// Address to bind; port `0` selects a free port.
     pub bind_addr: SocketAddr,
 }
@@ -58,11 +70,26 @@ pub enum RemoteError {
     Entropy,
 }
 
-/// Authenticated connections currently open.
+/// Authenticated connections and pairing requests currently open.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoteServerStatus {
     /// Open authenticated connections in connection order.
     pub connections: Vec<RemoteConnection>,
+    /// Devices that redeemed a pairing code and wait for approval, in
+    /// arrival order.
+    pub pairing_requests: Vec<PairingRequest>,
+}
+
+/// One device waiting for the host to approve its pairing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PairingRequest {
+    /// Short code the device also shows, so the user can match them.
+    pub confirmation: String,
+    /// Name the device chose while pairing.
+    pub device_name: String,
+    /// Identifier passed to [`RemoteServerHandle::approve_pairing`] or
+    /// [`RemoteServerHandle::deny_pairing`].
+    pub id: u64,
 }
 
 /// One open authenticated connection.
@@ -96,12 +123,21 @@ pub(crate) async fn start_with_entropy(
         .map_err(RemoteError::Bind)?;
     let local_addr = listener.local_addr().map_err(RemoteError::Bind)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let state = Arc::new(ServerState::new(host, entropy, shutdown_rx.clone()));
+    let state = Arc::new(ServerState::new(
+        host,
+        entropy,
+        shutdown_rx.clone(),
+        config.allowed_hosts,
+    ));
     let router = Router::new()
         .route("/", get(index))
         .route("/app.css", get(stylesheet))
         .route("/app.js", get(script))
         .route("/ws", get(upgrade))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_allowed_host,
+        ))
         .with_state(Arc::clone(&state));
     let server = tokio::spawn(async move {
         let mut shutdown_rx = shutdown_rx;
@@ -147,9 +183,21 @@ impl RemoteServerHandle {
             .ok_or(RemoteError::Entropy)
     }
 
-    /// Subscribes to the set of open authenticated connections.
+    /// Subscribes to open authenticated connections and pairing requests.
     pub fn status(&self) -> watch::Receiver<RemoteServerStatus> {
         self.state.status_tx.subscribe()
+    }
+
+    /// Issues the device token for a pending request; false when it is
+    /// unknown or already settled.
+    pub fn approve_pairing(&self, request_id: u64) -> bool {
+        self.state.settle_pairing(request_id, true)
+    }
+
+    /// Rejects a pending request; false when it is unknown or already
+    /// settled.
+    pub fn deny_pairing(&self, request_id: u64) -> bool {
+        self.state.settle_pairing(request_id, false)
     }
 
     /// Deletes one paired device and closes its open connections.
@@ -198,28 +246,38 @@ impl Drop for StopSignal {
 pub(crate) struct ServerState {
     pub(crate) entropy: Arc<dyn Entropy>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
+    /// Host names answered besides the loopback names.
+    allowed_hosts: Vec<String>,
     connections: Mutex<ConnectionRegistry>,
     host: RemoteHost,
     open_sockets_tx: watch::Sender<usize>,
     pairing: Mutex<PairingState>,
+    pairing_requests: Mutex<PairingRequestRegistry>,
     status_tx: watch::Sender<RemoteServerStatus>,
+    /// Sockets holding a [`HandshakeSlot`].
+    unauthenticated_sockets: Mutex<usize>,
 }
 
 impl ServerState {
-    /// Creates idle state for `host`.
+    /// Creates idle state for `host` that answers `allowed_hosts` besides
+    /// the loopback names.
     pub(crate) fn new(
         host: RemoteHost,
         entropy: Arc<dyn Entropy>,
         shutdown_rx: watch::Receiver<bool>,
+        allowed_hosts: Vec<String>,
     ) -> Self {
         Self {
+            allowed_hosts,
             connections: Mutex::new(ConnectionRegistry::default()),
             entropy,
             host,
             open_sockets_tx: watch::Sender::new(0),
             pairing: Mutex::new(PairingState::default()),
+            pairing_requests: Mutex::new(PairingRequestRegistry::default()),
             shutdown_rx,
             status_tx: watch::Sender::new(RemoteServerStatus::default()),
+            unauthenticated_sockets: Mutex::new(0),
         }
     }
 
@@ -241,6 +299,84 @@ impl ServerState {
     /// Locks the pairing state, recovering it after a panic elsewhere.
     pub(crate) fn pairing(&self) -> MutexGuard<'_, PairingState> {
         self.pairing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots for a
+    /// socket that has not authenticated, or returns `None` when all are
+    /// taken.
+    pub(crate) fn reserve_handshake(self: &Arc<Self>) -> Option<HandshakeSlot> {
+        let mut unauthenticated = self
+            .unauthenticated_sockets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *unauthenticated >= MAX_UNAUTHENTICATED_SOCKETS {
+            return None;
+        }
+        *unauthenticated += 1;
+
+        Some(HandshakeSlot {
+            state: Arc::clone(self),
+        })
+    }
+
+    /// Lists a pairing request until the host settles it or the returned
+    /// guard drops, and returns the receiver of the host's decision.
+    pub(crate) fn request_pairing(
+        self: &Arc<Self>,
+        device_name: String,
+        confirmation: String,
+    ) -> (oneshot::Receiver<bool>, PairingRequestGuard) {
+        let (decision_tx, decision_rx) = oneshot::channel();
+        let id = {
+            let mut registry = self.pairing_registry();
+            let id = registry.next_id;
+            registry.next_id += 1;
+            registry.entries.insert(
+                id,
+                PendingPairing {
+                    decision_tx,
+                    request: PairingRequest {
+                        confirmation,
+                        device_name,
+                        id,
+                    },
+                },
+            );
+
+            id
+        };
+        self.publish_status();
+
+        (
+            decision_rx,
+            PairingRequestGuard {
+                id,
+                state: Arc::clone(self),
+            },
+        )
+    }
+
+    /// Delivers the host's decision on one pairing request and reports
+    /// whether a waiting device received it.
+    fn settle_pairing(&self, request_id: u64, is_approved: bool) -> bool {
+        let pending = self.pairing_registry().entries.remove(&request_id);
+        self.publish_status();
+
+        pending.is_some_and(|pending| pending.decision_tx.send(is_approved).is_ok())
+    }
+
+    /// Removes one pairing request after its socket stops waiting.
+    fn withdraw_pairing(&self, request_id: u64) {
+        self.pairing_registry().entries.remove(&request_id);
+        self.publish_status();
+    }
+
+    /// Locks the pairing request registry, recovering it after a panic
+    /// elsewhere.
+    fn pairing_registry(&self) -> MutexGuard<'_, PairingRequestRegistry> {
+        self.pairing_requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Counts one socket task until the returned guard drops.
@@ -311,7 +447,8 @@ impl ServerState {
         self.publish_status();
     }
 
-    /// Publishes the registered connections in connection order.
+    /// Publishes the registered connections and pairing requests in arrival
+    /// order.
     fn publish_status(&self) {
         let connections = self
             .registry()
@@ -319,8 +456,18 @@ impl ServerState {
             .values()
             .map(|entry| entry.connection.clone())
             .collect();
+        let pairing_requests = self
+            .pairing_registry()
+            .entries
+            .values()
+            .map(|pending| pending.request.clone())
+            .collect();
+        let next = RemoteServerStatus {
+            connections,
+            pairing_requests,
+        };
         self.status_tx
-            .send_if_modified(|status| replace_connections(status, connections));
+            .send_if_modified(|status| replace_status(status, next));
     }
 
     /// Locks the connection registry, recovering it after a panic elsewhere.
@@ -369,15 +516,54 @@ struct RegisteredConnection {
     connection: RemoteConnection,
 }
 
-/// Replaces `status` connections and reports whether they changed.
-fn replace_connections(
-    status: &mut RemoteServerStatus,
-    connections: Vec<RemoteConnection>,
-) -> bool {
-    if status.connections == connections {
+/// Keeps one unauthenticated socket counted until it authenticates or ends.
+pub(crate) struct HandshakeSlot {
+    state: Arc<ServerState>,
+}
+
+impl Drop for HandshakeSlot {
+    fn drop(&mut self) {
+        let mut unauthenticated = self
+            .state
+            .unauthenticated_sockets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *unauthenticated = unauthenticated.saturating_sub(1);
+    }
+}
+
+/// Keeps one pairing request listed until it is settled or its socket
+/// stops waiting.
+pub(crate) struct PairingRequestGuard {
+    id: u64,
+    state: Arc<ServerState>,
+}
+
+impl Drop for PairingRequestGuard {
+    fn drop(&mut self) {
+        self.state.withdraw_pairing(self.id);
+    }
+}
+
+/// Pairing requests waiting for the host, keyed by arrival order.
+#[derive(Default)]
+struct PairingRequestRegistry {
+    entries: BTreeMap<u64, PendingPairing>,
+    next_id: u64,
+}
+
+/// One pairing request with the channel that delivers the host's decision.
+struct PendingPairing {
+    decision_tx: oneshot::Sender<bool>,
+    request: PairingRequest,
+}
+
+/// Replaces `status` and reports whether it changed.
+fn replace_status(status: &mut RemoteServerStatus, next: RemoteServerStatus) -> bool {
+    if *status == next {
         return false;
     }
-    status.connections = connections;
+    *status = next;
 
     true
 }
@@ -419,7 +605,7 @@ fn asset(content_type: &'static str, body: &'static str) -> Response {
 }
 
 /// Accepts a WebSocket upgrade from a same-origin page or a non-browser
-/// client.
+/// client while an unauthenticated slot is free.
 async fn upgrade(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -428,11 +614,56 @@ async fn upgrade(
     if !origin_matches_host(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let Some(handshake) = state.reserve_handshake() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
 
     upgrade
         .max_message_size(MAX_MESSAGE_SIZE)
         .max_frame_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| connection::serve(socket, state))
+        .on_upgrade(move |socket| connection::serve(socket, state, handshake))
+}
+
+/// Refuses every request whose `Host` is neither loopback nor allowed.
+async fn require_allowed_host(
+    State(state): State<Arc<ServerState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !host_is_allowed(request.headers(), &state.allowed_hosts) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    next.run(request).await
+}
+
+/// Returns whether the `Host` header names a loopback host or one of
+/// `allowed_hosts`, ignoring its port and ASCII case.
+pub(crate) fn host_is_allowed(headers: &HeaderMap, allowed_hosts: &[String]) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+    else {
+        return false;
+    };
+    let name = host_name(host);
+
+    LOOPBACK_HOSTS
+        .into_iter()
+        .chain(allowed_hosts.iter().map(String::as_str))
+        .any(|allowed| allowed.eq_ignore_ascii_case(name))
+}
+
+/// Strips the port from a `Host` value, unwrapping bracketed IPv6
+/// addresses such as `[::1]:4646`.
+fn host_name(host: &str) -> &str {
+    if let Some(bracketed) = host.strip_prefix('[') {
+        return bracketed
+            .split_once(']')
+            .map_or(bracketed, |(name, _)| name);
+    }
+
+    host.split_once(':').map_or(host, |(name, _)| name)
 }
 
 /// Returns whether the request has no `Origin` or one naming the `Host`.

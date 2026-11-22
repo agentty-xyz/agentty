@@ -3,8 +3,9 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 
 use super::{
-    DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, MAX_DEVICE_NAME_CHARS, MessageOutcome,
-    authenticate, device_display_name, handle_message,
+    Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, MAX_DEVICE_NAME_CHARS,
+    MessageOutcome, PairingDevice, authenticate, complete_pairing, device_display_name,
+    handle_message,
 };
 use crate::PROTOCOL_VERSION;
 use crate::device::token_hash;
@@ -83,21 +84,19 @@ async fn hello_with_known_token_welcomes_and_touches_device() {
     let authenticated = authenticate(&fixture.state, hello("t"), &mut revisions).await;
 
     // Assert
-    let (connection, reply) = authenticated.expect("known token should authenticate");
     assert_eq!(
-        connection,
-        RemoteConnection {
-            device_id: "phone".to_string(),
-            device_name: "phone name".to_string(),
-        }
-    );
-    assert_eq!(
-        reply,
-        ServerFrame::Welcome {
-            device_id: "phone".to_string(),
-            protocol_version: PROTOCOL_VERSION,
-            revision: 8,
-        }
+        authenticated,
+        Ok(Authentication::Authenticated {
+            connection: RemoteConnection {
+                device_id: "phone".to_string(),
+                device_name: "phone name".to_string(),
+            },
+            reply: ServerFrame::Welcome {
+                device_id: "phone".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                revision: 8,
+            },
+        })
     );
     assert_eq!(fixture.devices.touched(), ["phone"]);
     assert!(!revisions.has_changed().expect("sender should be alive"));
@@ -159,8 +158,18 @@ async fn first_frames_reject_other_protocol_versions() {
     assert!(fixture.state.pairing().redeem(&code));
 }
 
+/// Builds the credentials [`fixture`] entropy prepares for `device_name`.
+fn pairing_device(device_name: &str) -> PairingDevice {
+    PairingDevice {
+        confirmation: "AAAA".to_string(),
+        device_id: "00".repeat(16),
+        device_name: device_name.to_string(),
+        token: "00".repeat(32),
+    }
+}
+
 #[tokio::test]
-async fn pair_with_valid_code_stores_only_the_token_hash() {
+async fn pair_with_valid_code_requests_approval_without_storing_a_device() {
     // Arrange
     let fixture = fixture(MemoryDeviceStore::default());
     let code = issue_code(&fixture);
@@ -174,38 +183,71 @@ async fn pair_with_valid_code_stores_only_the_token_hash() {
     .await;
 
     // Assert
-    let (connection, reply) = authenticated.expect("valid code should pair");
+    assert_eq!(
+        authenticated,
+        Ok(Authentication::PairingRequested(pairing_device("My phone")))
+    );
+    assert_eq!(fixture.devices.stored(), []);
+}
+
+#[tokio::test]
+async fn complete_pairing_stores_only_the_token_hash() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::default());
+    let mut revisions = fixture.state.revisions();
+    fixture.revisions_tx.send_replace(8);
+
+    // Act
+    let paired = complete_pairing(&fixture.state, pairing_device("My phone"), &mut revisions).await;
+
+    // Assert
     let device_id = "00".repeat(16);
     let token = "00".repeat(32);
     assert_eq!(
-        reply,
-        ServerFrame::Paired {
-            device_id: device_id.clone(),
-            protocol_version: PROTOCOL_VERSION,
-            revision: 7,
-            token: token.clone(),
-        }
-    );
-    assert_eq!(
-        connection,
-        RemoteConnection {
-            device_id: device_id.clone(),
-            device_name: "My phone".to_string(),
-        }
+        paired,
+        Ok((
+            RemoteConnection {
+                device_id: device_id.clone(),
+                device_name: "My phone".to_string(),
+            },
+            ServerFrame::Paired {
+                device_id: device_id.clone(),
+                protocol_version: PROTOCOL_VERSION,
+                revision: 8,
+                token: token.clone(),
+            },
+        ))
     );
     assert_eq!(
         fixture.devices.stored(),
         [(device_id, "My phone".to_string(), token_hash(&token))]
     );
+    assert!(!revisions.has_changed().expect("sender should be alive"));
 }
 
 #[tokio::test]
-async fn pair_rejects_invalid_codes_store_failures_and_missing_entropy() {
+async fn complete_pairing_reports_store_failures() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::failing(&[INSERT]));
+
+    // Act
+    let paired = complete_pairing(
+        &fixture.state,
+        pairing_device("Phone"),
+        &mut fixture.state.revisions(),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(paired, Err(DEVICE_STORE_UNAVAILABLE));
+    assert_eq!(fixture.devices.stored(), []);
+}
+
+#[tokio::test]
+async fn pair_rejects_invalid_codes_and_missing_entropy() {
     // Arrange
     let wrong_code = fixture(MemoryDeviceStore::default());
     issue_code(&wrong_code);
-    let insert_failure = fixture(MemoryDeviceStore::failing(&[INSERT]));
-    let insert_code = issue_code(&insert_failure);
     let no_entropy = StateFixture::new(
         MemoryDeviceStore::default(),
         RecordingBackend::default(),
@@ -219,12 +261,6 @@ async fn pair_rejects_invalid_codes_store_failures_and_missing_entropy() {
         &mut wrong_code.state.revisions(),
     )
     .await;
-    let insert_result = authenticate(
-        &insert_failure.state,
-        pair(&insert_code, "Phone"),
-        &mut insert_failure.state.revisions(),
-    )
-    .await;
     let entropy_result = authenticate(
         &no_entropy.state,
         pair("AAAA-AAAA", "Phone"),
@@ -234,9 +270,7 @@ async fn pair_rejects_invalid_codes_store_failures_and_missing_entropy() {
 
     // Assert
     assert_eq!(wrong_result, Err("Invalid or expired pairing code"));
-    assert_eq!(insert_result, Err(DEVICE_STORE_UNAVAILABLE));
     assert_eq!(entropy_result, Err("Cannot generate device credentials"));
-    assert_eq!(insert_failure.devices.stored(), []);
 }
 
 #[tokio::test]
@@ -333,8 +367,9 @@ async fn handle_message_runs_each_request_against_the_session_service() {
         fixture.backend.calls(),
         [
             "list",
+            "list",
             "get:session-1",
-            "get:missing",
+            "list",
             "send:session-1:hi",
             "answer:session-1:Which branch?=main:0",
             "cancel:session-1"
@@ -352,12 +387,23 @@ async fn handle_message_reports_backend_errors_in_the_response() {
     );
 
     // Act
-    let result = reply_result(
+    let listed = reply_result(
         handle_message(&fixture.state, request_message(RemoteRequest::ListSessions)).await,
+    );
+    let loaded = reply_result(
+        handle_message(
+            &fixture.state,
+            request_message(RemoteRequest::GetSession {
+                session_id: "session-1".to_string(),
+            }),
+        )
+        .await,
     );
 
     // Assert
-    assert_eq!(result, RemoteResult::Error("backend failed".to_string()));
+    assert_eq!(listed, RemoteResult::Error("backend failed".to_string()));
+    assert_eq!(loaded, RemoteResult::Error("backend failed".to_string()));
+    assert_eq!(fixture.backend.calls(), ["list", "list"]);
 }
 
 #[tokio::test]

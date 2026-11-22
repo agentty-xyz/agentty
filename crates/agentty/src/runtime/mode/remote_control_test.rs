@@ -90,7 +90,7 @@ async fn keys_are_ignored_outside_the_popup() {
 async fn s_starts_and_stops_and_n_replaces_the_code() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0);
+    app.enable_remote_control(0, Vec::new());
     open_popup(&mut app, 0);
 
     // Act
@@ -111,6 +111,21 @@ async fn s_starts_and_stops_and_n_replaces_the_code() {
 }
 
 #[tokio::test]
+async fn y_and_x_keep_the_popup_open_without_pending_pairings() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    open_popup(&mut app, 0);
+
+    // Act
+    press(&mut app, KeyCode::Char('y')).await;
+    press(&mut app, KeyCode::Char('x')).await;
+
+    // Assert
+    assert_eq!(selected_device_index(&app), Some(0));
+    assert_eq!(app.remote_control.view().pairing_requests, []);
+}
+
+#[tokio::test]
 async fn j_and_k_move_within_the_device_list() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
@@ -124,7 +139,7 @@ async fn j_and_k_move_within_the_device_list() {
     let after_down = selected_device_index(&app);
     press(&mut app, KeyCode::Char('k')).await;
     press(&mut app, KeyCode::Up).await;
-    press(&mut app, KeyCode::Char('x')).await;
+    press(&mut app, KeyCode::Char('z')).await;
 
     // Assert
     assert_eq!(after_down, Some(1));

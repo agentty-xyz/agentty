@@ -197,7 +197,7 @@ async fn real_launcher_serves_on_loopback_until_shutdown() {
 
     // Act
     let server = launcher
-        .start(0, host(devices))
+        .start(0, vec!["box.tailnet.ts.net".to_string()], host(devices))
         .await
         .expect("listener should start on a free port");
     let local_addr = server.local_addr();
@@ -205,6 +205,8 @@ async fn real_launcher_serves_on_loopback_until_shutdown() {
         .issue_pairing_code()
         .expect("pairing code should be issued");
     let status = server.status().borrow().clone();
+    let approved_unknown = server.approve_pairing(7);
+    let denied_unknown = server.deny_pairing(7);
     let revoked = server.revoke_device("missing").await;
     server.shutdown().await;
 
@@ -214,6 +216,9 @@ async fn real_launcher_serves_on_loopback_until_shutdown() {
     assert_eq!(pairing_code.len(), 9);
     assert_eq!(pairing_code.chars().nth(4), Some('-'));
     assert_eq!(status.connections, []);
+    assert_eq!(status.pairing_requests, []);
+    assert!(!approved_unknown, "an unknown request cannot be approved");
+    assert!(!denied_unknown, "an unknown request cannot be denied");
     assert_eq!(revoked, Ok(()));
     assert!(
         TcpListener::bind(local_addr).is_ok(),
@@ -228,6 +233,7 @@ async fn real_launcher_reports_store_failure_when_revoking() {
     let server = launcher
         .start(
             0,
+            Vec::new(),
             host(Arc::new(RepositoryDeviceStore::new(Arc::new(
                 failing_repository(),
             )))),
@@ -259,7 +265,11 @@ async fn real_launcher_reports_a_port_in_use() {
 
     // Act
     let started = launcher
-        .start(port, host(Arc::new(database_device_store().await)))
+        .start(
+            port,
+            Vec::new(),
+            host(Arc::new(database_device_store().await)),
+        )
         .await;
 
     // Assert

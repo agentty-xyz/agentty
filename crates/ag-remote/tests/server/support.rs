@@ -61,6 +61,7 @@ impl TestServer {
         };
         let handle = ag_remote::start(
             RemoteServerConfig {
+                allowed_hosts: vec!["box.tailnet.ts.net".to_string()],
                 bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             },
             host,
@@ -83,8 +84,26 @@ impl TestServer {
         Ok(client)
     }
 
-    /// Pairs a new device and returns its open client, device id, and token.
+    /// Pairs a new device, approving it through the handle, and returns its
+    /// open client, device id, and token.
     pub(crate) async fn pair(&self, device_name: &str) -> TestResult<(Client, String, String)> {
+        let (mut client, request_id) = self.request_pairing(device_name).await?;
+        if !self.handle.approve_pairing(request_id) {
+            return Err("pairing request should be pending".into());
+        }
+        let ServerFrame::Paired {
+            device_id, token, ..
+        } = next_frame(&mut client).await?
+        else {
+            return Err("pairing should succeed".into());
+        };
+
+        Ok((client, device_id, token))
+    }
+
+    /// Redeems a fresh code and returns the waiting client with the id of
+    /// its listed pairing request.
+    pub(crate) async fn request_pairing(&self, device_name: &str) -> TestResult<(Client, u64)> {
         let code = self.handle.issue_pairing_code()?.code;
         let mut client = self.connect().await?;
         send(
@@ -96,14 +115,26 @@ impl TestServer {
             },
         )
         .await?;
-        let ServerFrame::Paired {
-            device_id, token, ..
-        } = next_frame(&mut client).await?
-        else {
-            return Err("pairing should succeed".into());
+        let ServerFrame::AwaitingApproval { confirmation } = next_frame(&mut client).await? else {
+            return Err("pairing should wait for approval".into());
         };
+        let request_id = self
+            .handle
+            .status()
+            .wait_for(|status| {
+                status
+                    .pairing_requests
+                    .iter()
+                    .any(|request| request.confirmation == confirmation)
+            })
+            .await?
+            .pairing_requests
+            .iter()
+            .find(|request| request.confirmation == confirmation)
+            .map(|request| request.id)
+            .ok_or("pairing request should be listed")?;
 
-        Ok((client, device_id, token))
+        Ok((client, request_id))
     }
 
     /// Opens a connection that sends a hello with `token` and returns the

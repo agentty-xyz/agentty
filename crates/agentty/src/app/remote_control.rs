@@ -19,7 +19,7 @@ use crate::infra::remote_control::{
     RemoteControlLauncher, RemoteControlServer, RepositoryDeviceStore,
 };
 use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView,
+    RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
 };
 
 /// Loopback port used unless `--remote-control-port` selects another.
@@ -29,6 +29,8 @@ const REMOTE_CONTROL_DISABLED: &str = "Remote control needs `agentty --experimen
 
 /// Remote-control listener ownership and its projected view.
 pub(crate) struct RemoteControl {
+    /// Host names a tunnel may use besides loopback.
+    allowed_hosts: Vec<String>,
     /// Latest authenticated connections reported by the running listener.
     connections: Vec<RemoteConnection>,
     devices: Arc<dyn DeviceStore>,
@@ -54,6 +56,7 @@ impl RemoteControl {
         let (revision_tx, _revision_rx) = watch::channel(0);
 
         Self {
+            allowed_hosts: Vec::new(),
             connections: Vec::new(),
             devices: Arc::new(RepositoryDeviceStore::new(repositories.remote_devices())),
             generation: 0,
@@ -83,8 +86,10 @@ impl RemoteControl {
 
 impl App {
     /// Enables the experimental `/remote-control` command, listening on the
-    /// loopback `port` when it starts.
-    pub fn enable_remote_control(&mut self, port: u16) {
+    /// loopback `port` when it starts and accepting requests that name a
+    /// loopback host or one of `allowed_hosts`.
+    pub fn enable_remote_control(&mut self, port: u16, allowed_hosts: Vec<String>) {
+        self.remote_control.allowed_hosts = allowed_hosts;
         self.remote_control.port = Some(port);
     }
 
@@ -114,7 +119,11 @@ impl App {
                         .with_initiator(CommandInitiator::Remote),
                 )),
             };
-            let started = self.remote_control.launcher.start(port, host).await;
+            let started = self
+                .remote_control
+                .launcher
+                .start(port, self.remote_control.allowed_hosts.clone(), host)
+                .await;
             match started {
                 Ok(server) => {
                     self.remote_control.generation += 1;
@@ -158,9 +167,32 @@ impl App {
         self.remote_control.generation += 1;
         self.remote_control.connections.clear();
         self.remote_control.view.listener = None;
+        self.remote_control.view.pairing_requests.clear();
         for device in &mut self.remote_control.view.devices {
             device.is_connected = false;
         }
+    }
+
+    /// Approves or denies the oldest device waiting to pair. The listener's
+    /// next status removes the request either way.
+    pub(crate) fn settle_remote_pairing(&mut self, approve: bool) {
+        let Some(server) = self.remote_control.server.as_ref() else {
+            return;
+        };
+        let Some(request) = self.remote_control.view.pairing_requests.first() else {
+            return;
+        };
+
+        let is_settled = if approve {
+            server.approve_pairing(request.id)
+        } else {
+            server.deny_pairing(request.id)
+        };
+        if !is_settled {
+            self.remote_control.view.error =
+                Some("That pairing request is no longer pending.".to_string());
+        }
+        self.remote_control.view.pairing_requests.remove(0);
     }
 
     /// Forgets one paired device, closing its connection when it is live.
@@ -190,6 +222,15 @@ impl App {
         }
 
         self.remote_control.connections = status.connections;
+        self.remote_control.view.pairing_requests = status
+            .pairing_requests
+            .into_iter()
+            .map(|request| RemotePairingRequestView {
+                confirmation: request.confirmation,
+                device_name: request.device_name,
+                id: request.id,
+            })
+            .collect();
         self.refresh_remote_devices().await;
     }
 
