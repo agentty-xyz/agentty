@@ -13,7 +13,7 @@ use super::{
     MockTerminalOperation, TerminalEnhancement, TerminalGuard, TerminalOperation,
     has_ssh_environment, prepare_terminal_stdout_with_operation, restore_terminal_state,
 };
-use crate::infra::tmux::TmuxKeyReporting;
+use crate::infra::tmux::{self, TmuxKeyReporting};
 
 /// Verifies keyboard modes are pushed and popped on the alternate screen,
 /// while the legacy and tmux paths retain their transport-specific sequences.
@@ -72,6 +72,20 @@ fn terminal_keyboard_modes_use_the_alternate_screen() {
     }
 }
 
+/// Verifies the production terminal operation reports the `tmux` mouse
+/// option through the `tmux` boundary, which answers `false` outside `tmux`.
+#[test]
+fn crossterm_terminal_operation_reports_tmux_mouse_option() {
+    // Arrange
+    let operation = CrosstermTerminalOperation;
+
+    // Act
+    let is_mouse_enabled = operation.is_tmux_mouse_enabled();
+
+    // Assert
+    assert_eq!(is_mouse_enabled, tmux::is_mouse_enabled());
+}
+
 /// Builds one expected terminal enhancement configuration.
 fn enhancement_fixture(keyboard: bool, mouse: bool, xterm: bool) -> TerminalEnhancement {
     TerminalEnhancement {
@@ -102,6 +116,10 @@ fn setup_terminal_skips_xterm_modified_keys_for_unsupported_tmux_format() {
         .expect_tmux_key_reporting()
         .once()
         .returning(|| TmuxKeyReporting::Unsupported);
+    operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| true);
     operation
         .expect_enter_alternate_screen()
         .once()
@@ -266,6 +284,10 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
         .once()
         .returning(|| TmuxKeyReporting::CsiU);
     operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| true);
+    operation
         .expect_enter_alternate_screen()
         .once()
         .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
@@ -280,7 +302,9 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
 }
 
 /// Verifies tmux sessions optimistically enable keyboard enhancement even
-/// when the support query returns a negative capability signal.
+/// when the support query returns a negative capability signal, and leave
+/// mouse reporting off when `tmux` has `mouse off` so the terminal keeps
+/// native text selection and link clicks.
 #[test]
 fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
     // Arrange
@@ -300,9 +324,13 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
         .once()
         .returning(|| TmuxKeyReporting::CsiU);
     operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| false);
+    operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false, true))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -310,7 +338,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, true, true));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, false, true));
 }
 
 /// Verifies SSH sessions optimistically enable keyboard enhancement when

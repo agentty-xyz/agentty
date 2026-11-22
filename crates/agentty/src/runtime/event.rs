@@ -143,9 +143,9 @@ fn forward_next_terminal_event(
 /// Converts mouse-wheel reports into arrow keys and drops other mouse reports.
 ///
 /// Direct terminals already turn the wheel into `Up`/`Down` on the alternate
-/// screen. Mouse reporting is requested only inside `tmux`, whose default
-/// bindings otherwise swallow the wheel, so this mapping keeps scrolling
-/// identical across both transports.
+/// screen. Mouse reporting is requested only inside `tmux` with `mouse on`,
+/// whose default bindings otherwise swallow the wheel, so this mapping keeps
+/// scrolling identical across both transports.
 fn wheel_as_arrow_key(event: Event) -> Option<Event> {
     let Event::Mouse(mouse) = event else {
         return Some(event);
