@@ -67,16 +67,29 @@ export function diffTotals(files) {
   );
 }
 
+// What identifies one listed file's change: when it differs, the file's
+// row and an opened patch need loading again.
+export function fileKey(file) {
+  return JSON.stringify([
+    String(file?.path ?? ""),
+    file?.old_path ?? null,
+    file?.status ?? null,
+    Number(file?.added_lines) || 0,
+    Number(file?.deleted_lines) || 0,
+  ]);
+}
+
 // Wires the diff view. `elements` holds `view` (the section that replaces
 // the transcript), `summary` (the line above the files), `files` (the
 // list) and `error`. `request(body)` sends one request and resolves with
 // its result.
 //
 // Returns `open(sessionId)`, which loads the file list, `refresh()`, which
-// loads it again and the patches the reader opened, `close()`, and
-// `isOpen()`.
+// loads it again, `close()`, and `isOpen()`. A refresh changes only the
+// rows whose file changed, so the reader keeps their place and focus, and
+// an opened patch stays on screen until its new text arrives.
 export function createDiff({ document, elements, request }) {
-  const state = { loads: 0, sessionId: null };
+  const state = { listKey: null, loads: 0, sessionId: null };
 
   async function load() {
     const sessionId = state.sessionId;
@@ -96,13 +109,14 @@ export function createDiff({ document, elements, request }) {
     }
     elements.error.textContent = "";
     const files = Array.isArray(result?.files) ? result.files : [];
-    renderSummary(files, Boolean(result?.truncated));
-    const opened = new Set(
-      [...elements.files.querySelectorAll("details")]
-        .filter((details) => details.open)
-        .map((details) => details.dataset.path),
-    );
-    elements.files.replaceChildren(...files.map((file) => renderFile(file, opened.has(file.path))));
+    const isTruncated = Boolean(result?.truncated);
+    const listKey = JSON.stringify([isTruncated, ...files.map(fileKey)]);
+    if (listKey === state.listKey) {
+      return;
+    }
+    state.listKey = listKey;
+    renderSummary(files, isTruncated);
+    renderFiles(files);
   }
 
   function renderSummary(files, isTruncated) {
@@ -112,94 +126,159 @@ export function createDiff({ document, elements, request }) {
       return;
     }
     const totals = diffTotals(files);
-    const lines = element(document, "span", "lines");
-    lines.append(
-      element(document, "span", "add", "+" + totals.added),
-      " ",
-      element(document, "span", "del", "-" + totals.deleted),
-    );
     elements.summary.replaceChildren(
       (files.length === 1 ? "1 file" : files.length + " files") + (isTruncated ? " shown" : ""),
       " · ",
-      lines,
+      lineCounts(totals.added, totals.deleted),
     );
     if (isTruncated) {
       elements.summary.append(" · the rest is too large to list here");
     }
   }
 
-  function renderFile(file, isOpen) {
-    const item = element(document, "li", "diff-file");
-    const details = element(document, "details");
-    details.dataset.path = String(file.path ?? "");
-    const summary = element(document, "summary");
-    const letter = element(document, "span", "diff-status diff-status--" + statusLetter(file.status), statusLetter(file.status));
-    letter.title = String(file.status ?? "");
-    const path = element(document, "span", "diff-path", filePath(file));
-    path.title = filePath(file);
-    const lines = element(document, "span", "lines");
-    lines.append(
-      element(document, "span", "add", "+" + (Number(file.added_lines) || 0)),
-      " ",
-      element(document, "span", "del", "-" + (Number(file.deleted_lines) || 0)),
+  // Keeps the row of each file that is still listed, rebuilds its heading
+  // only when its change differs, and moves a row only when the order
+  // changed.
+  function renderFiles(files) {
+    const rows = new Map(
+      [...elements.files.children].map((row) => [row.dataset.path, row]),
     );
-    summary.append(letter, path, lines);
+    const wanted = files.map((file) => {
+      const path = String(file.path ?? "");
+      const row = rows.get(path);
+      rows.delete(path);
+      if (!row) {
+        return renderFile(file);
+      }
+      if (row.dataset.key !== fileKey(file)) {
+        updateFile(row, file);
+      }
+
+      return row;
+    });
+    for (const stale of rows.values()) {
+      stale.remove();
+    }
+    wanted.forEach((row, index) => {
+      const current = elements.files.children[index];
+      if (current !== row) {
+        elements.files.insertBefore(row, current ?? null);
+      }
+    });
+  }
+
+  function renderFile(file) {
+    const item = element(document, "li", "diff-file");
+    item.dataset.path = String(file.path ?? "");
+    const details = element(document, "details");
+    const summary = element(document, "summary");
     const body = element(document, "div", "diff-body");
     details.append(summary, body);
     details.addEventListener("toggle", () => {
       if (details.open && !body.dataset.loaded) {
-        void loadPatch(details, body);
+        void loadPatch(item, body);
       }
     });
     item.append(details);
-    if (isOpen) {
-      details.open = true;
-      void loadPatch(details, body);
-    }
+    updateFile(item, file);
 
     return item;
   }
 
-  async function loadPatch(details, body) {
+  // Shows `file` in the heading of `item`. An opened patch loads again and
+  // stays on screen meanwhile; a closed one loads when it next opens.
+  function updateFile(item, file) {
+    item.dataset.key = fileKey(file);
+    const letter = element(
+      document,
+      "span",
+      "diff-status diff-status--" + statusLetter(file.status),
+      statusLetter(file.status),
+    );
+    letter.title = String(file.status ?? "");
+    const path = element(document, "span", "diff-path", filePath(file));
+    path.title = filePath(file);
+    item
+      .querySelector("summary")
+      .replaceChildren(
+        letter,
+        path,
+        lineCounts(Number(file.added_lines) || 0, Number(file.deleted_lines) || 0),
+      );
+    const body = item.querySelector(".diff-body");
+    if (item.querySelector("details").open && body.dataset.loaded) {
+      void loadPatch(item, body);
+    } else {
+      delete body.dataset.loaded;
+    }
+  }
+
+  async function loadPatch(item, body) {
     const sessionId = state.sessionId;
+    const key = item.dataset.key;
     body.dataset.loaded = "true";
-    body.replaceChildren(element(document, "p", "diff-note", "Loading…"));
+    if (body.children.length === 0) {
+      body.append(element(document, "p", "diff-note", "Loading…"));
+    }
     let result;
     try {
       result = await request({
         method: "get_session_diff",
-        path: details.dataset.path,
+        path: item.dataset.path,
         session_id: sessionId,
       });
     } catch (error) {
-      delete body.dataset.loaded;
-      body.replaceChildren(element(document, "p", "error", error.message));
+      if (sessionId === state.sessionId && key === item.dataset.key) {
+        delete body.dataset.loaded;
+        body.replaceChildren(element(document, "p", "error", error.message));
+      }
 
       return;
     }
-    if (sessionId !== state.sessionId) {
+    // A newer change of the file loads its own patch.
+    if (sessionId !== state.sessionId || key !== item.dataset.key) {
       return;
     }
     body.replaceChildren(renderPatch(result?.patch));
     if (result?.truncated) {
-      body.append(element(document, "p", "diff-note", "The rest of this patch is too large to show here."));
+      body.append(
+        element(document, "p", "diff-note", "The rest of this patch is too large to show here."),
+      );
     }
   }
 
+  // One block per line, each ending in its newline, so a copied patch
+  // keeps its line breaks.
   function renderPatch(patch) {
     const lines = patchLines(patch);
     if (lines.length === 0) {
       return element(document, "p", "diff-note", "No text changes to show.");
     }
     const pre = element(document, "pre", "patch");
-    pre.append(...lines.map((line) => element(document, "span", "patch-line patch-line--" + line.kind, line.text)));
+    pre.append(
+      ...lines.map((line) =>
+        element(document, "span", "patch-line patch-line--" + line.kind, line.text + "\n"),
+      ),
+    );
 
     return pre;
+  }
+
+  function lineCounts(added, deleted) {
+    const lines = element(document, "span", "lines");
+    lines.append(
+      element(document, "span", "add", "+" + added),
+      " ",
+      element(document, "span", "del", "-" + deleted),
+    );
+
+    return lines;
   }
 
   return {
     close: () => {
       state.sessionId = null;
+      state.listKey = null;
       state.loads += 1;
       elements.view.hidden = true;
       elements.files.replaceChildren();
@@ -209,6 +288,7 @@ export function createDiff({ document, elements, request }) {
     isOpen: () => state.sessionId !== null,
     open: (sessionId) => {
       state.sessionId = sessionId;
+      state.listKey = null;
       elements.view.hidden = false;
       elements.files.replaceChildren();
       elements.summary.replaceChildren("Loading the changes…");

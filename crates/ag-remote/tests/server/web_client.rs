@@ -333,8 +333,8 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
             "chatHidden": true,
             "files": ["Aa.rs+1 -0"],
             "patch": [
-                ["patch-line patch-line--meta", "diff --git a/a.rs b/a.rs"],
-                ["patch-line patch-line--meta", "+new"],
+                ["patch-line patch-line--meta", "diff --git a/a.rs b/a.rs\n"],
+                ["patch-line patch-line--meta", "+new\n"],
             ],
             "summary": "1 file · +1 -0",
         })

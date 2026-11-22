@@ -6,6 +6,7 @@ import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_d
 import {
   DRAFT_KEY_PREFIX,
   clockSkew,
+  diffKey,
   collectAnswers,
   composerKeyAction,
   composerRows,
@@ -900,6 +901,83 @@ test("new content follows the reader near the end, and otherwise offers Jump to 
   scroller.scrollTop = 1400 - 500;
   scroller.dispatchEvent(new FakeEvent("scroll"));
   assert.equal(byId("jump").hidden, true);
+});
+
+// Sets what a scroller reports: a hidden one reports zeros.
+function layout(scroller, { client, height, top }) {
+  scroller.clientHeight = client;
+  scroller.scrollHeight = height;
+  scroller.scrollTop = top;
+}
+
+function diffAnswer(body) {
+  return body.method === "get_session_diff"
+    ? { files: [{ added_lines: 1, deleted_lines: 0, path: "a.rs", status: "added" }], kind: "diff" }
+    : { kind: "accepted" };
+}
+
+test("back from the diff, the transcript returns to where the reader was", () => {
+  const { byId, chat } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const scroller = byId("chat-scroll");
+  layout(scroller, { client: 500, height: 2000, top: 0 });
+  chat.render(session());
+  // Reading in the middle, then the diff; the hidden scroller reports
+  // zeros, as a browser's does.
+  scroller.scrollTop = 600;
+  byId("diff").click();
+  layout(scroller, { client: 0, height: 0, top: 0 });
+  const grown = [...session().messages, { content: "more", kind: "assistant" }];
+  chat.render(session({ messages: grown, updated_at: 11 }));
+  assert.equal(byId("jump").hidden, true);
+
+  layout(scroller, { client: 500, height: 2400, top: 0 });
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 600);
+  // A message arrived meanwhile, so the pill offers it.
+  assert.equal(byId("jump").hidden, false);
+});
+
+test("back from the diff, a reader who was at the end sees the end", () => {
+  const { byId, chat } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const scroller = byId("chat-scroll");
+  layout(scroller, { client: 500, height: 2000, top: 0 });
+  chat.render(session());
+  assert.equal(scroller.scrollTop, 2000);
+  byId("diff").click();
+  layout(scroller, { client: 0, height: 0, top: 0 });
+  chat.render(session({ updated_at: 11 }));
+
+  layout(scroller, { client: 500, height: 2400, top: 0 });
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 2400);
+  assert.equal(byId("jump").hidden, true);
+  // Nothing new arrived for a reader in the middle either: no pill.
+  scroller.scrollTop = 100;
+  byId("diff").click();
+  byId("diff").click();
+  assert.equal(scroller.scrollTop, 100);
+  assert.equal(byId("jump").hidden, true);
+});
+
+test("the open diff is read again only when the session's changes may differ", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["diff"], respond: diffAnswer });
+  const diffReads = () => requests.filter((body) => body.method === "get_session_diff").length;
+  chat.render(detailedSession(), detailedSummary());
+  byId("diff").click();
+  await settle();
+  assert.equal(diffReads(), 1);
+
+  // A running session updates often; the same line counts read nothing.
+  chat.render(detailedSession({ updated_at: 11 }), detailedSummary({ updated_at: 11 }));
+  await settle();
+  assert.equal(diffReads(), 1);
+  chat.render(detailedSession({ updated_at: 12 }), detailedSummary({ added_lines: 65 }));
+  await settle();
+  assert.equal(diffReads(), 2);
+
+  // Without counts in the listing, an update stands in for them.
+  assert.equal(diffKey(session(), null), "updated:10");
+  assert.equal(diffKey(session(), detailedSummary()), "lines:64:9");
 });
 
 test("queued messages show one row each with the full text in the title", () => {

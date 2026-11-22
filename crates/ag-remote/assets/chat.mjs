@@ -285,6 +285,10 @@ export function createChat({
     capabilities: [],
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
+    // Where the transcript was when the diff replaced it.
+    chatPlace: null,
+    // What the open diff was loaded for; see `diffKey`.
+    diffKey: null,
     isAnswering: false,
     isCanceling: false,
     isConnected: false,
@@ -409,13 +413,32 @@ export function createChat({
 
   // Shows the session's diff in place of the transcript and the dock, or
   // the chat again.
+  // The transcript keeps its place while hidden: back from the diff, it
+  // returns there, or to the end if the reader was at the end, and offers
+  // `Jump to latest` for what arrived meanwhile.
   function showDiff(isOpen) {
+    if (isOpen) {
+      state.chatPlace = {
+        hasMissed: !elements.jump.hidden,
+        isAtEnd: isNearEnd(),
+        top: elements.scroller.scrollTop,
+      };
+      state.diffKey = diffKey(state.session, state.summary);
+    }
     elements.scroller.hidden = isOpen;
     elements.dock.hidden = isOpen;
     if (isOpen) {
       void diff.open(state.sessionId);
     } else {
       diff.close();
+      const place = state.chatPlace;
+      state.chatPlace = null;
+      if (place?.isAtEnd) {
+        scrollToEnd();
+      } else if (place) {
+        elements.scroller.scrollTop = place.top;
+        elements.jump.hidden = !place.hasMissed;
+      }
     }
     renderActions();
   }
@@ -666,6 +689,7 @@ export function createChat({
     elements.scroller.hidden = false;
     elements.dock.hidden = false;
     diff?.close();
+    state.chatPlace = null;
     elements.composer.hidden = false;
     elements.answerBar.hidden = true;
     elements.readonly.hidden = true;
@@ -718,8 +742,6 @@ export function createChat({
       return;
     }
     const isFirst = state.session === null;
-    const wasNearEnd = isNearEnd();
-    const isChanged = state.session?.updated_at !== session.updated_at;
     state.session = session;
     state.summary = summary?.id === session.id ? summary : null;
     state.clockSkew = clockSkew(state.summary, now());
@@ -729,16 +751,26 @@ export function createChat({
       elements.actionError.textContent = "";
     }
     elements.gone.hidden = true;
-    const isDiffOpen = Boolean(diff?.isOpen());
-    elements.scroller.hidden = isDiffOpen;
+    // The header closes the diff when the new status allows none.
     renderHeader(session);
+    const isDiffOpen = Boolean(diff?.isOpen());
+    const wasNearEnd = isNearEnd();
+    elements.scroller.hidden = isDiffOpen;
     const transcriptChanged = renderTranscript(session.messages || []);
     const questionsChanged = renderQuestions(session.questions || []);
     renderQueued(session.queued_messages || []);
     renderDock();
-    // A session that changed may have changed its files too.
-    if (isDiffOpen && isChanged && diff.isOpen()) {
-      void diff.refresh();
+    if (isDiffOpen) {
+      // The transcript is out of sight; returning to it says what arrived.
+      state.chatPlace.hasMissed ||= transcriptChanged || questionsChanged;
+      // The files are read again only when the session's changes may have.
+      const key = diffKey(session, state.summary);
+      if (key !== state.diffKey) {
+        state.diffKey = key;
+        void diff.refresh();
+      }
+
+      return;
     }
     if (isFirst || (wasNearEnd && (transcriptChanged || questionsChanged))) {
       scrollToEnd();
@@ -982,6 +1014,16 @@ function keepSourceView(oldNode, newNode) {
   if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
     showSource(newNode, true);
   }
+}
+
+// What says a session's changes may differ: the listing's line counts,
+// or, from a host that lists none, the session's update time.
+export function diffKey(session, summary) {
+  if (Number.isFinite(summary?.added_lines) && Number.isFinite(summary?.deleted_lines)) {
+    return "lines:" + summary.added_lines + ":" + summary.deleted_lines;
+  }
+
+  return "updated:" + session?.updated_at;
 }
 
 // How many seconds this device's clock runs behind the host's, as far as

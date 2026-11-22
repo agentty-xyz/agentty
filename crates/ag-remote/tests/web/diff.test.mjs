@@ -133,29 +133,134 @@ test("the view lists the files and loads a patch only when one opens", async () 
   assert.equal(lines.length, 9);
   assert.equal(lines[6].className, "patch-line patch-line--del");
   assert.equal(lines[7].className, "patch-line patch-line--add");
-  assert.equal(lines[7].textContent, "+    new();");
+  // Each line ends in its newline, so a copied patch keeps its breaks.
+  assert.equal(lines[7].textContent, "+    new();\n");
+  assert.equal(details.querySelector(".patch").textContent, PATCH);
   // Closing and opening again reuses the loaded patch.
   details.dispatchEvent(new FakeEvent("toggle"));
   assert.equal(page.requests.length, 2);
 });
 
-test("a refresh keeps open files open and reloads their patches", async () => {
+test("a refresh with the same files changes nothing on screen", async () => {
   const page = mountDiff(answer);
   await page.diff.open("s1");
-  openFile(page, 2);
+  const details = openFile(page, 2);
   await settle();
+  const rows = page.byId("diff-files").children;
+  const patch = details.querySelector(".patch");
+  const summary = page.byId("diff-summary").firstChild;
   await page.diff.refresh();
   await settle();
 
-  const details = page.byId("diff-files").querySelectorAll("details");
-  assert.deepEqual(
-    details.map((node) => node.open),
-    [false, false, true],
-  );
-  assert.equal(details[2].querySelectorAll(".patch-line").length, 9);
+  assert.deepEqual(page.byId("diff-files").children, rows);
+  assert.equal(details.querySelector(".patch"), patch);
+  assert.equal(page.byId("diff-summary").firstChild, summary);
+  assert.equal(details.open, true);
+  // Only the list was read again; the open patch was not.
   assert.deepEqual(
     page.requests.map((body) => body.path ?? null),
-    [null, "src/b.rs", null, "src/b.rs"],
+    [null, "src/b.rs", null],
+  );
+});
+
+test("a changed file keeps its row and its old patch until the new one arrives", async () => {
+  let files = FILES;
+  let patch = PATCH;
+  let release = null;
+  const page = mountDiff((body) => {
+    if (!body.path) {
+      return { files: files, kind: "diff" };
+    }
+    const answered = { files: files.filter((file) => file.path === body.path), kind: "diff", patch };
+
+    return release === null
+      ? answered
+      : new Promise((resolve) => {
+          release = () => resolve(answered);
+        });
+  });
+  await page.diff.open("s1");
+  const changed = openFile(page, 0);
+  const untouched = openFile(page, 1);
+  await settle();
+  const untouchedPatch = untouched.querySelector(".patch");
+  const rows = [...page.byId("diff-files").children];
+
+  // `src/lib.rs` grows, `src/new.rs` stays, `src/b.rs` goes, and a new
+  // file comes first.
+  files = [
+    { added_lines: 1, deleted_lines: 0, path: "README.md", status: "modified" },
+    { ...FILES[0], added_lines: 13 },
+    FILES[1],
+  ];
+  patch = "@@ -1 +1 @@\n-old\n+newer\n";
+  release = () => {};
+  await page.diff.refresh();
+  await settle();
+
+  const now = page.byId("diff-files").children;
+  assert.deepEqual(
+    now.map((row) => row.dataset.path),
+    ["README.md", "src/lib.rs", "src/new.rs"],
+  );
+  assert.equal(now[1], rows[0]);
+  assert.equal(now[2], rows[1]);
+  assert.equal(now[1].querySelector("summary").textContent, "Msrc/lib.rs+13 -3");
+  assert.equal(page.byId("diff-summary").textContent, "3 files · +54 -3");
+  // The changed file shows its old patch while the new one loads; the
+  // other keeps its patch and is not read again.
+  assert.equal(changed.querySelectorAll(".patch-line").length, 9);
+  assert.equal(changed.querySelector(".diff-note"), null);
+  assert.equal(untouched.querySelector(".patch"), untouchedPatch);
+  release();
+  await settle();
+  assert.equal(changed.querySelector(".patch").textContent, "@@ -1 +1 @@\n-old\n+newer\n");
+  assert.deepEqual(
+    page.requests.map((body) => body.path ?? null),
+    [null, "src/lib.rs", "src/new.rs", null, "src/lib.rs"],
+  );
+});
+
+test("a patch answer for an older change of the file is dropped", async () => {
+  let files = FILES;
+  const releases = [];
+  const page = mountDiff((body) =>
+    body.path
+      ? new Promise((resolve) => {
+          releases.push(() => resolve({ files: [], kind: "diff", patch: "@@ -1 +1 @@\n+v" + releases.length }));
+        })
+      : { files: files, kind: "diff" },
+  );
+  await page.diff.open("s1");
+  const details = openFile(page, 0);
+  files = [{ ...FILES[0], added_lines: 20 }, ...FILES.slice(1)];
+  await page.diff.refresh();
+  releases[0]();
+  await settle();
+  assert.equal(details.querySelector(".patch"), null);
+  releases[1]();
+  await settle();
+  assert.equal(details.querySelector(".patch").textContent, "@@ -1 +1 @@\n+v2\n");
+});
+
+test("a closed file whose change differs loads afresh when it opens", async () => {
+  let files = FILES;
+  const page = mountDiff((body) =>
+    body.path ? answer(body) : { files: files, kind: "diff" },
+  );
+  await page.diff.open("s1");
+  const details = openFile(page, 0);
+  await settle();
+  details.open = false;
+  files = [{ ...FILES[0], added_lines: 20 }, ...FILES.slice(1)];
+  await page.diff.refresh();
+  details.open = true;
+  details.dispatchEvent(new FakeEvent("toggle"));
+  await settle();
+
+  assert.deepEqual(
+    page.requests.map((body) => body.path ?? null),
+    [null, "src/lib.rs", null, "src/lib.rs"],
   );
 });
 
@@ -171,7 +276,7 @@ test("paths and patch lines render only as text", async () => {
   await settle();
 
   assert.equal(page.byId("diff-files").querySelector(".diff-path").textContent, hostile);
-  assert.equal(page.byId("diff-files").querySelectorAll(".patch-line")[1].textContent, "+" + hostile);
+  assert.equal(page.byId("diff-files").querySelectorAll(".patch-line")[1].textContent, "+" + hostile + "\n");
   assert.equal(page.document.querySelectorAll("img").length, 0);
 });
 
