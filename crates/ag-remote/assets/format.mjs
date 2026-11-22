@@ -202,15 +202,15 @@ export function parseSeen(text) {
   if (!text) {
     return null;
   }
+  let seen = null;
   try {
-    const seen = JSON.parse(text);
-
-    return seen && typeof seen === "object" && !Array.isArray(seen) ? seen : null;
+    seen = JSON.parse(text);
   } catch (_error) {
     // A damaged value counts as no map: the caller then marks every
     // session seen, as on a first load.
-    return null;
   }
+
+  return seen && typeof seen === "object" && !Array.isArray(seen) ? seen : null;
 }
 
 // Returns the seen map to store after `sessions` arrived while
