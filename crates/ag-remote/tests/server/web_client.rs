@@ -178,9 +178,15 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     assert_eq!(listed["heading"], "agentty");
     assert_eq!(listed["isOnline"], true);
     assert_eq!(listed["view"], "home-view");
+    assert_eq!(listed["groups"], json!(["Active2"]));
     assert_eq!(listed["sessions"][0]["title"], "Build it");
-    let detail = listed["sessions"][0]["detail"].as_str().unwrap_or_default();
-    assert!(detail.starts_with("Review · ") && detail.ends_with(" d ago"));
+    assert_eq!(listed["sessions"][0]["status"], "Review");
+    assert_eq!(listed["sessions"][1]["title"], "Plan it");
+    assert_eq!(listed["sessions"][1]["status"], "Draft");
+    let time = listed["sessions"][0]["time"].as_str().unwrap_or_default();
+    assert!(time.ends_with('d'), "{time}");
+    // The first listing counts as seen, so nothing starts unread.
+    assert_eq!(listed["unread"], json!([]));
     assert_eq!(
         opened,
         json!({
@@ -201,7 +207,13 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     assert_eq!(sent, json!({"step": "sent", "error": ""}));
     assert_eq!(
         refreshed,
-        json!({"step": "refreshed", "queued": ["Queued: Use the main branch"]})
+        json!({
+            "step": "refreshed",
+            "queued": ["Queued: Use the main branch"],
+            // `changed` brought a newer `Plan it`; the open session stays read.
+            "unread": ["session-2"],
+            "unreadLabel": ["Unread"],
+        })
     );
     assert_eq!(
         canceled,

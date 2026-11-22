@@ -84,22 +84,23 @@ export function statusInfo(statusName) {
     : status(String(statusName), "idle", "active", {});
 }
 
-// Formats how long ago `unixSeconds` was, as seen at `nowSeconds`.
+// Formats how long ago `unixSeconds` was, as seen at `nowSeconds`, in the
+// list's short form: `now`, then minutes, hours and days such as `3m`.
 export function relativeTime(unixSeconds, nowSeconds) {
   const seconds = Math.max(0, Math.round(nowSeconds - unixSeconds));
   if (seconds < 60) {
-    return "just now";
+    return "now";
   }
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return minutes + " min ago";
+    return minutes + "m";
   }
   const hours = Math.round(seconds / 3600);
-  if (hours < 48) {
-    return hours + " h ago";
+  if (hours < 24) {
+    return hours + "h";
   }
 
-  return Math.round(seconds / 86400) + " d ago";
+  return Math.round(seconds / 86400) + "d";
 }
 
 // Splits `sessions` into the populated groups of `GROUPS`, in that order,
@@ -216,20 +217,67 @@ export function parseSeen(text) {
   return seen && typeof seen === "object" && !Array.isArray(seen) ? seen : null;
 }
 
-// Returns the seen map to store after `sessions` arrived while
-// `openSessionId` is open. Without a map, as on the first load, every
-// session counts as seen. Sessions no longer listed are dropped.
-export function reconcileSeen(seen, sessions, openSessionId) {
-  const next = {};
-  for (const session of sessions) {
-    if (!seen || session.id === openSessionId) {
-      next[session.id] = session.updated_at;
-    } else if (Object.hasOwn(seen, session.id)) {
-      next[session.id] = seen[session.id];
+// Most sessions the seen map remembers. Ids that are not listed stay, so
+// switching the terminal to another project and back, or a session that
+// drops out of the listing for a while, does not mark them unread.
+export const MAX_SEEN = 500;
+
+// Combines two seen maps, as two tabs of this page write them, keeping the
+// later time of each session. Either may be `null`; both `null` gives
+// `null`.
+export function mergeSeen(first, second) {
+  if (!first && !second) {
+    return null;
+  }
+  const merged = {};
+  for (const map of [first, second]) {
+    for (const [id, seenAt] of Object.entries(map || {})) {
+      if (typeof seenAt === "number" && !(Object.hasOwn(merged, id) && merged[id] >= seenAt)) {
+        merged[id] = seenAt;
+      }
     }
   }
 
-  return next;
+  return merged;
+}
+
+// Returns the seen map to store after `sessions` arrived while
+// `openSessionId` is open. Without a map, as on the first load, or with
+// one that knows none of the listed sessions, as after pairing with
+// another Agentty, every listed session counts as seen. Ids no longer
+// listed stay until the map exceeds `MAX_SEEN`; then the most recently
+// updated ones are kept, and listed ones always.
+export function reconcileSeen(seen, sessions, openSessionId) {
+  const isFirstLoad =
+    !seen || (sessions.length > 0 && !sessions.some((session) => Object.hasOwn(seen, session.id)));
+  const next = mergeSeen(seen, {}) || {};
+  for (const session of sessions) {
+    if (isFirstLoad || session.id === openSessionId) {
+      next[session.id] = session.updated_at;
+    }
+  }
+
+  return pruneSeen(next, sessions);
+}
+
+function pruneSeen(seen, sessions) {
+  const ids = Object.keys(seen);
+  if (ids.length <= MAX_SEEN) {
+    return seen;
+  }
+  const listed = new Set(sessions.map((session) => session.id));
+  const kept = ids
+    .filter((id) => !listed.has(id))
+    .sort((first, second) => seen[second] - seen[first])
+    .slice(0, Math.max(0, MAX_SEEN - listed.size));
+  const pruned = {};
+  for (const id of [...listed, ...kept]) {
+    if (Object.hasOwn(seen, id)) {
+      pruned[id] = seen[id];
+    }
+  }
+
+  return pruned;
 }
 
 // Returns the ids of the sessions updated since they were last seen, other

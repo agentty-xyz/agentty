@@ -3,10 +3,19 @@
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
-import { relativeTime, statusInfo } from "./format.mjs";
+import { statusInfo } from "./format.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
-import { THEMES, applyTheme, createShell, loadTheme, parseRoute, saveTheme } from "./shell.mjs";
+import { TICK_MS, createSessionList } from "./session_list.mjs";
+import {
+  NARROW_QUERY,
+  THEMES,
+  applyTheme,
+  createShell,
+  loadTheme,
+  parseRoute,
+  saveTheme,
+} from "./shell.mjs";
 
 // The theme comes first, so a dark-theme device shows green for at most
 // one frame. The content security policy forbids an inline script that
@@ -58,8 +67,13 @@ const elements = {
   sidebar: document.getElementById("sidebar"),
   "sidebar-hide": document.getElementById("sidebar-hide"),
   "drawer-close": document.getElementById("drawer-close"),
+  "new-session": document.getElementById("new-session"),
+  filter: document.getElementById("filter"),
+  "filter-key": document.getElementById("filter-key"),
+  chips: document.getElementById("chips"),
   sessions: document.getElementById("sessions"),
   "sessions-empty": document.getElementById("sessions-empty"),
+  "filter-summary": document.getElementById("filter-summary"),
   "list-error": document.getElementById("list-error"),
   "device-name": document.getElementById("device-name"),
   connection: document.getElementById("connection"),
@@ -80,10 +94,13 @@ const elements = {
   retry: document.getElementById("retry"),
   reload: document.getElementById("reload"),
   "home-view": document.getElementById("home-view"),
+  "home-eyebrow": document.getElementById("home-eyebrow"),
   "home-title": document.getElementById("home-title"),
   "home-pick": document.getElementById("home-pick"),
   "home-none": document.getElementById("home-none"),
   "home-sessions": document.getElementById("home-sessions"),
+  "home-waiting": document.getElementById("home-waiting"),
+  "home-cards": document.getElementById("home-cards"),
   "session-view": document.getElementById("session-view"),
   "chat-scroll": document.getElementById("chat-scroll"),
   transcript: document.getElementById("transcript"),
@@ -337,6 +354,7 @@ function renderMain() {
 
 function renderHome() {
   const isEmpty = state.isAuthenticated && state.sessionCount === 0;
+  elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
   elements["home-title"].textContent = isEmpty ? "No sessions yet" : "Pick a session";
   elements["home-pick"].hidden = isEmpty;
   elements["home-none"].hidden = !isEmpty;
@@ -510,6 +528,9 @@ function handleFrame(data) {
 }
 
 function onAuthenticated() {
+  // Starting a session from the page comes with the `create_session`
+  // capability; until a host lists it, the button stays away.
+  elements["new-session"].hidden = !state.capabilities.includes("create_session");
   if (state.pendingPairing) {
     writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
     state.pendingPairing = null;
@@ -631,31 +652,7 @@ function element(tag, className, text) {
 
 function renderSessions(sessions) {
   state.sessionCount = sessions.length;
-  elements.sessions.replaceChildren(
-    ...sessions.map((session) => {
-      const item = element("li");
-      const button = element("button");
-      button.type = "button";
-      button.dataset.sessionId = session.id;
-      button.append(
-        element("span", "title", session.title || session.id),
-        element(
-          "span",
-          "detail",
-          session.status + " · " + relativeTime(session.updated_at, Date.now() / 1000),
-        ),
-      );
-      button.addEventListener("click", () => {
-        shell.showSession(session.id);
-        enterSession(session.id);
-      });
-      item.append(button);
-
-      return item;
-    }),
-  );
-  markCurrentRow();
-  elements["sessions-empty"].hidden = sessions.length > 0;
+  sessionList.update(sessions, state.currentSessionId);
   if (!state.currentSessionId) {
     renderHome();
   }
@@ -692,15 +689,9 @@ function leaveSession() {
   refresh();
 }
 
-// Marks the open session's row in the list.
+// Marks the open session's row in the list and counts it as seen.
 function markCurrentRow() {
-  for (const button of elements.sessions.querySelectorAll("button")) {
-    if (button.dataset.sessionId === state.currentSessionId) {
-      button.setAttribute("aria-current", "page");
-    } else {
-      button.removeAttribute("aria-current");
-    }
-  }
+  sessionList.setOpen(state.currentSessionId);
 }
 
 function renderSession(session) {
@@ -804,6 +795,50 @@ const shell = createShell({
   },
   parsePairingLink: parsePairingLink,
   window: window,
+});
+
+const sessionList = createSessionList({
+  document: document,
+  elements: {
+    cards: elements["home-cards"],
+    chips: elements.chips,
+    empty: elements["sessions-empty"],
+    filter: elements.filter,
+    filterKey: elements["filter-key"],
+    list: elements.sessions,
+    summary: elements["filter-summary"],
+    waiting: elements["home-waiting"],
+  },
+  // The field is on screen in the open drawer, or in the sidebar on a
+  // wide screen unless it was hidden.
+  isFilterShown: () => {
+    if (elements.shell.hidden) {
+      return false;
+    }
+
+    return window.matchMedia(NARROW_QUERY).matches
+      ? shell.isOpen()
+      : !elements.shell.classList.contains("is-sidebar-hidden");
+  },
+  onOpen: (sessionId) => {
+    shell.showSession(sessionId);
+    enterSession(sessionId);
+  },
+  window: window,
+});
+window.setInterval(sessionList.tick, TICK_MS);
+// An update that arrived while the page was hidden stays unread on the
+// open session until the page shows again.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    sessionList.markSeen();
+  }
+});
+
+// Until creating a session is wired, the button leads home.
+elements["new-session"].addEventListener("click", () => {
+  shell.showSession(null);
+  leaveSession();
 });
 
 elements["pair-name"].value = readStored(DEVICE_NAME_KEY) || defaultDeviceName();

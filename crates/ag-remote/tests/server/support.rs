@@ -374,7 +374,10 @@ impl DeviceStore for MemoryDeviceStore {
 /// is held, and recorded only once [`RecordingBackend::release`] is called,
 /// the message `panic` panics, every cancellation reports a missing
 /// session, every merge is refused, the host serves only regular sessions
-/// in project `1`, and every optional operation is served.
+/// in project `1`, and every optional operation is served. It lists
+/// `session-1` and `session-2`, a draft that counts as updated once for
+/// every message sent to any session, so a device sees another session
+/// change.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -441,14 +444,27 @@ impl SessionBackend for RecordingBackend {
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
+        let plan_updated_at = self
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("send:"))
+            .fold(30, |updated_at, _| updated_at + 1);
         self.record("list".to_string());
 
-        Ok(vec![SessionSummary {
-            id: SessionId::from("session-1"),
-            status: SessionStatus::Review,
-            title: Some("Build it".to_string()),
-            updated_at: 20,
-        }])
+        Ok(vec![
+            SessionSummary {
+                id: SessionId::from("session-1"),
+                status: SessionStatus::Review,
+                title: Some("Build it".to_string()),
+                updated_at: 20,
+            },
+            SessionSummary {
+                id: SessionId::from("session-2"),
+                status: SessionStatus::Draft,
+                title: Some("Plan it".to_string()),
+                updated_at: plan_updated_at,
+            },
+        ])
     }
 
     async fn send_message(

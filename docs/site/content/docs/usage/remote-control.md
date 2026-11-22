@@ -48,6 +48,13 @@ list; the back gesture, `Esc`, or a tap beside the list closes it. The address n
 open session, so the back gesture returns to the previous one and a reload keeps it
 open.
 
+The list groups sessions as the terminal does, with the archive collapsed. Type in
+`Filter sessions`, or press `/` to reach it, to match titles; `Esc` clears it. The
+`All`, `Needs you`, and `Running` buttons narrow the list by status. A dot marks a
+session that changed since you last opened it. Each browser tracks what it has seen on
+its own, so another device or a private window shows its own dots. With no session open,
+the page offers the sessions waiting for you.
+
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
 next to the device offers `Forget this device`. While the connection is down, a banner

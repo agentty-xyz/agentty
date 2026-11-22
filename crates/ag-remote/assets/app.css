@@ -549,15 +549,148 @@ code {
   padding: 0.8rem 0.75rem 0.55rem 1rem;
 }
 
+.sidebar-actions {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem 0.6rem;
+}
+
+/* .button.button-secondary, left aligned */
+.new-session {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-session .icon {
+  color: var(--color-accent);
+}
+
+kbd {
+  min-width: 1.25rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-bg);
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+/* .docs-search__input with a search icon */
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.4rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-dim);
+}
+
+.filter:focus-within {
+  border-color: var(--color-accent);
+}
+
+.filter input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 1rem;
+  appearance: none;
+}
+
+.filter input::placeholder {
+  color: var(--color-dim);
+}
+
+.filter input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.chips .count {
+  color: var(--color-dim);
+}
+
 .session-list {
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 0.25rem 0.5rem 0.75rem 0.75rem;
+  padding: 0 0.5rem 0.75rem 0.75rem;
 }
 
-.sessions {
+/* .docs-nav-heading */
+.group-label {
+  display: flex;
+  align-items: baseline;
+  margin: 1rem 0 0.35rem;
+  padding-right: 0.35rem;
+  color: var(--color-accent-dim);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.session-group:first-child .group-label {
+  margin-top: 0.35rem;
+}
+
+.group-label .count {
+  margin-left: auto;
+  color: var(--color-dim);
+  font-size: 0.72rem;
+}
+
+/* The archive label opens and closes its group, with the site's mobile
+   disclosure marker. */
+.group-toggle {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  min-height: 2rem;
+  margin: -0.4rem 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.group-toggle .marker {
+  width: 1ch;
+  margin-right: 0.45rem;
+  color: var(--color-accent);
+}
+
+.rows {
   display: grid;
   gap: 0.1rem;
   margin: 0;
@@ -565,9 +698,14 @@ code {
   list-style: none;
 }
 
-/* .docs-nav-link */
-.sessions button {
+/* .docs-nav-link: two lines, the unread dot on the right. Tier B adds a
+   size badge before the title and the model and review state to the
+   second line. */
+.row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.1rem 0.5rem;
+  align-items: center;
   width: 100%;
   min-width: 0;
   min-height: 3.1rem;
@@ -578,22 +716,36 @@ code {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: transparent;
   color: var(--color-muted);
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.sessions button:hover {
+.row:hover {
   background: var(--color-surface-raised);
   color: var(--color-text);
 }
 
-.sessions button[aria-current="page"] {
+.row.is-archived {
+  color: var(--color-dim);
+}
+
+.row.is-unread .row-title {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.row[aria-current="page"] {
   border-left-color: var(--color-accent);
   background: var(--color-surface-raised);
   color: var(--color-text);
 }
 
-.sessions .title {
+.row[aria-current="page"] .row-title {
+  font-weight: 650;
+}
+
+.row-title {
   overflow: hidden;
   font-size: 0.88rem;
   line-height: 1.3;
@@ -601,18 +753,47 @@ code {
   white-space: nowrap;
 }
 
-.sessions button[aria-current="page"] .title {
-  font-weight: 650;
-}
-
-.sessions .detail {
+.row-meta {
+  display: flex;
+  grid-column: 1;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
   overflow: hidden;
   color: var(--color-dim);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.3;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-meta > * {
+  flex: none;
+}
+
+.row-meta .time {
+  margin-left: auto;
+  padding-left: 0.4rem;
+}
+
+/* The roadmap node dot */
+.unread {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-accent);
+}
+
+.list-summary {
+  display: block;
+  margin: 0.75rem 0.5rem 0;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-align: center;
 }
 
 .list-empty {
@@ -893,6 +1074,78 @@ code {
 
 .empty .btn {
   margin-top: 0.4rem;
+}
+
+/* Sessions waiting for the user, as .feature-card tiles. */
+.waiting {
+  display: grid;
+  gap: 0.5rem;
+  width: min(100%, 44rem);
+  margin-top: 1.25rem;
+  text-align: left;
+}
+
+.waiting-label {
+  margin: 0;
+  color: var(--color-accent-dim);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: linear-gradient(145deg, var(--color-surface-raised), var(--color-surface));
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card:hover {
+  border-color: var(--color-border-strong);
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.card-meta .time::before {
+  content: "· ";
+}
+
+.card-title {
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Session ------------------------------------------------------ */
@@ -1207,8 +1460,13 @@ code {
     min-height: 2.75rem;
   }
 
-  .sessions button {
+  .row {
     min-height: 3.4rem;
+  }
+
+  .group-toggle {
+    min-height: 2.75rem;
+    margin: -0.75rem 0;
   }
 
   .menu-item {

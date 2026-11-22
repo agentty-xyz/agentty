@@ -4,9 +4,11 @@
 // Usage: node app_flow.mjs <listener address> session <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
 //
-// In `session` mode the test server lists one session, `Build it`, waiting
-// on one question. Between `sent` and `refreshed` the Rust test bumps the
-// server's revision, so the server pushes `changed`.
+// In `session` mode the test server lists `Build it`, waiting on one
+// question, and the draft `Plan it`, which counts as updated whenever a
+// message is sent. Between `sent` and `refreshed` the Rust test bumps the
+// server's revision, so the server pushes `changed` and `Plan it` turns
+// unread.
 //
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
@@ -68,26 +70,40 @@ function texts(nodes) {
   return nodes.map((node) => node.textContent);
 }
 
+function rows() {
+  return byId("sessions").querySelectorAll(".row");
+}
+
+// Ids of the rows that show the unread dot.
+function unreadRows() {
+  return rows()
+    .filter((row) => row.querySelector(".unread"))
+    .map((row) => row.dataset.sessionId);
+}
+
 async function sessionFlow() {
-  await waitFor("the session list", () => byId("sessions").children.length > 0);
+  await waitFor("the session list", () => rows().length > 0);
   report({
     step: "listed",
     connection: byId("connection").textContent,
+    groups: texts(byId("sessions").querySelectorAll(".group-label")),
     heading: byId("heading").textContent,
     isOnline: byId("connection").classList.contains("is-online"),
-    sessions: byId("sessions").children.map((item) => ({
-      detail: item.querySelector(".detail").textContent,
-      title: item.querySelector(".title").textContent,
+    sessions: rows().map((row) => ({
+      status: row.querySelector(".status").textContent,
+      time: row.querySelector(".time").textContent,
+      title: row.querySelector(".row-title").textContent,
     })),
+    unread: unreadRows(),
     view: visibleView(),
   });
 
-  byId("sessions").querySelector("button").click();
+  rows()[0].click();
   await waitFor("the transcript", () => byId("transcript").children.length > 0);
   report({
     step: "opened",
     cancelHidden: byId("cancel").hidden,
-    current: byId("sessions").querySelector("button").getAttribute("aria-current"),
+    current: rows()[0].getAttribute("aria-current"),
     hash: window.location.hash,
     heading: byId("heading").textContent,
     questions: byId("questions")
@@ -110,7 +126,12 @@ async function sessionFlow() {
   report({ step: "sent", error: byId("session-error").textContent });
 
   await waitFor("the queued message", () => byId("queued").children.length > 0);
-  report({ step: "refreshed", queued: texts(byId("queued").children) });
+  report({
+    step: "refreshed",
+    queued: texts(byId("queued").children),
+    unread: unreadRows(),
+    unreadLabel: texts(byId("sessions").querySelectorAll(".unread")),
+  });
 
   const option = byId("questions").querySelector(".options button");
   option.click();
@@ -138,14 +159,14 @@ async function sessionFlow() {
   await waitFor("the home view", () => visibleView() === "home-view");
   report({
     step: "closed",
-    current: byId("sessions").querySelector("button").getAttribute("aria-current"),
+    current: rows()[0].getAttribute("aria-current"),
     hash: window.location.hash,
     heading: byId("heading").textContent,
     view: visibleView(),
   });
 
   // Forgetting the device from an open session drops its route.
-  byId("sessions").querySelector("button").click();
+  rows()[0].click();
   const routed = window.location.hash;
   byId("device-more").click();
   byId("forget").click();

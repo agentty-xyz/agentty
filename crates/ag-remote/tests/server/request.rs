@@ -36,6 +36,16 @@ async fn next_untimed_frame(client: &mut Client) -> TestResult<ServerFrame> {
     Ok(serde_json::from_str(&text)?)
 }
 
+/// Builds the listing entry of the session `id`.
+fn summary(id: &str, status: &str, title: &str, updated_at: i64) -> RemoteSessionSummary {
+    RemoteSessionSummary {
+        id: id.to_string(),
+        status: status.to_string(),
+        title: Some(title.to_string()),
+        updated_at,
+    }
+}
+
 #[tokio::test]
 async fn each_request_reaches_the_session_service() -> TestResult {
     // Arrange
@@ -86,12 +96,10 @@ async fn each_request_reaches_the_session_service() -> TestResult {
     assert_eq!(
         listed,
         RemoteResult::Ok(RemoteResponse::Sessions {
-            sessions: vec![RemoteSessionSummary {
-                id: "session-1".to_string(),
-                status: "Review".to_string(),
-                title: Some("Build it".to_string()),
-                updated_at: 20,
-            }],
+            sessions: vec![
+                summary("session-1", "Review", "Build it", 20),
+                summary("session-2", "Draft", "Plan it", 30),
+            ],
         })
     );
     assert_eq!(
