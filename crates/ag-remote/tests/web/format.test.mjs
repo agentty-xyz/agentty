@@ -117,17 +117,17 @@ test("relativeTime rounds to the largest whole unit", () => {
   // Arrange
   const now = 1_000_000;
   const cases = [
-    [now, "just now"],
-    [now + 30, "just now"],
-    [now - 59, "just now"],
-    [now - 60, "1 min ago"],
-    [now - 59 * 60, "59 min ago"],
-    [now - 60 * 60, "1 h ago"],
-    [now - (3600 + 29 * 60 + 40), "1 h ago"],
-    [now - (47 * 3600 + 20 * 60), "47 h ago"],
-    [now - 47 * 3600, "47 h ago"],
-    [now - 48 * 3600, "2 d ago"],
-    [now - 30 * 86400, "30 d ago"],
+    [now, "now"],
+    [now + 30, "now"],
+    [now - 59, "now"],
+    [now - 60, "1m"],
+    [now - 59 * 60, "59m"],
+    [now - 60 * 60, "1h"],
+    [now - (3600 + 29 * 60 + 40), "1h"],
+    [now - 23 * 3600, "23h"],
+    [now - (23 * 3600 + 40 * 60), "1d"],
+    [now - 36 * 3600, "2d"],
+    [now - 30 * 86400, "30d"],
   ];
 
   // Act

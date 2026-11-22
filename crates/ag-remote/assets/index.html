@@ -40,6 +40,14 @@
             <line x1="6" y1="6" x2="18" y2="18" />
             <line x1="18" y1="6" x2="6" y2="18" />
             </symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+            </symbol>
+            <symbol id="i-search" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="16" y1="16" x2="21" y2="21" />
+            </symbol>
             <symbol id="i-device" viewBox="0 0 24 24">
             <rect x="7" y="2.5" width="10" height="19" rx="2" />
             <line x1="11" y1="18" x2="13" y2="18" />
@@ -121,10 +129,31 @@
                         </svg>
                     </button>
                 </div>
+                <div class="sidebar-actions">
+                    <button id="new-session" class="new-session" type="button" hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-plus" />
+                        </svg>
+                        New session
+                    </button>
+                    <label class="filter">
+                        <svg class="icon icon--sm" aria-hidden="true">
+                            <use href="#i-search" />
+                        </svg>
+                        <input id="filter"
+                               type="search"
+                               placeholder="Filter sessions"
+                               aria-label="Filter sessions"
+                               autocomplete="off"
+                               spellcheck="false">
+                        <kbd id="filter-key" class="wide-only" aria-hidden="true">/</kbd>
+                    </label>
+                    <div id="chips" class="segmented chips" role="group" aria-label="Show"></div>
+                </div>
                 <nav class="session-list" aria-label="Session list">
-                    <ul id="sessions" class="sessions">
-                    </ul>
+                    <div id="sessions" class="sessions"></div>
                     <p id="sessions-empty" class="list-empty" hidden>No sessions in the active project.</p>
+                    <p id="filter-summary" class="list-summary" role="status" hidden></p>
                     <p id="list-error" class="error" role="alert"></p>
                 </nav>
                 <footer class="sidebar-foot">
@@ -187,8 +216,8 @@
                     <button id="retry" type="button" class="btn btn--ghost" hidden>Retry now</button>
                     <button id="reload" type="button" class="btn btn--ghost" hidden>Reload</button>
                 </div>
-                <section id="home-view" class="empty">
-                    <p class="eyebrow">Remote control</p>
+                <section id="home-view" class="empty home">
+                    <p id="home-eyebrow" class="eyebrow">Remote control</p>
                     <h2 id="home-title">Pick a session</h2>
                     <p id="home-pick">Choose a session from the list to read it and reply.</p>
                     <p id="home-none" hidden>
@@ -200,6 +229,11 @@
                         </svg>
                         Show sessions
                     </button>
+                    <div id="home-waiting" class="waiting" hidden>
+                        <h3 class="waiting-label">Waiting for you</h3>
+                        <ul id="home-cards" class="card-grid">
+                        </ul>
+                    </div>
                 </section>
                 <section id="session-view" class="session-view" hidden>
                     <div id="chat-scroll" class="chat-scroll">

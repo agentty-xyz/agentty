@@ -84,22 +84,23 @@ export function statusInfo(statusName) {
     : status(String(statusName), "idle", "active", {});
 }
 
-// Formats how long ago `unixSeconds` was, as seen at `nowSeconds`.
+// Formats how long ago `unixSeconds` was, as seen at `nowSeconds`, in the
+// list's short form: `now`, then minutes, hours and days such as `3m`.
 export function relativeTime(unixSeconds, nowSeconds) {
   const seconds = Math.max(0, Math.round(nowSeconds - unixSeconds));
   if (seconds < 60) {
-    return "just now";
+    return "now";
   }
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return minutes + " min ago";
+    return minutes + "m";
   }
   const hours = Math.round(seconds / 3600);
-  if (hours < 48) {
-    return hours + " h ago";
+  if (hours < 24) {
+    return hours + "h";
   }
 
-  return Math.round(seconds / 86400) + " d ago";
+  return Math.round(seconds / 86400) + "d";
 }
 
 // Splits `sessions` into the populated groups of `GROUPS`, in that order,
