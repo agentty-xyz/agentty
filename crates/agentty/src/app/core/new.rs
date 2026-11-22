@@ -152,6 +152,7 @@ impl App {
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let (sync_handle, sync_task) = sync::SyncHandle::unstarted(event_tx.clone(), sync_context);
         Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
+        let remote_control = Self::remote_control(&clients, &repositories);
         let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
@@ -181,12 +182,9 @@ impl App {
             sessions: sessions.into(),
             question_progress: std::collections::HashMap::new(),
             question_reconcile_reload_attempted: None,
-            remote_control: RemoteControl::new(
-                clients.remote_control_launcher,
-                clients.browser_client,
-                clients.terminal_clipboard,
-                &repositories,
-            ),
+            remote_control,
+            screen_browser: clients.browser_client,
+            screen_clipboard: clients.terminal_clipboard,
             event_rx,
             is_tmux_session: clients.is_tmux_session,
             review_cache,
@@ -211,6 +209,17 @@ impl App {
             tmux_client: clients.tmux_client,
         };
         Ok(app.complete_startup(recoverable, sync_task, sweep).await)
+    }
+
+    /// Builds disabled remote control that shares the browser and terminal
+    /// clipboard clients with screen links and mouse selections.
+    fn remote_control(clients: &AppClients, repositories: &AppRepositories) -> RemoteControl {
+        RemoteControl::new(
+            Arc::clone(&clients.remote_control_launcher),
+            Arc::clone(&clients.browser_client),
+            Arc::clone(&clients.terminal_clipboard),
+            repositories,
+        )
     }
 
     /// Starts recovered reviews, resumes review-request watches, spawns

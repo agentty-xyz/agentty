@@ -39,6 +39,7 @@ use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
 use crate::infra::resource::ResourceClient;
+use crate::infra::terminal_clipboard::TerminalClipboard;
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
@@ -662,6 +663,18 @@ impl AppClients {
         project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     ) -> Self {
         self.project_discovery_client = project_discovery_client;
+
+        self
+    }
+
+    /// Replaces the terminal clipboard boundary so tests never reach the
+    /// developer's terminal or `tmux` clipboard.
+    #[must_use]
+    pub(crate) fn with_terminal_clipboard(
+        mut self,
+        terminal_clipboard: Arc<dyn TerminalClipboard>,
+    ) -> Self {
+        self.terminal_clipboard = terminal_clipboard;
 
         self
     }

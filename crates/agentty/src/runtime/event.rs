@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tokio::sync::mpsc;
@@ -21,6 +23,7 @@ use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::latency::CycleTiming;
 use crate::runtime::mode::chat_scroll::ChatScrollBatch;
+use crate::runtime::screen_selection::ScreenSelection;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 use crate::ui::RenderCacheStore;
 
@@ -127,7 +130,7 @@ fn forward_next_terminal_event(
     };
 
     match event {
-        Ok(event) => match wheel_as_arrow_key(event) {
+        Ok(event) => match translate_mouse_event(event) {
             Some(event) => event_tx.send(Ok(event)).is_ok(),
             None => true,
         },
@@ -140,19 +143,23 @@ fn forward_next_terminal_event(
     }
 }
 
-/// Converts mouse-wheel reports into arrow keys and drops other mouse reports.
+/// Converts mouse-wheel reports into arrow keys, keeps left-button reports
+/// for screen selection, and drops other mouse reports.
 ///
 /// Direct terminals already turn the wheel into `Up`/`Down` on the alternate
-/// screen. Mouse reporting is requested only inside `tmux` with `mouse on`,
-/// whose default bindings otherwise swallow the wheel, so this mapping keeps
-/// scrolling identical across both transports.
-fn wheel_as_arrow_key(event: Event) -> Option<Event> {
+/// screen. Mouse reporting is requested only inside `tmux`, which otherwise
+/// swallows the wheel or leaves it to the outer terminal, so this mapping
+/// keeps scrolling identical across both transports.
+fn translate_mouse_event(event: Event) -> Option<Event> {
     let Event::Mouse(mouse) = event else {
         return Some(event);
     };
     let key_code = match mouse.kind {
         MouseEventKind::ScrollUp => KeyCode::Up,
         MouseEventKind::ScrollDown => KeyCode::Down,
+        MouseEventKind::Down(MouseButton::Left)
+        | MouseEventKind::Drag(MouseButton::Left)
+        | MouseEventKind::Up(MouseButton::Left) => return Some(event),
         _ => return None,
     };
 
@@ -215,6 +222,7 @@ where
         timing,
         |app, terminal, event| {
             mode::diff::apply_refreshed_diff(app, presentation.render_cache_store());
+            update_screen_selection(app, presentation.screen_selection(), event.as_ref());
             if let Some(Event::Key(key)) = event.as_ref()
                 && is_press_key_event(*key)
             {
@@ -382,6 +390,30 @@ where
         })
     })
     .await
+}
+
+/// Feeds one terminal event to the mouse selection and requests a redraw
+/// when the selection changed.
+///
+/// Left-button reports start, extend, and finish a selection. A key press
+/// drops a selection whose button is still down, so a release that never
+/// arrives cannot leave a stale highlight. That includes the arrow key a
+/// wheel tick becomes: a selection is fixed to screen cells, so it cannot
+/// follow text that scrolls. The dispatcher calls this before any handler
+/// can consume the event, so every mode cancels alike.
+fn update_screen_selection(
+    app: &mut App,
+    screen_selection: &ScreenSelection,
+    event: Option<&Event>,
+) {
+    let is_changed = match event {
+        Some(Event::Mouse(mouse)) => screen_selection.handle_mouse(*mouse),
+        Some(Event::Key(key)) if is_press_key_event(*key) => screen_selection.cancel(),
+        _ => false,
+    };
+    if is_changed {
+        app.mark_dirty();
+    }
 }
 
 /// Routes one terminal event with an injected key handler for deterministic

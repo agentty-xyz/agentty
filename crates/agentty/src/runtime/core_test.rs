@@ -4,17 +4,20 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
+use ratatui::style::Modifier;
 use testty::session::PtySessionBuilder;
 use tokio::sync::mpsc;
 
@@ -27,7 +30,9 @@ use crate::app::{App, AppEvent};
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::infra::browser::MockBrowserClient;
 use crate::infra::clock::Clock;
+use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::latency::{CycleTiming, SLOW_CYCLE_THRESHOLD};
 use crate::runtime::{FRAME_INTERVAL, PresentationState};
@@ -599,6 +604,112 @@ async fn render_frame_skips_frame_ticks_when_greeting_is_hidden() {
     assert!(app.has_visible_frame_animation());
     assert!(!presentation.greeting_animated());
     assert_eq!(hidden_draw_count, initial_draw_count);
+}
+
+/// Verifies a frame highlights a mouse selection, and the frame after the
+/// release opens a clicked link or copies a drag without waiting for the
+/// clipboard.
+#[tokio::test]
+async fn render_frame_resolves_mouse_selection_gestures() {
+    // Arrange
+    let link = "https://example.com/docs";
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let (frames_done_tx, frames_done_rx) = std::sync::mpsc::channel::<()>();
+    let (copied_tx, mut copied_rx) = mpsc::unbounded_channel();
+    let mut clipboard = MockTerminalClipboard::new();
+    // The clipboard stays busy until every frame is rendered, so a frame
+    // that waited for it would time out here and report `false`.
+    clipboard
+        .expect_copy_through_tmux()
+        .times(1)
+        .returning(move |text| {
+            let is_after_frames = frames_done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            let _ = copied_tx.send((text.to_string(), is_after_frames));
+
+            true
+        });
+    let mut browser = MockBrowserClient::new();
+    browser.expect_open().returning({
+        let opened = Arc::clone(&opened);
+
+        move |url| opened.lock().expect("opened lock").push(url.to_string())
+    });
+    let clients = crate::test_support::test_app_clients()
+        .with_browser_client(Arc::new(browser))
+        .with_terminal_clipboard(Arc::new(clipboard));
+    let (mut app, _base_dir) = crate::test_support::new_test_app_with_clients(clients).await;
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::Review)
+            .transcript(format!("see {link} now"))
+            .build(),
+    );
+    app.mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let mut terminal =
+        Terminal::new(TestBackend::new(80, 24)).expect("failed to create test terminal");
+    let clock = crate::infra::clock::RealClock;
+    let mut last_draw = DrawStamp::now(&clock);
+    let presentation = PresentationState::default();
+    let mut render = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        app.mark_dirty();
+        render_frame(app, terminal, &clock, &mut last_draw, &presentation)
+            .expect("frame should render");
+    };
+    render(&mut app, &mut terminal);
+    let (column, row) = position_of(terminal.backend().buffer(), link);
+    let report = |kind, column| MouseEvent {
+        column,
+        kind,
+        modifiers: KeyModifiers::NONE,
+        row,
+    };
+    let selection = presentation.screen_selection();
+
+    // Act
+    selection.handle_mouse(report(MouseEventKind::Down(MouseButton::Left), column));
+    selection.handle_mouse(report(MouseEventKind::Drag(MouseButton::Left), column + 4));
+    render(&mut app, &mut terminal);
+    let is_highlighted = (column..=column + 4).all(|highlighted_column| {
+        terminal.backend().buffer()[(highlighted_column, row)]
+            .modifier
+            .contains(Modifier::REVERSED)
+    });
+    selection.handle_mouse(report(MouseEventKind::Up(MouseButton::Left), column + 4));
+    render(&mut app, &mut terminal);
+    selection.handle_mouse(report(MouseEventKind::Down(MouseButton::Left), column));
+    selection.handle_mouse(report(MouseEventKind::Up(MouseButton::Left), column));
+    render(&mut app, &mut terminal);
+    render(&mut app, &mut terminal);
+    frames_done_tx
+        .send(())
+        .expect("the clipboard mock should still be alive");
+    let copied = copied_rx.recv().await;
+
+    // Assert
+    assert!(is_highlighted);
+    assert_eq!(copied, Some(("https".to_string(), true)));
+    assert_eq!(*opened.lock().expect("opened lock"), vec![link]);
+}
+
+/// Returns the cell where `needle` starts on the rendered screen.
+fn position_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+    let area = buffer.area;
+
+    (area.top()..area.bottom())
+        .find_map(|row| {
+            let row_text: String = (area.left()..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
+            let column = row_text.find(needle)?;
+            let column = u16::try_from(row_text[..column].chars().count()).ok()?;
+
+            Some((column, row))
+        })
+        .expect("needle should be rendered")
 }
 
 /// Builds a test app viewing one draft session that shows the nerpa

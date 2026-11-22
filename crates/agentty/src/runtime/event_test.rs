@@ -21,6 +21,7 @@ use super::{
     EventSource, MockEventSource, TERMINAL_EVENT_DRAIN_BUDGET, process_event_with_key_handler,
     process_events, process_events_with_handler, process_events_with_scroll_handler,
     process_paste_event, spawn_event_reader, spawn_event_reader_with_source,
+    update_screen_selection,
 };
 use crate::app::session::{SESSION_REFRESH_INTERVAL, SessionDefaults};
 use crate::app::{App, AppEvent, SessionManager, SessionState};
@@ -41,6 +42,7 @@ use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::SettingsAction;
 use crate::runtime::latency::CycleTiming;
+use crate::runtime::screen_selection::ScreenSelection;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
 
 /// Continues a test cycle while asserting no terminal event was produced.
@@ -131,16 +133,20 @@ async fn test_spawn_event_reader_with_source_forwards_event_to_channel() {
     assert!(matches!(received_event, Event::Key(_)));
 }
 
-/// Verifies the reader forwards wheel reports as arrow keys and drops other
-/// mouse reports.
+/// Verifies the reader forwards wheel reports as arrow keys, keeps
+/// left-button reports for screen selection, and drops other mouse reports.
 #[test]
-fn test_spawn_event_reader_with_source_maps_wheel_to_arrow_keys() {
+fn test_spawn_event_reader_with_source_maps_wheel_and_keeps_left_button_reports() {
     // Arrange
     let mut mock_source = MockEventSource::new();
     let mut sequence = Sequence::new();
     for kind in [
         MouseEventKind::ScrollUp,
+        MouseEventKind::Down(MouseButton::Right),
         MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Moved,
+        MouseEventKind::Up(MouseButton::Left),
         MouseEventKind::ScrollDown,
     ] {
         mock_source
@@ -174,13 +180,26 @@ fn test_spawn_event_reader_with_source_maps_wheel_to_arrow_keys() {
     spawn_event_reader_with_source(event_source, event_tx, shutdown)
         .join()
         .expect("failed to join event reader thread");
-    let mut key_codes = Vec::new();
-    while let Ok(Ok(Event::Key(key))) = event_rx.try_recv() {
-        key_codes.push(key.code);
+    let mut forwarded = Vec::new();
+    while let Ok(Ok(event)) = event_rx.try_recv() {
+        forwarded.push(match event {
+            Event::Key(key) => format!("key {:?}", key.code),
+            Event::Mouse(mouse) => format!("mouse {:?}", mouse.kind),
+            other => format!("{other:?}"),
+        });
     }
 
     // Assert
-    assert_eq!(key_codes, vec![KeyCode::Up, KeyCode::Down]);
+    assert_eq!(
+        forwarded,
+        vec![
+            "key Up",
+            "mouse Down(Left)",
+            "mouse Drag(Left)",
+            "mouse Up(Left)",
+            "key Down",
+        ]
+    );
 }
 
 /// Verifies the reader exits cleanly when the event receiver is already
@@ -662,6 +681,56 @@ async fn test_process_event_with_key_handler_ignores_resize_events() {
     // Assert
     assert!(matches!(result, Ok(EventResult::Continue)));
     assert!(matches!(&app.mode, AppMode::List));
+}
+
+/// Verifies left-button reports drive the screen selection and request a
+/// redraw, and a key press drops a selection whose button is still down.
+#[tokio::test]
+async fn test_update_screen_selection_tracks_mouse_reports_and_key_presses() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let screen_selection = ScreenSelection::default();
+    let mouse = |kind| {
+        Event::Mouse(MouseEvent {
+            column: 1,
+            kind,
+            modifiers: KeyModifiers::NONE,
+            row: 0,
+        })
+    };
+    let key_press = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    let key_release = Event::Key(KeyEvent::new_with_kind(
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    ));
+    let cases = [
+        ("no event", None, false),
+        ("idle key press", Some(key_press.clone()), false),
+        (
+            "press",
+            Some(mouse(MouseEventKind::Down(MouseButton::Left))),
+            true,
+        ),
+        ("key release", Some(key_release), false),
+        ("resize", Some(Event::Resize(80, 24)), false),
+        ("selecting key press", Some(key_press), true),
+        (
+            "drag without press",
+            Some(mouse(MouseEventKind::Drag(MouseButton::Left))),
+            false,
+        ),
+    ];
+
+    for (name, event, expected_redraw) in cases {
+        app.clear_redraw();
+
+        // Act
+        update_screen_selection(&mut app, &screen_selection, event.as_ref());
+
+        // Assert
+        assert_eq!(app.needs_redraw(), expected_redraw, "{name}");
+    }
 }
 
 /// Verifies key release events are ignored even when keyboard enhancement
@@ -1279,6 +1348,54 @@ async fn test_event_batch_propagates_scroll_measurement_error() {
             ..
         }
     ));
+}
+
+/// Verifies a key the scroll handler consumes still drops a selection whose
+/// button is down. `Up` is also the key a wheel tick becomes.
+#[tokio::test]
+async fn test_event_batch_cancels_screen_selection_before_consumed_scroll_key() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+    let presentation = Rc::new(PresentationState::default());
+    let is_pressed = presentation.screen_selection().handle_mouse(MouseEvent {
+        column: 1,
+        kind: MouseEventKind::Down(MouseButton::Left),
+        modifiers: KeyModifiers::NONE,
+        row: 0,
+    });
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    event_tx
+        .send(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)))
+        .expect("queue scroll");
+    let mut tick = tokio::time::interval(Duration::from_mins(1));
+    tick.tick().await;
+    let mut consumed_keys = 0;
+    app.clear_redraw();
+
+    // Act
+    let result = process_events_with_scroll_handler(
+        &mut app,
+        Rc::clone(&presentation),
+        &mut terminal,
+        &mut event_rx,
+        &mut tick,
+        &mut CycleTiming::default(),
+        |_, _, _, _, _| {
+            consumed_keys += 1;
+
+            Ok(true)
+        },
+    )
+    .await;
+
+    // Assert
+    assert!(is_pressed);
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert_eq!(consumed_keys, 1);
+    assert!(app.needs_redraw());
+    assert!(!presentation.screen_selection().cancel());
 }
 
 #[tokio::test]

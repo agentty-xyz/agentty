@@ -588,6 +588,8 @@ impl AppServices {
             AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
             AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
             AppEvent::RemoteControlStatusUpdated { .. } => "RemoteControlStatusUpdated",
+            AppEvent::RemoteLinkCopied { .. } => "RemoteLinkCopied",
+            AppEvent::ScreenCopyDeclined { .. } => "ScreenCopyDeclined",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",
             AppEvent::ChatGptSignInUpdated { .. } => "ChatGptSignInUpdated",

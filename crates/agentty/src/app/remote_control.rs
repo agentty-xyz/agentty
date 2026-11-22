@@ -17,7 +17,7 @@ use ag_session::{SessionId, SessionService};
 use tokio::sync::{mpsc, watch};
 
 use crate::app::command_gateway::CommandInitiator;
-use crate::app::spawn::spawn_detached;
+use crate::app::spawn::{spawn_blocking_detached, spawn_detached};
 use crate::app::{App, AppEvent};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
@@ -61,6 +61,9 @@ pub(crate) struct RemoteControl {
     /// Public key devices pin, while a relay-linked listener runs.
     instance_key: Option<PublicKey>,
     launcher: Arc<dyn RemoteControlLauncher>,
+    /// Identifies the latest link copy so the result of an earlier one, or
+    /// of a link that is no longer shown, is ignored.
+    link_copy_request: u64,
     /// Loopback port, or `None` until `--experimental-remote` enables
     /// remote control.
     port: Option<u16>,
@@ -95,6 +98,7 @@ impl RemoteControl {
             generation: 0,
             instance_key: None,
             launcher,
+            link_copy_request: 0,
             port: None,
             relay_url: None,
             revision_tx,
@@ -138,6 +142,16 @@ impl RemoteControl {
         let listener = self.view.listener.as_ref()?;
 
         listener.relay.as_ref().map(|relay| relay.link.clone())
+    }
+
+    /// Clears the copy notice and disowns any copy still running, because
+    /// its result would describe a link that is no longer shown. Returns the
+    /// request a new copy reports under.
+    fn forget_link_copy(&mut self) -> u64 {
+        self.link_copy_request += 1;
+        self.view.notice = None;
+
+        self.link_copy_request
     }
 }
 
@@ -206,7 +220,7 @@ impl App {
             return;
         };
         self.remote_control.view.error = None;
-        self.remote_control.view.notice = None;
+        self.remote_control.forget_link_copy();
         if self.remote_control.server.is_none() {
             self.start_remote_listener(port).await;
         }
@@ -287,6 +301,7 @@ impl App {
 
     /// Replaces the pairing code shown while the listener runs.
     pub(crate) fn issue_remote_pairing_code(&mut self) {
+        self.remote_control.forget_link_copy();
         let Some(server) = self.remote_control.server.as_ref() else {
             return;
         };
@@ -329,11 +344,44 @@ impl App {
     }
 
     /// Copies the relay pairing link through the terminal.
+    ///
+    /// The `tmux` step runs in the background, because it waits for a `tmux`
+    /// command. Its result arrives as [`AppEvent::RemoteLinkCopied`].
     pub(crate) fn copy_remote_link(&mut self) {
         let Some(link) = self.remote_control.relay_link() else {
             return;
         };
-        let notice = if self.remote_control.clipboard.copy(&link) {
+        let request_id = self.remote_control.forget_link_copy();
+        let clipboard = Arc::clone(&self.remote_control.clipboard);
+        let event_tx = self.services.event_sender();
+        spawn_blocking_detached(move || {
+            let is_copied = clipboard.copy_through_tmux(&link);
+            // The app owns the event channel, so a closed one only drops the
+            // result.
+            let _ = event_tx.send(AppEvent::RemoteLinkCopied {
+                is_copied,
+                request_id,
+            });
+        });
+    }
+
+    /// Finishes the link copy identified by `request_id` and shows whether
+    /// it reached the terminal, ignoring a copy that a later one or a new
+    /// link replaced.
+    ///
+    /// When `tmux` did not copy the link, this asks the terminal from the
+    /// foreground, the only thread that may write to it.
+    pub(crate) fn apply_remote_link_copied(&mut self, request_id: u64, is_copied: bool) {
+        if request_id != self.remote_control.link_copy_request {
+            return;
+        }
+
+        let is_copied = is_copied
+            || self
+                .remote_control
+                .relay_link()
+                .is_some_and(|link| self.remote_control.clipboard.copy_through_terminal(&link));
+        let notice = if is_copied {
             LINK_COPIED
         } else {
             LINK_NOT_COPIED
@@ -350,7 +398,7 @@ impl App {
         self.remote_control.connections.clear();
         self.remote_control.instance_key = None;
         self.remote_control.view.listener = None;
-        self.remote_control.view.notice = None;
+        self.remote_control.forget_link_copy();
         self.remote_control.view.pairing_requests.clear();
         for device in &mut self.remote_control.view.devices {
             device.is_connected = false;

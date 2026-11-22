@@ -32,7 +32,8 @@ integration tests exercise supported APIs without exposing private implementatio
 | Wall and monotonic time        | `Clock`                         |
 | Worktree launch commands       | `TmuxClient`                    |
 | Clipboard capture              | `ClipboardImageClient`          |
-| Browser sign-in pages          | `BrowserClient`                 |
+| Terminal clipboard copies      | `TerminalClipboard`             |
+| Browser pages and links        | `BrowserClient`                 |
 | Workspace agents               | `AgentCatalogClient`            |
 | Process sampling               | `ResourceClient`                |
 | Remote-control listener        | `RemoteControlLauncher`         |

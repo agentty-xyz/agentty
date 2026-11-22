@@ -130,6 +130,35 @@ fn app_event_label_names_remote_control_status() {
 }
 
 #[test]
+fn app_event_label_names_remote_link_copies() {
+    // Arrange
+    let event = AppEvent::RemoteLinkCopied {
+        is_copied: true,
+        request_id: 1,
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "RemoteLinkCopied");
+}
+
+#[test]
+fn app_event_label_names_declined_screen_copies() {
+    // Arrange
+    let event = AppEvent::ScreenCopyDeclined {
+        text: "selected".to_string(),
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "ScreenCopyDeclined");
+}
+
+#[test]
 fn app_event_label_names_diff_preview_loads() {
     // Arrange
     let event = AppEvent::DiffPreviewLoaded {

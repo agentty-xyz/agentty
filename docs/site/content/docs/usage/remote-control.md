@@ -212,9 +212,9 @@ With a relay, the tab also shows the relay state, a pairing link, and a QR code 
 link when the terminal is large enough. Scan the code or open the link on the other
 device. The relay's pairing page opens with the code filled in: name the device, press
 `Pair`, then approve the pairing as usual. On this computer, press `o` to open the link;
-press `c` to copy it for another device. Copying uses the terminal clipboard, which
-`tmux` passes on only with `set-clipboard on`; otherwise select the link. The link
-carries the pairing code, so it works once.
+press `c` to copy it for another device. Copying uses the terminal clipboard; if the
+terminal does not support it, select the link instead. The link carries the pairing
+code, so it works once.
 
 The browser remembers the pairing, so later visits to the relay's address connect
 without a link. Pairing through a relay needs an up-to-date browser, from 2025 or later,

@@ -39,6 +39,7 @@ use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::browser::MockBrowserClient;
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
 use crate::infra::resource::MockResourceClient;
+use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
 use crate::presentation::chatgpt_sign_in::ChatGptSignInDialog;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
@@ -360,10 +361,19 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
     // Host process sampling would make idle redraws depend on machine load.
     let mut resource_client = MockResourceClient::new();
     resource_client.expect_sample().returning(|| None);
+    // The real clipboard would reach the terminal or `tmux` running the tests.
+    let mut terminal_clipboard = MockTerminalClipboard::new();
+    terminal_clipboard
+        .expect_copy_through_tmux()
+        .return_const(true);
+    terminal_clipboard
+        .expect_copy_through_terminal()
+        .return_const(true);
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
         .with_browser_client(Arc::new(browser_client))
+        .with_terminal_clipboard(Arc::new(terminal_clipboard))
         .with_session_run_factory(Arc::new(app::test_support::TestSessionRunFactory::default()))
         .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
             available_agent_kinds,

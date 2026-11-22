@@ -131,6 +131,13 @@ pub(crate) enum AppEvent {
         generation: u64,
         status: ag_remote::RemoteServerStatus,
     },
+    /// Reports whether `tmux` copied the remote pairing link identified by
+    /// `request_id` in the background. When it did not, the foreground asks
+    /// the terminal to copy the link.
+    RemoteLinkCopied { is_copied: bool, request_id: u64 },
+    /// Reports that `tmux` did not copy the screen `text` the user selected,
+    /// so the foreground asks the terminal to copy it.
+    ScreenCopyDeclined { text: String },
     /// Indicates locally available agent CLI versions finished loading.
     AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
     /// Indicates a background listing of harness models finished.
@@ -427,6 +434,8 @@ pub(super) struct AppEventBatch {
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     /// Latest remote-control connections with their listener generation.
     pub(super) remote_control_status: Option<(u64, ag_remote::RemoteServerStatus)>,
+    /// Latest remote pairing link copy result with its request.
+    pub(super) remote_link_copy: Option<(u64, bool)>,
     pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
@@ -436,6 +445,8 @@ pub(super) struct AppEventBatch {
     /// Sessions whose review-watch rerun requests finished, applied before
     /// review-request reports so the same batch's report can count.
     pub(super) review_watch_reruns_finished: HashSet<SessionId>,
+    /// Selected screen texts that `tmux` did not copy, in selection order.
+    pub(super) screen_copies_declined: Vec<String>,
     pub(super) session_activity_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
@@ -510,6 +521,7 @@ impl AppEventBatch {
             || self.git_status_update.is_some()
             || self.latest_available_version_update.is_some()
             || self.remote_control_status.is_some()
+            || self.remote_link_copy.is_some()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
             || !self.implementer_attempt_successes.is_empty()
@@ -613,6 +625,11 @@ impl AppEventBatch {
             AppEvent::RemoteControlStatusUpdated { generation, status } => {
                 self.remote_control_status = Some((generation, status));
             }
+            AppEvent::RemoteLinkCopied {
+                is_copied,
+                request_id,
+            } => self.collect_remote_link_copied(request_id, is_copied),
+            AppEvent::ScreenCopyDeclined { text } => self.screen_copies_declined.push(text),
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
                 self.agent_cli_updates = Some(agent_clis);
             }
@@ -688,16 +705,10 @@ impl AppEventBatch {
             event @ (AppEvent::SessionActivityReady { .. }
             | AppEvent::SessionActivityUpdated { .. }
             | AppEvent::SessionOutputReady { .. }
-            | AppEvent::SessionOutputCleared { .. }) => self.collect_activity_event(event),
+            | AppEvent::SessionOutputCleared { .. }
+            | AppEvent::SessionProgressUpdated { .. }) => self.collect_activity_event(event),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
-            }
-            AppEvent::SessionProgressUpdated {
-                progress_message,
-                session_id,
-            } => {
-                self.session_progress_updates
-                    .insert(session_id, progress_message);
             }
             AppEvent::SessionReviewCommentSnapshotLoaded {
                 request_id,
@@ -745,6 +756,8 @@ impl AppEventBatch {
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::RemoteControlStatusUpdated { .. }
+            | AppEvent::RemoteLinkCopied { .. }
+            | AppEvent::ScreenCopyDeclined { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::HarnessModelsUpdated { .. }
             | AppEvent::ChatGptSignInUpdated { .. }
@@ -764,6 +777,8 @@ impl AppEventBatch {
         }
     }
 
+    /// Collects transient session activity, output, and progress.
+    ///
     /// Formats deferred activity only after dequeuing, preserving clear order.
     /// Streamed output keeps its handle, which the foreground formats when it
     /// applies the batch and again on later frames.
@@ -787,6 +802,13 @@ impl AppEventBatch {
                 session_id,
             } => {
                 self.session_activity_updates.insert(session_id, activity);
+            }
+            AppEvent::SessionProgressUpdated {
+                progress_message,
+                session_id,
+            } => {
+                self.session_progress_updates
+                    .insert(session_id, progress_message);
             }
             _ => unreachable!("only activity events are routed here"),
         }
@@ -950,6 +972,18 @@ impl AppEventBatch {
         self.latest_available_version_update = Some(LatestAvailableVersionUpdate {
             latest_available_version,
         });
+    }
+
+    /// Stores the remote pairing link copy result of the newest request in
+    /// this reducer batch. Each copy runs on its own thread, so an older
+    /// result can arrive after a newer one.
+    fn collect_remote_link_copied(&mut self, request_id: u64, is_copied: bool) {
+        if self
+            .remote_link_copy
+            .is_none_or(|(batched_request_id, _)| request_id >= batched_request_id)
+        {
+            self.remote_link_copy = Some((request_id, is_copied));
+        }
     }
 
     /// Stores one completed linked review-comment snapshot load.
@@ -1261,6 +1295,12 @@ impl App {
         }
         if let Some((generation, status)) = event_batch.remote_control_status.take() {
             self.apply_remote_control_status(generation, status).await;
+        }
+        if let Some((request_id, is_copied)) = event_batch.remote_link_copy.take() {
+            self.apply_remote_link_copied(request_id, is_copied);
+        }
+        for text in std::mem::take(&mut event_batch.screen_copies_declined) {
+            self.copy_screen_text_through_terminal(&text);
         }
         self.apply_session_transient_updates(&mut event_batch);
         self.apply_deferred_session_settings().await;

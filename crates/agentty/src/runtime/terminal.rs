@@ -48,10 +48,6 @@ trait TerminalOperation {
     /// while still honoring explicit modified-key reporting requests.
     fn tmux_key_reporting(&self) -> TmuxKeyReporting;
 
-    /// Returns whether the enclosing `tmux` session has its `mouse` option
-    /// on, so wheel input over the pane needs explicit mouse reports.
-    fn is_tmux_mouse_enabled(&self) -> bool;
-
     /// Enters the alternate screen, enables its keyboard enhancement flags
     /// when supported, and enables bracketed paste.
     fn enter_alternate_screen(
@@ -101,10 +97,6 @@ impl TerminalOperation for CrosstermTerminalOperation {
         tmux::prepare_key_reporting()
     }
 
-    fn is_tmux_mouse_enabled(&self) -> bool {
-        tmux::is_mouse_enabled()
-    }
-
     fn enter_alternate_screen(
         &self,
         mut stdout: &mut dyn io::Write,
@@ -119,14 +111,14 @@ impl TerminalOperation for CrosstermTerminalOperation {
                 EnableXtermCsiUModifiedKeys(enhancement),
                 PushKeyboardEnhancementFlags(keyboard_enhancement_flags()),
                 EnableBracketedPaste,
-                EnableMouseWheelReporting(enhancement)
+                EnableMouseReporting(enhancement)
             )
         } else {
             execute!(
                 &mut stdout,
                 EnterAlternateScreen,
                 EnableBracketedPaste,
-                EnableMouseWheelReporting(enhancement)
+                EnableMouseReporting(enhancement)
             )
         }
     }
@@ -139,7 +131,7 @@ impl TerminalOperation for CrosstermTerminalOperation {
         if enhancement.keyboard_enhancement_enabled {
             execute!(
                 &mut stdout,
-                DisableMouseWheelReporting(enhancement),
+                DisableMouseReporting(enhancement),
                 PopKeyboardEnhancementFlags,
                 DisableXtermCsiUModifiedKeys(enhancement),
                 DisableBracketedPaste,
@@ -149,7 +141,7 @@ impl TerminalOperation for CrosstermTerminalOperation {
         } else {
             execute!(
                 &mut stdout,
-                DisableMouseWheelReporting(enhancement),
+                DisableMouseReporting(enhancement),
                 DisableBracketedPaste,
                 LeaveAlternateScreen,
                 Show
@@ -161,20 +153,24 @@ impl TerminalOperation for CrosstermTerminalOperation {
 /// Shared production terminal operation implementation.
 static CROSSTERM_TERMINAL_OPERATION: CrosstermTerminalOperation = CrosstermTerminalOperation;
 
-/// Conditionally requests button and wheel mouse reports in SGR encoding.
+/// Conditionally requests button, drag, and wheel mouse reports in SGR
+/// encoding.
 ///
-/// Only `tmux` panes with the `mouse` option on enable this: there, wheel
-/// input over an alternate-screen pane is discarded unless the pane requested
-/// mouse reports. Direct terminals and `tmux` with `mouse off` keep native
-/// text selection and link clicks, and the outer terminal already translates
-/// the wheel into arrow keys. Motion tracking stays off to avoid event floods.
+/// Every `tmux` pane enables this. With `tmux` mouse support on, wheel input
+/// over an alternate-screen pane is discarded unless the pane requested
+/// mouse reports. With it off, the wheel only works when the outer terminal
+/// turns it into arrow keys, which Agentty cannot detect through `tmux`.
+/// Taking the reports makes the wheel work either way; the runtime then
+/// selects text and opens links itself. Direct terminals keep native
+/// selection and already translate the wheel. Motion without a button stays
+/// off to avoid event floods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnableMouseWheelReporting(TerminalEnhancement);
+struct EnableMouseReporting(TerminalEnhancement);
 
-impl Command for EnableMouseWheelReporting {
+impl Command for EnableMouseReporting {
     fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
         if self.0.mouse_reporting_enabled {
-            buffer.write_str("\x1B[?1000h\x1B[?1006h")?;
+            buffer.write_str("\x1B[?1000h\x1B[?1002h\x1B[?1006h")?;
         }
 
         Ok(())
@@ -188,12 +184,12 @@ impl Command for EnableMouseWheelReporting {
 
 /// Conditionally disables the mouse reports enabled at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableMouseWheelReporting(TerminalEnhancement);
+struct DisableMouseReporting(TerminalEnhancement);
 
-impl Command for DisableMouseWheelReporting {
+impl Command for DisableMouseReporting {
     fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
         if self.0.mouse_reporting_enabled {
-            buffer.write_str("\x1B[?1006l\x1B[?1000l")?;
+            buffer.write_str("\x1B[?1006l\x1B[?1002l\x1B[?1000l")?;
         }
 
         Ok(())
@@ -369,7 +365,7 @@ fn terminal_enhancement(operation: &dyn TerminalOperation) -> TerminalEnhancemen
 
     TerminalEnhancement {
         keyboard_enhancement_enabled,
-        mouse_reporting_enabled: is_tmux_session && operation.is_tmux_mouse_enabled(),
+        mouse_reporting_enabled: is_tmux_session,
         xterm_modified_keys_enabled: keyboard_enhancement_enabled
             && tmux_key_reporting == TmuxKeyReporting::CsiU,
     }
