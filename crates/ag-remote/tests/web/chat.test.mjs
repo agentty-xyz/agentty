@@ -1263,6 +1263,166 @@ test("the settings sheet says that changes during a running turn apply after it"
   assert.equal(byId("composer-settings").disabled, true);
 });
 
+// Types `text` into the composer as the user would.
+function typeMessage(byId, text) {
+  const message = byId("message");
+  message.value = text;
+  message.dispatchEvent(new FakeEvent("input"));
+}
+
+function pressKey(byId, key) {
+  const event = new FakeEvent("keydown", { key: key });
+  byId("message").dispatchEvent(event);
+
+  return event;
+}
+
+function suggested(byId) {
+  return Array.from(byId("message-suggestions").children, (option) => option.dataset.key);
+}
+
+test("/ in the composer opens the slash menu, and Enter picks there instead of sending", async () => {
+  const storage = new MemoryStorage();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }),
+    sessionStorage: storage,
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const message = byId("message");
+  // The popup belongs to the composer, right after the message box.
+  assert.equal(message.nextSibling.querySelector("#message-suggestions"), byId("message-suggestions"));
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+
+  typeMessage(byId, "/");
+  await settle();
+  assert.equal(message.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(suggested(byId), ["/model", "/reasoning", "/style", "/fast"]);
+  assert.deepEqual(
+    Array.from(byId("message-suggestions").children, (option) => option.textContent)[1],
+    "/reasoningOverride the reasoning level for this session.",
+  );
+  typeMessage(byId, "/re");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "/re");
+  assert.equal(pressKey(byId, "Enter").defaultPrevented, true);
+  assert.deepEqual(suggested(byId), ["low", "medium", "high", "xhigh", "max"]);
+  assert.equal(message.value, "/reasoning");
+  // The key's release keeps the value list.
+  message.dispatchEvent(new FakeEvent("keyup", { key: "Enter" }));
+  pressKey(byId, "ArrowDown");
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+  assert.equal(message.value, "");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), null);
+  assert.deepEqual(requests, [
+    { method: "get_host" },
+    { method: "set_session_settings", reasoning: "medium", session_id: "s1" },
+  ]);
+});
+
+test("a tapped slash command picks it, and the host's refusal shows under the composer", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: (body) => {
+      if (body.method === "get_host") {
+        return HOST;
+      }
+      throw new Error("Session is busy");
+    },
+  });
+  chat.render(session(SETTINGS_SESSION));
+  typeMessage(byId, "/f");
+  await settle();
+  byId("message-suggestions").children[0].click();
+  await settle();
+
+  assert.deepEqual(requests.slice(1), [{ method: "set_session_settings", session_id: "s1", speed_mode: "fast" }]);
+  assert.equal(byId("session-error").textContent, "Session is busy");
+  assert.equal(byId("message").value, "");
+});
+
+test("a sent / message that names no command leaves no menu behind", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }),
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const message = byId("message");
+
+  typeMessage(byId, "/tmp/notes");
+  await settle();
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+  pressKey(byId, "Enter");
+  await settle();
+  chat.render(session(SETTINGS_SESSION));
+
+  assert.deepEqual(requests.slice(1), [{ method: "send_message", message: "/tmp/notes", session_id: "s1" }]);
+  assert.equal(message.value, "");
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+  assert.deepEqual(suggested(byId), []);
+
+  // Nor does sending with the button while a value list shows.
+  typeMessage(byId, "/st");
+  pressKey(byId, "Enter");
+  assert.deepEqual(suggested(byId), ["concise", "balanced", "detailed"]);
+  byId("composer").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+  chat.render(session(SETTINGS_SESSION));
+  assert.equal(message.getAttribute("aria-expanded"), "false");
+});
+
+test("without settings and host, / is plain text and Enter sends it", async () => {
+  for (const capabilities of [[], ["settings"], ["host"]]) {
+    const { byId, chat, requests } = mountChat({ capabilities: capabilities });
+    chat.render(session(SETTINGS_SESSION));
+    typeMessage(byId, "/model");
+    assert.equal(byId("message").getAttribute("aria-expanded"), "false");
+    pressKey(byId, "Enter");
+    await settle();
+    assert.deepEqual(requests, [{ method: "send_message", message: "/model", session_id: "s1" }]);
+  }
+});
+
+test("the slash menu closes on blur, offline, in a read-only session, and on a session switch", async () => {
+  const { byId, chat } = mountChat({
+    capabilities: ["host", "settings"],
+    respond: (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }),
+  });
+  chat.render(session(SETTINGS_SESSION));
+  const message = byId("message");
+  const isOpen = () => message.getAttribute("aria-expanded") === "true";
+  typeMessage(byId, "/");
+  await settle();
+
+  message.dispatchEvent(new FakeEvent("blur", { bubbles: false }));
+  assert.equal(isOpen(), false);
+  message.focus();
+  assert.equal(isOpen(), true);
+  // Moving the caret back closes it, and a click at the end opens it again.
+  message.value = "/mo";
+  message.setSelectionRange(1);
+  message.dispatchEvent(new FakeEvent("keyup", { key: "ArrowLeft" }));
+  assert.equal(isOpen(), false);
+  message.setSelectionRange(3);
+  message.click();
+  assert.equal(isOpen(), true);
+
+  chat.setConnected(false);
+  assert.equal(isOpen(), false);
+  chat.setConnected(true);
+  typeMessage(byId, "/");
+  chat.render(session({ ...SETTINGS_SESSION, status: "Done" }));
+  assert.equal(isOpen(), false);
+
+  chat.render(session(SETTINGS_SESSION));
+  typeMessage(byId, "/");
+  assert.equal(isOpen(), true);
+  chat.open("s2");
+  assert.equal(isOpen(), false);
+});
+
 test("Cancel session asks first and shows the host's refusal under the header", async () => {
   const { byId, chat, requests } = mountChat({
     respond: () => {

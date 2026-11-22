@@ -407,6 +407,7 @@ function datasetKey(attribute) {
 export class FakeElement extends FakeNode {
   #attributes = new Map();
   #value = null;
+  #selection = null;
 
   constructor(ownerDocument, tagName, namespaceURI = null) {
     super(ownerDocument);
@@ -536,6 +537,22 @@ export class FakeElement extends FakeNode {
       return;
     }
     this.#value = String(value ?? "");
+    // As in a browser, setting the value puts the caret at its end.
+    this.#selection = null;
+  }
+
+  // The caret of a text field: at the end of the value unless
+  // `setSelectionRange` placed it, until the value changes.
+  get selectionStart() {
+    return Math.min(this.#selection?.start ?? this.value.length, this.value.length);
+  }
+
+  get selectionEnd() {
+    return Math.min(this.#selection?.end ?? this.value.length, this.value.length);
+  }
+
+  setSelectionRange(start, end = start) {
+    this.#selection = { end: Math.max(start, end), start: start };
   }
 
   get rows() {

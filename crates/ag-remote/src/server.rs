@@ -35,10 +35,24 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; st
                                        connect-src 'self'; img-src 'self'; base-uri 'none'; \
                                        form-action 'none'; frame-ancestors 'none'";
 
+/// Content type of the web client's scripts.
+const SCRIPT: &str = "text/javascript; charset=utf-8";
+
+/// One web client script, served at its file name.
+macro_rules! script {
+    ($file:literal) => {
+        (
+            concat!("/", $file),
+            SCRIPT,
+            include_str!(concat!("../assets/", $file)),
+        )
+    };
+}
+
 /// Web client files by request path, with their content types. The page
 /// refers to the others by relative path, so a relay can serve the same
 /// files under a path prefix.
-const WEB_ASSETS: [(&str, &str, &str); 14] = [
+const WEB_ASSETS: [(&str, &str, &str); 16] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -49,66 +63,20 @@ const WEB_ASSETS: [(&str, &str, &str); 14] = [
         "text/css; charset=utf-8",
         include_str!("../assets/app.css"),
     ),
-    (
-        "/app.js",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/app.js"),
-    ),
-    (
-        "/chat.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/chat.mjs"),
-    ),
-    (
-        "/device_key.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/device_key.mjs"),
-    ),
-    (
-        "/diff.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/diff.mjs"),
-    ),
-    (
-        "/format.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/format.mjs"),
-    ),
-    (
-        "/home.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/home.mjs"),
-    ),
-    (
-        "/markdown.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/markdown.mjs"),
-    ),
-    (
-        "/noise.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/noise.mjs"),
-    ),
-    (
-        "/relay.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/relay.mjs"),
-    ),
-    (
-        "/session_list.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/session_list.mjs"),
-    ),
-    (
-        "/settings.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/settings.mjs"),
-    ),
-    (
-        "/shell.mjs",
-        "text/javascript; charset=utf-8",
-        include_str!("../assets/shell.mjs"),
-    ),
+    script!("app.js"),
+    script!("chat.mjs"),
+    script!("device_key.mjs"),
+    script!("diff.mjs"),
+    script!("format.mjs"),
+    script!("home.mjs"),
+    script!("markdown.mjs"),
+    script!("noise.mjs"),
+    script!("relay.mjs"),
+    script!("session_list.mjs"),
+    script!("settings.mjs"),
+    script!("shell.mjs"),
+    script!("slash.mjs"),
+    script!("suggest.mjs"),
 ];
 
 /// Host capabilities the server drives.

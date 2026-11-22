@@ -55,6 +55,8 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let session_list = get(addr, "/session_list.mjs").await?;
     let settings = get(addr, "/settings.mjs").await?;
     let shell = get(addr, "/shell.mjs").await?;
+    let slash = get(addr, "/slash.mjs").await?;
+    let suggest = get(addr, "/suggest.mjs").await?;
     let stylesheet = get(addr, "/app.css").await?;
 
     // Assert
@@ -72,6 +74,8 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&session_list, "text/javascript; charset=utf-8"),
         (&settings, "text/javascript; charset=utf-8"),
         (&shell, "text/javascript; charset=utf-8"),
+        (&slash, "text/javascript; charset=utf-8"),
+        (&suggest, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
     ] {
         assert!(response.starts_with("http/1.1 200 ok"));
@@ -100,6 +104,9 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(script.contains("from \"./session_list.mjs\""));
     assert!(script.contains("from \"./settings.mjs\""));
     assert!(chat.contains("from \"./settings.mjs\""));
+    assert!(chat.contains("from \"./slash.mjs\""));
+    assert!(chat.contains("from \"./suggest.mjs\""));
+    assert!(slash.contains("from \"./settings.mjs\""));
     assert!(script.contains("from \"./shell.mjs\""));
     assert!(device_key.contains("from \"./noise.mjs\""));
     assert!(relay.contains("from \"./noise.mjs\""));
@@ -199,7 +206,9 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/relay.mjs",
             "/session_list.mjs",
             "/settings.mjs",
-            "/shell.mjs"
+            "/shell.mjs",
+            "/slash.mjs",
+            "/suggest.mjs"
         ]
     );
 

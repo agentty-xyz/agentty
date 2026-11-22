@@ -28,73 +28,38 @@ static PAGE: LazyLock<String> = LazyLock::new(|| {
     include_str!("../../ag-remote/assets/index.html").replacen(LOCAL_TRANSPORT, RELAY_TRANSPORT, 1)
 });
 
+/// One script of the web client, served at its file name.
+macro_rules! script {
+    ($file:literal) => {
+        (
+            concat!("/", $file),
+            SCRIPT,
+            include_str!(concat!("../../ag-remote/assets/", $file)),
+        )
+    };
+}
+
 /// Files the page loads, by request path, with their content types.
-const FILES: [(&str, &str, &str); 13] = [
+const FILES: [(&str, &str, &str); 15] = [
     (
         "/app.css",
         "text/css; charset=utf-8",
         include_str!("../../ag-remote/assets/app.css"),
     ),
-    (
-        "/app.js",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/app.js"),
-    ),
-    (
-        "/chat.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/chat.mjs"),
-    ),
-    (
-        "/device_key.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/device_key.mjs"),
-    ),
-    (
-        "/diff.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/diff.mjs"),
-    ),
-    (
-        "/format.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/format.mjs"),
-    ),
-    (
-        "/home.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/home.mjs"),
-    ),
-    (
-        "/markdown.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/markdown.mjs"),
-    ),
-    (
-        "/noise.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/noise.mjs"),
-    ),
-    (
-        "/relay.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/relay.mjs"),
-    ),
-    (
-        "/session_list.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/session_list.mjs"),
-    ),
-    (
-        "/settings.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/settings.mjs"),
-    ),
-    (
-        "/shell.mjs",
-        SCRIPT,
-        include_str!("../../ag-remote/assets/shell.mjs"),
-    ),
+    script!("app.js"),
+    script!("chat.mjs"),
+    script!("device_key.mjs"),
+    script!("diff.mjs"),
+    script!("format.mjs"),
+    script!("home.mjs"),
+    script!("markdown.mjs"),
+    script!("noise.mjs"),
+    script!("relay.mjs"),
+    script!("session_list.mjs"),
+    script!("settings.mjs"),
+    script!("shell.mjs"),
+    script!("slash.mjs"),
+    script!("suggest.mjs"),
 ];
 
 /// Adds the web client's routes to `router`.
