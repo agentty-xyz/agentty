@@ -126,6 +126,23 @@ async fn existing_hosts_report_unsupported_session_listing() {
     );
 }
 
+#[tokio::test]
+async fn hosts_without_listing_report_the_listing_error_for_entries() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let listed = service.list_session_entries().await;
+
+    // Assert
+    assert_eq!(
+        listed,
+        Err(SessionError::Operation(
+            "Host does not support session listing".to_string()
+        ))
+    );
+}
+
 #[test]
 fn existing_hosts_serve_no_optional_operations() {
     // Arrange

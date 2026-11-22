@@ -681,7 +681,7 @@ async fn respond(
         }
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::ListSessions => {
-            let summaries = sessions.list_sessions().await?;
+            let summaries = sessions.list_session_entries().await?;
 
             Ok(RemoteResponse::Sessions {
                 sessions: summaries

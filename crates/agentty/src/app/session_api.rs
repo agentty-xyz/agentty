@@ -185,6 +185,12 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::list_sessions(self).await
     }
 
+    async fn list_session_entries(
+        &self,
+    ) -> Result<Vec<ag_session::SessionListEntry>, ApiSessionError> {
+        SessionRuntimeHandle::list_session_entries(self).await
+    }
+
     async fn send_message(
         &self,
         session_id: &SessionId,
@@ -351,7 +357,7 @@ impl App {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
             SessionRuntimeCommand::List { response_tx } => {
-                let _ = response_tx.send(Ok(self.list_api_sessions()));
+                let _ = response_tx.send(Ok(self.list_api_session_entries()));
             }
             SessionRuntimeCommand::HostContext { response_tx } => {
                 let _ = response_tx.send(self.api_host_context().await);
@@ -363,16 +369,39 @@ impl App {
         }
     }
 
-    /// Summarizes the loaded sessions in their display order.
-    fn list_api_sessions(&self) -> Vec<ag_session::SessionSummary> {
+    /// Summarizes the loaded sessions in their display order, with the diff
+    /// size, model, timer, merge-conflict, and review figures the session
+    /// list shows.
+    fn list_api_session_entries(&self) -> Vec<ag_session::SessionListEntry> {
+        let git_statuses = self.sessions.render_parts().session_git_statuses;
+
         self.sessions
             .sessions()
             .iter()
-            .map(|session| ag_session::SessionSummary {
-                id: session.id.clone(),
-                status: session.status,
-                title: session.title.clone(),
-                updated_at: session.updated_at,
+            .map(|session| ag_session::SessionListEntry {
+                stats: Some(ag_session::SessionListStats {
+                    added_lines: session.stats.added_lines,
+                    deleted_lines: session.stats.deleted_lines,
+                    has_merge_conflict: git_statuses
+                        .get(&session.id)
+                        .and_then(|status| status.has_merge_conflict)
+                        .unwrap_or(false),
+                    in_progress_started_at: session.in_progress_started_at,
+                    in_progress_total_seconds: session.in_progress_total_seconds,
+                    model: session.agent.model(),
+                    reasoning_level: session.effective_reasoning_level(),
+                    review_request: session
+                        .review_request
+                        .as_ref()
+                        .map(|review_request| review_request.summary.clone()),
+                    size_label: session.size.label().to_string(),
+                }),
+                summary: ag_session::SessionSummary {
+                    id: session.id.clone(),
+                    status: session.status,
+                    title: session.title.clone(),
+                    updated_at: session.updated_at,
+                },
             })
             .collect()
     }

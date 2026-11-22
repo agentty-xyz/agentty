@@ -1,6 +1,7 @@
 //! Session API lifecycle tests covering creation, loading, launch-setting
 //! inheritance, draft messages, and creation failure handling.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
@@ -15,8 +16,10 @@ use super::support::{
     persist_inherited_launch_settings, request_durable_message, request_host_context,
     request_message, request_session, request_session_creation,
 };
+use crate::app::session::SessionGitStatus;
 use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentCliInfo;
+use crate::domain::session::SessionSize;
 
 #[tokio::test]
 async fn runtime_backend_describes_the_project_new_sessions_join() {
@@ -137,6 +140,80 @@ async fn runtime_backend_lists_loaded_sessions_and_signals_mutations() {
             .has_changed()
             .expect("revision sender should live"),
         "the creation mutation should notify remote clients"
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_lists_sessions_with_their_list_stats() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let service = app.session_service();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Draft,
+            project_id,
+        },
+    )
+    .await
+    .expect("draft session should be created");
+    let review_summary = ag_session::ReviewRequestSummary {
+        display_id: "#7".to_string(),
+        forge_kind: ag_session::ForgeKind::GitHub,
+        source_branch: "wt/branch".to_string(),
+        state: ag_session::ReviewRequestState::Open,
+        status_summary: Some("PR ready".to_string()),
+        target_branch: "main".to_string(),
+        title: "Build it".to_string(),
+        web_url: "https://example.com/pull/7".to_string(),
+    };
+    {
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.stats.added_lines = 25;
+        session.stats.deleted_lines = 5;
+        session.size = SessionSize::from_line_counts(25, 5);
+        session.in_progress_started_at = Some(100);
+        session.in_progress_total_seconds = 60;
+        session.reasoning_level_override = Some(ReasoningLevel::Max);
+        session.review_request = Some(ag_session::ReviewRequest {
+            last_refreshed_at: 1,
+            summary: review_summary.clone(),
+        });
+    }
+    app.sessions.replace_session_git_statuses(HashMap::from([(
+        session_id.clone(),
+        SessionGitStatus {
+            base_status: None,
+            has_merge_conflict: Some(true),
+            remote_status: None,
+        },
+    )]));
+    let model = app.sessions.sessions()[0].agent.model();
+
+    // Act
+    let entries = app
+        .drive_session_request(async move { service.list_session_entries().await })
+        .await
+        .expect("sessions should list");
+
+    // Assert
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].summary.id, session_id);
+    assert_eq!(
+        entries[0].stats,
+        Some(ag_session::SessionListStats {
+            added_lines: 25,
+            deleted_lines: 5,
+            has_merge_conflict: true,
+            in_progress_started_at: Some(100),
+            in_progress_total_seconds: 60,
+            model,
+            reasoning_level: ReasoningLevel::Max,
+            review_request: Some(review_summary),
+            size_label: "S".to_string(),
+        })
     );
 }
 

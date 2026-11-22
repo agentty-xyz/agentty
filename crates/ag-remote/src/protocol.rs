@@ -12,7 +12,7 @@
 
 use ag_session::{
     AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary, Session,
-    SessionMessage, SessionMessageKind, SessionSummary, session_branch,
+    SessionListEntry, SessionMessage, SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -272,10 +272,47 @@ impl From<HostContext> for RemoteResponse {
 }
 
 /// Listing entry for one session.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// The stats fields are optional: a host that lists only summaries, or an
+/// older server, omits them, and a page hides what is missing.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteSessionSummary {
+    /// Lines the session's diff adds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_lines: Option<u64>,
+    /// Lines the session's diff removes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_lines: Option<u64>,
+    /// Whether merging the session branch into its base would conflict.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_merge_conflict: bool,
     /// Stable session identifier.
     pub id: String,
+    /// Start of the current active-work interval in Unix seconds, while the
+    /// session is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_progress_started_at: Option<i64>,
+    /// Active-work seconds completed before the current interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_progress_total_seconds: Option<i64>,
+    /// Model name, as `get_host` reports `default_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Compact model name for dense rows, such as `opus-5.5`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_short_name: Option<String>,
+    /// Reasoning level, such as `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Whether the linked pull request can merge, when the forge says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_ready: Option<RemoteReviewReadiness>,
+    /// State of the linked review request: `Open`, `Merged`, or `Closed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<String>,
+    /// Host size bucket of the diff, from `XS` to `XXL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
     /// Lifecycle status, such as `InProgress` or `Review`.
     pub status: String,
     /// Optional user-visible title.
@@ -284,13 +321,56 @@ pub struct RemoteSessionSummary {
     pub updated_at: i64,
 }
 
-impl From<SessionSummary> for RemoteSessionSummary {
-    fn from(summary: SessionSummary) -> Self {
-        Self {
+impl From<SessionListEntry> for RemoteSessionSummary {
+    fn from(entry: SessionListEntry) -> Self {
+        let summary = entry.summary;
+        let mut remote = Self {
             id: summary.id.to_string(),
             status: summary.status.to_string(),
             title: summary.title,
             updated_at: summary.updated_at,
+            ..Self::default()
+        };
+        let Some(stats) = entry.stats else {
+            return remote;
+        };
+        remote.added_lines = Some(stats.added_lines);
+        remote.deleted_lines = Some(stats.deleted_lines);
+        remote.has_merge_conflict = stats.has_merge_conflict;
+        remote.in_progress_started_at = stats.in_progress_started_at;
+        remote.in_progress_total_seconds = Some(stats.in_progress_total_seconds);
+        remote.model = Some(stats.model.name().to_string());
+        remote.model_short_name = Some(stats.model.short_name().to_string());
+        remote.reasoning = Some(stats.reasoning_level.as_str().to_string());
+        if let Some(review_request) = stats.review_request {
+            remote.review_ready = RemoteReviewReadiness::from_summary(&review_request);
+            remote.review_state = Some(review_request.state.as_str().to_string());
+        }
+        remote.size = Some(stats.size_label);
+
+        remote
+    }
+}
+
+/// Whether a linked pull request can merge, as the forge reported it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteReviewReadiness {
+    /// Checks pass and the pull request can merge.
+    Ready,
+    /// The pull request can merge only by bypassing branch protections.
+    ReadyWithBypass,
+}
+
+impl RemoteReviewReadiness {
+    /// Returns the readiness the forge reported for `summary`, if any.
+    fn from_summary(summary: &ReviewRequestSummary) -> Option<Self> {
+        if summary.is_github_pr_ready() {
+            Some(Self::Ready)
+        } else if summary.is_github_pr_bypass_ready() {
+            Some(Self::ReadyWithBypass)
+        } else {
+            None
         }
     }
 }

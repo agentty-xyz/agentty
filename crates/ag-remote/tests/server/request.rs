@@ -43,6 +43,7 @@ fn summary(id: &str, status: &str, title: &str, updated_at: i64) -> RemoteSessio
         status: status.to_string(),
         title: Some(title.to_string()),
         updated_at,
+        ..RemoteSessionSummary::default()
     }
 }
 

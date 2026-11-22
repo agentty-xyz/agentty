@@ -15,7 +15,7 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    ReviewRequest, Session, SessionError, SessionId, SessionSummary,
+    ReviewRequest, Session, SessionError, SessionId, SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -66,7 +66,7 @@ pub(crate) enum SessionRuntimeCommand {
         session_id: SessionId,
     },
     List {
-        response_tx: oneshot::Sender<Result<Vec<SessionSummary>, SessionError>>,
+        response_tx: oneshot::Sender<Result<Vec<SessionListEntry>, SessionError>>,
     },
     HostContext {
         response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
@@ -373,6 +373,14 @@ impl SessionRuntimeHandle {
 
     /// Lists the loaded sessions in display order through the runtime actor.
     pub(crate) async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
+        let entries = self.list_session_entries().await?;
+
+        Ok(entries.into_iter().map(|entry| entry.summary).collect())
+    }
+
+    /// Lists the loaded sessions in display order, with their list stats,
+    /// through the runtime actor.
+    pub(crate) async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
         self.request(|response_tx| SessionRuntimeCommand::List { response_tx })
             .await
     }
