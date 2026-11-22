@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteMessage, RemoteMessageKind,
-    RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
-    ServerFrame,
+    RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -760,6 +760,12 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
         RemoteResult::Ok(RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            mode_models: vec![RemoteModeModel {
+                agent: "codex".to_string(),
+                mode: RemoteSessionMode::Regular,
+                model: "gpt-6.1-sol".to_string(),
+                name: "gpt-6.1-sol".to_string(),
+            }],
             models: vec![RemoteModelOption::from(
                 ag_session::test_support::codex_selection()
             )],

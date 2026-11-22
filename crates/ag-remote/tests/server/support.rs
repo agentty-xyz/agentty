@@ -13,10 +13,11 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    ForgeKind, HostContext, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError, SessionId,
-    SessionListEntry, SessionListStats, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
+    ForgeKind, HostContext, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
+    ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
+    SessionError, SessionId, SessionListEntry, SessionListStats, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -420,7 +421,10 @@ impl SessionBackend for RecordingBackend {
             models: vec![ag_session::test_support::codex_selection()],
             project_id: 1,
             project_name: "agentty".to_string(),
-            session_modes: vec![CreateSessionMode::Regular],
+            session_modes: vec![HostSessionMode {
+                agent: ag_session::test_support::codex_selection(),
+                mode: CreateSessionMode::Regular,
+            }],
         })
     }
 

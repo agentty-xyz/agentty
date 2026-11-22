@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
-    DurableMessageRequest, HostContext, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest,
-    Session, SessionBackend, SessionDiffFile, SessionError, SessionId, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, SessionSummary, SpeedMode,
+    DurableMessageRequest, HostContext, HostSessionMode, QuestionItem, ReasoningLevel,
+    ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile, SessionError,
+    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
+    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -365,7 +365,16 @@ pub(crate) fn host_fixture() -> HostContext {
         models: vec![ag_session::test_support::codex_selection()],
         project_id: 1,
         project_name: "agentty".to_string(),
-        session_modes: vec![CreateSessionMode::Regular, CreateSessionMode::Draft],
+        session_modes: vec![
+            HostSessionMode {
+                agent: ag_session::test_support::codex_selection(),
+                mode: CreateSessionMode::Regular,
+            },
+            HostSessionMode {
+                agent: ag_session::test_support::codex_selection(),
+                mode: CreateSessionMode::Draft,
+            },
+        ],
     }
 }
 

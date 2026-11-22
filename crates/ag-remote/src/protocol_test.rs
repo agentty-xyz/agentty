@@ -1,16 +1,16 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, CreateSessionMode, ForgeKind, ReasoningLevel,
-    ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionDiffFile,
-    SessionDiffFileStatus, SessionId, SessionListEntry, SessionListStats, SessionStatus,
-    SessionSummary,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
+    HostSessionMode, ReasoningLevel, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    SessionDiffFile, SessionDiffFileStatus, SessionId, SessionListEntry, SessionListStats,
+    SessionStatus, SessionSummary,
 };
 use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, MAX_DIFF_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
-    RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, session_fixture};
 
@@ -324,6 +324,12 @@ fn session_creation_frames_default_to_regular_mode() {
         RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            mode_models: vec![RemoteModeModel {
+                agent: "codex".to_string(),
+                mode: RemoteSessionMode::Regular,
+                model: "gpt-6.1-sol".to_string(),
+                name: "gpt-6.1-sol".to_string(),
+            }],
             models: Vec::new(),
             project: "agentty".to_string(),
             session_modes: vec![RemoteSessionMode::Regular, RemoteSessionMode::Harness],
@@ -358,6 +364,12 @@ fn session_creation_frames_default_to_regular_mode() {
                 "kind": "host",
                 "base_branch": "main",
                 "default_model": "gpt-6.1-sol",
+                "mode_models": [{
+                    "agent": "codex",
+                    "mode": "regular",
+                    "model": "gpt-6.1-sol",
+                    "name": "gpt-6.1-sol"
+                }],
                 "project": "agentty",
                 "session_modes": ["regular", "harness"]
             },
@@ -369,11 +381,21 @@ fn session_creation_frames_default_to_regular_mode() {
 #[test]
 fn host_context_converts_modes_remote_devices_may_request() {
     // Arrange
+    let harness = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
     let mut host = host_fixture();
     host.session_modes = vec![
-        CreateSessionMode::Draft,
-        CreateSessionMode::Harness,
-        CreateSessionMode::Regular,
+        HostSessionMode {
+            agent: ag_session::test_support::codex_selection(),
+            mode: CreateSessionMode::Draft,
+        },
+        HostSessionMode {
+            agent: harness,
+            mode: CreateSessionMode::Harness,
+        },
+        HostSessionMode {
+            agent: ag_session::test_support::codex_selection(),
+            mode: CreateSessionMode::Regular,
+        },
     ];
 
     // Act
@@ -385,6 +407,20 @@ fn host_context_converts_modes_remote_devices_may_request() {
         RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            mode_models: vec![
+                RemoteModeModel {
+                    agent: harness.kind().name().to_string(),
+                    mode: RemoteSessionMode::Harness,
+                    model: AgentModel::KimiK3.as_str().to_string(),
+                    name: AgentModel::KimiK3.name().to_string(),
+                },
+                RemoteModeModel {
+                    agent: AgentKind::Codex.name().to_string(),
+                    mode: RemoteSessionMode::Regular,
+                    model: ag_session::test_support::CODEX_MODEL_ID.to_string(),
+                    name: ag_session::test_support::CODEX_MODEL.name().to_string(),
+                },
+            ],
             models: vec![RemoteModelOption::from(
                 ag_session::test_support::codex_selection()
             )],

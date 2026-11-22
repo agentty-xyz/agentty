@@ -12,9 +12,9 @@ use super::{
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteModelOption, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteModeModel, RemoteModelOption,
+    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -784,6 +784,12 @@ async fn get_host_describes_the_project_and_only_remote_modes() {
         RemoteResult::Ok(RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            mode_models: vec![RemoteModeModel {
+                agent: "codex".to_string(),
+                mode: RemoteSessionMode::Regular,
+                model: "gpt-6.1-sol".to_string(),
+                name: "gpt-6.1-sol".to_string(),
+            }],
             models: vec![RemoteModelOption::from(
                 ag_session::test_support::codex_selection()
             )],

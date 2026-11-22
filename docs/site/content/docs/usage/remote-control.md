@@ -58,9 +58,11 @@ merge. With no session open, the page offers the sessions waiting for you.
 
 When this Agentty lets devices create sessions, the sidebar names the active project and
 offers `New session`. Home then asks what the agent should work on, with the project,
-base branch, and default model below the box, and a choice of session type when Agentty
-offers more than one. Sending creates the session, sends your text as its first message,
-and opens it. If the message does not go through, the new session opens with your text
+base branch, and model below the box, and a choice of session type when Agentty offers
+more than one. When the device may change session settings, the model chip picks among
+the models of the agent that session type starts on. Sending creates the session,
+switches it to the picked model, sends your text as its first message, and opens it. If
+the switch or the message does not go through, the new session opens with your text
 still in its box.
 
 The header of the open session shows its size and changed lines, the session branch and

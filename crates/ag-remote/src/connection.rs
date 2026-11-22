@@ -792,7 +792,11 @@ async fn create_session(
     require_operation(sessions, SessionOperation::CreateSession)?;
     let host = sessions.host_context().await?;
     let mode = mode.session_mode();
-    if !host.session_modes.contains(&mode) {
+    if !host
+        .session_modes
+        .iter()
+        .any(|session_mode| session_mode.mode == mode)
+    {
         return Err(SessionError::Operation(
             UNAVAILABLE_SESSION_MODE.to_string(),
         ));
