@@ -366,6 +366,35 @@ test("ten thousand nested emphasis runs and brackets stop at the nesting limit",
   }
 });
 
+test("link attempts that never close read the text about once", () => {
+  // Each `](` once read up to 2,048 characters ahead, about 375 ms for
+  // the first case; now each case takes a few milliseconds.
+  for (const text of ["[](".repeat(85_000), '[](x "'.repeat(40_000), "[](<".repeat(60_000), "[](()".repeat(50_000)]) {
+    assert.ok(text.length < MAX_MARKDOWN_LENGTH);
+    const { elapsed, result } = timed(() => parseMarkdown(text));
+    assert.ok(elapsed < 150, "took " + elapsed + " ms");
+    assert.equal(result.children.length, 1);
+  }
+  // Nested parentheses and an angle-bracket destination still link.
+  assert.deepEqual(body("[a](https://example.com/a_(b_(c))) [b](<https://example.com/x y>)"), [
+    [
+      "p",
+      ["a", { ...LINK, href: "https://example.com/a_(b_(c))" }, "a"],
+      " ",
+      ["a", { ...LINK, href: "https://example.com/x%20y" }, "b"],
+    ],
+  ]);
+});
+
+test("emphasis follows the rule of 3", () => {
+  assert.deepEqual(body("*foo**bar**baz*"), [["p", ["em", "foo", ["strong", "bar"], "baz"]]]);
+  assert.deepEqual(body("**foo*bar*baz**"), [["p", ["strong", "foo", ["em", "bar"], "baz"]]]);
+  assert.deepEqual(body("**foo*bar**"), [["p", ["strong", "foo*bar"]]]);
+  assert.deepEqual(body("**a*"), [["p", "*", ["em", "a"]]]);
+  const { elapsed } = timed(() => parseMarkdown("*a**".repeat(60_000)));
+  assert.ok(elapsed < 500, "took " + elapsed + " ms");
+});
+
 test("deep indentation nests lists only to the limit", () => {
   const text = Array.from({ length: 400 }, (_value, level) => "  ".repeat(level) + "- level " + level).join("\n");
   const { elapsed, result } = timed(() => render(text));

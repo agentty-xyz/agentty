@@ -29,6 +29,9 @@ export const MAX_TABLE_COLUMNS = 64;
 const COPIED_MS = 1500;
 // Longest link destination and title read after `](`.
 const MAX_DESTINATION_LENGTH = 2048;
+// Deepest nesting of parentheses in a bare link destination. CommonMark
+// asks for at least three.
+const MAX_DESTINATION_PARENTHESES = 8;
 
 // Every element the renderer creates, by the part it plays. Nothing else
 // reaches `createElement`.
@@ -641,27 +644,27 @@ function closingRun(runs, length, after) {
   return run.next < run.positions.length ? run.positions[run.next] : -1;
 }
 
-// The index of `character` in `text` from `start` and before `limit`, or
-// -1.
-function boundedIndexOf(text, character, start, limit) {
-  const found = text.slice(start, limit).indexOf(character);
+// The index of `character` from `start` and before `limit`, or -1.
+function boundedIndexOf(scanner, character, start, limit) {
+  const found = scanner.nextIndex(character, start);
 
-  return found === -1 ? -1 : start + found;
+  return found < limit ? found : -1;
 }
 
 // Reads the `(destination "title")` after a link's `]` at `open`, the
 // index of `(`. Returns the destination and the index after `)`, or
 // `null`.
-function linkDestination(text, open) {
+function linkDestination(scanner, open) {
+  const text = scanner.text;
   const limit = Math.min(text.length, open + MAX_DESTINATION_LENGTH);
-  const read = readDestination(text, skipLinkSpaces(text, open + 1, limit), limit);
+  const read = readDestination(scanner, skipLinkSpaces(text, open + 1, limit), limit);
   if (!read) {
     return null;
   }
   let index = skipLinkSpaces(text, read.end, limit);
   const quote = text[index];
   if (quote === '"' || quote === "'") {
-    const end = boundedIndexOf(text, quote, index + 1, limit);
+    const end = boundedIndexOf(scanner, quote, index + 1, limit);
     if (end === -1) {
       return null;
     }
@@ -681,11 +684,15 @@ function skipLinkSpaces(text, index, limit) {
 }
 
 // A destination in `<…>`, or a bare one that ends at a space or at a
-// `)` it did not open. Returns it and the index after it, or `null`.
-function readDestination(text, index, limit) {
+// `)` it did not open. Returns it and the index after it, or `null`. A
+// bare destination with more than `MAX_DESTINATION_PARENTHESES` open
+// parentheses is none: every later `](` inside it adds one, so no read
+// runs far past the next few.
+function readDestination(scanner, index, limit) {
+  const text = scanner.text;
   if (text[index] === "<") {
-    const end = boundedIndexOf(text, ">", index, limit);
-    if (end === -1 || text.slice(index, end).includes("\n")) {
+    const end = boundedIndexOf(scanner, ">", index, limit);
+    if (end === -1 || scanner.nextIndex("\n", index) < end) {
       return null;
     }
 
@@ -703,6 +710,9 @@ function readDestination(text, index, limit) {
       break;
     }
     parentheses += parenthesisStep(character);
+    if (parentheses > MAX_DESTINATION_PARENTHESES) {
+      return null;
+    }
     end += 1;
   }
 
@@ -835,6 +845,23 @@ class InlineScanner {
     // the text each time, so the searches together read it once.
     this.urlStops = [-1, -1];
     this.parentheses = null;
+    // The last position found for each character `nextIndex` searched.
+    this.found = new Map();
+  }
+
+  // The first index of `character` at or after `from`, or the text's
+  // length. Links ask from further along the text each time, so the
+  // searches for one character together read the text once.
+  nextIndex(character, from) {
+    const last = this.found.get(character);
+    if (last !== undefined && last.from <= from && last.at >= from) {
+      return last.at;
+    }
+    const at = this.text.indexOf(character, from);
+    const found = at === -1 ? this.text.length : at;
+    this.found.set(character, { at: found, from: from });
+
+    return found;
   }
 
   // The first character at or after `from` that ends a bare URL.
@@ -996,7 +1023,7 @@ function scanCloseBracket(scanner) {
   }
   scanner.flush();
   const frame = scanner.frames.pop();
-  const link = bracketLink(scanner.text, scanner.index, frame);
+  const link = bracketLink(scanner, frame);
   if (link) {
     scanner.tokens.push(link.token);
     scanner.index = link.end;
@@ -1010,10 +1037,11 @@ function scanCloseBracket(scanner) {
 }
 
 // The link or image `frame` makes with the `(destination)` after the
-// `]` at `index`, and the index after it, or `null`. An unsafe
+// `]` the scanner is at, and the index after it, or `null`. An unsafe
 // destination makes none.
-function bracketLink(text, index, frame) {
-  const target = text[index + 1] === "(" ? linkDestination(text, index + 1) : null;
+function bracketLink(scanner, frame) {
+  const open = scanner.index + 1;
+  const target = scanner.text[open] === "(" ? linkDestination(scanner, open) : null;
   const href = target ? safeLink(target.destination) : null;
   if (!href) {
     return null;
@@ -1060,8 +1088,8 @@ function codeSpanText(raw) {
 
 // Pairs delimiter runs into emphasis, strong and strikethrough nodes, as
 // the CommonMark "process emphasis" step does, in one pass: each closer
-// takes the nearest opener of its mark, and the openers between them
-// become text. Returns the nodes and how deeply they nest; a pair that
+// takes the nearest opener of its mark that the rule of 3 allows, and
+// the openers between them become text. Returns the nodes and how deeply they nest; a pair that
 // would nest deeper than `MAX_NESTING` stays text.
 function processEmphasis(tokens) {
   const pairing = new EmphasisPairing();
@@ -1085,6 +1113,9 @@ class EmphasisPairing {
     this.stack = [];
     this.openers = { "*": 0, _: 0, "~": 0 };
     this.outerDepth = 0;
+    // For each kind of closer, the stack height below which a search
+    // already found no opener for it, as CommonMark's `openers_bottom`.
+    this.floors = new Map();
   }
 
   append(node, depth) {
@@ -1106,13 +1137,22 @@ class EmphasisPairing {
   drop() {
     const entry = this.stack.pop();
     this.openers[entry.mark] -= 1;
+    for (const [kind, floor] of this.floors) {
+      if (floor > this.stack.length) {
+        this.floors.set(kind, this.stack.length);
+      }
+    }
     this.note(entry.depth);
   }
 
   delimiter(token) {
     let remaining = token.count;
-    while (token.canClose && remaining > 0 && this.openers[token.mark] > 0) {
-      const used = this.close(token, remaining);
+    while (token.canClose && remaining > 0) {
+      const position = this.openerFor(token);
+      if (position === -1) {
+        break;
+      }
+      const used = this.close(token, remaining, position);
       if (used === 0) {
         break;
       }
@@ -1124,16 +1164,44 @@ class EmphasisPairing {
     const text = { text: token.mark.repeat(remaining), type: "text" };
     this.out.push(text);
     if (token.canOpen) {
-      this.stack.push({ depth: 0, index: this.out.length - 1, mark: token.mark, remaining: remaining, text: text });
+      this.stack.push({
+        canClose: token.canClose,
+        count: token.count,
+        depth: 0,
+        index: this.out.length - 1,
+        mark: token.mark,
+        remaining: remaining,
+        text: text,
+      });
       this.openers[token.mark] += 1;
     }
   }
 
-  // Pairs a closing run with `remaining` marks against the nearest open
-  // run of its mark, and returns how many marks that used: 0 when the
-  // pair would nest too deep.
-  close(token, remaining) {
-    while (this.stack.at(-1).mark !== token.mark) {
+  // The stack position of the nearest open run `token` can close, or -1.
+  // A failed search records its floor, so the next closer of the same
+  // kind does not search the same runs again.
+  openerFor(token) {
+    if (this.openers[token.mark] === 0) {
+      return -1;
+    }
+    const kind = token.mark + (token.count % 3) + (token.canOpen ? "o" : "");
+    const floor = this.floors.get(kind) ?? 0;
+    for (let position = this.stack.length - 1; position >= floor; position -= 1) {
+      const entry = this.stack[position];
+      if (entry.mark === token.mark && canPair(entry, token)) {
+        return position;
+      }
+    }
+    this.floors.set(kind, this.stack.length);
+
+    return -1;
+  }
+
+  // Pairs a closing run with `remaining` marks against the open run at
+  // `position`, after dropping the runs above it, and returns how many
+  // marks that used: 0 when the pair would nest too deep.
+  close(token, remaining, position) {
+    while (this.stack.length - 1 > position) {
       this.drop();
     }
     const opener = this.stack.at(-1);
@@ -1150,8 +1218,7 @@ class EmphasisPairing {
     opener.depth = 0;
     if (opener.remaining === 0) {
       this.out.pop();
-      this.stack.pop();
-      this.openers[token.mark] -= 1;
+      this.drop();
     }
     this.append({ children: children, depth: depth, type: pairType(token.mark, used) }, depth);
 
@@ -1163,6 +1230,17 @@ class EmphasisPairing {
 
     return { depth: depth, nodes: this.out.filter((node) => node.type !== "text" || node.text !== "") };
   }
+}
+
+// CommonMark's rule of 3: when either run could both open and close, the
+// two may pair only if their lengths do not add up to a multiple of 3,
+// unless both lengths are. So `*foo**bar**baz*` nests `bar` in `foo…baz`.
+function canPair(opener, closer) {
+  if (closer.mark === "~" || (!opener.canClose && !closer.canOpen)) {
+    return true;
+  }
+
+  return (opener.count + closer.count) % 3 !== 0 || (opener.count % 3 === 0 && closer.count % 3 === 0);
 }
 
 // How many marks a pair takes: `~~` always two, `*` and `_` two for
