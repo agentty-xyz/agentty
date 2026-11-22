@@ -391,10 +391,14 @@ async function routeFlow() {
 // first message, and opens it.
 async function createFlow() {
   await waitFor("the home composer", () => !byId("home-form").hidden);
+  const settingsButton = byId("home-composer-settings");
   report({
     step: "home",
-    chips: texts(byId("home-chips").children),
     eyebrow: byId("home-eyebrow").textContent,
+    hint: byId("home-composer-hint").textContent,
+    placeholder: byId("home-message").placeholder,
+    settings: (settingsButton.hidden ? byId("home-composer-meta") : settingsButton).textContent,
+    settingsButton: !settingsButton.hidden,
     modesHidden: byId("home-modes").hidden,
     newSessionHidden: byId("new-session").hidden,
     project: byId("project-name").textContent,

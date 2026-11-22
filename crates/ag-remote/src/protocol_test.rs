@@ -1,8 +1,8 @@
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
-    HostSessionMode, ReasoningLevel, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionId, SessionListEntry,
-    SessionListStats, SessionStatus, SessionSummary,
+    HostSessionMode, ReasoningLevel, ResponseStyle, ReviewRequest, ReviewRequestState,
+    ReviewRequestSummary, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionId,
+    SessionListEntry, SessionListStats, SessionStatus, SessionSummary, SpeedMode,
 };
 use serde_json::json;
 
@@ -329,6 +329,9 @@ fn session_creation_frames_default_to_regular_mode() {
                 mode: RemoteSessionMode::Regular,
                 model: "gpt-6.1-sol".to_string(),
                 name: "gpt-6.1-sol".to_string(),
+                reasoning: None,
+                response_style: None,
+                speed_mode: None,
             }],
             models: Vec::new(),
             project: "agentty".to_string(),
@@ -387,14 +390,23 @@ fn host_context_converts_modes_remote_devices_may_request() {
         HostSessionMode {
             agent: ag_session::test_support::codex_selection(),
             mode: CreateSessionMode::Draft,
+            reasoning_level: ReasoningLevel::High,
+            response_style: ResponseStyle::Concise,
+            speed_mode: SpeedMode::Fast,
         },
         HostSessionMode {
             agent: harness,
             mode: CreateSessionMode::Harness,
+            reasoning_level: ReasoningLevel::Low,
+            response_style: ResponseStyle::Detailed,
+            speed_mode: SpeedMode::Normal,
         },
         HostSessionMode {
             agent: ag_session::test_support::codex_selection(),
             mode: CreateSessionMode::Regular,
+            reasoning_level: ReasoningLevel::High,
+            response_style: ResponseStyle::Concise,
+            speed_mode: SpeedMode::Fast,
         },
     ];
 
@@ -413,12 +425,19 @@ fn host_context_converts_modes_remote_devices_may_request() {
                     mode: RemoteSessionMode::Harness,
                     model: AgentModel::KimiK3.as_str().to_string(),
                     name: AgentModel::KimiK3.name().to_string(),
+                    reasoning: Some("low".to_string()),
+                    response_style: Some("detailed".to_string()),
+                    // The harness has no speed control.
+                    speed_mode: None,
                 },
                 RemoteModeModel {
                     agent: AgentKind::Codex.name().to_string(),
                     mode: RemoteSessionMode::Regular,
                     model: ag_session::test_support::CODEX_MODEL_ID.to_string(),
                     name: ag_session::test_support::CODEX_MODEL.name().to_string(),
+                    reasoning: Some("high".to_string()),
+                    response_style: Some("concise".to_string()),
+                    speed_mode: Some("fast".to_string()),
                 },
             ],
             models: vec![RemoteModelOption::from(
@@ -896,6 +915,7 @@ fn file_entry(is_dir: bool, path: &str) -> SessionFileEntry {
 fn session_file_frames_encode_entries_in_host_order() {
     // Arrange
     let request = json!({"method": "list_session_files", "session_id": "s"});
+    let project_request = json!({"method": "list_project_files"});
     let entries = vec![
         file_entry(true, "src"),
         file_entry(false, "README.md"),
@@ -904,6 +924,8 @@ fn session_file_frames_encode_entries_in_host_order() {
 
     // Act
     let request: RemoteRequest = serde_json::from_value(request).expect("request should parse");
+    let project_request: RemoteRequest =
+        serde_json::from_value(project_request).expect("project request should parse");
     let listed = RemoteResponse::from_session_files(&entries);
 
     // Assert
@@ -913,6 +935,7 @@ fn session_file_frames_encode_entries_in_host_order() {
             session_id: "s".to_string(),
         }
     );
+    assert_eq!(project_request, RemoteRequest::ListProjectFiles);
     assert_eq!(
         serde_json::to_value(&listed).expect("list should encode"),
         json!({"kind": "session_files", "files": [

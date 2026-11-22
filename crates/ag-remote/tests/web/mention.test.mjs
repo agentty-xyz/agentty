@@ -75,6 +75,8 @@ function mountMentions({ respond = () => FILES } = {}) {
 test("the lookup needs the files capability", () => {
   assert.equal(offersMentions(["files"]), true);
   assert.equal(offersMentions(["diff", "settings"]), false);
+  assert.equal(offersMentions(["project_files"], "project"), true);
+  assert.equal(offersMentions(["files"], "project"), false);
 });
 
 test("mentionQuery finds the @ token the caret is in, as the terminal does", () => {
@@ -152,6 +154,23 @@ test("mentionText puts a trailing space after files and a slash after directorie
   assert.equal(mentionText({ isDir: true, path: "src" }), "@src/ ");
 });
 
+test("the project scope lists the project checkout, and never the session's entries", async () => {
+  const page = mountMentions();
+  page.type("@");
+  await settle();
+  Object.assign(page.context, { capabilities: ["project_files"], fileScope: "project", session: null });
+
+  // The session's entries stay hidden until the project's arrive.
+  page.mentions.refresh();
+  assert.equal(page.suggestions.isOpen(), false);
+  page.mentions.close();
+  page.type("@READ");
+  assert.deepEqual(page.requests.at(-1), { method: "list_project_files" });
+  assert.equal(page.suggestions.isOpen(), false);
+  await settle();
+  assert.deepEqual(page.shown(), ["README.md"]);
+});
+
 test("typing @ lists the session's files once they arrive", async () => {
   const page = mountMentions();
 
@@ -206,8 +225,8 @@ test("Escape closes the list until the text changes, and a new lookup reads the 
   assert.equal(page.requests.length, 2);
 });
 
-test("without the capability, a connection or a session the lookup stays shut", async () => {
-  for (const change of [{ capabilities: ["diff"] }, { isConnected: false }, { session: null }]) {
+test("without the capability, a connection, a session or a scope the lookup stays shut", async () => {
+  for (const change of [{ capabilities: ["diff"] }, { isConnected: false }, { session: null }, { fileScope: null }]) {
     const page = mountMentions();
     Object.assign(page.context, change);
 

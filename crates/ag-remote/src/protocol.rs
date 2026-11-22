@@ -99,6 +99,11 @@ pub enum RemoteRequest {
         /// Session to load.
         session_id: String,
     },
+    /// Lists the names of the files and directories in the host's active
+    /// project checkout, directories first, without their contents, for
+    /// mentioning files in a new session's first message. Offered through
+    /// the `project_files` capability.
+    ListProjectFiles,
     /// Lists the names of the files and directories in a session's worktree,
     /// directories first, without their contents. A session without a
     /// worktree lists nothing. Offered through the `files` capability.
@@ -204,9 +209,9 @@ impl RemoteSessionMode {
     }
 }
 
-/// The agent and model a new session of one mode starts with, as
-/// `get_host` lists it. A device picks another model for the new session
-/// among the `models` of the same `agent`.
+/// The agent, model and settings a new session of one mode starts with, as
+/// `get_host` lists it. A device picks other settings for the new session,
+/// and another model among the `models` of the same `agent`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteModeModel {
     /// Agent that runs the session, as `models` names it.
@@ -217,6 +222,16 @@ pub struct RemoteModeModel {
     pub model: String,
     /// Display name of the model.
     pub name: String,
+    /// Reasoning level the new session starts with, such as `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Style of the new session's answers, such as `concise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_style: Option<String>,
+    /// Speed the new session starts with, `normal` or `fast`. Absent when
+    /// the agent has no speed control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
 }
 
 /// One model a session can switch to, as `get_host` lists it.
@@ -379,10 +394,11 @@ pub enum RemoteResponse {
         /// Loaded session, boxed to keep other responses small.
         session: Option<Box<RemoteSession>>,
     },
-    /// The files and directories in a session's worktree, answering
-    /// `list_session_files`.
+    /// The files and directories in a session's worktree or the active
+    /// project's checkout, answering `list_session_files` or
+    /// `list_project_files`.
     SessionFiles {
-        /// Worktree entries, directories first, then by path.
+        /// Listed entries, directories first, then by path.
         files: Vec<RemoteFileEntry>,
         /// Whether the server left out the end of `files` to keep the
         /// response small.
@@ -444,8 +460,8 @@ impl RemoteResponse {
         })
     }
 
-    /// Builds the `session_files` response for a session's worktree
-    /// `entries`, in the host's order.
+    /// Builds the `session_files` response for the `entries` of a session's
+    /// worktree or the project checkout, in the host's order.
     ///
     /// The entries stay within [`MAX_FILE_RESPONSE_BYTES`] once encoded, so
     /// a response stays well under the frame limit; leaving out the rest
@@ -533,6 +549,13 @@ impl From<HostContext> for RemoteResponse {
                     mode,
                     model: option.model,
                     name: option.name,
+                    reasoning: Some(session_mode.reasoning_level.as_str().to_string()),
+                    response_style: Some(session_mode.response_style.as_str().to_string()),
+                    speed_mode: session_mode
+                        .agent
+                        .kind()
+                        .supports_speed_mode()
+                        .then(|| session_mode.speed_mode.as_str().to_string()),
                 })
             })
             .collect();

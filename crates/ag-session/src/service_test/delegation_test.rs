@@ -189,6 +189,25 @@ async fn existing_hosts_report_unsupported_session_files() {
     assert!(!supports_files);
 }
 
+#[tokio::test]
+async fn existing_hosts_report_unsupported_project_files() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let files = service.list_project_files().await;
+    let supports_files = service.supports(SessionOperation::ProjectFiles);
+
+    // Assert
+    assert_eq!(
+        files,
+        Err(SessionError::Operation(
+            "Host does not serve project files".to_string()
+        ))
+    );
+    assert!(!supports_files);
+}
+
 #[test]
 fn existing_hosts_serve_no_optional_operations() {
     // Arrange

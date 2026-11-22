@@ -259,6 +259,31 @@ async fn session_file_listings_reach_only_listed_sessions() -> TestResult {
 }
 
 #[tokio::test]
+async fn project_file_listings_name_the_project_checkout() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let listed = call(&mut client, 1, RemoteRequest::ListProjectFiles).await?;
+
+    // Assert
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::SessionFiles {
+            files: vec![RemoteFileEntry {
+                is_dir: false,
+                path: "README.md".to_string(),
+            }],
+            truncated: false,
+        })
+    );
+    assert_eq!(server.backend.calls(), ["project_files"]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
@@ -804,6 +829,9 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
                 mode: RemoteSessionMode::Regular,
                 model: "gpt-6.1-sol".to_string(),
                 name: "gpt-6.1-sol".to_string(),
+                reasoning: Some("high".to_string()),
+                response_style: Some("balanced".to_string()),
+                speed_mode: Some("normal".to_string()),
             }],
             models: vec![RemoteModelOption::from(
                 ag_session::test_support::codex_selection()

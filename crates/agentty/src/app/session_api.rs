@@ -38,6 +38,7 @@ impl SessionBackend for SessionRuntimeHandle {
             SessionOperation::CreateSession
                 | SessionOperation::HostContext
                 | SessionOperation::MergeSession
+                | SessionOperation::ProjectFiles
                 | SessionOperation::SessionDiff
                 | SessionOperation::SessionFiles
                 | SessionOperation::StopTurn
@@ -203,6 +204,12 @@ impl SessionBackend for SessionRuntimeHandle {
         session_id: &SessionId,
     ) -> Result<Option<Vec<ag_session::SessionFileEntry>>, ApiSessionError> {
         SessionRuntimeHandle::list_session_files(self, session_id).await
+    }
+
+    async fn list_project_files(
+        &self,
+    ) -> Result<Vec<ag_session::SessionFileEntry>, ApiSessionError> {
+        SessionRuntimeHandle::list_project_files(self).await
     }
 
     async fn list_sessions(&self) -> Result<Vec<ag_session::SessionSummary>, ApiSessionError> {
@@ -407,6 +414,9 @@ impl App {
                 response_tx,
                 session_id,
             } => self.start_api_session_files(&session_id, response_tx),
+            SessionRuntimeCommand::ListProjectFiles { response_tx } => {
+                self.start_api_project_files(response_tx);
+            }
             SessionRuntimeCommand::HostContext { response_tx } => {
                 let _ = response_tx.send(self.api_host_context().await);
             }
@@ -484,6 +494,28 @@ impl App {
         spawn::spawn_detached(async move {
             let entries = TaskService::load_at_mention_entries(folder, &session_id).await;
             let _ = response_tx.send(Ok(Some(api_file_entries(entries))));
+        });
+    }
+
+    /// Answers one programmatic project file-listing query: lists the active
+    /// project's checkout, the root a new session's draft looks up `@`
+    /// mentions in, from the `@`-mention index when it already caches that
+    /// root and otherwise on a blocking worker.
+    fn start_api_project_files(
+        &mut self,
+        response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, ApiSessionError>>,
+    ) {
+        let root = self.working_dir().to_path_buf();
+        if let Some(entries) = self.sessions.at_mention_index_for_root(&root) {
+            let _ = response_tx.send(Ok(api_file_entries(entries)));
+
+            return;
+        }
+        // The loader names a session only in its failure log.
+        let log_id = SessionId::from(format!("project-{}", self.active_project_id()));
+        spawn::spawn_detached(async move {
+            let entries = TaskService::load_at_mention_entries(root, &log_id).await;
+            let _ = response_tx.send(Ok(api_file_entries(entries)));
         });
     }
 
@@ -602,12 +634,19 @@ impl App {
             session_modes.push(HostSessionMode {
                 agent: settings.agent,
                 mode: CreateSessionMode::Regular,
+                reasoning_level: settings.reasoning_level,
+                response_style: settings.response_style,
+                speed_mode: settings.speed_mode,
             });
         }
+        // Harness sessions start at normal speed, as creation sets them.
         if let Some(harness_model) = harness_model {
             session_modes.push(HostSessionMode {
                 agent: AgentSelection::new(AgentKind::Harness, harness_model),
                 mode: CreateSessionMode::Harness,
+                reasoning_level: settings.reasoning_level,
+                response_style: settings.response_style,
+                speed_mode: SpeedMode::Normal,
             });
         }
         // A host that offers only Harness sessions starts them on the harness

@@ -273,8 +273,12 @@ async fn web_client_app_creates_sends_and_opens_a_session_from_home_through_the_
         home,
         json!({
             "step": "home",
-            "chips": ["project agentty", "base main", "gpt-6.1-sol"],
-            "eyebrow": "New session · agentty",
+            "eyebrow": "New session · agentty · base main",
+            // The Node page has no fine pointer, as on a phone.
+            "hint": "Enter adds a line",
+            "placeholder": "Describe the task",
+            "settings": "gpt-6.1-sol [high]·balanced·normal speed",
+            "settingsButton": true,
             // The test host offers one mode, so there is nothing to choose.
             "modesHidden": true,
             "newSessionHidden": false,

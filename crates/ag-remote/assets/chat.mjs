@@ -1,12 +1,13 @@
 // Open session of the remote control client: the header with its status
 // and actions, the transcript, the questions panel, the queued messages,
-// and the composer. Transcript text, titles and questions are untrusted
+// and the composer from composer.mjs. Transcript text, titles and questions are untrusted
 // and only ever become text nodes, directly or through the element
 // builder in markdown.mjs for answers, notices and questions. Updates change the nodes in place, so a
 // refresh keeps focus, scroll position and what the user is typing.
 // Functions take `document` and `window` as parameters, so the Node tests
 // in crates/ag-remote/tests/web/chat.test.mjs pass the fake DOM.
 
+import { createComposer, modelNode } from "./composer.mjs";
 import {
   activeSeconds,
   formatTimer,
@@ -18,22 +19,13 @@ import {
   statusInfo,
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
-import { createMentions } from "./mention.mjs";
-import { lineCounts, separator } from "./session_list.mjs";
-import { offersSettings } from "./settings.mjs";
-import { createSlashCommands } from "./slash.mjs";
-import { createSuggestions } from "./suggest.mjs";
+import { lineCounts } from "./session_list.mjs";
 
-// Unsent text of one session, in `sessionStorage`, under this prefix and
-// the session id.
-export const DRAFT_KEY_PREFIX = "agentty.remote.draft.";
 // Shortest time between two refreshes.
 export const REFRESH_INTERVAL_MS = 1000;
 // How close to the end of the transcript the reader must be for new
 // content to scroll into view.
 export const FOLLOW_DISTANCE_PX = 80;
-// Most rows the composer grows to.
-export const MAX_COMPOSER_ROWS = 8;
 // An activity box with more lines than this starts closed.
 const OPEN_ACTIVITY_LINES = 3;
 const MESSAGE_KINDS = new Set(["activity", "assistant", "notice", "user"]);
@@ -109,26 +101,6 @@ export function composerState(
   return { hint, isQueueing, mode: "compose", placeholder, showStop };
 }
 
-// What a key press in the composer does: `send`, or `null` to let the
-// browser add a line. With a fine pointer `Enter` sends and `Shift+Enter`
-// adds a line; on touch `Enter` adds a line. `Ctrl+Enter` and `Cmd+Enter`
-// always send. Nothing sends while an input method is composing.
-export function composerKeyAction(event, { isFinePointer }) {
-  if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
-    return null;
-  }
-  if (event.ctrlKey || event.metaKey) {
-    return "send";
-  }
-
-  return isFinePointer && !event.shiftKey && !event.altKey ? "send" : null;
-}
-
-// Rows the composer shows for `text`: one per line, from 1 to
-// `MAX_COMPOSER_ROWS`.
-export function composerRows(text) {
-  return Math.min(MAX_COMPOSER_ROWS, Math.max(1, String(text).split("\n").length));
-}
 
 // Collects the answers to `questions`: typed text wins over the chosen
 // option in `picks`. Returns the answers, how many questions have one, and
@@ -245,46 +217,6 @@ export function createRefreshGate({
   return { request };
 }
 
-// Unsent text per session, in memory and in `sessionStorage`, so a draft
-// survives switching sessions and reloading the tab. Storage failures
-// leave the copy in memory.
-export function createDrafts(window) {
-  const drafts = new Map();
-
-  return {
-    clear: (sessionId) => {
-      drafts.delete(sessionId);
-      try {
-        window.sessionStorage.removeItem(DRAFT_KEY_PREFIX + sessionId);
-      } catch (_error) {
-        // Only the copy in memory existed.
-      }
-    },
-    get: (sessionId) => {
-      if (drafts.has(sessionId)) {
-        return drafts.get(sessionId);
-      }
-      try {
-        return window.sessionStorage.getItem(DRAFT_KEY_PREFIX + sessionId) || "";
-      } catch (_error) {
-        return "";
-      }
-    },
-    set: (sessionId, text) => {
-      drafts.set(sessionId, text);
-      try {
-        if (text) {
-          window.sessionStorage.setItem(DRAFT_KEY_PREFIX + sessionId, text);
-        } else {
-          window.sessionStorage.removeItem(DRAFT_KEY_PREFIX + sessionId);
-        }
-      } catch (_error) {
-        // The copy in memory still lasts for this page.
-      }
-    },
-  };
-}
-
 // Wires the open session. `elements` holds the nodes with the ids named in
 // index.html, keyed as in `app.js`. `request(body)` sends one request and
 // resolves with its result; `onHome()` returns to home. `now()` returns
@@ -308,7 +240,6 @@ export function createChat({
   settings = null,
   now = () => Date.now() / 1000,
 }) {
-  const drafts = createDrafts(window);
   const state = {
     capabilities: [],
     // Sessions with a publish in flight. A publish can take long and
@@ -342,71 +273,34 @@ export function createChat({
     summary: null,
     sessionId: null,
   };
-  // The composer's suggestion popup, and the slash commands and `@` file
-  // lookup it lists. The slash commands take the text first.
-  const suggestions = createSuggestions({
-    container: elements.composer,
+  // The composer, shared with home's first message.
+  const composer = createComposer({
+    context: () => ({
+      capabilities: state.capabilities,
+      draftId: state.sessionId,
+      isConnected: state.isConnected,
+      isRunning: Boolean(state.session) && statusInfo(state.session.status).running,
+      session: state.session,
+      summary: state.summary,
+    }),
     document: document,
-    id: "message-suggestions",
-    input: elements.message,
-    label: "Suggestions",
-  });
-  const slash = createSlashCommands({
-    context: () => ({
-      capabilities: state.capabilities,
-      isConnected: state.isConnected,
-      // Only a composer on screen offers commands.
-      session: elements.composer.hidden ? null : state.session,
-    }),
-    input: elements.message,
-    request: request,
-    setText: (text) => {
-      elements.message.value = text;
-      if (state.sessionId) {
-        drafts.set(state.sessionId, text);
-      }
-      resizeComposer();
+    elements: {
+      form: elements.composer,
+      hint: elements.composerHint,
+      message: elements.message,
+      meta: elements.composerMeta,
+      send: elements.send,
+      settingsButton: elements.composerSettings,
     },
+    onSend: () => void sendMessage(),
+    request: request,
+    settings: settings,
     showError: (message) => {
       elements.sessionError.textContent = message;
     },
-    suggestions: suggestions,
+    suggestionsId: "message-suggestions",
+    window: window,
   });
-  const mentions = createMentions({
-    context: () => ({
-      capabilities: state.capabilities,
-      isConnected: state.isConnected,
-      session: elements.composer.hidden ? null : state.session,
-    }),
-    input: elements.message,
-    request: request,
-    setText: (text, caret) => {
-      elements.message.value = text;
-      elements.message.setSelectionRange(caret, caret);
-      if (state.sessionId) {
-        drafts.set(state.sessionId, text);
-      }
-      resizeComposer();
-    },
-    showError: (message) => {
-      elements.sessionError.textContent = message;
-    },
-    suggestions: suggestions,
-  });
-
-  // Opens, filters or closes the suggestions for the composer's text and
-  // caret.
-  function updateSuggestions() {
-    if (slash.update()) {
-      mentions.close();
-    } else {
-      mentions.update();
-    }
-  }
-
-  function isFinePointer() {
-    return Boolean(window.matchMedia?.("(pointer: fine)").matches);
-  }
 
   function isNearEnd() {
     const scroller = elements.scroller;
@@ -450,38 +344,6 @@ export function createChat({
       timer.textContent = label;
     } else {
       elements.sub.append(element(document, "span", "timer", label));
-    }
-  }
-
-  // Shows the session settings in the composer's line, or the key hint
-  // when the host names none. A host that lets this device change them
-  // makes the line a button that opens the settings sheet.
-  function renderMeta(hint) {
-    const parts = settingsParts(state.session, state.summary);
-    elements.composerHint.textContent = parts.length > 0 ? hint : "";
-    const isButton = parts.length > 0 && Boolean(settings) && offersSettings(state.capabilities);
-    elements.composerMeta.hidden = isButton;
-    elements.composerSettings.hidden = !isButton;
-    elements.composerSettings.disabled = !state.isConnected;
-    if (parts.length === 0) {
-      elements.composerMeta.textContent = hint;
-
-      return;
-    }
-    const nodes = parts.flatMap((part, index) => {
-      const node =
-        part.type === "model"
-          ? modelNode(document, part)
-          : element(document, "span", null, part.label);
-
-      return index === 0 ? [node] : [separator(document), node];
-    });
-    (isButton ? elements.composerSettings : elements.composerMeta).replaceChildren(...nodes);
-  }
-
-  function openSettings() {
-    if (state.session && state.isConnected && offersSettings(state.capabilities)) {
-      settings.open(state.session, { isRunning: statusInfo(state.session.status).running });
     }
   }
 
@@ -865,14 +727,12 @@ export function createChat({
       capabilities: state.capabilities,
       hasQuestions: state.questions.length > 0,
       isConnected: state.isConnected,
-      isFinePointer: isFinePointer(),
+      isFinePointer: composer.isFinePointer(),
     });
     elements.composer.hidden = dock.mode !== "compose";
     elements.answerBar.hidden = dock.mode !== "answer";
     elements.readonly.hidden = dock.mode !== "readonly";
-    // The suggestions follow the session, the host and the composer.
-    slash.refresh();
-    mentions.refresh();
+    composer.refresh();
     if (dock.mode === "readonly") {
       elements.readonly.textContent = dock.text;
     }
@@ -882,19 +742,18 @@ export function createChat({
     if (dock.mode !== "compose") {
       return;
     }
-    elements.message.placeholder = dock.placeholder;
-    renderMeta(dock.hint);
-    elements.send.disabled = !state.isConnected || state.isSending;
-    elements.send.setAttribute("aria-label", dock.isQueueing ? "Queue message" : "Send");
+    composer.render({
+      hint: dock.hint,
+      isSending: state.isSending,
+      placeholder: dock.placeholder,
+      sendLabel: dock.isQueueing ? "Queue message" : "Send",
+    });
     elements.stop.hidden = !dock.showStop;
     elements.stop.disabled = !state.isConnected || isActing("stop_turn");
   }
 
-  function resizeComposer() {
-    elements.message.rows = composerRows(elements.message.value);
-  }
-
   function reset() {
+    const previous = state.session;
     state.session = null;
     state.rendered = [];
     state.questions = [];
@@ -922,7 +781,6 @@ export function createChat({
     state.shownPublish = null;
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
-    elements.composerHint.textContent = "";
     state.summary = null;
     elements.heading.textContent = "";
     state.isLoadError = false;
@@ -940,9 +798,11 @@ export function createChat({
         dialog.close("");
       }
     }
-    settings?.close();
-    slash.reset();
-    mentions.reset();
+    // The sheet stays open for home's new session.
+    if (previous) {
+      settings?.close();
+    }
+    composer.reset();
     renderActions();
   }
 
@@ -953,11 +813,10 @@ export function createChat({
     state.sessionId = sessionId;
     showPublished();
     if (failure) {
-      drafts.set(sessionId, failure.draft);
+      composer.keepDraft(sessionId, failure.draft);
       elements.sessionError.textContent = failure.error;
     }
-    elements.message.value = drafts.get(sessionId);
-    resizeComposer();
+    composer.load(sessionId);
   }
 
   function close() {
@@ -1026,14 +885,9 @@ export function createChat({
     try {
       await request({ method: "send_message", session_id: sessionId, message: message });
       // Text typed after sending, here or before switching away, stays.
-      if (drafts.get(sessionId) === message) {
-        drafts.clear(sessionId);
-      }
+      composer.forgetDraft(sessionId, message);
       if (state.sessionId === sessionId) {
-        if (elements.message.value === message) {
-          elements.message.value = "";
-          resizeComposer();
-        }
+        composer.clearText(message);
         elements.sessionError.textContent = "";
       }
     } catch (error) {
@@ -1127,36 +981,6 @@ export function createChat({
     return dialog.returnValue === value && sessionId === state.sessionId ? sessionId : null;
   }
 
-  elements.message.addEventListener("input", () => {
-    if (state.sessionId) {
-      drafts.set(state.sessionId, elements.message.value);
-    }
-    resizeComposer();
-    updateSuggestions();
-  });
-  // An open suggestion list takes its keys first, so `Enter` picks there
-  // instead of sending.
-  elements.message.addEventListener("keydown", (event) => {
-    if (suggestions.handleKey(event)) {
-      return;
-    }
-    if (composerKeyAction(event, { isFinePointer: isFinePointer() }) === "send") {
-      event.preventDefault();
-      void sendMessage();
-    }
-  });
-  // Moving the caret, or the focus, opens or closes the suggestions.
-  for (const type of ["click", "focus", "keyup"]) {
-    elements.message.addEventListener(type, updateSuggestions);
-  }
-  elements.message.addEventListener("blur", () => {
-    slash.close();
-    mentions.close();
-  });
-  elements.composer.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void sendMessage();
-  });
   elements.stop.addEventListener("click", () => {
     void runAction(state.sessionId, "stop_turn", elements.sessionError);
   });
@@ -1211,7 +1035,6 @@ export function createChat({
       void runAction(sessionId, "sync_session", elements.actionError);
     }
   });
-  elements.composerSettings.addEventListener("click", openSettings);
   elements.cancelDialog.addEventListener("close", () => {
     const sessionId = confirmedSession(elements.cancelDialog, "confirm");
     if (sessionId) {
@@ -1228,7 +1051,7 @@ export function createChat({
   return {
     close,
     // Keeps `text` as the unsent message of `sessionId`, for when it opens.
-    keepDraft: (sessionId, text) => drafts.set(sessionId, text),
+    keepDraft: (sessionId, text) => composer.keepDraft(sessionId, text),
     open,
     render,
     setCapabilities: (capabilities) => {
@@ -1397,17 +1220,6 @@ function headerDetails(document, session, summary) {
   }
 
   return nodes;
-}
-
-// The model with its reasoning level, as `claude/opus-5.5 [high]`.
-function modelNode(document, part) {
-  const node = element(document, "span", "model");
-  node.append(element(document, "b", null, part.label));
-  if (part.reasoning) {
-    node.append(" [" + part.reasoning + "]");
-  }
-
-  return node;
 }
 
 // The linked review request as a link to the forge. Its address goes

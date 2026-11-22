@@ -77,6 +77,9 @@ pub(crate) enum SessionRuntimeCommand {
         response_tx: oneshot::Sender<Result<Option<Vec<SessionFileEntry>>, SessionError>>,
         session_id: SessionId,
     },
+    ListProjectFiles {
+        response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, SessionError>>,
+    },
     HostContext {
         response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
     },
@@ -401,6 +404,14 @@ impl SessionRuntimeHandle {
             session_id,
         })
         .await
+    }
+
+    /// Lists the files and directories in the active project's checkout
+    /// through the runtime actor, which walks the checkout off the
+    /// foreground loop.
+    pub(crate) async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::ListProjectFiles { response_tx })
+            .await
     }
 
     /// Describes the active project new sessions are created in through the
