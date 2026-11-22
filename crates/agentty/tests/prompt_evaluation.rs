@@ -219,6 +219,7 @@ impl CausalRubric {
                     "mismatch",
                     "mismatches",
                     "does not match",
+                    "matches nothing",
                     "no match",
                     "differs",
                     "different",
@@ -243,6 +244,7 @@ impl CausalRubric {
                     "never sleeps",
                     "no delay",
                     "default response",
+                    "immediate",
                     "immediately",
                 ],
             ],
@@ -261,6 +263,72 @@ impl CausalRubric {
                     "match",
                     "sentinel",
                 ],
+            ],
+        }
+    }
+
+    fn duplicate_helper() -> Self {
+        Self {
+            affirmative_trigger_predicates: &[],
+            trigger: &[&[
+                "truncation",
+                "truncate",
+                "truncates",
+                "truncated",
+                "ellipsis",
+                "limit",
+                "helper",
+                "copy",
+                "copies",
+                "duplicate",
+                "duplicates",
+                "duplicated",
+            ]],
+            impact: &[
+                &[
+                    "copy",
+                    "copies",
+                    "title",
+                    "titles",
+                    "truncation",
+                    "logic",
+                    "rule",
+                    "behavior",
+                    "implementation",
+                    "implementations",
+                ],
+                &[
+                    "diverge",
+                    "diverges",
+                    "drift",
+                    "drifts",
+                    "differ",
+                    "differs",
+                    "differently",
+                    "inconsistent",
+                    "out of sync",
+                    "stale",
+                    "mismatch",
+                    "two places",
+                    "twice",
+                ],
+            ],
+            correction: &[
+                &[
+                    "call",
+                    "calls",
+                    "calling",
+                    "reuse",
+                    "reuses",
+                    "reusing",
+                    "use",
+                    "uses",
+                    "using",
+                    "replace",
+                    "delegate",
+                    "delegates",
+                ],
+                &["truncate with ellipsis"],
             ],
         }
     }
@@ -1233,6 +1301,31 @@ fn submit_review_during_question(pending_question: &mut Option<String>) -> bool 
 
 const STUB_SOURCE: &str = include_str!("support/sleep_fixture.rs");
 
+/// Changed file whose added truncation repeats [`TEXT_HELPER_SOURCE`].
+const REPORT_SOURCE: &str = r##"pub fn title_line(title: &str) -> String {
+    let title = if title.chars().count() <= 40 {
+        title.to_string()
+    } else {
+        let kept: String = title.chars().take(37).collect();
+        format!("{kept}...")
+    };
+    format!("# {title}")
+}
+"##;
+
+/// Unchanged helper a live review must find by searching the workspace.
+const TEXT_HELPER_PATH: &str = "src/text.rs";
+const TEXT_HELPER_SOURCE: &str = r#"/// Shortens `text` to at most `max_chars` characters, ending with `...`.
+pub fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+
+    format!("{kept}...")
+}
+"#;
+
 fn positive_review_cases() -> Vec<Case> {
     [
         (
@@ -1257,7 +1350,7 @@ fn positive_review_cases() -> Vec<Case> {
                 ],
                 path: "tests/stub.rs",
                 rubric: CausalRubric::fixture_rewrite(),
-                severity: FocusedReviewSeverity::Medium,
+                severity: FocusedReviewSeverity::High,
                 source: STUB_SOURCE,
             },
             r##"@@ -5 +5,4 @@
@@ -1268,6 +1361,31 @@ fn positive_review_cases() -> Vec<Case> {
 +    );
 "##,
             "The telemetry test must replace the shared stub's command with a 30-second sleep.",
+        ),
+        (
+            "added-code-duplicates-existing-helper",
+            ReviewExpectation {
+                anchors: &[
+                    "title.chars().count() <= 40",
+                    "title.chars().take(37)",
+                    r#"format!("{kept}...")"#,
+                ],
+                path: "src/report.rs",
+                rubric: CausalRubric::duplicate_helper(),
+                severity: FocusedReviewSeverity::Medium,
+                source: REPORT_SOURCE,
+            },
+            r#"@@ -2 +2,6 @@
+-    let title = title.to_string();
++    let title = if title.chars().count() <= 40 {
++        title.to_string()
++    } else {
++        let kept: String = title.chars().take(37).collect();
++        format!("{kept}...")
++    };
+"#,
+            "Report titles longer than 40 characters must be shortened to 40 characters ending \
+             with `...`.",
         ),
     ]
     .into_iter()
@@ -1285,7 +1403,10 @@ fn positive_review_cases() -> Vec<Case> {
                     &json!([
                         "Rust: trace callers and compound conditions across paused and immediate \
                          paths.",
-                        "Tests: verify setup preconditions and fixture no-op paths."
+                        "Tests: verify setup preconditions and fixture no-op paths.",
+                        "Reuse and simplification: search the repository for existing functions, \
+                         types, and helpers that already provide added behavior, and check \
+                         whether added code repeats itself or has a materially simpler equivalent."
                     ])
                     .to_string(),
                 )
@@ -1450,6 +1571,11 @@ fn expected_review(case: &Case) -> Result<Value, &'static str> {
             "The telemetry stub is unchanged and never sleeps",
             "Assert the replacement matches the fixture",
         ),
+        "added-code-duplicates-existing-helper" => (
+            "The truncation rule changes in only one copy",
+            "The report title copy diverges from the shared rule",
+            "Call the existing truncate_with_ellipsis helper",
+        ),
         _ => return Err("unknown positive review case"),
     };
     Ok(json!({"project_impact":[], "suggestions":[{
@@ -1493,6 +1619,11 @@ fn causal_review_rubrics_accept_paraphrases_and_reject_other_defects_at_the_same
             "The replacement does not match the fixture text",
             "The test script stays untouched and has no delay",
             "Use a sentinel and check the replacement",
+        ),
+        (
+            "The lowercase pattern matches nothing in the seeded script",
+            "The stub command stays an immediate `printf`",
+            "Make the pattern match the seeded text exactly",
         ),
     ];
 
@@ -1558,6 +1689,71 @@ fn causal_review_rubrics_accept_paraphrases_and_reject_other_defects_at_the_same
         evidence["correction"] = json!(correction);
         let grade = case.grade(&AgentResponse::plain(review.to_string()));
         assert_eq!(grade["success"], false, "{review}");
+        assert_eq!(grade["false_findings"], 1);
+        assert_eq!(grade["missed_findings"], 1);
+    }
+}
+
+#[test]
+fn duplicate_helper_grader_accepts_paraphrases_and_rejects_other_causes_and_corrections() {
+    // Arrange
+    let case = positive_review_cases().remove(2);
+    let expected = expected_review(&case).expect("review");
+    let grade_evidence = |trigger: &str, impact: &str, correction: &str| {
+        let mut review = expected.clone();
+        let evidence = &mut review["suggestions"][0]["evidence"];
+        evidence["trigger"] = json!(trigger);
+        evidence["impact"] = json!(impact);
+        evidence["correction"] = json!(correction);
+
+        case.grade(&AgentResponse::plain(review.to_string()))
+    };
+
+    // Act / Assert
+    for (trigger, impact, correction) in [
+        (
+            "A later fix to truncate_with_ellipsis is not applied to title_line",
+            "Report titles drift from every other caller's truncation",
+            "Replace the inline branch with text::truncate_with_ellipsis(title, 40)",
+        ),
+        (
+            "The ellipsis limit is edited in src/text.rs only",
+            "The same logic is maintained in two places",
+            "Reuse truncate_with_ellipsis instead of repeating it",
+        ),
+        (
+            "Someone changes the truncation rule in truncate_with_ellipsis",
+            "Report titles truncate differently from other text in the crate",
+            "Replace the block with a call to the existing helper truncate_with_ellipsis",
+        ),
+    ] {
+        let grade = grade_evidence(trigger, impact, correction);
+        assert_eq!(grade["success"], true, "{trigger}: {grade}");
+    }
+    for (trigger, impact, correction) in [
+        (
+            "A title has more than 40 bytes",
+            "The title is cut inside a character",
+            "Call truncate_with_ellipsis",
+        ),
+        (
+            "The truncation rule changes in only one copy",
+            "The copies never diverge",
+            "Call truncate_with_ellipsis",
+        ),
+        (
+            "The truncation rule changes in only one copy",
+            "The report title copy diverges from the shared rule",
+            "Rename the local variable",
+        ),
+        (
+            "The truncation rule changes in only one copy",
+            "The report title copy diverges from the shared rule",
+            "Do not call truncate_with_ellipsis",
+        ),
+    ] {
+        let grade = grade_evidence(trigger, impact, correction);
+        assert_eq!(grade["success"], false, "{trigger}: {correction}");
         assert_eq!(grade["false_findings"], 1);
         assert_eq!(grade["missed_findings"], 1);
     }
@@ -2093,7 +2289,7 @@ async fn positive_review_evaluations_use_focused_protocol_through_the_worker() {
     let mut server = MockAppServerClient::new();
     server
         .expect_run_isolated_turn()
-        .times(2)
+        .times(positive_review_cases().len())
         .returning(|request, _| {
             assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
             assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
@@ -2521,6 +2717,8 @@ async fn live_prompt_evaluation() {
          Some(Duration::from_secs(1))\n}\n",
     )
     .expect("unchanged source fixture");
+    std::fs::write(folder.path().join(TEXT_HELPER_PATH), TEXT_HELPER_SOURCE)
+        .expect("existing helper fixture");
     for case in positive_review_cases() {
         for expectation in case.review_expectations {
             let path = folder.path().join(expectation.path);

@@ -13,6 +13,13 @@ use crate::infra::fs::{FsClient, FsError};
 /// findings.
 const MAX_CRITERIA_BYTES: usize = 8_000;
 
+/// Applies to every changed file; the review prompt owns how such findings
+/// are reported.
+const REUSE_CRITERION: &str = "Reuse and simplification: search the repository for existing \
+                               functions, types, and helpers that already provide added behavior, \
+                               and check whether added code repeats itself or has a materially \
+                               simpler equivalent.";
+
 /// Optional project configuration, added to the built-in review criteria.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,7 +94,12 @@ impl ReviewRules {
             .flat_map(|file| [file.old_path, file.new_path])
             .filter(|path| !path.is_empty())
             .collect();
-        let mut criteria = Vec::new();
+        let mut criteria: Vec<String> = Vec::new();
+        let mut add = |criterion: &str| {
+            if !criteria.iter().any(|existing| existing == criterion) {
+                criteria.push(criterion.to_string());
+            }
+        };
         for path in &paths {
             let extension = path.rsplit_once('.').map_or("", |(_, extension)| extension);
             let language = match extension {
@@ -122,22 +134,17 @@ impl ReviewRules {
                      concrete correctness and reliability risks."
                 }
             };
-            if !criteria.iter().any(|criterion| criterion == language) {
-                criteria.push(language.to_string());
-            }
-            if (path.starts_with("tests/")
+            add(language);
+            add(REUSE_CRITERION);
+            if path.starts_with("tests/")
                 || path.contains("/tests/")
                 || path.contains("_test.")
-                || path.contains(".test."))
-                && !criteria
-                    .iter()
-                    .any(|criterion| criterion.starts_with("Tests:"))
+                || path.contains(".test.")
             {
-                criteria.push(
+                add(
                     "Tests: check that assertions exercise the changed public behavior, failures \
                      cannot pass silently, and mocks preserve relevant contracts. Verify setup \
-                     preconditions, fixture replacements, and no-op/default-success paths."
-                        .to_string(),
+                     preconditions, fixture replacements, and no-op/default-success paths.",
                 );
             }
         }
@@ -157,15 +164,12 @@ impl ReviewRules {
                             .iter()
                             .any(|candidate| candidate == extension))
             }) {
-                let entry = format!(
+                add(&format!(
                     "Project criterion (path_prefix: {}; extensions: {}): {}",
                     serde_json::json!(rule.path_prefix),
                     serde_json::json!(rule.extensions),
                     rule.instructions
-                );
-                if !criteria.contains(&entry) {
-                    criteria.push(entry);
-                }
+                ));
             }
         }
         let rendered = serde_json::json!(criteria).to_string();

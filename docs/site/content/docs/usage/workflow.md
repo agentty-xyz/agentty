@@ -193,8 +193,10 @@ review completed. Press `f` and confirm regeneration to resume a partial review 
 unchanged inputs, including after restart. Completed reviews, changed inputs, and
 accepted syncs start fresh.
 
-Reviews apply criteria for the changed file types and test code. Add project criteria in
-`.agentty/review-rules.json` in the session worktree:
+Reviews apply criteria for the changed file types and test code. They also flag added
+code that duplicates existing code or could be materially simpler, but not naming or
+formatting preferences. Add project criteria in `.agentty/review-rules.json` in the
+session worktree:
 
 ```json
 {

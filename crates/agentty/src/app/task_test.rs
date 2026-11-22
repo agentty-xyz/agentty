@@ -1705,6 +1705,14 @@ fn test_review_assist_prompt_enforces_read_only_constraints() {
     assert!(normalized_prompt.contains("never ask the user to run it"));
     assert!(normalized_prompt.contains("high severity for correctness"));
     assert!(normalized_prompt.contains("concrete practical impact"));
+    assert!(normalized_prompt.contains(
+        "Added code that duplicates existing repository code, or that a materially simpler \
+         construct replaces without changing behavior, is a `medium` maintainability finding"
+    ));
+    assert!(
+        normalized_prompt
+            .contains("Naming, formatting, and preference-only rewrites stay excluded")
+    );
     let fenced_diff = format!("```diff\n{review_diff}\n```");
     assert!(
         prompt.contains(&fenced_diff),
