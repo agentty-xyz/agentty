@@ -17,6 +17,6 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 
-test "$(curl --fail --silent "http://$address/healthz")" = ok
+[[ "$(curl --fail --silent "http://$address/healthz")" == ok ]]
 page=$(curl --fail --silent "http://$address/")
 [[ "$page" == *'name="agentty-transport" content="relay"'* ]]
