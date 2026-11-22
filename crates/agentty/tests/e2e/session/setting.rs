@@ -449,9 +449,9 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-4-argon", 3000)
+                    .wait_for_text("gemini-4-neon", 3000)
                     .press_key("Enter")
-                    .wait_for_text("antigravity/gemini-4-argon [high]", 5000)
+                    .wait_for_text("antigravity/gemini-4-neon [high]", 5000)
                     .capture_labeled(
                         "incompatible_model_normalizes_speed",
                         "Switching to Antigravity drops fast mode and its speed display",
@@ -489,7 +489,7 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "antigravity/gemini-4-argon [high]",
+                        "antigravity/gemini-4-neon [high]",
                         &full,
                     );
                     assertion::assert_not_visible(frame, "· Fast");

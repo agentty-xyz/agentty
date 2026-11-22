@@ -174,7 +174,7 @@ async fn settings_tab_shows_content() {
                     assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                     assertion::assert_text_in_region(frame, "Default Fast Model", &full);
                     assertion::assert_text_in_region(frame, "Default Review Model", &full);
-                    assertion::assert_text_in_region(frame, "antigravity/gemini-4-argon", &full);
+                    assertion::assert_text_in_region(frame, "antigravity/gemini-4-neon", &full);
                     assertion::assert_text_in_region(frame, "[high]", &full);
                     assertion::assert_text_in_region(frame, "Disabled", &full);
                     assertion::assert_text_in_region(frame, "Launch Configurations", &full);
