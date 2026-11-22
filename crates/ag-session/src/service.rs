@@ -866,7 +866,8 @@ impl SessionService {
     }
 
     /// Stops the session's running turn and returns the session to review.
-    /// Unlike [`Self::cancel_session`], the worktree and its changes stay.
+    /// Unlike [`Self::cancel_session`], the worktree and its changes stay;
+    /// messages queued behind the turn are discarded.
     ///
     /// # Errors
     /// Returns an error when the session does not exist, has no running

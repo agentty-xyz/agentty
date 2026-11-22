@@ -115,8 +115,8 @@ pub enum RemoteRequest {
         session_id: String,
     },
     /// Stops the session's running turn and returns the session to review,
-    /// keeping its worktree and changes. Offered through the `stop_turn`
-    /// capability.
+    /// keeping its worktree and changes. It also discards the session's
+    /// queued messages. Offered through the `stop_turn` capability.
     StopTurn {
         /// Session whose turn stops.
         session_id: String,
