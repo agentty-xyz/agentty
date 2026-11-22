@@ -1176,6 +1176,78 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
     Ok(())
 }
 
+/// Starting a staged draft keeps its prompt shown once while the worktree is
+/// prepared, then runs it once.
+#[tokio::test]
+async fn draft_session_start_shows_staged_prompt_once_during_setup() -> E2eResult {
+    // Arrange
+    let checkout = ReleaseGate::new()?;
+    let hold_checkout = checkout.shell_wait();
+    FeatureTest::new("draft_session_start_setup")
+        .with_git()
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_delayed_session_creation(env, &hold_checkout).await?;
+                seed_claude_structured_output_project(env).await
+            })
+        })
+        .run(
+            move |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 5000)
+                    .write_text("Start this staged draft once")
+                    .press_key("Enter")
+                    .step(common::wait_for_session_view())
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("staged", "Staged draft before start")
+                    .press_key("s")
+                    .wait_for_text("Staged drafts start after setup.", 5000)
+                    .capture_labeled("preparing", "Draft start waits for workspace setup")
+                    .compose(&checkout.release())
+                    .wait_for_text(CLAUDE_STRUCTURED_RESPONSE_TEXT, 30000)
+                    .wait_for_stable_frame(300, 3000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let prompt = "Start this staged draft once";
+                    let staged = common::frame_from_capture(&report.captures[0]);
+                    let staged_count = staged.find_text(prompt).len();
+                    assert!(staged_count > 0, "staged draft preview shows the prompt");
+                    let preparing = common::frame_from_capture(&report.captures[1]);
+                    assertion::assert_match_count(&preparing, prompt, staged_count);
+                    assertion::assert_not_visible(&preparing, "Saved prompt:");
+                    // Title generation reuses the stub response, so only the
+                    // transcript below the header proves the turn ran.
+                    let transcript =
+                        Region::new(0, 3, frame.cols(), frame.rows().saturating_sub(3));
+                    assert!(
+                        preparing
+                            .find_text_in_region(CLAUDE_STRUCTURED_RESPONSE_TEXT, &transcript)
+                            .is_empty(),
+                        "the staged prompt waits for workspace setup"
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        CLAUDE_STRUCTURED_RESPONSE_TEXT,
+                        &transcript,
+                    );
+                    assertion::assert_match_count(frame, prompt, 1);
+                    assertion::assert_not_visible(frame, "Staged drafts start after setup.");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify that pressing `a` on the Sessions tab opens the creation selector,
 /// and choosing the regular option opens prompt mode with the submit footer.
 #[tokio::test]

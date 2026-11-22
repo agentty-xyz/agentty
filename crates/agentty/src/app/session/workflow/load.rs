@@ -228,6 +228,10 @@ impl SessionManager {
 
     /// Shows saved-prompt readiness and setup failures without flashing a
     /// preparation notice while the user is still composing their first prompt.
+    ///
+    /// Unstarted draft sessions omit the saved prompt because their staged
+    /// draft preview already shows that bundle; repeating it would show the
+    /// prompt twice until setup finishes.
     pub(crate) fn apply_workspace_preparation(
         session: &mut Session,
         preparation: Option<&SessionPreparationRow>,
@@ -238,8 +242,13 @@ impl SessionManager {
         let Some(preparation) = preparation else {
             return;
         };
+        let shows_staged_draft_preview =
+            session.status == Status::Draft && session.is_draft_session();
         let mut text = match preparation.state {
             SessionPreparationState::Preparing if preparation.prompt.is_none() => String::new(),
+            SessionPreparationState::Preparing if shows_staged_draft_preview => {
+                "Preparing workspace. Staged drafts start after setup.".to_string()
+            }
             SessionPreparationState::Preparing => "Preparing workspace. You can keep typing; \
                                                    submitted prompts wait for setup."
                 .to_string(),
@@ -249,9 +258,11 @@ impl SessionManager {
             ),
             SessionPreparationState::Ready | SessionPreparationState::Canceled => return,
         };
-        if let Some(prompt) = preparation.prompt.as_deref().and_then(|value| {
-            serde_json::from_str::<crate::domain::turn_prompt::TurnPrompt>(value).ok()
-        }) {
+        if !shows_staged_draft_preview
+            && let Some(prompt) = preparation.prompt.as_deref().and_then(|value| {
+                serde_json::from_str::<crate::domain::turn_prompt::TurnPrompt>(value).ok()
+            })
+        {
             text.push_str("\n\nSaved prompt:\n");
             text.push_str(&prompt.transcript_text());
         }

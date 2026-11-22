@@ -29,6 +29,7 @@ use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
 };
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::{
     AppRepositories, DbError, SessionListRow, SessionPreparationRow, SessionPreparationState,
@@ -36,7 +37,7 @@ use crate::infra::db::{
 };
 use crate::infra::fs;
 use crate::test_support::{
-    enable_tracing_log_fallback, poison_lock, session_manager_with_sessions,
+    SessionFixtureBuilder, enable_tracing_log_fallback, poison_lock, session_manager_with_sessions,
 };
 
 #[test]
@@ -73,6 +74,48 @@ fn test_workspace_preparation_shows_failures_and_clears_them_on_retry() {
         .expect("preparation remains available to lifecycle actions");
     assert!(matches!(&notice.body, TransientMessageBody::Plain(text) if text.is_empty()));
     assert!(session.allows_cancel_action());
+}
+
+#[test]
+fn test_workspace_preparation_repeats_saved_prompt_only_outside_draft_preview() {
+    // Arrange
+    let prompt = TurnPrompt::from_text("Run the staged bundle".to_string());
+    let preparation = SessionPreparationRow {
+        error: None,
+        prompt: Some(serde_json::to_string(&prompt).expect("prompt serializes")),
+        session_id: "preparing".to_string(),
+        start_ref: "main".to_string(),
+        state: SessionPreparationState::Preparing,
+    };
+    let mut draft_session = SessionFixtureBuilder::new()
+        .id("preparing")
+        .status(Status::Draft)
+        .draft(true)
+        .build();
+    let mut regular_session = crate::test_support::session_fixture("preparing", Status::Draft);
+
+    // Act
+    SessionManager::apply_workspace_preparation(&mut draft_session, Some(&preparation));
+    SessionManager::apply_workspace_preparation(&mut regular_session, Some(&preparation));
+
+    // Assert
+    let draft_notice = draft_session
+        .transient_messages
+        .get(TransientMessageSlot::WorkspacePreparation)
+        .expect("draft preparation notice is visible");
+    assert!(
+        matches!(&draft_notice.body, TransientMessageBody::Plain(text)
+            if text == "Preparing workspace. Staged drafts start after setup.")
+    );
+    let regular_notice = regular_session
+        .transient_messages
+        .get(TransientMessageSlot::WorkspacePreparation)
+        .expect("regular preparation notice is visible");
+    assert!(
+        matches!(&regular_notice.body, TransientMessageBody::Plain(text)
+            if text.contains("You can keep typing")
+                && text.ends_with("Saved prompt:\nRun the staged bundle"))
+    );
 }
 
 /// Clock fixture that supplies event-specific offsets for activity rows.
