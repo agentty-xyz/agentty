@@ -1,66 +1,13 @@
-:root {
-    --color-bg: #070b08;
-    --color-surface: #0d1510;
-    --color-surface-raised: #121e16;
-    --color-surface-interactive: #17271c;
-    --color-text: #d8f7df;
-    --color-accent: #4ae477;
-    --color-accent-dim: #78b486;
-    --color-muted: #6ca579;
-    --color-dim: #5b8c67;
-    --color-border: #294b31;
-    --color-border-strong: #447a4f;
-    --color-focus: #9af4b3;
-    --color-error: #ff9f9f;
-    --color-on-accent: #061009;
-    --color-roadmap-future: #e8c45a;
-    --color-roadmap-grid: color-mix(in srgb, var(--color-border) 32%, transparent);
-    --color-roadmap-horizon: #b7a4ff;
-    --glyph-0: #1c3a24;
-    --glyph-1: #24502f;
-    --glyph-2: #2f6a3d;
-    --glyph-3: #3f8a50;
-    --glyph-4: #57ad69;
-    --glyph-5: #7fce8e;
-    --glyph-6: #b3e8bd;
-    --glyph-7: #e4fbe8;
-    --glyph-hot: #4ae477;
-    --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: "Share Tech Mono", "Courier New", monospace;
+/* Design values come from the generated _tokens.scss; change design/tokens.json
+   instead. The tokens below derive from them or size this site's layout. */
+@use "tokens";
 
+:root {
+    --color-roadmap-grid: color-mix(in srgb, var(--color-border) 32%, transparent);
     --content-width: 800px;
     --content-width-wide: 960px;
     --content-width-docs: 1240px;
     --docs-sidebar-width: 230px;
-    --radius-sm: 0.35rem;
-    --radius-md: 0.65rem;
-    --radius-lg: 0.9rem;
-    --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.34);
-    --transition-fast: 140ms ease;
-}
-
-:root.theme-dark {
-    --color-bg: #080808;
-    --color-surface: #111111;
-    --color-surface-raised: #171717;
-    --color-surface-interactive: #1e1e1e;
-    --color-text: #f0f0f0;
-    --color-accent: #f4f4f4;
-    --color-accent-dim: #c8c8c8;
-    --color-muted: #adadad;
-    --color-dim: #919191;
-    --color-border: #333333;
-    --color-border-strong: #5d5d5d;
-    --color-focus: #ffffff;
-    --glyph-0: #262626;
-    --glyph-1: #363636;
-    --glyph-2: #4a4a4a;
-    --glyph-3: #646464;
-    --glyph-4: #858585;
-    --glyph-5: #a8a8a8;
-    --glyph-6: #cfcfcf;
-    --glyph-7: #f4f4f4;
-    --glyph-hot: #ffffff;
 }
 
 * {
@@ -458,7 +405,7 @@ svg {
 /* Allow the ASCII logo to scale down enough to avoid horizontal scrolling on phones. */
 .logo {
     color: var(--color-accent);
-    text-shadow: 0 0 12px rgba(61, 221, 106, 0.4);
+    text-shadow: var(--shadow-logo);
     font-size: clamp(0.48rem, 1.6vw, 0.85rem);
     line-height: 1.25;
     margin: 0 0 1.7rem;
@@ -467,10 +414,6 @@ svg {
     white-space: pre;
     overflow-x: auto;
     max-width: 100%;
-}
-
-:root.theme-dark .logo {
-    text-shadow: 0 0 12px rgba(224, 224, 224, 0.2);
 }
 
 .hero-description {
@@ -1020,7 +963,7 @@ svg {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     overflow: hidden;
-    background: #1e1e1e;
+    background: var(--color-demo-frame);
 }
 
 .feature-demo-frame [data-motion-demo] {
@@ -1732,7 +1675,7 @@ svg {
 .docs-mermaid__control:focus-visible {
     color: var(--color-accent);
     border-color: var(--color-accent);
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-control-hover);
 }
 
 .docs-mermaid__diagram {
@@ -1914,7 +1857,7 @@ svg {
     width: 100%;
     height: 100%;
     border: 0;
-    background: rgba(0, 0, 0, 0.72);
+    background: var(--color-scrim);
     backdrop-filter: blur(8px);
     cursor: default;
 }

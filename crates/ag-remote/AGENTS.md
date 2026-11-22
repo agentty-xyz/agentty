@@ -48,6 +48,9 @@ through `ag_session::SessionService`.
   loses a field.
 - Update the web client and `crates/ag-remote/tests/server/` together with
   `crates/ag-remote/src/protocol.rs`.
+- Design values live in `design/tokens.json`. `crates/ag-remote/assets/tokens.css` is
+  generated from it, and this crate and `ag-relay` serve it ahead of `app.css` as
+  `/app.css`; keep only layout sizes and the `--tone-*` aliases in `app.css`.
 
 ## Documentation
 

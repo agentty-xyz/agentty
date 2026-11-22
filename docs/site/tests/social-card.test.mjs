@@ -88,9 +88,9 @@ test('readThemeColors keeps only the default theme color and glyph properties', 
   assert.deepEqual(colors, { '--color-bg': '#070b08', '--glyph-hot': '#4ae477' });
 });
 
-test('readThemeColors reads every glyph level from the site stylesheet', () => {
+test('readThemeColors reads every glyph level from the generated site tokens', () => {
   // Arrange
-  const siteScss = readFileSync('docs/site/sass/site.scss', 'utf8');
+  const siteScss = readFileSync('docs/site/sass/_tokens.scss', 'utf8');
 
   // Act
   const colors = readThemeColors(siteScss);

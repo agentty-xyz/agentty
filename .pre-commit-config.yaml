@@ -608,3 +608,10 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+      - id: check-design-tokens
+        name: design tokens
+        description: Check that the stylesheets generated from `design/tokens.json` are current, that hand-written stylesheets name no raw colour, and that the colour pairs the token file lists keep their contrast in both themes; `cargo run -p ag-xtask -- design-tokens` regenerates the stylesheets. It runs on every change because any new stylesheet must use tokens too.
+        entry: cargo run -q --locked -p ag-xtask -- design-tokens --check
+        language: system
+        always_run: true
+        pass_filenames: false
