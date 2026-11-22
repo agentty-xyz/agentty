@@ -1,15 +1,16 @@
 //! Natural-language chat replies to a graph output awaiting acceptance.
 //!
 //! While a pending node of a live or paused graph waits for a predecessor's
-//! output to be accepted, a composer message is a reply to that output. A
-//! paused graph is resumed first, so the reply never runs as an ordinary turn
-//! outside the graph. The reply is recorded once with its visible prompt,
-//! bound to the exact inspected output version and execution. A read-only
-//! utility run on the Run Worker decides whether it accepts the output or asks
-//! for a revision; the first decision is durable, and its action is admitted
-//! through the command gateway. Recovery after a restart or a project switch
-//! decides or applies every reply whose action was not attempted, resuming its
-//! paused graph first. Only one reply per output is decided at a time.
+//! output to be accepted, a chat message, from the composer or the session
+//! API, is a reply to that output. A paused graph is resumed first, so the
+//! reply never runs as an ordinary turn outside the graph. The reply is
+//! recorded once with its visible prompt, bound to the exact inspected output
+//! version and execution. A read-only utility run on the Run Worker decides
+//! whether it accepts the output or asks for a revision; the first decision is
+//! durable, and its action is admitted through the command gateway. Recovery
+//! after a restart or a project switch decides or applies every reply whose
+//! action was not attempted, resuming its paused graph first. Only one reply
+//! per output is decided at a time.
 //!
 //! Acceptance cannot carry images, so a reply with attachments always
 //! revises without a decision run. A producer without a task conversation, or
@@ -34,8 +35,8 @@ use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
 use crate::app::graph_output_decision::GraphOutputReplyDecision;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::graph_reply_decision::ReplyDecision;
-use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::SessionId;
@@ -98,17 +99,17 @@ impl AwaitingOutput {
 }
 
 impl App {
-    /// Routes one composer message to the output a pending graph node waits
-    /// to see accepted.
+    /// Routes one chat message to the output a pending graph node waits to
+    /// see accepted.
     ///
     /// Returns `None` when no output awaits acceptance, so the caller
-    /// continues ordinary routing. Rejections keep the composer and its
-    /// draft open; an accepted reply is decided in the background.
+    /// continues ordinary routing. A rejected reply is not recorded; an
+    /// accepted reply is decided in the background.
     pub(crate) async fn submit_graph_output_reply(
         &mut self,
         session_id: &SessionId,
         prompt: &TurnPrompt,
-    ) -> Option<PromptWorkflowOutcome> {
+    ) -> Option<GraphReplyOutcome> {
         let output = match self.awaiting_graph_output(session_id).await {
             Ok(output) => output?,
             Err(error) => {
@@ -257,16 +258,16 @@ impl App {
 
     /// Records one reply with its visible prompt and decides it in the
     /// background. A reply with attachments to a producer that cannot take
-    /// revision guidance is rejected up front and keeps the composer open, as
-    /// is a reply to a paused graph that cannot be resumed.
+    /// revision guidance is rejected before it is recorded, as is a reply to
+    /// a paused graph that cannot be resumed.
     async fn reply_to_graph_output(
         &mut self,
         session_id: &SessionId,
         mut output: AwaitingOutput,
         prompt: &TurnPrompt,
-    ) -> PromptWorkflowOutcome {
+    ) -> GraphReplyOutcome {
         let Some((folder, transcript)) = self.reply_session_handles(session_id) else {
-            return PromptWorkflowOutcome::KeepPrompt;
+            return GraphReplyOutcome::Rejected(SessionError::NotFound);
         };
         let node_id = output.node.id.clone();
         if !prompt.attachments.is_empty() && !output.takes_revision_guidance {
@@ -328,9 +329,7 @@ impl App {
         );
         self.spawn_graph_output_reply_decision(session_id, reply, output, folder, transcript);
 
-        PromptWorkflowOutcome::ShowSession {
-            session_id: session_id.clone(),
-        }
+        GraphReplyOutcome::Accepted
     }
 
     /// Restarts dispatch of the paused graph that owns `output`, through the
@@ -461,20 +460,17 @@ impl App {
             }));
     }
 
-    /// Reports a rejected reply and keeps the composer open.
+    /// Reports a rejected reply in the session transcript and returns it.
     async fn reject_graph_output_reply(
         &self,
         session_id: &SessionId,
         message: &str,
-    ) -> PromptWorkflowOutcome {
-        self.append_prompt_status_line(
-            session_id,
-            TranscriptNotice::ReplyError,
-            &format!("Graph output: {message}"),
-        )
-        .await;
+    ) -> GraphReplyOutcome {
+        let message = format!("Graph output: {message}");
+        self.append_prompt_status_line(session_id, TranscriptNotice::ReplyError, &message)
+            .await;
 
-        PromptWorkflowOutcome::KeepPrompt
+        GraphReplyOutcome::Rejected(SessionError::Operation(message))
     }
 }
 

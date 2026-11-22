@@ -129,7 +129,8 @@ failure notice to the transcript; streamed output is never persisted or replayed
 
 Session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
-pending, a composer message is a reply to it; while a graph node waits for answers or
+pending, a chat message is a reply to it, whether it comes from the composer or a
+session API message, including remote control; while a graph node waits for answers or
 for acceptance of a predecessor's output, the message is a reply to that exact execution
 or output version. A reply to an output of the session's newest working graph first
 resumes that graph through the command gateway when it is paused, so the work stays

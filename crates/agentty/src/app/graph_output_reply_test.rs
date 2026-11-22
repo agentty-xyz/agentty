@@ -30,6 +30,7 @@ use crate::app::execution_graph::GraphDriverRegistration;
 use crate::app::execution_graph::tests::{graph, seed_session};
 use crate::app::graph_node_reply::tests::{app_with, messages, screenshot};
 use crate::app::graph_proposal_reply::tests::{apply_next_command, wait_for_message};
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
@@ -125,12 +126,7 @@ async fn revise_reply_sends_guidance_to_the_producer() {
     let notice = wait_for_message(&app, "Revision guidance").await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(notice, "Revision guidance sent to `first` · continuing");
     assert!(
         app.services
@@ -139,6 +135,39 @@ async fn revise_reply_sends_guidance_to_the_producer() {
             .expect("decision lock")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn api_message_replies_to_the_awaited_output_instead_of_starting_a_turn() {
+    // Arrange
+    let (graph, progress) = gated();
+    let mut repository = listing(graph, progress);
+    repository
+        .expect_continue_node()
+        .once()
+        .withf(|request| {
+            request.node_id == "first"
+                && request.kind
+                    == GraphNodeContinuation::Reply {
+                        attachments: Vec::new(),
+                        message: "Also add tests".into(),
+                    }
+        })
+        .returning(|_| Ok(true));
+    let (mut app, _directory, _driver) = decided_app(repository, "revise").await;
+    let _consumer = app.sessions.foreground_consumer();
+    let service = app.session_service();
+
+    // Act
+    let result = app
+        .drive_session_request(service.send_message(&SessionId::from("sess"), "Also add tests"))
+        .await;
+    apply_next_command(&mut app).await;
+    let notice = wait_for_message(&app, "Revision guidance").await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert_eq!(notice, "Revision guidance sent to `first` · continuing");
 }
 
 #[tokio::test]
@@ -188,7 +217,7 @@ async fn reply_with_attachments_to_a_producer_that_cannot_take_guidance_keeps_th
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     let messages = messages(&app).await;
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
@@ -231,7 +260,7 @@ async fn reply_with_attachments_to_an_output_a_started_dependent_consumed_keeps_
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     let messages = messages(&app).await;
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
@@ -278,12 +307,7 @@ async fn reply_with_attachments_revises_without_deciding() {
     let notice = wait_for_message(&app, "Revision guidance").await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(notice, "Revision guidance sent to `first` · continuing");
 }
 
@@ -348,12 +372,7 @@ async fn stopping_the_session_abandons_an_undecided_output_reply() {
     wait_for_status(&status, Status::Review).await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(
         notice,
         TranscriptNotice::ReplyError.format(
@@ -386,7 +405,7 @@ async fn reply_while_the_previous_one_is_decided_keeps_the_composer() {
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     let messages = messages(&app).await;
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
@@ -412,7 +431,7 @@ async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     assert!(
         app.services
             .output_reply_decisions
@@ -534,7 +553,7 @@ async fn reply_to_a_paused_graph_that_cannot_resume_keeps_the_composer() {
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     let messages = messages(&app).await;
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
@@ -588,7 +607,10 @@ async fn failed_reads_report_the_error_and_keep_the_composer() {
             .await;
 
         // Assert
-        assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt), "{fault}");
+        assert!(
+            matches!(outcome, Some(GraphReplyOutcome::Rejected(_))),
+            "{fault}"
+        );
         let messages = messages(&app).await;
         assert_eq!(messages.len(), 1, "{fault}: {messages:?}");
         assert!(
@@ -643,9 +665,8 @@ async fn failed_reply_persistence_keeps_the_composer_or_reports_the_error() {
 
         // Assert
         if failure == "record" {
-            assert_eq!(
-                outcome,
-                Some(PromptWorkflowOutcome::KeepPrompt),
+            assert!(
+                matches!(outcome, Some(GraphReplyOutcome::Rejected(_))),
                 "{failure}"
             );
             let messages = messages(&app).await;
@@ -913,12 +934,7 @@ async fn shutdown_leaves_an_undecided_output_reply_for_restart_recovery() {
     app.services.wait_for_cleanup_tasks(None).await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(deciding_count(&app), 0);
     assert_eq!(messages(&app).await, Vec::new());
 }

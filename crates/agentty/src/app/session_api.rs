@@ -531,6 +531,10 @@ impl App {
     }
 
     /// Sends one validated API message through the existing session workflow.
+    ///
+    /// Graph work waiting for the session's chat receives the message first,
+    /// as it does for terminal messages. Accepting a graph reply acknowledges
+    /// that it was recorded, not that its decision finished.
     pub(super) async fn send_api_message(
         &mut self,
         session_id: &SessionId,
@@ -549,6 +553,13 @@ impl App {
         let status = session.status;
         let plan = MessagePlan::for_api(status, session.is_draft_session());
         let prompt = TurnPrompt::from_text(message);
+        // Like the terminal, a staged draft prompt is never a graph reply.
+        // Boxed because accepting a reply can admit nested gateway commands.
+        if plan != MessagePlan::StageAndStart
+            && let Some(outcome) = Box::pin(self.submit_graph_reply(session_id, &prompt)).await
+        {
+            return outcome.into_result();
+        }
 
         if self
             .execute_message_plan(session_id, prompt, plan)

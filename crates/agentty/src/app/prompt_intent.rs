@@ -11,6 +11,7 @@ use tracing::warn;
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
 use crate::app::{App, AppError, ReviewCacheEntry, SessionManager, spawn};
@@ -266,9 +267,9 @@ impl App {
     /// Routes one presentation-owned prompt submission through the matching
     /// session workflow and returns the requested navigation effect.
     ///
-    /// A session's pending graph proposal receives the message as a reply
-    /// first, then a graph node awaiting answers, then a graph output awaiting
-    /// acceptance; otherwise it starts an ordinary turn.
+    /// Graph work waiting for the session's chat receives the message first,
+    /// through the routing session API messages share; otherwise it starts an
+    /// ordinary turn. A rejected graph reply keeps the composer and its draft.
     pub(crate) async fn submit_prompt(
         &mut self,
         submission: PromptSubmission,
@@ -300,14 +301,13 @@ impl App {
             return PromptWorkflowOutcome::KeepPrompt;
         }
         if session_mode != PromptSessionMode::NewDraft {
-            if let Some(outcome) = self.submit_graph_proposal_reply(&session_id, &prompt).await {
-                return outcome;
-            }
-            if let Some(outcome) = self.submit_graph_node_reply(&session_id, &prompt).await {
-                return outcome;
-            }
-            if let Some(outcome) = self.submit_graph_output_reply(&session_id, &prompt).await {
-                return outcome;
+            match self.submit_graph_reply(&session_id, &prompt).await {
+                Some(GraphReplyOutcome::Accepted) => {
+                    return PromptWorkflowOutcome::ShowSession { session_id };
+                }
+                // The rejection notice is already in the transcript.
+                Some(GraphReplyOutcome::Rejected(_)) => return PromptWorkflowOutcome::KeepPrompt,
+                None => {}
             }
             match self.queue_preparation_prompt(&session_id, &prompt).await {
                 Ok(true) => return PromptWorkflowOutcome::ShowSession { session_id },

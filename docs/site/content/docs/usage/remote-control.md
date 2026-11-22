@@ -6,8 +6,10 @@ weight = 4
 
 <a id="usage-remote-control"></a> Remote control lets another device follow your
 sessions and reply to them while Agentty runs. A paired device can list sessions, read
-transcripts, send messages, answer questions, and stop a running turn. Merging,
-publishing, and session settings stay in the terminal.
+transcripts, send messages, answer questions, and stop a running turn. While an
+execution graph waits for you, a message replies to it as a terminal reply would; see
+[Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
+Merging, publishing, and session settings stay in the terminal.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
