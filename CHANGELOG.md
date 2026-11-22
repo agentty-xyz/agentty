@@ -7,6 +7,84 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.20.0] - 2026-11-22
+
+### Added
+
+- `agentty`: add experimental remote control behind `--experimental-remote`.
+  `/remote-control` starts a loopback listener (`--remote-control-port`) and pairs a
+  phone or browser with a one-time code that the terminal must approve.
+- `agentty`: link remote control to a self-hosted relay with `--remote-relay <URL>`, so
+  devices reach Agentty without a tunnel. Traffic is end-to-end encrypted, devices stay
+  paired across restarts, and the popup shows a pairing link and QR code to open or
+  copy.
+- `agentty`: redesign the remote web page with the site's themes, a grouped session list
+  with filters and unread dots, and a chat that renders answers, notices, and questions
+  as Markdown and shows each session's size, line counts, model, branches, timer, and
+  review request.
+- `agentty`: let paired devices create sessions from the home composer and pick their
+  model, stop a running turn, cancel a session after confirming, merge, publish, sync
+  with the base branch, change model, reasoning, style, and speed from a settings sheet
+  or slash commands, read the session diff file by file, and look up worktree files with
+  `@`.
+- `ag-relay`: add a relay server and container image that join remote-control devices to
+  Agentty instances and serve the pairing page, which encrypts in the browser.
+- `ag-noise`: add Noise handshakes and encrypted sessions with AES-GCM for device to
+  instance and instance to relay connections.
+- `ag-session`: add `SessionService` and `SessionBackend` operations to list sessions
+  with stats, read a session's diff and files, stop a turn, merge, publish, rebase, and
+  change session settings, gated by `SessionOperation`.
+- `agentty`: add provider calls to an exhausted execution graph budget with `b` in the
+  graph view.
+- `agentty`: send queued chat into a running Claude or Codex turn with `Ctrl+s`, through
+  the new `ag-worker` turn steering.
+- `agentty`: list Claude models in Harness sessions when `ANTHROPIC_API_KEY` is set;
+  `ag-harness` adds the Anthropic provider and Claude catalog entries.
+- `agentty`: add Gemini 4 Neon to the Antigravity models and make it the default.
+- `agentty`: include matching rules from `.agentty/review-rules.json` in focused
+  reviews.
+- `agentty`: show each graph step's model and reasoning effort under its name.
+- `ag-harness`: let the native sandbox run commands in real repositories, with opt-in
+  system-read, temporary-directory, Git-write, and network grants.
+
+### Changed
+
+- `agentty`: default the response style to `Concise`.
+- `agentty`: address focused-review comments automatically in editing sessions; turn it
+  off with the `Auto Address Comments` project setting.
+- `agentty`: make `/graph` always available.
+- `agentty`: refresh an open diff of a running session every 10 seconds.
+- `agentty`: run Antigravity read-only turns with command and write denials instead of
+  `--mode plan`.
+- `agentty`: back off failing background fetches, poll unchanged review requests less
+  often, and reuse unchanged branch comparisons during status polling.
+- `agentty`: lay out terminal Mermaid diagrams with fewer edge crossings.
+- `ag-session`: `HostContext::session_modes` now holds `HostSessionMode` values with
+  each mode's starting agent and model (breaking).
+- release: bump workspace crate metadata and lockfile package versions to `0.20.0`.
+
+### Fixed
+
+- `agentty`: restore text selection and link clicks in the terminal, and fix wheel
+  scrolling and modified keys such as `Shift+Enter` inside `tmux`.
+- `agentty`: allow canceling sessions waiting on questions.
+- `agentty`: keep a session in progress while its graph still runs nodes, and keep chat
+  replies to graph outputs across restarts.
+- `agentty`: restart automatic review after an interrupted review and an unchanged turn.
+- `agentty`: show a staged draft's prompt once while its workspace is prepared.
+- `ag-harness`: wait out SQLite contention in the harness session store.
+
+### Removed
+
+- `agentty`: remove session permission mode selection, including `/mode`; chat turns
+  always edit.
+- `agentty`: remove the `--experimental-graph` flag.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.7] - 2026-11-20
 
 ### Added
