@@ -655,3 +655,19 @@ async fn message_planning_preserves_api_validation_precedence_and_reply_rejectio
         []
     );
 }
+
+#[test]
+fn review_publication_reuses_the_branch_of_an_earlier_push() {
+    // Arrange
+    let published = Some("origin/feature/x");
+
+    // Act
+    let republished = super::review::review_branch_name(None, published);
+    let requested = super::review::review_branch_name(Some("chosen".to_string()), published);
+    let unpublished = super::review::review_branch_name(None, None);
+
+    // Assert
+    assert_eq!(republished.as_deref(), Some("feature/x"));
+    assert_eq!(requested.as_deref(), Some("chosen"));
+    assert_eq!(unpublished, None);
+}

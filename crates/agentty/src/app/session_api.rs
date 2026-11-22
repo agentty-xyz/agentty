@@ -39,6 +39,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::StopTurn
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
+                | SessionOperation::PublishSession
         )
     }
 

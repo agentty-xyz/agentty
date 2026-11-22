@@ -107,6 +107,14 @@ pub enum RemoteRequest {
         /// Session to merge.
         session_id: String,
     },
+    /// Pushes a session to the branch it was published to before, or under
+    /// its default name the first time, and opens or refreshes its review
+    /// request with the user's forge credentials. Offered through the
+    /// `publish` capability.
+    PublishSession {
+        /// Session to publish.
+        session_id: String,
+    },
     /// Sends one chat message, starting, resuming, or queueing a turn.
     SendMessage {
         /// Message text.
@@ -344,6 +352,11 @@ pub enum RemoteResponse {
     Session {
         /// Loaded session, boxed to keep other responses small.
         session: Option<Box<RemoteSession>>,
+    },
+    /// The review request a publish created or refreshed.
+    ReviewRequest {
+        /// Review request as the forge reported it.
+        review_request: RemoteReviewRequest,
     },
     /// The host's loaded sessions in display order.
     Sessions {
@@ -719,6 +732,9 @@ impl From<Session> for RemoteSession {
 pub struct RemoteReviewRequest {
     /// Forge display id, such as `#123`.
     pub display_id: String,
+    /// Forge name, such as `GitHub` or `GitLab`. Absent from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<String>,
     /// Branch published for review.
     pub source_branch: String,
     /// Remote state: `Open`, `Merged`, or `Closed`.
@@ -739,6 +755,7 @@ impl From<ReviewRequestSummary> for RemoteReviewRequest {
     fn from(summary: ReviewRequestSummary) -> Self {
         Self {
             display_id: summary.display_id,
+            forge: Some(summary.forge_kind.display_name().to_string()),
             source_branch: summary.source_branch,
             state: summary.state.as_str().to_string(),
             status_summary: summary.status_summary,

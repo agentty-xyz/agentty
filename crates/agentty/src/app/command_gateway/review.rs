@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::app::App;
 use crate::app::branch_publish::{branch_publish_loading_label, review_request_queued_label};
+use crate::app::session::remote_branch_name_from_upstream_ref;
 use crate::domain::session::PublishBranchAction;
 use crate::domain::transient_message::TransientMessageBody;
 
@@ -40,6 +41,10 @@ impl App {
     /// Admits publication through the same lookup, branch reservation,
     /// persistence, and worker queue for both entry points.
     ///
+    /// A request without a branch name republishes a session pushed before
+    /// under its existing branch, so neither entry point opens a second branch
+    /// and review request for it.
+    ///
     /// The terminal calls directly on the foreground task; API commands arrive
     /// through the bounded mailbox. Neither path waits for a busy branch here.
     /// Status eligibility remains worker-owned and is checked at execution,
@@ -67,6 +72,10 @@ impl App {
 
             return Err(SessionError::NotFound);
         };
+        let remote_branch_name = review_branch_name(
+            remote_branch_name,
+            context.session.published_upstream_ref.as_deref(),
+        );
         // Reserve an idle branch before persistence. An existing owner already
         // serializes worker execution, so the foreground never waits here.
         let branch_operation_lock = Arc::clone(&context.branch_operation_lock);
@@ -105,4 +114,13 @@ impl App {
 
         Ok(())
     }
+}
+
+/// Returns the branch a publication pushes: the requested name, else the
+/// branch of an earlier push, else `None` for the session's default branch.
+pub(super) fn review_branch_name(
+    requested: Option<String>,
+    published_upstream_ref: Option<&str>,
+) -> Option<String> {
+    requested.or_else(|| published_upstream_ref.map(remote_branch_name_from_upstream_ref))
 }

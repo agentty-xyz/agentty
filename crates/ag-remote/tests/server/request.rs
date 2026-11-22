@@ -5,7 +5,8 @@ use std::time::Duration;
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteMessage, RemoteMessageKind,
     RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -278,6 +279,106 @@ async fn a_slow_request_delays_neither_other_requests_nor_change_pushes() -> Tes
             id: 1,
             result: RemoteResult::Ok(RemoteResponse::Accepted),
         }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let publish = RemoteRequest::PublishSession {
+        session_id: "session-1".to_string(),
+    };
+
+    // Act
+    send(
+        &mut client,
+        &ClientFrame::Request {
+            id: 1,
+            request: publish,
+        },
+    )
+    .await?;
+    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let unlisted = call(
+        &mut client,
+        3,
+        RemoteRequest::PublishSession {
+            session_id: "other-project-session".to_string(),
+        },
+    )
+    .await?;
+    let messaged = call(
+        &mut client,
+        4,
+        RemoteRequest::SendMessage {
+            message: "hello".to_string(),
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+    let canceled = call(
+        &mut client,
+        5,
+        RemoteRequest::CancelSession {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+    let stopped = call(
+        &mut client,
+        6,
+        RemoteRequest::StopTurn {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+    let calls_before_release = server.backend.calls();
+    server.backend.release();
+    let published = next_frame(&mut client).await?;
+
+    // Assert
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    assert_eq!(messaged, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(stopped, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        canceled,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    for reached in ["send:session-1:hello", "cancel:session-1", "stop:session-1"] {
+        assert!(calls_before_release.iter().any(|call| call == reached));
+    }
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        published,
+        ServerFrame::Response {
+            id: 1,
+            result: RemoteResult::Ok(RemoteResponse::ReviewRequest {
+                review_request: RemoteReviewRequest {
+                    display_id: "#7".to_string(),
+                    forge: Some("GitHub".to_string()),
+                    source_branch: "agentty/session-1".to_string(),
+                    state: "Open".to_string(),
+                    status_summary: None,
+                    target_branch: "main".to_string(),
+                    title: "Build it".to_string(),
+                    web_url: "https://github.com/example/project/pull/7".to_string(),
+                },
+            }),
+        }
+    );
+    assert!(
+        server
+            .backend
+            .calls()
+            .iter()
+            .any(|call| call == "review:session-1")
     );
 
     Ok(())

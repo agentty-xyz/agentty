@@ -108,6 +108,10 @@ pub enum SessionOperation {
     /// Changing a session's model, reasoning, style, or speed through
     /// [`SessionBackend::update_session_settings`].
     SessionSettings,
+    /// Publishing a session to its existing branch, or under its default name
+    /// the first time, and creating or refreshing its review request through
+    /// [`SessionBackend::create_review_request`].
+    PublishSession,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.

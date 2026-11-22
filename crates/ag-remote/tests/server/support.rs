@@ -13,10 +13,10 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    HostContext, QuestionItem, ReviewRequest, Session, SessionBackend, SessionDiffFile,
-    SessionDiffFileStatus, SessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
-    SessionSummary,
+    ForgeKind, HostContext, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError, SessionId,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionSettingsChange, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -385,7 +385,7 @@ impl RecordingBackend {
         locked(&self.calls).clone()
     }
 
-    /// Lets every held `wait` message, now and later, finish.
+    /// Lets every held `wait` message and publish, now and later, finish.
     pub(crate) fn release(&self) {
         self.released.send_replace(true);
     }
@@ -580,14 +580,29 @@ impl SessionBackend for RecordingBackend {
         ))
     }
 
-    // Every review request is refused.
+    // A publish is held like the message `wait`, and then opens pull
+    // request `#7`.
     async fn create_review_request(
         &self,
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError> {
+        let mut released = self.released.subscribe();
+        let _ = released.wait_for(|is_released| *is_released).await;
         self.record(format!("review:{session_id}"));
 
-        Err(SessionError::Operation("unsupported".to_string()))
+        Ok(ReviewRequest {
+            last_refreshed_at: 30,
+            summary: ReviewRequestSummary {
+                display_id: "#7".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: format!("agentty/{session_id}"),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Build it".to_string(),
+                web_url: "https://github.com/example/project/pull/7".to_string(),
+            },
+        })
     }
 }
 

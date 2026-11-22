@@ -9,8 +9,8 @@ use serde_json::json;
 use crate::protocol::{
     ClientFrame, MAX_DIFF_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
     RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewReadiness, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
-    ServerFrame,
+    RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, session_fixture};
 
@@ -33,7 +33,8 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         {"type": "request", "id": 5, "request": {"method": "cancel_session", "session_id": "s"}},
         {"type": "request", "id": 6, "request": {"method": "merge_session", "session_id": "s"}},
         {"type": "request", "id": 7, "request": {"method": "stop_turn", "session_id": "s"}},
-        {"type": "request", "id": 8, "request": {"method": "sync_session", "session_id": "s"}}
+        {"type": "request", "id": 8, "request": {"method": "sync_session", "session_id": "s"}},
+        {"type": "request", "id": 9, "request": {"method": "publish_session", "session_id": "s"}}
     ]);
 
     // Act
@@ -102,6 +103,12 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             ClientFrame::Request {
                 id: 8,
                 request: RemoteRequest::SyncSession {
+                    session_id: "s".to_string(),
+                },
+            },
+            ClientFrame::Request {
+                id: 9,
+                request: RemoteRequest::PublishSession {
                     session_id: "s".to_string(),
                 },
             },
@@ -262,6 +269,47 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
         ])
     );
     assert_eq!(decoded, frames);
+}
+
+#[test]
+fn review_request_response_names_the_forge_and_omits_a_missing_status() {
+    // Arrange
+    let review_request = ReviewRequest {
+        last_refreshed_at: 30,
+        summary: ReviewRequestSummary {
+            display_id: "!4".to_string(),
+            forge_kind: ForgeKind::GitLab,
+            source_branch: "agentty/s".to_string(),
+            state: ReviewRequestState::Merged,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Build it".to_string(),
+            web_url: "https://gitlab.com/example/project/-/merge_requests/4".to_string(),
+        },
+    };
+
+    // Act
+    let response = RemoteResponse::ReviewRequest {
+        review_request: RemoteReviewRequest::from(review_request.summary),
+    };
+    let encoded = serde_json::to_value(&response).expect("response should encode");
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "kind": "review_request",
+            "review_request": {
+                "display_id": "!4",
+                "forge": "GitLab",
+                "source_branch": "agentty/s",
+                "state": "Merged",
+                "target_branch": "main",
+                "title": "Build it",
+                "web_url": "https://gitlab.com/example/project/-/merge_requests/4"
+            }
+        })
+    );
 }
 
 #[test]
@@ -555,6 +603,7 @@ fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control(
         encoded["review_request"],
         json!({
             "display_id": "#12",
+            "forge": "GitHub",
             "source_branch": "wt/session-",
             "state": "Open",
             "status_summary": "PR ready",

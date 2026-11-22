@@ -12,9 +12,9 @@ published are lost; the device asks before it cancels. While an execution graph 
 for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
-change a session's settings, create sessions in the active project, and merge a session
-into its base branch, though the web page has no buttons for them yet. The page does not
-offer publishing yet.
+change a session's settings, create sessions in the active project, merge a session into
+its base branch, and publish its branch, though the web page has no buttons for them
+yet.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -165,8 +165,10 @@ device can:
   once, while a model or speed change waits for the running turn as it does in the
   terminal;
 - cancel a session, which deletes its worktree and branch;
-- merge a session, which lands its changes on the base branch; and
-- create a session in the active project, which adds a worktree and branch.
+- merge a session, which lands its changes on the base branch;
+- create a session in the active project, which adds a worktree and branch; and
+- publish a session, which pushes its branch and opens or refreshes its pull request
+  with this computer's Git and forge credentials.
 
 Anyone holding a paired device can do the same, so remove a device you no longer
 control.
@@ -183,6 +185,11 @@ control.
 - A device can read and act on only the sessions it lists, which are the sessions of the
   active project, and creates sessions only in that project. Agentty refuses a request
   for any other session.
+- A device that publishes a session pushes it to the branch it was published to before,
+  or under the default name the first time, and opens or refreshes its pull request with
+  this computer's Git and forge credentials; it cannot choose a branch name. See
+  [Forge Authentication](@/docs/usage/forge-authentication.md) for what publishing
+  needs.
 - Web pages from other sites cannot connect, including pages that point their own domain
   at this computer.
 - Agentty does not encrypt the connection itself. Use a tunnel that does, such as
