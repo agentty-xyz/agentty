@@ -35,6 +35,12 @@ The relay is untrusted. It learns which instance a device asks for, when they co
 and how much they send. It cannot read or change what they send, and it cannot pair a
 device: pairing still needs the one-time code and an approval in the terminal.
 
+Whoever runs a relay decides which instances may register with it. After an instance
+proves its key, the relay asks an admission policy about its identifier: the `ag-relay`
+binary can admit a fixed list, and a program that embeds the crate can supply its own
+policy. Refusing an instance is the only power this adds; the operator still cannot read
+or change a stream.
+
 Whoever serves the web client is trusted with the page's code. The relay serves it, so a
 malicious relay operator could serve an altered page. Running your own relay removes
 that party.

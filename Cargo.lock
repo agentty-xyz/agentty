@@ -217,6 +217,7 @@ name = "ag-relay"
 version = "0.20.0"
 dependencies = [
  "ag-noise",
+ "async-trait",
  "axum",
  "clap",
  "futures-util",

@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+use crate::admission::{AdmissionPolicy, AdmitAll};
 use crate::limit::{HandshakeLimiter, RelayLimits};
 use crate::registry::Registry;
 use crate::{control, page, stream};
@@ -62,13 +63,61 @@ pub enum RelayError {
     InvalidHeaderName,
 }
 
-/// Starts the relay on `config.bind_addr` and returns its control handle.
+/// Starts the relay on `config.bind_addr`, admitting every instance, and
+/// returns its control handle.
 ///
 /// # Errors
 ///
 /// Returns [`RelayError::InvalidHeaderName`] for an unusable client address
 /// header and [`RelayError::Bind`] when the address cannot be bound.
 pub async fn start(config: RelayConfig) -> Result<RelayHandle, RelayError> {
+    start_with_admission(config, Arc::new(AdmitAll)).await
+}
+
+/// Starts the relay like [`start`], registering only the instances
+/// `admission` admits.
+///
+/// A program that embeds the relay with its own policy:
+///
+/// ```no_run
+/// use std::sync::Arc;
+///
+/// use ag_relay::{AdmissionError, AdmissionPolicy, RelayConfig, RelayLimits};
+/// use async_trait::async_trait;
+///
+/// /// Admits the instances an operator listed.
+/// struct Listed(Vec<String>);
+///
+/// #[async_trait]
+/// impl AdmissionPolicy for Listed {
+///     async fn admit(&self, instance_id: &str) -> Result<bool, AdmissionError> {
+///         Ok(self.0.iter().any(|listed| listed == instance_id))
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let config = RelayConfig {
+///         bind_addr: "127.0.0.1:8787".parse()?,
+///         client_address_header: None,
+///         limits: RelayLimits::default(),
+///     };
+///     let policy = Listed(vec!["<instance identifier>".to_string()]);
+///     let relay = ag_relay::start_with_admission(config, Arc::new(policy)).await?;
+///     tokio::signal::ctrl_c().await?;
+///     relay.shutdown().await;
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Fails like [`start`].
+pub async fn start_with_admission(
+    config: RelayConfig,
+    admission: Arc<dyn AdmissionPolicy>,
+) -> Result<RelayHandle, RelayError> {
     let client_address_header = match config.client_address_header {
         Some(name) => Some(HeaderName::try_from(name).map_err(|_| RelayError::InvalidHeaderName)?),
         None => None,
@@ -79,6 +128,7 @@ pub async fn start(config: RelayConfig) -> Result<RelayHandle, RelayError> {
     let local_addr = listener.local_addr().map_err(RelayError::Bind)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = Arc::new(RelayState {
+        admission,
         client_address_header,
         handshakes: Arc::new(HandshakeLimiter::new(&config.limits)),
         limits: config.limits,
@@ -156,6 +206,8 @@ impl Drop for StopSignal {
 
 /// State shared by every connection.
 pub(crate) struct RelayState {
+    /// Decides which instances may register.
+    pub(crate) admission: Arc<dyn AdmissionPolicy>,
     /// Resources clients may hold.
     pub(crate) limits: RelayLimits,
     /// Registered instances and unanswered streams.

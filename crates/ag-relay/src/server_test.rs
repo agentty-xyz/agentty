@@ -6,6 +6,7 @@ use tokio::sync::watch;
 
 use super::{RelayState, limit_address};
 use crate::RelayLimits;
+use crate::admission::AdmitAll;
 use crate::limit::HandshakeLimiter;
 use crate::registry::Registry;
 
@@ -18,6 +19,7 @@ fn state(header: Option<&'static str>) -> RelayState {
     let limits = RelayLimits::default();
 
     RelayState {
+        admission: Arc::new(AdmitAll),
         client_address_header: header.map(HeaderName::from_static),
         handshakes: Arc::new(HandshakeLimiter::new(&limits)),
         limits,

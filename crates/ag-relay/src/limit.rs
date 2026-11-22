@@ -15,14 +15,20 @@ const BUDGET_WINDOW: Duration = Duration::from_mins(1);
 pub struct RelayLimits {
     /// Time an instance has to answer a device's stream.
     pub accept_timeout: Duration,
+    /// Time the [`crate::AdmissionPolicy`] has to decide on one registration;
+    /// a policy that has not answered by then refuses the instance. Agentty
+    /// gives up on a registration that the relay has not confirmed within
+    /// ten seconds, so keep this well below that.
+    pub admission_timeout: Duration,
     /// Time an instance has to finish its registration handshake.
     pub handshake_timeout: Duration,
     /// Bytes one stream may carry per minute, both directions combined.
     pub max_bytes_per_minute: usize,
-    /// Registration handshakes that may be in progress at once.
+    /// Registrations that may be in progress at once, from the first
+    /// handshake message until the admission decision.
     pub max_handshakes: usize,
-    /// Registration handshakes one client address may have in progress at
-    /// once, so one client cannot take every handshake.
+    /// Registrations one client address may have in progress at once, so
+    /// one client cannot take every handshake.
     pub max_handshakes_per_address: usize,
     /// Instances that may be registered at once.
     pub max_instances: usize,
@@ -45,6 +51,7 @@ impl Default for RelayLimits {
     fn default() -> Self {
         Self {
             accept_timeout: Duration::from_secs(10),
+            admission_timeout: Duration::from_secs(5),
             handshake_timeout: Duration::from_secs(10),
             max_bytes_per_minute: 16 * 1024 * 1024,
             max_handshakes: 64,

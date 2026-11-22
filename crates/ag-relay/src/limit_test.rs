@@ -5,6 +5,9 @@ use std::time::Duration;
 use super::{ByteBudget, HandshakeLimiter};
 use crate::RelayLimits;
 
+/// Time Agentty waits for the relay to confirm a registration.
+const AGENTTY_REGISTRATION_WAIT: Duration = Duration::from_secs(10);
+
 #[test]
 fn default_limits_bound_every_resource() {
     // Arrange
@@ -21,6 +24,7 @@ fn default_limits_bound_every_resource() {
     ];
     let durations = [
         limits.accept_timeout,
+        limits.admission_timeout,
         limits.handshake_timeout,
         limits.ping_interval,
         limits.shutdown_timeout,
@@ -31,6 +35,7 @@ fn default_limits_bound_every_resource() {
     assert!(bounded.iter().all(|limit| *limit > 0));
     assert!(durations.iter().all(|duration| *duration > Duration::ZERO));
     assert!(limits.max_handshakes_per_address < limits.max_handshakes);
+    assert!(limits.admission_timeout < AGENTTY_REGISTRATION_WAIT);
 }
 
 #[test]
