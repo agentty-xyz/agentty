@@ -546,6 +546,15 @@ impl SessionBackend for RecordingBackend {
         Ok(())
     }
 
+    // Every sync is refused.
+    async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.record(format!("sync:{session_id}"));
+
+        Err(SessionError::Operation(
+            "Session cannot sync in status `Done`".to_string(),
+        ))
+    }
+
     // Every merge is refused.
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"));

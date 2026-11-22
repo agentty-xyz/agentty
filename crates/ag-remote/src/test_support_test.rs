@@ -318,6 +318,10 @@ impl SessionBackend for RecordingBackend {
         self.record(format!("stop:{session_id}"), ())
     }
 
+    async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.record(format!("sync:{session_id}"), ())
+    }
+
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"), ())
     }

@@ -862,11 +862,46 @@ async fn stop_turn_reaches_the_host_only_for_listed_sessions_it_serves() {
 }
 
 #[tokio::test]
+async fn sync_session_reaches_the_host_only_for_listed_sessions_it_serves() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::RebaseSession],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let sync = |session_id: &str| RemoteRequest::SyncSession {
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let synced = reply_result(&serving.state, sync("session-1")).await;
+    let unlisted = reply_result(&serving.state, sync("other-project")).await;
+    let unsupported = reply_result(&not_serving.state, sync("session-1")).await;
+
+    // Assert
+    assert_eq!(synced, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["list", "sync:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn capabilities_follow_the_order_of_the_capability_table() {
     // Arrange
     let fixture = supporting_fixture(
         MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
-        &[SessionOperation::StopTurn, SessionOperation::MergeSession],
+        &[
+            SessionOperation::RebaseSession,
+            SessionOperation::StopTurn,
+            SessionOperation::MergeSession,
+        ],
     );
     let mut revisions = fixture.state.revisions();
 
@@ -883,6 +918,10 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
     };
     assert_eq!(
         capabilities,
-        Some(vec!["merge".to_string(), "stop_turn".to_string()])
+        Some(vec![
+            "merge".to_string(),
+            "stop_turn".to_string(),
+            "sync".to_string()
+        ])
     );
 }

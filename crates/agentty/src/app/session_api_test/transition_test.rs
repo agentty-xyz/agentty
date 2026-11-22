@@ -16,7 +16,7 @@ use super::super::{api_error_from_app, api_error_from_session};
 use super::support::{
     request_cancellation, request_durable_message, request_merge, request_message,
     request_question_answers, request_review_request, request_session, request_session_creation,
-    request_turn_stop,
+    request_sync, request_turn_stop,
 };
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{AppError, SessionError};
@@ -296,6 +296,49 @@ async fn runtime_backend_stops_a_running_session_without_runtime_handles() {
             .map(|session| session.status),
         Some(Status::Review)
     );
+}
+
+#[tokio::test]
+async fn runtime_backend_syncs_a_review_session_and_refuses_unknown_ones() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Regular,
+            project_id,
+        },
+    )
+    .await
+    .expect("session should be created");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
+
+    // Act
+    let supported = app
+        .session_service()
+        .supports(ag_session::SessionOperation::RebaseSession);
+    let synced = request_sync(&mut app, session_id.clone()).await;
+    let synced_status = app
+        .sessions
+        .session_handles()
+        .get(&session_id)
+        .and_then(|handles| handles.status.lock().ok().map(|status| *status));
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, SessionStatus::Done);
+    let done_error = request_sync(&mut app, session_id.clone())
+        .await
+        .expect_err("done session should not sync");
+    let missing_error = request_sync(&mut app, SessionId::from("missing"))
+        .await
+        .expect_err("missing session should not sync");
+
+    // Assert
+    assert!(supported);
+    assert_eq!(synced, Ok(()));
+    assert_eq!(synced_status, Some(Status::Rebasing));
+    assert!(matches!(done_error, ApiSessionError::Operation(_)));
+    assert_eq!(missing_error, ApiSessionError::NotFound);
 }
 
 #[tokio::test]

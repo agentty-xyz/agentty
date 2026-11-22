@@ -480,7 +480,15 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
         },
     )
     .await?;
-    let stopped = call(&mut client, 4, RemoteRequest::StopTurn { session_id }).await?;
+    let stopped = call(
+        &mut client,
+        4,
+        RemoteRequest::StopTurn {
+            session_id: session_id.clone(),
+        },
+    )
+    .await?;
+    let synced = call(&mut client, 5, RemoteRequest::SyncSession { session_id }).await?;
 
     // Assert
     let not_found = RemoteResult::Error("Session not found".to_string());
@@ -488,7 +496,34 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
     assert_eq!(answered, not_found);
     assert_eq!(canceled, not_found);
     assert_eq!(stopped, not_found);
-    assert_eq!(server.backend.calls(), ["list", "list", "list", "list"]);
+    assert_eq!(synced, not_found);
+    assert_eq!(server.backend.calls(), vec!["list"; 5]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let synced = call(
+        &mut client,
+        1,
+        RemoteRequest::SyncSession {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+
+    // Assert
+    assert_eq!(
+        synced,
+        RemoteResult::Error("Session cannot sync in status `Done`".to_string())
+    );
+    assert_eq!(server.backend.calls(), ["list", "sync:session-1"]);
 
     Ok(())
 }

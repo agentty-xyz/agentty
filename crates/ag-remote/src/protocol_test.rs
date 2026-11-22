@@ -31,7 +31,8 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         }},
         {"type": "request", "id": 5, "request": {"method": "cancel_session", "session_id": "s"}},
         {"type": "request", "id": 6, "request": {"method": "merge_session", "session_id": "s"}},
-        {"type": "request", "id": 7, "request": {"method": "stop_turn", "session_id": "s"}}
+        {"type": "request", "id": 7, "request": {"method": "stop_turn", "session_id": "s"}},
+        {"type": "request", "id": 8, "request": {"method": "sync_session", "session_id": "s"}}
     ]);
 
     // Act
@@ -94,6 +95,12 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             ClientFrame::Request {
                 id: 7,
                 request: RemoteRequest::StopTurn {
+                    session_id: "s".to_string(),
+                },
+            },
+            ClientFrame::Request {
+                id: 8,
+                request: RemoteRequest::SyncSession {
                     session_id: "s".to_string(),
                 },
             },

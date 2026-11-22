@@ -64,6 +64,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::MergeSession, "merge"),
     (SessionOperation::SessionDiff, "diff"),
     (SessionOperation::StopTurn, "stop_turn"),
+    (SessionOperation::RebaseSession, "sync"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -595,7 +596,8 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::CancelSession { session_id }
         | RemoteRequest::MergeSession { session_id }
         | RemoteRequest::SendMessage { session_id, .. }
-        | RemoteRequest::StopTurn { session_id } => Some(session_id),
+        | RemoteRequest::StopTurn { session_id }
+        | RemoteRequest::SyncSession { session_id } => Some(session_id),
         RemoteRequest::CreateSession { .. }
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
@@ -720,6 +722,13 @@ async fn respond(
             require_operation(sessions, SessionOperation::StopTurn)?;
             let session_id = listed_session_id(sessions, session_id).await?;
             sessions.stop_turn(&session_id).await?;
+
+            Ok(RemoteResponse::Accepted)
+        }
+        RemoteRequest::SyncSession { session_id } => {
+            require_operation(sessions, SessionOperation::RebaseSession)?;
+            let session_id = listed_session_id(sessions, session_id).await?;
+            sessions.rebase_session(&session_id).await?;
 
             Ok(RemoteResponse::Accepted)
         }

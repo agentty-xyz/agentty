@@ -204,7 +204,7 @@ async fn existing_hosts_report_unsupported_turn_stop() {
 #[tokio::test]
 async fn service_delegates_turn_stop_to_supporting_hosts() {
     // Arrange
-    let backend = Arc::new(TurnStoppingBackend::default());
+    let backend = Arc::new(OptionalBackend::default());
     let service = SessionService::new(backend.clone());
 
     // Act
@@ -220,17 +220,70 @@ async fn service_delegates_turn_stop_to_supporting_hosts() {
     );
 }
 
-/// Host that supports stopping a turn and records each stop.
+#[tokio::test]
+async fn existing_hosts_report_unsupported_session_sync() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::RebaseSession);
+    let synced = service.rebase_session(&SessionId::from("session-1")).await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        synced,
+        Err(SessionError::Operation(
+            "Host does not support syncing a session branch".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_session_sync_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::RebaseSession);
+    let synced = service.rebase_session(&SessionId::from("session-1")).await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(synced, Ok(()));
+    assert_eq!(
+        backend.synced.lock().expect("synced sessions").as_slice(),
+        [SessionId::from("session-1")]
+    );
+}
+
+/// Host that serves the optional operations and records each call.
 #[derive(Default)]
-struct TurnStoppingBackend {
+struct OptionalBackend {
     inner: FakeBackend,
     stopped: Mutex<Vec<SessionId>>,
+    synced: Mutex<Vec<SessionId>>,
 }
 
 #[async_trait]
-impl SessionBackend for TurnStoppingBackend {
+impl SessionBackend for OptionalBackend {
     fn supports(&self, operation: SessionOperation) -> bool {
-        operation == SessionOperation::StopTurn
+        matches!(
+            operation,
+            SessionOperation::StopTurn | SessionOperation::RebaseSession
+        )
+    }
+
+    async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.synced
+            .lock()
+            .expect("synced sessions")
+            .push(session_id.clone());
+
+        Ok(())
     }
 
     async fn create_session(

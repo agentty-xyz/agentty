@@ -467,6 +467,14 @@ impl SessionRuntimeHandle {
             .await
     }
 
+    /// Starts or queues one session branch rebase through the runtime actor.
+    pub(crate) async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        let session_id = session_id.clone();
+
+        self.request_admission(SessionMutation::Rebase { session_id })
+            .await
+    }
+
     /// Enqueues one session for merge through the runtime actor.
     pub(crate) async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();
