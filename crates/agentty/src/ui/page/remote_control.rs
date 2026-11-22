@@ -1,46 +1,40 @@
-//! Centered popup showing the remote-control listener, its pairing code,
-//! and the paired devices.
+//! Remote tab page showing the remote-control listener, its pairing code,
+//! and the paired devices of the active project.
 
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 
+use crate::presentation::help_action::remote_control_actions;
 use crate::presentation::remote_control::{RemoteControlView, RemoteRelayView};
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay, style};
+use crate::ui::{Page, layout, style};
 
-const MIN_OVERLAY_HEIGHT: u16 = 22;
-const MIN_OVERLAY_WIDTH: u16 = 56;
-/// Popup dimensions for the remote-control status.
-const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
-    overlay::OverlayDimensions::new(64, 70, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 /// Width of the left-hand field labels.
 const LABEL_WIDTH: usize = 8;
 
-/// Centered popup for `/remote-control`.
-pub struct RemoteControlOverlay<'a> {
-    selected_device_index: usize,
+/// Renders the Remote tab: remote-control status, pairing, and devices.
+pub struct RemoteControlPage<'a> {
+    project_name: Option<String>,
     view: &'a RemoteControlView,
 }
 
-impl<'a> RemoteControlOverlay<'a> {
-    /// Creates the popup for one frame's remote-control state.
-    pub fn new(view: &'a RemoteControlView) -> Self {
-        Self {
-            selected_device_index: 0,
-            view,
-        }
+impl<'a> RemoteControlPage<'a> {
+    /// Creates the page for one frame's remote-control state. Paired
+    /// devices follow the sessions of the project named `project_name`.
+    pub(crate) fn new(view: &'a RemoteControlView, project_name: Option<String>) -> Self {
+        Self { project_name, view }
     }
 
-    /// Sets which paired-device row is highlighted.
-    #[must_use]
-    pub fn selected_device_index(mut self, selected_device_index: usize) -> Self {
-        self.selected_device_index = selected_device_index;
-
-        self
+    /// Returns the title naming the project that paired devices follow.
+    fn title(&self) -> String {
+        match self.project_name.as_deref() {
+            Some(name) => format!("'{name}' remote control"),
+            None => "Remote control".to_string(),
+        }
     }
 
     /// Returns all render lines for content `width` columns wide and
@@ -88,33 +82,35 @@ impl<'a> RemoteControlOverlay<'a> {
             }
             lines.push(Line::from(""));
         }
-        match &self.view.listener {
-            Some(listener) => {
-                lines.push(field_line("Status", "On", palette::success()));
-                lines.push(field_line("Open", &listener.url, palette::text()));
-                lines.push(field_line(
-                    "Code",
-                    &listener.pairing_code,
-                    palette::warning(),
-                ));
-                lines.push(Line::from(""));
-                lines.push(muted_line(
-                    "Open the address on another device through a tunnel that forwards this port, \
-                     then enter the code. The code works once.",
-                ));
-                if let Some(relay) = &listener.relay {
-                    lines.extend(relay_lines(relay, qr_code));
-                }
-                if let Some(notice) = &self.view.notice {
-                    lines.push(Line::from(Span::styled(
-                        notice.clone(),
-                        Style::default().fg(palette::success()),
-                    )));
-                }
+        if let Some(listener) = &self.view.listener {
+            lines.push(field_line("Status", "On", palette::success()));
+            lines.push(field_line("Open", &listener.url, palette::text()));
+            lines.push(field_line(
+                "Code",
+                &listener.pairing_code,
+                palette::warning(),
+            ));
+            lines.push(Line::from(""));
+            lines.push(muted_line(
+                "Open the address on another device through a tunnel that forwards this port, \
+                 then enter the code. The code works once.",
+            ));
+            if let Some(relay) = &listener.relay {
+                lines.extend(relay_lines(relay, qr_code));
             }
-            None => {
-                lines.push(field_line("Status", "Off", palette::text_muted()));
+            if let Some(notice) = &self.view.notice {
+                lines.push(Line::from(Span::styled(
+                    notice.clone(),
+                    Style::default().fg(palette::success()),
+                )));
             }
+        } else {
+            lines.push(field_line("Status", "Off", palette::text_muted()));
+            lines.push(Line::from(""));
+            lines.push(muted_line(
+                "Start remote control to follow and steer this project's sessions from a paired \
+                 phone or browser.",
+            ));
         }
         if let Some(error) = &self.view.error {
             lines.push(Line::from(""));
@@ -139,7 +135,7 @@ impl<'a> RemoteControlOverlay<'a> {
             let name_width = width.saturating_sub(state.len() + 2).max(1);
             let name = truncate_with_ellipsis(&device.name, name_width);
             let row = format!(" {name:<name_width$}{state}");
-            if index == self.selected_device_index {
+            if index == self.view.selected_device_index {
                 lines.push(Line::from(Span::styled(
                     format!("{row:<width$}"),
                     style::selection_style(),
@@ -153,60 +149,40 @@ impl<'a> RemoteControlOverlay<'a> {
         }
 
         lines.push(Line::from(""));
-        lines.push(
-            Line::from(Span::styled(
-                self.help_text(),
-                Style::default().fg(palette::text_muted()),
-            ))
-            .alignment(Alignment::Center),
-        );
+        lines.push(muted_line(&self.help_text()));
 
         lines
     }
 
     /// Returns the key hints that apply to the current state.
     fn help_text(&self) -> String {
-        let mut hints = Vec::new();
-        if !self.view.pairing_requests.is_empty() {
-            hints.push("y: approve");
-            hints.push("x: deny");
-        }
-        if let Some(listener) = &self.view.listener {
-            hints.push("n: new code");
-            if listener.relay.is_some() {
-                hints.push("o: open link");
-                hints.push("c: copy link");
-            }
-            hints.push("s: stop");
-        } else {
-            hints.push("s: start");
-        }
-        if !self.view.devices.is_empty() {
-            hints.push("j/k: move");
-            hints.push("d: remove");
-        }
-        hints.push("Esc: close");
+        let hints: Vec<String> = remote_control_actions(self.view)
+            .iter()
+            .map(|action| format!("{}: {}", action.key, action.footer_label))
+            .collect();
 
         hints.join(" | ")
     }
 }
 
-impl Component for RemoteControlOverlay<'_> {
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
-        let content_width = overlay::overlay_content_width(popup_area.width).max(1);
-        let content_height = usize::from(
-            popup_area
-                .height
-                .saturating_sub(overlay::overlay_required_height(0)),
+impl Page for RemoteControlPage<'_> {
+    /// Renders the remote-control state in one bordered section that fills
+    /// the tab page.
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
+        let main_area = layout::tab_page_area(area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.title())
+            .border_style(style::border_style())
+            .padding(Padding::horizontal(1));
+        let content_area = block.inner(main_area);
+        let lines = self.lines(
+            usize::from(content_area.width).max(1),
+            usize::from(content_area.height),
         );
-        let paragraph = Paragraph::new(self.lines(content_width, content_height))
-            .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true })
-            .block(overlay::overlay_block("Remote Control", palette::accent()));
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true }).block(block);
 
-        overlay::clear_popup_area(frame, popup_area);
-        frame.render_widget(paragraph, popup_area);
+        frame.render_widget(paragraph, main_area);
     }
 }
 
@@ -271,5 +247,5 @@ fn muted_line(text: &str) -> Line<'static> {
 }
 
 #[cfg(test)]
-#[path = "remote_control_overlay_test.rs"]
+#[path = "remote_control_test.rs"]
 mod tests;

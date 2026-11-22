@@ -2067,14 +2067,6 @@ impl App {
                     },
                 ..
             }
-            | AppMode::RemoteControl {
-                restore_view:
-                    ConfirmationViewMode {
-                        session_id: view_id,
-                        ..
-                    },
-                ..
-            }
             | AppMode::PublishBranchInput {
                 restore_view:
                     ConfirmationViewMode {

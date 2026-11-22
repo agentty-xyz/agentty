@@ -275,10 +275,6 @@ impl SessionManager {
             | AppMode::PublishBranchInput {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
-            }
-            | AppMode::RemoteControl {
-                restore_view: ConfirmationViewMode { session_id, .. },
-                ..
             } => Some(session_id),
             AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
             _ => None,

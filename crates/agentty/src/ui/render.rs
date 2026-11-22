@@ -86,8 +86,9 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state.
-    pub remote_control: &'a RemoteControlView,
+    /// Remote-control listener and paired-device state, or `None` when this
+    /// launch does not offer the Remote tab.
+    pub remote_control: Option<&'a RemoteControlView>,
     /// UI-owned cache resources shared by every page in this frame.
     pub render_cache_store: &'a RenderCacheStore,
     /// Detected session worktree branch names keyed by session id.
@@ -179,7 +180,6 @@ pub fn render(frame: &mut Frame, context: RenderContext<'_>) {
             context.projects,
         ))
         .project_sync_status(context.project_sync_status.cloned())
-        .remote_control(context.remote_control.status_bar_notice())
         .update_status(context.update_status.cloned())
         .render(frame, status_bar_area);
     render_footer_bar(
@@ -244,10 +244,6 @@ fn render_footer_bar(
             ..
         }
         | AppMode::PublishBranchInput {
-            restore_view: ConfirmationViewMode { session_id, .. },
-            ..
-        }
-        | AppMode::RemoteControl {
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
         }

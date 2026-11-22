@@ -29,7 +29,7 @@ use app::sync::{
     PROJECT_SYNC_STATUS_VISIBLE_DURATION, ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus,
     SyncMainCompletion, SyncMainRequest, SyncMainRunner,
 };
-use app::tab::TabManager;
+use app::tab::{Tab, TabManager};
 use app::{sync, task};
 use session::StatusTransition;
 use tokio::sync::mpsc;
@@ -140,7 +140,7 @@ pub(crate) struct AppClients {
     pub(super) agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
-    /// Starts the loopback listener behind `/remote-control`.
+    /// Starts the loopback listener behind the Remote tab.
     pub(super) remote_control_launcher: Arc<dyn RemoteControlLauncher>,
     /// Copies remote-control pairing links through the terminal.
     pub(super) terminal_clipboard: Arc<dyn TerminalClipboard>,
@@ -306,7 +306,7 @@ pub struct App {
     /// `AppMode::View`, or once the panel opens, so a later legitimate
     /// transition reloads again.
     pub(crate) question_reconcile_reload_attempted: Option<SessionId>,
-    /// Owns the `/remote-control` listener and its paired-device view.
+    /// Owns the Remote tab's listener and its paired-device view.
     pub(crate) remote_control: crate::app::remote_control::RemoteControl,
     /// Caches generated focused review text per session so it survives mode
     /// switches, is hydrated after restart, and is ready when the user presses
@@ -392,11 +392,20 @@ impl App {
     /// Cycles the active list tab forward.
     pub fn next_tab(&mut self) {
         self.tabs.next();
+        self.show_current_tab();
     }
 
     /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
+        self.show_current_tab();
+    }
+
+    /// Prepares the tab that was just selected for display.
+    fn show_current_tab(&mut self) {
+        if self.tabs.current() == Tab::Remote {
+            self.show_remote_control();
+        }
     }
 
     /// Persists the active list tab for startup restoration.

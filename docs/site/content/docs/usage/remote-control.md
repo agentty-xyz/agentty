@@ -15,8 +15,8 @@ paired device can also stop a running turn, sync a session branch with its base 
 change a session's settings, create sessions in the active project, merge a session into
 its base branch, and publish its branch; the web page offers each of these.
 
-Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
-`/remote-control`.
+Remote control is a preview feature. Start Agentty with `--experimental-remote` to add
+the `Remote` tab to the right of `Settings`.
 
 <!-- more -->
 
@@ -25,20 +25,24 @@ Remote control is a preview feature. Start Agentty with `--experimental-remote` 
 <a id="usage-remote-control-start"></a>
 
 1. Start Agentty with `agentty --experimental-remote`.
-1. Open a session and type `/remote-control`.
-1. The popup shows the address Agentty listens on and a one-time pairing code.
+1. Press `Tab` in a list until the `Remote` tab opens, then press `Enter`.
+1. The tab shows the address Agentty listens on and a one-time pairing code.
 1. Open the address on the other device, enter the code, and name the device.
-1. The device shows a four-character confirmation code, and the popup shows a pairing
+1. The device shows a four-character confirmation code, and the tab shows a pairing
    request with the same code. Press `y` to approve it only when the codes match, or `x`
    to deny it.
 
-The device stays paired, so later visits connect without a code. The status bar shows
-`Remote control on` and the number of connected devices while the listener runs, and
-asks you to approve when a device waits to pair.
+The device stays paired, so later visits connect without a code. While the listener
+runs, the tab reads `Remote (1 online)` with the number of connected devices. Pairing
+requests appear only in the tab, so keep it open while you pair a device.
 
-Remote control stays off until you start it, and it stops when you press `s` in the
-popup or quit Agentty. It does not start again on the next launch. See
-[Keybindings](@/docs/usage/keybindings.md#remote-control-popup) for the popup keys.
+The tab belongs to the active project: its title names the project whose sessions paired
+devices follow, and it lists the paired devices. Opening the tab while the listener runs
+replaces the pairing code, because a code works once.
+
+Remote control stays off until you start it, and it stops when you press `Enter` in the
+tab again or quit Agentty. It does not start again on the next launch. See
+[Keybindings](@/docs/usage/keybindings.md#remote) for the tab's keys.
 
 ## Use the Page
 
@@ -204,7 +208,7 @@ printf '%s' <key> | xxd -r -p | shasum -a 256
 
 ### Pair Through the Relay
 
-With a relay, the popup also shows the relay state, a pairing link, and a QR code of the
+With a relay, the tab also shows the relay state, a pairing link, and a QR code of the
 link when the terminal is large enough. Scan the code or open the link on the other
 device. The relay's pairing page opens with the code filled in: name the device, press
 `Pair`, then approve the pairing as usual. On this computer, press `o` to open the link;
@@ -271,12 +275,12 @@ control.
 ### Protections
 
 - A pairing code works once, expires after 10 minutes, and stops working after five
-  wrong attempts. Press `n` in the popup for a new code.
+  wrong attempts. Press `n` in the `Remote` tab for a new code.
 - A device becomes paired only after you approve it in the terminal; an unanswered
   request expires after two minutes.
 - Each device gets its own key, which Agentty stores only as a hash. Remove a device in
-  the popup with `d`; its open connection closes at once. Keys do not expire, so remove
-  a device you no longer control.
+  the `Remote` tab with `d`; its open connection closes at once. Keys do not expire, so
+  remove a device you no longer control.
 - A device can read and act on only the sessions it lists, which are the sessions of the
   active project, and creates sessions only in that project. Agentty refuses a request
   for any other session.

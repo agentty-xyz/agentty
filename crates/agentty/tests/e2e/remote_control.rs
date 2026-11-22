@@ -1,19 +1,18 @@
-//! `/remote-control` popup, listener lifecycle, and status-bar notice.
+//! Remote tab E2E tests: listener lifecycle and tab label.
 
 use testty::assertion;
 use testty::region::Region;
 
-use super::fixture::{E2eResult, seed_review_ready_session};
 use crate::common;
 use crate::common::FeatureTest;
 
-/// Verify `--experimental-remote` offers `/remote-control`, which starts a
-/// loopback listener with a pairing code, shows the status-bar notice while
-/// it runs, and stops from the popup.
+/// Verify `--experimental-remote` adds the Remote tab to the right of
+/// Settings, where `Enter` starts a loopback listener with a pairing code,
+/// only the tab label reports it while it runs, and `Enter` stops it again.
 #[tokio::test]
-async fn session_remote_control() -> E2eResult {
+async fn remote_control_tab() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange, Act, Assert
-    FeatureTest::new("session_remote_control")
+    FeatureTest::new("remote_control_tab")
         .with_git()
         .with_terminal_size(140, 36)
         .args([
@@ -21,48 +20,51 @@ async fn session_remote_control() -> E2eResult {
             "--remote-control-port".to_string(),
             "0".to_string(),
         ])
-        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .press_key("/")
-                    .write_text("remote")
-                    .wait_for_text("Control Agentty sessions from another device", 3000)
+                    .compose(&common::switch_to_tab("Settings"))
+                    .compose(&common::switch_to_tab("Remote"))
+                    .wait_for_text("Status  Off", 5000)
+                    .capture_labeled("remote_tab_off", "Remote tab opens with the listener off")
                     .press_key("Enter")
                     .wait_for_text("Status  On", 5000)
-                    .capture_labeled("remote_control_on", "Popup shows the running listener")
-                    .press_key("s")
+                    .capture_labeled("remote_tab_on", "Enter starts the listener")
+                    .press_key("Enter")
                     .wait_for_text("Status  Off", 5000)
-                    .capture_labeled("remote_control_off", "Stopping turns the listener off")
-                    .press_key("Esc")
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("session_view", "Closing returns to the session")
+                    .capture_labeled("remote_tab_stopped", "Enter stops the listener")
             },
             |_frame, report| {
                 Box::pin(async move {
-                    let on_frame = common::frame_from_capture(&report.captures[0]);
-                    let on_full = Region::full(on_frame.cols(), on_frame.rows());
-                    assertion::assert_text_in_region(&on_frame, "Remote Control", &on_full);
-                    assertion::assert_text_in_region(&on_frame, "http://127.0.0.1:", &on_full);
-                    assertion::assert_text_in_region(&on_frame, "Code", &on_full);
-                    assertion::assert_text_in_region(&on_frame, "None yet", &on_full);
-                    assertion::assert_text_in_region(
-                        &on_frame,
-                        "Remote control on, 0 devices connected",
-                        &on_full,
-                    );
-
-                    let off_frame = common::frame_from_capture(&report.captures[1]);
+                    let off_frame = common::frame_from_capture(&report.captures[0]);
                     let off_full = Region::full(off_frame.cols(), off_frame.rows());
-                    assertion::assert_text_in_region(&off_frame, "s: start", &off_full);
-                    assertion::assert_not_visible(&off_frame, "http://127.0.0.1:");
+                    assertion::assert_text_in_region(&off_frame, "Settings | Remote", &off_full);
+                    assertion::assert_text_in_region(&off_frame, "remote control", &off_full);
+                    assertion::assert_text_in_region(&off_frame, "Enter: start", &off_full);
+                    assertion::assert_text_in_region(&off_frame, "None yet", &off_full);
+                    assertion::assert_not_visible(&off_frame, "online");
                     assertion::assert_not_visible(&off_frame, "Remote control on");
 
-                    let view_frame = common::frame_from_capture(&report.captures[2]);
-                    assertion::assert_not_visible(&view_frame, "Remote Control");
+                    let on_frame = common::frame_from_capture(&report.captures[1]);
+                    let on_full = Region::full(on_frame.cols(), on_frame.rows());
+                    assertion::assert_text_in_region(&on_frame, "Remote (0 online)", &on_full);
+                    assertion::assert_text_in_region(&on_frame, "http://127.0.0.1:", &on_full);
+                    assertion::assert_text_in_region(&on_frame, "Code", &on_full);
+                    assertion::assert_text_in_region(
+                        &on_frame,
+                        "n: new code | Enter: stop",
+                        &on_full,
+                    );
+                    assertion::assert_not_visible(&on_frame, "Remote control on");
+
+                    let stopped_frame = common::frame_from_capture(&report.captures[2]);
+                    let stopped_full = Region::full(stopped_frame.cols(), stopped_frame.rows());
+                    assertion::assert_text_in_region(&stopped_frame, "Enter: start", &stopped_full);
+                    assertion::assert_not_visible(&stopped_frame, "http://127.0.0.1:");
+                    assertion::assert_not_visible(&stopped_frame, "online");
+                    assertion::assert_not_visible(&stopped_frame, "Remote control on");
                 })
             },
         )
@@ -72,12 +74,12 @@ async fn session_remote_control() -> E2eResult {
 }
 
 /// Verify `--remote-relay` adds the relay state, a one-time pairing link,
-/// and the link actions to the `/remote-control` popup. Nothing listens on
-/// the relay address, so the link stays connecting.
+/// and the link actions to the Remote tab. Nothing listens on the relay
+/// address, so the link stays connecting.
 #[tokio::test]
-async fn session_remote_control_relay() -> E2eResult {
+async fn remote_control_tab_relay() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange, Act, Assert
-    FeatureTest::new("session_remote_control_relay")
+    FeatureTest::new("remote_control_tab_relay")
         .with_git()
         .with_terminal_size(140, 36)
         .args([
@@ -87,20 +89,15 @@ async fn session_remote_control_relay() -> E2eResult {
             "--remote-relay".to_string(),
             "ws://127.0.0.1:9".to_string(),
         ])
-        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .press_key("/")
-                    .write_text("remote")
-                    .wait_for_text("Control Agentty sessions from another device", 3000)
+                    .compose(&common::switch_to_tab_reverse("Remote"))
                     .press_key("Enter")
                     .wait_for_text("Relay   Connecting", 5000)
-                    .capture_labeled("relay_link", "Popup shows the relay link")
-                    .press_key("s")
+                    .capture_labeled("relay_link", "Remote tab shows the relay link")
+                    .press_key("Enter")
                     .wait_for_text("Status  Off", 5000)
                     .capture_labeled("relay_off", "Stopping hides the relay link")
             },

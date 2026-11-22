@@ -22,6 +22,9 @@ const PROCESS_STATS_GAP: usize = 2;
 pub struct Tabs {
     current_tab: Tab,
     process_resources: Option<SessionResources>,
+    /// Label of the Remote tab, or `None` when this launch does not offer
+    /// it.
+    remote_label: Option<String>,
 }
 
 impl Tabs {
@@ -34,7 +37,17 @@ impl Tabs {
         Self {
             current_tab,
             process_resources: None,
+            remote_label: None,
         }
+    }
+
+    /// Shows the Remote tab under `remote_label`, which reports its
+    /// connected devices; `None` leaves the tab out.
+    #[must_use]
+    pub fn remote_label(mut self, remote_label: Option<String>) -> Self {
+        self.remote_label = remote_label;
+
+        self
     }
 
     /// Sets the Agentty process-tree totals shown at the right edge of the
@@ -51,7 +64,7 @@ impl Component for Tabs {
     /// Renders the tabs and right-aligns the process stats in the space left
     /// beside them. Tabs keep priority on narrow terminals.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let line = Line::from(tab_spans(self.current_tab));
+        let line = Line::from(tab_spans(self.current_tab, self.remote_label.as_deref()));
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(style::border_style())
@@ -101,35 +114,34 @@ fn process_stats_label(
         .find(|label| Line::raw(label.as_str()).width() <= max_width)
 }
 
-/// Returns styled tab spans with separators between the top-level tabs.
-fn tab_spans(current_tab: Tab) -> Vec<Span<'static>> {
-    let tab_count = Tab::project_scoped_tabs().len();
-    let mut spans = Vec::with_capacity(2 * tab_count + 1);
+/// Returns styled tab spans with separators between the top-level tabs. The
+/// Remote tab follows the others under `remote_label`, when it is offered.
+fn tab_spans(current_tab: Tab, remote_label: Option<&str>) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(2 * Tab::ALL.len() - 1);
 
-    spans.push(tab_span(Tab::Projects, current_tab));
-
-    for tab in Tab::project_scoped_tabs() {
+    for tab in Tab::WITHOUT_REMOTE {
+        if !spans.is_empty() {
+            spans.push(tab_separator_span());
+        }
+        spans.push(tab_span(tab, tab.title(), current_tab));
+    }
+    if let Some(remote_label) = remote_label {
         spans.push(tab_separator_span());
-        spans.push(tab_span(*tab, current_tab));
+        spans.push(tab_span(Tab::Remote, remote_label, current_tab));
     }
 
     spans
 }
 
 /// Returns one styled tab span with active/inactive affordance treatment.
-fn tab_span(tab: Tab, current_tab: Tab) -> Span<'static> {
-    let label = format!(" {} ", tab_label(tab));
+fn tab_span(tab: Tab, label: &str, current_tab: Tab) -> Span<'static> {
+    let label = format!(" {label} ");
 
     if tab == current_tab {
         return Span::styled(label, style::selection_style());
     }
 
     Span::styled(label, Style::default().fg(style::palette::text_muted()))
-}
-
-/// Returns the display label for a top-level tab.
-fn tab_label(tab: Tab) -> &'static str {
-    tab.title()
 }
 
 /// Returns one styled separator span between tabs.

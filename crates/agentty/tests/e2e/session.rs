@@ -14,7 +14,6 @@ mod prompt;
 mod provider;
 mod question;
 mod queue;
-mod remote_control;
 mod review;
 mod review_comment;
 mod review_request;

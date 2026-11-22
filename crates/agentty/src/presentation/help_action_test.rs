@@ -1,12 +1,17 @@
-//! Shortcut availability tests for list, settings, session view, and diff
-//! help actions.
+//! Shortcut availability tests for list, settings, remote, session view, and
+//! diff help actions.
 
 use super::{
-    DiffReviewCommentHelp, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
-    ViewHelpState, ViewSessionState, diff_actions, project_list_actions, session_list_actions,
-    session_view_state, settings_actions, view_actions, view_actions_with_review_request,
+    DiffReviewCommentHelp, HelpAction, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
+    ViewHelpState, ViewSessionState, diff_actions, project_list_actions, remote_actions,
+    remote_control_actions, session_list_actions, session_view_state, settings_actions,
+    view_actions, view_actions_with_review_request,
 };
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
+use crate::presentation::remote_control::{
+    RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
+    RemoteRelayView,
+};
 use crate::test_support::SessionFixtureBuilder;
 
 #[test]
@@ -32,6 +37,66 @@ fn test_settings_actions_exclude_new_session_shortcut() {
 
     // Assert
     assert!(!actions.iter().any(|action| action.key == "a"));
+}
+
+#[test]
+fn test_remote_actions_follow_the_listener_pairings_and_devices() {
+    // Arrange
+    let stopped = RemoteControlView::default();
+    let running = RemoteControlView {
+        devices: vec![RemoteDeviceView {
+            id: "phone".to_string(),
+            is_connected: true,
+            name: "Phone".to_string(),
+        }],
+        listener: Some(RemoteListenerView {
+            pairing_code: "ABCD-EFGH".to_string(),
+            relay: Some(RemoteRelayView::new(
+                "https://relay.example/".to_string(),
+                true,
+            )),
+            url: "http://127.0.0.1:4646/".to_string(),
+        }),
+        pairing_requests: vec![RemotePairingRequestView {
+            confirmation: "K7QX".to_string(),
+            device_name: "Laptop".to_string(),
+            id: 1,
+        }],
+        ..RemoteControlView::default()
+    };
+    let keys = |actions: Vec<HelpAction>| -> Vec<&'static str> {
+        actions.into_iter().map(|action| action.key).collect()
+    };
+
+    // Act
+    let stopped_keys = keys(remote_actions(&stopped));
+    let running_keys = keys(remote_actions(&running));
+    let stopped_start = remote_control_actions(&stopped);
+
+    // Assert
+    assert_eq!(stopped_keys, ["q", "s", "Enter", "Tab", "Shift+Tab", "?"]);
+    assert_eq!(
+        running_keys,
+        [
+            "q",
+            "s",
+            "y",
+            "x",
+            "n",
+            "o",
+            "c",
+            "Enter",
+            "j/k",
+            "d",
+            "Tab",
+            "Shift+Tab",
+            "?"
+        ]
+    );
+    assert_eq!(
+        stopped_start,
+        [HelpAction::new("start", "Enter", "Start remote control")]
+    );
 }
 
 #[test]

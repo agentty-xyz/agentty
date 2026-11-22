@@ -1,8 +1,8 @@
 //! Tests for the remote-control frame projection.
 
 use crate::presentation::remote_control::{
-    LIGHT_CELL, RemoteControlNotice, RemoteControlView, RemoteDeviceView, RemoteListenerView,
-    RemotePairingRequestView, RemoteRelayView,
+    LIGHT_CELL, RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
+    RemoteRelayView,
 };
 
 /// Builds a view with one connected device, one idle device, and one
@@ -29,6 +29,7 @@ fn view_with_devices(listener: Option<RemoteListenerView>) -> RemoteControlView 
             device_name: "Laptop".to_string(),
             id: 1,
         }],
+        selected_device_index: 0,
     }
 }
 
@@ -86,7 +87,7 @@ fn connected_device_count_counts_only_connected_devices() {
 }
 
 #[test]
-fn status_bar_notice_appears_only_while_listening() {
+fn tab_label_counts_connected_devices_only_while_listening() {
     // Arrange
     let stopped = view_with_devices(None);
     let listening = view_with_devices(Some(RemoteListenerView {
@@ -96,16 +97,10 @@ fn status_bar_notice_appears_only_while_listening() {
     }));
 
     // Act
-    let stopped_notice = stopped.status_bar_notice();
-    let listening_notice = listening.status_bar_notice();
+    let stopped_label = stopped.tab_label();
+    let listening_label = listening.tab_label();
 
     // Assert
-    assert_eq!(stopped_notice, None);
-    assert_eq!(
-        listening_notice,
-        Some(RemoteControlNotice {
-            connected_devices: 1,
-            pairing_requests: 1,
-        })
-    );
+    assert_eq!(stopped_label, "Remote");
+    assert_eq!(listening_label, "Remote (1 online)");
 }

@@ -80,6 +80,26 @@ and accented row text.
 <a id="usage-settings-options"></a> Role pickers ask for model, reasoning, and, for
 Claude or Codex, speed. See [Settings Scope](@/docs/usage/workflow.md#settings-scope).
 
+## Remote
+
+Appears only with `agentty --experimental-remote`. See
+[Remote Control](@/docs/usage/remote-control.md).
+
+| Key                 | Action                                         |
+| ------------------- | ---------------------------------------------- |
+| `q`                 | Quit after confirmation                        |
+| `s`                 | Sync active project branch                     |
+| `Enter`             | Start remote control, or stop it while it runs |
+| `y`                 | Approve the oldest pairing request             |
+| `x`                 | Deny the oldest pairing request                |
+| `n`                 | Replace the pairing code                       |
+| `o`                 | Open the relay pairing link in this browser    |
+| `c`                 | Copy the relay pairing link                    |
+| `j` / `k`           | Move between paired devices                    |
+| `d`                 | Remove the selected device                     |
+| `Tab` / `Shift+Tab` | Switch to next / previous tab                  |
+| `?`                 | Help                                           |
+
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.
@@ -267,22 +287,6 @@ open.
 | `j` / `k`   | Move selection                         |
 | `Enter`     | Open worktree and run selected command |
 | `Esc` / `q` | Cancel and return to session view      |
-
-## Remote Control Popup
-
-Opens from `/remote-control`. See [Remote Control](@/docs/usage/remote-control.md).
-
-| Key         | Action                                          |
-| ----------- | ----------------------------------------------- |
-| `y`         | Approve the oldest pairing request              |
-| `x`         | Deny the oldest pairing request                 |
-| `n`         | Replace the pairing code                        |
-| `o`         | Open the relay pairing link in this browser     |
-| `c`         | Copy the relay pairing link                     |
-| `s`         | Stop remote control, or start it when it is off |
-| `j` / `k`   | Move between paired devices                     |
-| `d`         | Remove the selected device                      |
-| `Esc` / `q` | Close and return to session view                |
 
 ## Prompt Input
 
