@@ -1132,6 +1132,73 @@ kbd {
   margin-top: 0.4rem;
 }
 
+/* The home composer, for a new session's first message. */
+.home.is-composing h2 {
+  max-width: 44rem;
+  font-size: clamp(1.65rem, 4vw, 2.4rem);
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+.composer.home-composer {
+  width: min(100%, 44rem);
+  margin-top: 0.5rem;
+  padding: 0.95rem 0.75rem 0.65rem 1.1rem;
+  text-align: left;
+}
+
+.composer.home-composer textarea {
+  min-height: 4.8rem;
+}
+
+.home-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  white-space: normal;
+}
+
+/* .site-theme-switch chips, as the mockup's project, base and model. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.75rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-bg);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.chip b {
+  color: var(--color-text);
+  font-weight: 400;
+}
+
+.home-modes {
+  width: auto;
+}
+
+.project {
+  margin: 0 0 0.1rem;
+  overflow: hidden;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project b {
+  color: var(--color-text);
+  font-weight: 400;
+}
+
 /* Sessions waiting for the user, as .feature-card tiles. */
 .waiting {
   display: grid;

@@ -144,6 +144,9 @@
                     </button>
                 </div>
                 <div class="sidebar-actions">
+                    <p id="project" class="project" hidden>
+                        project <b id="project-name"></b>
+                    </p>
                     <button id="new-session" class="new-session" type="button" hidden>
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-plus" />
@@ -251,6 +254,26 @@
                 <section id="home-view" class="empty home">
                     <p id="home-eyebrow" class="eyebrow">Remote control</p>
                     <h2 id="home-title">Pick a session</h2>
+                    <form id="home-form" class="composer home-composer" hidden>
+                        <textarea id="home-message"
+                                  rows="3"
+                                  placeholder="Describe the task. The agent starts in a new worktree."
+                                  aria-label="First message"></textarea>
+                        <div class="composer-row">
+                            <div id="home-chips" class="composer-meta home-chips"></div>
+                            <button id="home-send" type="submit" class="send" aria-label="Start session">
+                                <svg class="icon" aria-hidden="true">
+                                    <use href="#i-up" />
+                                </svg>
+                            </button>
+                        </div>
+                    </form>
+                    <fieldset id="home-modes"
+                              class="segmented home-modes"
+                              aria-label="Session type"
+                              hidden>
+                    </fieldset>
+                    <p id="home-error" class="error" role="alert"></p>
                     <p id="home-pick">Choose a session from the list to read it and reply.</p>
                     <p id="home-none" hidden>
                         Press <code>a</code> on the Sessions tab in Agentty to start one.

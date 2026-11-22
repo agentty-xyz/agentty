@@ -3,6 +3,7 @@
 //
 // Usage: node app_flow.mjs <listener address> session <device token>
 //        node app_flow.mjs <listener address> route <device token>
+//        node app_flow.mjs <listener address> create <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
 //
 // In `session` mode the test server lists `Build it`, waiting on one
@@ -14,6 +15,9 @@
 //
 // In `route` mode the page loads at `#s=session-2` with a draft left in
 // this tab, as after a reload, and sends it.
+//
+// In `create` mode the page starts at home, where the test server offers
+// new sessions in its `agentty` project, and creates one with a message.
 //
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
@@ -41,7 +45,7 @@ const window = createWindow(
   document,
   "http://" + address + "/" + (mode === "route" ? "#s=session-2" : ""),
 );
-if (mode === "session" || mode === "route") {
+if (mode !== "pair") {
   window.localStorage.setItem(TOKEN_KEY, secret);
 }
 if (mode === "route") {
@@ -339,8 +343,36 @@ async function routeFlow() {
   });
 }
 
+// Home describes the host's project, creates a session, sends it the
+// first message, and opens it.
+async function createFlow() {
+  await waitFor("the home composer", () => !byId("home-form").hidden);
+  report({
+    step: "home",
+    chips: texts(byId("home-chips").children),
+    eyebrow: byId("home-eyebrow").textContent,
+    modesHidden: byId("home-modes").hidden,
+    newSessionHidden: byId("new-session").hidden,
+    project: byId("project-name").textContent,
+    title: byId("home-title").textContent,
+  });
+
+  byId("home-message").value = "Add a relay image";
+  byId("home-message").dispatchEvent(new FakeEvent("input"));
+  byId("home-send").click();
+  await waitFor("the new session", () => byId("transcript").children.length > 0);
+  report({
+    step: "created",
+    error: byId("session-error").textContent,
+    hash: window.location.hash,
+    heading: byId("heading").textContent,
+    homeMessage: byId("home-message").value,
+    view: visibleView(),
+  });
+}
+
 await import(APP_URL.href);
-const flows = { pair: pairFlow, route: routeFlow, session: sessionFlow };
+const flows = { create: createFlow, pair: pairFlow, route: routeFlow, session: sessionFlow };
 await flows[mode]();
 
 // The client keeps its socket open, so the script ends itself once its

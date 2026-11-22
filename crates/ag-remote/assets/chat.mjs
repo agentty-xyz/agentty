@@ -264,7 +264,7 @@ export function createDrafts(window) {
 // resolves with its result; `onHome()` returns to home. `now()` returns
 // the time in seconds, for the header's timer.
 //
-// Returns `open(sessionId)`, `close()`, `render(session, summary)` for a
+// Returns `open(sessionId, failure)`, `close()`, `render(session, summary)` for a
 // snapshot and the session's entry in the listing (`session` is `null`
 // when the session is gone), `setConnected(isConnected)`,
 // `setCapabilities(list)`, `tick()`, and
@@ -654,9 +654,15 @@ export function createChat({
     renderActions();
   }
 
-  function open(sessionId) {
+  // Opens `sessionId`. `failure`, when a first message from home did not
+  // go through, keeps its text as the draft and says why.
+  function open(sessionId, failure = null) {
     reset();
     state.sessionId = sessionId;
+    if (failure) {
+      drafts.set(sessionId, failure.draft);
+      elements.sessionError.textContent = failure.error;
+    }
     elements.message.value = drafts.get(sessionId);
     resizeComposer();
   }

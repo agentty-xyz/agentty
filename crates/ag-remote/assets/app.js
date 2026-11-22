@@ -4,6 +4,7 @@
 
 import { createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
+import { createHome } from "./home.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
@@ -67,6 +68,8 @@ const elements = {
   sidebar: document.getElementById("sidebar"),
   "sidebar-hide": document.getElementById("sidebar-hide"),
   "drawer-close": document.getElementById("drawer-close"),
+  project: document.getElementById("project"),
+  "project-name": document.getElementById("project-name"),
   "new-session": document.getElementById("new-session"),
   filter: document.getElementById("filter"),
   "filter-key": document.getElementById("filter-key"),
@@ -106,6 +109,12 @@ const elements = {
   "home-view": document.getElementById("home-view"),
   "home-eyebrow": document.getElementById("home-eyebrow"),
   "home-title": document.getElementById("home-title"),
+  "home-form": document.getElementById("home-form"),
+  "home-message": document.getElementById("home-message"),
+  "home-chips": document.getElementById("home-chips"),
+  "home-send": document.getElementById("home-send"),
+  "home-modes": document.getElementById("home-modes"),
+  "home-error": document.getElementById("home-error"),
   "home-pick": document.getElementById("home-pick"),
   "home-none": document.getElementById("home-none"),
   "home-sessions": document.getElementById("home-sessions"),
@@ -290,6 +299,7 @@ function renderOffline() {
     elements["banner-text"].textContent = "Offline";
   }
   chat.setConnected(kind === "connected");
+  home.setConnected(kind === "connected");
 }
 
 function tickCountdown() {
@@ -369,12 +379,21 @@ function renderMain() {
   }
 }
 
+// Home asks for a new session's first message when the host offers that,
+// and otherwise offers the sessions to pick from.
 function renderHome() {
   const isEmpty = state.isAuthenticated && state.sessionCount === 0;
-  elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
-  elements["home-title"].textContent = isEmpty ? "No sessions yet" : "Pick a session";
-  elements["home-pick"].hidden = isEmpty;
-  elements["home-none"].hidden = !isEmpty;
+  const host = home.host();
+  elements["home-view"].classList.toggle("is-composing", Boolean(host));
+  if (host) {
+    elements["home-eyebrow"].textContent = "New session · " + host.project;
+    elements["home-title"].textContent = "What should the agent work on?";
+  } else {
+    elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
+    elements["home-title"].textContent = isEmpty ? "No sessions yet" : "Pick a session";
+  }
+  elements["home-pick"].hidden = isEmpty || Boolean(host);
+  elements["home-none"].hidden = !isEmpty || Boolean(host);
   elements["home-sessions"].hidden = isEmpty;
   let summary = "";
   if (state.isAuthenticated) {
@@ -520,9 +539,6 @@ function handleFrame(data) {
 }
 
 function onAuthenticated() {
-  // Starting a session from the page comes with the `create_session`
-  // capability; until a host lists it, the button stays away.
-  elements["new-session"].hidden = !state.capabilities.includes("create_session");
   chat.setCapabilities(state.capabilities);
   if (state.pendingPairing) {
     writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
@@ -540,6 +556,9 @@ function onAuthenticated() {
   setConnection("connected");
   showShell();
   refresh(true);
+  // Starting a session needs the `host` and `create_session` capabilities;
+  // the button appears once the host described its project.
+  void home.setCapabilities(state.capabilities);
 }
 
 // Pairing failures, including a denial or a missed approval in the
@@ -639,12 +658,13 @@ function renderSessions(sessions) {
 }
 
 // Opens `sessionId` in the main area. The caller has already routed to it.
-function enterSession(sessionId) {
+// `failure` is a first message from home that did not go through.
+function enterSession(sessionId, failure = null) {
   if (sessionId === state.currentSessionId) {
     return;
   }
   state.currentSessionId = sessionId;
-  chat.open(sessionId);
+  chat.open(sessionId, failure);
   markCurrentRow();
   renderMain();
   refresh(true);
@@ -780,10 +800,37 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-// Until creating a session is wired, the button leads home.
+const home = createHome({
+  document: document,
+  elements: {
+    chips: elements["home-chips"],
+    error: elements["home-error"],
+    form: elements["home-form"],
+    message: elements["home-message"],
+    modes: elements["home-modes"],
+    send: elements["home-send"],
+  },
+  onCreated: (sessionId, failure) => {
+    shell.showSession(sessionId);
+    enterSession(sessionId, failure);
+  },
+  onHost: (host) => {
+    elements["new-session"].hidden = !host;
+    elements.project.hidden = !host;
+    elements["project-name"].textContent = host?.project ?? "";
+    if (!state.currentSessionId) {
+      renderHome();
+    }
+  },
+  request: request,
+  window: window,
+});
+
+// New session leads to the home composer.
 elements["new-session"].addEventListener("click", () => {
   shell.showSession(null);
   leaveSession();
+  home.focus();
 });
 
 elements["pair-name"].value = readStored(DEVICE_NAME_KEY) || defaultDeviceName();

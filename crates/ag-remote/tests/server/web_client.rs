@@ -240,7 +240,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
         .backend
         .calls()
         .into_iter()
-        .filter(|call| !call.starts_with("list") && !call.starts_with("get:"))
+        .filter(|call| !call.starts_with("list") && !call.starts_with("get:") && call != "host")
         .collect();
     assert_eq!(
         mutations,
@@ -250,6 +250,62 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
             "send:session-2:Use the main branch",
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_creates_sends_and_opens_a_session_from_home_through_the_listener()
+-> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (_paired, _device_id, token) = server.pair("Node browser").await?;
+    let address = server.handle.local_addr().to_string();
+
+    // Act
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "create", &token])?;
+    let home = app.next_step().await?;
+    let created = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(
+        home,
+        json!({
+            "step": "home",
+            "chips": ["project agentty", "base main", "gpt-6.1-sol"],
+            "eyebrow": "New session · agentty",
+            // The test host offers one mode, so there is nothing to choose.
+            "modesHidden": true,
+            "newSessionHidden": false,
+            "project": "agentty",
+            "title": "What should the agent work on?",
+        })
+    );
+    // The test host creates `session-2`, titled `Plan it`.
+    assert_eq!(
+        created,
+        json!({
+            "step": "created",
+            "error": "",
+            "hash": "#s=session-2",
+            "heading": "Plan it",
+            "homeMessage": "",
+            "view": "session-view",
+        })
+    );
+    assert!(succeeded);
+    let calls = server.backend.calls();
+    let create = calls
+        .iter()
+        .position(|call| call == "create:Regular:1")
+        .ok_or("no session was created")?;
+    let send = calls
+        .iter()
+        .position(|call| call == "send:session-2:Add a relay image")
+        .ok_or("no first message was sent")?;
+    assert!(calls.iter().any(|call| call == "host"));
+    assert!(create < send);
 
     Ok(())
 }

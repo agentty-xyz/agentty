@@ -547,6 +547,16 @@ test("each session keeps its own draft across switches and reloads", () => {
   assert.equal(broken.byId("message").value, "kept");
 });
 
+test("a session opened after a failed first message keeps its text and says why", () => {
+  const sessionStorage = new MemoryStorage();
+  const { byId, chat } = mountChat({ sessionStorage });
+  chat.open("new", { draft: "Fix the relay", error: "Session is busy" });
+
+  assert.equal(byId("message").value, "Fix the relay");
+  assert.equal(byId("session-error").textContent, "Session is busy");
+  assert.equal(sessionStorage.getItem(DRAFT_KEY_PREFIX + "new"), "Fix the relay");
+});
+
 test("blank messages and messages while offline are not sent", async () => {
   const { byId, chat, requests } = mountChat();
   chat.render(session());
