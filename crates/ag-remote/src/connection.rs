@@ -21,8 +21,8 @@ use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
-    ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 use crate::transport::{CloseCause, FrameTransport, Incoming};
@@ -67,6 +67,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::StopTurn, "stop_turn"),
     (SessionOperation::RebaseSession, "sync"),
     (SessionOperation::SessionSettings, "settings"),
+    (SessionOperation::PublishSession, "publish"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -599,8 +600,11 @@ impl RequestTasks {
     }
 }
 
-/// Returns the session a request changes, or `None` for reads and for
-/// creation, which changes no existing session.
+/// Returns the session a request changes, or `None` for reads, for creation,
+/// which changes no existing session, and for a publish. A publish can wait
+/// behind a running turn, so queueing it would hold a later stop, cancel,
+/// answer, or message until the turn ends; the host serializes the push
+/// itself.
 fn mutated_session(request: &RemoteRequest) -> Option<&str> {
     match request {
         RemoteRequest::AnswerQuestions { session_id, .. }
@@ -615,6 +619,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::GetSession { .. }
         | RemoteRequest::GetSessionDiff { .. }
         | RemoteRequest::ListSessions
+        | RemoteRequest::PublishSession { .. }
         | RemoteRequest::Unsupported => None,
     }
 }
@@ -720,6 +725,15 @@ async fn respond(
             sessions.merge_session(&session_id).await?;
 
             Ok(RemoteResponse::Accepted)
+        }
+        RemoteRequest::PublishSession { session_id } => {
+            require_operation(sessions, SessionOperation::PublishSession)?;
+            let session_id = listed_session_id(sessions, session_id).await?;
+            let review_request = sessions.create_review_request(&session_id).await?;
+
+            Ok(RemoteResponse::ReviewRequest {
+                review_request: RemoteReviewRequest::from(review_request.summary),
+            })
         }
         RemoteRequest::SendMessage {
             message,

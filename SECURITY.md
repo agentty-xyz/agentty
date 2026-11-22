@@ -60,10 +60,10 @@ of the active project, it can do what the
 lists under "What a paired device can do": today that is reading transcripts and diffs,
 sending prompts, answering questions, stopping a turn, syncing a session branch,
 changing session settings, canceling a session, merging a session into its base branch,
-and creating sessions. The approved set also covers publishing a session branch and
-opening its pull request with the user's forge credentials, once it becomes available.
-With those, anyone holding a paired device can have code written, land it on the base
-branch, and push it to the Git remote, so remove a device you no longer control.
+creating sessions, and publishing a session branch and opening its pull request with the
+user's forge credentials. With those, anyone holding a paired device can have code
+written, land it on the base branch, and push it to the Git remote, so remove a device
+you no longer control.
 
 Report these as vulnerabilities:
 

@@ -1002,3 +1002,29 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
         ])
     );
 }
+
+#[tokio::test]
+async fn publish_returns_host_refusals_and_needs_the_host_to_serve_it() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::PublishSession],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let publish = || RemoteRequest::PublishSession {
+        session_id: "session-1".to_string(),
+    };
+
+    // Act
+    let refused = reply_result(&serving.state, publish()).await;
+    let unsupported = reply_result(&not_serving.state, publish()).await;
+
+    // Assert
+    assert_eq!(refused, RemoteResult::Error("unsupported".to_string()));
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["list", "review:session-1"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
