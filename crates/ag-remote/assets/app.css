@@ -2053,6 +2053,7 @@ kbd {
 
 /* .search-field, grown into a composer */
 .composer {
+  position: relative;
   display: grid;
   gap: 0.35rem;
   padding: 0.7rem 0.6rem 0.55rem 0.95rem;
@@ -2139,6 +2140,90 @@ kbd {
 
 .composer-settings:disabled {
   cursor: default;
+}
+
+/* ---- Suggestion popup (suggest.mjs) ---------------------------------
+   Opens above the composer, as wide as it, in the settings sheet's
+   raised surface. The list scrolls once it outgrows the space. */
+.suggest {
+  position: absolute;
+  inset: auto 0 calc(100% + 0.4rem);
+  z-index: 20;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-panel);
+}
+
+.suggest[hidden] {
+  display: none;
+}
+
+.suggest-title {
+  margin: 0;
+  padding: 0.1rem 0.45rem 0.2rem;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.suggest-list {
+  display: grid;
+  gap: 0.15rem;
+  max-height: min(16rem, 40dvh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.suggest-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.6rem;
+  min-height: 2.4rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.suggest-item:hover,
+.suggest-item.is-highlighted {
+  border-color: var(--color-border);
+  background: var(--color-surface-interactive);
+}
+
+.suggest-item.is-highlighted {
+  border-color: var(--color-border-strong);
+}
+
+.suggest-label {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.suggest-current {
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.suggest-detail {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 /* ---- Settings sheet ----------------------------------------------- */
@@ -2456,6 +2541,10 @@ kbd {
 
   .sheet-item {
     min-height: 2.9rem;
+  }
+
+  .suggest-item {
+    min-height: 2.75rem;
   }
 
   .btn {

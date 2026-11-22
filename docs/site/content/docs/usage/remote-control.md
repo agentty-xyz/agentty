@@ -100,7 +100,10 @@ running turn if there is one.
 When this Agentty lets devices change settings, the line under the message box is a
 button. It opens a sheet with the models of the session's agent, the reasoning level,
 the answer style, and the speed when the chosen model can run fast. `Apply` sends only
-what you changed; during a running turn, the changes apply from the next turn.
+what you changed; during a running turn, the changes apply from the next turn. Typing
+`/` at the start of the message box also lists `/model`, `/reasoning`, `/style`, and,
+when the model can run fast, `/fast`, as in the terminal: pick one with the arrow keys
+and `Enter`, or tap it, then pick a value; `/fast` toggles the speed at once.
 
 When this Agentty lets devices read diffs, `Diff` in the header, or in the `⋯` sheet on
 a phone, shows the session's changed files in place of the chat, each with its status

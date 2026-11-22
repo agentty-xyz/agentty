@@ -20,6 +20,8 @@ import {
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
 import { lineCounts, separator } from "./session_list.mjs";
 import { offersSettings } from "./settings.mjs";
+import { createSlashCommands } from "./slash.mjs";
+import { createSuggestions } from "./suggest.mjs";
 
 // Unsent text of one session, in `sessionStorage`, under this prefix and
 // the session id.
@@ -339,6 +341,35 @@ export function createChat({
     summary: null,
     sessionId: null,
   };
+  // The composer's suggestion popup, and the slash commands it lists.
+  const suggestions = createSuggestions({
+    container: elements.composer,
+    document: document,
+    id: "message-suggestions",
+    input: elements.message,
+    label: "Suggestions",
+  });
+  const slash = createSlashCommands({
+    context: () => ({
+      capabilities: state.capabilities,
+      isConnected: state.isConnected,
+      // Only a composer on screen offers commands.
+      session: elements.composer.hidden ? null : state.session,
+    }),
+    input: elements.message,
+    request: request,
+    setText: (text) => {
+      elements.message.value = text;
+      if (state.sessionId) {
+        drafts.set(state.sessionId, text);
+      }
+      resizeComposer();
+    },
+    showError: (message) => {
+      elements.sessionError.textContent = message;
+    },
+    suggestions: suggestions,
+  });
 
   function isFinePointer() {
     return Boolean(window.matchMedia?.("(pointer: fine)").matches);
@@ -806,6 +837,8 @@ export function createChat({
     elements.composer.hidden = dock.mode !== "compose";
     elements.answerBar.hidden = dock.mode !== "answer";
     elements.readonly.hidden = dock.mode !== "readonly";
+    // The slash menu follows the session, the host and the composer.
+    slash.refresh();
     if (dock.mode === "readonly") {
       elements.readonly.textContent = dock.text;
     }
@@ -874,6 +907,7 @@ export function createChat({
       }
     }
     settings?.close();
+    slash.reset();
     renderActions();
   }
 
@@ -1063,13 +1097,24 @@ export function createChat({
       drafts.set(state.sessionId, elements.message.value);
     }
     resizeComposer();
+    slash.update();
   });
+  // An open suggestion list takes its keys first, so `Enter` picks there
+  // instead of sending.
   elements.message.addEventListener("keydown", (event) => {
+    if (suggestions.handleKey(event)) {
+      return;
+    }
     if (composerKeyAction(event, { isFinePointer: isFinePointer() }) === "send") {
       event.preventDefault();
       void sendMessage();
     }
   });
+  // Moving the caret, or the focus, opens or closes the slash menu.
+  for (const type of ["click", "focus", "keyup"]) {
+    elements.message.addEventListener(type, () => slash.update());
+  }
+  elements.message.addEventListener("blur", () => slash.close());
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
     void sendMessage();

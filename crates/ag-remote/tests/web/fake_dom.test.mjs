@@ -210,6 +210,12 @@ test("element properties reflect attributes", () => {
   assert.equal(input.value, "typed");
   assert.equal(input.hasAttribute("value"), false);
   assert.equal(input.getAttribute("placeholder"), "Your answer");
+  // The caret sits at the end of a set value until it is placed.
+  assert.deepEqual([input.selectionStart, input.selectionEnd], [5, 5]);
+  input.setSelectionRange(1, 3);
+  assert.deepEqual([input.selectionStart, input.selectionEnd], [1, 3]);
+  input.value = "new";
+  assert.deepEqual([input.selectionStart, input.selectionEnd], [3, 3]);
   delete button.dataset.sessionId;
   assert.equal(button.hasAttribute("data-session-id"), false);
 });
