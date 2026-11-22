@@ -218,7 +218,9 @@ export function createHome({
       // Another mode may start on another agent, so its model and speed
       // picks do not carry over.
       if (mode !== state.mode) {
-        const { model: _model, speed_mode: _speed, ...kept } = state.picks;
+        const kept = { ...state.picks };
+        delete kept.model;
+        delete kept.speed_mode;
         state.picks = kept;
       }
       state.mode = mode;
