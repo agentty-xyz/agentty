@@ -153,3 +153,12 @@ another. Limits on what a client can hold replace accounts.
 
 Agentty uses a relay only when started with `--remote-relay`. No hosted relay or default
 address exists, so nothing leaves the computer unless the user chooses a relay.
+
+### A connection runs up to eight requests at once
+
+Some host operations reply only when their work finishes, such as creating a session.
+Each request therefore runs in its own task, and the connection keeps reading requests
+and pushing changes meanwhile. Replies carry the request's `id` and may arrive out of
+order. A connection can keep eight requests running; another one gets an error at once,
+so one connection cannot queue unbounded host work. Closing the connection drops pending
+replies, not the work behind them.

@@ -369,17 +369,24 @@ impl DeviceStore for MemoryDeviceStore {
 }
 
 /// Session backend that records calls; a session snapshot queues the
-/// messages sent to it, the message `busy` is rejected, and
-/// every cancellation reports a missing session.
+/// messages sent to it, the message `busy` is rejected, the message `wait`
+/// is held until [`RecordingBackend::release`], and every cancellation
+/// reports a missing session.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
+    released: watch::Sender<bool>,
 }
 
 impl RecordingBackend {
     /// Returns the recorded calls.
     pub(crate) fn calls(&self) -> Vec<String> {
         locked(&self.calls).clone()
+    }
+
+    /// Lets every held `wait` message, now and later, finish.
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
     }
 
     fn record(&self, call: String) {
@@ -433,6 +440,10 @@ impl SessionBackend for RecordingBackend {
         self.record(format!("send:{session_id}:{message}"));
         if message == "busy" {
             return Err(SessionError::Operation("Session is busy".to_string()));
+        }
+        if message == "wait" {
+            let mut released = self.released.subscribe();
+            let _ = released.wait_for(|is_released| *is_released).await;
         }
 
         Ok(())

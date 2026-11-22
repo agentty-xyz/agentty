@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
@@ -44,6 +44,10 @@ const PAIRING_PENDING: &str = "Wait for pairing approval";
 const SERVER_STOPPED: &str = "Server stopped";
 /// Error returned for a request method this server does not know.
 const UNSUPPORTED_REQUEST: &str = "Unsupported request";
+/// Requests one connection may have running at once.
+pub(crate) const MAX_REQUESTS_IN_PROGRESS: usize = 8;
+/// Error returned for a request beyond [`MAX_REQUESTS_IN_PROGRESS`].
+pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -350,6 +354,11 @@ pub(crate) async fn complete_pairing(
 }
 
 /// Serves requests and change pushes for one authenticated connection.
+///
+/// Each request runs in its own task, so a slow host operation delays
+/// neither later requests nor change pushes. Replies go out as they
+/// complete, matched to their request by `id`. Closing the connection drops
+/// the replies still pending; the host work they belong to carries on.
 async fn run<T: FrameTransport>(
     mut transport: T,
     state: &ServerState,
@@ -359,6 +368,8 @@ async fn run<T: FrameTransport>(
 ) {
     let mut change_deadline: Option<Instant> = None;
     let mut revisions_open = true;
+    let request_slots = Arc::new(Semaphore::new(MAX_REQUESTS_IN_PROGRESS));
+    let (reply_tx, mut reply_rx) = mpsc::channel(MAX_REQUESTS_IN_PROGRESS);
 
     loop {
         tokio::select! {
@@ -387,8 +398,12 @@ async fn run<T: FrameTransport>(
                     revisions_open = false;
                 }
             }
+            Some(reply) = reply_rx.recv() => {
+                let Reply { frame, slot: _slot } = reply;
+                send(&mut transport, &frame).await;
+            }
             incoming = transport.receive() => {
-                match handle_incoming(state, incoming).await {
+                match handle_incoming(incoming) {
                     MessageOutcome::Closed => return,
                     MessageOutcome::Ignored => {}
                     MessageOutcome::Rejected(reason) => {
@@ -396,11 +411,49 @@ async fn run<T: FrameTransport>(
 
                         return;
                     }
-                    MessageOutcome::Reply(frame) => send(&mut transport, &frame).await,
+                    MessageOutcome::Request { id, request } => {
+                        if let Ok(slot) = Arc::clone(&request_slots).try_acquire_owned() {
+                            spawn_request(state, id, request, slot, reply_tx.clone());
+                        } else {
+                            let busy = ServerFrame::Response {
+                                id,
+                                result: RemoteResult::Error(TOO_MANY_REQUESTS.to_string()),
+                            };
+                            send(&mut transport, &busy).await;
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// Runs one request in its own task and hands its reply, with the request
+/// slot it holds, to `reply_tx`.
+fn spawn_request(
+    state: &ServerState,
+    id: u64,
+    request: RemoteRequest,
+    slot: OwnedSemaphorePermit,
+    reply_tx: mpsc::Sender<Reply>,
+) {
+    let sessions = state.sessions().clone();
+    tokio::spawn(async move {
+        let frame = ServerFrame::Response {
+            id,
+            result: execute(&sessions, request).await,
+        };
+        // A closed connection no longer wants the reply.
+        let _ = reply_tx.send(Reply { frame, slot }).await;
+    });
+}
+
+/// Response of a finished request, waiting for the connection to send it.
+struct Reply {
+    /// Frame to send.
+    frame: ServerFrame,
+    /// Request slot, freed once the frame is taken for sending.
+    slot: OwnedSemaphorePermit,
 }
 
 /// What the connection does after one authenticated client message.
@@ -411,20 +464,20 @@ pub(crate) enum MessageOutcome {
     Ignored,
     /// The client broke the protocol; the connection closes.
     Rejected(&'static str),
-    /// Send this frame and keep serving.
-    Reply(ServerFrame),
+    /// Run this request and reply to it under `id`.
+    Request {
+        /// Identifier the reply carries.
+        id: u64,
+        /// Request to run.
+        request: RemoteRequest,
+    },
 }
 
-/// Handles one thing received on an authenticated connection.
-pub(crate) async fn handle_incoming(state: &ServerState, incoming: Incoming) -> MessageOutcome {
+/// Classifies one thing received on an authenticated connection.
+pub(crate) fn handle_incoming(incoming: Incoming) -> MessageOutcome {
     match incoming {
         Incoming::Text(text) => match serde_json::from_str::<ClientFrame>(&text) {
-            Ok(ClientFrame::Request { id, request }) => {
-                MessageOutcome::Reply(ServerFrame::Response {
-                    id,
-                    result: execute(state.sessions(), request).await,
-                })
-            }
+            Ok(ClientFrame::Request { id, request }) => MessageOutcome::Request { id, request },
             Ok(ClientFrame::Hello { .. } | ClientFrame::Pair { .. }) => {
                 MessageOutcome::Rejected("Connection is already authenticated")
             }
@@ -437,7 +490,7 @@ pub(crate) async fn handle_incoming(state: &ServerState, incoming: Incoming) -> 
 }
 
 /// Runs one request against the session service.
-async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteResult {
+pub(crate) async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteResult {
     match respond(sessions, request).await {
         Ok(response) => RemoteResult::Ok(response),
         Err(error) => RemoteResult::Error(error.to_string()),
