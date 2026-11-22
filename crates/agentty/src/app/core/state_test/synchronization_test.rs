@@ -796,6 +796,50 @@ async fn project_sync_is_blocked_while_merge_work_is_pending() {
 }
 
 #[tokio::test]
+async fn terminal_project_sync_steps_advance_the_remote_revision() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(2)
+        .returning(|_, _, _, _| {});
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let mut revision = move || *revisions.borrow_and_update();
+    let initial_revision = revision();
+
+    // Act: a started sync, a duplicate, and a sync of another project that
+    // waits for the first.
+    app.start_sync_main();
+    let after_start = revision();
+    app.start_sync_main();
+    let after_duplicate = revision();
+    let mut second_project_context = app.sync_handle.context_snapshot();
+    second_project_context.project_id = app.active_project_id() + 1;
+    second_project_context.project_name = "second-project".to_string();
+    app.sync_handle.publish_context(second_project_context);
+    app.start_sync_main();
+    let after_queued = revision();
+    // The first sync ends, so the queued one starts.
+    app.project_sync_status = None;
+    app.start_next_project_sync_from_queue();
+    let after_queued_start = revision();
+    // A merge now blocks a new sync of the second project.
+    app.project_sync_status = None;
+    app.merge_queue.enqueue("pending-merge".into());
+    app.start_sync_main();
+    let after_blocked = revision();
+
+    // Assert
+    assert_eq!(after_start, initial_revision + 1);
+    assert_eq!(after_duplicate, after_start);
+    assert_eq!(after_queued, after_start);
+    assert_eq!(after_queued_start, after_start + 1);
+    assert_eq!(after_blocked, after_queued_start + 1);
+}
+
+#[tokio::test]
 async fn programmatic_project_sync_is_refused_while_merge_work_is_pending() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;

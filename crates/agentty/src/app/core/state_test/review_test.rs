@@ -771,23 +771,26 @@ async fn test_apply_review_request_status_update_persists_summary() {
     app.refresh_sessions_now().await;
 
     let summary = test_review_request_summary("#5", ReviewRequestState::Open);
-    let task_result = SyncReviewRequestTaskResult {
-        attention: None,
-        outcome: session::SyncReviewRequestOutcome::Open {
-            display_id: "#5".to_string(),
-            status_summary: None,
-        },
-        summary: Some(summary),
-    };
-
-    let update = ReviewRequestStatusUpdate {
+    let update = || ReviewRequestStatusUpdate {
         generation: 0,
-        result: Ok(task_result),
+        result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
+            outcome: session::SyncReviewRequestOutcome::Open {
+                display_id: "#5".to_string(),
+                status_summary: None,
+            },
+            summary: Some(summary.clone()),
+        }),
         session_id: session_id.into(),
     };
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
 
     // Act
-    app.apply_review_request_status_update(update).await;
+    app.apply_review_request_status_update(update()).await;
+    let after_first_update = *revisions.borrow_and_update();
+    app.apply_review_request_status_update(update()).await;
+    let after_same_update = *revisions.borrow_and_update();
 
     // Assert
     assert_eq!(app.sessions.sessions().len(), 1);
@@ -797,6 +800,9 @@ async fn test_apply_review_request_status_update_persists_summary() {
         .as_ref()
         .expect("expected linked review request after sync");
     assert_eq!(review_request.summary.display_id, "#5");
+    // Remote clients learn of a new summary once, not of an unchanged one.
+    assert_eq!(after_first_update, initial_revision + 1);
+    assert_eq!(after_same_update, after_first_update);
 }
 
 #[tokio::test]

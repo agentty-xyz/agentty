@@ -1392,8 +1392,6 @@ struct InheritedCreationSettings {
     settings: SessionCreationSettings,
 }
 
-/// Converts indexed worktree entries into the session API's file entries,
-/// keeping their order.
 /// Converts the status bar's project sync into its programmatic form.
 fn api_project_sync(status: &ProjectSyncStatus) -> HostProjectSync {
     let phase = match &status.phase {
@@ -1426,6 +1424,8 @@ fn api_project_sync(status: &ProjectSyncStatus) -> HostProjectSync {
     }
 }
 
+/// Converts indexed worktree entries into the session API's file entries,
+/// keeping their order.
 fn api_file_entries(entries: Vec<FileEntry>) -> Vec<SessionFileEntry> {
     entries
         .into_iter()

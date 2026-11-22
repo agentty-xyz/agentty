@@ -2609,10 +2609,25 @@ impl App {
         };
 
         if let Some(summary) = task_result.summary {
+            // Remote clients list the review state and whether the request
+            // can merge, which no session event marks.
+            let is_changed = self
+                .sessions
+                .session_for_id(&session_id)
+                .is_some_and(|session| {
+                    session
+                        .review_request
+                        .as_ref()
+                        .map(|review_request| &review_request.summary)
+                        != Some(&summary)
+                });
             let _ = self
                 .sessions
                 .store_review_request_summary(&self.services, &session_id, summary)
                 .await;
+            if is_changed {
+                self.publish_session_change();
+            }
         }
 
         match task_result.outcome {
