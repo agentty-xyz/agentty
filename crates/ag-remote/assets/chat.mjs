@@ -253,7 +253,7 @@ export function createDrafts(window) {
 //
 // Returns `open(sessionId)`, `close()`, `render(session)` for a snapshot
 // (`null` when the session is gone), `setConnected(isConnected)`,
-// `setCapabilities(list)`, and `showError(message)`.
+// `setCapabilities(list)`, and `showLoadError(sessionId, message)`.
 export function createChat({ document, window, elements, request, onHome }) {
   const drafts = createDrafts(window);
   const state = {
@@ -261,6 +261,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     isAnswering: false,
     isCanceling: false,
     isConnected: false,
+    // Whether the header's error says a refresh failed.
+    isLoadError: false,
     isMerging: false,
     isSending: false,
     isStopping: false,
@@ -381,6 +383,10 @@ export function createChat({ document, window, elements, request, onHome }) {
         return row;
       }),
     );
+    // Clicks and the keys that activate the summary both arrive as a click.
+    summary.addEventListener("click", () => {
+      details.dataset.toggled = "true";
+    });
     details.append(summary, list);
 
     return details;
@@ -538,8 +544,13 @@ export function createChat({ document, window, elements, request, onHome }) {
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
     elements.heading.textContent = "";
-    if (elements.sheet.open) {
-      elements.sheet.close();
+    state.isLoadError = false;
+    // Nothing asked about the previous session may act once it is gone.
+    for (const dialog of [elements.sheet, elements.cancelDialog, elements.mergeDialog]) {
+      delete dialog.dataset.sessionId;
+      if (dialog.open) {
+        dialog.close("");
+      }
     }
     renderActions();
   }
@@ -569,6 +580,11 @@ export function createChat({ document, window, elements, request, onHome }) {
     const isFirst = state.session === null;
     const wasNearEnd = isNearEnd();
     state.session = session;
+    if (state.isLoadError) {
+      // A snapshot arrived, so the earlier refresh failure is over.
+      state.isLoadError = false;
+      elements.actionError.textContent = "";
+    }
     elements.gone.hidden = true;
     elements.scroller.hidden = false;
     renderHeader(session);
@@ -593,13 +609,14 @@ export function createChat({ document, window, elements, request, onHome }) {
     renderDock();
     try {
       await request({ method: "send_message", session_id: sessionId, message: message });
-      drafts.clear(sessionId);
+      // Text typed after sending, here or before switching away, stays.
+      if (drafts.get(sessionId) === message) {
+        drafts.clear(sessionId);
+      }
       if (state.sessionId === sessionId) {
         if (elements.message.value === message) {
           elements.message.value = "";
           resizeComposer();
-        } else {
-          drafts.set(sessionId, elements.message.value);
         }
         elements.sessionError.textContent = "";
       }
@@ -643,9 +660,8 @@ export function createChat({ document, window, elements, request, onHome }) {
     }
   }
 
-  // Runs one session action and shows its error under the header.
-  async function runAction(flag, body, errorNode) {
-    const sessionId = state.sessionId;
+  // Runs one action on `sessionId` and shows its error in `errorNode`.
+  async function runAction(sessionId, flag, body, errorNode) {
     if (!sessionId || state[flag]) {
       return;
     }
@@ -666,12 +682,23 @@ export function createChat({ document, window, elements, request, onHome }) {
     }
   }
 
+  // Asks with `dialog` about the open session, and remembers which one.
   function confirmWith(dialog) {
     if (!state.sessionId) {
       return;
     }
+    dialog.dataset.sessionId = state.sessionId;
     dialog.returnValue = "";
     dialog.showModal();
+  }
+
+  // The session `dialog` was opened for, when the user confirmed it and
+  // that session is still open; otherwise `null`.
+  function confirmedSession(dialog, value) {
+    const sessionId = dialog.dataset.sessionId ?? null;
+    delete dialog.dataset.sessionId;
+
+    return dialog.returnValue === value && sessionId === state.sessionId ? sessionId : null;
   }
 
   elements.message.addEventListener("input", () => {
@@ -691,7 +718,7 @@ export function createChat({ document, window, elements, request, onHome }) {
     void sendMessage();
   });
   elements.stop.addEventListener("click", () => {
-    void runAction("isStopping", { method: "stop_turn" }, elements.sessionError);
+    void runAction(state.sessionId, "isStopping", { method: "stop_turn" }, elements.sessionError);
   });
   elements.questions.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -705,10 +732,7 @@ export function createChat({ document, window, elements, request, onHome }) {
   });
   elements.jump.addEventListener("click", scrollToEnd);
   elements.goneHome.addEventListener("click", () => onHome());
-  elements.more.addEventListener("click", () => {
-    elements.sheet.returnValue = "";
-    elements.sheet.showModal();
-  });
+  elements.more.addEventListener("click", () => confirmWith(elements.sheet));
   // A tap beside the sheet, on its backdrop, closes it.
   elements.sheet.addEventListener("click", (event) => {
     if (event.target === elements.sheet) {
@@ -716,21 +740,27 @@ export function createChat({ document, window, elements, request, onHome }) {
     }
   });
   elements.sheet.addEventListener("close", () => {
-    if (elements.sheet.returnValue === "cancel") {
+    const choice = elements.sheet.returnValue;
+    if (!confirmedSession(elements.sheet, choice)) {
+      return;
+    }
+    if (choice === "cancel") {
       confirmWith(elements.cancelDialog);
-    } else if (elements.sheet.returnValue === "merge") {
+    } else if (choice === "merge") {
       confirmWith(elements.mergeDialog);
     }
   });
   elements.merge.addEventListener("click", () => confirmWith(elements.mergeDialog));
   elements.cancelDialog.addEventListener("close", () => {
-    if (elements.cancelDialog.returnValue === "confirm") {
-      void runAction("isCanceling", { method: "cancel_session" }, elements.actionError);
+    const sessionId = confirmedSession(elements.cancelDialog, "confirm");
+    if (sessionId) {
+      void runAction(sessionId, "isCanceling", { method: "cancel_session" }, elements.actionError);
     }
   });
   elements.mergeDialog.addEventListener("close", () => {
-    if (elements.mergeDialog.returnValue === "confirm") {
-      void runAction("isMerging", { method: "merge_session" }, elements.actionError);
+    const sessionId = confirmedSession(elements.mergeDialog, "confirm");
+    if (sessionId) {
+      void runAction(sessionId, "isMerging", { method: "merge_session" }, elements.actionError);
     }
   });
 
@@ -752,19 +782,27 @@ export function createChat({ document, window, elements, request, onHome }) {
         elements.message.placeholder = "Offline. Your draft is kept.";
       }
     },
-    showError: (message) => {
+    // Shows that refreshing `sessionId` failed, if it is still open. The
+    // next snapshot clears it.
+    showLoadError: (sessionId, message) => {
+      if (sessionId !== state.sessionId) {
+        return;
+      }
+      state.isLoadError = true;
       elements.actionError.textContent = message;
     },
   };
 }
 
 // An activity box the reader opened or closed stays that way when its
-// content changes.
+// content changes. One the reader left alone takes the default for its
+// new length.
 function keepActivityOpen(oldNode, newNode) {
   const oldDetails = oldNode?.querySelector?.("details");
   const newDetails = newNode.querySelector("details");
-  if (oldDetails && newDetails) {
+  if (oldDetails?.dataset.toggled && newDetails) {
     newDetails.open = oldDetails.open;
+    newDetails.dataset.toggled = "true";
   }
 }
 

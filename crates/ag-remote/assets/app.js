@@ -603,21 +603,22 @@ async function loadSessions() {
   if (!state.isAuthenticated) {
     return;
   }
+  // A session opened while this runs is loaded by the next run, and an
+  // answer for this one is dropped once another is open.
+  const sessionId = state.currentSessionId;
   try {
     const listed = await request({ method: "list_sessions" });
     renderSessions(listed.sessions || []);
     elements["list-error"].textContent = "";
-    if (state.currentSessionId) {
-      const sessionId = state.currentSessionId;
+    if (sessionId) {
       const loaded = await request({ method: "get_session", session_id: sessionId });
-      // A session opened while the request ran is loaded by the next one.
       if (sessionId === state.currentSessionId) {
         chat.render(loaded.session);
       }
     }
   } catch (error) {
-    if (state.currentSessionId) {
-      chat.showError(error.message);
+    if (sessionId) {
+      chat.showLoadError(sessionId, error.message);
     } else {
       elements["list-error"].textContent = error.message;
     }

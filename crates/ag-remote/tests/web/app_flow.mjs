@@ -2,6 +2,7 @@
 // the integration tests in crates/ag-remote/tests/server/web_client.rs.
 //
 // Usage: node app_flow.mjs <listener address> session <device token>
+//        node app_flow.mjs <listener address> route <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
 //
 // In `session` mode the test server lists `Build it`, waiting on one
@@ -10,6 +11,9 @@
 // after `queued` the Rust test bumps the server's revision, so the server
 // pushes `changed`: first `Plan it` turns unread, then its queued message
 // shows.
+//
+// In `route` mode the page loads at `#s=session-2` with a draft left in
+// this tab, as after a reload, and sends it.
 //
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
@@ -24,6 +28,7 @@ import { FakeEvent, createDocument, createWindow } from "./fake_dom.mjs";
 const APP_URL = new URL("../../assets/app.js", import.meta.url);
 const PAGE = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
 const TOKEN_KEY = "agentty.remote.token";
+const ROUTED_DRAFT_KEY = "agentty.remote.draft.session-2";
 const WAIT_MS = 10000;
 
 if (typeof WebSocket === "undefined") {
@@ -32,9 +37,15 @@ if (typeof WebSocket === "undefined") {
 
 const [address, mode, secret] = process.argv.slice(2);
 const document = createDocument(PAGE);
-const window = createWindow(document, "http://" + address + "/");
-if (mode === "session") {
+const window = createWindow(
+  document,
+  "http://" + address + "/" + (mode === "route" ? "#s=session-2" : ""),
+);
+if (mode === "session" || mode === "route") {
   window.localStorage.setItem(TOKEN_KEY, secret);
+}
+if (mode === "route") {
+  window.sessionStorage.setItem(ROUTED_DRAFT_KEY, "Resume the plan");
 }
 globalThis.document = document;
 globalThis.window = window;
@@ -297,8 +308,31 @@ async function pairFlow() {
   });
 }
 
+// The session in the address opens with its draft, and the composer sends
+// to it.
+async function routeFlow() {
+  await waitFor("the routed transcript", () => byId("transcript").children.length > 0);
+  report({
+    step: "restored",
+    current: byId("sessions").querySelector('[aria-current="page"]')?.dataset.sessionId ?? null,
+    hash: window.location.hash,
+    heading: byId("heading").textContent,
+    message: byId("message").value,
+    view: visibleView(),
+  });
+
+  byId("send").click();
+  await waitFor("the composer to clear", () => byId("message").value === "");
+  report({
+    step: "sent",
+    draft: window.sessionStorage.getItem(ROUTED_DRAFT_KEY),
+    error: byId("session-error").textContent,
+  });
+}
+
 await import(APP_URL.href);
-await (mode === "pair" ? pairFlow() : sessionFlow());
+const flows = { pair: pairFlow, route: routeFlow, session: sessionFlow };
+await flows[mode]();
 
 // The client keeps its socket open, so the script ends itself once its
 // output has been written.

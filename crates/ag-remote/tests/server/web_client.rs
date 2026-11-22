@@ -253,6 +253,45 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     Ok(())
 }
 
+#[tokio::test]
+async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_listener()
+-> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (_paired, _device_id, token) = server.pair("Node browser").await?;
+    let address = server.handle.local_addr().to_string();
+
+    // Act
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "route", &token])?;
+    let restored = app.next_step().await?;
+    let sent = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(
+        restored,
+        json!({
+            "step": "restored",
+            "current": "session-2",
+            "hash": "#s=session-2",
+            "heading": "Plan it",
+            "message": "Resume the plan",
+            "view": "session-view",
+        })
+    );
+    assert_eq!(sent, json!({"step": "sent", "draft": null, "error": ""}));
+    assert!(succeeded);
+    assert!(
+        server
+            .backend
+            .calls()
+            .iter()
+            .any(|call| call == "send:session-2:Resume the plan")
+    );
+
+    Ok(())
+}
+
 /// Checks the steps where the app opens `Build it`, which waits on a
 /// question, and answers it.
 fn assert_question_answered(opened: &Value, answered: &Value) {

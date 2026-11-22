@@ -229,17 +229,32 @@ test("the transcript only appends when it grows, and keeps the nodes on screen",
   assert.equal(items[2].textContent, "Next");
   // A refresh keeps focus and the text being typed.
   assert.equal(composer.value, "typing");
-  assert.equal(chat && composer.ownerDocument.activeElement, composer);
+  assert.equal(composer.ownerDocument.activeElement, composer);
 });
 
 test("an activity box the reader toggled stays that way when it changes", () => {
   const { byId, chat } = mountChat();
   chat.render(session({ messages: [{ content: "✓ a", kind: "activity" }] }));
-  byId("transcript").querySelector("details").open = false;
+  const toggled = byId("transcript").querySelector("details");
+  // The fake DOM does not toggle on a click; set what the browser would.
+  toggled.querySelector("summary").click();
+  toggled.open = false;
   chat.render(session({ messages: [{ content: "✓ a\n✓ b", kind: "activity" }] }));
-  const details = byId("transcript").querySelector("details");
+  let details = byId("transcript").querySelector("details");
   assert.equal(details.open, false);
   assert.equal(details.querySelectorAll("li").length, 2);
+  // The choice lasts through later changes too.
+  chat.render(session({ messages: [{ content: "✓ a\n✓ b\n✓ c", kind: "activity" }] }));
+  details = byId("transcript").querySelector("details");
+  assert.equal(details.open, false);
+});
+
+test("an activity box the reader left alone follows the default as it grows", () => {
+  const { byId, chat } = mountChat();
+  chat.render(session({ messages: [{ content: "✓ a\n✓ b", kind: "activity" }] }));
+  assert.equal(byId("transcript").querySelector("details").open, true);
+  chat.render(session({ messages: [{ content: "✓ a\n✓ b\n✓ c\n✓ d\n✓ e", kind: "activity" }] }));
+  assert.equal(byId("transcript").querySelector("details").open, false);
 });
 
 test("the composer follows the status", () => {
@@ -573,6 +588,83 @@ test("Merge asks first, names the base branch, and sends merge_session", async (
   await settle();
   assert.deepEqual(requests, [{ method: "merge_session", session_id: "s1" }]);
   assert.equal(byId("action-error").textContent, "");
+});
+
+test("a confirmation never acts on a session other than the one it asked about", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["merge"] });
+  chat.render(session());
+  const cancelDialog = byId("cancel-dialog");
+  const mergeDialog = byId("merge-dialog");
+
+  // Moving to another session, as the back gesture does, closes every
+  // open question without acting.
+  byId("session-more").click();
+  byId("cancel").click();
+  assert.equal(cancelDialog.open, true);
+  chat.open("s2");
+  assert.equal(cancelDialog.open, false);
+  chat.render(session({ id: "s2" }));
+  byId("merge").click();
+  chat.open("s3");
+  assert.equal(mergeDialog.open, false);
+  byId("session-more").click();
+  chat.open("s4");
+  assert.equal(byId("session-sheet").open, false);
+  await settle();
+  assert.deepEqual(requests, []);
+  assert.equal(byId("action-error").textContent, "");
+
+  // A dialog still open for another session sends nothing on confirm.
+  chat.render(session({ id: "s4" }));
+  byId("merge").click();
+  mergeDialog.dataset.sessionId = "s3";
+  mergeDialog.querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.deepEqual(requests, []);
+
+  // Confirming for the open session sends that session's id.
+  byId("merge").click();
+  mergeDialog.querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.deepEqual(requests, [{ method: "merge_session", session_id: "s4" }]);
+});
+
+test("a refresh failure shows for its own session until a snapshot arrives", () => {
+  const { byId, chat } = mountChat();
+  chat.render(session());
+  // A failure for a session no longer open stays off this one.
+  chat.showLoadError("s0", "Request failed");
+  assert.equal(byId("action-error").textContent, "");
+  chat.showLoadError("s1", "Disconnected");
+  assert.equal(byId("action-error").textContent, "Disconnected");
+  chat.render(session());
+  assert.equal(byId("action-error").textContent, "");
+});
+
+test("text typed after sending survives the reply, even in another session", async () => {
+  const storage = new MemoryStorage();
+  let accept = () => {};
+  const { byId, chat } = mountChat({
+    respond: () =>
+      new Promise((resolve) => {
+        accept = () => resolve({ kind: "accepted" });
+      }),
+    sessionStorage: storage,
+  });
+  chat.render(session());
+  const message = byId("message");
+  message.value = "Ship it";
+  message.dispatchEvent(new FakeEvent("input"));
+  byId("send").click();
+  // More text, then another session, before the host answers.
+  message.value = "Ship it and tag it";
+  message.dispatchEvent(new FakeEvent("input"));
+  chat.open("s2");
+  accept();
+  await settle();
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "Ship it and tag it");
+  chat.open("s1");
+  assert.equal(message.value, "Ship it and tag it");
 });
 
 test("mergeTarget reads the base branch only when the host sends one", () => {
