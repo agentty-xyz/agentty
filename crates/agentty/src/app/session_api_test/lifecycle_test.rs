@@ -247,6 +247,11 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
     ));
     assert!(harness_result.is_ok());
     assert_eq!(host.session_modes, [CreateSessionMode::Harness]);
+    assert_eq!(
+        Some(host.default_model),
+        app.services.harness_availability().default_model()
+    );
+    assert_ne!(host.default_model, app.sessions.default_session_model());
 }
 
 #[tokio::test]

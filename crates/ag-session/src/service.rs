@@ -101,7 +101,9 @@ pub enum SessionOperation {
 pub struct HostContext {
     /// Branch new sessions start from.
     pub base_branch: String,
-    /// Model a new session starts with.
+    /// Model a new session in the first of `session_modes` starts with: the
+    /// harness model when only Harness sessions are offered, otherwise the
+    /// regular agent's default.
     pub default_model: AgentModel,
     /// Identifier of the active project, the only one that accepts new
     /// sessions.
