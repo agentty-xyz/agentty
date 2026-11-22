@@ -298,6 +298,18 @@ impl DiffContentSnapshot {
         diff_util::filter_diff_lines(&parsed_lines, selected_item)
     }
 
+    /// Returns the file or folder shown on one file-tree row.
+    pub(crate) fn tree_item(&self, selected_index: usize) -> Option<&FileTreeItem> {
+        self.tree_items.get(selected_index)
+    }
+
+    /// Returns the file-tree row showing `item`, when this diff contains it.
+    pub(crate) fn tree_item_index(&self, item: &FileTreeItem) -> Option<usize> {
+        self.tree_items
+            .iter()
+            .position(|tree_item| tree_item == item)
+    }
+
     /// Returns whether the active file-tree row identifies one file.
     pub(crate) fn selected_item_is_file(&self, selected_index: usize) -> bool {
         matches!(

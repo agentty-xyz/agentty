@@ -267,7 +267,7 @@ work; it does not submit an empty reply.
 | Worktree preparation and cleanup    | Session lifecycle                         |
 | Archived worktree sweep             | Startup                                   |
 | File indexing and image capture     | Composer interaction                      |
-| Full diff and Markdown preview      | Inspection request                        |
+| Full diff and Markdown preview      | Inspection request; every 10 s while open |
 | Process resource sampling           | Foreground ticks, rate-limited            |
 | Title and commit-message generation | Session input and changed turns           |
 | Focused review                      | Eligible changed diff or manual request   |

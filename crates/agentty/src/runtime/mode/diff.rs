@@ -64,6 +64,112 @@ pub(crate) fn handle_loading(app: &mut App, key: KeyEvent) -> EventResult {
     EventResult::Continue
 }
 
+/// Replaces the open diff with its newer live re-read, keeping the selected
+/// file or folder, changed row, and scroll position while they still exist.
+///
+/// A comment edit, row selection, or leave confirmation depends on the
+/// visible changed-row positions, so the newer diff waits until it ends.
+pub(crate) fn apply_refreshed_diff(app: &mut App, render_cache_store: &RenderCacheStore) {
+    let Some(refreshed) = app.take_refreshed_session_diff() else {
+        return;
+    };
+    // The preview reload reads `app` while it rewrites the Diff page, so the
+    // mode is detached for the update and always restored afterwards.
+    let mut mode = std::mem::replace(&mut app.mode, AppMode::List);
+    apply_refreshed_diff_to_mode(
+        app,
+        render_cache_store,
+        &mut mode,
+        refreshed.session_id,
+        refreshed.diff,
+    );
+    app.mode = mode;
+}
+
+/// Applies one refreshed diff to the detached `mode` when it is the Diff page
+/// of `refreshed_session_id`, queueing it while comment interaction is active.
+fn apply_refreshed_diff_to_mode(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    mode: &mut AppMode,
+    refreshed_session_id: SessionId,
+    refreshed_diff: String,
+) {
+    let AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        line_comments,
+        preview,
+        scroll_cache,
+        scroll_offset,
+        selected_diff_line_index,
+        session_id,
+        ..
+    } = mode
+    else {
+        return;
+    };
+    if *session_id != refreshed_session_id {
+        return;
+    }
+    if line_comments.is_editing()
+        || line_comments.is_selecting()
+        || line_comments.submit_confirmation_index.is_some()
+    {
+        app.queue_refreshed_session_diff(refreshed_session_id, refreshed_diff);
+
+        return;
+    }
+
+    let diff_layout_cache = render_cache_store.diff_layout_cache();
+    let visible_content = diff_layout_cache.content(diff);
+    let refreshed_content = diff_layout_cache.content(&refreshed_diff);
+    let visible_index = *file_explorer_selected_index;
+    let refreshed_index = visible_content
+        .tree_item(visible_index)
+        .and_then(|item| refreshed_content.tree_item_index(item));
+    let previewed_lines_changed = visible_content
+        .selected_markdown_path(visible_index)
+        .is_some_and(|path| visible_content.file_lines(path) != refreshed_content.file_lines(path));
+    if let Some(refreshed_index) = refreshed_index {
+        let refreshed_line_index = visible_content
+            .selected_changed_line(visible_index, *selected_diff_line_index)
+            .and_then(|anchor| {
+                refreshed_content.changed_line_index_for_anchor(refreshed_index, &anchor)
+            });
+        *file_explorer_selected_index = refreshed_index;
+        if let Some(refreshed_line_index) = refreshed_line_index {
+            *selected_diff_line_index = refreshed_line_index;
+        } else if refreshed_content
+            .selected_changed_line(refreshed_index, *selected_diff_line_index)
+            .is_none()
+        {
+            *selected_diff_line_index = 0;
+        }
+    } else {
+        *file_explorer_selected_index =
+            visible_index.min(refreshed_content.item_count().saturating_sub(1));
+        *selected_diff_line_index = 0;
+        *scroll_offset = 0;
+    }
+    let should_reload_preview =
+        preview.is_enabled() && (refreshed_index.is_none() || previewed_lines_changed);
+    *diff = refreshed_diff;
+    *scroll_cache = None;
+    if should_reload_preview {
+        *preview = start_selected_preview_load(
+            app,
+            diff_layout_cache,
+            diff,
+            *file_explorer_selected_index,
+            preview,
+            session_id,
+        );
+    }
+
+    app.mark_dirty();
+}
+
 /// Returns whether the leave-diff comment submission confirmation is open.
 pub(crate) fn is_submit_confirmation_open(app: &App) -> bool {
     matches!(
