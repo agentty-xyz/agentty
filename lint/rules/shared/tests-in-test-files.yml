@@ -6,7 +6,7 @@ note: |
   Load the suite from the production module with `#[cfg(test)]`,
   `#[path = "<module>_test.rs"]`, and `mod tests;`.
 files:
-  - crates/*/src/**/*.rs
+  - "**/src/**/*.rs"
 ignores:
   - "**/*_test.rs"
   - "**/*_test/**"

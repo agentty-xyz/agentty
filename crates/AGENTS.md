@@ -29,8 +29,6 @@ source of truth for the member and module inventory.
 
 ### Tests and Boundaries
 
-- Choose each test's level and fixture with `skills/test-pyramid/SKILL.md`; the rules
-  below govern how test files are written.
 - In `*_test.rs` files, import through `crate::` paths to the owning production module,
   or through named `super::` imports for private items in the parent module. Import
   sibling fixtures through their support module. Test-module routers declare child
@@ -44,8 +42,7 @@ source of truth for the member and module inventory.
   are the exception.
 - Keep suite-local fixtures with their tests, crate-wide fixtures in test-gated support
   modules, and cross-crate support behind `test-utils`. Put public-contract integration
-  tests in each crate's `tests/`, shared integration helpers in `tests/support/`, and
-  Agentty PTY workflows in `crates/agentty/tests/e2e/`.
+  tests in each crate's `tests/` and shared integration helpers in `tests/support/`.
 - Keep coverage filename filters aligned with the test-file convention when moving
   suites; preserve coverage of production code.
 - Keep a real test for an isolated external command. For flows with multiple external
@@ -56,6 +53,12 @@ source of truth for the member and module inventory.
   boundaries in orchestration code.
 - When removing behavior, test the remaining supported path rather than only asserting
   that the old path is absent.
+
+### Workspace Test Routing
+
+- Choose each test's level and fixture with `skills/test-pyramid/SKILL.md`; the Tests
+  and Boundaries rules above govern how test files are written.
+- Put Agentty PTY workflows in `crates/agentty/tests/e2e/`.
 
 ## Tokio
 

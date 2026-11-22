@@ -1,0 +1,31 @@
+# Coding standards that another workspace can reuse. Paths are relative to the repository root.
+# The `check-standards` hook keeps every export present and portable.
+version = 1
+
+# Copied byte-for-byte to the same path.
+files = [".rustfmt.toml", "clippy.toml"]
+
+# Skills copied as whole directories under `skills/`.
+skills = ["grilling"]
+
+# The pinned toolchain; a consumer takes its channel.
+[toolchain]
+file = "rust-toolchain.toml"
+
+# Lint tables read from `[workspace.lints]`.
+[lints]
+manifest = "Cargo.toml"
+
+# ast-grep rules that name no crate or path of this workspace, and their rule tests.
+[rules]
+directory = "lint/rules/shared"
+tests = "lint/rule-tests/shared"
+
+# Instruction sections, named by exact heading text. A section runs to the next heading of the same or a higher level.
+[[instructions]]
+file = "AGENTS.md"
+sections = ["Shared Gates", "Writing Instructions"]
+
+[[instructions]]
+file = "crates/AGENTS.md"
+sections = ["Workspace and Modules", "Readability", "Tests and Boundaries", "Tokio"]

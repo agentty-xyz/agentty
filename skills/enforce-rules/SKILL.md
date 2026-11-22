@@ -33,8 +33,8 @@ exception in the check's configuration as that page describes, never at the call
      `cargo clippy --workspace --all-targets --all-features --message-format=short -- -W clippy::<lint>`
      and count the distinct sites. Restriction lints that report thousands of existing
      sites usually belong at level 3.
-   - ast-grep: add the draft rule under `lint/rules/` and run
-     `prek run ast-grep --all-files`; it lists every match.
+   - ast-grep: add the draft rule to its directory under `lint/rules/` (see below) and
+     run `prek run ast-grep --all-files`; it lists every match.
    - `ag-xtask` or contract test: implement the check first and let it list violations.
 1. Decide what to do with the existing violations:
    - A handful: fix them in the same change.
@@ -54,6 +54,11 @@ exception in the check's configuration as that page describes, never at the call
 
 - Name the file after the rule `id`, in kebab-case, and prefix rules scoped to one crate
   with that crate, such as `agentty-layer-host-access`.
+- Put a rule in `lint/rules/shared/` when it names no crate or path of this workspace
+  and its `files` and `ignores` globs start with a pattern such as `**/src/**/*.rs`;
+  `standards.toml` exports these rules to downstream workspaces, and `check-standards`
+  rejects shared rules that break either condition. Put every other rule in
+  `lint/rules/workspace/`.
 - Use `severity: error`. Write `message` as one sentence saying what to do, and `note`
   as the fix plus the owning document.
 - Scope with `files` and `ignores`, relative to the repository root. Production-only
@@ -62,9 +67,10 @@ exception in the check's configuration as that page describes, never at the call
   on the matched node's text. Inspect node kinds with ast-grep's
   `run --debug-query=cst -l rust -p '<snippet>'` mode, using the `ast-grep-cli` version
   that `.pre-commit-config.yaml` pins.
-- Add `lint/rule-tests/<id>-test.yml` with at least one `valid` and one `invalid` case
-  covering each branch of the rule; `prek run ast-grep-test --all-files` runs them. Rule
-  tests ignore `files` and `ignores`, so keep path scoping simple.
+- Add `<id>-test.yml` to the matching `lint/rule-tests/shared/` or
+  `lint/rule-tests/workspace/` directory with at least one `valid` and one `invalid`
+  case covering each branch of the rule; `prek run ast-grep-test --all-files` runs them.
+  Rule tests ignore `files` and `ignores`, so keep path scoping simple.
 
 ## Writing ag-xtask Checks
 

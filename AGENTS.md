@@ -45,7 +45,22 @@ rules.
 
 ## Non-Negotiable Gates
 
+`standards.toml` exports the shared gates to downstream workspaces; the Agentty gates
+apply only here.
+
+### Shared Gates
+
 - Preserve unrelated user changes.
+- Use integration tests appropriate to the public surface for CLI, library, or backend
+  features that no more specific gate covers.
+- Every coverable line and function of production Rust code stays at 100% automated test
+  coverage. Never add coverage ignore patterns or service-side exclusions to satisfy it.
+- Prefer removing obsolete behavior within the requested scope. Ask only when choosing
+  between preserving an existing public contract and making a breaking change that the
+  user has not already authorized; leave unrelated compatibility behavior alone.
+
+### Agentty Gates
+
 - Agentty UI features demonstrable in a PTY scenario require `FeatureTest` E2E coverage
   under `crates/agentty/tests/e2e/`; follow `crates/agentty/tests/e2e/AGENTS.md`. For
   behavior requiring live backends or unavailable infrastructure, report the exact
@@ -54,15 +69,8 @@ rules.
   `skills/refresh-feature-recordings/SKILL.md`. Refresh each affected GIF, hash sidecar,
   and PNG poster together; passing behavioral assertions alone does not establish
   artifact freshness.
-- Use integration tests appropriate to the public surface for other CLI, library, or
-  backend features.
-- Every coverable line and function of production Rust code stays at 100% automated test
-  coverage. CI enforces this with the `coverage` hook, which generates a fresh report
-  and lists every gap; `coverage-focused` checks one package locally. Never add coverage
-  ignore patterns or service-side exclusions to satisfy it.
-- Prefer removing obsolete behavior within the requested scope. Ask only when choosing
-  between preserving an existing public contract and making a breaking change that the
-  user has not already authorized; leave unrelated compatibility behavior alone.
+- CI enforces the coverage gate with the `coverage` hook, which generates a fresh report
+  and lists every gap; `coverage-focused` checks one package locally.
 
 ## Quality Gates
 
@@ -176,15 +184,23 @@ or review steps directly in a checkout.
 
 ## Instruction Files
 
+### Writing Instructions
+
 - Add or change an `AGENTS.md` only for durable scope-specific purpose, invariants,
   change routing, or documentation synchronization.
 - Do not duplicate inherited rules, implementation inventories, or facts readily
   recoverable from manifests, module routers, tests, or CLI help.
 - Do not restate a rule that Clippy or a repository hook already enforces.
+
+### Instruction Checks
+
 - The `check-instructions` hook checks literal repository paths, local Markdown links,
   parent-relative paths in `AGENTS.md`, instruction aliases, and hook names in
   `prek run` examples. Keep its regression tests aligned when changing the instruction
   format.
+- `standards.toml` exports instruction sections by heading. Put workspace-specific
+  guidance in a section it does not export; the `check-standards` hook rejects exported
+  text that names this workspace's crates, hooks, or unexported paths.
 
 ## Canonical References
 

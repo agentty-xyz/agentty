@@ -4,7 +4,7 @@ severity: error
 message: Declare public and restricted struct fields before private fields.
 note: |
   Move the field above the first private field, keeping each visibility group in
-  alphabetical order; see `crates/AGENTS.md`.
+  alphabetical order.
 rule:
   kind: field_declaration
   has:

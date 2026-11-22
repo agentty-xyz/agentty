@@ -589,3 +589,10 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+      - id: check-standards
+        name: standards manifest
+        description: Check that `standards.toml` names existing exports and that exported instruction sections, skills, and shared ast-grep rules name no workspace crate, hook, or unexported repository path. It runs on every change because any new path or crate can make an export unportable.
+        entry: cargo run -q --locked -p ag-xtask -- check-standards
+        language: system
+        always_run: true
+        pass_filenames: false
