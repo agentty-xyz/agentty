@@ -42,6 +42,7 @@ fn session() -> Session {
         draft_prompt: None,
         id: "12345678-owner".into(),
         messages: Vec::new(),
+        progress: None,
         published_upstream_ref: None,
         questions: Vec::new(),
         queued_messages: Vec::new(),

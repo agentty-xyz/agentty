@@ -21,6 +21,7 @@ import {
   sessionFigures,
   settingsParts,
   statusInfo,
+  statusLine,
   unreadIds,
 } from "../../assets/format.mjs";
 
@@ -119,6 +120,57 @@ test("statusInfo shows an unknown status by name in the idle tone and allows not
     [],
   );
   assert.equal(inherited.label, "toString");
+});
+
+test("statusLine says what a working or waiting session does, as the terminal does", () => {
+  // Arrange
+  const expected = {
+    Draft: null,
+    InProgress: ["Working...", true],
+    Review: null,
+    AgentReview: ["Reviewing changes...", true],
+    Watching: ["Watching review request for failing checks, comments, and conflicts...", false],
+    Question: null,
+    Queued: ["Waiting in merge queue...", false],
+    Rebasing: ["Rebasing...", true],
+    Merging: ["Merging...", true],
+    Merged: ["Waiting for manual local target sync...", true],
+    Done: null,
+    Canceled: null,
+  };
+
+  // Act
+  const lines = Object.fromEntries(
+    ALL_STATUSES.map((name) => {
+      const line = statusLine(name);
+
+      return [name, line && [line.text, line.isLoading]];
+    }),
+  );
+
+  // Assert
+  assert.deepEqual(lines, expected);
+  assert.equal(statusLine("Paused"), null);
+  assert.equal(statusLine("toString"), null);
+});
+
+test("statusLine takes the host's progress, with its detail rows, over the default text", () => {
+  // Arrange
+  const progress = "  Reviewing with Codex...  \n\n  Reading the diff \n";
+
+  // Act
+  const reviewing = statusLine("AgentReview", progress);
+  const blank = statusLine("InProgress", "  \n ");
+  const idle = statusLine("Review", "Working... Reading files");
+
+  // Assert
+  assert.deepEqual(reviewing, {
+    details: ["Reading the diff"],
+    isLoading: true,
+    text: "Reviewing with Codex...",
+  });
+  assert.deepEqual(blank, { details: [], isLoading: true, text: "Working..." });
+  assert.equal(idle, null);
 });
 
 test("relativeTime rounds to the largest whole unit", () => {

@@ -376,6 +376,10 @@ pub struct Session {
     pub id: SessionId,
     /// Ordered durable transcript messages.
     pub messages: Vec<SessionMessage>,
+    /// Live line describing the session's current work, such as
+    /// `Working... Reading files`, while it works or waits. Further lines
+    /// add detail. `None` when the host shows no such line.
+    pub progress: Option<String>,
     /// Published upstream branch reference, when present.
     pub published_upstream_ref: Option<String>,
     /// Structured clarification questions waiting for answers.

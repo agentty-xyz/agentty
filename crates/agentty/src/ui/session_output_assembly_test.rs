@@ -9,8 +9,7 @@ use ratatui::text::Line;
 use super::{
     SESSION_OUTPUT_BLOCK_ORDER, SessionOutputAssembly, SessionOutputTranscriptSection,
     append_markdown_lines, append_queued_entries, append_transient_message, append_user_prompt,
-    generated_turn_progress_message, output_assembly, output_body, protect_user_prompt_indentation,
-    typed_transcript_sections,
+    output_assembly, output_body, protect_user_prompt_indentation, typed_transcript_sections,
 };
 use crate::domain::session::{QueuedMessage, Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -328,25 +327,6 @@ fn test_generated_review_prompt_is_hidden_behind_resolution_loader() {
     assert!(!rendered_text.contains("Inspecting files"));
     assert!(output.active_loader_line_index.is_some());
     assert_eq!(output.transient_loader_line_index, None);
-}
-
-#[test]
-fn test_review_comment_resolution_loader_ignores_non_loading_body() {
-    // Arrange
-    let mut session = crate::test_support::SessionFixtureBuilder::new().build();
-    session.transient_messages.upsert(TransientMessage {
-        anchor: TransientMessageAnchor::Tail,
-        body: TransientMessageBody::Plain("not loading".to_string()),
-        lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::GeneratedTurnProgress,
-        turn_position: None,
-    });
-
-    // Act
-    let loading_message = generated_turn_progress_message(&session);
-
-    // Assert
-    assert_eq!(loading_message, None);
 }
 
 #[test]

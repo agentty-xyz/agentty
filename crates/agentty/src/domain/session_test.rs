@@ -24,6 +24,9 @@ mod setting;
 #[path = "session_test/state_test.rs"]
 mod state;
 
+#[path = "session_test/status_line_test.rs"]
+mod status_line;
+
 #[path = "session_test/synchronization_test.rs"]
 mod synchronization;
 

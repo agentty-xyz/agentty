@@ -814,18 +814,23 @@ impl App {
             .load_session_messages(session_id)
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        let queued_messages = self
-            .sessions
-            .session_for_id(session_id)
-            .map_or_default(|session| {
-                session
-                    .queued_messages
-                    .iter()
-                    .map(|message| message.transcript_text().to_string())
-                    .collect()
-            });
+        let live_session = self.sessions.session_for_id(session_id);
+        let queued_messages = live_session.map_or_default(|session| {
+            session
+                .queued_messages
+                .iter()
+                .map(|message| message.transcript_text().to_string())
+                .collect()
+        });
+        let progress = live_session
+            .and_then(|session| session.status_line(self.session_progress_message(session_id)));
 
-        build_api_session(row, message_rows, queued_messages).map(Some)
+        build_api_session(row, message_rows, queued_messages).map(|session| {
+            Some(ag_session::Session {
+                progress,
+                ..session
+            })
+        })
     }
 
     /// Sends one validated API message through the existing session workflow.
@@ -1390,6 +1395,7 @@ fn build_api_session(
         draft_prompt,
         id: SessionId::from(row.id),
         messages,
+        progress: None,
         published_upstream_ref: row.published_upstream_ref,
         questions,
         queued_messages,

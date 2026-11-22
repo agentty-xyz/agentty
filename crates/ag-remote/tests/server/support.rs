@@ -699,6 +699,7 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
         draft_prompt: None,
         id: session_id.clone(),
         messages,
+        progress: None,
         published_upstream_ref: None,
         questions,
         queued_messages,

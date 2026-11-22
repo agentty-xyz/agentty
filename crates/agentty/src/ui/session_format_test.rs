@@ -6,9 +6,9 @@ use ratatui::style::Modifier;
 
 use super::{
     STEER_HINT_TEXT, prompt_session_status, session_header_lines, session_output_queued_lines,
-    session_output_status_icon, session_output_status_lines, session_output_status_message,
-    session_output_steer_hint_line, session_output_transient_loading_lines,
-    session_output_uses_tachyon_loader, session_speed_display, session_started_label,
+    session_output_status_icon, session_output_status_lines, session_output_steer_hint_line,
+    session_output_transient_loading_lines, session_output_uses_tachyon_loader,
+    session_speed_display, session_started_label,
 };
 use crate::domain::agent::{AgentModel, ResponseStyle};
 use crate::domain::session::{
@@ -412,11 +412,16 @@ fn merged_session_output_explains_manual_sync_wait() {
     let status = Status::Merged;
 
     // Act
-    let message = session_output_status_message(status, None, None, None);
+    let lines = session_output_status_lines(status, None, None, None);
     let icon = session_output_status_icon(status);
 
     // Assert
-    assert_eq!(message, "Waiting for manual local target sync...");
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0]
+            .to_string()
+            .ends_with(" Waiting for manual local target sync...")
+    );
     assert!(matches!(icon, Icon::TachyonLoader));
 }
 
@@ -439,7 +444,7 @@ fn watching_session_output_explains_what_is_watched() {
 }
 
 #[test]
-fn idle_session_statuses_have_no_output_status_message() {
+fn idle_session_statuses_have_no_output_status_lines() {
     // Arrange
     let idle_statuses = [
         Status::Draft,
@@ -450,11 +455,11 @@ fn idle_session_statuses_have_no_output_status_message() {
     ];
 
     // Act
-    let messages = idle_statuses
-        .map(|status| session_output_status_message(status, Some("ignored"), None, None));
+    let lines = idle_statuses
+        .map(|status| session_output_status_lines(status, Some("ignored"), None, None));
 
     // Assert
-    assert!(messages.iter().all(String::is_empty));
+    assert!(lines.iter().all(Vec::is_empty));
 }
 
 #[test]

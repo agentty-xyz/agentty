@@ -411,6 +411,7 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
             SessionMessage::new(3, SessionMessageKind::AssistantAnswer, "done"),
             SessionMessage::new(4, SessionMessageKind::WorkflowNotice, "committed"),
         ],
+        progress: None,
         published_upstream_ref: None,
         questions: vec![QuestionItem {
             options: vec!["main".to_string(), "develop".to_string()],

@@ -567,6 +567,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             is_draft: false,
             model: Some("gpt-6.1-sol".to_string()),
             model_id: Some("gpt-6.1-sol".to_string()),
+            progress: None,
             published_upstream_ref: None,
             reasoning: Some("high".to_string()),
             response_style: Some("balanced".to_string()),
@@ -606,6 +607,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
 fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control() {
     // Arrange
     let mut session = session_fixture(&SessionId::from("session-1"));
+    session.progress = Some("Working... Reading files".to_string());
     session.published_upstream_ref = Some("origin/wt/session-".to_string());
     session.review_request = Some(ReviewRequest {
         last_refreshed_at: 30,
@@ -629,6 +631,7 @@ fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control(
 
     // Assert
     assert_eq!(remote.agent.as_deref(), Some("antigravity"));
+    assert_eq!(encoded["progress"], "Working... Reading files");
     assert_eq!(remote.speed_mode, None);
     assert!(remote.is_draft);
     assert_eq!(

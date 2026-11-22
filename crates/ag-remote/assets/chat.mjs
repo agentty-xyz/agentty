@@ -16,6 +16,7 @@ import {
   sessionFigures,
   settingsParts,
   statusInfo,
+  statusLine,
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
 import { createMentions } from "./mention.mjs";
@@ -688,6 +689,37 @@ export function createChat({
     return changes.append.length + changes.replace.length + changes.remove > 0;
   }
 
+  // Ends the transcript with what the session is doing, as the terminal
+  // does, such as `Working... Reading files`. Returns whether the line
+  // changed. The marker node stays while the line shows, so its loader
+  // animates on when only the text changes.
+  function renderStatusLine(statusName, progress) {
+    const node = elements.statusLine;
+    const line = statusLine(statusName, progress);
+    const key = line ? JSON.stringify([statusName, line.text, line.details]) : "";
+    if (node.dataset.status === key) {
+      return false;
+    }
+    node.dataset.status = key;
+    node.hidden = line === null;
+    if (!line) {
+      node.replaceChildren();
+
+      return true;
+    }
+    const loading = line.isLoading ? " is-loading" : "";
+    node.className = "status status-line status--" + statusInfo(statusName).tone + loading;
+    if (!node.firstElementChild) {
+      node.replaceChildren(element(document, "i"), element(document, "span", "status-line-body"));
+    }
+    node.lastElementChild.replaceChildren(
+      element(document, "span", null, line.text),
+      ...line.details.map((detail) => element(document, "span", "status-line-detail", detail)),
+    );
+
+    return true;
+  }
+
   function renderMessage(message) {
     const kind = messageKind(message);
     const content = String(message.content ?? "");
@@ -901,6 +933,7 @@ export function createChat({
     state.questionsKey = null;
     state.picks = [];
     elements.transcript.replaceChildren();
+    renderStatusLine(null);
     elements.queued.replaceChildren();
     elements.queuedBox.hidden = true;
     elements.questions.replaceChildren();
@@ -992,6 +1025,7 @@ export function createChat({
     const wasNearEnd = isNearEnd();
     elements.scroller.hidden = isDiffOpen;
     const transcriptChanged = renderTranscript(session.messages || []);
+    const statusLineChanged = renderStatusLine(session.status, session.progress);
     const questionsChanged = renderQuestions(session.questions || []);
     renderQueued(session.queued_messages || []);
     renderDock();
@@ -1008,7 +1042,9 @@ export function createChat({
 
       return;
     }
-    if (isFirst || (wasNearEnd && (transcriptChanged || questionsChanged))) {
+    // The status line follows the end only for a reader already there; it
+    // alone is no news worth the jump button.
+    if (isFirst || (wasNearEnd && (transcriptChanged || statusLineChanged || questionsChanged))) {
       scrollToEnd();
     } else if (transcriptChanged || questionsChanged) {
       elements.jump.hidden = false;
