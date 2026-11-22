@@ -21,8 +21,8 @@ use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
-    ClientFrame, RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 use crate::transport::{CloseCause, FrameTransport, Incoming};
@@ -64,6 +64,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::CreateSession, "create_session"),
     (SessionOperation::MergeSession, "merge"),
     (SessionOperation::SessionDiff, "diff"),
+    (SessionOperation::SessionFiles, "files"),
     (SessionOperation::StopTurn, "stop_turn"),
     (SessionOperation::RebaseSession, "sync"),
     (SessionOperation::SessionSettings, "settings"),
@@ -618,6 +619,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
         | RemoteRequest::GetSessionDiff { .. }
+        | RemoteRequest::ListSessionFiles { .. }
         | RemoteRequest::ListSessions
         | RemoteRequest::PublishSession { .. }
         | RemoteRequest::Unsupported => None,
@@ -677,22 +679,7 @@ async fn respond(
         RemoteRequest::AnswerQuestions {
             answers,
             session_id,
-        } => {
-            let session_id = listed_session_id(sessions, session_id).await?;
-            let request = AnswerQuestionsRequest {
-                answers: answers
-                    .into_iter()
-                    .map(|answer| QuestionAnswer {
-                        answer: answer.answer,
-                        question: answer.question,
-                    })
-                    .collect(),
-                attachments: Vec::new(),
-            };
-            sessions.answer_questions(&session_id, request).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
+        } => answer_listed_questions(sessions, session_id, answers).await,
         RemoteRequest::CancelSession { session_id } => {
             let session_id = listed_session_id(sessions, session_id).await?;
             sessions.cancel_session(&session_id).await?;
@@ -708,6 +695,9 @@ async fn respond(
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::GetSessionDiff { path, session_id } => {
             get_listed_session_diff(sessions, session_id, path.as_deref()).await
+        }
+        RemoteRequest::ListSessionFiles { session_id } => {
+            list_listed_session_files(sessions, session_id).await
         }
         RemoteRequest::ListSessions => {
             let summaries = sessions.list_session_entries().await?;
@@ -783,6 +773,29 @@ async fn respond(
     }
 }
 
+/// Answers the current question set of one session only when the host lists
+/// that session.
+async fn answer_listed_questions(
+    sessions: &SessionService,
+    session_id: String,
+    answers: Vec<RemoteQuestionAnswer>,
+) -> Result<RemoteResponse, SessionError> {
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let request = AnswerQuestionsRequest {
+        answers: answers
+            .into_iter()
+            .map(|answer| QuestionAnswer {
+                answer: answer.answer,
+                question: answer.question,
+            })
+            .collect(),
+        attachments: Vec::new(),
+    };
+    sessions.answer_questions(&session_id, request).await?;
+
+    Ok(RemoteResponse::Accepted)
+}
+
 /// Creates a session in the host's active project, the only project the
 /// host accepts, and only in a mode the host serves now.
 async fn create_session(
@@ -848,6 +861,22 @@ async fn get_listed_session_diff(
 
     RemoteResponse::from_diff(&files, path)
         .ok_or_else(|| SessionError::Operation(FILE_NOT_IN_DIFF.to_string()))
+}
+
+/// Lists the files and directories in one session's worktree only when the
+/// host lists that session.
+async fn list_listed_session_files(
+    sessions: &SessionService,
+    session_id: String,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::SessionFiles)?;
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let entries = sessions
+        .list_session_files(&session_id)
+        .await?
+        .ok_or(SessionError::NotFound)?;
+
+    Ok(RemoteResponse::from_session_files(&entries))
 }
 
 /// Returns `session_id` when the host lists that session, and

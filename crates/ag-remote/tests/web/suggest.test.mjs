@@ -193,3 +193,21 @@ test("showing the same list again keeps its nodes and highlight, and a new one s
   assert.equal(input.getAttribute("aria-activedescendant"), "field-suggestions-0");
   assert.equal(options(document)[0].dataset.key, "b");
 });
+
+test("an owner closes and asks about only its own list", () => {
+  const { input, suggestions } = mountSuggestions();
+  suggestions.show({ items: ITEMS, onPick: () => {}, owner: "slash" });
+
+  assert.equal(suggestions.isOpen(), true);
+  assert.equal(suggestions.isOpen("slash"), true);
+  assert.equal(suggestions.isOpen("mention"), false);
+  suggestions.close("mention");
+  assert.equal(suggestions.isOpen("slash"), true);
+  // The same items from another owner are a new list.
+  key(input, "ArrowDown");
+  suggestions.show({ items: ITEMS, onPick: () => {}, owner: "mention" });
+  assert.equal(input.getAttribute("aria-activedescendant"), "field-suggestions-0");
+  assert.equal(suggestions.isOpen("slash"), false);
+  suggestions.close("mention");
+  assert.equal(suggestions.isOpen(), false);
+});

@@ -451,6 +451,7 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
             SessionRuntimeCommand::Get { .. }
             | SessionRuntimeCommand::GetDiff { .. }
             | SessionRuntimeCommand::List { .. }
+            | SessionRuntimeCommand::ListFiles { .. }
             | SessionRuntimeCommand::HostContext { .. }
             | SessionRuntimeCommand::GetGraphProposal { .. }
             | SessionRuntimeCommand::GetExecutionGraph { .. }

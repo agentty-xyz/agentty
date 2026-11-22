@@ -100,6 +100,9 @@ pub enum SessionOperation {
     /// Reading a session's changes through
     /// [`SessionBackend::get_session_diff`].
     SessionDiff,
+    /// Listing the files and directories in a session's worktree through
+    /// [`SessionBackend::list_session_files`].
+    SessionFiles,
     /// Stopping a running turn through [`SessionBackend::stop_turn`].
     StopTurn,
     /// Rebasing a session branch onto its base branch through
@@ -156,6 +159,15 @@ pub enum SessionDiffFileStatus {
     Modified,
     /// The file moved, possibly with changes.
     Renamed,
+}
+
+/// One file or directory in a session's worktree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionFileEntry {
+    /// Whether the entry is a directory.
+    pub is_dir: bool,
+    /// Path relative to the worktree root, with `/` separators.
+    pub path: String,
 }
 
 /// The project a host creates new sessions in, and how it creates them.
@@ -433,6 +445,20 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not serve session diffs".to_string(),
+        ))
+    }
+
+    /// Lists the files and directories in a session's worktree, directories
+    /// first, or `None` when the host has not loaded the session. Hosts that
+    /// do not serve file listings report it as an error.
+    async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
+        let _ = session_id;
+
+        Err(SessionError::Operation(
+            "Host does not serve session files".to_string(),
         ))
     }
 
@@ -865,6 +891,20 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
         self.backend.get_session_diff(session_id).await
+    }
+
+    /// Lists the files and directories in one session's worktree,
+    /// directories first, or `None` when the host has not loaded the
+    /// session.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not serve file listings or cannot
+    /// read this one.
+    pub async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
+        self.backend.list_session_files(session_id).await
     }
 
     /// Lists the host's loaded sessions in its display order.

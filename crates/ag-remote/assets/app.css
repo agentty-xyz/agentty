@@ -2207,9 +2207,12 @@ kbd {
 }
 
 .suggest-label {
+  min-width: 0;
   color: var(--color-accent);
   font-family: var(--font-mono);
   font-size: 0.9rem;
+  /* Long file paths wrap instead of widening the page. */
+  overflow-wrap: anywhere;
 }
 
 .suggest-current {

@@ -9,20 +9,23 @@ use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, HostSessionMode, QuestionAnswer, ReviewRequest,
-    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, parse_persisted_session_agent_model,
+    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionFileEntry,
+    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
+    SessionSettings, SessionSettingsChange, SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
+use tokio::sync::oneshot;
 
 use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptModelChange;
 use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
 use crate::app::session_creation::PreparedSessionCreation;
+use crate::app::task::TaskService;
 use crate::app::{
-    App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
+    App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
+use crate::domain::file_entry::FileEntry;
 use crate::domain::question::question_answer_message;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
@@ -36,6 +39,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::HostContext
                 | SessionOperation::MergeSession
                 | SessionOperation::SessionDiff
+                | SessionOperation::SessionFiles
                 | SessionOperation::StopTurn
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
@@ -192,6 +196,13 @@ impl SessionBackend for SessionRuntimeHandle {
         session_id: &SessionId,
     ) -> Result<Option<Vec<ag_session::SessionDiffFile>>, ApiSessionError> {
         SessionRuntimeHandle::get_session_diff(self, session_id).await
+    }
+
+    async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<ag_session::SessionFileEntry>>, ApiSessionError> {
+        SessionRuntimeHandle::list_session_files(self, session_id).await
     }
 
     async fn list_sessions(&self) -> Result<Vec<ag_session::SessionSummary>, ApiSessionError> {
@@ -392,6 +403,10 @@ impl App {
             SessionRuntimeCommand::List { response_tx } => {
                 let _ = response_tx.send(Ok(self.list_api_session_entries()));
             }
+            SessionRuntimeCommand::ListFiles {
+                response_tx,
+                session_id,
+            } => self.start_api_session_files(&session_id, response_tx),
             SessionRuntimeCommand::HostContext { response_tx } => {
                 let _ = response_tx.send(self.api_host_context().await);
             }
@@ -437,6 +452,39 @@ impl App {
                 },
             })
             .collect()
+    }
+
+    /// Answers one programmatic file-listing query: captures the session's
+    /// worktree folder on the foreground loop, then walks it on a blocking
+    /// worker unless the `@`-mention index already caches it. A session the
+    /// host has not loaded answers `None`; a session without a worktree on
+    /// disk lists nothing, never the project checkout.
+    fn start_api_session_files(
+        &mut self,
+        session_id: &SessionId,
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionFileEntry>>, ApiSessionError>>,
+    ) {
+        let Some(session) = self.sessions.session_for_id(session_id) else {
+            let _ = response_tx.send(Ok(None));
+
+            return;
+        };
+        let folder = session.folder.clone();
+        if !self.services.fs_client().is_dir(folder.clone()) {
+            let _ = response_tx.send(Ok(Some(Vec::new())));
+
+            return;
+        }
+        if let Some(entries) = self.sessions.at_mention_index_for_root(&folder) {
+            let _ = response_tx.send(Ok(Some(api_file_entries(entries))));
+
+            return;
+        }
+        let session_id = session_id.clone();
+        spawn::spawn_detached(async move {
+            let entries = TaskService::load_at_mention_entries(folder, &session_id).await;
+            let _ = response_tx.send(Ok(Some(api_file_entries(entries))));
+        });
     }
 
     /// Projects isolated task history without exposing storage metadata.
@@ -1241,6 +1289,18 @@ struct ApiProjectCreationContext {
 struct InheritedCreationSettings {
     base_branch: String,
     settings: SessionCreationSettings,
+}
+
+/// Converts indexed worktree entries into the session API's file entries,
+/// keeping their order.
+fn api_file_entries(entries: Vec<FileEntry>) -> Vec<SessionFileEntry> {
+    entries
+        .into_iter()
+        .map(|entry| SessionFileEntry {
+            is_dir: entry.is_dir,
+            path: entry.path,
+        })
+        .collect()
 }
 
 /// Combines a rejected question answer with a subsequent persistence failure.

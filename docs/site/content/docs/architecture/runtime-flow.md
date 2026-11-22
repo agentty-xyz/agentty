@@ -85,7 +85,9 @@ revision after it applies session updates, reloads, or admitted mutations; conne
 clients then fetch the list and the open session again, so remote views converge on
 durable state instead of replaying events. A session diff query captures its diff source
 in the mailbox and runs Git in a detached task that answers the caller directly, so it
-adds no reducer event.
+adds no reducer event. A session file listing works the same way: the mailbox captures
+the worktree folder, or answers from the `@`-mention index cache, and a blocking worker
+walks the worktree.
 
 ## App Event Reducer
 

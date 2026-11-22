@@ -12,13 +12,16 @@
 // `label` is what the list is called while a shown set has no title.
 //
 // Returns:
-// - `show({ items, title, onPick, onDismiss })` lists `items` and
+// - `show({ items, title, onPick, onDismiss, owner })` lists `items` and
 //   highlights the first. `title` heads the list; `onPick(item)` runs when
 //   the user picks one, and `onDismiss()` when the user closes the list
-//   with `Escape`. An empty list closes the popup, and showing the list on
-//   screen again keeps its highlight.
-// - `close()` hides the popup.
-// - `isOpen()` says whether it shows.
+//   with `Escape`. `owner` names the provider showing it, when several
+//   share the popup. An empty list closes the popup, and showing the list
+//   on screen again keeps its highlight.
+// - `close(owner)` hides the popup; with `owner`, only while that
+//   provider's list shows.
+// - `isOpen(owner)` says whether it shows; with `owner`, that provider's
+//   list.
 // - `handleKey(event)`, for the field's `keydown`, moves the highlight
 //   with `ArrowUp` and `ArrowDown`, picks with `Enter` or `Tab`, and closes
 //   with `Escape`. It returns `true`, and prevents the key's default, when
@@ -31,7 +34,7 @@ export function createSuggestions({
   label = "Suggestions",
   container = input.parentNode,
 }) {
-  const state = { highlight: 0, items: [], onDismiss: null, onPick: null, title: "" };
+  const state = { highlight: 0, items: [], onDismiss: null, onPick: null, owner: null, title: "" };
   const popup = document.createElement("div");
   popup.className = "suggest";
   popup.hidden = true;
@@ -97,16 +100,17 @@ export function createSuggestions({
     return option;
   }
 
-  function show({ items, title: heading = "", onPick, onDismiss = null }) {
+  function show({ items, title: heading = "", onPick, onDismiss = null, owner = null }) {
     if (items.length === 0) {
       close();
 
       return;
     }
     const isSame =
-      isOpen() && state.title === heading && JSON.stringify(state.items) === JSON.stringify(items);
+      isOpen(owner) && state.title === heading && JSON.stringify(state.items) === JSON.stringify(items);
     state.onPick = onPick;
     state.onDismiss = onDismiss;
+    state.owner = owner;
     // The same list again, as on a refresh, keeps its nodes and highlight.
     if (isSame) {
       return;
@@ -123,18 +127,22 @@ export function createSuggestions({
     renderHighlight();
   }
 
-  function close() {
+  function close(owner = null) {
+    if (owner !== null && state.owner !== owner) {
+      return;
+    }
     state.items = [];
     state.onPick = null;
     state.onDismiss = null;
+    state.owner = null;
     popup.hidden = true;
     list.replaceChildren();
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
   }
 
-  function isOpen() {
-    return !popup.hidden;
+  function isOpen(owner = null) {
+    return !popup.hidden && (owner === null || state.owner === owner);
   }
 
   function move(step) {

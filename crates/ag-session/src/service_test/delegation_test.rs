@@ -168,6 +168,27 @@ async fn existing_hosts_report_unsupported_session_diffs() {
     assert!(!supports_diff);
 }
 
+#[tokio::test]
+async fn existing_hosts_report_unsupported_session_files() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let files = service
+        .list_session_files(&SessionId::from("session-1"))
+        .await;
+    let supports_files = service.supports(SessionOperation::SessionFiles);
+
+    // Assert
+    assert_eq!(
+        files,
+        Err(SessionError::Operation(
+            "Host does not serve session files".to_string()
+        ))
+    );
+    assert!(!supports_files);
+}
+
 #[test]
 fn existing_hosts_serve_no_optional_operations() {
     // Arrange

@@ -85,7 +85,7 @@ pub use review::{
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, HostSessionMode, QuestionAnswer, SessionBackend,
-    SessionDiffFile, SessionDiffFileStatus, SessionOperation, SessionService,
+    SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionOperation, SessionService,
     SessionSettingsChange, StartExecutionGraphRequest,
 };
 pub use setting::SettingName;

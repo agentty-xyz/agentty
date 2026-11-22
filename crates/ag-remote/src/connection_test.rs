@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ag_noise::PublicKey;
-use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionOperation};
+use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionOperation};
 use tokio::sync::watch;
 
 use super::{
@@ -12,9 +12,9 @@ use super::{
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteModeModel, RemoteModelOption,
-    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteModeModel,
+    RemoteModelOption, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -760,6 +760,82 @@ async fn session_diff_of_a_session_the_host_no_longer_loads_is_not_found() {
 
     // Act
     let result = reply_result(&fixture.state, diff_request("session-1", None)).await;
+
+    // Assert
+    assert_eq!(result, RemoteResult::Error("Session not found".to_string()));
+}
+
+/// Builds a file-listing request for `session_id`.
+fn files_request(session_id: &str) -> RemoteRequest {
+    RemoteRequest::ListSessionFiles {
+        session_id: session_id.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn session_files_list_the_worktree_of_listed_sessions_only() {
+    // Arrange
+    let serving = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_files(Some(vec![
+            SessionFileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            SessionFileEntry {
+                is_dir: false,
+                path: "src/lib.rs".to_string(),
+            },
+        ])),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+
+    // Act
+    let listed = reply_result(&serving.state, files_request("session-1")).await;
+    let unlisted = reply_result(&serving.state, files_request("other-project")).await;
+    let unsupported = reply_result(&not_serving.state, files_request("session-1")).await;
+
+    // Assert
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::SessionFiles {
+            files: vec![
+                RemoteFileEntry {
+                    is_dir: true,
+                    path: "src".to_string(),
+                },
+                RemoteFileEntry {
+                    is_dir: false,
+                    path: "src/lib.rs".to_string(),
+                },
+            ],
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["list", "files:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn session_files_of_a_session_the_host_no_longer_loads_are_not_found() {
+    // Arrange
+    let fixture = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_files(None),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+
+    // Act
+    let result = reply_result(&fixture.state, files_request("session-1")).await;
 
     // Assert
     assert_eq!(result, RemoteResult::Error("Session not found".to_string()));

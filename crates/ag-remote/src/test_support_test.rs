@@ -8,8 +8,9 @@ use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
     DurableMessageRequest, HostContext, HostSessionMode, QuestionItem, ReasoningLevel,
     ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile, SessionError,
-    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
-    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
+    SessionFileEntry, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
+    SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -184,6 +185,7 @@ pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
     diff_files: Option<Vec<SessionDiffFile>>,
     is_failing: bool,
+    session_files: Option<Vec<SessionFileEntry>>,
     supported: Vec<SessionOperation>,
 }
 
@@ -194,6 +196,17 @@ impl RecordingBackend {
         Self {
             diff_files: files,
             supported: vec![SessionOperation::SessionDiff],
+            ..Self::default()
+        }
+    }
+
+    /// Creates a backend that serves file listings and reports `entries` as
+    /// the worktree of every session, or `None` as a session it has not
+    /// loaded.
+    pub(crate) fn with_files(entries: Option<Vec<SessionFileEntry>>) -> Self {
+        Self {
+            session_files: entries,
+            supported: vec![SessionOperation::SessionFiles],
             ..Self::default()
         }
     }
@@ -260,6 +273,13 @@ impl SessionBackend for RecordingBackend {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
         self.record(format!("diff:{session_id}"), self.diff_files.clone())
+    }
+
+    async fn list_session_files(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
+        self.record(format!("files:{session_id}"), self.session_files.clone())
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
