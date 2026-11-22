@@ -1630,3 +1630,153 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
         )
         .await
 }
+
+/// Session turns the compaction scenario runs; the earlier, longer turns
+/// fill the small window's history.
+const COMPACTION_TURNS: usize = 5;
+/// Leading turns whose answers are long.
+const LONG_ANSWER_TURNS: usize = 3;
+/// Start of the notice the session shows once its earlier turns are
+/// summarized, which names the session's model next.
+const COMPACTION_NOTICE: &str = "[Context] Summarized earlier turns with";
+
+/// Returns the answer to compaction scenario turn `number`, ending in a
+/// marker that stays visible below a long answer.
+fn compaction_answer(number: usize) -> String {
+    let filler = if number <= LONG_ANSWER_TURNS {
+        "long answer ".repeat(400)
+    } else {
+        String::new()
+    };
+
+    format!("{filler}Answer {number} done.")
+}
+
+/// Scripts a local OpenAI-compatible server that runs `qwen3:latest` with a
+/// 16,384-token window, answers each numbered question, and writes the
+/// summary that compacts the session's earlier turns.
+async fn small_window_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"id": "qwen3:latest", "max_model_len": 16384}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Conversation source to summarize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": json!({
+                    "context": "Earlier questions were answered at length.",
+                    "decisions": [],
+                    "state": "Answering the next question."
+                }).to_string()}
+            }]
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    // Later questions win over the earlier ones their requests replay.
+    for number in 1..=COMPACTION_TURNS {
+        let priority = u8::try_from(2 + COMPACTION_TURNS - number).unwrap_or(u8::MAX);
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains(format!("Question {number}")))
+            .respond_with(answer(&compaction_answer(number)))
+            .with_priority(priority)
+            .mount(&server)
+            .await;
+    }
+
+    server
+}
+
+#[tokio::test]
+async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult {
+    // Arrange
+    let server = small_window_provider().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_context_compaction")
+        .with_git()
+        // Wide enough to keep the notice on one line.
+        .with_terminal_size(160, 40)
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("ANTHROPIC_API_KEY", "")
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", server.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")
+        .run(
+            |scenario| {
+                let mut scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter");
+                for number in 1..=COMPACTION_TURNS {
+                    let question = format!("Question {number}");
+                    let marker = format!("Answer {number} done.");
+                    if number > 1 {
+                        scenario = scenario.press_key("Enter");
+                    }
+                    scenario = scenario
+                        .step(common::wait_for_prompt_composer())
+                        .write_text(question.clone())
+                        .wait_for_text(question, 3000)
+                        .press_key("Enter")
+                        .eventually(
+                            Duration::from_secs(30),
+                            Duration::from_millis(100),
+                            move |frame| {
+                                let full = Region::full(frame.cols(), frame.rows());
+
+                                assertion::match_text_in_region(frame, &marker, &full)
+                            },
+                        );
+                }
+
+                scenario
+                    .wait_for_text(COMPACTION_NOTICE, 5000)
+                    .capture_labeled("harness_compaction_notice", "Earlier turns compacted")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, COMPACTION_NOTICE, &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "openai-compatible/qwen3:latest to fit the context window.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        &format!("Answer {COMPACTION_TURNS} done."),
+                        &full,
+                    );
+                })
+            },
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let compactions = requests
+        .iter()
+        .filter(|request| {
+            String::from_utf8_lossy(&request.body).contains("Conversation source to summarize")
+        })
+        .count();
+    assert_eq!(compactions, 1, "the session should compact once");
+
+    Ok(())
+}

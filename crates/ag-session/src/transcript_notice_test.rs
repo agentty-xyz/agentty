@@ -14,6 +14,8 @@ fn test_transcript_notice_prefixes_match_canonical_labels() {
         (TranscriptNotice::CommitAssist, "[Commit Assist]"),
         (TranscriptNotice::CommitError, "[Commit Error]"),
         (TranscriptNotice::CommitWarning, "[Commit Warning]"),
+        (TranscriptNotice::Context, "[Context]"),
+        (TranscriptNotice::ContextWarning, "[Context Warning]"),
         (TranscriptNotice::ContinueError, "[Continue Error]"),
         (TranscriptNotice::Error, "[Error]"),
         (TranscriptNotice::ForkError, "[Fork Error]"),

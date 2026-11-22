@@ -6,7 +6,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
+use ag_contracts::{AgentRequestKind, ContextCompaction, MockAgentChannel, TurnResult};
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem, TurnPrompt};
 use ag_session::{
@@ -132,6 +132,8 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
     .await
     .expect("initial provider handoff");
     assert_eq!(first.request_kind, AgentRequestKind::SessionStart);
+    // Graph nodes never compact, so no hidden notice drops their history.
+    assert_eq!(first.context_compaction, ContextCompaction::Off);
     assert_eq!(
         app.services
             .db()

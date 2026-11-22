@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OutputEvent};
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OutputEvent, TurnNotice};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::output::LiveOutput;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
+use crate::domain::transcript_notice::TranscriptNotice;
 
 const LIVE_RUNNING_LIMIT: usize = 3;
 const LIVE_INTERRUPTED_LIMIT: usize = 3;
@@ -24,6 +25,8 @@ const USAGE_SECTIONS: [&str; 3] = ["Tools: ", "MCP: ", "Skills: "];
 #[derive(Default)]
 pub(super) struct TurnActivity {
     live: LiveActivity,
+    /// Transcript notices the turn reported, in order.
+    notices: Vec<String>,
     output: LiveOutput,
 }
 
@@ -70,6 +73,30 @@ impl TurnActivity {
         session_id: &SessionId,
     ) {
         self.output.observe(event, sender, session_id);
+    }
+
+    /// Keeps the transcript notice for one thing the turn reported about how
+    /// it ran, such as a compaction of the session's earlier context.
+    pub(super) fn observe_notice(&mut self, notice: &TurnNotice) {
+        let text = match notice {
+            TurnNotice::ContextCompacted { model: Some(model) } => TranscriptNotice::Context
+                .format(format_args!(
+                    "Summarized earlier turns with `{model}` to fit the context window."
+                )),
+            TurnNotice::ContextCompacted { model: None } => TranscriptNotice::Context
+                .format("Summarized earlier turns to fit the context window."),
+            TurnNotice::ContextCompactionFailed { reason } => TranscriptNotice::ContextWarning
+                .format(format_args!(
+                    "Could not summarize earlier turns ({reason}); the oldest no longer fit and \
+                     were dropped from the context."
+                )),
+        };
+        self.notices.push(text);
+    }
+
+    /// Returns the transcript notices the turn reported, in order.
+    pub(super) fn notices(&self) -> &[String] {
+        &self.notices
     }
 
     /// Settles calls lacking a terminal provider event when the stream closes.

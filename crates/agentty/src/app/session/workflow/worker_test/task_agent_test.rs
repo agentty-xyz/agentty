@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnRequest};
+use ag_contracts::{
+    AgentError, AgentRequestKind, ContextCompaction, MockAgentChannel, PermissionMode, TurnRequest,
+};
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
 use ag_session::{
@@ -262,6 +264,8 @@ async fn assert_planner_attempt(
 fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &AgentRequestKind) {
     assert_eq!(turn.model, AgentModel::Gpt61Sol.provider_model_str());
     assert_eq!(turn.permission_mode, PermissionMode::ReadOnly);
+    // Task agents never compact, so no hidden notice drops their history.
+    assert_eq!(turn.context_compaction, ContextCompaction::Off);
     assert_eq!(&turn.request_kind, expected_kind);
     assert_eq!(
         turn.agent_profile.current(),

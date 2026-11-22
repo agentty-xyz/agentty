@@ -273,6 +273,10 @@ pub struct TurnContinuationParts {
 /// Input payload for one provider-agnostic agent turn.
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
+    /// Whether the turn compacts the session's earlier turns once they nearly
+    /// fill the model's context window. Only in-process harness turns
+    /// compact; other agents manage their own context and ignore it.
+    pub context_compaction: ContextCompaction,
     /// Prior context needed to continue this turn.
     pub continuation: TurnContinuation,
     /// Resolved harness policy. The worker replaces this with its configured
@@ -306,6 +310,24 @@ pub struct TurnRequest {
     pub speed_mode: SpeedMode,
 }
 
+/// How a turn handles a session context that outgrows the model's window.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextCompaction {
+    /// The turn never compacts; history that no longer fits is left out of
+    /// its requests, oldest first.
+    #[default]
+    Off,
+    /// The turn first summarizes earlier turns into a checkpoint that later
+    /// requests carry in their place.
+    Automatic {
+        /// Model that writes the summary, such as the user's Default Fast
+        /// Model, or `None` for [`TurnRequest::model`]. Harness turns also
+        /// use [`TurnRequest::model`] when this model cannot serve
+        /// summaries.
+        summary_model: Option<String>,
+    },
+}
+
 /// Incremental event emitted during one agent turn.
 ///
 /// Events are sent through an [`mpsc::UnboundedSender`] as the turn
@@ -321,6 +343,9 @@ pub enum TurnEvent {
     /// Model output streamed by an in-process harness turn, shown
     /// transiently until the turn result is persisted.
     Output(crate::OutputEvent),
+    /// Something about how the turn ran that the user should know, such as
+    /// a compaction of the session's earlier context.
+    Notice(crate::TurnNotice),
     /// The turn completed successfully with final token counts.
     Completed {
         /// Whether the provider reset its context for this turn.

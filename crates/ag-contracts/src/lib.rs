@@ -6,6 +6,7 @@ mod activity;
 mod contract;
 mod execution_policy;
 mod input_size;
+mod notice;
 mod one_shot;
 mod output;
 mod permission;
@@ -18,12 +19,13 @@ pub use activity::{ActivityEvent, ActivityKind, ActivityStatus};
 pub use contract::MockAgentChannel;
 pub use contract::{
     AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
-    AgentRequestKind, LiveTranscript, SessionRef, StartSessionRequest, TurnContinuation,
-    TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
+    AgentRequestKind, ContextCompaction, LiveTranscript, SessionRef, StartSessionRequest,
+    TurnContinuation, TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
     normalize_instruction_conversation_id,
 };
 pub use execution_policy::{ExecutionPolicy, McpPolicy, ToolPolicy};
 pub use input_size::is_input_size_error;
+pub use notice::TurnNotice;
 #[cfg(any(test, feature = "test-utils"))]
 pub use one_shot::MockOneShotClient;
 pub use one_shot::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};

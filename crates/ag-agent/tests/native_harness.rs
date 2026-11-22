@@ -12,13 +12,15 @@ use ag_agent::{
 };
 use ag_contracts::{
     ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
-    AgentRequestKind, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest,
-    OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle,
-    SpeedMode, TurnContinuation, TurnEvent, TurnRequest,
+    AgentRequestKind, ContextCompaction, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient,
+    OneShotRequest, OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel,
+    ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
+use ag_harness::provider::ModelProvider;
 use ag_harness::store::SQLITE_BUSY_TIMEOUT;
 use ag_harness::tool::ToolDefinition;
+use ag_harness::{Cost, Usage};
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
 use ag_telemetry::{KeyValue, Span};
@@ -72,6 +74,7 @@ fn config(data_root: &Path, environment: BTreeMap<String, String>) -> NativeHarn
 /// Builds a session turn request for `folder`.
 fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
     TurnRequest {
+        context_compaction: ContextCompaction::Off,
         provider_call_budget: None,
         continuation: TurnContinuation::fresh(),
         execution_policy: ExecutionPolicy::default(),
@@ -530,6 +533,7 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
     let resume_request = |prompt: String, provider_conversation_id: Option<String>| {
         let mut request = turn_request(worktree.path(), FALLBACK_BUDGET_MODEL, &prompt);
+        request.context_compaction = automatic(None);
         request.request_kind = AgentRequestKind::SessionResume;
         request.continuation = continuing(provider_conversation_id);
 
@@ -548,7 +552,7 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
     )
     .await;
     let first = first.expect("first turn should succeed");
-    let (second, _) = run_turn(
+    let (second, second_events) = run_turn(
         &channel,
         "session-evict",
         resume_request(
@@ -572,11 +576,21 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
 
     // Assert
     third.expect("third turn should succeed");
+    // The second turn's compaction failed on the protocol answer, so it
+    // evicted history instead, and the third turn backs off from retrying.
+    assert!(second_events.iter().any(|event| matches!(
+        event,
+        TurnEvent::Notice(TurnNotice::ContextCompactionFailed { .. })
+    )));
     assert_eq!(
         second.provider_conversation_id.as_deref(),
         Some("session-evict")
     );
-    let bodies = request_bodies(&server).await;
+    let bodies = request_bodies(&server)
+        .await
+        .into_iter()
+        .filter(|body| !body.contains(COMPACTION_SOURCE))
+        .collect::<Vec<_>>();
     assert_eq!(bodies.len(), 3);
     assert!(!bodies[1].contains("First answer"));
     assert!(bodies[1].contains(REFRESH_REMINDER));
@@ -2329,4 +2343,384 @@ async fn unconfigured_harness_fails_before_execution() {
             .to_string()
             .contains("--experimental-harness")
     );
+}
+
+/// Locally served session model with a small declared window.
+const SMALL_WINDOW_MODEL: &str = "openai-compatible/small-window";
+/// Leading line of every compaction request's source.
+const COMPACTION_SOURCE: &str = "Conversation source to summarize";
+/// Input tokens the fast model reports for each compaction request.
+const COMPACTION_INPUT_TOKENS: u64 = 800;
+/// Output tokens the fast model reports for each compaction request.
+const COMPACTION_OUTPUT_TOKENS: u64 = 40;
+
+/// Returns credentials serving [`SMALL_WINDOW_MODEL`] from `local` with a
+/// 16,384-token window and Muse, the fast model, from `fast`.
+fn compaction_environment(local: &MockServer, fast: &MockServer) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("HOME".to_string(), "/tmp".to_string()),
+        ("MODEL_API_BASE_URL".to_string(), fast.uri()),
+        ("MODEL_API_KEY".to_string(), "muse-key".to_string()),
+        ("OPENAI_COMPATIBLE_BASE_URL".to_string(), local.uri()),
+        (
+            "OPENAI_COMPATIBLE_CONTEXT_WINDOW".to_string(),
+            "16384".to_string(),
+        ),
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+    ])
+}
+
+/// Most session turns [`run_until_notice`] runs before the session must
+/// have compacted.
+const MAX_UNCOMPACTED_TURNS: usize = 8;
+
+/// Returns a session answer large enough that a few turns fill the small
+/// window's history.
+fn long_answer() -> ResponseTemplate {
+    answer(&"long answer ".repeat(400))
+}
+
+/// Returns a valid compaction summary with the fast model's usage.
+fn summary_answer() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"content": json!({
+                "context": "Earlier questions were answered at length.",
+                "decisions": [],
+                "state": "Answering the next question."
+            }).to_string()}
+        }],
+        "usage": {
+            "prompt_tokens": COMPACTION_INPUT_TOKENS,
+            "completion_tokens": COMPACTION_OUTPUT_TOKENS,
+            "total_tokens": COMPACTION_INPUT_TOKENS + COMPACTION_OUTPUT_TOKENS
+        }
+    }))
+}
+
+/// Returns automatic compaction summarizing on `summary_model`.
+fn automatic(summary_model: Option<&str>) -> ContextCompaction {
+    ContextCompaction::Automatic {
+        summary_model: summary_model.map(str::to_string),
+    }
+}
+
+/// Returns numbered session turn `number` on `model` with `compaction`,
+/// resuming the session unless it is the first turn of a new one.
+fn numbered_turn(
+    worktree: &Path,
+    model: &str,
+    number: usize,
+    compaction: &ContextCompaction,
+    resumes: bool,
+) -> TurnRequest {
+    let mut request = turn_request(worktree, model, &format!("Question {number}"));
+    request.context_compaction = compaction.clone();
+    if resumes {
+        request.request_kind = AgentRequestKind::SessionResume;
+    }
+
+    request
+}
+
+/// Runs numbered session turns of `session_id` on [`SMALL_WINDOW_MODEL`]
+/// with `compaction` until one reports a notice, and returns that turn's
+/// result and events; the first turn resumes the session when `resumed`.
+///
+/// # Errors
+/// Returns a failed turn's error, or a failure when no turn reports a notice.
+async fn run_until_notice(
+    channel: &Arc<dyn AgentChannel>,
+    worktree: &Path,
+    session_id: &str,
+    compaction: &ContextCompaction,
+    resumed: bool,
+) -> Result<(ag_contracts::TurnResult, Vec<TurnEvent>), String> {
+    let mut provider_conversation_id = None;
+    for number in 1..=MAX_UNCOMPACTED_TURNS {
+        let mut request = numbered_turn(
+            worktree,
+            SMALL_WINDOW_MODEL,
+            number,
+            compaction,
+            resumed || number > 1,
+        );
+        request.continuation = continuing(provider_conversation_id.take());
+        let (result, events) = run_turn(channel, session_id, request).await;
+        let result = result?;
+        if events
+            .iter()
+            .any(|event| matches!(event, TurnEvent::Notice(_)))
+        {
+            return Ok((result, events));
+        }
+        provider_conversation_id = result.provider_conversation_id;
+    }
+
+    Err(format!(
+        "{MAX_UNCOMPACTED_TURNS} turns should compact the session"
+    ))
+}
+
+#[tokio::test]
+async fn long_session_compacts_on_the_fast_model_at_its_prices() {
+    // Arrange
+    let local = MockServer::start().await;
+    let fast = MockServer::start().await;
+    respond(&local, "Question", long_answer(), 1).await;
+    respond(&fast, COMPACTION_SOURCE, summary_answer(), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), compaction_environment(&local, &fast));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, events) = run_until_notice(
+        &channel,
+        worktree.path(),
+        "session-compact",
+        &automatic(Some(MUSE_MODEL)),
+        false,
+    )
+    .await
+    .expect("the session should compact");
+    let mut next = numbered_turn(
+        worktree.path(),
+        SMALL_WINDOW_MODEL,
+        99,
+        &automatic(Some(MUSE_MODEL)),
+        true,
+    );
+    next.continuation = continuing(result.provider_conversation_id.clone());
+    let (next_result, _) = run_turn(&channel, "session-compact", next).await;
+
+    // Assert
+    assert!(
+        events.contains(&TurnEvent::Notice(TurnNotice::ContextCompacted {
+            model: Some(MUSE_MODEL.to_string()),
+        }))
+    );
+    let fast_bodies = request_bodies(&fast).await;
+    assert_eq!(fast_bodies.len(), 1);
+    assert!(fast_bodies[0].contains(COMPACTION_SOURCE));
+    // The checkpoint covers the turn that carried the full contract, so the
+    // next turn sends it again beside the summary.
+    next_result.expect("the turn after compaction should succeed");
+    let next_body = request_bodies(&local)
+        .await
+        .into_iter()
+        .find(|body| body.contains("Question 99"))
+        .expect("the next turn reaches the session model");
+    assert_eq!(next_body.matches(FULL_CONTRACT).count(), 1);
+    assert!(next_body.contains("Earlier questions were answered at length."));
+    assert!(fast_bodies[0].contains(r#""model":"muse-spark-1.3""#));
+    assert!(
+        !request_bodies(&local)
+            .await
+            .iter()
+            .any(|body| body.contains(COMPACTION_SOURCE))
+    );
+    let report: Value = serde_json::from_str(result.harness_report.as_deref().expect("report"))
+        .expect("report JSON");
+    let compaction = &report["model_requests"][0];
+    assert_eq!(compaction["purpose"], "Compaction");
+    assert_eq!(compaction["model"], "muse/muse-spark-1.3");
+    let pricing = ModelProvider::Muse
+        .pricing(MUSE_MODEL)
+        .expect("Muse prices");
+    let mut usage = Usage::default();
+    usage.input = COMPACTION_INPUT_TOKENS;
+    usage.output = COMPACTION_OUTPUT_TOKENS;
+    assert_eq!(
+        compaction["cost"]["micro_usd"],
+        Cost::of(&usage, pricing).micro_usd
+    );
+    // The turn's usage counts the compaction request with its own.
+    assert_eq!(
+        result.input_tokens,
+        COMPACTION_INPUT_TOKENS + 30,
+        "{report}"
+    );
+    assert_eq!(result.output_tokens, COMPACTION_OUTPUT_TOKENS + 7);
+}
+
+#[tokio::test]
+async fn an_unusable_fast_model_leaves_compaction_on_the_session_model() {
+    // Arrange
+    let local = MockServer::start().await;
+    let fast = MockServer::start().await;
+    respond(&local, COMPACTION_SOURCE, summary_answer(), 1).await;
+    respond(&local, "Question", long_answer(), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let mut environment = compaction_environment(&local, &fast);
+    environment.remove("MODEL_API_KEY");
+    let config = config(data_root.path(), environment);
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (_, events) = run_until_notice(
+        &channel,
+        worktree.path(),
+        "session-compact",
+        &automatic(Some(MUSE_MODEL)),
+        false,
+    )
+    .await
+    .expect("the session should compact");
+
+    // Assert
+    assert!(
+        events.contains(&TurnEvent::Notice(TurnNotice::ContextCompacted {
+            model: Some(SMALL_WINDOW_MODEL.to_string()),
+        }))
+    );
+    assert_eq!(request_bodies(&fast).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn turns_without_automatic_compaction_evict_instead() {
+    // Arrange
+    let local = MockServer::start().await;
+    let fast = MockServer::start().await;
+    respond(&local, "Question", long_answer(), 1).await;
+    respond(&fast, COMPACTION_SOURCE, summary_answer(), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), compaction_environment(&local, &fast));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let outcome = run_until_notice(
+        &channel,
+        worktree.path(),
+        "session-evict",
+        &ContextCompaction::Off,
+        false,
+    )
+    .await;
+
+    // Assert
+    assert!(outcome.is_err_and(|error| error.contains("should compact")));
+    assert_eq!(request_bodies(&fast).await, Vec::<String>::new());
+    assert!(
+        !request_bodies(&local)
+            .await
+            .iter()
+            .any(|body| body.contains(COMPACTION_SOURCE))
+    );
+}
+
+#[tokio::test]
+async fn switching_to_a_small_window_compacts_on_the_fast_model() {
+    // Arrange
+    let local = MockServer::start().await;
+    let fast = MockServer::start().await;
+    respond(&local, "Question", long_answer(), 1).await;
+    respond(&fast, COMPACTION_SOURCE, summary_answer(), 1).await;
+    respond(&fast, "Question", long_answer(), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), compaction_environment(&local, &fast));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let compaction = automatic(Some(MUSE_MODEL));
+    // Muse's large window holds these turns, the small window does not.
+    for number in 1..=4 {
+        let request = numbered_turn(worktree.path(), MUSE_MODEL, number, &compaction, number > 1);
+        let (result, events) = run_turn(&channel, "session-switch", request).await;
+        result.expect("Muse turn should succeed");
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::Notice(_)))
+        );
+    }
+
+    // Act
+    let request = numbered_turn(worktree.path(), SMALL_WINDOW_MODEL, 5, &compaction, true);
+    let (result, events) = run_turn(&channel, "session-switch", request).await;
+
+    // Assert
+    result.expect("the switching turn should succeed");
+    // The switching turn summarizes on the Fast model, not on the new
+    // session model.
+    assert!(
+        events.contains(&TurnEvent::Notice(TurnNotice::ContextCompacted {
+            model: Some(MUSE_MODEL.to_string()),
+        })),
+        "{events:?}"
+    );
+    let fast_bodies = request_bodies(&fast).await;
+    assert_eq!(
+        fast_bodies
+            .iter()
+            .filter(|body| body.contains(COMPACTION_SOURCE))
+            .count(),
+        1
+    );
+    let local_bodies = request_bodies(&local).await;
+    assert!(
+        !local_bodies
+            .iter()
+            .any(|body| body.contains(COMPACTION_SOURCE))
+    );
+    assert!(local_bodies.iter().any(|body| body.contains("Question 5")));
+}
+
+#[tokio::test]
+async fn session_recorded_before_automatic_compaction_resumes_and_compacts() {
+    // Arrange
+    let local = MockServer::start().await;
+    let fast = MockServer::start().await;
+    respond(&local, "Question", long_answer(), 1).await;
+    respond(&fast, COMPACTION_SOURCE, summary_answer(), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let session_directory = data_root.path().join("fixture-session");
+    std::fs::create_dir_all(&session_directory).expect("session directory");
+    // A one-turn session on `muse-spark-1.3`, prompt `First question` and
+    // answer `First answer`, recorded under registration revision
+    // `agentty-native-2` by this crate at d0841a242, the last revision
+    // before sessions compacted automatically. A one-off test ran that
+    // turn as `session_turn_answers_and_resumes_with_stored_history` does,
+    // in the worktree `/tmp/agentty-worktree`, then copied the session's
+    // `harness.db` and folded its WAL in with `sqlite3 harness.db
+    // "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;
+    // VACUUM;"`.
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre_compaction_harness.db"),
+        session_directory.join("harness.db"),
+    )
+    .expect("fixture copy");
+    let config = config(data_root.path(), compaction_environment(&local, &fast));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (_, events) = run_until_notice(
+        &channel,
+        worktree.path(),
+        "fixture-session",
+        &automatic(Some(MUSE_MODEL)),
+        true,
+    )
+    .await
+    .expect("the recorded session should resume and compact");
+
+    // Assert
+    let local_bodies = request_bodies(&local).await;
+    // The first resumed turn replays the recorded one.
+    assert!(local_bodies[0].contains("First question"));
+    assert!(local_bodies[0].contains("First answer"));
+    assert!(
+        events.contains(&TurnEvent::Notice(TurnNotice::ContextCompacted {
+            model: Some(MUSE_MODEL.to_string()),
+        }))
+    );
+    let fast_bodies = request_bodies(&fast).await;
+    assert_eq!(fast_bodies.len(), 1);
+    assert!(fast_bodies[0].contains(COMPACTION_SOURCE));
 }

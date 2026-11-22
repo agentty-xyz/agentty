@@ -10,19 +10,21 @@ use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
-use ag_harness::catalog::{Capabilities, ModelCatalog, ModelId, ModelSelector, ModelSpec};
+use ag_harness::catalog::{
+    Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
+};
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
-    ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
-    ReasoningEffort,
+    ContextPolicy, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
+    ModelRequest, ReasoningEffort,
 };
 use ag_harness::provider::{
     ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider,
     chatgpt_auth_file_in,
 };
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, RunRequest, ToolSet,
-    TurnInput,
+    Harness, HarnessError, Model, ModelError, OutputSchema, Repository, RepositoryError,
+    RunRequest, ToolSet, TurnInput,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -524,6 +526,61 @@ impl ModelSelection {
         format!("{}/{}", self.provider, self.model)
     }
 
+    /// Returns the Agentty model id of the registration key `key`, as users
+    /// pick the model: `ChatGPT` plan and local server models keep their
+    /// provider, as in `chatgpt/gpt-6-luna`, and other cataloged models are
+    /// bare, as in `gpt-6-luna`. An unknown key is returned unchanged.
+    pub(crate) fn model_id_of(key: &str) -> String {
+        match Self::from_key(key) {
+            Some(selection)
+                if !matches!(
+                    selection.provider,
+                    ModelProvider::ChatGpt | ModelProvider::OpenAiCompatible
+                ) =>
+            {
+                selection.model
+            }
+            _ => key.to_string(),
+        }
+    }
+
+    /// Returns the model that writes compaction summaries for sessions
+    /// running on this selection in its place: `requested`, such as the
+    /// user's Default Fast Model, when it resolves to another harness model
+    /// whose provider can serve requests now, as `is_signed_in` reports for a
+    /// sign-in provider, and that declares structured output for the summary
+    /// schema. Otherwise returns `None`, so the session's own model
+    /// summarizes, and logs why a requested model was passed over.
+    pub(crate) fn summary_model(
+        &self,
+        requested: Option<&str>,
+        environment: &BTreeMap<String, String>,
+        is_signed_in: impl Fn(&Path) -> bool,
+    ) -> Option<Self> {
+        let requested = requested?;
+        let rejection = match Self::resolve(requested, environment) {
+            Err(error) => error,
+            Ok(candidate) if candidate == *self => return None,
+            Ok(candidate) => {
+                match configuration_status(candidate.provider, environment, is_signed_in) {
+                    HarnessModelStatus::Ready
+                        if candidate
+                            .provider
+                            .capabilities(&candidate.model)
+                            .is_some_and(Capabilities::structured_output) =>
+                    {
+                        return Some(candidate);
+                    }
+                    HarnessModelStatus::Ready => "it declares no structured output".to_string(),
+                    status => format!("it is not ready ({status:?})"),
+                }
+            }
+        };
+        tracing::warn!(summary_model = requested, %rejection, "summarizing on the session model");
+
+        None
+    }
+
     /// Registers this model's provider client under its key.
     ///
     /// # Errors
@@ -535,6 +592,47 @@ impl ModelSelection {
         provider_call_budget: Option<&ProviderCallBudget>,
         running_context_window: Option<u64>,
     ) -> Result<ModelRegistry, String> {
+        let model = self.client(environment, provider_call_budget)?;
+
+        self.register(model, self.profile(environment, running_context_window)?)
+    }
+
+    /// Returns this model's catalog entry as the harness provider catalog
+    /// declares it, with its prices, profile, and output limit, so the
+    /// requests it answers as a summary model are priced at its own prices.
+    ///
+    /// # Errors
+    /// Returns an actionable error when credentials or the endpoint are
+    /// missing, or the entry is invalid.
+    fn summary_entry(
+        &self,
+        environment: &BTreeMap<String, String>,
+        provider_call_budget: Option<&ProviderCallBudget>,
+    ) -> Result<ModelHandle, String> {
+        let id = ModelId::cataloged(self.provider, &self.model);
+        let spec = self
+            .provider
+            .model_spec(&self.model)
+            .ok_or("The harness provider catalog does not list the summary model.")?;
+
+        ModelCatalog::builder()
+            .model(spec, self.client(environment, provider_call_budget)?)
+            .build()
+            .and_then(|catalog| catalog.resolve(&ModelSelector::Id(id)))
+            .map_err(failure("Invalid harness summary model"))
+    }
+
+    /// Returns this model's provider client, charging `provider_call_budget`
+    /// for every request when one is set.
+    ///
+    /// # Errors
+    /// Returns an actionable error when credentials or the endpoint are
+    /// missing.
+    fn client(
+        &self,
+        environment: &BTreeMap<String, String>,
+        provider_call_budget: Option<&ProviderCallBudget>,
+    ) -> Result<Arc<dyn Model>, String> {
         let mut configuration = ModelConfiguration::new(self.provider, &self.model);
         // Only the `ChatGPT` provider reads a sign-in, and the harness keeps
         // no default location for it.
@@ -574,10 +672,12 @@ impl ModelSelection {
             None => Arc::new(client),
         };
 
-        self.register(model, self.profile(environment, running_context_window)?)
+        Ok(model)
     }
 
-    /// Builds a harness for this model with Agentty's defaults.
+    /// Builds a harness for this model with Agentty's defaults, summarizing
+    /// on `context.summary_model` when it is set and can serve summaries, as
+    /// [`HarnessContext::apply_summary_model`] decides.
     ///
     /// # Errors
     /// Returns the registration failure.
@@ -591,8 +691,10 @@ impl ModelSelection {
             context.provider_call_budget,
             context.running_context_window,
         )?;
+        let mut harness = self.harness_from(&registry, context, observer)?;
+        context.apply_summary_model(|summary| harness.set_summary_model(summary));
 
-        self.harness_from(&registry, context, observer)
+        Ok(harness)
     }
 
     /// Builds a harness that resumes a session recorded on this model without
@@ -664,7 +766,10 @@ impl ModelSelection {
         Ok(registry)
     }
 
-    /// Builds a harness over this selection's registration in `registry`.
+    /// Builds a harness over this selection's registration in `registry`
+    /// whose durable sessions, when `context.compacts`, compact their earlier
+    /// turns automatically once replayed history nears the context budget,
+    /// and otherwise evict them.
     ///
     /// A turn built inside a recording trace also exports the harness's
     /// `invoke_agent`, `chat`, and `execute_tool` spans beneath the current
@@ -675,8 +780,15 @@ impl ModelSelection {
         context: &HarnessContext<'_>,
         observer: impl LifecycleObserver + 'static,
     ) -> Result<Harness, String> {
+        let context_policy = if context.compacts {
+            ContextPolicy::auto_compact()
+        } else {
+            ContextPolicy::Evict
+        };
+
         Ok(Harness::from_registry(registry, &self.key())
             .map_err(failure("Invalid harness model registration"))?
+            .context_policy(context_policy)
             .repository(context.repository.clone())
             .model_reasoning_effort(reasoning_effort(context.reasoning_level))
             .with_lifecycle_observer(traced(observer)))
@@ -716,6 +828,8 @@ impl ModelSelection {
 
 /// Inputs shared by every harness built for one turn.
 pub(crate) struct HarnessContext<'a> {
+    /// Whether durable sessions compact their earlier turns automatically.
+    pub(crate) compacts: bool,
     /// Environment snapshot used for credentials.
     pub(crate) environment: &'a BTreeMap<String, String>,
     /// Optional limit charged for every model request.
@@ -726,6 +840,31 @@ pub(crate) struct HarnessContext<'a> {
     pub(crate) repository: &'a Repository,
     /// Context window the local server runs the model with, when known.
     pub(crate) running_context_window: Option<u64>,
+    /// Model that writes compaction summaries in place of the turn's model,
+    /// resolved by [`ModelSelection::summary_model`].
+    pub(crate) summary_model: Option<&'a ModelSelection>,
+}
+
+impl HarnessContext<'_> {
+    /// Hands the catalog entry of [`Self::summary_model`] to `apply`, which
+    /// sets it on a harness or session. When the entry cannot be built or
+    /// `apply` refuses it, logs why and leaves the session's own model
+    /// summarizing rather than failing the turn.
+    pub(crate) fn apply_summary_model(
+        &self,
+        apply: impl FnOnce(&ModelHandle) -> Result<(), HarnessError>,
+    ) {
+        let Some(summary_model) = self.summary_model else {
+            return;
+        };
+        let applied = summary_model
+            .summary_entry(self.environment, self.provider_call_budget)
+            .and_then(|entry| apply(&entry).map_err(|error| error.to_string()));
+        if let Err(error) = applied {
+            let summary_model = summary_model.key();
+            tracing::warn!(%summary_model, %error, "summarizing on the session model");
+        }
+    }
 }
 
 /// Returns the instructions stored with new harness sessions.

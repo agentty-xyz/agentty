@@ -1,12 +1,13 @@
 //! `SettingsManager` tests for settings rows, defaults, persisted values, and
 //! role model selection.
 
+use ag_contracts::ContextCompaction;
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
     SettingsManager, load_default_fast_agent_setting, load_default_smart_agent_setting,
-    load_default_smart_model_setting, load_max_concurrent_subagents_setting, normalized_speed_mode,
-    selectable_model_options,
+    load_default_smart_model_setting, load_max_concurrent_subagents_setting,
+    load_session_context_compaction, normalized_speed_mode, selectable_model_options,
 };
 use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
@@ -1154,6 +1155,58 @@ async fn load_default_fast_agent_setting_uses_a_ready_harness_fast_default() {
     assert_eq!(without_project, fallback);
     assert_eq!(unknown_model, fallback);
     assert_eq!(missing_model, fallback);
+}
+
+#[tokio::test]
+async fn harness_sessions_compact_on_a_harness_fast_default_only() {
+    // Arrange
+    let (services, project_id) =
+        test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
+    let harness_session = AgentSelection::new(AgentKind::Harness, AgentModel::MuseSpark13);
+    let compaction_model = |project_id, session_agent| {
+        load_session_context_compaction(services.db(), project_id, session_agent)
+    };
+    let automatic = |summary_model: Option<&str>| ContextCompaction::Automatic {
+        summary_model: summary_model.map(str::to_string),
+    };
+
+    // Act
+    let unset = compaction_model(Some(project_id), harness_session).await;
+    persist_harness_fast_default(&services, project_id, AgentModel::Qwen38Flash.as_str()).await;
+    let harness_fast = compaction_model(Some(project_id), harness_session).await;
+    let without_project = compaction_model(None, harness_session).await;
+    let cli_session = compaction_model(Some(project_id), model_fixture::codex_selection()).await;
+    services
+        .db()
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultFastAgent,
+                    AgentKind::Claude.name().to_string(),
+                ),
+                (
+                    SettingName::DefaultFastModel,
+                    AgentModel::ClaudeHaiku55.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist CLI fast default");
+    let cli_fast = compaction_model(Some(project_id), harness_session).await;
+
+    // Assert
+    assert_eq!(unset, automatic(None));
+    assert_eq!(
+        harness_fast,
+        automatic(Some(AgentModel::Qwen38Flash.provider_model_str()))
+    );
+    assert_eq!(without_project, automatic(None));
+    // Other agents manage their own context.
+    assert_eq!(cli_session, ContextCompaction::Off);
+    // A Fast default on an agent CLI never summarizes a Harness session.
+    assert_eq!(cli_fast, automatic(None));
 }
 
 #[tokio::test]

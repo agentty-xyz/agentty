@@ -234,6 +234,9 @@ async fn prepare(
         if persistent { None } else { replay },
     );
     let prepared = TurnRequest {
+        // Task agents run bounded assignments, and no transcript shows their
+        // compaction notices.
+        context_compaction: ag_contracts::ContextCompaction::Off,
         provider_call_budget: None,
         continuation,
         execution_policy: ag_contracts::ExecutionPolicy::default(),

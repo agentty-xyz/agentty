@@ -3,10 +3,12 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use ag_contracts::{OutputEvent, OutputKind};
-use ag_harness::event::{Delta, Item, ItemKind};
+use ag_contracts::{OutputEvent, OutputKind, TurnNotice};
+use ag_harness::event::{CompactionOutcome, Delta, Item, ItemKind};
 use ag_harness::{RunEventKind, RunOutput};
 use serde_json::Value;
+
+use super::config::ModelSelection;
 
 /// Field of the protocol response that carries the user-facing answer.
 const ANSWER_FIELD: &str = "answer";
@@ -205,6 +207,34 @@ impl OutputProjector {
         }
 
         vec![OutputEvent::Discard { ids }]
+    }
+}
+
+/// Returns the notice a run event warrants: a compaction that published a
+/// checkpoint, or one that failed so the turn continued without its oldest
+/// turns. Any other event warrants none, including a compaction that found
+/// nothing to cover.
+pub(crate) fn turn_notice(event: &RunEventKind) -> Option<TurnNotice> {
+    let RunEventKind::Compacted(report) = event else {
+        return None;
+    };
+
+    match &report.outcome {
+        CompactionOutcome::Compacted { model, .. } => Some(TurnNotice::ContextCompacted {
+            model: model
+                .as_ref()
+                .map(|model| ModelSelection::model_id_of(model.as_str())),
+        }),
+        CompactionOutcome::Failed(failure) => {
+            // The notice names only the failure's kind; its message can be a
+            // long provider response.
+            tracing::warn!(kind = %failure.kind, detail = %failure.message, "compaction failed");
+
+            Some(TurnNotice::ContextCompactionFailed {
+                reason: failure.kind.as_str().replace('_', " "),
+            })
+        }
+        _ => None,
     }
 }
 

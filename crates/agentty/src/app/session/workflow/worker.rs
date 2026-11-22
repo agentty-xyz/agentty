@@ -793,6 +793,8 @@ impl SessionWorkerRebaseAssistClient {
             .ok()
             .flatten();
         let req = TurnRequest {
+            // Assist turns resolve conflicts in a few short turns.
+            context_compaction: ag_contracts::ContextCompaction::Off,
             provider_call_budget: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::provider(

@@ -228,6 +228,52 @@ fn test_session_transcript_conversation_replay_text_ignores_notice_only_transcri
 }
 
 #[test]
+fn provider_replay_keeps_workflow_notices_but_not_context_notices() {
+    // Arrange
+    let transcript = SessionTranscript::new(vec![
+        SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "keep going"),
+        SessionMessage::new(
+            1,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Context] Summarized earlier turns to fit the context window.\n",
+        ),
+        SessionMessage::new(
+            2,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Context Warning] Could not summarize earlier turns (transport).\n",
+        ),
+        SessionMessage::new(
+            3,
+            SessionMessageKind::WorkflowNotice,
+            "[Commit] No changes to commit.\n",
+        ),
+        SessionMessage::conversation(4, SessionMessageKind::AssistantAnswer, "done"),
+    ]);
+    let notices_only = SessionTranscript::new(vec![SessionMessage::new(
+        0,
+        SessionMessageKind::WorkflowNotice,
+        "[Context] Summarized earlier turns to fit the context window.",
+    )]);
+
+    // Act
+    let provider_text = transcript
+        .provider_replay_text()
+        .expect("provider text should render");
+    let displayed = transcript
+        .replay_text()
+        .expect("display text should render");
+
+    // Assert
+    assert_eq!(
+        provider_text,
+        " › keep going\n\n[Commit] No changes to commit.\ndone\n\n"
+    );
+    assert!(displayed.contains("[Context] Summarized"));
+    assert!(displayed.contains("[Context Warning]"));
+    assert_eq!(notices_only.provider_replay_text(), None);
+}
+
+#[test]
 fn test_session_transcript_replay_text_is_absent_without_content() {
     // Arrange
     let transcript = SessionTranscript::new(Vec::new());

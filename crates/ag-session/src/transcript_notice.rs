@@ -21,6 +21,10 @@ pub enum TranscriptNotice {
     BranchPushError,
     /// Session auto-commit result.
     Commit,
+    /// Earlier turns compacted to fit the model's context window.
+    Context,
+    /// Failed compaction of earlier turns; the turn continued without them.
+    ContextWarning,
     /// Agent-assisted auto-commit recovery attempt.
     CommitAssist,
     /// Session auto-commit failure.
@@ -81,6 +85,8 @@ impl TranscriptNotice {
             Self::CommitAssist => "[Commit Assist]",
             Self::CommitError => "[Commit Error]",
             Self::CommitWarning => "[Commit Warning]",
+            Self::Context => "[Context]",
+            Self::ContextWarning => "[Context Warning]",
             Self::ContinueError => "[Continue Error]",
             Self::Error => "[Error]",
             Self::ForkError => "[Fork Error]",
