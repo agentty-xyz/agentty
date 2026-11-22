@@ -43,6 +43,28 @@ pub trait ToolHandler: Send + Sync {
     /// that is not [`ToolEffects::ReadOnly`] waits for its decision.
     fn effects(&self) -> ToolEffects;
 
+    /// Returns what the call with the model's JSON `arguments` may change,
+    /// which the approval handler sees and decides on; [`Self::effects`]
+    /// unless the handler tells calls apart, as the built-in `bash` marks
+    /// commands that run outside the sandbox
+    /// [`ToolEffects::ExecutesUnsandboxed`].
+    fn call_effects(&self, arguments: &Value) -> ToolEffects {
+        let _ = arguments;
+
+        self.effects()
+    }
+
+    /// Returns the exact argument vector, executable first, that a call
+    /// [`Self::call_effects`] marks [`ToolEffects::ExecutesUnsandboxed`]
+    /// runs outside the sandbox; the approval handler sees it as
+    /// [`crate::approval::ApprovalRequest::command`]. `None` unless the
+    /// handler runs such calls.
+    fn unsandboxed_command(&self, arguments: &Value) -> Option<Vec<String>> {
+        let _ = arguments;
+
+        None
+    }
+
     /// Runs one call with the model's JSON `arguments`, which the harness
     /// does not validate against the definition's parameters, or with the
     /// validated ones a [`crate::approval::Decision::AllowWith`] gave.
@@ -73,6 +95,14 @@ pub enum ToolEffects {
     /// Runs commands or other actions whose effects the harness cannot
     /// bound, like the built-in `bash`.
     Executes,
+    /// Runs a command outside the sandbox with the harness process's full
+    /// access, like a `bash` call of a program
+    /// `BashConfig::with_excluded_command` excludes. It runs unsandboxed
+    /// only when the approval handler decides
+    /// [`crate::approval::Decision::AllowUnsandboxed`]; a plain allow runs
+    /// it inside the sandbox. Show the user the exact argument vector, since
+    /// the program can run any code its arguments name.
+    ExecutesUnsandboxed,
 }
 
 /// Facts about one tool call, given to its [`ToolHandler`].
@@ -85,6 +115,9 @@ pub struct ToolContext {
     pub(crate) fits: Option<SharedResultFits>,
     pub(crate) run: Option<RunId>,
     pub(crate) session: Option<SessionId>,
+    /// Whether the approval handler explicitly allowed the call to run
+    /// outside the sandbox.
+    pub(crate) unsandboxed: bool,
     pub(crate) workspace: Option<PathBuf>,
 }
 
@@ -98,6 +131,7 @@ impl ToolContext {
             fits: None,
             run: None,
             session: None,
+            unsandboxed: false,
             workspace: None,
         }
     }

@@ -307,10 +307,23 @@ still describes the call by the model's arguments. A denial answers the model wi
   cherry-pick state stay read-only even under the Git-writes grant, because Git run
   later outside the sandbox would execute or follow them. Unsupported policy fails
   closed on enforcing executors, and a command the native sandbox refuses to start
-  returns to the model as a rejected tool call. Each executor reports its `Enforcement`
-  (none, filesystem, or filesystem and network), and the model-facing `bash` description
-  states exactly that, so an unsandboxed executor is never presented as a sandbox.
-  Output is captured within one bounded budget.
+  returns to the model as a rejected tool call. For coding sessions the policy follows
+  Claude Code's and Codex's sandboxes: optional full-disk reads minus hidden paths,
+  which always include the keychain, credential stores, browser profiles, and other
+  sessions' temporary directories, and which fail closed without a known home directory;
+  writable roots kept out of home and system directories, since host tools would run
+  what commands plant there; a per-path Unix-socket allowlist that only macOS enforces
+  (Linux reports it through the sandbox warning); and excluded programs whose plain-word
+  commands run without a shell, outside the sandbox, only when the `ApprovalHandler`
+  explicitly decides `Decision::AllowUnsandboxed` after seeing the exact argument
+  vector; a plain allow keeps them sandboxed. Hidden paths are the policy's only
+  narrowing field, so host executors receive them only by declaring support. A sandboxed
+  command whose failure reads like an operating-system denial gets an advisory
+  `likely_sandbox_denial` flag; it never triggers an unsandboxed rerun by itself. Each
+  executor reports its `Enforcement` (none, filesystem, or filesystem and network), and
+  the model-facing `bash` description states exactly that and names the excluded
+  programs, so an unsandboxed command is never presented as sandboxed. Output is
+  captured within one bounded budget.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks

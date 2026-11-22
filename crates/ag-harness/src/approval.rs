@@ -1,10 +1,12 @@
 //! Host approval of tool calls that change state, bounded by a decision
 //! timeout.
 //!
-//! With an [`ApprovalHandler`] configured, every call to a tool whose
-//! [`ToolEffects`] are not [`ToolEffects::ReadOnly`] waits for the handler's
-//! [`Decision`] before it runs; read-only calls never ask. Without one, every
-//! tool the turn's [`crate::ToolSet`] holds runs as before.
+//! With an [`ApprovalHandler`] configured, every call whose [`ToolEffects`]
+//! (as `ToolHandler::call_effects` reports them) are not
+//! [`ToolEffects::ReadOnly`] waits for the handler's [`Decision`] before it
+//! runs; read-only calls never ask. Without one, every tool the turn's
+//! [`crate::ToolSet`] holds runs as before, and `bash` commands excluded
+//! from the sandbox stay inside it.
 
 use std::error::Error;
 use std::fmt;
@@ -54,7 +56,15 @@ pub struct ApprovalRequest {
     pub arguments: Value,
     /// Provider identifier of the call.
     pub call_id: String,
-    /// What the call may change, as its tool declares it.
+    /// For a call marked [`ToolEffects::ExecutesUnsandboxed`], the exact
+    /// argument vector, executable first, it runs with outside the sandbox
+    /// if [`Decision::AllowUnsandboxed`] approves it, with no shell between;
+    /// `None` for every other call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// What the call may change, as its tool declares it for these
+    /// arguments; allowing [`ToolEffects::ExecutesUnsandboxed`] lets the
+    /// command run outside the sandbox with the host's full access.
     pub effects: ToolEffects,
     /// Run that made the call; `None` for a call outside a run, such as one
     /// from [`crate::Harness::turn`].
@@ -85,6 +95,13 @@ pub enum Decision {
         /// Why the call was denied, sent to the model.
         feedback: String,
     },
+    /// Runs a call marked [`ToolEffects::ExecutesUnsandboxed`] outside the
+    /// sandbox, with the harness process's full access and exactly the
+    /// [`ApprovalRequest::command`] it shows; on any other call it acts as
+    /// [`Self::Allow`]. Only this decision lets a command leave the sandbox:
+    /// [`Self::Allow`] and [`Self::AllowWith`] run it inside, so a handler
+    /// that allows `bash` by name never approves an escape.
+    AllowUnsandboxed,
 }
 
 /// A harness's approval handler and the time it has to decide.
@@ -135,6 +152,7 @@ impl Approval {
 
         match decision {
             Decision::Allow => Ok(Approved::Run(request.arguments)),
+            Decision::AllowUnsandboxed => Ok(Approved::RunUnsandboxed(request.arguments)),
             Decision::AllowWith(arguments) => {
                 OutputSchema::new(definition.parameters().clone())
                     .map_err(|error| error.to_string())
@@ -162,6 +180,9 @@ impl Approval {
 pub(crate) enum Approved {
     /// The call runs with the model's arguments.
     Run(Value),
+    /// The call runs with the model's arguments, outside the sandbox when
+    /// it is marked [`ToolEffects::ExecutesUnsandboxed`].
+    RunUnsandboxed(Value),
     /// The call runs with these replacement arguments, which its result
     /// reports to the model.
     Replaced(Value),

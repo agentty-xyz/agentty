@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::bash::{BashConfig, Enforcement};
+use crate::bash::Enforcement;
 use crate::calibration::UNCALIBRATED_CAPACITY_PERCENT;
 use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
@@ -2715,10 +2715,9 @@ pub(crate) fn builtin_definition(builtin: Builtin, options: &TurnOptions) -> Too
         Builtin::Write => ToolDefinition::write(),
         // Without a configuration the turn fails before any command runs;
         // still claim no isolation rather than one nothing provides.
-        Builtin::Bash => ToolDefinition::bash(
-            options
-                .bash()
-                .map_or(Enforcement::None, BashConfig::enforcement),
+        Builtin::Bash => options.bash().map_or_else(
+            || ToolDefinition::bash(Enforcement::None),
+            ToolDefinition::bash_for,
         ),
     }
 }

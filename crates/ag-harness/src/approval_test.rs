@@ -36,6 +36,7 @@ fn request() -> ApprovalRequest {
     ApprovalRequest {
         arguments: json!({"target": "prod"}),
         call_id: "deploy_0".to_string(),
+        command: None,
         effects: ToolEffects::Executes,
         run: None,
         session: None,
@@ -80,6 +81,9 @@ async fn allow_and_deny_answer_the_call() {
         .decide(&parameters, request())
         .await;
     let denied = approval(Some(deny)).decide(&parameters, request()).await;
+    let unsandboxed = approval(Some(Decision::AllowUnsandboxed))
+        .decide(&parameters, request())
+        .await;
 
     // Assert
     assert_eq!(
@@ -87,6 +91,10 @@ async fn allow_and_deny_answer_the_call() {
         Approved::Run(json!({"target": "prod"}))
     );
     assert_eq!(denied.expect("denied"), Approved::Denied("no".to_string()));
+    assert_eq!(
+        unsandboxed.expect("allowed unsandboxed"),
+        Approved::RunUnsandboxed(json!({"target": "prod"}))
+    );
 }
 
 #[tokio::test]

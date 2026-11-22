@@ -283,6 +283,11 @@ impl ApprovalHandler for AskTheUser {
     }
 }
 
+// A `bash` call of a program `BashConfig::with_excluded_command` excludes is
+// marked `ToolEffects::ExecutesUnsandboxed` and carries its exact argument
+// vector in `request.command`. Only `Decision::AllowUnsandboxed` runs it
+// outside the sandbox; `Allow` and `AllowWith` keep it inside.
+
 fn approved_harness(
     model: Arc<dyn Model>,
     tools: ToolSet,
@@ -612,16 +617,22 @@ instead.
 The workspace is read-only unless you grant `with_write`. Everything else is explicit
 too:
 
-| Grant                      | Native sandbox effect                                                                                                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `with_system_reads`        | Reads the system directories Bash, Git, and toolchains need (`/usr`, `/System`, the Command Line Tools on macOS; `/usr`, `/lib*`, `/etc`, private `/proc` and `/dev` on Linux) |
-| `with_read`                | Reads one more directory, such as `~/.rustup` or `/opt/homebrew`                                                                                                               |
-| `with_write`               | Writes beneath a workspace directory; `with_write(".")` grants the whole worktree                                                                                              |
-| `with_temporary_directory` | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
-| `with_git_writes`          | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, submodule metadata, and rebase and cherry-pick state      |
-| `with_network`             | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
-| `with_environment`         | Passes one environment value                                                                                                                                                   |
-| `with_host_information`    | Exposes host details such as `uname`; required                                                                                                                                 |
+| Grant                       | Native sandbox effect                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `with_system_reads`         | Reads the system directories Bash, Git, and toolchains need (`/usr`, `/System`, the Command Line Tools on macOS; `/usr`, `/lib*`, `/etc`, private `/proc` and `/dev` on Linux) |
+| `with_read`                 | Reads one more directory, such as `~/.rustup` or `/opt/homebrew`                                                                                                               |
+| `with_write`                | Writes beneath a workspace directory; `with_write(".")` grants the whole worktree                                                                                              |
+| `with_temporary_directory`  | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
+| `with_git_writes`           | Lets `git add` and `git commit` write the repository's Git directories, except configuration, hooks, worktree links, submodule metadata, and rebase and cherry-pick state      |
+| `with_network`              | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
+| `with_full_disk_read`       | Reads everything except hidden paths, as Claude Code and Codex do; always hides the keychain and other credential stores                                                       |
+| `with_hidden_path`          | Hides one path, such as a project's `.env`, from reads and writes; refused inside a writable directory                                                                         |
+| `with_writable_root`        | Reads and writes one directory outside the workspace, every home directory, and system directories                                                                             |
+| `with_unix_socket`          | Allows connecting to one Unix-domain socket, such as `ssh-agent`'s, pinned when configured; macOS only, Linux warns                                                            |
+| `with_excluded_command`     | Runs explicitly approved plain commands of one pinned program outside the sandbox, without a shell                                                                             |
+| `with_excluded_environment` | Passes one environment value to excluded commands only                                                                                                                         |
+| `with_environment`          | Passes one environment value                                                                                                                                                   |
+| `with_host_information`     | Exposes host details such as `uname`; required                                                                                                                                 |
 
 Grants are paths: the sandbox never walks a granted directory, so a toolchain-sized read
 grant or a large `target/` or `node_modules` costs nothing per command. Links resolve to
@@ -633,10 +644,49 @@ write grant containing a Git directory, and only the repository's own Git metada
 repository at the top of each write grant stay read-only; macOS protects every `.git`
 name. A command the sandbox refuses to start, for example because a granted directory is
 missing, comes back to the model as a rejected tool call, and the turn continues.
-Enforcing a grant or a denial is the selected executor's job. Long output keeps each
-stream's start and end within the capture budget (`capture_bytes`, up to
-`BashConfig::MAX_CAPTURE_BYTES`; hosts usually pass
-`BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
+
+Coding sessions follow the sandboxes of Claude Code and Codex:
+
+- `with_full_disk_read` always hides the keychains, browser profiles, and common
+  credential stores (`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.git-credentials`,
+  `~/.npmrc`, Cargo's credentials, agent tokens, and more; the `with_full_disk_read`
+  docs list them) under the account's home directory and any different `HOME`, where
+  variables such as `XDG_CONFIG_HOME`, `CARGO_HOME`, `GNUPGHOME`, or `KUBECONFIG` move
+  them, plus `/run/secrets`, and the network grant never reaches the keychain service.
+  It also hides every other entry beside the session's temporary directory, so give each
+  session its own directory inside a dedicated parent; a parent that contains the
+  workspace or a home directory is refused, as is full-disk read when the account has no
+  home directory. Pass tools a credential such as `GH_TOKEN` with `with_environment`;
+  never grant the keychain.
+- A writable root lets commands plant code that host tools run later, so it is refused
+  inside any home directory, even for caches: Cargo, Go, and Git use cached entries
+  without re-verifying them. Point tool caches at the session's temporary directory
+  through the environment instead (`CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`,
+  `GOCACHE`, `PIP_CACHE_DIR`, and similar).
+- An excluded program runs unsandboxed only when the `ApprovalHandler` decides
+  `Decision::AllowUnsandboxed` on a call marked `ToolEffects::ExecutesUnsandboxed`;
+  `Allow` keeps it sandboxed. The harness runs the pinned executable directly with the
+  exact argument vector `ApprovalRequest::command` shows, with no shell, and only for
+  plain printable-ASCII words without quotes, globs, `~`, `$`, or operators. It gets a
+  minimal environment the host controls: a sanitized `PATH`, `HOME`, `USER`, `LOGNAME`,
+  `LANG`, `LC_*`, and `TERM` from the harness, and `with_excluded_environment` values,
+  never the sandbox's values or temporary directory. Excluding a program trusts it
+  fully: it runs whatever its arguments name and follows configuration in the workspace,
+  such as a `compose.yaml` or `.cargo/config.toml`, which the approval does not show.
+  The model-facing `bash` description names excluded programs.
+- A sandboxed command that fails with an operating-system denial on stderr, such as
+  `Operation not permitted`, gets a hedged `sandbox` note in its result, and its
+  `ToolCallItem` sets `likely_sandbox_denial`. The guess is advisory and the command's
+  own output can trigger it: never rerun a command outside the sandbox automatically.
+- Host executors receive hidden paths only by declaring
+  `BashExecutor::supports_hidden_paths`.
+
+Upgrading `ag-harness` can change what the native sandbox enforces, as this release does
+for the macOS network grant (TLS trust evaluation added, the keychain service removed):
+change your policy revision when you upgrade. Enforcing a grant or a denial is the
+selected executor's job. Long output keeps each stream's start and end within the
+capture budget (`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually
+pass `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
 results are not deferred by the per-round result share, so a larger budget spends more
 of the context window per command. The omitted byte counts are on the `CommandOutcome`.
 Command intents are recorded before spawning; await `settled()` (and

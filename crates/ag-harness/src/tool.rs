@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 use thiserror::Error;
 
-use crate::bash::{BashArguments, Enforcement};
+use crate::bash::{BashArguments, BashConfig, Enforcement};
 pub use crate::file_system::{FileSystem, LocalFileSystem};
 pub use crate::read::{ReadError, ReadOutput};
 pub use crate::tool_handler::{
@@ -35,6 +35,14 @@ const BASH_FILE_SYSTEM_SANDBOX: &str = "Run Bash inside a host filesystem sandbo
 /// `bash` isolation clause when filesystem and network policy are enforced.
 const BASH_FULL_SANDBOX: &str = "Run Bash inside the host sandbox. Workspace reads are allowed; \
                                  writes require host grants. Network access is denied.";
+/// Start of the `bash` clause naming programs excluded from the sandbox.
+const BASH_EXCLUDED_PREFIX: &str = "Programs excluded from the sandbox:";
+/// End of the `bash` clause naming programs excluded from the sandbox.
+const BASH_EXCLUDED_SUFFIX: &str = "A command that starts with one of them and consists only of \
+                                    plain words, with no quotes, `$`, globs, `~`, or shell \
+                                    operators, runs without a shell outside the sandbox with the \
+                                    host's full access once the user explicitly approves it; \
+                                    otherwise it runs inside the sandbox.";
 /// `bash` limits that hold for every executor.
 const BASH_LIMITS: &str = "Output and duration are bounded; long output keeps each stream's start \
                            and end. Applied writes are not rolled back.";
@@ -222,6 +230,29 @@ impl ToolDefinition {
             name: Cow::Borrowed(BASH_NAME),
             parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),
         }
+    }
+
+    /// Defines shell source as [`Self::bash`] does for `configuration`'s
+    /// enforcement, also naming the programs whose simple commands run
+    /// outside the sandbox once approved, so the description never
+    /// presents them as sandboxed.
+    pub(crate) fn bash_for(configuration: &BashConfig) -> Self {
+        let mut definition = Self::bash(configuration.enforcement());
+        let programs = configuration
+            .snapshot
+            .excluded_commands
+            .keys()
+            .map(|program| format!("`{program}`"))
+            .collect::<Vec<_>>();
+        if configuration.enforcement() != Enforcement::None && !programs.is_empty() {
+            definition.description = format!(
+                "{} {BASH_EXCLUDED_PREFIX} {}. {BASH_EXCLUDED_SUFFIX}",
+                definition.description,
+                programs.join(", ")
+            );
+        }
+
+        definition
     }
 
     /// Defines the native `read` function tool.

@@ -132,6 +132,7 @@ async fn journaled_tool(
         configuration: configuration()
             .with_environment("GREETING".into(), "hello".into())
             .expect("environment grant"),
+        excluded: None,
         executor: Arc::new(Finishing { cleanup_failure }),
         external_reads: Vec::new(),
         journal: Some(acquired.guard.write_journal()),
@@ -227,6 +228,7 @@ async fn invalid_policy_and_executor_failure_never_register_effects() {
             cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
             commands: commands.clone(),
             configuration,
+            excluded: None,
             executor: Arc::new(FailingExecutor { panic: false }),
             external_reads: Vec::new(),
             journal: None,
@@ -234,7 +236,7 @@ async fn invalid_policy_and_executor_failure_never_register_effects() {
         };
 
         // Act
-        let result = tool.execute(&arguments, "call").await;
+        let result = tool.execute(&arguments, "call", false).await;
 
         // Assert
         assert!(matches!(result, Err(TurnError::Bash(error)) if error == expected));
@@ -251,6 +253,7 @@ async fn executor_panic_retains_cleanup_authority_and_unknown_outcome() {
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         commands: commands.clone(),
         configuration: configuration(),
+        excluded: None,
         executor: Arc::new(FailingExecutor { panic: true }),
         external_reads: Vec::new(),
         journal: None,
@@ -262,6 +265,7 @@ async fn executor_panic_retains_cleanup_authority_and_unknown_outcome() {
         .execute(
             &BashArguments::new("true".into()).expect("arguments"),
             "call",
+            false,
         )
         .await;
 
@@ -289,7 +293,7 @@ async fn journal_failures_report_the_command_with_any_observed_outcome() {
         store.inject(fault);
 
         // Act
-        let result = tool.execute(&arguments, "call").await;
+        let result = tool.execute(&arguments, "call", false).await;
 
         // Assert
         assert!(
@@ -322,6 +326,7 @@ async fn failed_cleanup_fails_the_journaled_command() {
         .execute(
             &BashArguments::new("true".into()).expect("arguments"),
             "call",
+            false,
         )
         .await;
 
@@ -414,4 +419,158 @@ fn outcome_keeps_exit_output_and_each_failure_dimension() {
         );
         assert!(outcome.truncated);
     }
+}
+
+#[test]
+fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
+    // Arrange
+    let host = tempfile::tempdir().expect("host programs");
+    let cache = tempfile::tempdir().expect("writable root");
+    let tool = host.path().join("tool");
+    std::fs::write(&tool, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("mode");
+    let search = format!(
+        "relative:/usr/bin:/workspace/bin:{}::/nonexistent-directory:/bin",
+        cache.path().join("bin").display()
+    );
+    let configuration = BashConfig::for_executor(
+        Arc::new(crate::bash::UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_writable_root(cache.path().to_path_buf())
+    .expect("writable root")
+    .with_excluded_command(tool)
+    .expect("excluded command")
+    .with_temporary_directory("/private/tmp/session".into())
+    .expect("temporary directory");
+    let workspace = std::path::Path::new("/workspace");
+
+    // Act
+    let granted = BashTool::excluded_configuration(
+        &configuration
+            .clone()
+            .with_environment("PATH".into(), search)
+            .expect("PATH")
+            .with_environment("GIT_CONFIG_GLOBAL".into(), "/workspace/gitconfig".into())
+            .expect("sandbox value")
+            .with_excluded_environment("GH_TOKEN".into(), "token".into())
+            .expect("excluded value"),
+        workspace,
+    )
+    .expect("excluded configuration");
+    let default = BashTool::excluded_configuration(&configuration, workspace)
+        .expect("excluded configuration");
+    let planted = [
+        "/workspace/config",
+        "/private/tmp/session/home",
+        &format!("/usr/bin:{}", cache.path().join("cargo").display()),
+    ]
+    .map(|value| {
+        BashTool::excluded_configuration(
+            &configuration
+                .clone()
+                .with_excluded_environment("CARGO_HOME".into(), value.into())
+                .expect("excluded value"),
+            workspace,
+        )
+        .map(|_| ())
+    });
+
+    // Assert
+    assert_eq!(granted.environment["PATH"], "/usr/bin:/bin");
+    assert_eq!(granted.environment["GH_TOKEN"], "token");
+    // Values granted to sandboxed commands and the temporary directory never
+    // reach excluded ones; identity and locale come from the harness process.
+    assert!(!granted.environment.contains_key("GIT_CONFIG_GLOBAL"));
+    assert_eq!(granted.snapshot.temporary_directory, None);
+    assert_eq!(
+        granted.environment.get("HOME").map(String::as_str),
+        std::env::var("HOME").ok().as_deref()
+    );
+    assert!(
+        granted.environment.keys().all(|name| [
+            "PATH", "GH_TOKEN", "HOME", "USER", "LOGNAME", "LANG", "TERM"
+        ]
+        .contains(&name.as_str())
+            || name.starts_with("LC_")),
+        "{:?}",
+        granted.environment.keys()
+    );
+    assert_eq!(default.environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin");
+    assert!(
+        default
+            .snapshot
+            .environment_names
+            .iter()
+            .any(|name| name == "PATH")
+    );
+    assert_eq!(default.enforcement(), crate::bash::Enforcement::None);
+    // A value naming a place commands can write is refused.
+    assert_eq!(planted, [Err(BashError::InvalidPolicy); 3]);
+}
+
+#[test]
+fn excluded_values_resolve_paths_that_do_not_exist_yet() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let root = directory.path().canonicalize().expect("canonical fixture");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(root.join("outside")).expect("outside");
+    std::os::unix::fs::symlink(&workspace, root.join("outside/link")).expect("link");
+    let tool = root.join("outside/tool");
+    std::fs::write(&tool, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("mode");
+    let configuration = BashConfig::for_executor(
+        Arc::new(crate::bash::UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_excluded_command(tool)
+    .expect("excluded command");
+    let uppercase = workspace.to_string_lossy().to_uppercase();
+    let check = |value: String| {
+        BashTool::excluded_configuration(
+            &configuration
+                .clone()
+                .with_excluded_environment("CARGO_HOME".into(), value)
+                .expect("excluded value"),
+            &workspace,
+        )
+        .map(|_| ())
+    };
+
+    // Act / Assert
+    // Through a link, through `..`, or not existing yet, a value still
+    // resolves to the workspace it would be created in.
+    for value in [
+        root.join("outside/link/missing"),
+        root.join("outside/../workspace/missing"),
+    ] {
+        assert_eq!(
+            check(value.display().to_string()),
+            Err(BashError::InvalidPolicy),
+            "{}",
+            value.display()
+        );
+    }
+    // On a case-insensitive file system, as macOS uses by default, another
+    // letter case names the same workspace.
+    let case_insensitive = std::path::Path::new(&uppercase).exists();
+    assert_eq!(
+        check(format!("{uppercase}/missing")).is_err(),
+        case_insensitive
+    );
+    assert!(check(root.join("outside/elsewhere").display().to_string()).is_ok());
 }

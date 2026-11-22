@@ -32,6 +32,8 @@ use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::process::{Pid, WaitOptions, WaitStatus, getegid, geteuid, getgid, getuid, wait};
 use rustix::stdio::stdin;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::contract::ReadScope;
 use super::wire::{Launch, Notice};
 
 /// First argument of every helper invocation: the harness starts the helper
@@ -293,22 +295,30 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
          file-read* file-write-data (literal \"/dev/stdin\") (literal \"/dev/stdout\") (literal \
          \"/dev/stderr\") (subpath \"/dev/fd\"))\n(deny file-link)\n",
     );
+    if configuration.read_scope == ReadScope::FullDisk {
+        profile.push_str("(allow file-read*)\n");
+    }
     for path in std::iter::once(&configuration.workspace)
         .chain(&configuration.external_reads)
         .chain(std::iter::once(&configuration.launcher))
     {
         rule(&mut profile, "allow file-read*", path)?;
     }
+    if configuration.host_information {
+        profile.push_str(
+            "(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))\n",
+        );
+    }
+    // Hidden paths override every read rule above, and the writable
+    // directories below stay accessible inside them.
+    for path in &configuration.hidden_paths {
+        rule(&mut profile, "deny file-read* file-write*", path)?;
+    }
     for path in &configuration.writes {
         rule(&mut profile, "allow file-read* file-write*", path)?;
     }
     for path in &configuration.git_metadata {
         rule(&mut profile, "deny file-write*", path)?;
-    }
-    if configuration.host_information {
-        profile.push_str(
-            "(allow sysctl-read file-read-metadata)\n(allow file-read* (literal \"/\"))\n",
-        );
     }
     profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))\n");
     if let Some(git) = &configuration.git_writes {
@@ -345,6 +355,18 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     if configuration.network {
         profile.push_str(SEATBELT_NETWORK);
     }
+    // Seatbelt matches a socket's resolved path, which preparation supplies.
+    for socket in &configuration.unix_sockets {
+        let socket = socket
+            .to_str()
+            .ok_or_else(|| io::Error::other("non-UTF8 socket"))?;
+        writeln!(
+            profile,
+            "(allow network-outbound (remote unix-socket (path-literal {})))",
+            serde_json::to_string(socket)?
+        )
+        .map_err(io::Error::other)?;
+    }
 
     Ok(profile)
 }
@@ -360,7 +382,11 @@ const GIT_WORKTREE_PROTECTED: &str =
 
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
-/// certificates. Other Unix-domain sockets stay denied.
+/// certificates, including the trust evaluation agent Apple's `LibreSSL`,
+/// and so `/usr/bin/curl`, falls back to. The keychain service
+/// (`com.apple.SecurityServer`) stays denied, so commands cannot fetch
+/// credentials such as Git's or the GitHub CLI's from the keychain. Other
+/// Unix-domain sockets stay denied unless granted by path.
 #[cfg(target_os = "macos")]
 const SEATBELT_NETWORK: &str =
     "(allow system-socket)\n(allow network-outbound (remote ip))\n(allow network-bind \
@@ -369,7 +395,7 @@ const SEATBELT_NETWORK: &str =
      \"com.apple.dnssd.service\") (global-name \
      \"com.apple.SystemConfiguration.DNSConfiguration\") (global-name \
      \"com.apple.SystemConfiguration.configd\") (global-name \"com.apple.trustd.agent\") \
-     (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.ocspd\"))\n";
+     (global-name \"com.apple.ocspd\") (global-name \"com.apple.TrustEvaluationAgent\"))\n";
 
 /// Appends `(<action> (subpath "<path>"))` to `profile`.
 #[cfg(target_os = "macos")]
@@ -433,10 +459,15 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         "--cap-drop",
         "ALL",
         "--as-pid-1",
-        "--tmpfs",
-        "/",
     ]);
-    if configuration.system {
+    let full_disk = configuration.read_scope == ReadScope::FullDisk;
+    if full_disk {
+        command.args(["--ro-bind", "/", "/"]);
+    } else {
+        command.args(["--tmpfs", "/"]);
+    }
+    let devices = configuration.system || full_disk;
+    if devices {
         command.args(["--proc", "/proc", "--dev", "/dev"]);
     }
     for path in &configuration.external_reads {
@@ -450,6 +481,19 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .arg("--ro-bind")
         .arg(&configuration.workspace)
         .arg(&configuration.workspace);
+    // Hidden directories cover the read mounts above, and the writable
+    // mounts below stay accessible inside them: an empty directory, made
+    // read-only once those are mounted. Hidden files get the empty device
+    // last. A missing path cannot appear, since none lies inside a writable
+    // directory.
+    let (hidden_directories, hidden_files): (Vec<_>, Vec<_>) = configuration
+        .hidden_paths
+        .iter()
+        .filter(|path| path.exists())
+        .partition(|path| path.is_dir());
+    for path in &hidden_directories {
+        command.arg("--tmpfs").arg(path);
+    }
     for path in &configuration.writes {
         command.arg("--bind").arg(path).arg(path);
     }
@@ -471,7 +515,13 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
             }
         }
     }
-    if !configuration.system {
+    for path in hidden_directories {
+        command.arg("--remount-ro").arg(path);
+    }
+    for path in hidden_files {
+        command.arg("--ro-bind").arg("/dev/null").arg(path);
+    }
+    if !devices {
         command.args(["--dev-bind", "/dev/null", "/dev/null"]);
     }
     command.arg("--seccomp").arg(filter.as_raw_fd().to_string());
