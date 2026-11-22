@@ -33,4 +33,5 @@ Keep `docs/site/content/docs/usage/remote-control.md` aligned when relay behavio
 limits, or what the relay can observe changes. `container/relay.Containerfile` builds
 the relay's image, and `container/relay-probe.sh` probes it for the `relay-image` hook
 and for `.github/workflows/publish-relay-image.yml`, which publishes it on pushes to
-`main` and for each release.
+`main` and for each release. `container/relay.fly.toml` deploys the image on Fly.io;
+keep its port, flags, and health check aligned with the image.

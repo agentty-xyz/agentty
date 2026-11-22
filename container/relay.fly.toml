@@ -1,0 +1,50 @@
+# Fly.io configuration for the remote-control relay, `ag-relay`.
+#
+# It deploys the published image, so it needs no checkout or build. The app
+# name and region come from the command line:
+#
+#   fly apps create <name>
+#   fly deploy --config container/relay.fly.toml --app <name> --ha=false
+#
+# Fly Proxy terminates TLS, carries the WebSockets, and caps connections, which
+# the relay leaves to a reverse proxy.
+
+# The relay closes its connections within five seconds of being stopped. Keys
+# before the first table header are app settings.
+kill_timeout = 10
+
+[build]
+  image = "ghcr.io/agentty-xyz/agentty-relay:latest"
+
+# Arguments to the image's entry point. Fly Proxy sets `Fly-Client-IP` to the
+# one address it accepted the connection from, so the relay's limits count each
+# client separately.
+[processes]
+  app = "--client-address-header Fly-Client-IP"
+
+# The relay keeps registrations in memory, so devices and the Agentty instance
+# must reach the same machine: run exactly one (`--ha=false`), and never stop
+# it for idleness.
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 1000
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
