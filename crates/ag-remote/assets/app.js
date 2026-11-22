@@ -3,55 +3,93 @@
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
-import { relativeTime } from "./format.mjs";
+import { relativeTime, statusInfo } from "./format.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
+import { THEMES, applyTheme, createShell, loadTheme, parseRoute, saveTheme } from "./shell.mjs";
+
+// The theme comes first, so a dark-theme device shows green for at most
+// one frame. The content security policy forbids an inline script that
+// could set it before the first paint.
+applyTheme(document, loadTheme(window));
 
 const PROTOCOL_VERSION = 1;
 const TOKEN_KEY = "agentty.remote.token";
 const RELAY_KEY = "agentty.remote.relay";
+const DEVICE_NAME_KEY = "agentty.remote.device_name";
 const MAX_BACKOFF_MS = 30000;
 // Rejections that mean the stored credential can never work again.
 const CREDENTIAL_REJECTIONS = new Set(["Unknown device token", "Device revoked"]);
-// Statuses Agentty lets a session be canceled from. Canceling removes the
-// whole session, so the button asks first.
-const CANCELABLE_STATUSES = new Set([
-  "InProgress", "Question", "Review", "AgentReview", "Watching", "Draft",
-]);
 // A relay serves this page with the marker set to "relay". The device then
 // pairs with a link and reaches Agentty through that relay, encrypted end
 // to end, and its key replaces the token.
 const usesRelay =
   document.querySelector('meta[name="agentty-transport"]')?.content === "relay";
+// What the device footer says in each connection state.
+const CONNECTION_LABELS = {
+  connected: usesRelay ? "Connected · relay, encrypted" : "Connected · local listener",
+  connecting: "Connecting",
+  offline: "Offline",
+  reconnecting: "Reconnecting",
+  rejected: "Disconnected",
+  waiting: "Waiting for approval",
+};
 
 // Each id is a literal, so the contract test in
 // crates/ag-remote/tests/server/http.rs can check it exists in index.html.
 const elements = {
-  back: document.getElementById("back"),
-  heading: document.getElementById("heading"),
-  connection: document.getElementById("connection"),
+  announcer: document.getElementById("announcer"),
   "pair-view": document.getElementById("pair-view"),
   "pair-hint-local": document.getElementById("pair-hint-local"),
   "pair-hint-relay": document.getElementById("pair-hint-relay"),
   "pair-form": document.getElementById("pair-form"),
+  "pair-fields": document.getElementById("pair-fields"),
   "pair-code": document.getElementById("pair-code"),
   "pair-name": document.getElementById("pair-name"),
-  "pair-status": document.getElementById("pair-status"),
+  "pair-confirm": document.getElementById("pair-confirm"),
+  "pair-confirmation": document.getElementById("pair-confirmation"),
   "pair-error": document.getElementById("pair-error"),
-  "list-view": document.getElementById("list-view"),
+  "pair-submit": document.getElementById("pair-submit"),
+  "pair-cancel": document.getElementById("pair-cancel"),
+  "pair-foot": document.getElementById("pair-foot"),
+  shell: document.getElementById("shell"),
+  sidebar: document.getElementById("sidebar"),
+  "sidebar-hide": document.getElementById("sidebar-hide"),
+  "drawer-close": document.getElementById("drawer-close"),
   sessions: document.getElementById("sessions"),
   "sessions-empty": document.getElementById("sessions-empty"),
   "list-error": document.getElementById("list-error"),
+  "device-name": document.getElementById("device-name"),
+  connection: document.getElementById("connection"),
+  "device-more": document.getElementById("device-more"),
+  "device-menu": document.getElementById("device-menu"),
   forget: document.getElementById("forget"),
-  "session-view": document.getElementById("session-view"),
+  "forget-dialog": document.getElementById("forget-dialog"),
+  scrim: document.getElementById("scrim"),
+  main: document.getElementById("main"),
+  menu: document.getElementById("menu"),
+  heading: document.getElementById("heading"),
+  "heading-sub": document.getElementById("heading-sub"),
   "session-status": document.getElementById("session-status"),
   cancel: document.getElementById("cancel"),
   "cancel-dialog": document.getElementById("cancel-dialog"),
+  banner: document.getElementById("banner"),
+  "banner-text": document.getElementById("banner-text"),
+  retry: document.getElementById("retry"),
+  reload: document.getElementById("reload"),
+  "home-view": document.getElementById("home-view"),
+  "home-title": document.getElementById("home-title"),
+  "home-pick": document.getElementById("home-pick"),
+  "home-none": document.getElementById("home-none"),
+  "home-sessions": document.getElementById("home-sessions"),
+  "session-view": document.getElementById("session-view"),
+  "chat-scroll": document.getElementById("chat-scroll"),
   transcript: document.getElementById("transcript"),
   queued: document.getElementById("queued"),
   questions: document.getElementById("questions"),
   composer: document.getElementById("composer"),
   message: document.getElementById("message"),
+  send: document.getElementById("send"),
   "session-error": document.getElementById("session-error"),
 };
 
@@ -59,6 +97,8 @@ const state = {
   backoffMs: 1000,
   // Optional requests the server supports; offer a feature only when listed.
   capabilities: [],
+  // One of the keys of `CONNECTION_LABELS`.
+  connection: "offline",
   currentSessionId: null,
   // This browser's key pair for relay streams.
   deviceKey: null,
@@ -71,12 +111,19 @@ const state = {
   pairingLink: null,
   pendingPairing: null,
   pending: new Map(),
+  // When the next reconnect attempt starts, in milliseconds since the epoch.
+  reconnectAt: 0,
   reconnectTimer: null,
   refreshAgain: false,
+  // Why Agentty refused this device for good, until the page reloads.
+  rejection: null,
   // Relay address and instance key that relay streams connect to.
   relay: null,
   session: null,
+  sessionCount: 0,
   stopReconnecting: false,
+  // Ticks the banner's reconnect countdown.
+  tickTimer: null,
   transport: null,
 };
 
@@ -131,6 +178,7 @@ function forgetCredential() {
   } else {
     setToken(null);
   }
+  writeStored(DEVICE_NAME_KEY, null);
 }
 
 // A relay device sends no token: its encrypted stream proves its key.
@@ -169,34 +217,142 @@ function socketUrl() {
   return scheme + "//" + window.location.host + "/ws";
 }
 
-function setConnection(label, isOnline) {
+// Shows `kind`, one of the keys of `CONNECTION_LABELS`, in the device
+// footer, announces a change once, and updates the banner and composer.
+function setConnection(kind) {
+  const label = CONNECTION_LABELS[kind];
   elements.connection.textContent = label;
-  elements.connection.classList.toggle("online", isOnline);
+  elements.connection.classList.toggle("is-online", kind === "connected");
+  elements.connection.classList.toggle("is-error", kind === "rejected");
+  if (state.connection !== kind) {
+    elements.announcer.textContent = label;
+  }
+  state.connection = kind;
+  renderOffline();
 }
 
-// Shows the pairing view. Through a relay the code comes from the pairing
-// link, so the form appears only once a link was opened.
+// While the device is paired but not connected, a banner under the header
+// says so and the composer keeps its draft without sending it.
+function renderOffline() {
+  window.clearInterval(state.tickTimer);
+  state.tickTimer = null;
+  const kind = state.connection;
+  const isOffline = kind === "reconnecting" || kind === "offline";
+  elements.banner.hidden = !state.rejection && !isOffline;
+  elements.banner.classList.toggle("is-error", Boolean(state.rejection));
+  elements.retry.hidden = !isOffline || Boolean(state.rejection);
+  elements.reload.hidden = !state.rejection;
+  if (state.rejection) {
+    elements["banner-text"].textContent = state.rejection;
+  } else if (kind === "reconnecting") {
+    tickCountdown();
+    state.tickTimer = window.setInterval(tickCountdown, 1000);
+  } else {
+    elements["banner-text"].textContent = "Offline";
+  }
+  const canSend = kind === "connected";
+  elements.send.disabled = !canSend;
+  elements.message.placeholder = canSend ? "Reply to the agent" : "Offline. Your draft is kept.";
+}
+
+function tickCountdown() {
+  const seconds = Math.max(1, Math.ceil((state.reconnectAt - Date.now()) / 1000));
+  elements["banner-text"].textContent = "Reconnecting in " + seconds + "s";
+}
+
+// Shows the pairing card instead of the app. Through a relay the code
+// comes from the pairing link, so the fields appear only once a link was
+// opened.
 function showPairing() {
+  setPairingWait(null);
   if (usesRelay) {
     const link = state.pairingLink;
     elements["pair-hint-local"].hidden = true;
     elements["pair-hint-relay"].hidden = Boolean(link);
-    elements["pair-form"].hidden = !link;
+    elements["pair-fields"].hidden = !link;
+    elements["pair-submit"].hidden = !link;
+    elements["pair-foot"].hidden = false;
     if (link) {
       elements["pair-code"].value = link.code;
     }
   }
-  show("pair");
+  elements["pair-view"].hidden = false;
+  elements.shell.hidden = true;
 }
 
-function show(view) {
-  elements["pair-view"].hidden = view !== "pair";
-  elements["list-view"].hidden = view !== "list";
-  elements["session-view"].hidden = view !== "session";
-  elements.back.hidden = view !== "session";
-  if (view !== "session") {
-    elements.heading.textContent = "Agentty";
+function showShell() {
+  elements["pair-view"].hidden = true;
+  elements.shell.hidden = false;
+  elements["device-name"].textContent = readStored(DEVICE_NAME_KEY) || defaultDeviceName();
+  renderMain();
+}
+
+// Shows the confirmation code while Agentty waits for approval, or the
+// form when `confirmation` is null.
+function setPairingWait(confirmation) {
+  const isWaiting = confirmation !== null;
+  elements["pair-confirm"].hidden = !isWaiting;
+  elements["pair-confirmation"].textContent = confirmation || "";
+  elements["pair-submit"].hidden = isWaiting;
+  elements["pair-cancel"].hidden = !isWaiting;
+}
+
+// Shows home or the open session in the main area.
+function renderMain() {
+  const sessionId = state.currentSessionId;
+  elements["home-view"].hidden = Boolean(sessionId);
+  elements["session-view"].hidden = !sessionId;
+  if (!sessionId) {
+    elements.heading.textContent = "agentty";
+    renderStatus(null);
+    elements.cancel.hidden = true;
+    renderHome();
   }
+}
+
+function renderHome() {
+  const isEmpty = state.isAuthenticated && state.sessionCount === 0;
+  elements["home-title"].textContent = isEmpty ? "No sessions yet" : "Pick a session";
+  elements["home-pick"].hidden = isEmpty;
+  elements["home-none"].hidden = !isEmpty;
+  elements["home-sessions"].hidden = isEmpty;
+  let summary = "";
+  if (state.isAuthenticated) {
+    summary = isEmpty ? "no sessions in this project" : sessionCountText(state.sessionCount);
+  }
+  elements["heading-sub"].replaceChildren(summary);
+}
+
+function sessionCountText(count) {
+  return count === 1 ? "1 session" : count + " sessions";
+}
+
+// Shows the session's status as a badge on wide screens and in the
+// header's sub-line on narrow ones, or neither for `null`.
+function renderStatus(statusName) {
+  const badge = elements["session-status"];
+  if (statusName === null) {
+    badge.hidden = true;
+    elements["heading-sub"].replaceChildren();
+
+    return;
+  }
+  badge.hidden = false;
+  fillStatus(badge, statusName);
+  const line = element("span", "status narrow-only");
+  fillStatus(line, statusName);
+  elements["heading-sub"].replaceChildren(line);
+}
+
+function fillStatus(node, statusName) {
+  const info = statusInfo(statusName);
+  for (const name of [...node.classList]) {
+    if (name.startsWith("status--")) {
+      node.classList.remove(name);
+    }
+  }
+  node.classList.add("status--" + info.tone);
+  node.replaceChildren(element("i"), info.label);
 }
 
 function send(frame) {
@@ -252,7 +408,7 @@ function connect(firstFrame) {
   state.transport?.close();
   state.stopReconnecting = false;
   state.isAuthenticated = false;
-  setConnection("Connecting", false);
+  setConnection("connecting");
 
   const handlers = {
     onclose: () => handleClose(transport),
@@ -278,7 +434,7 @@ function disconnect() {
   state.transport = null;
   state.isAuthenticated = false;
   failPending("Disconnected");
-  setConnection("Offline", false);
+  setConnection("offline");
 }
 
 function handleFrame(data) {
@@ -291,25 +447,20 @@ function handleFrame(data) {
 
   switch (frame.type) {
     case "awaiting_approval":
-      elements["pair-status"].textContent =
-        "Waiting for approval in Agentty. Confirm the code matches: " + frame.confirmation;
-      setConnection("Waiting for approval", false);
+      setPairingWait(String(frame.confirmation));
+      setConnection("waiting");
       break;
     case "paired":
       if (!usesRelay) {
         setToken(frame.token);
       }
       state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
-      state.pendingPairing = null;
-      elements["pair-status"].textContent = "";
       onAuthenticated();
       break;
     case "welcome":
       // A relay device that pairs again with a key Agentty already knows
       // is welcomed directly.
       state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
-      state.pendingPairing = null;
-      elements["pair-status"].textContent = "";
       onAuthenticated();
       break;
     case "response": {
@@ -337,6 +488,10 @@ function handleFrame(data) {
 }
 
 function onAuthenticated() {
+  if (state.pendingPairing) {
+    writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
+    state.pendingPairing = null;
+  }
   if (usesRelay) {
     state.isRelayPaired = true;
     state.pairingLink = null;
@@ -344,12 +499,10 @@ function onAuthenticated() {
   }
   state.isAuthenticated = true;
   state.backoffMs = 1000;
-  setConnection("Connected", true);
   elements["list-error"].textContent = "";
   elements["pair-error"].textContent = "";
-  if (!state.currentSessionId) {
-    show("list");
-  }
+  setConnection("connected");
+  showShell();
   refresh();
 }
 
@@ -357,7 +510,6 @@ function onAuthenticated() {
 // terminal, return to the pair form with the reason.
 function onRejected(reason) {
   state.stopReconnecting = true;
-  elements["pair-status"].textContent = "";
   if (state.pendingPairing || CREDENTIAL_REJECTIONS.has(reason)) {
     if (CREDENTIAL_REJECTIONS.has(reason)) {
       forgetCredential();
@@ -369,10 +521,9 @@ function onRejected(reason) {
   } else {
     // Other rejections, such as an unsupported protocol version, last
     // until Agentty or the server of this page is updated.
-    elements["list-error"].textContent = reason;
-    elements["session-error"].textContent = reason;
+    state.rejection = reason;
   }
-  setConnection("Disconnected", false);
+  setConnection("rejected");
 }
 
 function handleClose(transport) {
@@ -381,29 +532,37 @@ function handleClose(transport) {
   }
   state.isAuthenticated = false;
   state.transport = null;
-  elements["pair-status"].textContent = "";
   failPending("Disconnected");
-  setConnection("Offline", false);
   if (state.pendingPairing) {
     // The connection ended before Agentty answered the pairing.
     state.pendingPairing = null;
+    setPairingWait(null);
     elements["pair-error"].textContent =
       "Could not reach Agentty. Check that remote control is on, then try again.";
   }
   if (state.stopReconnecting || !hasCredential()) {
+    // A rejection already said why the connection ended.
+    if (state.connection !== "rejected") {
+      setConnection("offline");
+    }
+
     return;
   }
   const delay = state.backoffMs;
   state.backoffMs = Math.min(state.backoffMs * 2, MAX_BACKOFF_MS);
-  setConnection("Reconnecting", false);
+  state.reconnectAt = Date.now() + delay;
   state.reconnectTimer = window.setTimeout(() => {
     connect(helloFrame());
   }, delay);
+  setConnection("reconnecting");
 }
 
 // Reloads the list and the open session. Changes that arrive while a
 // reload runs coalesce into one more reload after it.
 function refresh() {
+  if (!state.isAuthenticated) {
+    return;
+  }
   if (state.isRefreshing) {
     state.refreshAgain = true;
 
@@ -427,11 +586,12 @@ async function loadSessions() {
   const listed = await request({ method: "list_sessions" });
   renderSessions(listed.sessions || []);
   if (state.currentSessionId) {
-    const loaded = await request({
-      method: "get_session",
-      session_id: state.currentSessionId,
-    });
-    renderSession(loaded.session);
+    const sessionId = state.currentSessionId;
+    const loaded = await request({ method: "get_session", session_id: sessionId });
+    // A session opened while the request ran is loaded by the next one.
+    if (sessionId === state.currentSessionId) {
+      renderSession(loaded.session);
+    }
   }
 }
 
@@ -448,11 +608,13 @@ function element(tag, className, text) {
 }
 
 function renderSessions(sessions) {
+  state.sessionCount = sessions.length;
   elements.sessions.replaceChildren(
     ...sessions.map((session) => {
       const item = element("li");
       const button = element("button");
       button.type = "button";
+      button.dataset.sessionId = session.id;
       button.append(
         element("span", "title", session.title || session.id),
         element(
@@ -461,31 +623,62 @@ function renderSessions(sessions) {
           session.status + " · " + relativeTime(session.updated_at, Date.now() / 1000),
         ),
       );
-      button.addEventListener("click", () => openSession(session.id));
+      button.addEventListener("click", () => {
+        shell.showSession(session.id);
+        enterSession(session.id);
+      });
       item.append(button);
 
       return item;
     }),
   );
+  markCurrentRow();
   elements["sessions-empty"].hidden = sessions.length > 0;
+  if (!state.currentSessionId) {
+    renderHome();
+  }
 }
 
-function openSession(sessionId) {
+// Opens `sessionId` in the main area. The caller has already routed to it.
+function enterSession(sessionId) {
+  if (sessionId === state.currentSessionId) {
+    return;
+  }
   state.currentSessionId = sessionId;
   state.session = null;
+  elements.heading.textContent = "";
+  renderStatus(null);
+  elements.cancel.hidden = true;
   elements.transcript.replaceChildren();
   elements.queued.replaceChildren();
   elements.questions.hidden = true;
   elements["session-error"].textContent = "";
-  show("session");
+  markCurrentRow();
+  renderMain();
   refresh();
 }
 
-function closeSession() {
+// Returns to home. The caller has already routed there.
+function leaveSession() {
+  if (!state.currentSessionId) {
+    return;
+  }
   state.currentSessionId = null;
   state.session = null;
-  show("list");
+  markCurrentRow();
+  renderMain();
   refresh();
+}
+
+// Marks the open session's row in the list.
+function markCurrentRow() {
+  for (const button of elements.sessions.querySelectorAll("button")) {
+    if (button.dataset.sessionId === state.currentSessionId) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  }
 }
 
 function renderSession(session) {
@@ -503,24 +696,26 @@ function renderSession(session) {
     !state.session || JSON.stringify(state.session.questions) !== JSON.stringify(session.questions);
   state.session = session;
   elements.heading.textContent = session.title || session.id;
-  elements["session-status"].textContent = session.status;
-  elements.cancel.hidden = !CANCELABLE_STATUSES.has(session.status);
+  renderStatus(session.status);
+  elements.cancel.hidden = !statusInfo(session.status).cancel;
 
+  // The transcript follows new content only while the reader is near its
+  // end.
+  const scroller = elements["chat-scroll"];
+  const nearBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 80;
   if (isNewTranscript) {
-    const nearBottom =
-      window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
     elements.transcript.replaceChildren(
       ...session.messages.map((message) => element("li", message.kind, message.content)),
     );
-    if (nearBottom) {
-      window.scrollTo(0, document.body.scrollHeight);
-    }
   }
   elements.queued.replaceChildren(
     ...session.queued_messages.map((message) => element("li", null, "Queued: " + message)),
   );
   if (questionsChanged) {
     renderQuestions(session.questions);
+  }
+  if (nearBottom && (isNewTranscript || questionsChanged)) {
+    scroller.scrollTop = scroller.scrollHeight;
   }
 }
 
@@ -533,7 +728,7 @@ function renderQuestions(questions) {
   }
 
   questions.forEach((question, index) => {
-    const group = element("div", "stack");
+    const group = element("div");
     group.dataset.question = question.text;
     group.append(element("p", "question", question.text));
     const options = element("div", "options");
@@ -559,17 +754,39 @@ function renderQuestions(questions) {
     form.append(group);
   });
 
-  const submit = element("button", "primary", "Answer");
+  const submit = element("button", null, "Answer");
   submit.type = "submit";
   form.append(submit);
 }
 
-elements["pair-name"].value = defaultDeviceName();
+const shell = createShell({
+  document: document,
+  elements: {
+    app: elements.shell,
+    close: elements["drawer-close"],
+    hide: elements["sidebar-hide"],
+    main: elements.main,
+    menu: elements.menu,
+    scrim: elements.scrim,
+    sidebar: elements.sidebar,
+  },
+  onRoute: (route) => {
+    if (route.kind === "session") {
+      enterSession(route.sessionId);
+    } else {
+      leaveSession();
+    }
+  },
+  parsePairingLink: parsePairingLink,
+  window: window,
+});
+
+elements["pair-name"].value = readStored(DEVICE_NAME_KEY) || defaultDeviceName();
 
 elements["pair-form"].addEventListener("submit", (event) => {
   event.preventDefault();
   const code = elements["pair-code"].value.trim();
-  if (!code) {
+  if (!code || state.pendingPairing) {
     return;
   }
   if (usesRelay) {
@@ -582,20 +799,73 @@ elements["pair-form"].addEventListener("submit", (event) => {
     state.isRelayPaired = false;
     state.relay = { instanceKey: link.instanceKey, relayUrl: link.relayUrl };
   }
+  const deviceName = elements["pair-name"].value.trim();
   elements["pair-error"].textContent = "";
-  elements["pair-status"].textContent = "";
-  state.pendingPairing = code;
+  state.pendingPairing = { code: code, deviceName: deviceName };
   connect({
     type: "pair",
     code: code,
-    device_name: elements["pair-name"].value.trim(),
+    device_name: deviceName,
     protocol_version: PROTOCOL_VERSION,
   });
 });
 
+// Stops waiting for approval. Agentty drops the request once the
+// connection closes.
+elements["pair-cancel"].addEventListener("click", () => {
+  state.pendingPairing = null;
+  disconnect();
+  setPairingWait(null);
+});
+
+for (const button of document.querySelectorAll("[data-theme]")) {
+  button.addEventListener("click", () => {
+    const theme = THEMES.includes(button.dataset.theme) ? button.dataset.theme : THEMES[0];
+    applyTheme(document, theme);
+    saveTheme(window, theme);
+  });
+}
+
+function setDeviceMenu(isOpen) {
+  elements["device-menu"].hidden = !isOpen;
+  elements["device-more"].setAttribute("aria-expanded", String(isOpen));
+}
+
+elements["device-more"].addEventListener("click", () => {
+  setDeviceMenu(elements["device-menu"].hidden);
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (
+    !elements["device-menu"].hidden &&
+    !elements["device-menu"].contains(target) &&
+    !elements["device-more"].contains(target)
+  ) {
+    setDeviceMenu(false);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements["device-menu"].hidden) {
+    setDeviceMenu(false);
+    elements["device-more"].focus();
+  }
+});
+
 elements.forget.addEventListener("click", () => {
+  setDeviceMenu(false);
+  elements["forget-dialog"].returnValue = "";
+  elements["forget-dialog"].showModal();
+});
+
+elements["forget-dialog"].addEventListener("close", () => {
+  if (elements["forget-dialog"].returnValue !== "confirm") {
+    return;
+  }
   forgetCredential();
   state.currentSessionId = null;
+  state.session = null;
   disconnect();
   if (usesRelay) {
     // Agentty lists the old key until it is removed there; a later pairing
@@ -607,10 +877,19 @@ elements.forget.addEventListener("click", () => {
         state.deviceKey = deviceKey.keyPair;
       });
   }
+  elements["pair-name"].value = defaultDeviceName();
   showPairing();
 });
 
-elements.back.addEventListener("click", closeSession);
+elements["home-sessions"].addEventListener("click", () => elements.menu.click());
+
+elements.retry.addEventListener("click", () => {
+  if (hasCredential()) {
+    connect(helloFrame());
+  }
+});
+
+elements.reload.addEventListener("click", () => window.location.reload());
 
 elements.cancel.addEventListener("click", () => {
   if (!state.currentSessionId) {
@@ -639,11 +918,10 @@ elements["cancel-dialog"].addEventListener("close", async () => {
 elements.composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = elements.message.value;
-  if (!message.trim() || !state.currentSessionId) {
+  if (!message.trim() || !state.currentSessionId || elements.send.disabled) {
     return;
   }
-  const submit = elements.composer.querySelector("button");
-  submit.disabled = true;
+  elements.send.disabled = true;
   try {
     await request({
       method: "send_message",
@@ -655,7 +933,7 @@ elements.composer.addEventListener("submit", async (event) => {
   } catch (error) {
     elements["session-error"].textContent = error.message;
   } finally {
-    submit.disabled = false;
+    elements.send.disabled = state.connection !== "connected";
   }
 });
 
@@ -690,23 +968,37 @@ elements.questions.addEventListener("submit", async (event) => {
 // Takes a pairing link from the address bar, if one is there, and removes
 // it so the one-time code stays out of the address bar and the history.
 function adoptPairingLink() {
-  const link = parsePairingLink(window.location.hash);
-  if (!link) {
+  const route = parseRoute(window.location.hash, parsePairingLink);
+  if (route.kind !== "pairing") {
     return false;
   }
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  state.pairingLink = link;
+  state.pairingLink = route.link;
 
   return true;
+}
+
+// Opens the session the address names, if any, once the app connects.
+function adoptSessionRoute() {
+  const route = parseRoute(window.location.hash, parsePairingLink);
+  state.currentSessionId = route.kind === "session" ? route.sessionId : null;
+}
+
+// Shows the app and connects with the saved credential.
+function resume() {
+  adoptSessionRoute();
+  showShell();
+  connect(helloFrame());
 }
 
 async function startThroughRelay() {
   if (!(await isSupported())) {
     elements["pair-hint-local"].hidden = true;
-    elements["pair-form"].hidden = true;
+    elements["pair-fields"].hidden = true;
+    elements["pair-submit"].hidden = true;
     elements["pair-error"].textContent =
       "This browser cannot pair through a relay. Open the link in an up-to-date browser, over HTTPS.";
-    show("pair");
+    elements["pair-view"].hidden = false;
 
     return;
   }
@@ -720,6 +1012,7 @@ async function startThroughRelay() {
       disconnect();
       state.currentSessionId = null;
       state.session = null;
+      state.pendingPairing = null;
       elements["pair-error"].textContent = "";
       showPairing();
     }
@@ -746,15 +1039,13 @@ async function startThroughRelay() {
   }
   state.relay = relay;
   state.isRelayPaired = true;
-  show("list");
-  connect(helloFrame());
+  resume();
 }
 
 if (usesRelay) {
   await startThroughRelay();
 } else if (token()) {
-  show("list");
-  connect(helloFrame());
+  resume();
 } else {
-  show("pair");
+  showPairing();
 }

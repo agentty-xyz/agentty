@@ -4,7 +4,8 @@
         <meta charset="utf-8">
         <meta name="viewport"
               content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <meta name="color-scheme" content="light dark">
+        <meta name="color-scheme" content="dark">
+        <meta name="theme-color" content="#070b08">
         <meta name="referrer" content="no-referrer">
         <meta name="agentty-transport" content="local">
         <title>Agentty Remote</title>
@@ -12,81 +13,251 @@
         <script type="module" src="app.js"></script>
     </head>
     <body>
-        <header class="bar">
-            <button id="back"
-                    class="icon"
-                    type="button"
-                    aria-label="Back to sessions"
-                    hidden>&larr;</button>
-            <h1 id="heading">Agentty</h1>
-            <output id="connection" class="pill">Offline</output>
-        </header>
-        <main>
-            <section id="pair-view" class="view" hidden>
-                <h2>Pair this device</h2>
-                <p id="pair-hint-local" class="muted">
+        <svg class="sprite" aria-hidden="true" focusable="false">
+            <symbol id="i-prompt" viewBox="0 0 24 24">
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+            </symbol>
+            <symbol id="i-menu" viewBox="0 0 24 24">
+            <line x1="4" y1="7" x2="20" y2="7" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="17" x2="20" y2="17" />
+            </symbol>
+            <symbol id="i-panel" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <line x1="9" y1="4" x2="9" y2="20" />
+            </symbol>
+            <symbol id="i-more" viewBox="0 0 24 24">
+            <circle cx="5" cy="12" r="1" />
+            <circle cx="12" cy="12" r="1" />
+            <circle cx="19" cy="12" r="1" />
+            </symbol>
+            <symbol id="i-up" viewBox="0 0 24 24">
+            <line x1="12" y1="19" x2="12" y2="5" />
+            <polyline points="6 11 12 5 18 11" />
+            </symbol>
+            <symbol id="i-x" viewBox="0 0 24 24">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+            </symbol>
+            <symbol id="i-device" viewBox="0 0 24 24">
+            <rect x="7" y="2.5" width="10" height="19" rx="2" />
+            <line x1="11" y1="18" x2="13" y2="18" />
+            </symbol>
+        </svg>
+        <p id="announcer" class="visually-hidden" role="status"></p>
+        <div id="pair-view" class="pair-screen" hidden>
+            <span class="brand">
+                <svg class="icon" aria-hidden="true">
+                    <use href="#i-prompt" />
+                </svg>
+                agentty <span class="brand-tag">remote</span>
+            </span>
+            <form id="pair-form" class="pair" autocomplete="off">
+                <p class="eyebrow">Remote control</p>
+                <h1>Pair this device</h1>
+                <p id="pair-hint-local">
                     Run <code>/remote-control</code> in Agentty and enter the code it shows.
                 </p>
-                <p id="pair-hint-relay" class="muted" hidden>
+                <p id="pair-hint-relay" hidden>
                     Open the pairing link or scan the QR code that <code>/remote-control</code> shows in Agentty.
                 </p>
-                <form id="pair-form" class="stack" autocomplete="off">
+                <div id="pair-fields" class="pair-fields">
                     <label>
                         Pairing code
-                        <input id="pair-code"
-                               name="code"
-                               inputmode="text"
-                               autocapitalize="characters"
-                               spellcheck="false"
-                               placeholder="ABCD-EFGH"
-                               required
-                               maxlength="16">
+                        <span class="code-field">
+                            <span aria-hidden="true">&gt;</span>
+                            <input id="pair-code"
+                                   name="code"
+                                   inputmode="text"
+                                   autocapitalize="characters"
+                                   spellcheck="false"
+                                   placeholder="ABCD-EFGH"
+                                   required
+                                   maxlength="16">
+                        </span>
                     </label>
                     <label>
                         Device name
-                        <input id="pair-name" name="name" maxlength="64">
+                        <input id="pair-name" class="field" name="name" maxlength="64">
                     </label>
-                    <button type="submit" class="primary">Pair</button>
-                </form>
-                <p id="pair-status" class="muted"></p>
-                <p id="pair-error" class="error" role="alert"></p>
-            </section>
-            <section id="list-view" class="view" hidden>
-                <ul id="sessions" class="sessions">
-                </ul>
-                <p id="sessions-empty" class="muted" hidden>No sessions in the active project.</p>
-                <p id="list-error" class="error" role="alert"></p>
-                <button id="forget" type="button" class="link">Forget this device</button>
-            </section>
-            <section id="session-view" class="view" hidden>
-                <div class="session-meta">
-                    <span id="session-status" class="pill"></span>
-                    <button id="cancel" type="button" class="danger" hidden>Cancel session</button>
                 </div>
-                <dialog id="cancel-dialog" aria-labelledby="cancel-dialog-title">
-                    <form method="dialog" class="stack">
-                        <h2 id="cancel-dialog-title">Cancel this session?</h2>
-                        <p>
-                            Agentty stops the agent and deletes the session's worktree and branch. Changes that are not merged or published are lost.
-                        </p>
-                        <div class="dialog-actions">
-                            <button value="keep" class="primary" autofocus>Keep session</button>
-                            <button value="confirm" class="danger">Cancel session</button>
+                <div id="pair-confirm" class="confirm" hidden>
+                    <span class="status status--working"><i></i>Waiting for approval in Agentty</span>
+                    <span id="pair-confirmation" class="confirm-code"></span>
+                    <p>
+                        Press <code>y</code> in the terminal only when it shows the same code.
+                    </p>
+                </div>
+                <p id="pair-error" class="error" role="alert"></p>
+                <button id="pair-submit" type="submit" class="btn btn--primary btn--lg">Pair</button>
+                <button id="pair-cancel" type="button" class="btn btn--lg" hidden>Cancel</button>
+            </form>
+            <p id="pair-foot" class="pair-foot" hidden>Through a relay · encrypted end to end</p>
+        </div>
+        <div id="shell" class="app" hidden>
+            <aside id="sidebar" class="sidebar" aria-label="Sessions">
+                <div class="sidebar-head">
+                    <span class="brand">
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-prompt" />
+                        </svg>
+                        agentty <span class="brand-tag">remote</span>
+                    </span>
+                    <button id="sidebar-hide"
+                            class="icon-btn wide-only"
+                            type="button"
+                            aria-label="Hide sessions">
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-panel" />
+                        </svg>
+                    </button>
+                    <button id="drawer-close"
+                            class="icon-btn narrow-only"
+                            type="button"
+                            aria-label="Close sessions">
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-x" />
+                        </svg>
+                    </button>
+                </div>
+                <nav class="session-list" aria-label="Session list">
+                    <ul id="sessions" class="sessions">
+                    </ul>
+                    <p id="sessions-empty" class="list-empty" hidden>No sessions in the active project.</p>
+                    <p id="list-error" class="error" role="alert"></p>
+                </nav>
+                <footer class="sidebar-foot">
+                    <div class="segmented" role="group" aria-label="Color theme">
+                        <button type="button" data-theme="green" aria-pressed="true">green</button>
+                        <button type="button" data-theme="dark" aria-pressed="false">dark</button>
+                    </div>
+                    <div class="device">
+                        <span class="device-glyph">
+                            <svg class="icon" aria-hidden="true">
+                                <use href="#i-device" />
+                            </svg>
+                        </span>
+                        <span class="device-text">
+                            <span id="device-name" class="device-name"></span>
+                            <span id="connection" class="device-state">Offline</span>
+                        </span>
+                        <button id="device-more"
+                                class="icon-btn"
+                                type="button"
+                                aria-label="Device"
+                                aria-haspopup="menu"
+                                aria-expanded="false"
+                                aria-controls="device-menu">
+                            <svg class="icon" aria-hidden="true">
+                                <use href="#i-more" />
+                            </svg>
+                        </button>
+                        <div id="device-menu" class="menu" role="menu" hidden>
+                            <button id="forget" class="menu-item is-danger" type="button" role="menuitem">Forget this device</button>
                         </div>
-                    </form>
-                </dialog>
-                <ol id="transcript" class="transcript">
-                </ol>
-                <ul id="queued" class="queued">
-                </ul>
-                <form id="questions" class="questions stack" hidden>
+                    </div>
+                </footer>
+            </aside>
+            <div id="scrim" class="scrim" hidden></div>
+            <main id="main" class="main">
+                <header class="chat-head">
+                    <button id="menu"
+                            class="icon-btn menu-btn"
+                            type="button"
+                            aria-label="Show sessions"
+                            aria-controls="sidebar"
+                            aria-expanded="false">
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-menu" />
+                        </svg>
+                    </button>
+                    <div class="chat-heading">
+                        <h1 id="heading" class="chat-title">agentty</h1>
+                        <p id="heading-sub" class="chat-sub"></p>
+                    </div>
+                    <span id="session-status" class="status status-badge wide-only" hidden></span>
+                    <div class="chat-actions">
+                        <button id="cancel" type="button" class="btn btn--danger" hidden>Cancel session</button>
+                    </div>
+                </header>
+                <div id="banner" class="banner" hidden>
+                    <i></i>
+                    <span id="banner-text" class="banner-text"></span>
+                    <button id="retry" type="button" class="btn btn--ghost" hidden>Retry now</button>
+                    <button id="reload" type="button" class="btn btn--ghost" hidden>Reload</button>
+                </div>
+                <section id="home-view" class="empty">
+                    <p class="eyebrow">Remote control</p>
+                    <h2 id="home-title">Pick a session</h2>
+                    <p id="home-pick">Choose a session from the list to read it and reply.</p>
+                    <p id="home-none" hidden>
+                        Press <code>a</code> on the Sessions tab in Agentty to start one.
+                    </p>
+                    <button id="home-sessions" type="button" class="btn btn--lg narrow-only">
+                        <svg class="icon icon--sm" aria-hidden="true">
+                            <use href="#i-menu" />
+                        </svg>
+                        Show sessions
+                    </button>
+                </section>
+                <section id="session-view" class="session-view" hidden>
+                    <div id="chat-scroll" class="chat-scroll">
+                        <div class="chat-column">
+                            <ol id="transcript" class="transcript">
+                            </ol>
+                            <form id="questions" class="questions" hidden>
+                            </form>
+                        </div>
+                    </div>
+                    <footer class="dock">
+                        <div class="chat-column">
+                            <ul id="queued" class="queued">
+                            </ul>
+                            <p id="session-error" class="error" role="alert"></p>
+                            <form id="composer" class="composer">
+                                <textarea id="message"
+                                          rows="2"
+                                          placeholder="Reply to the agent"
+                                          aria-label="Message"></textarea>
+                                <button id="send" type="submit" class="send" aria-label="Send">
+                                    <svg class="icon" aria-hidden="true">
+                                        <use href="#i-up" />
+                                    </svg>
+                                </button>
+                            </form>
+                        </div>
+                    </footer>
+                </section>
+            </main>
+            <dialog id="cancel-dialog"
+                    class="dialog"
+                    aria-labelledby="cancel-dialog-title">
+                <form method="dialog">
+                    <h2 id="cancel-dialog-title">Cancel this session?</h2>
+                    <p>
+                        Agentty stops the agent and deletes the session's worktree and branch. Changes that are not merged or published are lost.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Keep session</button>
+                        <button value="confirm" class="btn btn--lg btn--danger">Cancel session</button>
+                    </div>
                 </form>
-                <form id="composer" class="composer">
-                    <textarea id="message" rows="2" placeholder="Message" aria-label="Message"></textarea>
-                    <button type="submit" class="primary">Send</button>
+            </dialog>
+            <dialog id="forget-dialog"
+                    class="dialog"
+                    aria-labelledby="forget-dialog-title">
+                <form method="dialog">
+                    <h2 id="forget-dialog-title">Forget this device?</h2>
+                    <p>
+                        This browser stops connecting and needs a new pairing code to come back. Agentty lists the device until you remove it in the remote control popup.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Keep pairing</button>
+                        <button value="confirm" class="btn btn--lg btn--danger">Forget device</button>
+                    </div>
                 </form>
-                <p id="session-error" class="error" role="alert"></p>
-            </section>
-        </main>
+            </dialog>
+        </div>
     </body>
 </html>

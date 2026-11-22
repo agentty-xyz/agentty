@@ -162,7 +162,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     let address = server.handle.local_addr().to_string();
 
     // Act
-    let mut app = WebDevice::run(APP_SCRIPT, &[&address, &token])?;
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "session", &token])?;
     let listed = app.next_step().await?;
     let opened = app.next_step().await?;
     let sent = app.next_step().await?;
@@ -173,9 +173,10 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     let succeeded = app.succeeded().await?;
 
     // Assert
-    assert_eq!(listed["connection"], "Connected");
+    assert_eq!(listed["connection"], "Connected · local listener");
+    assert_eq!(listed["heading"], "agentty");
     assert_eq!(listed["isOnline"], true);
-    assert_eq!(listed["view"], "list-view");
+    assert_eq!(listed["view"], "home-view");
     assert_eq!(listed["sessions"][0]["title"], "Build it");
     let detail = listed["sessions"][0]["detail"].as_str().unwrap_or_default();
     assert!(detail.starts_with("Review · ") && detail.ends_with(" d ago"));
@@ -184,6 +185,8 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
         json!({
             "step": "opened",
             "cancelHidden": false,
+            "current": "page",
+            "hash": "#s=session-1",
             "heading": "Build it",
             "questions": [{"options": ["main"], "text": "Which branch?"}],
             "status": "Question",
@@ -211,7 +214,13 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     );
     assert_eq!(
         closed,
-        json!({"step": "closed", "heading": "Agentty", "view": "list-view"})
+        json!({
+            "step": "closed",
+            "current": null,
+            "hash": "",
+            "heading": "agentty",
+            "view": "home-view",
+        })
     );
     assert!(succeeded);
     let mutations: Vec<String> = server
@@ -228,6 +237,60 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
             "cancel:session-1",
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_shows_the_confirmation_code_then_the_denial_through_the_listener()
+-> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let code = server.handle.issue_pairing_code()?.code;
+    let address = server.handle.local_addr().to_string();
+
+    // Act
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "pair", &code])?;
+    let awaiting = app.next_step().await?;
+    let request = server
+        .handle
+        .status()
+        .wait_for(|status| !status.pairing_requests.is_empty())
+        .await?
+        .pairing_requests[0]
+        .clone();
+    let denied_request = server.handle.deny_pairing(request.id);
+    let denied = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(request.device_name, "Node browser");
+    assert_eq!(
+        awaiting,
+        json!({
+            "step": "awaiting",
+            "cancelHidden": false,
+            "confirmation": request.confirmation,
+            "connection": "Waiting for approval",
+            "submitHidden": true,
+            "view": "pair-view",
+        })
+    );
+    assert!(denied_request);
+    assert_eq!(
+        denied,
+        json!({
+            "step": "denied",
+            "cancelHidden": true,
+            "confirmHidden": true,
+            "connection": "Disconnected",
+            "error": "Pairing was denied",
+            "submitHidden": false,
+            "view": "pair-view",
+        })
+    );
+    assert!(succeeded);
+    assert_eq!(server.devices.device_ids(), Vec::<String>::new());
 
     Ok(())
 }
