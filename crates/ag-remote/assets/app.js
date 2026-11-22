@@ -338,20 +338,17 @@ function renderStatus(statusName) {
     return;
   }
   badge.hidden = false;
-  fillStatus(badge, statusName);
-  const line = element("span", "status narrow-only");
-  fillStatus(line, statusName);
+  fillStatus(badge, "status status-badge wide-only", statusName);
+  const line = element("span");
+  fillStatus(line, "status narrow-only", statusName);
   elements["heading-sub"].replaceChildren(line);
 }
 
-function fillStatus(node, statusName) {
+// Gives `node` the classes in `className` plus the tone of `statusName`,
+// and shows its dot and label.
+function fillStatus(node, className, statusName) {
   const info = statusInfo(statusName);
-  for (const name of [...node.classList]) {
-    if (name.startsWith("status--")) {
-      node.classList.remove(name);
-    }
-  }
-  node.classList.add("status--" + info.tone);
+  node.className = className + " status--" + info.tone;
   node.replaceChildren(element("i"), info.label);
 }
 
