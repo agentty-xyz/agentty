@@ -317,3 +317,54 @@ fn generation_and_check_failures_propagate_and_stale_reports_never_pass()
 
     Ok(())
 }
+
+#[test]
+fn coverage_hooks_delete_raw_profiles_after_passing_and_failing_runs() -> Result<(), Box<dyn Error>>
+{
+    for hook in [
+        "coverage",
+        "coverage-focused",
+        "coverage-ag-harness-sandbox",
+        "coverage-ag-harness-features",
+    ] {
+        for (directory, relocated, coverage_exit) in [
+            ("target/llvm-cov-target", false, 0),
+            ("target/llvm-cov-target", false, 42),
+            ("target/relocated", true, 0),
+        ] {
+            // Arrange
+            let fixture = Fixture::new(hook)?;
+            let profiles = [
+                format!("{directory}/run.profraw"),
+                format!("{directory}/debug/child.profraw"),
+            ];
+            let merged = format!("{directory}/run.profdata");
+            fs::create_dir_all(fixture.path(&format!("{directory}/debug")))?;
+            for profile in &profiles {
+                fs::write(fixture.path(profile), "raw")?;
+            }
+            fs::write(fixture.path(&merged), "merged")?;
+            let coverage_exit_text = coverage_exit.to_string();
+            let mut environment = vec![
+                ("AGENTTY_TEST_PACKAGES", "ag-xtask"),
+                ("AGENTTY_TEST_WRITE_REPORT", "1"),
+                ("AGENTTY_TEST_COVERAGE_EXIT", coverage_exit_text.as_str()),
+            ];
+            if relocated {
+                environment.push(("CARGO_LLVM_COV_TARGET_DIR", directory));
+            }
+
+            // Act
+            let output = fixture.run(&environment)?;
+
+            // Assert
+            assert_eq!(output.status.code(), Some(coverage_exit), "{hook}");
+            for profile in &profiles {
+                assert!(!fixture.path(profile).exists(), "{hook}: {profile}");
+            }
+            assert!(fixture.path(&merged).exists(), "{hook}");
+        }
+    }
+
+    Ok(())
+}

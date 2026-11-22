@@ -22,8 +22,10 @@ isolation of coverage build settings from `check-coverage`, and failure propagat
 `clippy-ag-harness-features` and `coverage-ag-harness-features` build every selection
 without default features under selected feature unification, keep it and the coverage
 build settings away from `check-coverage`, and propagate failures.
+`crates/ag-xtask/tests/coverage_hook.rs` also checks that all four coverage hooks delete
+their raw profiles after passing and failing runs.
 
-`coverage-ag-harness-sandbox` still lacks such regression coverage; configuration and
+`coverage-ag-harness-sandbox` has no other regression coverage; configuration and
 instruction checks are not replacements. Review changes to coverage commands, compiler
 wrappers, and native sandbox setup for argument quoting, failure propagation, report
 freshness, and setup ordering.
