@@ -334,7 +334,8 @@ repos:
         description: Build `container/relay.Containerfile` with Podman, run the image with an extra relay flag, and check that it answers the health probe and serves the pairing page.
         entry: >-
           bash -eu -o pipefail -c 'image=localhost/agentty-relay:check;
-          podman build --file container/relay.Containerfile --tag "$image" .;
+          podman build --file container/relay.Containerfile
+          --ignorefile container/relay.containerignore --tag "$image" .;
           container=$(podman run --detach --rm --publish 127.0.0.1::8787 "$image"
           --client-address-header X-Real-IP);
           trap "podman stop --time 2 $container >/dev/null" EXIT;

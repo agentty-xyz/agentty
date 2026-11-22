@@ -1,7 +1,0 @@
-# Build context for `container/relay.Containerfile`, which builds from the
-# repository root: only the workspace manifests and sources.
-*
-!Cargo.lock
-!Cargo.toml
-!crates
-!rust-toolchain.toml

@@ -2,9 +2,10 @@
 #
 # The image holds one statically linked binary, which also serves the pairing
 # page, and nothing else: no shell and no system libraries. Build it from the
-# repository root, where `.containerignore` keeps the context small:
+# repository root, with the ignore file that keeps the context small:
 #
-#   podman build --file container/relay.Containerfile --tag agentty-relay .
+#   podman build --file container/relay.Containerfile \
+#     --ignorefile container/relay.containerignore --tag agentty-relay .
 #
 # The relay listens on port 8787 inside the container; publish that port to
 # choose the outside one. Arguments after the image name go to the relay, such

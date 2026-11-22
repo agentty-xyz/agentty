@@ -61,11 +61,17 @@ a free one.
 tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
 with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`. No hosted
 relay is offered yet, so run your own `ag-relay` behind a reverse proxy that serves it
-over TLS. From a checkout of the Agentty repository,
-`podman build --file container/relay.Containerfile --tag agentty-relay .` builds its
-container image, which listens on port `8787`. Arguments after the image name go to the
-relay: behind a proxy, pass `--client-address-header` with the header your proxy sets to
-the client address, so the relay's limits count each client separately.
+over TLS. From a checkout of the Agentty repository, build its container image, which
+listens on port `8787`:
+
+```sh
+podman build --file container/relay.Containerfile \
+  --ignorefile container/relay.containerignore --tag agentty-relay .
+```
+
+Arguments after the image name go to the relay: behind a proxy, pass
+`--client-address-header` with the header your proxy sets to the client address, so the
+relay's limits count each client separately.
 
 With a relay, the popup also shows the relay state, a pairing link, and a QR code of the
 link when the terminal is large enough. Scan the code or open the link on the other

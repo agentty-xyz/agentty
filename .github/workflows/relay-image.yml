@@ -7,13 +7,13 @@ on:
   # relay, a crate or the web client it embeds, or shared build configuration.
   pull_request:
     paths:
-      - .containerignore
       - .github/actions/setup-rust-prek/**
       - .github/workflows/relay-image.yml
       - .pre-commit-config.yaml
       - Cargo.lock
       - Cargo.toml
       - container/relay.Containerfile
+      - container/relay.containerignore
       - crates/ag-noise/**
       - crates/ag-relay/**
       - crates/ag-remote/assets/**
