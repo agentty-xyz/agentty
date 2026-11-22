@@ -35,7 +35,6 @@ use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::app::session::workflow::steering::SteeringDeliveries;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
@@ -639,7 +638,6 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
         let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
         let expected_turn = TurnSelection {
             agent: expected_agent,
-            permission_mode: PermissionMode::ReadOnly,
         };
         let command = SessionCommand::Run {
             operation_id: "telemetry-turn".into(),
@@ -657,10 +655,6 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
             .insert_session_operation("telemetry-turn", &context.session_id, command.kind())
             .await
             .expect("operation");
-        db.sessions()
-            .update_session_permission_mode(&context.session_id, PermissionMode::ReadOnly)
-            .await
-            .expect("permission mode");
 
         // Act
         let result = SessionWorkerService::process_session_command(
@@ -707,7 +701,6 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
     let command = resume_command("auto-commit-cancellation");
     let expected_turn = TurnSelection {
         agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
-        permission_mode: PermissionMode::AutoEdit,
     };
     db.operations()
         .insert_session_operation(

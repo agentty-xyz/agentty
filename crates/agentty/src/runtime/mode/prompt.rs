@@ -16,9 +16,7 @@ use crate::app::prompt_intent::{
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputState};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{Session, SessionId, Status};
-use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{
@@ -47,8 +45,6 @@ use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
     input_mode: PromptInputMode,
-    /// Session permission mode toggled by `Shift+Tab`.
-    permission_mode: PermissionMode,
     /// Effective session reasoning level preselected by `/reasoning`.
     reasoning_level: ReasoningLevel,
     /// Session response style preselected by `/style`.
@@ -123,8 +119,6 @@ enum PromptEffect {
     OpenDiff { restore: Option<DiffRestoreTarget> },
     /// Starts remote control and opens its popup above session view.
     OpenRemoteControl,
-    /// Persists one permission mode and reports failures in the transcript.
-    PersistPermissionMode(PermissionMode),
     /// Lists harness models again for the opened `/model` stage.
     RefreshHarnessModels,
     /// Saves the captured composer for the next prompt reopen.
@@ -159,8 +153,7 @@ struct PromptTurnSubmission {
 ///
 /// `Tab` moves focus between the composer and the chat transcript above it,
 /// unless the `@`-mention dropdown is open and claims the key for completion.
-/// `Shift+Tab` cycles the session permission mode while the composer is
-/// focused. While the transcript holds focus, scroll keys navigate it and the
+/// While the transcript holds focus, scroll keys navigate it and the
 /// composer text stays untouched. Pressing `q` from transcript focus returns to
 /// the sessions list and saves the complete composer for the next reopen.
 ///
@@ -289,8 +282,6 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
 
     Some(PromptContext {
         input_mode: prompt_input_mode(at_mention_state.as_ref(), input, slash_state),
-        permission_mode: session
-            .map_or_else(PermissionMode::default, |session| session.permission_mode),
         reasoning_level: session.map_or(
             app.settings.default_smart_reasoning_level,
             Session::effective_reasoning_level,
@@ -424,9 +415,6 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
                 selected_device_index: 0,
             };
         }
-        PromptEffect::PersistPermissionMode(permission_mode) => {
-            persist_prompt_permission_mode(app, session_id, permission_mode).await;
-        }
         PromptEffect::RefreshHarnessModels => app.refresh_harness_models(),
         PromptEffect::SaveProgress(snapshot) => app.save_prompt_progress(snapshot),
         PromptEffect::StartImagePaste { attachment_number } => {
@@ -535,26 +523,6 @@ fn apply_prompt_workflow_outcome(
             };
         }
         PromptWorkflowOutcome::ShowSessionList => *mode = AppMode::List,
-    }
-}
-
-/// Persists one selected permission mode and reports failures in the target
-/// session transcript.
-async fn persist_prompt_permission_mode(
-    app: &mut App,
-    session_id: &SessionId,
-    permission_mode: PermissionMode,
-) {
-    if let Err(error) = app
-        .update_prompt_session_permission_mode(session_id, permission_mode)
-        .await
-    {
-        app.append_prompt_status_line(
-            session_id,
-            TranscriptNotice::Error,
-            &format!("Failed to change mode; the session remains unchanged: {error}"),
-        )
-        .await;
     }
 }
 
@@ -920,14 +888,6 @@ fn reduce_editing_key(
     effects: &mut Vec<PromptEffect>,
 ) {
     match key.code {
-        KeyCode::BackTab => {
-            let permission_mode = match prompt_context.permission_mode {
-                PermissionMode::AutoEdit => PermissionMode::ReadOnly,
-                PermissionMode::ReadOnly => PermissionMode::AutoEdit,
-            };
-
-            effects.push(PromptEffect::PersistPermissionMode(permission_mode));
-        }
         KeyCode::Enter | KeyCode::Char('\r' | '\n') if !input_key::should_insert_newline(key) => {
             reduce_prompt_submit(mode, prompt_context, effects);
         }

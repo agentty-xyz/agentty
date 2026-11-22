@@ -152,7 +152,7 @@ impl<'a> ChatInput<'a> {
     }
 
     /// Fits the title and status between the border corners and padding,
-    /// preserving the trailing permission indicator before other fields.
+    /// preserving the trailing status indicator before other fields.
     fn input_title(&self, width: u16) -> String {
         let Some(status) = self.status else {
             return format!(" {} ", self.title);

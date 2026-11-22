@@ -346,8 +346,6 @@ pub struct SessionSettings {
     pub base_branch: String,
     /// Whether the session uses deferred draft materialization.
     pub is_draft: bool,
-    /// Provider permission mode used for future turns.
-    pub permission_mode: PermissionMode,
     /// Owning project identifier.
     pub project_id: i64,
     /// Session-scoped reasoning level.

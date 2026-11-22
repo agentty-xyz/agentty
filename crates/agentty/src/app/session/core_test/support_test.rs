@@ -22,7 +22,6 @@ use super::super::{SessionDefaults, SessionManager, session_folder};
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
@@ -705,7 +704,6 @@ pub(super) fn add_manual_session_with_status(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,
         ),
-        permission_mode: PermissionMode::AutoEdit,
         project_name: String::new(),
         prompt: prompt.to_string(),
         queued_messages: Vec::new(),
@@ -763,7 +761,6 @@ pub(super) fn test_session_manager_with_clock(
             in_progress_total_seconds: 0,
             is_draft: false,
             agent: model_fixture::codex_selection(),
-            permission_mode: PermissionMode::AutoEdit,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),

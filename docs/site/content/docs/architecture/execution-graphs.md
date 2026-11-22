@@ -50,7 +50,7 @@ Workspace access is explicit:
   work, such as turns and sync, but never graph writers. Use it only when observing a
   changing workspace is acceptable.
 - `ExclusiveWrite` serializes against every other operation in that Env. It cannot relax
-  session permissions, definition restrictions, or worker policy.
+  host permission ceilings, definition restrictions, or worker policy.
 
 A shared budget ID names a host-owned provider-call budget that covers retries and
 protocol repairs. The executor resolves it to one shared counter, reserves the first
@@ -102,14 +102,14 @@ transaction that creates the operation-backed task attempt or utility run. Compe
 admissions return the original receipt without dispatching again, including after a
 restart.
 
-The executor intersects session and definition permissions and keeps worker policy and
-capacity ceilings. Hosts share one `GraphResources` lease pool with other work in those
-Envs, and the database also excludes conflicting active work across graphs. Session
-adapters publish active ownership before waiting for Env access, so concurrent sync
-queues behind the turn. Leases are held through ordered effects and settlement; each
-settled node releases its capacity and Env lease and wakes only the drivers waiting for
-them. Dropping a driver leaves admitted work owned through cleanup, and runner panics
-follow the same durable failure path as returned errors.
+The executor intersects the host ceiling with definition permissions and keeps worker
+policy and capacity ceilings. Hosts share one `GraphResources` lease pool with other
+work in those Envs, and the database also excludes conflicting active work across
+graphs. Session adapters publish active ownership before waiting for Env access, so
+concurrent sync queues behind the turn. Leases are held through ordered effects and
+settlement; each settled node releases its capacity and Env lease and wakes only the
+drivers waiting for them. Dropping a driver leaves admitted work owned through cleanup,
+and runner panics follow the same durable failure path as returned errors.
 
 Successful settlement saves the complete schema-valid response. Question-free outputs
 receive validation evidence; user acceptance and task completion remain separate

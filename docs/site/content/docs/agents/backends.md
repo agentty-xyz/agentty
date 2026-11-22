@@ -36,14 +36,15 @@ account, plan, and usage pattern.
 
 ### Permissions
 
-- **Auto Edit**: Codex and Claude run commands with full access, outside the provider
+- **Chat turns**: Codex and Claude run commands with full access, outside the provider
   sandbox, so browser tests, local services, PTY tools, container runtimes, and tool
   caches work. Commands are therefore not confined to the session worktree; review the
-  diff, and use `Read Only` for inspection-only work.
-- **Read Only**: Codex denies filesystem writes and permission escalation but allows
-  shell network requests. Claude runs without a shell, using `Read`, `Glob`, `Grep`,
-  `WebSearch`, and `WebFetch`. Antigravity denies shell commands and file writes. This
-  also applies to read-only graph nodes.
+  diff.
+- **Inspection work**: Agentty runs reviews, planning, titles, and read-only graph nodes
+  without write access. Codex denies filesystem writes and permission escalation but
+  allows shell network requests. Claude runs without a shell, using `Read`, `Glob`,
+  `Grep`, `WebSearch`, and `WebFetch`. Antigravity denies shell commands and file
+  writes.
 - Claude turns can always use `WebSearch` and `WebFetch` without a permission prompt,
   and Claude's file-edit tool cannot edit the main checkout. Treat fetched web content
   as untrusted, keep web-backed prompts specific, and review the diff before merging.
@@ -242,8 +243,8 @@ Without the flag the session type is hidden; with it but no runnable model, it i
 disabled. With a runnable model, Agentty starts even when no backend CLI is installed,
 disabling the other session types.
 
-- `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
-  run unsandboxed `bash`, which can reach the network and paths outside the worktree.
+- Inspection turns can read the worktree. Chat turns can also write files and run
+  unsandboxed `bash`, which can reach the network and paths outside the worktree.
   Provider keys and endpoints are removed from the `bash` environment.
 - Answers and reasoning stream into the session view as the model writes them, with a
   short "Preparing a tool call" line while tool arguments arrive; the activity footer

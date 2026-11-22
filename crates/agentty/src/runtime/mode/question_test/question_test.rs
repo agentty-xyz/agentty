@@ -138,7 +138,6 @@ async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,
         ),
-        permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
         project_name: String::new(),
         prompt: String::new(),
         queued_messages: Vec::new(),

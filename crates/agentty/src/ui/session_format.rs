@@ -166,18 +166,14 @@ pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     Some(session.speed_mode.name())
 }
 
-/// Formats the response-style, response-speed, and permission indicators shown
-/// in the prompt input title.
+/// Formats the response-style and response-speed indicators shown in the
+/// prompt input title.
 pub(crate) fn prompt_session_status(session: &Session) -> String {
-    let speed_mode = session_speed_display(session);
-    let permission_mode = session.permission_mode.display_label();
     let response_style = session.response_style.name();
 
-    match speed_mode {
-        None => format!("{response_style} · {permission_mode}"),
-        Some(speed_mode) => {
-            format!("{response_style} · {speed_mode} · {permission_mode}")
-        }
+    match session_speed_display(session) {
+        None => response_style.to_string(),
+        Some(speed_mode) => format!("{response_style} · {speed_mode}"),
     }
 }
 

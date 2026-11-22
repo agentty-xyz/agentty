@@ -432,9 +432,6 @@ impl App {
         let folder = session.folder.clone();
         let status = Arc::clone(&handles.status);
         let transcript = Arc::clone(&handles.transcript);
-        self.services
-            .validate_graph_session_permissions(&request.graph.session_id)
-            .await?;
         let cancellation = CancellationToken::new();
         let runner = Arc::new(SessionGraphRunner {
             cancellation: cancellation.clone(),
@@ -557,26 +554,6 @@ impl AppServices {
             client,
             wake: self.graph_wake.clone(),
         })
-    }
-
-    async fn validate_graph_session_permissions(
-        &self,
-        session_id: &str,
-    ) -> Result<(), ag_session::SessionError> {
-        let invalid = ag_session::SessionError::Operation;
-        let session = self
-            .db()
-            .sessions()
-            .load_session(session_id)
-            .await
-            .map_err(|error| invalid(error.to_string()))?
-            .ok_or_else(|| invalid("Graph session is missing".into()))?;
-        let _: PermissionMode = session
-            .permission_mode
-            .parse()
-            .map_err(|error| invalid(format!("Invalid session permissions: {error}")))?;
-
-        Ok(())
     }
 
     /// Saves the launch and opens its ledgered budgets from the credit the
@@ -884,7 +861,7 @@ impl AppServices {
                     "Draft" | "Review" | "AgentReview" | "Watching" | "InProgress"
                 ) =>
             {
-                session.permission_mode.parse().ok()
+                Some(PermissionMode::AutoEdit)
             }
             _ => None,
         }

@@ -48,8 +48,7 @@ impl TaskAgentRole {
     /// Callers must pass this mode through worker/runtime permission
     /// enforcement; resolving a value alone does not sandbox a run. Worker
     /// execution policy remains an independent restriction. Implementers
-    /// retain read-only sessions and the session's existing
-    /// auto-address-comments behavior unchanged.
+    /// retain the host permission ceiling unchanged.
     pub fn permission_mode(self, session_permission_mode: PermissionMode) -> PermissionMode {
         match self {
             Self::Planner => PermissionMode::ReadOnly,

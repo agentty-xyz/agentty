@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use agentty::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
 use agentty::app::AppError;
 use agentty::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
-use agentty::domain::permission::PermissionMode;
 use agentty::infra::db::{DbError, acquire_instance_lock};
 use serde_json::Value;
 use wiremock::MockServer;
@@ -122,17 +121,7 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
     ];
     let agents = [AgentKind::Codex, AgentKind::Claude, AgentKind::Antigravity]
         .map(|kind| AgentSelection::new(kind, kind.default_model()));
-    let turns = agents
-        .into_iter()
-        .zip([
-            PermissionMode::AutoEdit,
-            PermissionMode::ReadOnly,
-            PermissionMode::AutoEdit,
-        ])
-        .map(|(agent, permission_mode)| TurnSelection {
-            agent,
-            permission_mode,
-        });
+    let turns = agents.into_iter().map(|agent| TurnSelection { agent });
     let event_count = session_types.len() + agents.len() * 3;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
@@ -191,7 +180,6 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
                 &[
                     ("agent", turn.agent.kind().name()),
                     ("model", turn.agent.model().as_str()),
-                    ("permission_mode", turn.permission_mode.label()),
                 ],
                 &[],
             );

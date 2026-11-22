@@ -25,7 +25,6 @@ use super::{
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::{App, AppEvent};
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
@@ -762,10 +761,7 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
         app.services.track_cleanup_task(tokio::spawn(async move {
             release_rx.await.expect("release turn settlement");
             services.emit_app_event(AppEvent::RefreshSessions);
-            let turn = TurnSelection {
-                agent,
-                permission_mode: PermissionMode::ReadOnly,
-            };
+            let turn = TurnSelection { agent };
             services.emit_app_event(AppEvent::SessionTurnStarted {
                 session_id: "settled-turn".into(),
                 turn,
@@ -804,7 +800,6 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
                 .expect("turn event sent before shutdown returns");
             assert_eq!(event["properties"]["agent"], agent.kind().name());
             assert_eq!(event["properties"]["model"], agent.model().as_str());
-            assert_eq!(event["properties"]["permission_mode"], "read_only");
         }
     }
 }

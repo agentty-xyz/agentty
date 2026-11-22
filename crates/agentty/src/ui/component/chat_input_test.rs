@@ -130,8 +130,7 @@ fn test_render_shows_session_status_beside_prompt_title() {
     let width = 80;
     let backend = ratatui::backend::TestBackend::new(width, 5);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let chat_input =
-        ChatInput::new("codex/gpt-5.4 [high]", "", 0).status("Balanced · Fast · Auto Edit");
+    let chat_input = ChatInput::new("codex/gpt-5.4 [high]", "", 0).status("Balanced · Fast");
 
     // Act
     terminal
@@ -143,21 +142,21 @@ fn test_render_shows_session_status_beside_prompt_title() {
 
     // Assert
     let top_row = buffer_row_text(terminal.backend().buffer(), 0, width);
-    assert!(top_row.contains(" codex/gpt-5.4 [high] · Balanced · Fast · Auto Edit "));
+    assert!(top_row.contains(" codex/gpt-5.4 [high] · Balanced · Fast "));
 }
 
 #[test]
-fn narrow_prompt_preserves_style_and_permission_before_model_title() {
+fn narrow_prompt_preserves_status_before_model_title() {
     for title in [
         "Reply [gpt-5.4]",
         "回复 [模型模型模型模型]",
         "Re\u{301}ply [a long model]",
     ] {
         // Arrange
-        let width = 40;
+        let width = 30;
         let backend = ratatui::backend::TestBackend::new(width, 5);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let chat_input = ChatInput::new(title, "", 0).status("Balanced · Normal · Auto Edit");
+        let chat_input = ChatInput::new(title, "", 0).status("Balanced · Normal");
 
         // Act
         terminal
@@ -166,23 +165,18 @@ fn narrow_prompt_preserves_style_and_permission_before_model_title() {
 
         // Assert
         let row = buffer_row_text(terminal.backend().buffer(), 0, width);
-        assert!(row.contains("Balanced · Normal · Auto Edit"), "{row}");
+        assert!(row.contains("Balanced · Normal"), "{row}");
         assert!(row.contains("..."), "{row}");
         assert!(row.ends_with('╮'));
     }
 }
 
 #[test]
-fn prompt_title_reserves_the_trailing_permission_indicator() {
-    for status in [
-        "Balanced · Normal · Auto Edit",
-        "Balanced · Normal · Read Only",
-        "Balanced · Read Only",
-        "Auto Edit",
-    ] {
+fn prompt_title_reserves_the_trailing_status_indicator() {
+    for status in ["Balanced · Normal", "Concise · Fast", "Detailed"] {
         // Arrange
         let chat_input = ChatInput::new("Reply [long-model-name]", "", 0).status(status);
-        let permission = status
+        let indicator = status
             .rsplit(" · ")
             .next()
             .expect("status has an indicator");
@@ -196,11 +190,11 @@ fn prompt_title_reserves_the_trailing_permission_indicator() {
                 title.width() <= usize::from(width - 2),
                 "width {width}: {title}"
             );
-            if usize::from(width - 4) >= permission.width() {
-                assert!(title.contains(permission), "width {width}: {title}");
+            if usize::from(width - 4) >= indicator.width() {
+                assert!(title.contains(indicator), "width {width}: {title}");
             }
             if let Some((response_style, _)) = status.split_once(" · ")
-                && usize::from(width - 4) >= response_style.width() + permission.width() + 3
+                && usize::from(width - 4) >= response_style.width() + indicator.width() + 3
             {
                 assert!(title.contains(response_style), "width {width}: {title}");
             }

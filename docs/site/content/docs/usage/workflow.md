@@ -27,9 +27,9 @@ current page. With `NO_COLOR`, selections use bold reverse video.
 Session chat shows `[size]`, the title, and added and removed line totals, plus any
 linked review request. Scroll history with `j` / `k` or the arrow keys; `g` jumps to the
 oldest output and `G` returns to the newest and follows updates. The composer border
-shows `agent/model [reasoning]`, response style, speed when supported, permissions, and
-timers such as `Timer: 2m 0s · Started 4m ago`. The footer shows the active directory,
-branch, and ahead/behind counts.
+shows `agent/model [reasoning]`, response style, speed when supported, and timers such
+as `Timer: 2m 0s · Started 4m ago`. The footer shows the active directory, branch, and
+ahead/behind counts.
 
 Archiving a session while you type discards unsent drafts, partial answers, and attached
 images. Up to eight session turns run at once; others wait for capacity.
@@ -154,7 +154,7 @@ and appear as the last queued action; choosing the current value cancels the cha
 Pending changes are lost on restart.
 
 While composing, `Tab` focuses chat for scrolling; from there, `d` previews changes and
-`q` returns to the list with the draft kept. `Shift+Tab` toggles the permission mode.
+`q` returns to the list with the draft kept.
 
 In Diff mode, add file, line, or range comments and press `s` to submit them with the
 draft and images. Leaving Diff mode with unsent comments asks whether to submit them;
@@ -217,8 +217,8 @@ limited to 64 KiB and the selected criteria to 8,000 bytes; shorten instructions
 narrow the review if they exceed it. Regenerate a review to apply changed criteria.
 
 Use `/apply` to have the agent verify suggestions and apply those that remain valid.
-[Permission modes](@/docs/usage/workflow.md#slash-commands) can automate this for up to
-three iterations.
+Agentty [automates this](@/docs/usage/workflow.md#slash-commands) for up to three
+iterations.
 
 ### Session Output Markdown
 
@@ -475,20 +475,16 @@ draft.
 | `/style`          | Choose concise, balanced, or detailed answers.               |
 | `/fast`           | Toggle normal or fast responses for Claude or Codex.         |
 
-`/apply` requires a completed focused review. `Shift+Tab` toggles the session permission
-mode while composing:
-
-- **Auto Edit**: Standard editing permissions. Codex and Claude have full command
-  access, so commands are not confined to the worktree.
-- **Read Only**: Prevents filesystem writes during chat turns.
+`/apply` requires a completed focused review. Chat turns always run with editing
+permissions; see [Permissions](@/docs/agents/backends.md#permissions).
 
 See [Agents & Models](@/docs/agents/backends.md#switching-models) for speed costs and
 model compatibility.
 
-In Auto Edit sessions, Agentty verifies and applies focused-review suggestions
-automatically, for up to three turns per message; a new prompt or mode change resets
-that limit. A notice in the chat explains this after a session's first message. Turn off
-`Auto Address Comments` in the project's Settings to disable it.
+Agentty verifies and applies focused-review suggestions automatically, for up to three
+turns per message; a new prompt resets that limit. A notice in the chat explains this
+after a session's first message. Turn off `Auto Address Comments` in the project's
+Settings to disable it.
 
 `/remote-control` appears only with `agentty --experimental-remote` and pairs a phone or
 browser with this Agentty; see [Remote Control](@/docs/usage/remote-control.md).
@@ -670,9 +666,9 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 | `agentty_launch`         | After the database opens                                       | `ci`, `interactive`                              |
 | `agentty_failure`        | When startup after the database opens or the terminal UI fails | `failure_category`, `stage`, `ci`, `interactive` |
 | `agentty_session_start`  | When new session metadata is reserved                          | `session_type`, `agent`, `model`                 |
-| `agentty_turn_start`     | When a first or follow-up message begins execution             | `agent`, `model`, `permission_mode`              |
-| `agentty_turn_finish`    | When a turn and its post-processing complete successfully      | `agent`, `model`, `permission_mode`              |
-| `agentty_turn_interrupt` | When an executing turn is stopped by the user                  | `agent`, `model`, `permission_mode`              |
+| `agentty_turn_start`     | When a first or follow-up message begins execution             | `agent`, `model`                                 |
+| `agentty_turn_finish`    | When a turn and its post-processing complete successfully      | `agent`, `model`                                 |
+| `agentty_turn_interrupt` | When an executing turn is stopped by the user                  | `agent`, `model`                                 |
 
 - `ci` is `true` when `CI`, `GITHUB_ACTIONS`, `TF_BUILD`, `JENKINS_URL`, or
   `CODEBUILD_BUILD_ID` is set to a value other than empty, `0`, or `false`.
@@ -683,7 +679,6 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 - `session_type` is `regular`, `draft`, or `fork`.
 - `agent` and `model` identify the selected provider and model; any local model is sent
   as `openai-compatible`, never by name.
-- `permission_mode` is `auto_edit` or `read_only`.
 
 Each event carries a random installation ID, created on the first launch with telemetry
 or `--otlp-endpoint` enabled and stored in Agentty's database, and sets

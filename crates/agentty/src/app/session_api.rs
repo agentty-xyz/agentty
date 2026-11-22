@@ -909,7 +909,6 @@ impl App {
             base_branch: source.settings.base_branch,
             settings: SessionCreationSettings {
                 agent: source.settings.agent,
-                permission_mode: source.settings.permission_mode,
                 reasoning_level: source.settings.reasoning_level,
                 response_style: source.settings.response_style,
                 speed_mode: source.settings.speed_mode,
@@ -1038,10 +1037,6 @@ fn build_api_session(
         .as_deref()
         .and_then(|value| value.parse::<ReasoningLevel>().ok())
         .unwrap_or_default();
-    let permission_mode = row
-        .permission_mode
-        .parse::<ag_contracts::PermissionMode>()
-        .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?;
     let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
     let response_style = row
         .response_style
@@ -1071,7 +1066,6 @@ fn build_api_session(
             agent: parse_persisted_session_agent_model(Some(&row.agent), &row.model),
             base_branch: row.base_branch,
             is_draft: row.is_draft,
-            permission_mode,
             project_id,
             reasoning_level,
             response_style,

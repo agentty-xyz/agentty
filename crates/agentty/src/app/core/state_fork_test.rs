@@ -1,7 +1,5 @@
 //! Session fork snapshot preparation and source validation unit tests.
 
-use ag_session::PermissionMode;
-
 use super::App;
 use crate::app::AppError;
 use crate::domain::session::{SessionDiffState, SessionStats, Status};
@@ -201,8 +199,8 @@ async fn test_fork_session_from_dirty_source_prepares_frozen_snapshot() {
 }
 
 #[tokio::test]
-async fn fork_refreshes_committed_changes_for_every_permission_mode() {
-    for permission_mode in PermissionMode::ALL {
+async fn fork_refreshes_committed_changes_for_every_review_status() {
+    for status in [Status::Review, Status::AgentReview] {
         // Arrange
         let (mut app, _base_dir) =
             crate::test_support::new_git_test_app_with_mock_tmux_client().await;
@@ -221,18 +219,7 @@ async fn fork_refreshes_committed_changes_for_every_permission_mode() {
         tokio::fs::write(folder.join("README.md"), "uncommitted source change\n")
             .await
             .expect("dirty source");
-        app.services
-            .db()
-            .sessions()
-            .update_session_permission_mode(&source_id, permission_mode)
-            .await
-            .expect("permission mode");
         // Both review-ready statuses use the same preparation path.
-        let status = if permission_mode == PermissionMode::ReadOnly {
-            Status::AgentReview
-        } else {
-            Status::Review
-        };
         crate::test_support::set_session_status_for_test(&mut app, &source_id, status);
 
         // Act
@@ -259,7 +246,6 @@ async fn fork_refreshes_committed_changes_for_every_permission_mode() {
             (row.added_lines, row.deleted_lines, row.has_diff),
             (1, 1, Some(true))
         );
-        assert_eq!(row.permission_mode, permission_mode.label());
     }
 }
 

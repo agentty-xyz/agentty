@@ -20,7 +20,6 @@ use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::StatusTransition;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionFollowUpTask, SessionSize, SessionStats, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageAnchor, TransientMessageSlot};
@@ -413,27 +412,6 @@ fn test_apply_session_speed_mode_updated_updates_only_matching_session() {
     assert_eq!(
         session_manager.state.sessions[0].speed_mode,
         SpeedMode::Fast
-    );
-}
-
-#[test]
-/// Ensures permission reducer updates only the matching in-memory session
-/// snapshot and leaves unrelated sessions untouched.
-fn test_apply_session_permission_mode_updated_updates_only_matching_session() {
-    // Arrange
-    let mut session_manager = test_session_manager("session-id", None);
-
-    // Act
-    session_manager
-        .apply_session_permission_mode_updated("other-session", PermissionMode::ReadOnly);
-    let mode_after_non_matching_update = session_manager.state.sessions[0].permission_mode;
-    session_manager.apply_session_permission_mode_updated("session-id", PermissionMode::ReadOnly);
-
-    // Assert
-    assert_eq!(mode_after_non_matching_update, PermissionMode::AutoEdit);
-    assert_eq!(
-        session_manager.state.sessions[0].permission_mode,
-        PermissionMode::ReadOnly
     );
 }
 

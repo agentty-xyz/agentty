@@ -1680,7 +1680,7 @@ impl SessionWorkerService {
 
         let is_generated_turn = Self::begin_generated_turn(context, &command).await;
 
-        let turn_selection = Self::emit_turn_started(context, command.turn_agent()).await;
+        let turn_selection = Self::emit_turn_started(context, command.turn_agent());
 
         let result = ag_worker::execute(
             context.db.operations(),
@@ -1780,23 +1780,14 @@ impl SessionWorkerService {
         true
     }
 
-    /// Reports a model turn beginning execution with its queued selection and
-    /// the session `/mode` read now, returning both for its settlement event.
-    ///
-    /// A turn whose mode cannot be read fails during preparation, so the
-    /// default only labels its start event.
-    async fn emit_turn_started(
+    /// Reports a model turn beginning execution with its queued selection,
+    /// returning it for the turn's settlement event.
+    fn emit_turn_started(
         context: &SessionWorkerContext,
         turn_agent: Option<AgentSelection>,
     ) -> Option<TurnSelection> {
         let agent = turn_agent?;
-        let permission_mode = turn::load_session_permission_mode(&context.db, &context.session_id)
-            .await
-            .unwrap_or_default();
-        let selection = TurnSelection {
-            agent,
-            permission_mode,
-        };
+        let selection = TurnSelection { agent };
         let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
             session_id: context.session_id.clone(),
             turn: selection,

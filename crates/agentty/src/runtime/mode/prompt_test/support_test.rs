@@ -17,7 +17,6 @@ use crate::app::App;
 use crate::app::prompt_intent::PromptSessionMode;
 use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle};
 use crate::domain::input::InputState;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::Database;
@@ -159,7 +158,6 @@ pub(super) const TEST_INPUT_WIDTH: u16 = 118;
 pub(super) fn new_test_prompt_context() -> PromptContext {
     PromptContext {
         input_mode: PromptInputMode::Text,
-        permission_mode: PermissionMode::default(),
         reasoning_level: ReasoningLevel::default(),
         response_style: ResponseStyle::default(),
         scroll_offset: None,

@@ -269,7 +269,7 @@ async fn graph_proposal_public_api_uses_worker_then_launches_only_after_approval
     app.drive_session_request(service.generate_graph_proposal(input))
         .await
         .expect("duplicate generation");
-    assert_changed_permission_rejected(&mut app).await;
+    assert_unready_session_rejected(&mut app).await;
     app.drive_session_request(service.approve_graph_proposal("preview", 2))
         .await
         .expect("approval");
@@ -369,25 +369,16 @@ async fn assert_unapproved_launches_rejected(app: &crate::app::App, state: &Grap
     }
 }
 
-async fn assert_changed_permission_rejected(app: &mut crate::app::App) {
-    app.services
-        .db()
-        .sessions()
-        .update_session_permission_mode("sess", PermissionMode::ReadOnly)
-        .await
-        .expect("restrict permission");
+async fn assert_unready_session_rejected(app: &mut crate::app::App) {
+    let status = Arc::clone(&app.sessions.session_handles()["sess"].status);
+    let ready_status = std::mem::replace(&mut *status.lock().expect("status"), Status::Question);
     let service = app.session_service();
     assert!(
         app.drive_session_request(service.approve_graph_proposal("preview", 2))
             .await
             .is_err()
     );
-    app.services
-        .db()
-        .sessions()
-        .update_session_permission_mode("sess", PermissionMode::AutoEdit)
-        .await
-        .expect("restore permission");
+    *status.lock().expect("status") = ready_status;
 }
 
 #[tokio::test]

@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus,
-    PermissionMode, ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName,
-    SpeedMode,
+    ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName, SpeedMode,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -63,8 +62,6 @@ pub struct PersistedSessionCreation<'a> {
     pub is_draft: bool,
     /// Persisted model identifier for the session.
     pub model: &'a str,
-    /// Provider permission mode captured for the session.
-    pub permission_mode: PermissionMode,
     /// Owning project identifier.
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
@@ -200,8 +197,6 @@ session_rows! {
         pub model: String,
         /// Total output tokens accumulated for the session.
         pub output_tokens: i64,
-        /// Persisted provider permission mode for future turns.
-        pub permission_mode: String,
         /// Owning project identifier, when present.
         pub project_id: Option<i64>,
     }
@@ -446,12 +441,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     async fn load_session_response_style(&self, session_id: &str)
     -> Result<ResponseStyle, DbError>;
 
-    /// Loads the persisted provider permission mode for future turns.
-    async fn load_session_permission_mode(
-        &self,
-        session_id: &str,
-    ) -> Result<PermissionMode, DbError>;
-
     /// Loads the persisted session response-speed preference.
     async fn load_session_speed_mode(&self, session_id: &str) -> Result<SpeedMode, DbError>;
 
@@ -585,13 +574,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         &self,
         id: &str,
         response_style: ResponseStyle,
-    ) -> Result<(), DbError>;
-
-    /// Updates the persisted provider permission mode for future turns.
-    async fn update_session_permission_mode(
-        &self,
-        id: &str,
-        permission_mode: PermissionMode,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted session response-speed preference.
@@ -783,7 +765,6 @@ impl SqliteSessionRepository {
             id,
             is_draft,
             model,
-            permission_mode,
             project_id,
             reasoning_level,
             response_style,
@@ -802,7 +783,6 @@ impl SqliteSessionRepository {
         status,
         has_diff,
         is_draft,
-        permission_mode,
         project_id,
         reasoning_level,
         response_style,
@@ -811,7 +791,7 @@ impl SqliteSessionRepository {
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ",
         )
         .bind(id)
@@ -822,7 +802,6 @@ impl SqliteSessionRepository {
         // Diff availability remains unknown until the worktree is refreshed.
         .bind(Option::<bool>::None)
         .bind(is_draft)
-        .bind(permission_mode.label())
         .bind(project_id)
         .bind(reasoning_level.as_str())
         .bind(response_style.as_str())
@@ -1022,7 +1001,6 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
-                permission_mode: PermissionMode::AutoEdit,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
@@ -1052,7 +1030,6 @@ WHERE id = ?
                 id,
                 is_draft: false,
                 model,
-                permission_mode: PermissionMode::AutoEdit,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
@@ -1073,7 +1050,6 @@ WHERE id = ?
             id,
             is_draft,
             model,
-            permission_mode,
             project_id,
             reasoning_level,
             response_style,
@@ -1090,7 +1066,6 @@ WHERE id = ?
                 id,
                 is_draft,
                 model,
-                permission_mode,
                 project_id,
                 reasoning_level,
                 response_style,
@@ -1134,7 +1109,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS is_draft,
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.permission_mode AS permission_mode,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1210,7 +1184,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.permission_mode AS permission_mode,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1271,7 +1244,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.permission_mode AS permission_mode,
        session.project_id,
        '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
@@ -1344,7 +1316,6 @@ SELECT session.base_branch AS base_branch,
        session.is_draft AS is_draft,
        session.model AS model,
        session.output_tokens AS output_tokens,
-       session.permission_mode AS permission_mode,
        session.project_id,
        '' AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1627,22 +1598,6 @@ WHERE id = ?
 
         Ok(value
             .and_then(|value| value.parse::<ResponseStyle>().ok())
-            .unwrap_or_default())
-    }
-
-    async fn load_session_permission_mode(
-        &self,
-        session_id: &str,
-    ) -> Result<PermissionMode, DbError> {
-        let value = sqlx::query_scalar!(
-            r"SELECT permission_mode FROM session WHERE id = ?",
-            session_id
-        )
-        .fetch_optional(&self.0)
-        .await?;
-
-        Ok(value
-            .and_then(|value| value.parse::<PermissionMode>().ok())
             .unwrap_or_default())
     }
 
@@ -2194,30 +2149,6 @@ SET response_style = ?,
 WHERE id = ?
             "#,
             response_style.as_str(),
-            now,
-            id
-        )
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update_session_permission_mode(
-        &self,
-        id: &str,
-        permission_mode: PermissionMode,
-    ) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query!(
-            r#"
-UPDATE session
-SET permission_mode = ?,
-    updated_at = ?
-WHERE id = ?
-            "#,
-            permission_mode.label(),
             now,
             id
         )
@@ -2795,7 +2726,6 @@ struct SessionJoinRow {
     is_draft: bool,
     model: String,
     output_tokens: i64,
-    permission_mode: String,
     project_id: Option<i64>,
     prompt: String,
     published_upstream_ref: Option<String>,
@@ -2871,7 +2801,6 @@ impl SessionJoinRow {
             is_draft,
             model,
             output_tokens,
-            permission_mode,
             project_id,
             prompt,
             published_upstream_ref,
@@ -2922,7 +2851,6 @@ impl SessionJoinRow {
             is_draft,
             model,
             output_tokens,
-            permission_mode,
             project_id,
             published_upstream_ref,
             reasoning_level_override,

@@ -353,9 +353,10 @@ settlement. Hosts supply question policy and ordered Git and forge effects. Clos
 mailbox settles or cancels outstanding work and notifies every caller. Operation
 completion includes post-processing, not only model completion.
 
-Turn preparation resolves permissions, reasoning level, response style, speed, and agent
-after workspace preparation; the model selection travels with the queued turn. Agent
-application state is saved only after a successful turn.
+Chat turns always run with editing permissions. Turn preparation resolves reasoning
+level, response style, speed, and agent after workspace preparation; the model selection
+travels with the queued turn. Agent application state is saved only after a successful
+turn.
 
 <a id="architecture-runtime-flow-steering"></a> Steering bypasses the queue without
 breaking ordering: the foreground removes the leading steerable chat prompts so the

@@ -73,12 +73,12 @@ async fn session_collapsed_composer() -> E2eResult {
                     let collapsed = common::frame_from_capture(&report.captures[0]);
                     let timing_row = collapsed.rows() - 2;
                     assert!(collapsed.row_text(timing_row).contains("Started"));
-                    assert!(collapsed.row_text(timing_row - 1).contains("Auto Edit"));
+                    assert!(collapsed.row_text(timing_row - 1).contains("· Concise"));
                     assert_eq!(collapsed.row_text(timing_row - 2).trim(), "");
                     assertion::assert_not_visible(&collapsed, "›");
                     assert!(frame.row_text(frame.rows() - 2).contains("Enter: send"));
                     assert!(frame.row_text(frame.rows() - 3).contains("Started"));
-                    assert!(frame.row_text(frame.rows() - 5).contains("Auto Edit"));
+                    assert!(frame.row_text(frame.rows() - 5).contains("· Concise"));
                     assert_eq!(frame.row_text(frame.rows() - 6).trim(), "");
                     assert!(
                         frame

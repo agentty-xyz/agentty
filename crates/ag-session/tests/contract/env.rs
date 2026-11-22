@@ -1,8 +1,8 @@
 //! Public environment ownership contract, without filesystem provisioning.
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, EnvId, PermissionMode, ReasoningLevel, ResponseStyle,
-    Session, SessionSettings, SessionStatus, SpeedMode, Task,
+    AgentKind, AgentModel, AgentSelection, EnvId, ReasoningLevel, ResponseStyle, Session,
+    SessionSettings, SessionStatus, SpeedMode, Task,
 };
 
 #[test]
@@ -50,7 +50,6 @@ fn session() -> Session {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             base_branch: "main".to_string(),
             is_draft: true,
-            permission_mode: PermissionMode::AutoEdit,
             project_id: 1,
             reasoning_level: ReasoningLevel::default(),
             response_style: ResponseStyle::default(),

@@ -44,7 +44,7 @@ impl SessionSnapshotStore {
             r"
 INSERT INTO session (
     id, agent, model, base_branch, status, project_id, prompt,
-    title, permission_mode, reasoning_level, response_style, speed_mode, added_lines, deleted_lines, has_diff, size,
+    title, reasoning_level, response_style, speed_mode, added_lines, deleted_lines, has_diff, size,
     input_tokens, output_tokens, is_draft,
     provider_conversation_id,
     app_server_instruction_provider_conversation_id, questions, published_upstream_ref,
@@ -53,7 +53,7 @@ INSERT INTO session (
     created_at, updated_at
 )
 SELECT ?, agent, model, base_branch, ?, project_id, prompt,
-       title, permission_mode, reasoning_level, response_style, speed_mode, 0, 0, NULL, 'XS', 0, 0, 0,
+       title, reasoning_level, response_style, speed_mode, 0, 0, NULL, 'XS', 0, 0, 0,
        NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
        ?, ?
 FROM session

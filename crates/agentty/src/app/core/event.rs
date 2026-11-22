@@ -146,11 +146,6 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         session_agent: crate::domain::agent::AgentSelection,
     },
-    /// Indicates a session provider permission mode has been persisted.
-    SessionPermissionModeUpdated {
-        permission_mode: crate::domain::permission::PermissionMode,
-        session_id: SessionId,
-    },
     /// Indicates a session reasoning-level selection has been persisted.
     SessionReasoningLevelUpdated {
         reasoning_level: crate::domain::agent::ReasoningLevel,
@@ -451,8 +446,6 @@ pub(super) struct AppEventBatch {
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     /// Latest streamed-output handle per session, or `None` once cleared.
     pub(super) session_output_updates: HashMap<SessionId, Option<crate::app::session::LiveOutput>>,
-    pub(super) session_permission_mode_updates:
-        HashMap<SessionId, crate::domain::permission::PermissionMode>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_rebase_review_invalidated_ids: HashSet<SessionId>,
@@ -532,7 +525,6 @@ impl AppEventBatch {
             || !self.review_updates.is_empty()
             || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
-            || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_activity_updates.is_empty()
             || !self.session_output_updates.is_empty()
@@ -630,13 +622,6 @@ impl AppEventBatch {
             AppEvent::ChatGptSignInUpdated { update } => self.chatgpt_sign_in_updates.push(update),
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.update_status = Some(update_status);
-            }
-            AppEvent::SessionPermissionModeUpdated {
-                permission_mode,
-                session_id,
-            } => {
-                self.session_permission_mode_updates
-                    .insert(session_id, permission_mode);
             }
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level,
@@ -764,7 +749,6 @@ impl AppEventBatch {
             | AppEvent::HarnessModelsUpdated { .. }
             | AppEvent::ChatGptSignInUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
-            | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
             | AppEvent::SessionResponseStyleUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
@@ -1926,13 +1910,6 @@ impl App {
         for (session_id, session_agent) in std::mem::take(&mut event_batch.session_model_updates) {
             self.sessions
                 .apply_session_model_updated(&session_id, session_agent);
-        }
-
-        for (session_id, permission_mode) in
-            std::mem::take(&mut event_batch.session_permission_mode_updates)
-        {
-            self.sessions
-                .apply_session_permission_mode_updated(&session_id, permission_mode);
         }
 
         for (session_id, reasoning_level) in

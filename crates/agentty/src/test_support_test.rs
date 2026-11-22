@@ -184,7 +184,6 @@ impl SessionFixtureBuilder {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                permission_mode: crate::domain::permission::PermissionMode::default(),
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),

@@ -1559,18 +1559,12 @@ async fn seed_completed_review_audit(
 }
 
 #[tokio::test]
-async fn automatic_apply_completion_revalidates_setting_mode_and_iteration_limit() {
+async fn automatic_apply_completion_revalidates_setting_and_iteration_limit() {
     // Arrange, Act, Assert
-    for (is_auto_address_enabled, permission_mode, completed_iterations) in [
-        (
-            false,
-            crate::domain::permission::PermissionMode::AutoEdit,
-            0,
-        ),
-        (true, crate::domain::permission::PermissionMode::ReadOnly, 0),
+    for (is_auto_address_enabled, completed_iterations) in [
+        (false, 0),
         (
             true,
-            crate::domain::permission::PermissionMode::AutoEdit,
             crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS,
         ),
     ] {
@@ -1581,7 +1575,6 @@ async fn automatic_apply_completion_revalidates_setting_mode_and_iteration_limit
                 is_auto_address_enabled,
             ))
             .await;
-        app.sessions.sessions_mut()[0].permission_mode = permission_mode;
         app.auto_address_review_iterations
             .insert(session_id.clone(), completed_iterations);
         let current_diff = String::new();

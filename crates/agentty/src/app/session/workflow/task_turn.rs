@@ -222,7 +222,6 @@ async fn prepare(
         .await?
         .ok_or_else(|| SessionError::Workflow("Task context is missing".to_string()))?;
     let assignment = &history.context.context.assignment;
-    let permission = turn::load_session_permission_mode(&context.db, &context.session_id).await?;
     let agent_profile = AgentDefinitionPrompt::active(assignment.definition.prompt.clone(), true);
     let replay = replay(&history);
     let persistent = ag_worker::uses_persistent_session(assignment.agent.kind());
@@ -243,7 +242,7 @@ async fn prepare(
         model: assignment.agent.model().provider_model_str().to_string(),
         permission_mode: assignment
             .definition
-            .permission_mode(assignment.role.permission_mode(permission)),
+            .permission_mode(assignment.role.permission_mode(PermissionMode::AutoEdit)),
         agent_profile,
         prompt: task_prompt(request),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,

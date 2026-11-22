@@ -1,5 +1,5 @@
-//! Channel turn preparation and execution tests covering session settings,
-//! permission modes, and failure handling.
+//! Channel turn preparation and execution tests covering session settings and
+//! failure handling.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -16,13 +16,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    MainCheckoutSnapshot, READ_ONLY_CHAT_PROMPT, add_main_checkout_warning,
-    fresh_turn_cancel_token, live_transcript_source, load_session_permission_mode,
-    load_session_response_style, load_title_reasoning_level, prepare_turn_request,
+    MainCheckoutSnapshot, add_main_checkout_warning, fresh_turn_cancel_token,
+    live_transcript_source, load_session_response_style, load_title_reasoning_level,
+    prepare_turn_request,
 };
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
-use crate::app::session::SessionError;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -30,10 +29,7 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{
-    AppRepositories, DbError, LEGACY_SESSION_AGENT_CLEAR_MARKER, PersistedSessionCreation,
-    SessionTurnMetadata,
-};
+use crate::infra::db::{AppRepositories, LEGACY_SESSION_AGENT_CLEAR_MARKER, SessionTurnMetadata};
 use crate::test_support::poison_lock;
 
 #[tokio::test]
@@ -73,8 +69,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
             &prompt,
             &resolved_turn_test_env(),
         )
-        .await
-        .expect("resumed turn");
+        .await;
 
         // Assert
         assert_eq!(
@@ -117,8 +112,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
         &prompt,
         &resolved_turn_test_env(),
     )
-    .await
-    .expect("following turn");
+    .await;
 
     // Assert
     assert_eq!(
@@ -149,8 +143,7 @@ async fn prepared_turn_preserves_default_settings() {
         &prompt,
         &env,
     )
-    .await
-    .expect("default settings");
+    .await;
 
     // Assert
     assert_eq!(prepared.request.permission_mode, PermissionMode::AutoEdit);
@@ -188,8 +181,7 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
         &prompt,
         &resolved_turn_test_env(),
     )
-    .await
-    .expect("current settings");
+    .await;
 
     // Assert
     assert_eq!(prepared.session_project_id, Some(project_id));
@@ -197,7 +189,7 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
         prepared.request.model,
         metadata.session_agent.model().provider_model_str()
     );
-    assert_eq!(prepared.request.permission_mode, PermissionMode::ReadOnly);
+    assert_eq!(prepared.request.permission_mode, PermissionMode::AutoEdit);
     assert_eq!(prepared.request.reasoning_level, ReasoningLevel::Low);
     assert_eq!(prepared.request.response_style, ResponseStyle::Concise);
     assert_eq!(prepared.request.speed_mode, SpeedMode::Fast);
@@ -205,13 +197,7 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
         prepared.request.agent_profile,
         AgentDefinitionPrompt::default()
     );
-    assert!(
-        prepared
-            .request
-            .prompt
-            .text
-            .starts_with(READ_ONLY_CHAT_PROMPT)
-    );
+    assert_eq!(prepared.request.prompt, prompt);
     assert_eq!(
         prepared.request.continuation.replay_transcript(),
         Some("earlier messages")
@@ -229,93 +215,8 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
     );
 }
 
-#[test]
-fn read_only_chat_prompt_redirects_write_access_requests_to_mode_shortcut() {
-    // Arrange, Act
-    let prompt = READ_ONLY_CHAT_PROMPT;
-
-    // Assert
-    assert!(prompt.contains("Do not ask a clarification question requesting write access"));
-    assert!(prompt.contains("switching the session to `Auto Edit` with `Shift+Tab`"));
-}
-
 #[tokio::test]
-async fn persisted_permission_mode_controls_read_only_execution() {
-    // Arrange
-    let repositories = AppRepositories::in_memory().await.expect("db should open");
-    let project_id = repositories
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    repositories
-        .sessions()
-        .insert_session(
-            "worker",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert worker session");
-    repositories
-        .sessions()
-        .insert_session(
-            "read-only-worker",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert read-only worker session");
-    repositories
-        .sessions()
-        .update_session_permission_mode("read-only-worker", PermissionMode::ReadOnly)
-        .await
-        .expect("failed to set read-only permission mode");
-    repositories
-        .sessions()
-        .insert_session_with_agent(PersistedSessionCreation {
-            agent: "codex",
-            base_branch: "main",
-            id: "researcher",
-            is_draft: false,
-            model: model_fixture::CODEX_MODEL_ID,
-            permission_mode: PermissionMode::ReadOnly,
-            project_id,
-            reasoning_level: ReasoningLevel::default(),
-            response_style: ag_contracts::ResponseStyle::default(),
-            speed_mode: crate::domain::agent::SpeedMode::Normal,
-            status: "InProgress",
-        })
-        .await
-        .expect("failed to insert research session");
-
-    // Act
-    let worker_mode = load_session_permission_mode(&repositories, "worker")
-        .await
-        .expect("worker mode should load");
-    let read_only_worker_mode = load_session_permission_mode(&repositories, "read-only-worker")
-        .await
-        .expect("read-only worker mode should load");
-    let research_mode = load_session_permission_mode(&repositories, "researcher")
-        .await
-        .expect("research mode should load");
-    let missing_error = load_session_permission_mode(&repositories, "missing")
-        .await
-        .expect_err("missing session should fail");
-
-    // Assert
-    assert_eq!(worker_mode, PermissionMode::AutoEdit);
-    assert_eq!(read_only_worker_mode, PermissionMode::ReadOnly);
-    assert_eq!(research_mode, PermissionMode::ReadOnly);
-    assert!(matches!(missing_error, SessionError::NotFound));
-}
-
-#[tokio::test]
-async fn permission_mode_load_propagates_query_errors() {
+async fn prepared_turn_falls_back_to_default_settings_when_storage_fails() {
     // Arrange
     let (repositories, pool) = AppRepositories::in_memory_with_pool()
         .await
@@ -330,7 +231,7 @@ async fn permission_mode_load_propagates_query_errors() {
     };
 
     // Act
-    let result = prepare_turn_request(
+    let prepared = prepare_turn_request(
         &context,
         &metadata,
         AgentRequestKind::SessionStart,
@@ -341,10 +242,11 @@ async fn permission_mode_load_propagates_query_errors() {
     .await;
 
     // Assert
-    assert!(matches!(
-        result,
-        Err(SessionError::Db(DbError::Query(sqlx::Error::PoolClosed)))
-    ));
+    assert_eq!(prepared.session_project_id, None);
+    assert_eq!(prepared.request.permission_mode, PermissionMode::AutoEdit);
+    assert_eq!(prepared.request.reasoning_level, ReasoningLevel::default());
+    assert_eq!(prepared.request.response_style, ResponseStyle::default());
+    assert_eq!(prepared.request.speed_mode, SpeedMode::default());
 }
 
 /// Supplies resolved paths independently of the worker's cached folder.
@@ -390,45 +292,6 @@ async fn response_style_load_returns_persisted_value_and_defaults_missing_sessio
     // Assert
     assert_eq!(persisted_style, ResponseStyle::Detailed);
     assert_eq!(missing_style, ResponseStyle::Concise);
-}
-
-#[tokio::test]
-async fn permission_mode_load_rejects_invalid_persisted_values() {
-    // Arrange
-    let (repositories, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    let project_id = repositories
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    repositories
-        .sessions()
-        .insert_session(
-            "worker",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert worker session");
-    sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'worker'")
-        .execute(&pool)
-        .await
-        .expect("failed to corrupt permission mode");
-
-    // Act
-    let permission_result = load_session_permission_mode(&repositories, "worker").await;
-    // Assert
-    assert!(matches!(
-        permission_result,
-        Err(SessionError::Db(DbError::InvalidData {
-            entity: "session permission mode",
-            ..
-        }))
-    ));
 }
 
 #[tokio::test]
@@ -541,10 +404,6 @@ async fn update_turn_test_settings(db: &AppRepositories) {
         .update_session_model("worker", "changed-model")
         .await
         .expect("model");
-    db.sessions()
-        .update_session_permission_mode("worker", PermissionMode::ReadOnly)
-        .await
-        .expect("permissions");
     db.sessions()
         .update_session_reasoning_level("worker", ReasoningLevel::Low)
         .await

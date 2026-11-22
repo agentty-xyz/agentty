@@ -127,9 +127,8 @@ impl App {
                 "Graph generation requires a prepared idle session".into(),
             ));
         }
-        let (agent, permission, folder, transcript) = (
+        let (agent, folder, transcript) = (
             session.agent,
-            session.permission_mode,
             session.folder.clone(),
             Arc::clone(&handles.transcript),
         );
@@ -137,7 +136,7 @@ impl App {
             agent,
             definitions: self.enabled_agent_definitions(&folder).await?,
             limits: GraphProposalLimits::default(),
-            permission,
+            permission: PermissionMode::AutoEdit,
             version: GraphProposalVersion {
                 answers: Vec::new(),
                 approval: None,
@@ -219,28 +218,16 @@ impl App {
                     .sessions
                     .session_for_id(&state.input.session_id)
                     .ok_or(SessionError::NotFound)?;
-                let stored = self
-                    .services
-                    .db()
-                    .sessions()
-                    .load_session(&state.input.session_id)
-                    .await
-                    .map_err(proposal_error)?
-                    .ok_or(SessionError::NotFound)?;
-                if session.permission_mode != state.permission
-                    || stored.permission_mode != state.permission.to_string()
-                    || !matches!(
-                        session.status,
-                        Status::Draft
-                            | Status::Review
-                            | Status::AgentReview
-                            | Status::Watching
-                            | Status::InProgress
-                    )
-                {
+                if !matches!(
+                    session.status,
+                    Status::Draft
+                        | Status::Review
+                        | Status::AgentReview
+                        | Status::Watching
+                        | Status::InProgress
+                ) {
                     return Err(SessionError::Operation(
-                        "Session permissions or readiness changed; proposal cannot be approved"
-                            .into(),
+                        "Session readiness changed; proposal cannot be approved".into(),
                     ));
                 }
                 let GraphProposalVersionOutcome::Generated {

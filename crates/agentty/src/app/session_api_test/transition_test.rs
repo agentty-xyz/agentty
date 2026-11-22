@@ -98,52 +98,6 @@ async fn runtime_backend_durable_turn_clears_diff_comments() {
 }
 
 #[tokio::test]
-async fn runtime_backend_rejects_invalid_permission_mode_retrieval_and_inheritance() {
-    // Arrange
-    let (mut app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let project_id = app.active_project_id();
-    let source_session_id = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Draft,
-            project_id,
-        },
-    )
-    .await
-    .expect("source session should be created");
-    sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = ?")
-        .bind(source_session_id.as_str())
-        .execute(&pool)
-        .await
-        .expect("source permission mode should be corrupted");
-
-    // Act
-    let retrieval_error = request_session(&mut app, source_session_id.clone())
-        .await
-        .expect_err("invalid permission mode retrieval should fail");
-    let inheritance_error = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: Some(source_session_id),
-            mode: CreateSessionMode::Draft,
-            project_id,
-        },
-    )
-    .await
-    .expect_err("invalid permission mode inheritance should fail");
-
-    // Assert
-    for error in [retrieval_error, inheritance_error] {
-        assert!(matches!(
-            error,
-            ApiSessionError::InvalidData(message)
-                if message.contains("Unknown permission mode: invalid")
-        ));
-    }
-}
-
-#[tokio::test]
 async fn runtime_backend_preserves_workflow_validation_errors() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;

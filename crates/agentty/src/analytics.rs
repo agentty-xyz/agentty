@@ -14,7 +14,6 @@ use uuid::Uuid;
 
 use crate::app::AppError;
 use crate::domain::agent::{AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel};
-use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::install_receipt::ShellInstallReceipt;
@@ -91,16 +90,13 @@ impl TurnOutcome {
 pub struct TurnSelection {
     /// Provider and model captured when the turn was queued.
     pub agent: AgentSelection,
-    /// Session `/mode` read when the turn began execution.
-    pub permission_mode: PermissionMode,
 }
 
 impl TurnSelection {
-    fn properties(self) -> [(&'static str, &'static str); 3] {
+    fn properties(self) -> [(&'static str, &'static str); 2] {
         [
             ("agent", self.agent.kind().name()),
             ("model", reported_model(self.agent)),
-            ("permission_mode", self.permission_mode.label()),
         ]
     }
 }
@@ -316,13 +312,12 @@ impl Analytics {
     }
 
     /// Records an accepted first or follow-up message without its contents,
-    /// including the session `/mode` it executes under.
+    /// including the provider and model it runs with.
     pub async fn record_turn_start(&self, turn: TurnSelection) {
         self.send("agentty_turn_start", &turn.properties()).await;
     }
 
-    /// Records a successful or user-interrupted turn with its queued selection
-    /// and the `/mode` reported when it started.
+    /// Records a successful or user-interrupted turn with its queued selection.
     pub async fn record_turn_end(&self, turn: TurnSelection, outcome: TurnOutcome) {
         self.send(outcome.event_name(), &turn.properties()).await;
     }

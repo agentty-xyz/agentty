@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_session::{
     AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, SessionError as ApiSessionError, SessionId, SessionMessageKind,
@@ -273,10 +273,6 @@ async fn runtime_backend_inherits_launch_settings_for_regular_and_draft_sessions
         ReasoningLevel::High
     );
     assert_eq!(inherited_session.settings.speed_mode, SpeedMode::Fast);
-    assert_eq!(
-        inherited_session.settings.permission_mode,
-        PermissionMode::ReadOnly
-    );
 
     let mut expected_regular_settings = inherited_session.settings.clone();
     expected_regular_settings.is_draft = false;
@@ -289,10 +285,6 @@ async fn runtime_backend_inherits_launch_settings_for_regular_and_draft_sessions
         default_session_model
     );
     assert_eq!(ordinary_session.settings.speed_mode, SpeedMode::Normal);
-    assert_eq!(
-        ordinary_session.settings.permission_mode,
-        PermissionMode::AutoEdit
-    );
     assert_eq!(app.sessions.default_session_model(), default_session_model);
 }
 

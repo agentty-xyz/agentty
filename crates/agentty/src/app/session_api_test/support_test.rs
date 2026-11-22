@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionAnswer,
     ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
@@ -201,7 +201,6 @@ pub(super) fn session_row() -> SessionRow {
         is_draft: true,
         model: model_fixture::CODEX_MODEL_ID.to_string(),
         output_tokens: 60,
-        permission_mode: "read_only".to_string(),
         project_id: Some(7),
         prompt: "staged prompt".to_string(),
         published_upstream_ref: Some("origin/wt/session-1".to_string()),
@@ -246,12 +245,6 @@ pub(super) async fn persist_inherited_launch_settings(app: &App, session_id: &Se
         .update_session_speed_mode(session_id, SpeedMode::Fast)
         .await
         .expect("source speed mode should update");
-    app.services
-        .db()
-        .sessions()
-        .update_session_permission_mode(session_id, PermissionMode::ReadOnly)
-        .await
-        .expect("source permission mode should update");
 }
 
 /// Answers any utility prompt, such as title generation, during question flows.

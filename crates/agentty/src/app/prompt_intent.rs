@@ -14,10 +14,9 @@ use crate::app::command_gateway::{
 use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
-use crate::app::{App, AppError, ReviewCacheEntry, SessionManager, spawn};
+use crate::app::{App, ReviewCacheEntry, SessionManager, spawn};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::{PromptAttachment, PromptSlashCommandSet};
-use crate::domain::permission::PermissionMode;
 use crate::domain::question::QuestionAttachmentState;
 use crate::domain::review;
 use crate::domain::session::{Session, SessionId, Status};
@@ -848,55 +847,15 @@ impl App {
         }
     }
 
-    /// Persists one prompt-selected provider permission mode.
-    ///
-    /// # Errors
-    /// Returns an error when the session is missing or persistence fails.
-    pub(crate) async fn update_prompt_session_permission_mode(
-        &mut self,
-        session_id: &SessionId,
-        permission_mode: PermissionMode,
-    ) -> Result<(), AppError> {
-        let result = self
-            .set_session_permission_mode(session_id, permission_mode)
-            .await;
-        if let Err(error) = &result {
-            warn!(
-                session_id = %session_id,
-                permission_mode = ?permission_mode,
-                error = %error,
-                "failed to update session permission mode from prompt shortcut"
-            );
-        }
-
-        if result.is_ok() {
-            self.auto_address_review_iterations.remove(session_id);
-        }
-
-        result
-    }
-
     /// Starts bounded `/apply`-equivalent turns for newly ready focused
-    /// reviews when the project enables automatic remediation and the
-    /// session may edit files.
+    /// reviews when the project enables automatic remediation.
     pub(crate) fn auto_address_focused_reviews(&mut self, ready_session_ids: Vec<SessionId>) {
         if !self.settings.auto_address_review_comments() {
             return;
         }
 
         for session_id in ready_session_ids {
-            let Some(session_index) = self
-                .sessions
-                .sessions()
-                .iter()
-                .position(|session| session.id == session_id)
-            else {
-                continue;
-            };
-            if self.sessions.sessions()[session_index]
-                .permission_mode
-                .is_read_only()
-            {
+            if self.sessions.session_for_id(&session_id).is_none() {
                 continue;
             }
 

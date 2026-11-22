@@ -23,7 +23,6 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
 };
 use crate::domain::harness::HarnessAvailability;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{PublishBranchAction, SessionDiffState, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
@@ -269,7 +268,6 @@ async fn apply_turn_started_clears_saved_diff_comments() {
         session_id: "session-1".into(),
         turn: TurnSelection {
             agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
-            permission_mode: PermissionMode::AutoEdit,
         },
     })
     .await;
@@ -286,7 +284,6 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
     app.set_analytics(Some(analytics));
     let turn = TurnSelection {
         agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
-        permission_mode: PermissionMode::ReadOnly,
     };
     app.services.emit_app_event(AppEvent::SessionTurnStarted {
         session_id: "private-session".into(),
@@ -314,11 +311,10 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
         assert_eq!(event["event"], "agentty_turn_start");
         assert_eq!(event["properties"]["agent"], "antigravity");
         assert_eq!(event["properties"]["model"], "gemini-3.8-flash");
-        assert_eq!(event["properties"]["permission_mode"], "read_only");
         assert!(!event.to_string().contains("private-session"));
         assert_eq!(
             event["properties"].as_object().map(serde_json::Map::len),
-            Some(7)
+            Some(6)
         );
     }
 }
@@ -677,14 +673,8 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
         (AgentKind::Codex, AgentModel::Gpt61Sol),
     ]
     .into_iter()
-    .zip([
-        PermissionMode::AutoEdit,
-        PermissionMode::ReadOnly,
-        PermissionMode::AutoEdit,
-    ])
-    .map(|((kind, model), permission_mode)| TurnSelection {
+    .map(|(kind, model)| TurnSelection {
         agent: AgentSelection::new(kind, model),
-        permission_mode,
     })
     .collect::<Vec<_>>();
     for turn in turns[..2].iter().copied() {
@@ -723,12 +713,8 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
         assert_eq!(event["event"], name);
         assert_eq!(event["properties"]["model"], turn.agent.model().as_str());
         assert_eq!(
-            event["properties"]["permission_mode"],
-            turn.permission_mode.label()
-        );
-        assert_eq!(
             event["properties"].as_object().map(serde_json::Map::len),
-            Some(7)
+            Some(6)
         );
     }
 }

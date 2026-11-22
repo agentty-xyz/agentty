@@ -30,13 +30,13 @@ use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{
     PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{AppRepositories, PersistedSessionCreation};
+use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 
 /// Shared Env gates for stand-alone worker host tests.
@@ -100,31 +100,6 @@ pub(super) async fn insert_in_progress_test_session(db: &AppRepositories) -> i64
         .expect("failed to insert session");
 
     project_id
-}
-
-/// Inserts one in-progress read-only session for worker-flow tests.
-pub(super) async fn insert_in_progress_read_only_session(db: &AppRepositories) {
-    let project_id = db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session_with_agent(PersistedSessionCreation {
-            agent: "antigravity",
-            base_branch: "main",
-            id: "sess1",
-            is_draft: false,
-            model: "gemini-3.8-flash",
-            permission_mode: ag_contracts::PermissionMode::ReadOnly,
-            project_id,
-            reasoning_level: ReasoningLevel::default(),
-            response_style: ag_contracts::ResponseStyle::default(),
-            speed_mode: SpeedMode::Normal,
-            status: "InProgress",
-        })
-        .await
-        .expect("failed to insert read-only session");
 }
 
 /// Seeds one unfinished operation and its owning session for recovery
@@ -222,8 +197,8 @@ pub(super) fn transcript_text(transcript: &Arc<Mutex<SessionTranscript>>) -> Str
         .unwrap_or_default()
 }
 
-/// Builds a title-generation boundary that verifies read-only
-/// sessions use an isolated read-only utility request.
+/// Builds a title-generation boundary that verifies titles use an isolated
+/// read-only utility request.
 pub(super) fn read_only_title_run_client() -> Arc<dyn RunClient> {
     let mut title_client = MockRunClient::new();
     title_client
