@@ -148,7 +148,64 @@ test("message kinds map to their renderings, and unknown kinds become notices", 
   // Untrusted text stays text: no element comes out of it.
   assert.equal(items[0].textContent, "<img src=x onerror=alert(1)>");
   assert.equal(items[0].children.length, 0);
-  assert.equal(items[1].textContent, "line 1\nline 2");
+  // An answer renders as Markdown, and keeps its source a toggle away.
+  const rendered = items[1].querySelector(".md");
+  const source = items[1].querySelector(".md-source");
+  const toggle = items[1].querySelector(".source-toggle");
+  assert.deepEqual(
+    rendered.children.map((child) => child.localName),
+    ["p"],
+  );
+  assert.equal(rendered.querySelectorAll("br").length, 1);
+  assert.equal(source.textContent, "line 1\nline 2");
+  assert.equal(source.hidden, true);
+  toggle.click();
+  assert.deepEqual([rendered.hidden, source.hidden, toggle.textContent], [true, false, "View rendered"]);
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  toggle.click();
+  assert.deepEqual([rendered.hidden, source.hidden, toggle.textContent], [false, true, "View source"]);
+});
+
+test("an answer keeps showing its source while it grows, and an unchanged one keeps its node", () => {
+  const { byId, chat } = mountChat();
+  const messages = [
+    { content: "Build it", kind: "user" },
+    { content: "**Done**", kind: "assistant" },
+  ];
+  chat.render(session({ messages: messages }));
+  const [first, answer] = byId("transcript").children;
+  answer.querySelector(".source-toggle").click();
+
+  chat.render(session({ messages: [messages[0], { content: "**Done** and `tested`", kind: "assistant" }] }));
+
+  const [firstAfter, answerAfter] = byId("transcript").children;
+  assert.equal(firstAfter, first);
+  assert.notEqual(answerAfter, answer);
+  assert.equal(answerAfter.querySelector(".md").hidden, true);
+  assert.equal(answerAfter.querySelector(".md-source").textContent, "**Done** and `tested`");
+  assert.equal(answerAfter.querySelector(".md code").textContent, "tested");
+
+  chat.render(session({ messages: [messages[0], { content: "**Done** and `tested`", kind: "assistant" }] }));
+
+  assert.equal(byId("transcript").children[1], answerAfter);
+});
+
+test("notices and question text render inline Markdown, and raw HTML stays text", () => {
+  const { byId, chat } = mountChat();
+  chat.render(
+    session({
+      messages: [{ content: "[Review Request] Opened <https://example.com/1> from `wt/3f9a`", kind: "notice" }],
+      questions: [{ options: [], text: "Reject `insertAdjacentHTML` too? <img src=x onerror=alert(1)>" }],
+      status: "Question",
+    }),
+  );
+  const body = byId("transcript").querySelector(".notice-body");
+  assert.equal(body.querySelector("code").textContent, "wt/3f9a");
+  assert.equal(body.querySelector("a").getAttribute("href"), "https://example.com/1");
+  const question = byId("questions").querySelector(".question-text");
+  assert.equal(question.querySelector("code").textContent, "insertAdjacentHTML");
+  assert.equal(question.querySelector("img"), null);
+  assert.ok(question.textContent.endsWith("<img src=x onerror=alert(1)>"));
 });
 
 test("a notice's label becomes a tagged prefix, and its tone marks the row", () => {

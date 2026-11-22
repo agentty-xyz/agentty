@@ -1,12 +1,14 @@
 // Open session of the remote control client: the header with its status
 // and actions, the transcript, the questions panel, the queued messages,
 // and the composer. Transcript text, titles and questions are untrusted
-// and only ever become text nodes. Updates change the nodes in place, so a
+// and only ever become text nodes, directly or through the element
+// builder in markdown.mjs for answers, notices and questions. Updates change the nodes in place, so a
 // refresh keeps focus, scroll position and what the user is typing.
 // Functions take `document` and `window` as parameters, so the Node tests
 // in crates/ag-remote/tests/web/chat.test.mjs pass the fake DOM.
 
 import { parseActivity, parseNotice, statusInfo } from "./format.mjs";
+import { parseInlineMarkdown, parseMarkdown, renderMarkdown } from "./markdown.mjs";
 
 // Unsent text of one session, in `sessionStorage`, under this prefix and
 // the session id.
@@ -331,6 +333,7 @@ export function createChat({ document, window, elements, request, onHome }) {
     for (const index of changes.replace) {
       const node = renderMessage(messages[index]);
       keepActivityOpen(children[index], node);
+      keepSourceView(children[index], node);
       children[index].replaceWith(node);
     }
     for (const index of changes.append) {
@@ -358,12 +361,39 @@ export function createChat({ document, window, elements, request, onHome }) {
       if (notice.label) {
         item.append(element(document, "span", "notice-label", notice.label));
       }
-      item.append(element(document, "span", "notice-body", notice.body));
+      item.append(inlineMarkdown("span", "notice-body", notice.body));
+    } else if (kind === "assistant") {
+      renderAnswer(item, content);
     } else {
       item.textContent = content;
     }
 
     return item;
+  }
+
+  // `tag` with class `className`, holding `text` rendered as inline
+  // Markdown.
+  function inlineMarkdown(tag, className, text) {
+    const node = element(document, tag, className + " md-inline");
+    node.append(renderMarkdown(parseInlineMarkdown(text), document, { window }));
+
+    return node;
+  }
+
+  // An answer renders as Markdown, with its source one toggle away for
+  // whatever the renderer gets wrong.
+  function renderAnswer(item, content) {
+    const rendered = element(document, "div", "md");
+    rendered.append(renderMarkdown(parseMarkdown(content), document, { window }));
+    const source = element(document, "div", "md-source", content);
+    source.hidden = true;
+    const toggle = element(document, "button", "source-toggle", "View source");
+    toggle.type = "button";
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => showSource(item, source.hidden));
+    const tools = element(document, "div", "msg-tools");
+    tools.append(toggle);
+    item.append(rendered, source, tools);
   }
 
   function renderActivity(content) {
@@ -417,7 +447,7 @@ export function createChat({ document, window, elements, request, onHome }) {
     const options = question.options || [];
     group.append(
       element(document, "p", "eyebrow", "Question " + (index + 1) + " of " + total),
-      element(document, "p", "question-text", question.text),
+      inlineMarkdown("p", "question-text", question.text),
     );
     if (options.length > 0) {
       const list = element(document, "div", "options");
@@ -803,6 +833,25 @@ function keepActivityOpen(oldNode, newNode) {
   if (oldDetails?.dataset.toggled && newDetails) {
     newDetails.open = oldDetails.open;
     newDetails.dataset.toggled = "true";
+  }
+}
+
+// Shows the source of the answer in `item` instead of its rendering, or
+// the rendering again.
+function showSource(item, isSource) {
+  item.querySelector(".md").hidden = isSource;
+  item.querySelector(".md-source").hidden = !isSource;
+  const toggle = item.querySelector(".source-toggle");
+  toggle.textContent = isSource ? "View rendered" : "View source";
+  toggle.setAttribute("aria-pressed", String(isSource));
+}
+
+// An answer whose source the reader opened keeps showing it when its
+// content changes.
+function keepSourceView(oldNode, newNode) {
+  const oldSource = oldNode?.querySelector?.(".md-source");
+  if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
+    showSource(newNode, true);
   }
 }
 

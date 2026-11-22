@@ -142,6 +142,34 @@ connection stays open; malformed frames still close it.
 newer page hides what an older server lacks. `PROTOCOL_VERSION` changes only when a
 frame changes meaning or loses a field.
 
+### Markdown is rendered by a DOM builder, not a library
+
+**Context.** Assistant answers are Markdown written by a model, so they are untrusted.
+The web client has no build step and no dependencies, and its content security policy
+allows no inline styles and no other origin.
+
+**Decision.** `markdown.mjs` parses the subset the TUI renders into a tree of plain
+objects, then builds elements from a fixed table of tags with `createElement` and text
+nodes. Raw HTML stays text, links keep only the `http:`, `https:`, and `mailto:`
+schemes, and the page loads no images.
+
+**Why.**
+
+- The page never parses markup from a string, so the contract test that refuses
+  `innerHTML` and its relatives keeps holding for every served file.
+- Safety does not depend on a sanitizer configuration or on a library's update cycle.
+- The parser works in linear passes, caps nesting at 16 levels, and skips answers over
+  256 KB, so a hostile answer cannot freeze the page.
+
+**Consequences.** The renderer differs from CommonMark at the edges: no indented code,
+setext headings, reference links, footnotes, or HTML. Each answer has a `View source`
+toggle for those cases. The Node tests in `crates/ag-remote/tests/web/` cover each
+construct and hostile input.
+
+**Rejected: a Markdown library and a sanitizer**, vendored as files. They cover more of
+CommonMark, but render to an HTML string that the page would have to parse, need a
+sanitizer to make that safe, and add third-party code to update.
+
 ### Remote devices may create, merge, and publish
 
 **Context.** Remote control started as a way to follow sessions and reply to them, and

@@ -1209,11 +1209,259 @@ kbd {
   white-space: pre-wrap;
 }
 
-/* Plain text until Markdown renders answers. */
 .msg--assistant {
   color: var(--color-text);
   line-height: 1.7;
+}
+
+/* The source of an answer, and an answer too large to parse. */
+.md-source,
+.md-plain {
   white-space: pre-wrap;
+}
+
+.md-source {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.msg-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.35rem;
+}
+
+.source-toggle {
+  min-height: 1.75rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.source-toggle:hover,
+.source-toggle[aria-pressed="true"] {
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+/* ---- Markdown: the site's .docs-content rules --------------------- */
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p,
+.md ul,
+.md ol {
+  margin: 0.5rem 0 0.9rem;
+}
+
+.md ul,
+.md ol {
+  padding-left: 1.35rem;
+}
+
+.md li + li {
+  margin-top: 0.28rem;
+}
+
+.md li > ul,
+.md li > ol {
+  margin: 0.28rem 0 0;
+}
+
+.md .md-task-item {
+  list-style: none;
+}
+
+.md .md-task {
+  color: var(--color-accent-dim);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.md h1,
+.md h2,
+.md h3 {
+  margin: 1.4rem 0 0.5rem;
+  color: var(--color-text);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.3;
+}
+
+.md h1 {
+  font-size: 1.3rem;
+}
+
+.md h2 {
+  font-size: 1.15rem;
+}
+
+.md h3 {
+  font-size: 1.02rem;
+}
+
+.md strong,
+.md-inline strong {
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.md a,
+.md-inline a {
+  color: var(--color-accent-dim);
+  text-decoration-color: color-mix(in srgb, var(--color-accent-dim) 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2rem;
+}
+
+.md a:hover,
+.md-inline a:hover {
+  color: var(--color-accent);
+}
+
+/* Inline code takes the page's `code` style. */
+.md :not(pre) > code,
+.md-inline code {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.md blockquote {
+  margin: 0.8rem 0;
+  padding: 0.1rem 0 0.1rem 0.85rem;
+  border-left: 2px solid var(--color-border-strong);
+  color: var(--color-muted);
+}
+
+.md hr {
+  margin: 1.2rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.code-block {
+  margin: 0.9rem 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+}
+
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2rem;
+  padding: 0.3rem 0.5rem 0.3rem 0.85rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-dim);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+/* .docs-copy-btn */
+.copy-btn {
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 0.8rem 0.95rem;
+  overflow-x: auto;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.code-block pre code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+.table-scroll {
+  margin: 0.9rem 0;
+  overflow-x: auto;
+}
+
+.md table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  overflow-wrap: normal;
+}
+
+.md thead {
+  background: var(--color-surface);
+}
+
+.md th {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.md td {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-muted);
+  vertical-align: top;
+}
+
+.md tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.md td:first-child {
+  color: var(--color-accent-dim);
+  font-weight: 500;
+}
+
+.md .align-center {
+  text-align: center;
+}
+
+.md .align-right {
+  text-align: right;
 }
 
 .msg--activity {
@@ -1843,6 +2091,11 @@ kbd {
 }
 
 @media (max-width: 560px) {
+  .md th,
+  .md td {
+    padding: 0.45rem 0.55rem;
+  }
+
   .dialog-actions .btn {
     flex: 1 1 8rem;
   }
