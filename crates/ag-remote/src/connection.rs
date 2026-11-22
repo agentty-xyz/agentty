@@ -424,11 +424,26 @@ pub(crate) async fn handle_incoming(state: &ServerState, incoming: Incoming) -> 
 
 /// Runs one request against the session service.
 async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteResult {
-    let result = match request {
+    match respond(sessions, request).await {
+        Ok(response) => RemoteResult::Ok(response),
+        Err(error) => RemoteResult::Error(error.to_string()),
+    }
+}
+
+/// Answers one request.
+///
+/// Every request that names a session first checks that the host lists it,
+/// so a remote client reaches only the sessions it can see.
+async fn respond(
+    sessions: &SessionService,
+    request: RemoteRequest,
+) -> Result<RemoteResponse, SessionError> {
+    match request {
         RemoteRequest::AnswerQuestions {
             answers,
             session_id,
         } => {
+            let session_id = listed_session_id(sessions, session_id).await?;
             let request = AnswerQuestionsRequest {
                 answers: answers
                     .into_iter()
@@ -439,40 +454,36 @@ async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteRes
                     .collect(),
                 attachments: Vec::new(),
             };
+            sessions.answer_questions(&session_id, request).await?;
 
-            sessions
-                .answer_questions(&SessionId::from(session_id), request)
-                .await
-                .map(|()| RemoteResponse::Accepted)
+            Ok(RemoteResponse::Accepted)
         }
-        RemoteRequest::CancelSession { session_id } => sessions
-            .cancel_session(&SessionId::from(session_id))
-            .await
-            .map(|()| RemoteResponse::Accepted),
+        RemoteRequest::CancelSession { session_id } => {
+            let session_id = listed_session_id(sessions, session_id).await?;
+            sessions.cancel_session(&session_id).await?;
+
+            Ok(RemoteResponse::Accepted)
+        }
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::ListSessions => {
-            sessions
-                .list_sessions()
-                .await
-                .map(|summaries| RemoteResponse::Sessions {
-                    sessions: summaries
-                        .into_iter()
-                        .map(RemoteSessionSummary::from)
-                        .collect(),
-                })
+            let summaries = sessions.list_sessions().await?;
+
+            Ok(RemoteResponse::Sessions {
+                sessions: summaries
+                    .into_iter()
+                    .map(RemoteSessionSummary::from)
+                    .collect(),
+            })
         }
         RemoteRequest::SendMessage {
             message,
             session_id,
-        } => sessions
-            .send_message(&SessionId::from(session_id), message)
-            .await
-            .map(|()| RemoteResponse::Accepted),
-    };
+        } => {
+            let session_id = listed_session_id(sessions, session_id).await?;
+            sessions.send_message(&session_id, message).await?;
 
-    match result {
-        Ok(response) => RemoteResult::Ok(response),
-        Err(error) => RemoteResult::Error(error.to_string()),
+            Ok(RemoteResponse::Accepted)
+        }
     }
 }
 
@@ -482,19 +493,37 @@ async fn get_listed_session(
     sessions: &SessionService,
     session_id: String,
 ) -> Result<RemoteResponse, SessionError> {
+    let session_id = match listed_session_id(sessions, session_id).await {
+        Ok(session_id) => session_id,
+        Err(SessionError::NotFound) => return Ok(RemoteResponse::Session { session: None }),
+        Err(error) => return Err(error),
+    };
+    let session = sessions.get_session(&session_id).await?;
+
+    Ok(RemoteResponse::Session {
+        session: session.map(RemoteSession::from),
+    })
+}
+
+/// Returns `session_id` when the host lists that session, and
+/// [`SessionError::NotFound`] otherwise.
+///
+/// Remote clients see only the listed sessions, so every request that names
+/// a session goes through this check before it reaches the host.
+async fn listed_session_id(
+    sessions: &SessionService,
+    session_id: String,
+) -> Result<SessionId, SessionError> {
     let is_listed = sessions
         .list_sessions()
         .await?
         .iter()
         .any(|summary| summary.id.as_str() == session_id);
     if !is_listed {
-        return Ok(RemoteResponse::Session { session: None });
+        return Err(SessionError::NotFound);
     }
-    let session = sessions.get_session(&SessionId::from(session_id)).await?;
 
-    Ok(RemoteResponse::Session {
-        session: session.map(RemoteSession::from),
-    })
+    Ok(SessionId::from(session_id))
 }
 
 /// Resolves once the server starts stopping or its handle is gone.

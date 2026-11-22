@@ -132,7 +132,9 @@ async fn each_request_reaches_the_session_service() -> TestResult {
             "list",
             "get:session-1",
             "list",
+            "list",
             "send:session-1:continue",
+            "list",
             "answer:session-1:Which branch?=main"
         ]
     );
@@ -151,8 +153,8 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         &mut client,
         1,
         RemoteRequest::SendMessage {
-            message: "hi".to_string(),
-            session_id: "busy".to_string(),
+            message: "busy".to_string(),
+            session_id: "session-1".to_string(),
         },
     )
     .await?;
@@ -160,7 +162,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         &mut client,
         2,
         RemoteRequest::CancelSession {
-            session_id: "gone".to_string(),
+            session_id: "session-1".to_string(),
         },
     )
     .await?;
@@ -173,6 +175,44 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         RemoteResult::Error("Session not found".to_string())
     );
     assert!(matches!(listed, RemoteResult::Ok(_)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let session_id = "other-project-session".to_string();
+
+    // Act
+    let sent = call(
+        &mut client,
+        1,
+        RemoteRequest::SendMessage {
+            message: "continue".to_string(),
+            session_id: session_id.clone(),
+        },
+    )
+    .await?;
+    let answered = call(
+        &mut client,
+        2,
+        RemoteRequest::AnswerQuestions {
+            answers: Vec::new(),
+            session_id: session_id.clone(),
+        },
+    )
+    .await?;
+    let canceled = call(&mut client, 3, RemoteRequest::CancelSession { session_id }).await?;
+
+    // Assert
+    let not_found = RemoteResult::Error("Session not found".to_string());
+    assert_eq!(sent, not_found);
+    assert_eq!(answered, not_found);
+    assert_eq!(canceled, not_found);
+    assert_eq!(server.backend.calls(), ["list", "list", "list"]);
 
     Ok(())
 }
