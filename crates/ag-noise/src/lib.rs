@@ -19,6 +19,10 @@
 //!   message the relay knows the instance holds the private half of
 //!   [`Handshake::remote_public_key`].
 //!
+//! Both patterns use X25519, AES-256-GCM, and SHA-256, a suite browsers
+//! provide through the Web Crypto API, so the web client can implement the
+//! device side without this crate.
+//!
 //! A [`Session`] splits a frame into Noise messages that must arrive in the
 //! order they were produced, and refuses frames above its configured size.
 
