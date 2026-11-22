@@ -181,10 +181,9 @@ async fn other_servers_are_listed_through_the_models_api_with_credentials() {
 
 #[tokio::test]
 async fn an_unreachable_server_reports_an_error() {
-    // Arrange
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("free port");
-    let base_url = format!("http://{}/v1", listener.local_addr().expect("address"));
-    drop(listener);
+    // Arrange: nothing can listen on port 0, whereas a port freed after
+    // binding can be taken by another test's server before the request.
+    let base_url = "http://127.0.0.1:0/v1";
 
     // Act
     let inventory = LocalServer::new(base_url, Some(" ".into()))
