@@ -103,6 +103,10 @@ fn setup_terminal_skips_xterm_modified_keys_for_unsupported_tmux_format() {
         .once()
         .returning(|| TmuxKeyReporting::Unsupported);
     operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| true);
+    operation
         .expect_enter_alternate_screen()
         .once()
         .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, false))
@@ -266,6 +270,10 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
         .once()
         .returning(|| TmuxKeyReporting::CsiU);
     operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| true);
+    operation
         .expect_enter_alternate_screen()
         .once()
         .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
@@ -280,7 +288,9 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_query_failure() {
 }
 
 /// Verifies tmux sessions optimistically enable keyboard enhancement even
-/// when the support query returns a negative capability signal.
+/// when the support query returns a negative capability signal, and leave
+/// mouse reporting off when `tmux` has `mouse off` so the terminal keeps
+/// native text selection and link clicks.
 #[test]
 fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
     // Arrange
@@ -300,9 +310,13 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
         .once()
         .returning(|| TmuxKeyReporting::CsiU);
     operation
+        .expect_is_tmux_mouse_enabled()
+        .once()
+        .returning(|| false);
+    operation
         .expect_enter_alternate_screen()
         .once()
-        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true, true))
+        .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false, true))
         .returning(|_, _| Ok(()));
 
     // Act
@@ -310,7 +324,7 @@ fn setup_terminal_enables_keyboard_enhancement_for_tmux_unsupported_query() {
 
     // Assert
     let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-    assert_eq!(guard.enhancement(), enhancement_fixture(true, true, true));
+    assert_eq!(guard.enhancement(), enhancement_fixture(true, false, true));
 }
 
 /// Verifies SSH sessions optimistically enable keyboard enhancement when

@@ -234,9 +234,11 @@ first line of pasted text.
 
 Inside `tmux`, Agentty sets the server's `extended-keys-format` to `csi-u` and turns
 `extended-keys` on when it is off, so modified keys such as `Shift+Enter` reach the
-input; an `extended-keys` change applies after reattaching. It also requests mouse wheel
-reports so scrolling works with `tmux` mouse support; hold `Shift` while dragging to
-select text. `tmux` cannot forward `Cmd`, so use the `Ctrl` alternatives there.
+input; an `extended-keys` change applies after reattaching. When `tmux` has `mouse on`,
+Agentty also requests mouse wheel reports so scrolling works; hold `Shift` while
+dragging to select text or click links. With `mouse off`, the terminal keeps native text
+selection and link clicks. `tmux` cannot forward `Cmd`, so use the `Ctrl` alternatives
+there.
 
 ## Publish Popup
 

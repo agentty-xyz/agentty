@@ -48,6 +48,10 @@ trait TerminalOperation {
     /// while still honoring explicit modified-key reporting requests.
     fn tmux_key_reporting(&self) -> TmuxKeyReporting;
 
+    /// Returns whether the enclosing `tmux` session has its `mouse` option
+    /// on, so wheel input over the pane needs explicit mouse reports.
+    fn is_tmux_mouse_enabled(&self) -> bool;
+
     /// Enters the alternate screen, enables its keyboard enhancement flags
     /// when supported, and enables bracketed paste.
     fn enter_alternate_screen(
@@ -95,6 +99,10 @@ impl TerminalOperation for CrosstermTerminalOperation {
 
     fn tmux_key_reporting(&self) -> TmuxKeyReporting {
         tmux::prepare_key_reporting()
+    }
+
+    fn is_tmux_mouse_enabled(&self) -> bool {
+        tmux::is_mouse_enabled()
     }
 
     fn enter_alternate_screen(
@@ -155,9 +163,10 @@ static CROSSTERM_TERMINAL_OPERATION: CrosstermTerminalOperation = CrosstermTermi
 
 /// Conditionally requests button and wheel mouse reports in SGR encoding.
 ///
-/// Only `tmux` panes enable this: with `tmux` mouse support on, wheel input
-/// over an alternate-screen pane is discarded unless the pane requested mouse
-/// reports. Direct terminals keep native text selection and already translate
+/// Only `tmux` panes with the `mouse` option on enable this: there, wheel
+/// input over an alternate-screen pane is discarded unless the pane requested
+/// mouse reports. Direct terminals and `tmux` with `mouse off` keep native
+/// text selection and link clicks, and the outer terminal already translates
 /// the wheel into arrow keys. Motion tracking stays off to avoid event floods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EnableMouseWheelReporting(TerminalEnhancement);
@@ -360,7 +369,7 @@ fn terminal_enhancement(operation: &dyn TerminalOperation) -> TerminalEnhancemen
 
     TerminalEnhancement {
         keyboard_enhancement_enabled,
-        mouse_reporting_enabled: is_tmux_session,
+        mouse_reporting_enabled: is_tmux_session && operation.is_tmux_mouse_enabled(),
         xterm_modified_keys_enabled: keyboard_enhancement_enabled
             && tmux_key_reporting == TmuxKeyReporting::CsiU,
     }
