@@ -6,9 +6,13 @@
 #
 #   podman build --file container/relay.Containerfile --tag agentty-relay .
 #
-# The relay speaks plain HTTP on port 8787 and does not limit plain TCP
-# connections or slow request headers. Run it behind a reverse proxy that
-# terminates TLS and limits connections.
+# The relay listens on port 8787 inside the container; publish that port to
+# choose the outside one. Arguments after the image name go to the relay, such
+# as `--client-address-header X-Real-IP` behind a reverse proxy.
+#
+# The relay speaks plain HTTP and does not limit plain TCP connections or slow
+# request headers. Run it behind a reverse proxy that terminates TLS and limits
+# connections.
 #
 # The base image and `rustup` are pinned like `container/e2e.Containerfile`;
 # upgrade both files together.
@@ -34,11 +38,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
-COPY crates crates
+COPY rust-toolchain.toml ./
 
 # Install the toolchain `rust-toolchain.toml` pins, with the musl target for a
-# static binary, then build only the relay.
+# static binary. Source changes below reuse this layer.
 RUN case "${TARGETARCH}" in \
     amd64) \
         rust_host=x86_64-unknown-linux-gnu; \
@@ -64,6 +67,14 @@ RUN case "${TARGETARCH}" in \
     && rust_channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
     && /rustup-init -y --no-modify-path --profile minimal \
         --default-toolchain "${rust_channel}" --target "${rust_target}" \
+    && rm /rustup-init \
+    && echo "${rust_target}" > /rust-target
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+
+# Build only the relay.
+RUN rust_target="$(cat /rust-target)" \
     && cargo build --locked --release --package ag-relay --target "${rust_target}" \
     && cp "target/${rust_target}/release/ag-relay" /ag-relay
 
@@ -79,5 +90,6 @@ USER 65532:65532
 
 EXPOSE 8787
 
-ENTRYPOINT ["/ag-relay"]
-CMD ["--listen", "0.0.0.0:8787"]
+# The bind address is part of the entry point, so arguments given at run time
+# add to it instead of replacing it.
+ENTRYPOINT ["/ag-relay", "--listen", "0.0.0.0:8787"]
