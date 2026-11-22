@@ -472,14 +472,46 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
         },
     )
     .await?;
-    let canceled = call(&mut client, 3, RemoteRequest::CancelSession { session_id }).await?;
+    let canceled = call(
+        &mut client,
+        3,
+        RemoteRequest::CancelSession {
+            session_id: session_id.clone(),
+        },
+    )
+    .await?;
+    let stopped = call(&mut client, 4, RemoteRequest::StopTurn { session_id }).await?;
 
     // Assert
     let not_found = RemoteResult::Error("Session not found".to_string());
     assert_eq!(sent, not_found);
     assert_eq!(answered, not_found);
     assert_eq!(canceled, not_found);
-    assert_eq!(server.backend.calls(), ["list", "list", "list"]);
+    assert_eq!(stopped, not_found);
+    assert_eq!(server.backend.calls(), ["list", "list", "list", "list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stop_turn_reaches_the_host_for_a_listed_session() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let stopped = call(
+        &mut client,
+        1,
+        RemoteRequest::StopTurn {
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await?;
+
+    // Assert
+    assert_eq!(stopped, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(server.backend.calls(), ["list", "stop:session-1"]);
 
     Ok(())
 }
@@ -616,8 +648,7 @@ async fn unknown_methods_get_an_error_and_keep_the_connection() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
-    let unknown =
-        r#"{"type":"request","id":1,"request":{"method":"stop_turn","session_id":"session-1"}}"#;
+    let unknown = r#"{"type":"request","id":1,"request":{"method":"rename_session","session_id":"session-1"}}"#;
 
     // Act
     client.send(Message::Text(unknown.into())).await?;

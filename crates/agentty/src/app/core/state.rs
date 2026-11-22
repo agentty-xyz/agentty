@@ -1392,6 +1392,120 @@ impl App {
             .await?)
     }
 
+    /// Stops the running turn of an `InProgress` session and returns the
+    /// session to `Review`, keeping its worktree and changes.
+    ///
+    /// The terminal's `Ctrl+C` and the session API both use this workflow.
+    /// Cancels queued operations in the database, then fires the per-turn
+    /// cancellation token so the worker's `select!` branch triggers graceful
+    /// channel shutdown. The worker owns process termination: CLI channels
+    /// receive `SIGTERM` inside the cancellation branch (where the child is
+    /// guaranteed alive because `run_turn` has not returned yet), and
+    /// app-server channels shut down through `shutdown_session`. Both paths
+    /// converge on the worker returning a `[Stopped]` error. Background graph
+    /// work, such as proposal generation or a reply decision, is stopped too.
+    /// After signalling, the persisted status is updated to `Review`, the
+    /// in-memory snapshot and shared handle are refreshed, automatic focused
+    /// review is suppressed for the partial turn, and UI events are emitted
+    /// so the user can inspect or continue the session instead of treating it
+    /// as canceled.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist, has no running
+    /// turn, or its `Review` status cannot be persisted.
+    pub(crate) async fn stop_session_turn(&mut self, session_id: &str) -> Result<(), AppError> {
+        let status = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(session::SessionError::NotFound)?
+            .status;
+        if status != Status::InProgress {
+            return Err(AppError::Workflow(format!(
+                "Session `{session_id}` has no running turn in status `{status}`"
+            )));
+        }
+        let timestamp_seconds =
+            session::unix_timestamp_from_system_time(self.services.clock().now_system_time());
+
+        self.services.stop_graph_activity(session_id).await;
+
+        if let Err(error) = self
+            .services
+            .db()
+            .operations()
+            .request_cancel_for_session_operations(session_id)
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to request cancellation for queued session operations"
+            );
+        }
+
+        if let Some(handles) = self.sessions.session_handles().get(session_id) {
+            // Cancel the current turn's token so the worker's `select!`
+            // branch fires and triggers graceful channel shutdown. The
+            // worker sends SIGTERM to CLI child processes inside the
+            // cancellation path where the PID is guaranteed valid.
+            match handles.cancel_token.lock() {
+                Ok(cancel_token) => cancel_token.cancel(),
+                Err(error) => {
+                    warn!(
+                        session_id = session_id,
+                        error = %error,
+                        "failed to lock session cancel token"
+                    );
+                }
+            }
+        }
+
+        self.services
+            .db()
+            .sessions()
+            .update_session_status_with_timing_at(
+                session_id,
+                &Status::Review.to_string(),
+                timestamp_seconds,
+            )
+            .await?;
+
+        if let Some(handles) = self.sessions.session_handles().get(session_id)
+            && let Ok(mut handle_status) = handles.status.lock()
+        {
+            *handle_status = Status::Review;
+        }
+
+        // The status check above found the session, so this updates it.
+        self.sessions
+            .sessions_mut()
+            .iter_mut()
+            .filter(|session| session.id == session_id)
+            .for_each(|session| {
+                let previous_status = session.status;
+                session.status = Status::Review;
+                session.reconcile_status_transition(previous_status);
+            });
+
+        // The session stays review-ready, but automatic focused review should
+        // not immediately start for the partially stopped turn. The marker is
+        // inserted without loading a diff so the caller returns quickly; the
+        // next submitted turn clears it, and a manual focused review replaces
+        // it.
+        self.suppress_review_output(session_id);
+
+        self.services.emit_app_event(AppEvent::SessionUpdated {
+            session_id: session_id.into(),
+            version: session::SessionTaskService::next_session_update_version(
+                &self.services.session_update_versions(),
+                session_id,
+            ),
+        });
+        self.services.emit_session_and_project_refresh_events();
+
+        Ok(())
+    }
+
     /// Settles background work and flushes queued turn telemetry before
     /// process shutdown, sharing one cleanup deadline.
     pub(crate) async fn wait_for_background_cleanup_tasks(&mut self) {

@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
-use crate::app::{self, App, AppEvent, ReviewCacheEntry, SessionManager};
+use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::input::InputState;
 use crate::domain::session::{
     FollowUpTaskAction, PublishBranchAction, ReviewWatchToggle, SessionId, Status,
@@ -697,14 +697,20 @@ fn apply_view_scroll_and_output_mode(mode: &mut AppMode, scroll_offset: Option<u
 /// stays `InProgress`, and no cancellation token, database status update, or
 /// auto-review suppression runs while a queued message is being dropped.
 /// When the queue is already empty, the press falls through to
-/// [`cancel_in_progress_turn`] which performs the existing
-/// cancel-and-return-to-`Review` flow.
+/// [`App::stop_session_turn`], which stops the turn and returns the session
+/// to `Review`.
 async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     if pop_last_queued_chat_message_if_any(app, session_id).await {
         return;
     }
 
-    cancel_in_progress_turn(app, session_id).await;
+    if let Err(error) = app.stop_session_turn(session_id).await {
+        warn!(
+            session_id = session_id,
+            error = %error,
+            "failed to stop session turn"
+        );
+    }
 }
 
 /// Pops the most recently queued chat message (LIFO) from the session's
@@ -745,120 +751,6 @@ async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) ->
     });
 
     true
-}
-
-/// Interrupts the active turn of a running `InProgress` session and returns it
-/// to `Review`.
-///
-/// Cancels queued operations in the database, then fires the per-turn
-/// [`CancellationToken`] so the worker's `select!` branch triggers
-/// graceful channel shutdown. The worker owns process termination:
-/// CLI channels receive `SIGTERM` inside the cancellation branch
-/// (where the child is guaranteed alive because `run_turn` has not
-/// returned yet), and app-server channels shut down through
-/// `shutdown_session`. Both paths converge on the worker returning a
-/// `[Stopped]` error. Background graph work, such as proposal generation or a
-/// reply decision, is stopped too. After signalling, the persisted status is
-/// updated to `Review`, the in-memory snapshot and shared handle are
-/// refreshed, and UI events are emitted so the user can inspect or continue
-/// the session instead of treating it as canceled.
-async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
-    let timestamp_seconds =
-        app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
-
-    app.services.stop_graph_activity(session_id).await;
-
-    if let Err(error) = app
-        .services
-        .db()
-        .operations()
-        .request_cancel_for_session_operations(session_id)
-        .await
-    {
-        warn!(
-            session_id = session_id,
-            error = %error,
-            "failed to request cancellation for queued session operations"
-        );
-    }
-
-    if let Some(handles) = app.sessions.session_handles().get(session_id) {
-        // Cancel the current turn's token so the worker's `select!`
-        // branch fires and triggers graceful channel shutdown. The
-        // worker sends SIGTERM to CLI child processes inside the
-        // cancellation path where the PID is guaranteed valid.
-        match handles.cancel_token.lock() {
-            Ok(cancel_token) => cancel_token.cancel(),
-            Err(error) => {
-                warn!(
-                    session_id = session_id,
-                    error = %error,
-                    "failed to lock session cancel token"
-                );
-            }
-        }
-    }
-
-    if let Err(error) = app
-        .services
-        .db()
-        .sessions()
-        .update_session_status_with_timing_at(
-            session_id,
-            &Status::Review.to_string(),
-            timestamp_seconds,
-        )
-        .await
-    {
-        warn!(
-            session_id = session_id,
-            error = %error,
-            "failed to persist review status after interrupting session turn"
-        );
-
-        return;
-    }
-
-    if let Some(handles) = app.sessions.session_handles().get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
-    }
-
-    if let Some(session) = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-    {
-        let previous_status = session.status;
-        session.status = Status::Review;
-        session.reconcile_status_transition(previous_status);
-    }
-
-    suppress_auto_review_for_stopped_turn(app, session_id);
-
-    app.services.emit_app_event(AppEvent::SessionUpdated {
-        session_id: session_id.into(),
-        version: SessionTaskService::next_session_update_version(
-            &app.services.session_update_versions(),
-            session_id,
-        ),
-    });
-    app.services.emit_session_and_project_refresh_events();
-}
-
-/// Marks automatic focused review as suppressed after a user stops one active
-/// turn.
-///
-/// The session remains review-ready, but the reducer's automatic focused
-/// review pass should not immediately start an agent review for the partially
-/// stopped turn. The marker is intentionally inserted without loading a diff so
-/// `Ctrl+C` returns to the event loop quickly; the next submitted turn clears
-/// the cache, and pressing `f` still starts manual focused review because
-/// view-mode review handling replaces suppressed entries.
-fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
-    app.suppress_review_output(session_id);
 }
 
 /// Switches the TUI mode from session view to the prompt input.

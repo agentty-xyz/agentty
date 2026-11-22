@@ -459,6 +459,14 @@ impl SessionRuntimeHandle {
             .await
     }
 
+    /// Stops one session's running turn through the runtime actor.
+    pub(crate) async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        let session_id = session_id.clone();
+
+        self.request_admission(SessionMutation::StopTurn { session_id })
+            .await
+    }
+
     /// Enqueues one session for merge through the runtime actor.
     pub(crate) async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();

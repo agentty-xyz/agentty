@@ -87,6 +87,16 @@ pub(super) async fn request_cancellation(
         .await
 }
 
+pub(super) async fn request_turn_stop(
+    app: &mut App,
+    session_id: SessionId,
+) -> Result<(), ApiSessionError> {
+    let service = app.session_service();
+
+    app.drive_session_request(async move { service.stop_turn(&session_id).await })
+        .await
+}
+
 pub(super) async fn request_merge(
     app: &mut App,
     session_id: SessionId,

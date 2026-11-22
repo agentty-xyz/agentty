@@ -135,8 +135,9 @@ so a version bump would lock out every relay device until both sides match.
 **Decision.** Frame changes stay additive. New fields default when missing and are
 omitted when empty. `welcome` and `paired` carry a `capabilities` list of the optional
 requests the server supports, and the client offers a feature only when its capability
-is listed. A request with an unknown `method` gets `Unsupported request` and the
-connection stays open; malformed frames still close it.
+is listed. The server lists a capability only when the host reports the operation behind
+it through `SessionService::supports`. A request with an unknown `method` gets
+`Unsupported request` and the connection stays open; malformed frames still close it.
 
 **Consequences.** An older page ignores fields and capabilities it does not know. A
 newer page hides what an older server lacks. `PROTOCOL_VERSION` changes only when a

@@ -182,6 +182,10 @@ pub(crate) enum SessionMutation {
     Cancel {
         session_id: SessionId,
     },
+    /// Stops the running turn and returns the session to review.
+    StopTurn {
+        session_id: SessionId,
+    },
     /// Enqueues one session for merge.
     Merge {
         session_id: SessionId,
@@ -217,6 +221,7 @@ impl SessionMutation {
             Self::CompleteTask { .. } => ("complete_task", None),
             Self::AnswerQuestions { session_id, .. } => ("answer_questions", Some(session_id)),
             Self::Cancel { session_id, .. } => ("cancel", Some(session_id)),
+            Self::StopTurn { session_id } => ("stop_turn", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),
         }
     }

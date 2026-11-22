@@ -314,6 +314,10 @@ impl SessionBackend for RecordingBackend {
         self.record(format!("cancel:{session_id}"), ())
     }
 
+    async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.record(format!("stop:{session_id}"), ())
+    }
+
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"), ())
     }

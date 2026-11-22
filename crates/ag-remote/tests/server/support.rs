@@ -369,16 +369,9 @@ impl DeviceStore for MemoryDeviceStore {
     }
 }
 
-/// Session backend that records calls; a session snapshot queues the
-/// messages sent to it, the message `busy` is rejected, the message `wait`
-/// is held, and recorded only once [`RecordingBackend::release`] is called,
-/// the message `panic` panics, every cancellation reports a missing
-/// session, every merge is refused, every diff adds one line to `a.rs`, the
-/// host serves only regular sessions in project `1`, and every optional
-/// operation is served. It lists `session-1`, waiting on a question, and
-/// `session-2`, running a turn, which counts as updated once for every
-/// message sent and every answer given to any session, so a device sees
-/// another session change.
+/// Session backend that records every call and serves every optional
+/// operation. Each method's comment says how it answers; [`session`]
+/// describes the listed sessions.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -416,6 +409,7 @@ impl SessionBackend for RecordingBackend {
         Ok(SessionId::from("session-2"))
     }
 
+    // The host serves only regular sessions in project `1`.
     async fn host_context(&self) -> Result<HostContext, SessionError> {
         self.record("host".to_string());
 
@@ -428,6 +422,8 @@ impl SessionBackend for RecordingBackend {
         })
     }
 
+    // A snapshot queues the messages sent to its session; `missing` is
+    // absent.
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError> {
         self.record(format!("get:{session_id}"));
         if session_id.as_str() == "missing" {
@@ -444,6 +440,7 @@ impl SessionBackend for RecordingBackend {
         Ok(Some(session(session_id, sent)))
     }
 
+    // Every diff adds one line to `a.rs`.
     async fn get_session_diff(
         &self,
         session_id: &SessionId,
@@ -460,6 +457,10 @@ impl SessionBackend for RecordingBackend {
         }]))
     }
 
+    // Lists `session-1`, waiting on a question, and `session-2`, running a
+    // turn. `session-2` counts as updated once for every message sent and
+    // every answer given to any session, so a device sees another session
+    // change.
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
         let plan_updated_at = self
             .calls()
@@ -484,6 +485,8 @@ impl SessionBackend for RecordingBackend {
         ])
     }
 
+    // The message `busy` is rejected, `panic` panics, and `wait` is held,
+    // and recorded only once [`RecordingBackend::release`] is called.
     async fn send_message(
         &self,
         session_id: &SessionId,
@@ -529,12 +532,21 @@ impl SessionBackend for RecordingBackend {
         Ok(())
     }
 
+    // Every cancellation reports a missing session.
     async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("cancel:{session_id}"));
 
         Err(SessionError::NotFound)
     }
 
+    // Every turn stop succeeds.
+    async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.record(format!("stop:{session_id}"));
+
+        Ok(())
+    }
+
+    // Every merge is refused.
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"));
 
@@ -543,6 +555,7 @@ impl SessionBackend for RecordingBackend {
         ))
     }
 
+    // Every review request is refused.
     async fn create_review_request(
         &self,
         session_id: &SessionId,

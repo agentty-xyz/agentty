@@ -832,3 +832,57 @@ async fn create_session_uses_the_active_project_and_a_served_mode() {
     );
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }
+
+#[tokio::test]
+async fn stop_turn_reaches_the_host_only_for_listed_sessions_it_serves() {
+    // Arrange
+    let serving = supporting_fixture(MemoryDeviceStore::default(), &[SessionOperation::StopTurn]);
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let stop = |session_id: &str| RemoteRequest::StopTurn {
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let stopped = reply_result(&serving.state, stop("session-1")).await;
+    let unlisted = reply_result(&serving.state, stop("other-project")).await;
+    let unsupported = reply_result(&not_serving.state, stop("session-1")).await;
+
+    // Assert
+    assert_eq!(stopped, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["list", "stop:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn capabilities_follow_the_order_of_the_capability_table() {
+    // Arrange
+    let fixture = supporting_fixture(
+        MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
+        &[SessionOperation::StopTurn, SessionOperation::MergeSession],
+    );
+    let mut revisions = fixture.state.revisions();
+
+    // Act
+    let welcomed = authenticate(&fixture.state, hello("t"), &mut revisions).await;
+
+    // Assert
+    let capabilities = match welcomed {
+        Ok(Authentication::Authenticated {
+            reply: ServerFrame::Welcome { capabilities, .. },
+            ..
+        }) => Some(capabilities),
+        _ => None,
+    };
+    assert_eq!(
+        capabilities,
+        Some(vec!["merge".to_string(), "stop_turn".to_string()])
+    );
+}

@@ -356,11 +356,12 @@ fn assert_message_queued_while_running(running: &Value, queued: &Value, shown: &
             },
             "answerBarHidden": true,
             "composerHidden": false,
-            "hint": "Sending queues the message",
+            // The host serves turn stops, so a running turn offers `Stop`.
+            "hint": "Sending queues the message · Stop returns the session to Review",
             "notice": {"isError": true, "label": "Commit Error", "text": "hook failed"},
             "placeholder": "Queue a message for the next turn",
             "sendLabel": "Queue message",
-            "stopHidden": true,
+            "stopHidden": false,
             "transcript": [
                 {"kind": "user", "text": "plan it"},
                 {
