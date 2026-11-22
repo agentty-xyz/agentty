@@ -47,8 +47,7 @@ use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
     input_mode: PromptInputMode,
-    /// Session permission mode cycled by `Shift+Tab` and preselected by
-    /// `/mode`.
+    /// Session permission mode toggled by `Shift+Tab`.
     permission_mode: PermissionMode,
     /// Effective session reasoning level preselected by `/reasoning`.
     reasoning_level: ReasoningLevel,
@@ -923,8 +922,7 @@ fn reduce_editing_key(
     match key.code {
         KeyCode::BackTab => {
             let permission_mode = match prompt_context.permission_mode {
-                PermissionMode::AutoEdit => PermissionMode::AutoEditAddressComments,
-                PermissionMode::AutoEditAddressComments => PermissionMode::ReadOnly,
+                PermissionMode::AutoEdit => PermissionMode::ReadOnly,
                 PermissionMode::ReadOnly => PermissionMode::AutoEdit,
             };
 
@@ -1072,14 +1070,6 @@ fn reduce_prompt_slash_submit(
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
             effects.push(PromptEffect::OpenRemoteControl);
         }
-        Some(PromptSuggestionSelection::Command("/mode")) => {
-            let selected_index = PermissionMode::ALL
-                .iter()
-                .position(|permission_mode| *permission_mode == prompt_context.permission_mode)
-                .unwrap_or(0);
-
-            open_prompt_slash_stage(mode, PromptSlashStage::Mode, selected_index);
-        }
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
             let selected_index = ReasoningLevel::ALL
                 .iter()
@@ -1117,7 +1107,6 @@ fn reduce_prompt_slash_submit(
         // Setting selections were applied above.
         Some(
             PromptSuggestionSelection::Model(_)
-            | PromptSuggestionSelection::Mode(_)
             | PromptSuggestionSelection::Reasoning(_)
             | PromptSuggestionSelection::Style(_),
         )
@@ -1132,9 +1121,6 @@ fn prompt_slash_setting_effect(selection: &PromptSuggestionSelection) -> Option<
         PromptSuggestionSelection::Command("/fast") => Some(PromptEffect::ToggleSpeedMode),
         PromptSuggestionSelection::Model(selected_agent) => {
             Some(PromptEffect::UpdateModel(*selected_agent))
-        }
-        PromptSuggestionSelection::Mode(permission_mode) => {
-            Some(PromptEffect::PersistPermissionMode(*permission_mode))
         }
         PromptSuggestionSelection::Reasoning(reasoning_level) => {
             Some(PromptEffect::UpdateReasoningLevel(*reasoning_level))

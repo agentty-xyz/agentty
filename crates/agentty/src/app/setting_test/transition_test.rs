@@ -62,7 +62,7 @@ fn next_and_previous_do_not_move_selection_while_selector_dropdown_is_open() {
 }
 
 #[test]
-fn previous_wraps_to_default_response_style_row_from_theme_row() {
+fn previous_wraps_to_auto_address_comments_row_from_theme_row() {
     // Arrange
     let mut manager = new_settings_manager();
 
@@ -75,7 +75,7 @@ fn previous_wraps_to_default_response_style_row_from_theme_row() {
             .presentation
             .snapshot(&manager.view)
             .selected_row_index,
-        Some(7)
+        Some(8)
     );
 }
 

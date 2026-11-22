@@ -20,7 +20,6 @@ use crate::domain::agent::{
     ReasoningLevel, ResponseStyle, ServedModel,
 };
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
-use crate::domain::permission::PermissionMode;
 
 fn insert_test_attachment(
     attachment_state: &mut PromptAttachmentState,
@@ -608,11 +607,11 @@ fn test_slash_suggestion_list_for_command_stage_contains_matches_non_prefix_inpu
         .into_iter()
         .map(|item| item.label)
         .collect::<Vec<_>>();
-    assert_eq!(labels, vec!["/mode", "/model", "/reasoning"]);
+    assert_eq!(labels, vec!["/model", "/reasoning"]);
 }
 
 #[test]
-fn test_mode_is_selected_for_m_shortcut() {
+fn test_model_is_selected_for_m_shortcut() {
     // Arrange
     let slash_state = PromptSlashState::default();
 
@@ -638,9 +637,12 @@ fn test_mode_is_selected_for_m_shortcut() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/mode", "/model"]
+        vec!["/model"]
     );
-    assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
+    assert_eq!(
+        selection,
+        Some(PromptSuggestionSelection::Command("/model"))
+    );
 }
 
 #[test]
@@ -707,52 +709,6 @@ fn test_selected_slash_action_returns_selected_model() {
             AgentKind::Claude,
             AgentModel::ClaudeFable52,
         )))
-    );
-}
-
-#[test]
-fn test_mode_stage_lists_modes_and_returns_selected_mode() {
-    // Arrange
-    let slash_state = PromptSlashState {
-        selected_index: 1,
-        stage: PromptSlashStage::Mode,
-        ..PromptSlashState::default()
-    };
-
-    // Act
-    let suggestion_list = build_prompt_slash_suggestion_list(
-        "/mode",
-        &slash_state,
-        AgentKind::Codex,
-        PromptSlashCommandSet::WithoutApply,
-    )
-    .expect("mode suggestions should render");
-    let selection = resolve_prompt_slash_selection(
-        "/mode",
-        &slash_state,
-        AgentKind::Codex,
-        PromptSlashCommandSet::WithoutApply,
-    );
-
-    // Assert
-    assert_eq!(suggestion_list.title, "/mode (j/k move, Enter select)");
-    assert_eq!(
-        suggestion_list
-            .items
-            .iter()
-            .map(|item| item.label.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "Auto Edit",
-            "Auto Edit + Auto Address Comments",
-            "Read Only"
-        ]
-    );
-    assert_eq!(
-        selection,
-        Some(PromptSuggestionSelection::Mode(
-            PermissionMode::AutoEditAddressComments
-        ))
     );
 }
 
@@ -1152,7 +1108,7 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/graph", "/mode", "/model", "/reasoning", "/style", "/fast"]
+        vec!["/graph", "/model", "/reasoning", "/style", "/fast"]
     );
     assert_eq!(suggestion_list.selected_index, 0);
 }
@@ -1211,7 +1167,7 @@ fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/graph", "/mode", "/model", "/reasoning", "/style"]
+        vec!["/graph", "/model", "/reasoning", "/style"]
     );
 }
 

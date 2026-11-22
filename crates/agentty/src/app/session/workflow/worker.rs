@@ -1666,6 +1666,16 @@ impl SessionWorkerService {
             } = &command
         {
             Self::append_preparation_prompt(context, request_kind, prompt);
+            if matches!(request_kind, AgentRequestKind::SessionStart) {
+                SessionTaskService::append_auto_address_notice(
+                    &context.transcript,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.session_update_versions,
+                    &context.session_id,
+                )
+                .await;
+            }
         }
 
         let is_generated_turn = Self::begin_generated_turn(context, &command).await;

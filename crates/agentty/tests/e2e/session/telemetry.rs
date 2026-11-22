@@ -352,7 +352,7 @@ fn assert_usage_events(events: &[LogRecord]) {
                     && permission_mode
                         == Some(&any_value::Value::StringValue("auto_edit".to_string()))
             }),
-        "turn events report the agent and the session's default /mode"
+        "turn events report the agent and the session's default permission mode"
     );
     assert!(!format!("{events:?}").contains("Private timing prompt"));
 }

@@ -49,7 +49,7 @@ fn speed_defaults_keep_fast_only_on_models_with_fast_support() {
 }
 
 #[test]
-fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() {
+fn settings_rows_include_role_model_coauthor_launch_and_auto_address_options() {
     // Arrange
     let manager = new_settings_manager();
 
@@ -57,7 +57,7 @@ fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() 
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows.len(), 8);
+    assert_eq!(rows.len(), 9);
     assert_eq!(rows[0].0, "Theme");
     assert_eq!(rows[1].0, "Max Subagents");
     assert_eq!(rows[2].0, "Default Smart Model");
@@ -66,6 +66,7 @@ fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() 
     assert_eq!(rows[5].0, "Coauthored by Agentty");
     assert_eq!(rows[6].0, "Launch Configurations");
     assert_eq!(rows[7].0, "Default Response Style");
+    assert_eq!(rows[8].0, "Auto Address Comments");
 }
 
 #[test]
@@ -419,6 +420,71 @@ async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
             .expect("failed to load coauthor setting"),
         Some("true".to_string())
     );
+}
+
+#[test]
+fn settings_rows_show_auto_address_review_comments_value() {
+    // Arrange
+    let mut manager = new_settings_manager();
+    manager.fixture_view_mut().auto_address_review_comments = false;
+
+    // Act
+    let rows = manager.settings_rows();
+
+    // Assert
+    assert_eq!(rows[8], ("Auto Address Comments", "Disabled".to_string()));
+}
+
+#[tokio::test]
+async fn settings_manager_new_enables_auto_address_without_valid_persisted_flag() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    let missing_manager = settings_manager(&services, project_id).await;
+    services
+        .db()
+        .settings()
+        .upsert_project_setting(
+            project_id,
+            SettingName::AutoAddressReviewComments,
+            "invalid-bool",
+        )
+        .await
+        .expect("failed to persist invalid auto-address flag");
+
+    // Act
+    let invalid_manager = settings_manager(&services, project_id).await;
+
+    // Assert
+    assert!(missing_manager.settings().auto_address_review_comments());
+    assert!(invalid_manager.settings().auto_address_review_comments());
+}
+
+#[tokio::test]
+async fn selector_dropdown_disables_auto_address_setting_and_persists_value() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    let mut manager = settings_manager(&services, project_id).await;
+    select_row(&mut manager, "Auto Address Comments");
+
+    // Act
+    manager.handle_enter();
+    manager.previous();
+    manager.select_selector_dropdown_option().await;
+    let reloaded_manager = settings_manager(&services, project_id).await;
+
+    // Assert
+    assert!(!manager.settings().auto_address_review_comments());
+    assert!(!manager.is_selector_dropdown_open());
+    assert_eq!(
+        services
+            .db()
+            .settings()
+            .get_project_setting(project_id, SettingName::AutoAddressReviewComments)
+            .await
+            .expect("failed to load auto-address setting"),
+        Some("false".to_string())
+    );
+    assert!(!reloaded_manager.settings().auto_address_review_comments());
 }
 
 #[tokio::test]

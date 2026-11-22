@@ -7,7 +7,7 @@ use crate::permission::PermissionMode;
 #[test]
 fn test_from_str_accepts_supported_modes() {
     // Arrange
-    let permission_modes = ["auto_edit", "auto_edit_address_comments", "read_only"];
+    let permission_modes = ["auto_edit", "read_only"];
 
     // Act
     let parsed_permission_modes = permission_modes.map(PermissionMode::from_str);
@@ -15,26 +15,25 @@ fn test_from_str_accepts_supported_modes() {
     // Assert
     assert_eq!(
         parsed_permission_modes,
-        [
-            Ok(PermissionMode::AutoEdit),
-            Ok(PermissionMode::AutoEditAddressComments),
-            Ok(PermissionMode::ReadOnly),
-        ]
+        [Ok(PermissionMode::AutoEdit), Ok(PermissionMode::ReadOnly)]
     );
 }
 
 #[test]
 fn test_from_str_rejects_removed_permission_modes() {
     // Arrange
-    let removed_mode = "autonomous";
+    let removed_modes = ["autonomous", "auto_edit_address_comments"];
 
     // Act
-    let parsed_permission_mode = PermissionMode::from_str(removed_mode);
+    let parsed_permission_modes = removed_modes.map(PermissionMode::from_str);
 
     // Assert
     assert_eq!(
-        parsed_permission_mode,
-        Err("Unknown permission mode: autonomous".to_string())
+        parsed_permission_modes,
+        [
+            Err("Unknown permission mode: autonomous".to_string()),
+            Err("Unknown permission mode: auto_edit_address_comments".to_string()),
+        ]
     );
 }
 
@@ -55,31 +54,12 @@ fn test_label_and_display_label_return_persisted_and_user_facing_text() {
     // Act
     let labels = permission_modes.map(PermissionMode::label);
     let display_labels = permission_modes.map(PermissionMode::display_label);
-    let descriptions = permission_modes.map(PermissionMode::description);
     let read_only = permission_modes.map(PermissionMode::is_read_only);
 
     // Assert
-    assert_eq!(
-        labels,
-        ["auto_edit", "auto_edit_address_comments", "read_only"]
-    );
-    assert_eq!(
-        display_labels,
-        [
-            "Auto Edit",
-            "Auto Edit + Auto Address Comments",
-            "Read Only"
-        ]
-    );
-    assert_eq!(
-        descriptions,
-        [
-            "Allow the agent to edit files automatically.",
-            "Auto Edit, then address focused-review suggestions up to 3 times.",
-            "Inspect the repository without changing files.",
-        ]
-    );
-    assert_eq!(read_only, [false, false, true]);
+    assert_eq!(labels, ["auto_edit", "read_only"]);
+    assert_eq!(display_labels, ["Auto Edit", "Read Only"]);
+    assert_eq!(read_only, [false, true]);
 }
 
 #[test]

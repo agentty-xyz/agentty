@@ -585,10 +585,7 @@ fn test_prompt_suggestion_list_for_busy_session_offers_setting_commands_only() {
     let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
 
     // Assert
-    assert_eq!(
-        labels,
-        vec!["/mode", "/model", "/reasoning", "/style", "/fast"]
-    );
+    assert_eq!(labels, vec!["/model", "/reasoning", "/style", "/fast"]);
 }
 
 #[test]
@@ -610,7 +607,7 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/graph", "/mode", "/model", "/reasoning", "/style", "/fast"]
+        vec!["/graph", "/model", "/reasoning", "/style", "/fast"]
     );
     assert_eq!(menu.selected_index, 0);
 }

@@ -7,6 +7,7 @@ fn test_transcript_notice_prefixes_match_canonical_labels() {
     // Arrange
     let notices = [
         (TranscriptNotice::Apply, "[Apply]"),
+        (TranscriptNotice::AutoAddress, "[Auto Address]"),
         (TranscriptNotice::BranchPush, "[Branch Push]"),
         (TranscriptNotice::BranchPushError, "[Branch Push Error]"),
         (TranscriptNotice::Commit, "[Commit]"),

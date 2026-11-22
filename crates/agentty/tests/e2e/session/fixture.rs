@@ -276,28 +276,6 @@ pub(super) async fn seed_review_ready_session_on_sessions_tab(
     Ok(())
 }
 
-/// Seeds the review-ready feature session with automatic addressing already
-/// selected so semantic execution and GIF replay remain idempotent.
-pub(super) async fn seed_auto_address_review_mode(
-    env: &BuilderEnv,
-) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_on_sessions_tab(env).await?;
-
-    (async {
-        let database = common::open_database(env).await?;
-        database
-            .sessions()
-            .update_session_permission_mode(
-                "review-shortcut-0001",
-                agentty::domain::permission::PermissionMode::AutoEditAddressComments,
-            )
-            .await
-    })
-    .await?;
-
-    Ok(())
-}
-
 /// Seeds the rebase transcript fixture with a pre-rebase hook that runs
 /// `hold_rebase`: a fixed `sleep` or a `ReleaseGate::shell_wait` statement.
 pub(super) async fn seed_rebase_transcript_session_with_delay(

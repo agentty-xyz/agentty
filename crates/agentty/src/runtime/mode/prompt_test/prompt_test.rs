@@ -375,7 +375,7 @@ fn test_prompt_slash_commands_match_model() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(commands, vec!["/mode", "/model"]);
+    assert_eq!(commands, vec!["/model"]);
 }
 
 /// Verifies the root slash-command menu exposes every command in display
@@ -402,7 +402,6 @@ fn test_prompt_slash_commands_lists_all_commands() {
         vec![
             "/apply",
             "/graph",
-            "/mode",
             "/model",
             "/reasoning",
             "/style",
@@ -1059,16 +1058,9 @@ fn test_prompt_input_command_ignores_non_prompt_mode() {
 }
 
 #[test]
-fn test_backtab_cycles_permission_modes_and_preserves_input() {
+fn test_backtab_toggles_permission_modes_and_preserves_input() {
     for (current_permission_mode, expected_permission_mode) in [
-        (
-            PermissionMode::AutoEdit,
-            PermissionMode::AutoEditAddressComments,
-        ),
-        (
-            PermissionMode::AutoEditAddressComments,
-            PermissionMode::ReadOnly,
-        ),
+        (PermissionMode::AutoEdit, PermissionMode::ReadOnly),
         (PermissionMode::ReadOnly, PermissionMode::AutoEdit),
     ] {
         // Arrange
@@ -1208,30 +1200,6 @@ async fn test_style_slash_submit_sets_preference_and_resets_input() {
     assert_eq!(
         app.sessions.sessions()[0].response_style,
         ResponseStyle::Detailed
-    );
-}
-
-#[tokio::test]
-async fn test_mode_slash_command_selects_auto_address_mode() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/mode", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    run_prompt_submit(&mut app, &prompt_context).await;
-    press_prompt_key(&mut app, KeyCode::Down).await;
-    run_prompt_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt {
-            input, slash_state, ..
-        } if input.text().is_empty() && *slash_state == PromptSlashState::default()
-    ));
-    assert_eq!(
-        app.sessions.sessions()[0].permission_mode,
-        PermissionMode::AutoEditAddressComments
     );
 }
 
@@ -1993,25 +1961,31 @@ fn test_handle_prompt_slash_submit_ignores_non_prompt_mode() {
 }
 
 #[test]
-fn test_handle_prompt_slash_submit_maps_filtered_command_index_to_mode() {
+fn test_handle_prompt_slash_submit_maps_filtered_command_index_to_reasoning() {
     // Arrange
     let mut mode = new_test_prompt_mode("/");
     if let AppMode::Prompt { slash_state, .. } = &mut mode {
-        // `/apply` is filtered out, so `/graph` and `/mode` lead the menu.
-        slash_state.selected_index = 1;
+        // `/apply` is filtered out, so `/graph`, `/model`, and `/reasoning`
+        // lead the menu.
+        slash_state.selected_index = 2;
     }
+    let prompt_context = new_test_prompt_context();
+    let expected_index = ReasoningLevel::ALL
+        .iter()
+        .position(|level| *level == prompt_context.reasoning_level)
+        .expect("context reasoning level is listed");
     let mut effects = Vec::new();
 
     // Act
-    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
+    reduce_prompt_slash_submit(&mut mode, &prompt_context, &mut effects);
 
     // Assert
     assert!(matches!(
         &mode,
         AppMode::Prompt { slash_state, .. }
-            if slash_state.stage == PromptSlashStage::Mode
+            if slash_state.stage == PromptSlashStage::Reasoning
                 && slash_state.selected_agent.is_none()
-                && slash_state.selected_index == 0
+                && slash_state.selected_index == expected_index
     ));
     assert!(effects.is_empty());
 }

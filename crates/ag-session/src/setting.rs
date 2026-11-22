@@ -9,6 +9,9 @@ pub enum SettingName {
     ActiveProjectId,
     /// Persists the active list tab selection.
     ActiveTab,
+    /// Persists whether completed turns automatically address focused-review
+    /// suggestions for a project.
+    AutoAddressReviewComments,
     /// Persists the provider that owns the fast-model default.
     DefaultFastAgent,
     /// Persists the project or global fast-model selection.
@@ -64,6 +67,7 @@ impl SettingName {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
             Self::ActiveTab => "ActiveTab",
+            Self::AutoAddressReviewComments => "AutoAddressReviewComments",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultHarnessModel => "DefaultHarnessModel",

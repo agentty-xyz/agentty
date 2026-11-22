@@ -381,12 +381,10 @@ async fn prepare(
 }
 
 fn intersect_permissions(captured: PermissionMode, current: PermissionMode) -> PermissionMode {
-    if captured == PermissionMode::ReadOnly || current == PermissionMode::ReadOnly {
+    if captured.is_read_only() || current.is_read_only() {
         PermissionMode::ReadOnly
-    } else if captured == PermissionMode::AutoEdit || current == PermissionMode::AutoEdit {
-        PermissionMode::AutoEdit
     } else {
-        current
+        PermissionMode::AutoEdit
     }
 }
 

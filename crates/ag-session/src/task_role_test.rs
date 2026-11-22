@@ -26,10 +26,6 @@ fn role_permissions_never_expand_session_access() {
     // Arrange
     let cases = [
         (PermissionMode::AutoEdit, PermissionMode::AutoEdit),
-        (
-            PermissionMode::AutoEditAddressComments,
-            PermissionMode::AutoEditAddressComments,
-        ),
         (PermissionMode::ReadOnly, PermissionMode::ReadOnly),
     ];
 

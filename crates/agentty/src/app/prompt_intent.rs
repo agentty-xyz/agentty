@@ -877,8 +877,13 @@ impl App {
     }
 
     /// Starts bounded `/apply`-equivalent turns for newly ready focused
-    /// reviews whose session mode enables automatic remediation.
+    /// reviews when the project enables automatic remediation and the
+    /// session may edit files.
     pub(crate) fn auto_address_focused_reviews(&mut self, ready_session_ids: Vec<SessionId>) {
+        if !self.settings.auto_address_review_comments() {
+            return;
+        }
+
         for session_id in ready_session_ids {
             let Some(session_index) = self
                 .sessions
@@ -888,8 +893,9 @@ impl App {
             else {
                 continue;
             };
-            if self.sessions.sessions()[session_index].permission_mode
-                != PermissionMode::AutoEditAddressComments
+            if self.sessions.sessions()[session_index]
+                .permission_mode
+                .is_read_only()
             {
                 continue;
             }

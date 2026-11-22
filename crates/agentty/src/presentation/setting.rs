@@ -13,6 +13,9 @@ use crate::domain::theme::ColorTheme;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SettingsView {
     pub(crate) available_model_selections: Vec<AgentSelection>,
+    /// Whether completed turns automatically address focused-review
+    /// suggestions for the active project.
+    pub(crate) auto_address_review_comments: bool,
     pub(crate) default_fast_reasoning_level: ReasoningLevel,
     pub(crate) default_fast_selection: AgentSelection,
     pub(crate) default_fast_speed_mode: SpeedMode,
@@ -35,6 +38,7 @@ pub(crate) struct SettingsView {
 /// One persistence operation requested by the settings screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsOperation {
+    AutoAddressReviewComments(bool),
     DefaultFastSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
@@ -728,6 +732,9 @@ fn settings_operation_for_primary_selector(
     value: SettingSelectorValue,
 ) -> Option<SettingsOperation> {
     match (row, value) {
+        (SettingRow::AutoAddressReviewComments, SettingSelectorValue::Bool(value)) => {
+            Some(SettingsOperation::AutoAddressReviewComments(value))
+        }
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
@@ -752,6 +759,7 @@ enum SettingControl {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
+    AutoAddressReviewComments,
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
@@ -763,7 +771,7 @@ enum SettingRow {
 }
 
 impl SettingRow {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Theme,
         Self::MaxConcurrentSubagents,
         Self::DefaultSmartModel,
@@ -772,15 +780,17 @@ impl SettingRow {
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
+        Self::AutoAddressReviewComments,
     ];
     const GLOBAL: [Self; 2] = [Self::Theme, Self::MaxConcurrentSubagents];
-    const PROJECT: [Self; 6] = [
+    const PROJECT: [Self; 7] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
+        Self::AutoAddressReviewComments,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -800,6 +810,7 @@ impl SettingRow {
 
     fn label(self) -> &'static str {
         match self {
+            Self::AutoAddressReviewComments => "Auto Address Comments",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
@@ -960,6 +971,9 @@ impl SettingSelectorOption {
             (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
                 view.default_response_style == value
             }
+            (SettingRow::AutoAddressReviewComments, SettingSelectorValue::Bool(value)) => {
+                view.auto_address_review_comments == value
+            }
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
@@ -1034,7 +1048,9 @@ fn move_launch_configuration_list_editor_selection(
 
 fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<SettingSelectorOption> {
     match row {
-        SettingRow::IncludeCoauthoredByAgentty => bool_selector_options(),
+        SettingRow::AutoAddressReviewComments | SettingRow::IncludeCoauthoredByAgentty => {
+            bool_selector_options()
+        }
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
@@ -1154,6 +1170,9 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
             view.default_review_speed_mode,
         ),
         SettingRow::DefaultResponseStyle => view.default_response_style.name().to_string(),
+        SettingRow::AutoAddressReviewComments => {
+            bool_setting_display(view.auto_address_review_comments)
+        }
         SettingRow::IncludeCoauthoredByAgentty => {
             bool_setting_display(view.include_coauthored_by_agentty)
         }

@@ -176,7 +176,7 @@ fn narrow_prompt_preserves_style_and_permission_before_model_title() {
 fn prompt_title_reserves_the_trailing_permission_indicator() {
     for status in [
         "Balanced · Normal · Auto Edit",
-        "Balanced · Normal · Auto Edit + Auto Address Comments",
+        "Balanced · Normal · Read Only",
         "Balanced · Read Only",
         "Auto Edit",
     ] {

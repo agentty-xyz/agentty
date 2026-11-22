@@ -9,8 +9,8 @@ use ag_contracts::SessionDiffState;
 use ag_git::MockGitClient;
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, DurableMessageRequest, DurableMessageVisibility,
-    PermissionMode, SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment,
-    TaskAgentInput, TaskAgentRole, TaskAttemptStatus,
+    SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    TaskAgentRole, TaskAttemptStatus,
 };
 use ag_worker::MockRunClient;
 use tokio::sync::Notify;
@@ -573,10 +573,6 @@ async fn seed_pending_review(app: &mut App) -> (SessionId, Uuid) {
         .await
         .expect("session");
     db.sessions()
-        .update_session_permission_mode(&session_id, PermissionMode::AutoEditAddressComments)
-        .await
-        .expect("permission");
-    db.sessions()
         .defer_session_focused_review(&session_id)
         .await
         .expect("pending review");
@@ -588,7 +584,6 @@ async fn seed_pending_review(app: &mut App) -> (SessionId, Uuid) {
         .id(session_id.clone())
         .status(Status::AgentReview)
         .build();
-    session.permission_mode = PermissionMode::AutoEditAddressComments;
     session.stats.added_lines = 1;
     session.stats.diff_state = SessionDiffState::Present;
     app.sessions.push_session(session);

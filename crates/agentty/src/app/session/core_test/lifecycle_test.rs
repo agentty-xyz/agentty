@@ -1190,12 +1190,17 @@ async fn test_start_session() {
         .await
         .expect("failed to load session messages");
     assert_eq!(db_sessions[0].prompt, "Hello");
-    assert_eq!(messages.len(), 1);
+    assert_eq!(messages.len(), 2);
     assert_eq!(
         messages[0].kind,
         crate::domain::session_message::SessionMessageKind::UserPrompt.as_str()
     );
     assert_eq!(messages[0].content, "Hello");
+    assert_eq!(
+        messages[1].kind,
+        crate::domain::session_message::SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert!(messages[1].content.contains("[Auto Address]"));
     assert_eq!(activity_timestamps.len(), 1);
 }
 

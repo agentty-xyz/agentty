@@ -9,6 +9,10 @@ fn test_as_str_returns_persisted_keys() {
     let settings = [
         (SettingName::ActiveProjectId, "ActiveProjectId"),
         (SettingName::ActiveTab, "ActiveTab"),
+        (
+            SettingName::AutoAddressReviewComments,
+            "AutoAddressReviewComments",
+        ),
         (SettingName::DefaultFastAgent, "DefaultFastAgent"),
         (SettingName::DefaultFastModel, "DefaultFastModel"),
         (SettingName::DefaultHarnessModel, "DefaultHarnessModel"),
@@ -73,6 +77,7 @@ fn test_display_matches_as_str() {
     let settings = [
         SettingName::ActiveProjectId,
         SettingName::ActiveTab,
+        SettingName::AutoAddressReviewComments,
         SettingName::DefaultFastAgent,
         SettingName::DefaultFastModel,
         SettingName::DefaultFastReasoningLevel,
