@@ -718,7 +718,6 @@ fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {
     // Act
     let secure = pairing_link("wss://relay.example/", &key, "ABCD-EFGH");
     let plain = pairing_link("ws://127.0.0.1:8787", &key, "ABCD-EFGH");
-    let other = pairing_link("relay.example", &key, "CODE");
 
     // Assert
     assert_eq!(
@@ -729,7 +728,6 @@ fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {
         )
     );
     assert!(plain.starts_with("http://127.0.0.1:8787/#relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A8787&"));
-    assert!(other.starts_with("relay.example/#relay=relay%2Eexample&"));
 }
 
 #[tokio::test]

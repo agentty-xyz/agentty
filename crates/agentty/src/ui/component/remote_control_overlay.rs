@@ -55,7 +55,7 @@ impl<'a> RemoteControlOverlay<'a> {
             .and_then(|listener| listener.relay.as_ref())
             .map_or(&[][..], |relay| relay.qr_code.as_slice());
         let qr_width = qr_code.first().map_or(0, |row| row.chars().count());
-        let fits = qr_width <= width && lines.len() + qr_code.len() <= height;
+        let fits = qr_width <= width && wrapped_row_count(&lines, width) + qr_code.len() <= height;
         if qr_code.is_empty() || !fits {
             return lines;
         }
@@ -195,7 +195,11 @@ impl Component for RemoteControlOverlay<'_> {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let content_width = overlay::overlay_content_width(popup_area.width).max(1);
-        let content_height = usize::from(popup_area.height.saturating_sub(2));
+        let content_height = usize::from(
+            popup_area
+                .height
+                .saturating_sub(overlay::overlay_required_height(0)),
+        );
         let paragraph = Paragraph::new(self.lines(content_width, content_height))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
@@ -228,6 +232,20 @@ fn relay_lines(relay: &RemoteRelayView, qr_code: &[String]) -> Vec<Line<'static>
     ));
 
     lines
+}
+
+/// Estimates the rows `lines` take once wrapped to `width` columns. Word
+/// wrapping can break before a full row, so each wrapped line counts one
+/// extra row to stay on the safe side.
+fn wrapped_row_count(lines: &[Line<'_>], width: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            let rows = line.width().div_ceil(width).max(1);
+
+            rows + usize::from(rows > 1)
+        })
+        .sum()
 }
 
 /// Builds one `label  value` row with the value in `color`.

@@ -1,7 +1,7 @@
 //! Tests for the remote-control frame projection.
 
 use crate::presentation::remote_control::{
-    RemoteControlNotice, RemoteControlView, RemoteDeviceView, RemoteListenerView,
+    LIGHT_CELL, RemoteControlNotice, RemoteControlView, RemoteDeviceView, RemoteListenerView,
     RemotePairingRequestView, RemoteRelayView,
 };
 
@@ -51,13 +51,13 @@ fn relay_view_encodes_the_link_as_square_half_block_rows() {
     assert!(relay.is_connected);
     assert!(row_widths.iter().all(|width| *width == size));
     assert_eq!(relay.qr_code.len(), size.div_ceil(2));
-    assert_eq!(relay.qr_code[0].trim(), "");
+    assert!(relay.qr_code[0].chars().all(|cell| cell == LIGHT_CELL));
     assert!(
         relay
             .qr_code
             .iter()
             .flat_map(|row| row.chars())
-            .all(|cell| matches!(cell, '█' | '▀' | '▄' | ' '))
+            .all(|cell| matches!(cell, '█' | '▀' | '▄' | LIGHT_CELL))
     );
 }
 

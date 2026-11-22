@@ -56,7 +56,7 @@ struct Cli {
     /// Relay that `/remote-control` registers with, such as
     /// `wss://relay.example`, so devices can pair and connect without a
     /// tunnel. Traffic through it is encrypted end to end.
-    #[arg(long, value_name = "URL", requires = "remote")]
+    #[arg(long, value_name = "URL", requires = "remote", value_parser = parse_relay_url)]
     remote_relay: Option<String>,
 }
 
@@ -107,6 +107,26 @@ async fn run(
     let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
 
     run_application(cli, runtime).with_context(context).await
+}
+
+/// Accepts a relay base URL: `ws://` or `wss://`, a host, and no query or
+/// fragment, since the pairing link appends its own fragment. A trailing
+/// slash is dropped.
+fn parse_relay_url(value: &str) -> Result<String, String> {
+    let url = value.trim().trim_end_matches('/');
+    let host = url
+        .strip_prefix("wss://")
+        .or_else(|| url.strip_prefix("ws://"))
+        .unwrap_or_default();
+    let is_valid = !host.is_empty()
+        && !host.starts_with('/')
+        && !host.contains(['?', '#'])
+        && !host.contains(char::is_whitespace);
+    if !is_valid {
+        return Err("expected a relay URL such as wss://relay.example".to_string());
+    }
+
+    Ok(url.to_string())
 }
 
 /// Reports an OTLP setup failure using its bounded, credential-free message.

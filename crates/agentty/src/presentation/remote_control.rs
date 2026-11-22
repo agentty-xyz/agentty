@@ -82,9 +82,12 @@ impl RemoteRelayView {
 
 /// Light modules around a QR code; scanners need a margin.
 const QR_QUIET_ZONE: usize = 2;
+/// Cell of two light modules: a no-break space, because wrapping text
+/// renderers trim ordinary leading spaces and would shift the rows.
+pub const LIGHT_CELL: char = '\u{a0}';
 
 /// Encodes `link` as QR code rows. Each character covers two module rows:
-/// `█` both dark, `▀` top dark, `▄` bottom dark, and a space both light,
+/// `█` both dark, `▀` top dark, `▄` bottom dark, and [`LIGHT_CELL`] both light,
 /// with a two-module quiet zone. Returns no rows when the link is too long
 /// to encode.
 fn qr_rows(link: &str) -> Vec<String> {
@@ -110,7 +113,7 @@ fn qr_rows(link: &str) -> Vec<String> {
                         (true, true) => '█',
                         (true, false) => '▀',
                         (false, true) => '▄',
-                        (false, false) => ' ',
+                        (false, false) => LIGHT_CELL,
                     },
                 )
                 .collect()

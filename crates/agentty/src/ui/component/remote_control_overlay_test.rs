@@ -210,6 +210,97 @@ fn relay_listener_shows_status_link_qr_code_and_link_hints() {
     );
 }
 
+/// Renders `overlay` on a `width` by `height` terminal and returns its rows.
+fn rendered_rows(overlay: &RemoteControlOverlay<'_>, width: u16, height: u16) -> Vec<String> {
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            overlay.render(frame, area);
+        })
+        .expect("failed to draw");
+    let buffer = terminal.backend().buffer();
+
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn rendered_qr_code_keeps_every_row_intact_and_aligned() {
+    // Arrange
+    let view = relay_view(true, None);
+    let overlay = RemoteControlOverlay::new(&view);
+    let qr_code = view
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.qr_code.clone())
+        .expect("relay should have a QR code");
+
+    // Act
+    let rows = rendered_rows(&overlay, 160, 80);
+
+    // Assert
+    let first_row = rows
+        .iter()
+        .position(|row| row.contains(&qr_code[0]))
+        .expect("first QR row should render");
+    let column = rows[first_row].find(&qr_code[0]);
+    for (offset, qr_row) in qr_code.iter().enumerate() {
+        assert_eq!(rows[first_row + offset].find(qr_row.as_str()), column);
+    }
+}
+
+#[test]
+fn rendered_popup_keeps_its_hints_when_the_qr_code_barely_fits() {
+    // Arrange
+    let view = relay_view(true, None);
+    let overlay = RemoteControlOverlay::new(&view);
+    let first_qr_row = view
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.qr_code[0].clone())
+        .expect("relay should have a QR code");
+
+    // Act
+    let frames: Vec<(bool, bool)> = (30..90)
+        .map(|height| {
+            let rows = rendered_rows(&overlay, 100, height);
+            let has_qr_code = rows.iter().any(|row| row.contains(&first_qr_row));
+            let last_text_row = rows
+                .iter()
+                .rev()
+                .find(|row| {
+                    row.contains('│')
+                        && row
+                            .chars()
+                            .any(|cell| cell.is_alphanumeric() || cell == ':')
+                })
+                .cloned()
+                .unwrap_or_default();
+            let has_hints = rows.iter().any(|row| row.contains("n: new code"))
+                && last_text_row.contains("close");
+
+            (has_qr_code, has_hints)
+        })
+        .collect();
+
+    // Assert
+    assert!(frames.iter().any(|(has_qr_code, _)| *has_qr_code));
+    assert!(
+        frames
+            .iter()
+            .all(|(has_qr_code, has_hints)| !has_qr_code || *has_hints)
+    );
+}
+
 #[test]
 fn relay_qr_code_is_left_out_when_it_does_not_fit() {
     // Arrange

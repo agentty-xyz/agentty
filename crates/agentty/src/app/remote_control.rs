@@ -402,24 +402,18 @@ impl App {
 
 /// Builds the link a device opens to pair through `relay_url`.
 ///
-/// The relay serves the pairing page at its root over HTTP(S). Everything
-/// after `#` stays in the browser, so the relay never sees the instance key
-/// or the one-time code it carries.
+/// `relay_url` is a `ws://` or `wss://` URL, as `--remote-relay` requires.
+/// The relay serves the pairing page at the same place over `http://` or
+/// `https://`. Everything after `#` stays in the browser, so the relay never
+/// sees the instance key or the one-time code it carries.
 pub(crate) fn pairing_link(
     relay_url: &str,
     instance_key: &PublicKey,
     pairing_code: &str,
 ) -> String {
     let relay_url = relay_url.trim_end_matches('/');
-    let page = relay_url
-        .strip_prefix("wss://")
-        .map(|rest| format!("https://{rest}"))
-        .or_else(|| {
-            relay_url
-                .strip_prefix("ws://")
-                .map(|rest| format!("http://{rest}"))
-        })
-        .unwrap_or_else(|| relay_url.to_string());
+    // `ws://` becomes `http://` and `wss://` becomes `https://`.
+    let page = format!("http{}", relay_url.get(2..).unwrap_or_default());
 
     format!(
         "{page}/#relay={}&key={}&code={}",
