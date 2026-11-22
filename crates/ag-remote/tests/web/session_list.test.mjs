@@ -20,7 +20,7 @@ const SESSIONS = [
 
 // Mounts the list on the client's page. Returns the page, the sessions
 // opened through it, and the list.
-function mountList({ storage = new MemoryStorage(), time = () => NOW } = {}) {
+function mountList({ storage = new MemoryStorage(), time = () => NOW, isFilterShown } = {}) {
   const window = createWindow(createDocument(INDEX_HTML));
   window.localStorage = storage;
   const document = window.document;
@@ -38,6 +38,7 @@ function mountList({ storage = new MemoryStorage(), time = () => NOW } = {}) {
       summary: byId("filter-summary"),
       waiting: byId("home-waiting"),
     },
+    isFilterShown: isFilterShown,
     now: time,
     onOpen: (sessionId) => opened.push(sessionId),
     window: window,
@@ -190,7 +191,7 @@ test("nothing starts unread, and a later update marks other sessions unread", ()
   assert.equal(dot.parentNode.classList.contains("is-unread"), true);
 });
 
-test("opening a session marks it seen, and the seen map drops unlisted ids", () => {
+test("opening a session marks it seen, and the seen map keeps unlisted ids", () => {
   // Arrange
   const page = mountList();
   page.list.update(SESSIONS, null);
@@ -206,7 +207,7 @@ test("opening a session marks it seen, and the seen map drops unlisted ids", () 
   assert.deepEqual(unreadIds(page.byId), ["merging", "review", "draft"]);
   assert.equal(stored.running, NOW + 10);
   assert.equal(stored.review, NOW - 180);
-  assert.equal(Object.hasOwn(stored, "done"), false);
+  assert.equal(stored.done, NOW - 2 * 86400);
 });
 
 test("an update to the open session while the page is hidden waits until it shows", () => {
@@ -278,7 +279,10 @@ test("the filter matches titles without case, counts the chips and says how many
     summary: page.byId("filter-summary").textContent,
     summaryHidden: page.byId("filter-summary").hidden,
   };
-  page.byId("chips").querySelector('[data-filter="needs_you"]').click();
+  // A keyboard user activates the focused chip, which keeps the focus.
+  const chip = page.byId("chips").querySelector('[data-filter="needs_you"]');
+  chip.focus();
+  chip.click();
 
   // Assert
   assert.deepEqual(unfiltered, [
@@ -391,4 +395,114 @@ test("tick refreshes relative times without rebuilding the rows", () => {
   assert.equal(page.byId("sessions").querySelector('[data-session-id="running"]'), row);
   assert.equal(row.querySelector(".time").textContent, "1h");
   assert.equal(page.byId("home-cards").querySelector(".time").textContent, "1h");
+});
+
+test("an update keeps the keyboard focus on the same row, card, chip and toggle", () => {
+  // Arrange
+  const page = mountList();
+  page.list.update(SESSIONS, null);
+  const later = SESSIONS.map((session) => ({ ...session, updated_at: session.updated_at + 1 }));
+  const focusedAfterUpdate = (find) => {
+    find().focus();
+    page.list.update(later, null);
+
+    return page.document.activeElement === find() && find().isConnected;
+  };
+
+  // Act
+  const results = {
+    card: focusedAfterUpdate(() => page.byId("home-cards").querySelector(".card")),
+    chip: focusedAfterUpdate(() => page.byId("chips").querySelector('[data-filter="running"]')),
+    row: focusedAfterUpdate(() =>
+      page.byId("sessions").querySelector('[data-session-id="running"]'),
+    ),
+    toggle: focusedAfterUpdate(() => page.byId("sessions").querySelector(".group-toggle")),
+  };
+  // Opening a row by keyboard keeps the focus on it too.
+  const row = page.byId("sessions").querySelector('[data-session-id="draft"]');
+  row.focus();
+  page.list.setOpen("draft");
+  const opened = page.document.activeElement;
+
+  // Assert
+  assert.deepEqual(results, { card: true, chip: true, row: true, toggle: true });
+  assert.equal(opened.dataset.sessionId, "draft");
+  assert.equal(opened.getAttribute("aria-current"), "page");
+});
+
+test("two tabs keep each other's seen times", () => {
+  // Arrange: both tabs share one storage and start from the same listing.
+  const storage = new MemoryStorage();
+  const first = mountList({ storage: storage });
+  const second = mountList({ storage: storage });
+  const later = SESSIONS.map((session) => ({ ...session, updated_at: NOW + 10 }));
+  first.list.update(SESSIONS, null);
+  second.list.update(SESSIONS, null);
+
+  // Act: each tab opens a different updated session.
+  first.list.update(later, "running");
+  second.list.update(later, "review");
+  const stored = JSON.parse(storage.getItem(SEEN_KEY));
+
+  // Assert
+  assert.equal(stored.running, NOW + 10);
+  assert.equal(stored.review, NOW + 10);
+});
+
+test("a storage event from another tab clears the dots it saw", () => {
+  // Arrange
+  const page = mountList();
+  page.list.update(SESSIONS, null);
+  const later = SESSIONS.map((session) =>
+    session.id === "running" ? { ...session, updated_at: NOW + 10 } : session,
+  );
+  page.list.update(later, null);
+  const before = unreadIds(page.byId);
+
+  // Act
+  const seen = Object.fromEntries(later.map((session) => [session.id, session.updated_at]));
+  page.window.dispatchEvent(
+    new FakeEvent("storage", { key: SEEN_KEY, newValue: JSON.stringify(seen) }),
+  );
+  page.window.dispatchEvent(new FakeEvent("storage", { key: "other", newValue: "{}" }));
+
+  // Assert
+  assert.deepEqual(before, ["running"]);
+  assert.deepEqual(unreadIds(page.byId), []);
+});
+
+test("the match count is written only when it changes", () => {
+  // Arrange
+  const page = mountList();
+  page.list.update(SESSIONS, null);
+  type(page, "relay");
+  const summary = page.byId("filter-summary");
+  const node = summary.firstChild;
+
+  // Act
+  page.list.update(SESSIONS, null);
+
+  // Assert
+  assert.equal(summary.textContent, "1 of 5 sessions match.");
+  assert.equal(summary.firstChild, node);
+});
+
+test("slash does nothing while the filter is off screen", () => {
+  // Arrange
+  let isShown = false;
+  const page = mountList({ isFilterShown: () => isShown });
+
+  // Act
+  const hidden = new FakeEvent("keydown", { key: "/" });
+  page.document.body.dispatchEvent(hidden);
+  const focusedWhileHidden = page.document.activeElement;
+  isShown = true;
+  const shown = new FakeEvent("keydown", { key: "/" });
+  page.document.body.dispatchEvent(shown);
+
+  // Assert
+  assert.equal(hidden.defaultPrevented, false);
+  assert.notEqual(focusedWhileHidden, page.byId("filter"));
+  assert.equal(shown.defaultPrevented, true);
+  assert.equal(page.document.activeElement, page.byId("filter"));
 });

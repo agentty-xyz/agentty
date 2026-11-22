@@ -9,6 +9,7 @@ import {
   filterCounts,
   filterSessions,
   groupSessions,
+  mergeSeen,
   parseSeen,
   reconcileSeen,
   relativeTime,
@@ -30,13 +31,21 @@ const COLLAPSED_GROUP = "archive";
 // match a filter), `filter` (the text field), `filterKey` (the key hint in
 // it), `chips` (the filter buttons), and `cards` with `waiting`, the home
 // view's cards and their section. `onOpen(sessionId)` runs when a row or a
-// card is chosen. `now()` returns the time in seconds.
+// card is chosen. `now()` returns the time in seconds, and
+// `isFilterShown()` whether the filter field is on screen for `/`.
 //
 // Returns `update(sessions, openId)` for a new listing while `openId` is
 // open, `setOpen(sessionId)` when another session (or `null`, home) opens,
 // `markSeen()` once the page shows again,
 // and `tick()`, which refreshes relative times.
-export function createSessionList({ document, window, elements, onOpen, now = defaultNow }) {
+export function createSessionList({
+  document,
+  window,
+  elements,
+  onOpen,
+  now = defaultNow,
+  isFilterShown = () => true,
+}) {
   const state = {
     filter: FILTERS[0].id,
     isArchiveOpen: false,
@@ -47,9 +56,13 @@ export function createSessionList({ document, window, elements, onOpen, now = de
     seen: null,
     sessions: [],
   };
-  state.seen = loadSeen();
+  state.seen = readStored();
 
-  function loadSeen() {
+  // Reads the map another tab of this page may have written since.
+  function readStored() {
+    if (state.isStorageBroken) {
+      return null;
+    }
     try {
       return parseSeen(window.localStorage.getItem(SEEN_KEY));
     } catch (_error) {
@@ -59,11 +72,13 @@ export function createSessionList({ document, window, elements, onOpen, now = de
     }
   }
 
-  // Records what this browser has seen. The open session counts as seen
-  // only while the page is visible.
+  // Records what this browser has seen. The stored map is read again first,
+  // so two tabs keep each other's later times. The open session counts as
+  // seen only while the page is visible.
   function reconcile() {
     const visibleOpenId = document.visibilityState === "hidden" ? null : state.openId;
-    state.seen = reconcileSeen(state.seen, state.sessions, visibleOpenId);
+    const known = mergeSeen(state.seen, readStored());
+    state.seen = reconcileSeen(known, state.sessions, visibleOpenId);
     if (state.isStorageBroken) {
       return;
     }
@@ -74,7 +89,11 @@ export function createSessionList({ document, window, elements, onOpen, now = de
     }
   }
 
+  // Rebuilds the list, chips and cards. A focused row, card, chip or
+  // toggle is focused again in its new copy, so keyboard users keep their
+  // place when an update arrives.
   function render() {
+    const focused = focusedKey();
     const unread = state.isStorageBroken
       ? new Set()
       : unreadIds(state.sessions, state.seen, state.openId);
@@ -86,10 +105,39 @@ export function createSessionList({ document, window, elements, onOpen, now = de
     );
     elements.empty.hidden = state.sessions.length > 0;
     elements.summary.hidden = !isFiltering || state.sessions.length === 0;
-    elements.summary.textContent =
-      shown.length + " of " + state.sessions.length + " sessions match.";
+    // The summary is a live region: unchanged text is not written again,
+    // so an update does not announce it once more.
+    const summary = shown.length + " of " + state.sessions.length + " sessions match.";
+    if (elements.summary.textContent !== summary) {
+      elements.summary.textContent = summary;
+    }
     renderChips();
     renderCards(time);
+    restoreFocus(focused);
+  }
+
+  function focusedKey() {
+    const active = document.activeElement;
+    for (const container of [elements.list, elements.chips, elements.cards]) {
+      if (active && container.contains(active)) {
+        return { container: container, key: keyOf(active) };
+      }
+    }
+
+    return null;
+  }
+
+  function restoreFocus(focused) {
+    if (!focused?.key) {
+      return;
+    }
+    for (const button of focused.container.querySelectorAll("button")) {
+      if (keyOf(button) === focused.key) {
+        button.focus({ preventScroll: true });
+
+        return;
+      }
+    }
   }
 
   // A collapsed group still shows its label and count. A query shows its
@@ -109,7 +157,6 @@ export function createSessionList({ document, window, elements, onOpen, now = de
       toggle.addEventListener("click", () => {
         state.isArchiveOpen = !isOpen;
         render();
-        elements.list.querySelector('[data-group="archive"] .group-toggle')?.focus();
       });
       heading.append(toggle);
       rows.hidden = !isOpen;
@@ -174,7 +221,6 @@ export function createSessionList({ document, window, elements, onOpen, now = de
         button.addEventListener("click", () => {
           state.filter = filter.id;
           render();
-          elements.chips.querySelector('[data-filter="' + filter.id + '"]')?.focus();
         });
 
         return button;
@@ -219,9 +265,10 @@ export function createSessionList({ document, window, elements, onOpen, now = de
       setQuery("");
     }
   });
-  // `/` focuses the field unless the user is typing somewhere already.
+  // `/` focuses the field when it is on screen, unless the user is typing
+  // somewhere already.
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) {
+    if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || !isFilterShown()) {
       return;
     }
     const target = event.target;
@@ -230,6 +277,14 @@ export function createSessionList({ document, window, elements, onOpen, now = de
     }
     event.preventDefault();
     elements.filter.focus();
+  });
+  // Another tab of this page marked sessions seen.
+  window.addEventListener("storage", (event) => {
+    if (event.key !== SEEN_KEY || state.isStorageBroken) {
+      return;
+    }
+    state.seen = mergeSeen(state.seen, parseSeen(event.newValue));
+    render();
   });
 
   return {
@@ -270,6 +325,19 @@ export function statusLine(document, statusName) {
   node.append(element(document, "i"), info.label);
 
   return node;
+}
+
+// What identifies a list button across renders: its session, its filter,
+// or the archive toggle.
+function keyOf(node) {
+  if (node.dataset?.sessionId) {
+    return "session:" + node.dataset.sessionId;
+  }
+  if (node.dataset?.filter) {
+    return "filter:" + node.dataset.filter;
+  }
+
+  return node.classList?.contains("group-toggle") ? "toggle" : null;
 }
 
 function fullDate(unixSeconds) {

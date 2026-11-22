@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   FILTERS,
   GROUPS,
+  MAX_SEEN,
   filterCounts,
   filterSessions,
   groupSessions,
+  mergeSeen,
   parseActivity,
   parseNotice,
   parseSeen,
@@ -122,6 +124,9 @@ test("relativeTime rounds to the largest whole unit", () => {
     [now - 59, "now"],
     [now - 60, "1m"],
     [now - 59 * 60, "59m"],
+    // Rounding up to a whole hour moves to the next unit, never `60m`.
+    [now - (59 * 60 + 30), "1h"],
+    [now - (59 * 60 + 59), "1h"],
     [now - 60 * 60, "1h"],
     [now - (3600 + 29 * 60 + 40), "1h"],
     [now - 23 * 3600, "23h"],
@@ -297,7 +302,7 @@ test("reconcileSeen marks everything seen on the first load", () => {
   assert.deepEqual([...unreadIds(sessions, seen, null)], []);
 });
 
-test("reconcileSeen keeps old values, updates the open session and drops unlisted ids", () => {
+test("reconcileSeen keeps old values and unlisted ids, and updates the open session", () => {
   // Arrange
   const stored = { a: 10, b: 20, gone: 5 };
   const sessions = [
@@ -310,8 +315,74 @@ test("reconcileSeen keeps old values, updates the open session and drops unliste
   const seen = reconcileSeen(stored, sessions, "b");
 
   // Assert
-  assert.deepEqual(seen, { a: 10, b: 25 });
+  assert.deepEqual(seen, { a: 10, b: 25, gone: 5 });
   assert.deepEqual(stored, { a: 10, b: 20, gone: 5 });
+  assert.deepEqual([...unreadIds(sessions, seen, "b")], ["a", "new"]);
+});
+
+test("switching to another project and back marks nothing unread", () => {
+  // Arrange
+  const projectA = [session("a1", "Review", "A1", 10), session("a2", "Done", "A2", 20)];
+  const projectB = [session("b1", "Review", "B1", 30), session("b2", "Draft", "B2", 40)];
+  const seenA = reconcileSeen(null, projectA, null);
+
+  // Act: the terminal switches to B, which this browser never saw, then
+  // back to A.
+  const seenB = reconcileSeen(seenA, projectB, null);
+  const unreadB = unreadIds(projectB, seenB, null);
+  const seenBack = reconcileSeen(seenB, projectA, null);
+
+  // Assert
+  assert.deepEqual([...unreadB], []);
+  assert.deepEqual(seenBack, { a1: 10, a2: 20, b1: 30, b2: 40 });
+  assert.deepEqual([...unreadIds(projectA, seenBack, null)], []);
+});
+
+test("a stored map that knows none of the listed sessions counts as a first load", () => {
+  // Arrange: this browser paired again with another Agentty.
+  const stored = { old1: 10, old2: 20 };
+  const sessions = [session("x", "Review", "X", 50), session("y", "Question", "Y", 60)];
+
+  // Act
+  const seen = reconcileSeen(stored, sessions, null);
+  const emptyListing = reconcileSeen(stored, [], null);
+
+  // Assert
+  assert.deepEqual([...unreadIds(sessions, seen, null)], []);
+  assert.deepEqual(seen, { old1: 10, old2: 20, x: 50, y: 60 });
+  assert.deepEqual(emptyListing, stored);
+});
+
+test("reconcileSeen keeps listed ids and the most recent others when the map grows too large", () => {
+  // Arrange
+  const stored = Object.fromEntries(
+    Array.from({ length: MAX_SEEN + 10 }, (_, index) => ["old" + index, index]),
+  );
+  stored.listed = 0;
+  const sessions = [session("listed", "Done", "Listed", 0)];
+
+  // Act
+  const seen = reconcileSeen(stored, sessions, null);
+
+  // Assert
+  assert.equal(Object.keys(seen).length, MAX_SEEN);
+  assert.equal(seen.listed, 0);
+  assert.equal(Object.hasOwn(seen, "old" + (MAX_SEEN + 9)), true);
+  assert.equal(Object.hasOwn(seen, "old10"), false);
+});
+
+test("mergeSeen keeps the later time of each session and ignores non-numbers", () => {
+  // Arrange
+  const first = { a: 10, b: 30, bad: "x" };
+  const second = { a: 20, b: 5, c: 1 };
+
+  // Act
+  const merged = mergeSeen(first, second);
+
+  // Assert
+  assert.deepEqual(merged, { a: 20, b: 30, c: 1 });
+  assert.deepEqual(mergeSeen(null, second), { a: 20, b: 5, c: 1 });
+  assert.equal(mergeSeen(null, null), null);
 });
 
 test("unreadIds lists sessions updated since seen, and new ones, but never the open one", () => {

@@ -7,7 +7,15 @@ import { statusInfo } from "./format.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
-import { THEMES, applyTheme, createShell, loadTheme, parseRoute, saveTheme } from "./shell.mjs";
+import {
+  NARROW_QUERY,
+  THEMES,
+  applyTheme,
+  createShell,
+  loadTheme,
+  parseRoute,
+  saveTheme,
+} from "./shell.mjs";
 
 // The theme comes first, so a dark-theme device shows green for at most
 // one frame. The content security policy forbids an inline script that
@@ -800,6 +808,17 @@ const sessionList = createSessionList({
     list: elements.sessions,
     summary: elements["filter-summary"],
     waiting: elements["home-waiting"],
+  },
+  // The field is on screen in the open drawer, or in the sidebar on a
+  // wide screen unless it was hidden.
+  isFilterShown: () => {
+    if (elements.shell.hidden) {
+      return false;
+    }
+
+    return window.matchMedia(NARROW_QUERY).matches
+      ? shell.isOpen()
+      : !elements.shell.classList.contains("is-sidebar-hidden");
   },
   onOpen: (sessionId) => {
     shell.showSession(sessionId);
