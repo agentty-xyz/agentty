@@ -211,6 +211,16 @@ impl RecordingBackend {
         }
     }
 
+    /// Creates a backend that serves project file listings and reports
+    /// `entries` as the active project's checkout.
+    pub(crate) fn with_project_files(entries: Vec<SessionFileEntry>) -> Self {
+        Self {
+            session_files: Some(entries),
+            supported: vec![SessionOperation::ProjectFiles],
+            ..Self::default()
+        }
+    }
+
     /// Creates a backend that serves the optional `operations`.
     pub(crate) fn supporting(operations: &[SessionOperation]) -> Self {
         Self {
@@ -280,6 +290,13 @@ impl SessionBackend for RecordingBackend {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
         self.record(format!("files:{session_id}"), self.session_files.clone())
+    }
+
+    async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.record(
+            "project_files".to_string(),
+            self.session_files.clone().unwrap_or_default(),
+        )
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
@@ -389,10 +406,16 @@ pub(crate) fn host_fixture() -> HostContext {
             HostSessionMode {
                 agent: ag_session::test_support::codex_selection(),
                 mode: CreateSessionMode::Regular,
+                reasoning_level: ReasoningLevel::High,
+                response_style: ResponseStyle::Balanced,
+                speed_mode: SpeedMode::Fast,
             },
             HostSessionMode {
                 agent: ag_session::test_support::codex_selection(),
                 mode: CreateSessionMode::Draft,
+                reasoning_level: ReasoningLevel::High,
+                response_style: ResponseStyle::Balanced,
+                speed_mode: SpeedMode::Fast,
             },
         ],
     }

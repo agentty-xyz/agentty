@@ -1,9 +1,11 @@
 // `@` file lookup of the remote control client's composer. As in the
 // terminal, typing `@` at the start of a word lists the files and
-// directories of the open session's worktree, ranked by a fuzzy match of
-// what follows; picking one puts `@path ` in its place. The names come
-// from `list_session_files`, offered through the `files` capability, and
-// only ever become text nodes, through suggest.mjs. The ranking follows
+// directories of the open session's worktree, or for a session yet to
+// start those of the active project's checkout, ranked by a fuzzy match
+// of what follows; picking one puts `@path ` in its place. The names come
+// from `list_session_files`, offered through the `files` capability, or
+// `list_project_files`, offered through `project_files`, and only ever
+// become text nodes, through suggest.mjs. The ranking follows
 // `filter_entries` in crates/agentty/src/domain/file_entry.rs and the
 // token rules follow `extract_at_mention_query` in
 // crates/agentty/src/domain/input.rs. The Node tests in
@@ -23,9 +25,10 @@ const SEGMENT_BOUNDARIES = new Set(["/", ".", "_", "-"]);
 // A character that can be part of an `@` token.
 const TOKEN_CHARACTER = /^[\p{L}\p{N}/._-]$/u;
 
-// Whether the host lets this device look up a session's files.
-export function offersMentions(capabilities) {
-  return capabilities.includes("files");
+// Whether the host lets this device look up the files of `scope`: a
+// session's worktree, or with `"project"` the active project's checkout.
+export function offersMentions(capabilities, scope = "session") {
+  return capabilities.includes(scope === "project" ? "project_files" : "files");
 }
 
 // The `@` token the caret sits in, as `{ start, end, query }`: `start` is
@@ -63,7 +66,8 @@ function tokenStart(text, caret) {
   return previous === undefined || /\s/.test(previous) || OPENING_DELIMITERS.has(previous) ? index : -1;
 }
 
-// The `list_session_files` entries in a result, as `{ path, isDir }`.
+// The `list_session_files` or `list_project_files` entries in a result,
+// as `{ path, isDir }`.
 export function parseEntries(result) {
   if (result?.kind !== "session_files" || !Array.isArray(result.files)) {
     return [];
@@ -118,7 +122,9 @@ export function mentionText(entry) {
 
 // Wires the `@` lookup of text field `input` to popup `suggestions` from
 // suggest.mjs. `context()` returns the open `session`, the host's
-// `capabilities` and `isConnected`; `request(body)` sends one request and
+// `capabilities` and `isConnected`, and `fileScope`: `"session"`, the
+// default, for the session's worktree, `"project"` for the project
+// checkout, or `null` for no lookup; `request(body)` sends one request and
 // resolves with its result; `setText(text, caret)` replaces the field's
 // text and its saved draft and puts the caret at `caret`;
 // `showError(message)` shows a failure.
@@ -133,7 +139,7 @@ export function createMentions({ input, suggestions, request, context, setText, 
     // until the text changes.
     dismissed: null,
     entries: [],
-    // The session the entries belong to.
+    // The key of the source the entries belong to.
     entriesFor: null,
     // Whether a file load is on its way.
     isLoading: false,
@@ -144,11 +150,21 @@ export function createMentions({ input, suggestions, request, context, setText, 
     loads: 0,
   };
 
-  // The open session when this device may look up its files.
-  function mentionSession() {
-    const { capabilities = [], isConnected = false, session = null } = context() ?? {};
+  // Where this device may look up files now, as `{ body, key }`: the
+  // request that lists them and the key their entries are kept under;
+  // `null` when it may not.
+  function mentionSource() {
+    const { capabilities = [], fileScope = "session", isConnected = false, session = null } = context() ?? {};
+    if (!isConnected || !fileScope || !offersMentions(capabilities, fileScope)) {
+      return null;
+    }
+    if (fileScope === "project") {
+      return { body: { method: "list_project_files" }, key: "project" };
+    }
 
-    return session && isConnected && offersMentions(capabilities) ? session : null;
+    return session
+      ? { body: { method: "list_session_files", session_id: session.id }, key: "session:" + session.id }
+      : null;
   }
 
   function isShown() {
@@ -160,16 +176,16 @@ export function createMentions({ input, suggestions, request, context, setText, 
     suggestions.close(OWNER);
   }
 
-  // Reads the session's files again, keeping the earlier ones on screen
-  // until the answer arrives.
-  async function load(session) {
+  // Reads the files of `source` again, keeping the earlier ones on
+  // screen until the answer arrives.
+  async function load(source) {
     const loading = ++state.loads;
     state.isLoading = true;
     try {
-      const entries = parseEntries(await request({ method: "list_session_files", session_id: session.id }));
+      const entries = parseEntries(await request(source.body));
       if (loading === state.loads) {
         state.entries = entries;
-        state.entriesFor = session.id;
+        state.entriesFor = source.key;
       }
     } catch (error) {
       if (loading === state.loads) {
@@ -186,8 +202,8 @@ export function createMentions({ input, suggestions, request, context, setText, 
 
   function show() {
     const token = mentionQuery(input.value, input.selectionStart, input.selectionEnd);
-    const session = mentionSession();
-    if (!token || !session || state.entriesFor !== session.id) {
+    const source = mentionSource();
+    if (!token || !source || state.entriesFor !== source.key) {
       suggestions.close(OWNER);
 
       return;
@@ -217,8 +233,8 @@ export function createMentions({ input, suggestions, request, context, setText, 
   }
 
   function update() {
-    const session = mentionSession();
-    const token = session ? mentionQuery(input.value, input.selectionStart, input.selectionEnd) : null;
+    const source = mentionSource();
+    const token = source ? mentionQuery(input.value, input.selectionStart, input.selectionEnd) : null;
     if (!token || (state.dismissed !== null && input.value === state.dismissed)) {
       close();
 
@@ -228,7 +244,7 @@ export function createMentions({ input, suggestions, request, context, setText, 
     // A new lookup reads the files again, as they change while the agent
     // works.
     if (!state.isWanted && !state.isLoading) {
-      void load(session);
+      void load(source);
     }
     state.isWanted = true;
     show();
@@ -237,9 +253,9 @@ export function createMentions({ input, suggestions, request, context, setText, 
   }
 
   // Shows the list again for a newer snapshot, or closes it once the
-  // session no longer allows it.
+  // composer no longer allows it.
   function refresh() {
-    if (!mentionSession()) {
+    if (!mentionSource()) {
       close();
     } else if (isShown()) {
       show();

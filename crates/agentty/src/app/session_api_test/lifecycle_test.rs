@@ -58,6 +58,9 @@ async fn runtime_backend_describes_the_project_new_sessions_join() {
         [HostSessionMode {
             agent: session.settings.agent,
             mode: CreateSessionMode::Regular,
+            reasoning_level: session.settings.reasoning_level,
+            response_style: session.settings.response_style,
+            speed_mode: session.settings.speed_mode,
         }]
     );
     assert_eq!(host.default_model, app.sessions.default_session_model());
@@ -342,6 +345,16 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
         AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3)
     );
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
+    assert_eq!(
+        host.session_modes[1],
+        HostSessionMode {
+            agent: session.settings.agent,
+            mode: CreateSessionMode::Harness,
+            reasoning_level: session.settings.reasoning_level,
+            response_style: session.settings.response_style,
+            speed_mode: session.settings.speed_mode,
+        }
+    );
 }
 
 #[tokio::test]
@@ -366,8 +379,13 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
     let regular_error = request_session_creation(&mut app, request(CreateSessionMode::Regular))
         .await
         .expect_err("regular sessions need an agent CLI");
-    let harness_result =
-        request_session_creation(&mut app, request(CreateSessionMode::Harness)).await;
+    let session_id = request_session_creation(&mut app, request(CreateSessionMode::Harness))
+        .await
+        .expect("harness sessions should be created");
+    let session = request_session(&mut app, session_id)
+        .await
+        .expect("the harness session should load")
+        .expect("the harness session should exist");
     let host = request_host_context(&mut app)
         .await
         .expect("host context should load");
@@ -377,12 +395,14 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
         regular_error,
         ApiSessionError::Operation(message) if message.contains("only Harness sessions")
     ));
-    assert!(harness_result.is_ok());
     assert_eq!(
         host.session_modes,
         [HostSessionMode {
             agent: AgentSelection::new(AgentKind::Harness, host.default_model),
             mode: CreateSessionMode::Harness,
+            reasoning_level: session.settings.reasoning_level,
+            response_style: session.settings.response_style,
+            speed_mode: SpeedMode::Normal,
         }]
     );
     assert_eq!(

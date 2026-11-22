@@ -65,6 +65,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::MergeSession, "merge"),
     (SessionOperation::SessionDiff, "diff"),
     (SessionOperation::SessionFiles, "files"),
+    (SessionOperation::ProjectFiles, "project_files"),
     (SessionOperation::StopTurn, "stop_turn"),
     (SessionOperation::RebaseSession, "sync"),
     (SessionOperation::SessionSettings, "settings"),
@@ -619,6 +620,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
         | RemoteRequest::GetSessionDiff { .. }
+        | RemoteRequest::ListProjectFiles
         | RemoteRequest::ListSessionFiles { .. }
         | RemoteRequest::ListSessions
         | RemoteRequest::PublishSession { .. }
@@ -695,6 +697,13 @@ async fn respond(
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::GetSessionDiff { path, session_id } => {
             get_listed_session_diff(sessions, session_id, path.as_deref()).await
+        }
+        RemoteRequest::ListProjectFiles => {
+            require_operation(sessions, SessionOperation::ProjectFiles)?;
+
+            Ok(RemoteResponse::from_session_files(
+                &sessions.list_project_files().await?,
+            ))
         }
         RemoteRequest::ListSessionFiles { session_id } => {
             list_listed_session_files(sessions, session_id).await

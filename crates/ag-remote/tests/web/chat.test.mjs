@@ -3,13 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
+import { DRAFT_KEY_PREFIX, composerKeyAction, composerRows } from "../../assets/composer.mjs";
 import {
-  DRAFT_KEY_PREFIX,
   clockSkew,
   diffKey,
   collectAnswers,
-  composerKeyAction,
-  composerRows,
   composerState,
   createChat,
   createRefreshGate,

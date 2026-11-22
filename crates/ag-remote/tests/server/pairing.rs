@@ -30,6 +30,7 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
                 "merge",
                 "diff",
                 "files",
+                "project_files",
                 "stop_turn",
                 "sync",
                 "settings",

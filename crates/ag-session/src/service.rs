@@ -100,6 +100,10 @@ pub enum SessionOperation {
     /// Reading a session's changes through
     /// [`SessionBackend::get_session_diff`].
     SessionDiff,
+    /// Listing the files and directories in the active project's checkout
+    /// through [`SessionBackend::list_project_files`], for drafting a new
+    /// session before it has a worktree.
+    ProjectFiles,
     /// Listing the files and directories in a session's worktree through
     /// [`SessionBackend::list_session_files`].
     SessionFiles,
@@ -161,12 +165,13 @@ pub enum SessionDiffFileStatus {
     Renamed,
 }
 
-/// One file or directory in a session's worktree.
+/// One file or directory in a session's worktree or the active project's
+/// checkout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionFileEntry {
     /// Whether the entry is a directory.
     pub is_dir: bool,
-    /// Path relative to the worktree root, with `/` separators.
+    /// Path relative to the listed root, with `/` separators.
     pub path: String,
 }
 
@@ -200,6 +205,12 @@ pub struct HostSessionMode {
     pub agent: AgentSelection,
     /// Creation mode.
     pub mode: CreateSessionMode,
+    /// Reasoning level a new session in this mode starts with.
+    pub reasoning_level: ReasoningLevel,
+    /// Response style a new session in this mode starts with.
+    pub response_style: ResponseStyle,
+    /// Response-speed preference a new session in this mode starts with.
+    pub speed_mode: SpeedMode,
 }
 
 /// Host implementation boundary for session persistence and workflows.
@@ -459,6 +470,15 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not serve session files".to_string(),
+        ))
+    }
+
+    /// Lists the files and directories in the active project's checkout,
+    /// directories first. Hosts that do not serve project file listings
+    /// report it as an error.
+    async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not serve project files".to_string(),
         ))
     }
 
@@ -905,6 +925,16 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
         self.backend.list_session_files(session_id).await
+    }
+
+    /// Lists the files and directories in the active project's checkout,
+    /// directories first.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not serve project file listings
+    /// or cannot read the checkout.
+    pub async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.backend.list_project_files().await
     }
 
     /// Lists the host's loaded sessions in its display order.

@@ -1,5 +1,5 @@
 //! Session API file-listing tests covering worktree walks, the shared
-//! `@`-mention cache, and sessions without a worktree.
+//! `@`-mention cache, sessions without a worktree, and the project checkout.
 
 use ag_session::{SessionError as ApiSessionError, SessionFileEntry, SessionId};
 
@@ -102,4 +102,66 @@ async fn api_session_files_list_nothing_without_a_worktree_instead_of_the_projec
 
     // Assert
     assert_eq!(files, Some(Vec::new()));
+}
+
+/// Lists the active project's checkout entries through the programmatic
+/// session API.
+async fn request_project_files(app: &mut App) -> Result<Vec<SessionFileEntry>, ApiSessionError> {
+    let service = app.session_service();
+
+    app.drive_session_request(async move { service.list_project_files().await })
+        .await
+}
+
+#[tokio::test]
+async fn api_project_files_list_the_project_checkout_without_a_session() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+    std::fs::create_dir_all(base_dir.path().join("docs")).expect("directory should be created");
+    std::fs::write(base_dir.path().join("docs/guide.md"), "").expect("file should be written");
+
+    // Act
+    let files = request_project_files(&mut app)
+        .await
+        .expect("project files should load");
+
+    // Assert
+    assert!(
+        files
+            .iter()
+            .any(|entry| entry.is_dir && entry.path == "docs")
+    );
+    assert!(
+        files
+            .iter()
+            .any(|entry| !entry.is_dir && entry.path == "docs/guide.md")
+    );
+}
+
+#[tokio::test]
+async fn api_project_files_reuse_the_cached_mention_index_of_the_checkout() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let checkout = app.working_dir().to_path_buf();
+    app.sessions.set_at_mention_index_for_root(
+        checkout,
+        vec![FileEntry {
+            is_dir: false,
+            path: "draft.rs".to_string(),
+        }],
+    );
+
+    // Act
+    let files = request_project_files(&mut app)
+        .await
+        .expect("project files should load");
+
+    // Assert
+    assert_eq!(
+        files,
+        vec![SessionFileEntry {
+            is_dir: false,
+            path: "draft.rs".to_string(),
+        }]
+    );
 }

@@ -138,7 +138,9 @@ const elements = {
   "home-title": document.getElementById("home-title"),
   "home-form": document.getElementById("home-form"),
   "home-message": document.getElementById("home-message"),
-  "home-chips": document.getElementById("home-chips"),
+  "home-composer-hint": document.getElementById("home-composer-hint"),
+  "home-composer-meta": document.getElementById("home-composer-meta"),
+  "home-composer-settings": document.getElementById("home-composer-settings"),
   "home-send": document.getElementById("home-send"),
   "home-modes": document.getElementById("home-modes"),
   "home-error": document.getElementById("home-error"),
@@ -420,7 +422,8 @@ function renderHome() {
   const host = home.host();
   elements["home-view"].classList.toggle("is-composing", Boolean(host));
   if (host) {
-    elements["home-eyebrow"].textContent = "New session · " + host.project;
+    elements["home-eyebrow"].textContent =
+      "New session · " + host.project + (host.baseBranch ? " · base " + host.baseBranch : "");
     elements["home-title"].textContent = "What should the agent work on?";
   } else {
     elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
@@ -720,6 +723,24 @@ function markCurrentRow() {
   sessionList.setOpen(state.currentSessionId);
 }
 
+// The settings sheet, for the open session and for home's new one.
+const settingsSheet = createSettings({
+  document: document,
+  elements: {
+    apply: elements["settings-apply"],
+    dialog: elements["settings-dialog"],
+    error: elements["settings-error"],
+    form: elements["settings-form"],
+    model: elements["settings-model"],
+    note: elements["settings-note"],
+    reasoning: elements["settings-reasoning"],
+    speed: elements["settings-speed"],
+    speedRow: elements["settings-speed-row"],
+    style: elements["settings-style"],
+  },
+  request: request,
+});
+
 const chat = createChat({
   diff: createDiff({
     document: document,
@@ -793,22 +814,7 @@ const chat = createChat({
     leaveSession();
   },
   request: request,
-  settings: createSettings({
-    document: document,
-    elements: {
-      apply: elements["settings-apply"],
-      dialog: elements["settings-dialog"],
-      error: elements["settings-error"],
-      form: elements["settings-form"],
-      model: elements["settings-model"],
-      note: elements["settings-note"],
-      reasoning: elements["settings-reasoning"],
-      speed: elements["settings-speed"],
-      speedRow: elements["settings-speed-row"],
-      style: elements["settings-style"],
-    },
-    request: request,
-  }),
+  settings: settingsSheet,
   window: window,
 });
 
@@ -881,12 +887,14 @@ document.addEventListener("visibilitychange", () => {
 const home = createHome({
   document: document,
   elements: {
-    chips: elements["home-chips"],
     error: elements["home-error"],
     form: elements["home-form"],
+    hint: elements["home-composer-hint"],
     message: elements["home-message"],
+    meta: elements["home-composer-meta"],
     modes: elements["home-modes"],
     send: elements["home-send"],
+    settingsButton: elements["home-composer-settings"],
   },
   // The new session opens only if the user is still on home; otherwise it
   // shows up in the list, with an unsent first message kept as its draft.
@@ -910,6 +918,7 @@ const home = createHome({
     }
   },
   request: request,
+  settings: settingsSheet,
   window: window,
 });
 

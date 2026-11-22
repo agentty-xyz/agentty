@@ -57,13 +57,16 @@ the session's size, changed lines, model, and `PR ready` when its pull request c
 merge. With no session open, the page offers the sessions waiting for you.
 
 When this Agentty lets devices create sessions, the sidebar names the active project and
-offers `New session`. Home then asks what the agent should work on, with the project,
-base branch, and model below the box, and a choice of session type when Agentty offers
-more than one. When the device may change session settings, the model chip picks among
-the models of the agent that session type starts on. Sending creates the session,
-switches it to the picked model, sends your text as its first message, and opens it. If
-the switch or the message does not go through, the new session opens with your text
-still in its box.
+offers `New session`. Home then asks what the agent should work on in the active project
+and base branch, with a choice of session type when Agentty offers more than one. Its
+message box is the open session's: the line under it shows the new session's model,
+reasoning level, answer style, and speed, and when the device may change session
+settings, the line and the slash commands change them, with models from the agent that
+session type starts on. Because the session has no worktree yet, `@` lists the files in
+the active project's checkout, as it does for a draft in the terminal. Sending creates
+the session, applies the settings you changed, sends your text as its first message, and
+opens it. If the settings or the message do not go through, the new session opens with
+your text still in its box.
 
 The header of the open session shows its size and changed lines, the session branch and
 its base branch, the model and reasoning level, a link to its pull request, and the
@@ -227,6 +230,8 @@ device can:
   session changed;
 - list the names of the files and directories in a session's worktree, as `@` lookup in
   the terminal does, without reading their contents;
+- list the names of the files and directories in the active project's checkout, for `@`
+  lookup in the first message of a new session, without reading their contents;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions;

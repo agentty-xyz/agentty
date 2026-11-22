@@ -424,6 +424,9 @@ impl SessionBackend for RecordingBackend {
             session_modes: vec![HostSessionMode {
                 agent: ag_session::test_support::codex_selection(),
                 mode: CreateSessionMode::Regular,
+                reasoning_level: ag_session::ReasoningLevel::High,
+                response_style: ag_session::ResponseStyle::Balanced,
+                speed_mode: ag_session::SpeedMode::Normal,
             }],
         })
     }
@@ -480,6 +483,16 @@ impl SessionBackend for RecordingBackend {
                 path: "src/lib.rs".to_string(),
             },
         ]))
+    }
+
+    // The project checkout holds the file `README.md`.
+    async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.record("project_files".to_string());
+
+        Ok(vec![SessionFileEntry {
+            is_dir: false,
+            path: "README.md".to_string(),
+        }])
     }
 
     /// Lists `session-2` with the figures of a running turn, and every

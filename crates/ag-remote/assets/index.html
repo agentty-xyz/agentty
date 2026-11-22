@@ -289,11 +289,18 @@
                     <h2 id="home-title">Pick a session</h2>
                     <form id="home-form" class="composer home-composer" hidden>
                         <textarea id="home-message"
-                                  rows="3"
-                                  placeholder="Describe the task. The agent starts in a new worktree."
+                                  rows="1"
+                                  placeholder="Describe the task"
                                   aria-label="First message"></textarea>
                         <div class="composer-row">
-                            <div id="home-chips" class="composer-meta home-chips"></div>
+                            <p id="home-composer-meta" class="composer-meta"></p>
+                            <button id="home-composer-settings"
+                                    type="button"
+                                    class="composer-meta composer-settings"
+                                    title="Change the new session's settings"
+                                    aria-haspopup="dialog"
+                                    aria-controls="settings-dialog"
+                                    hidden></button>
                             <button id="home-send" type="submit" class="send" aria-label="Start session">
                                 <svg class="icon" aria-hidden="true">
                                     <use href="#i-up" />
@@ -301,6 +308,7 @@
                             </button>
                         </div>
                     </form>
+                    <p id="home-composer-hint" class="dock-hint wide-only home-hint"></p>
                     <fieldset id="home-modes"
                               class="segmented home-modes"
                               aria-label="Session type"

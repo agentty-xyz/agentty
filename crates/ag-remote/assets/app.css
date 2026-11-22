@@ -1141,71 +1141,21 @@ kbd {
   text-wrap: balance;
 }
 
+/* The session's composer, as wide as the session's chat column. */
 .composer.home-composer {
   width: min(100%, 44rem);
   margin-top: 0.5rem;
-  padding: 0.95rem 0.75rem 0.65rem 1.1rem;
   text-align: left;
 }
 
-.composer.home-composer textarea {
-  min-height: 4.8rem;
+/* Home scrolls, and cuts off what rises above its top, so the suggestions
+   open below the box there. */
+.home-composer .suggest {
+  inset: calc(100% + 0.4rem) 0 auto;
 }
 
-.home-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  white-space: normal;
-}
-
-/* .site-theme-switch chips, as the mockup's project, base and model. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 1.75rem;
-  padding: 0 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  background: var(--color-bg);
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-
-.chip b {
-  color: var(--color-text);
-  font-weight: 400;
-}
-
-/* The model chip, when the user may pick the new session's model. */
-.chip-select {
-  appearance: none;
-  max-width: 100%;
-  padding-right: 1.5rem;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--color-muted) 50%),
-    linear-gradient(135deg, var(--color-muted) 50%, transparent 50%);
-  background-position:
-    right 0.75rem center,
-    right 0.5rem center;
-  background-size: 0.25rem 0.25rem;
-  background-repeat: no-repeat;
-  color: var(--color-text);
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.chip-select:hover:not(:disabled),
-.chip-select:focus-visible {
-  border-color: var(--color-accent);
-}
-
-.chip-select:disabled {
-  cursor: default;
-  opacity: 0.6;
+.dock-hint.home-hint {
+  margin: -0.25rem 0 0;
 }
 
 .home-modes {

@@ -842,6 +842,42 @@ async fn session_files_of_a_session_the_host_no_longer_loads_are_not_found() {
 }
 
 #[tokio::test]
+async fn project_files_list_the_project_checkout_only_when_the_host_serves_them() {
+    // Arrange
+    let serving = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_project_files(vec![SessionFileEntry {
+            is_dir: false,
+            path: "README.md".to_string(),
+        }]),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+
+    // Act
+    let listed = reply_result(&serving.state, RemoteRequest::ListProjectFiles).await;
+    let unsupported = reply_result(&not_serving.state, RemoteRequest::ListProjectFiles).await;
+
+    // Assert
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::SessionFiles {
+            files: vec![RemoteFileEntry {
+                is_dir: false,
+                path: "README.md".to_string(),
+            }],
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["project_files"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn get_host_describes_the_project_and_only_remote_modes() {
     // Arrange
     let serving = supporting_fixture(
@@ -865,6 +901,9 @@ async fn get_host_describes_the_project_and_only_remote_modes() {
                 mode: RemoteSessionMode::Regular,
                 model: "gpt-6.1-sol".to_string(),
                 name: "gpt-6.1-sol".to_string(),
+                reasoning: Some("high".to_string()),
+                response_style: Some("balanced".to_string()),
+                speed_mode: Some("fast".to_string()),
             }],
             models: vec![RemoteModelOption::from(
                 ag_session::test_support::codex_selection()

@@ -1,7 +1,7 @@
 // Settings sheet of the remote control client: with the `settings` and
 // `host` capabilities, the settings line under the message box opens a
-// sheet that changes the open session's model, reasoning level, answer
-// style and speed. The models come from `get_host`, and their names only
+// sheet that changes the model, reasoning level, answer style and speed of
+// the open session, or of the session home is about to start. The models come from `get_host`, and their names only
 // ever become text nodes. Only the settings the user changed are sent.
 // Functions take `document` as a parameter, so the Node tests in
 // crates/ag-remote/tests/web/settings.test.mjs pass the fake DOM.
@@ -84,10 +84,13 @@ export function withCurrent(values, current) {
 // the nodes with the ids named in index.html. `request(body)` sends one
 // request and resolves with its result.
 //
-// Returns `open(session, { isRunning })`, `update(session, { isRunning })`
-// for a newer snapshot of the open session, and `close()`.
+// Returns `open(session, { isRunning, apply })`, `update(session, {
+// isRunning })` for a newer snapshot of the open session, and `close()`.
+// `apply(change)` applies the `set_session_settings` change and resolves
+// once it has; without it, the sheet sends the request.
 export function createSettings({ document, elements, request }) {
   const state = {
+    apply: null,
     choice: currentChoice(null),
     isApplying: false,
     // Whether the model list is on its way.
@@ -206,7 +209,7 @@ export function createSettings({ document, elements, request }) {
     elements.error.textContent = "";
     render();
     try {
-      await request({ method: "set_session_settings", session_id: session.id, ...change });
+      await state.apply(change);
       if (state.session?.id === session.id) {
         close();
       }
@@ -220,8 +223,10 @@ export function createSettings({ document, elements, request }) {
     }
   }
 
-  function open(session, { isRunning = false } = {}) {
+  function open(session, { isRunning = false, apply = null } = {}) {
     state.session = session;
+    state.apply =
+      apply ?? ((change) => request({ method: "set_session_settings", session_id: session.id, ...change }));
     state.choice = currentChoice(session);
     state.models = [];
     state.isApplying = false;

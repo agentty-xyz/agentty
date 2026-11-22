@@ -499,10 +499,11 @@ async fn runtime_backend_serves_its_optional_operations_to_frontends_that_ask() 
         SessionOperation::CreateSession,
         SessionOperation::HostContext,
         SessionOperation::MergeSession,
+        SessionOperation::ProjectFiles,
         SessionOperation::PublishSession,
     ]
     .map(|operation| service.supports(operation));
 
     // Assert
-    assert_eq!(supported, [true; 4]);
+    assert_eq!(supported, [true; 5]);
 }

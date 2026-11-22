@@ -1,9 +1,10 @@
 // Slash commands of the remote control client's composer. As in the
 // terminal, `/` at the start of the message lists the commands that
 // change the open session's settings; `/model`, `/reasoning` and `/style`
-// then list their values, and `/fast` toggles the speed. Every pick sends
-// one `set_session_settings` request, so the menu needs the same
-// `settings` and `host` capabilities as the settings sheet. Model names
+// then list their values, and `/fast` toggles the speed. Every pick makes
+// one `set_session_settings` change, held for a session not yet created,
+// so the menu needs the same `settings` and `host` capabilities as the
+// settings sheet. Model names
 // from `get_host` only ever become text nodes, through suggest.mjs.
 // The Node tests in crates/ag-remote/tests/web/slash.test.mjs and
 // chat.test.mjs pass the fake DOM.
@@ -95,15 +96,25 @@ export function slashValues(command, session, models) {
 // Wires the slash commands of text field `input` to popup `suggestions`
 // from suggest.mjs. `context()` returns the open `session`, the host's
 // `capabilities` and `isConnected`; `request(body)` sends one request and
-// resolves with its result; `setText(text)` replaces the field's text and
-// its saved draft; `showError(message)` shows a failure, or clears it
-// when empty.
+// resolves with its result; `applySettings(session, change)` applies a
+// `set_session_settings` change, by sending it unless given;
+// `setText(text)` replaces the field's text and its saved draft;
+// `showError(message)` shows a failure, or clears it when empty.
 //
 // Returns `update()`, for the field's input, caret and focus changes,
 // which opens, filters or closes the menu and says whether it shows;
 // `refresh()` for a newer snapshot of the session; `close()`; and
 // `reset()` for another session.
-export function createSlashCommands({ input, suggestions, request, context, setText, showError }) {
+export function createSlashCommands({
+  input,
+  suggestions,
+  request,
+  context,
+  setText,
+  showError,
+  applySettings = (session, change) =>
+    request({ method: "set_session_settings", session_id: session.id, ...change }),
+}) {
   const state = {
     // Text the user closed the menu on with `Escape`; it stays closed
     // until the text changes.
@@ -263,7 +274,7 @@ export function createSlashCommands({ input, suggestions, request, context, setT
     }
     showError("");
     try {
-      await request({ method: "set_session_settings", session_id: session.id, ...change });
+      await applySettings(session, change);
     } catch (error) {
       if (context()?.session?.id === session.id) {
         showError(error.message);

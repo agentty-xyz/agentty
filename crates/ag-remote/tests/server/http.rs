@@ -45,6 +45,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let page = get(addr, "/").await?;
     let script = get(addr, "/app.js").await?;
     let chat = get(addr, "/chat.mjs").await?;
+    let composer = get(addr, "/composer.mjs").await?;
     let device_key = get(addr, "/device_key.mjs").await?;
     let diff = get(addr, "/diff.mjs").await?;
     let format = get(addr, "/format.mjs").await?;
@@ -65,6 +66,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
         (&chat, "text/javascript; charset=utf-8"),
+        (&composer, "text/javascript; charset=utf-8"),
         (&device_key, "text/javascript; charset=utf-8"),
         (&diff, "text/javascript; charset=utf-8"),
         (&format, "text/javascript; charset=utf-8"),
@@ -105,10 +107,12 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(script.contains("from \"./relay.mjs\""));
     assert!(script.contains("from \"./session_list.mjs\""));
     assert!(script.contains("from \"./settings.mjs\""));
-    assert!(chat.contains("from \"./settings.mjs\""));
-    assert!(chat.contains("from \"./mention.mjs\""));
-    assert!(chat.contains("from \"./slash.mjs\""));
-    assert!(chat.contains("from \"./suggest.mjs\""));
+    assert!(chat.contains("from \"./composer.mjs\""));
+    assert!(home.contains("from \"./composer.mjs\""));
+    assert!(composer.contains("from \"./settings.mjs\""));
+    assert!(composer.contains("from \"./mention.mjs\""));
+    assert!(composer.contains("from \"./slash.mjs\""));
+    assert!(composer.contains("from \"./suggest.mjs\""));
     assert!(slash.contains("from \"./settings.mjs\""));
     assert!(script.contains("from \"./shell.mjs\""));
     assert!(device_key.contains("from \"./noise.mjs\""));
@@ -200,6 +204,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/app.css",
             "/app.js",
             "/chat.mjs",
+            "/composer.mjs",
             "/device_key.mjs",
             "/diff.mjs",
             "/format.mjs",
