@@ -60,7 +60,8 @@ jobs:
       # Workspace crates depend on each other with caret requirements, so a
       # break in any published library can break dependents already released.
       # A version bump and a release tag enforce the bump; a tooling change
-      # assumes `major`, which still builds and lints every crate.
+      # assumes `major`, which still builds the current and baseline rustdoc
+      # of every crate but runs no lint.
       - name: Check semver against crates.io
         if: ${{ steps.gate.outputs.run == 'true' }}
         env:

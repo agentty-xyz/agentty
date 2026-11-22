@@ -1,13 +1,17 @@
 //! `cargo semver-checks` over the published library crates that have a
-//! crates.io baseline.
+//! usable crates.io baseline.
 
 use std::process::{Output, Stdio};
 
 use clap::Args;
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cargo_environment;
+
+/// Why a crate whose newest crates.io release fails to build is skipped.
+const BROKEN_BASELINE: &str = "its newest crates.io release does not build, so it cannot serve as \
+                               a semver baseline; yank it or publish a release that builds";
 
 /// Arguments for the published-crate semver check.
 #[derive(Args)]
@@ -17,20 +21,25 @@ pub(crate) struct Options {
     #[arg(long)]
     exclude: Vec<String>,
     /// Release type to assume instead of deriving it from the workspace
-    /// version; `major` still builds and lints every crate but allows breaks.
+    /// version. `major` still builds the current and baseline rustdoc of
+    /// every crate, but runs no lint.
     #[arg(long, value_parser = ["major", "minor", "patch"])]
     release_type: Option<String>,
 }
 
 /// Runs `cargo semver-checks` for every publishable library crate except
-/// the excluded ones, skipping crates crates.io does not list yet because a
-/// new crate has no baseline to compare with.
+/// the excluded ones, one crate at a time.
+///
+/// A crate crates.io does not list yet is skipped, because a new crate has
+/// no baseline. So is a crate whose newest crates.io release no longer
+/// builds, with a warning naming that release, because no API can be read
+/// from it. A workspace crate whose own rustdoc fails is a failure.
 ///
 /// # Errors
 ///
 /// Returns an error when Cargo metadata cannot be read, an excluded name is
 /// not a workspace package, a registry lookup fails for another reason than
-/// a missing crate, or `cargo semver-checks` reports failures.
+/// a missing crate, or a crate's rustdoc or semver check fails.
 pub(crate) fn run(options: &Options) -> Result<(), String> {
     let metadata = cargo(&["metadata", "--no-deps", "--format-version", "1"])?;
     if !metadata.status.success() {
@@ -40,31 +49,42 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
         ));
     }
     let candidates = publishable_libraries(&metadata.stdout, &options.exclude)?;
-    let mut packages = Vec::new();
+    let mut failures = Vec::new();
     for name in candidates {
         let lookup = cargo(&["info", "--registry", "crates-io", &name])?;
-        match Baseline::from_lookup(&name, &lookup)? {
-            Baseline::Missing => info!("Skipping {name}: new crate, no crates.io baseline"),
-            Baseline::Published => packages.push(name),
+        if Baseline::from_lookup(&name, &lookup)? == Baseline::Missing {
+            info!("Skipping {name}: new crate, no crates.io baseline");
+
+            continue;
+        }
+        let mut arguments = vec!["semver-checks", "--color", "never"];
+        if let Some(release_type) = &options.release_type {
+            arguments.extend(["--release-type", release_type.as_str()]);
+        }
+        arguments.extend(["--package", name.as_str()]);
+        // Its report goes to standard error, which is kept to classify a
+        // failure and then logged.
+        let checks = cargo_with_output(&arguments, Stdio::inherit, Stdio::piped)?;
+        let report = String::from_utf8_lossy(&checks.stderr);
+        info!("cargo semver-checks report for {name}:\n{report}");
+        match Outcome::from_report(&name, checks.status.success(), &report) {
+            Outcome::BrokenBaseline => {
+                warn!("Skipping {name}: {BROKEN_BASELINE}");
+            }
+            Outcome::BrokenCurrent => failures.push(format!(
+                "{name}: the workspace crate's rustdoc does not build; see its error above"
+            )),
+            Outcome::Breaking => failures.push(format!(
+                "{name}: public API changes need a larger version bump"
+            )),
+            Outcome::Passed => {}
         }
     }
-    if packages.is_empty() {
-        info!("No published library crate has a crates.io baseline to check");
-
-        return Ok(());
-    }
-    let mut arguments = vec!["semver-checks"];
-    if let Some(release_type) = &options.release_type {
-        arguments.extend(["--release-type", release_type.as_str()]);
-    }
-    arguments.extend(
-        packages
-            .iter()
-            .flat_map(|name| ["--package", name.as_str()]),
-    );
-    let checks = cargo_with_output(&arguments, Stdio::inherit)?;
-    if !checks.status.success() {
-        return Err("cargo semver-checks reported failures".to_string());
+    if !failures.is_empty() {
+        return Err(format!(
+            "cargo semver-checks reported failures:\n{}",
+            failures.join("\n")
+        ));
     }
 
     Ok(())
@@ -96,6 +116,45 @@ impl Baseline {
             "Could not look up {name} on crates.io: {}",
             stderr.trim()
         ))
+    }
+}
+
+/// Result of one crate's `cargo semver-checks` run.
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    /// The newest crates.io release failed to build its rustdoc.
+    BrokenBaseline,
+    /// The workspace crate failed to build its rustdoc.
+    BrokenCurrent,
+    /// Lints found changes the release type does not allow.
+    Breaking,
+    /// Both rustdoc builds and every lint passed.
+    Passed,
+}
+
+impl Outcome {
+    /// Classifies a run from its exit status and uncolored report.
+    /// `cargo semver-checks` builds the current crate before the baseline and
+    /// announces each build as `Building <name> v<version> (<side>)`, so a
+    /// rustdoc failure after the baseline announcement is the baseline's.
+    fn from_report(name: &str, success: bool, report: &str) -> Self {
+        if success {
+            return Self::Passed;
+        }
+        if !report.contains(&format!("failed to build rustdoc for crate {name} v")) {
+            return Self::Breaking;
+        }
+        let building = format!("Building {name} v");
+        let baseline_started = report.lines().any(|line| {
+            let line = line.trim();
+
+            line.starts_with(&building) && line.ends_with("(baseline)")
+        });
+        if baseline_started {
+            return Self::BrokenBaseline;
+        }
+
+        Self::BrokenCurrent
     }
 }
 
@@ -148,15 +207,19 @@ fn publishable_libraries(metadata: &[u8], exclude: &[String]) -> Result<Vec<Stri
 
 /// Runs a Cargo subcommand and captures its output.
 fn cargo(arguments: &[&str]) -> Result<Output, String> {
-    cargo_with_output(arguments, Stdio::piped)
+    cargo_with_output(arguments, Stdio::piped, Stdio::piped)
 }
 
-/// Runs a Cargo subcommand with `stdio` for its standard output and error.
-fn cargo_with_output(arguments: &[&str], stdio: fn() -> Stdio) -> Result<Output, String> {
+/// Runs a Cargo subcommand with the given standard output and error.
+fn cargo_with_output(
+    arguments: &[&str],
+    stdout: fn() -> Stdio,
+    stderr: fn() -> Stdio,
+) -> Result<Output, String> {
     cargo_environment::command("cargo")
         .args(arguments)
-        .stdout(stdio())
-        .stderr(stdio())
+        .stdout(stdout())
+        .stderr(stderr())
         .output()
         .map_err(|error| format!("Could not execute cargo: {error}"))
 }

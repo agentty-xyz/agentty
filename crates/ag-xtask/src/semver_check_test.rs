@@ -3,7 +3,7 @@
 use std::os::unix::process::ExitStatusExt;
 use std::process::{ExitStatus, Output};
 
-use super::{Baseline, publishable_libraries};
+use super::{Baseline, Outcome, publishable_libraries};
 
 const METADATA: &str = r#"{"packages": [
     {"name": "core", "publish": null, "targets": [{"kind": ["lib"]}]},
@@ -96,4 +96,48 @@ fn other_lookup_failures_are_errors() {
                 .to_string()
         )
     );
+}
+
+#[test]
+fn a_successful_run_passes() {
+    // Arrange
+    let report = "    Building core v1.0.0 (current)\n     Summary no semver update required\n";
+    // Act
+    let outcome = Outcome::from_report("core", true, report);
+    // Assert
+    assert_eq!(outcome, Outcome::Passed);
+}
+
+#[test]
+fn a_rustdoc_failure_after_the_baseline_build_starts_is_the_baselines() {
+    // Arrange
+    let report = "    Building core v1.0.0 (current)\n       Built [ 1.0s] (current)\n    \
+                  Building core v1.0.0 (baseline)\nerror: failed to build rustdoc for crate core \
+                  v1.0.0\n";
+    // Act
+    let outcome = Outcome::from_report("core", false, report);
+    // Assert
+    assert_eq!(outcome, Outcome::BrokenBaseline);
+}
+
+#[test]
+fn a_rustdoc_failure_before_the_baseline_build_is_the_workspace_crates() {
+    // Arrange
+    let report = "    Building core v1.0.0 (current)\nerror: failed to build rustdoc for crate \
+                  core v1.0.0\n    Building other v1.0.0 (baseline)\n";
+    // Act
+    let outcome = Outcome::from_report("core", false, report);
+    // Assert
+    assert_eq!(outcome, Outcome::BrokenCurrent);
+}
+
+#[test]
+fn a_failure_without_a_rustdoc_error_is_a_breaking_change() {
+    // Arrange
+    let report = "    Building core v1.0.0 (baseline)\n--- failure enum_variant_added ---\n     \
+                  Summary semver requires new major version\n";
+    // Act
+    let outcome = Outcome::from_report("core", false, report);
+    // Assert
+    assert_eq!(outcome, Outcome::Breaking);
 }

@@ -12,12 +12,15 @@ use tempfile::TempDir;
 const METADATA: &str = r#"{"packages": [
     {"name": "core", "publish": null, "targets": [{"kind": ["lib"]}]},
     {"name": "fresh", "publish": null, "targets": [{"kind": ["lib"]}]},
+    {"name": "store", "publish": null, "targets": [{"kind": ["lib"]}]},
     {"name": "app", "publish": null, "targets": [{"kind": ["lib"]}, {"kind": ["bin"]}]},
     {"name": "internal", "publish": [], "targets": [{"kind": ["lib"]}]}
 ]}"#;
 
 /// A stub `cargo` that answers `metadata`, reports `fresh` missing from
 /// crates.io, fails lookups named in `LOOKUP_FAILS`, and records each call.
+/// Its `semver-checks` reports the crate named in `BROKEN_BASELINE`,
+/// `BROKEN_CURRENT`, or `BREAKING` the way `cargo semver-checks` does.
 struct Fixture {
     tools: TempDir,
 }
@@ -40,7 +43,19 @@ info)
   [ "$4" = "$LOOKUP_FAILS" ] && { echo "error: index timed out" >&2; exit 101; }
   exit 0 ;;
 semver-checks)
-  exit "${SEMVER_EXIT:-0}" ;;
+  for name; do :; done
+  echo "    Building $name v1.0.0 (current)" >&2
+  if [ "$name" = "$BROKEN_CURRENT" ]; then
+    echo "error: failed to build rustdoc for crate $name v1.0.0" >&2; exit 1
+  fi
+  echo "    Building $name v1.0.0 (baseline)" >&2
+  if [ "$name" = "$BROKEN_BASELINE" ]; then
+    echo "error: failed to build rustdoc for crate $name v1.0.0" >&2; exit 1
+  fi
+  if [ "$name" = "$BREAKING" ]; then
+    echo "     Summary semver requires new major version" >&2; exit 1
+  fi
+  echo "     Summary no semver update required" >&2 ;;
 esac
 "#,
         )?;
@@ -73,7 +88,7 @@ esac
 }
 
 #[test]
-fn checks_published_libraries_and_skips_new_crates() -> Result<(), Box<dyn Error>> {
+fn checks_published_libraries_one_at_a_time_and_skips_new_crates() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;
     // Act
@@ -81,13 +96,16 @@ fn checks_published_libraries_and_skips_new_crates() -> Result<(), Box<dyn Error
     // Assert
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("Skipping fresh: new crate"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Building store v1.0.0 (baseline)"));
     assert_eq!(
         fixture.calls(),
         [
             "metadata --no-deps --format-version 1",
             "info --registry crates-io core",
+            "semver-checks --color never --package core",
             "info --registry crates-io fresh",
-            "semver-checks --package core",
+            "info --registry crates-io store",
+            "semver-checks --color never --package store",
         ]
     );
 
@@ -99,13 +117,65 @@ fn passes_an_explicit_release_type_to_semver_checks() -> Result<(), Box<dyn Erro
     // Arrange
     let fixture = Fixture::new()?;
     // Act
-    let output = fixture.run(&["--exclude", "app", "--release-type", "major"], &[])?;
+    let output = fixture.run(
+        &[
+            "--exclude",
+            "app",
+            "--exclude",
+            "store",
+            "--release-type",
+            "major",
+        ],
+        &[],
+    )?;
     // Assert
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
-        fixture.calls().last().map(String::as_str),
-        Some("semver-checks --release-type major --package core")
+        fixture
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("semver-checks"))
+            .collect::<Vec<_>>(),
+        ["semver-checks --color never --release-type major --package core"]
     );
+
+    Ok(())
+}
+
+#[test]
+fn skips_a_baseline_that_does_not_build_with_a_warning() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    // Act
+    let output = fixture.run(&["--exclude", "app"], &[("BROKEN_BASELINE", "core")])?;
+    // Assert
+    assert!(output.status.success(), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(log.contains("Skipping core: its newest crates.io release does not build"));
+    assert!(
+        fixture
+            .calls()
+            .iter()
+            .any(|call| call == "semver-checks --color never --package store")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn reports_each_failing_crate_by_cause() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    // Act
+    let output = fixture.run(
+        &["--exclude", "app"],
+        &[("BROKEN_CURRENT", "core"), ("BREAKING", "store")],
+    )?;
+    // Assert
+    assert!(!output.status.success());
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(log.contains("core: the workspace crate's rustdoc does not build"));
+    assert!(log.contains("store: public API changes need a larger version bump"));
 
     Ok(())
 }
@@ -115,7 +185,17 @@ fn skips_semver_checks_when_no_crate_has_a_baseline() -> Result<(), Box<dyn Erro
     // Arrange
     let fixture = Fixture::new()?;
     // Act
-    let output = fixture.run(&["--exclude", "app", "--exclude", "core"], &[])?;
+    let output = fixture.run(
+        &[
+            "--exclude",
+            "app",
+            "--exclude",
+            "core",
+            "--exclude",
+            "store",
+        ],
+        &[],
+    )?;
     // Assert
     assert!(output.status.success(), "{output:?}");
     assert!(
@@ -129,18 +209,15 @@ fn skips_semver_checks_when_no_crate_has_a_baseline() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn reports_semver_failures_and_lookup_errors() -> Result<(), Box<dyn Error>> {
+fn reports_lookup_metadata_and_execution_errors() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;
     // Act
-    let breaking = fixture.run(&[], &[("SEMVER_EXIT", "1")])?;
     let unreachable = fixture.run(&[], &[("LOOKUP_FAILS", "core")])?;
     let unreadable = fixture.run(&[], &[("METADATA_FAILS", "1")])?;
     let unknown = fixture.run(&["--exclude", "missing"], &[])?;
     let without_cargo = fixture.run(&[], &[("PATH", "/nonexistent")])?;
     // Assert
-    assert!(!breaking.status.success());
-    assert!(String::from_utf8_lossy(&breaking.stdout).contains("reported failures"));
     assert!(!unreachable.status.success());
     assert!(String::from_utf8_lossy(&unreachable.stdout).contains("index timed out"));
     assert!(!unreadable.status.success());
