@@ -62,10 +62,14 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::HostContext, "host"),
     (SessionOperation::CreateSession, "create_session"),
     (SessionOperation::MergeSession, "merge"),
+    (SessionOperation::SessionDiff, "diff"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
 const UNAVAILABLE_SESSION_MODE: &str = "Session mode is not available";
+/// Error returned when a device asks for the patch of a file the session's
+/// diff does not change.
+const FILE_NOT_IN_DIFF: &str = "File is not in the session diff";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -593,6 +597,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         RemoteRequest::CreateSession { .. }
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
+        | RemoteRequest::GetSessionDiff { .. }
         | RemoteRequest::ListSessions
         | RemoteRequest::Unsupported => None,
     }
@@ -680,6 +685,9 @@ async fn respond(
             Ok(RemoteResponse::from(sessions.host_context().await?))
         }
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
+        RemoteRequest::GetSessionDiff { path, session_id } => {
+            get_listed_session_diff(sessions, session_id, path.as_deref()).await
+        }
         RemoteRequest::ListSessions => {
             let summaries = sessions.list_session_entries().await?;
 
@@ -753,6 +761,24 @@ async fn get_listed_session(
     Ok(RemoteResponse::Session {
         session: session.map(|session| Box::new(RemoteSession::from(session))),
     })
+}
+
+/// Reads the diff of one session only when the host lists it: the file
+/// list, or with `path` that file's patch.
+async fn get_listed_session_diff(
+    sessions: &SessionService,
+    session_id: String,
+    path: Option<&str>,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::SessionDiff)?;
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let files = sessions
+        .get_session_diff(&session_id)
+        .await?
+        .ok_or(SessionError::NotFound)?;
+
+    RemoteResponse::from_diff(&files, path)
+        .ok_or_else(|| SessionError::Operation(FILE_NOT_IN_DIFF.to_string()))
 }
 
 /// Returns `session_id` when the host lists that session, and

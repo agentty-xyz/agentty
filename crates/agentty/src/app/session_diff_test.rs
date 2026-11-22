@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use ag_session::test_support as model_fixture;
+use ag_session::{SessionDiffFile, SessionDiffFileStatus, test_support as model_fixture};
 
 use super::{
     DeferredAutoReviewPersistenceRetry, FocusedReviewTarget,
@@ -1895,4 +1895,107 @@ async fn open_diff_refresh_ignores_unchanged_failed_and_stale_results() {
     assert!(unchanged_refresh.is_none());
     assert!(app.take_refreshed_session_diff().is_none());
     assert!(app.pending_session_diff_requests.is_empty());
+}
+
+/// Loads one session's diff files through the programmatic session API.
+async fn request_api_diff(
+    app: &mut App,
+    session_id: &SessionId,
+) -> Result<Option<Vec<SessionDiffFile>>, ag_session::SessionError> {
+    let service = app.session_service();
+    let session_id = session_id.clone();
+
+    app.drive_session_request(async move { service.get_session_diff(&session_id).await })
+        .await
+}
+
+#[tokio::test]
+async fn api_session_diff_splits_worktree_changes_and_answers_none_for_unloaded_sessions() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app().await;
+    let folder = app.sessions.sessions()[0].folder.clone();
+    std::fs::write(folder.join("remote.txt"), "one\ntwo\n").expect("file should be written");
+
+    // Act
+    let files = request_api_diff(&mut app, &session_id)
+        .await
+        .expect("diff should load")
+        .expect("session should be loaded");
+    let missing = request_api_diff(&mut app, &SessionId::from("missing"))
+        .await
+        .expect("missing lookup should succeed");
+
+    // Assert
+    let file = files
+        .iter()
+        .find(|file| file.path == "remote.txt")
+        .expect("new file should be listed");
+    assert_eq!(file.status, SessionDiffFileStatus::Added);
+    assert_eq!((file.added_lines, file.deleted_lines), (2, 0));
+    assert!(
+        file.patch
+            .starts_with("diff --git a/remote.txt b/remote.txt\n")
+    );
+    assert_eq!(missing, None);
+}
+
+#[tokio::test]
+async fn api_session_diff_reads_archived_changes_with_each_file_status() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    app.sessions.sessions_mut()[0].status = Status::Done;
+    let archived_diff = "diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ \
+                         b/new.rs\n@@ -0,0 +1 @@\n+new\ndiff --git a/gone.rs b/gone.rs\ndeleted \
+                         file mode 100644\n--- a/gone.rs\n+++ /dev/null\n@@ -1 +0,0 \
+                         @@\n-gone\ndiff --git a/old.rs b/moved.rs\nsimilarity index 90%\nrename \
+                         from old.rs\nrename to moved.rs\ndiff --git a/lib.rs b/lib.rs\n--- \
+                         a/lib.rs\n+++ b/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
+    app.services
+        .db()
+        .sessions()
+        .update_session_archived_diff(&session_id, Some(archived_diff.to_string()))
+        .await
+        .expect("archived diff should persist");
+
+    // Act
+    let files = request_api_diff(&mut app, &session_id)
+        .await
+        .expect("archived diff should load")
+        .expect("session should be loaded");
+
+    // Assert
+    let summary: Vec<_> = files
+        .iter()
+        .map(|file| {
+            (
+                file.path.as_str(),
+                file.old_path.as_deref(),
+                file.status,
+                file.added_lines,
+                file.deleted_lines,
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("new.rs", None, SessionDiffFileStatus::Added, 1, 0),
+            ("gone.rs", None, SessionDiffFileStatus::Deleted, 0, 1),
+            (
+                "moved.rs",
+                Some("old.rs"),
+                SessionDiffFileStatus::Renamed,
+                0,
+                0
+            ),
+            ("lib.rs", None, SessionDiffFileStatus::Modified, 1, 1),
+        ]
+    );
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.patch.as_str())
+            .collect::<String>(),
+        archived_diff
+    );
 }

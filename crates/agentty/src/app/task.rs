@@ -193,43 +193,55 @@ struct ReviewAssistPromptTemplate<'a> {
 pub(crate) struct TaskService;
 
 impl TaskService {
+    /// Loads one session's unified diff from `source`: the retained archive,
+    /// nothing, or the live worktree in `folder` against its base branch,
+    /// falling back to the archive when merge cleanup removed the worktree.
+    pub(super) async fn load_session_diff(
+        folder: PathBuf,
+        session_id: &SessionId,
+        source: SessionDiffTaskSource,
+    ) -> Result<String, String> {
+        match source {
+            SessionDiffTaskSource::Archived { repositories } => repositories
+                .sessions()
+                .load_session_archived_diff(session_id)
+                .await
+                .map(Option::unwrap_or_default)
+                .map_err(|error| format!("Failed to load archived diff: {error}")),
+            SessionDiffTaskSource::Empty => Ok(String::new()),
+            SessionDiffTaskSource::Worktree {
+                archived_fallback,
+                base_branch,
+                git_client,
+            } => match git_client.diff(folder, base_branch).await {
+                Ok(diff) => Ok(diff),
+                Err(error @ ag_git::GitError::RepositoryUnavailable { .. }) => {
+                    let archived_diff_result = if let Some(repositories) = archived_fallback {
+                        repositories
+                            .sessions()
+                            .load_session_archived_diff(session_id)
+                            .await
+                            .map_err(|error| format!("Failed to load archived diff: {error}"))
+                    } else {
+                        Ok(None)
+                    };
+
+                    archived_diff_result.and_then(|archived_diff| {
+                        archived_diff.ok_or_else(|| format!("Failed to run git diff: {error}"))
+                    })
+                }
+                Err(error) => Err(format!("Failed to run git diff: {error}")),
+            },
+        }
+    }
+
     /// Spawns one session-diff load and returns its stale-safe request
     /// generation without waiting for Git or persistence I/O.
     pub(super) fn spawn_session_diff_task(input: SessionDiffTaskInput) -> u64 {
         let request_id = NEXT_SESSION_DIFF_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         spawn::spawn_detached(async move {
-            let result = match input.source {
-                SessionDiffTaskSource::Archived { repositories } => repositories
-                    .sessions()
-                    .load_session_archived_diff(&input.session_id)
-                    .await
-                    .map(Option::unwrap_or_default)
-                    .map_err(|error| format!("Failed to load archived diff: {error}")),
-                SessionDiffTaskSource::Empty => Ok(String::new()),
-                SessionDiffTaskSource::Worktree {
-                    archived_fallback,
-                    base_branch,
-                    git_client,
-                } => match git_client.diff(input.folder, base_branch).await {
-                    Ok(diff) => Ok(diff),
-                    Err(error @ ag_git::GitError::RepositoryUnavailable { .. }) => {
-                        let archived_diff_result = if let Some(repositories) = archived_fallback {
-                            repositories
-                                .sessions()
-                                .load_session_archived_diff(&input.session_id)
-                                .await
-                                .map_err(|error| format!("Failed to load archived diff: {error}"))
-                        } else {
-                            Ok(None)
-                        };
-
-                        archived_diff_result.and_then(|archived_diff| {
-                            archived_diff.ok_or_else(|| format!("Failed to run git diff: {error}"))
-                        })
-                    }
-                    Err(error) => Err(format!("Failed to run git diff: {error}")),
-                },
-            };
+            let result =
+                Self::load_session_diff(input.folder, &input.session_id, input.source).await;
             let _ = input.app_event_tx.send(AppEvent::SessionDiffLoaded {
                 request_id,
                 result,

@@ -1,14 +1,15 @@
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, CreateSessionMode, ForgeKind, ReasoningLevel,
-    ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionListEntry,
-    SessionListStats, SessionStatus, SessionSummary,
+    ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionDiffFile,
+    SessionDiffFileStatus, SessionId, SessionListEntry, SessionListStats, SessionStatus,
+    SessionSummary,
 };
 use serde_json::json;
 
 use crate::protocol::{
-    ClientFrame, RemoteMessage, RemoteMessageKind, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, MAX_DIFF_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
+    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteReviewReadiness, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, session_fixture};
 
@@ -567,4 +568,132 @@ fn session_frames_from_an_older_server_parse_without_details() {
     assert_eq!(session.review_request, None);
     assert!(!session.is_draft);
     assert_eq!(encoded, old);
+}
+
+/// Returns one changed file at `path` with `status` and patch `text`.
+fn diff_file(path: &str, status: SessionDiffFileStatus, text: &str) -> SessionDiffFile {
+    SessionDiffFile {
+        added_lines: 2,
+        deleted_lines: 1,
+        old_path: (status == SessionDiffFileStatus::Renamed).then(|| "old.rs".to_string()),
+        patch: text.to_string(),
+        path: path.to_string(),
+        status,
+    }
+}
+
+#[test]
+fn diff_frames_encode_the_file_list_and_one_patch() {
+    // Arrange
+    let request = json!({"method": "get_session_diff", "session_id": "s", "path": "a.rs"});
+    let files = vec![
+        diff_file("a.rs", SessionDiffFileStatus::Added, "+a\n"),
+        diff_file("b.rs", SessionDiffFileStatus::Deleted, "-b\n"),
+        diff_file("c.rs", SessionDiffFileStatus::Modified, "+c\n"),
+        diff_file("new.rs", SessionDiffFileStatus::Renamed, ""),
+    ];
+
+    // Act
+    let request: RemoteRequest = serde_json::from_value(request).expect("request should parse");
+    let listed = RemoteResponse::from_diff(&files, None).expect("list should build");
+    let opened = RemoteResponse::from_diff(&files, Some("a.rs")).expect("patch should build");
+    let missing = RemoteResponse::from_diff(&files, Some("z.rs"));
+
+    // Assert
+    assert_eq!(
+        request,
+        RemoteRequest::GetSessionDiff {
+            path: Some("a.rs".to_string()),
+            session_id: "s".to_string(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&listed).expect("list should encode"),
+        json!({"kind": "diff", "files": [
+            {"added_lines": 2, "deleted_lines": 1, "path": "a.rs", "status": "added"},
+            {"added_lines": 2, "deleted_lines": 1, "path": "b.rs", "status": "deleted"},
+            {"added_lines": 2, "deleted_lines": 1, "path": "c.rs", "status": "modified"},
+            {
+                "added_lines": 2,
+                "deleted_lines": 1,
+                "old_path": "old.rs",
+                "path": "new.rs",
+                "status": "renamed"
+            }
+        ]})
+    );
+    assert_eq!(
+        serde_json::to_value(&opened).expect("patch should encode"),
+        json!({"kind": "diff", "files": [
+            {"added_lines": 2, "deleted_lines": 1, "path": "a.rs", "status": "added"}
+        ], "patch": "+a\n"})
+    );
+    assert_eq!(missing, None);
+}
+
+#[test]
+fn large_patches_are_cut_at_a_line_boundary_within_the_encoded_budget() {
+    // Arrange
+    let line = format!("+{}\n", "\u{1}".repeat(99));
+    let patch = line.repeat(MAX_DIFF_RESPONSE_BYTES / 100);
+    let unbroken = "x".repeat(MAX_DIFF_RESPONSE_BYTES + 1);
+    let files = vec![
+        diff_file("big.rs", SessionDiffFileStatus::Modified, &patch),
+        diff_file("long.rs", SessionDiffFileStatus::Modified, &unbroken),
+    ];
+
+    // Act
+    let big = RemoteResponse::from_diff(&files, Some("big.rs")).expect("patch should build");
+    let long = RemoteResponse::from_diff(&files, Some("long.rs")).expect("patch should build");
+
+    // Assert
+    let (_, big_patch, big_truncated) = diff_parts(big);
+    let big_patch = big_patch.expect("patch should be present");
+    assert!(big_truncated);
+    assert!(big_patch.len() < patch.len());
+    assert!(big_patch.ends_with('\n'));
+    assert!(
+        serde_json::to_string(&big_patch)
+            .expect("patch should encode")
+            .len()
+            <= MAX_DIFF_RESPONSE_BYTES + 2
+    );
+    let (_, long_patch, long_truncated) = diff_parts(long);
+    assert!(long_truncated);
+    assert_eq!(
+        long_patch.map(|long_patch| long_patch.len()),
+        Some(MAX_DIFF_RESPONSE_BYTES)
+    );
+}
+
+/// Returns the files, patch, and truncation flag of a `diff` response, or
+/// nothing for any other response.
+fn diff_parts(response: RemoteResponse) -> (Vec<RemoteDiffFile>, Option<String>, bool) {
+    match response {
+        RemoteResponse::Diff {
+            files,
+            patch,
+            truncated,
+        } => (files, patch, truncated),
+        _ => (Vec::new(), None, false),
+    }
+}
+
+#[test]
+fn long_file_lists_stop_within_the_encoded_budget() {
+    // Arrange
+    let path = format!("dir/\"{}\"", "\\".repeat(1000));
+    let files: Vec<SessionDiffFile> = (0..200)
+        .map(|_| diff_file(&path, SessionDiffFileStatus::Modified, ""))
+        .collect();
+
+    // Act
+    let listed = RemoteResponse::from_diff(&files, None).expect("list should build");
+
+    // Assert
+    let encoded = serde_json::to_string(&listed).expect("list should encode");
+    let (listed_files, _, truncated) = diff_parts(listed);
+    assert!(truncated);
+    assert!(!listed_files.is_empty() && listed_files.len() < files.len());
+    assert!(encoded.len() <= MAX_DIFF_RESPONSE_BYTES);
 }

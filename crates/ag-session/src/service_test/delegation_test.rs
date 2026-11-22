@@ -143,6 +143,27 @@ async fn hosts_without_listing_report_the_listing_error_for_entries() {
     );
 }
 
+#[tokio::test]
+async fn existing_hosts_report_unsupported_session_diffs() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let diff = service
+        .get_session_diff(&SessionId::from("session-1"))
+        .await;
+    let supports_diff = service.supports(SessionOperation::SessionDiff);
+
+    // Assert
+    assert_eq!(
+        diff,
+        Err(SessionError::Operation(
+            "Host does not serve session diffs".to_string()
+        ))
+    );
+    assert!(!supports_diff);
+}
+
 #[test]
 fn existing_hosts_serve_no_optional_operations() {
     // Arrange

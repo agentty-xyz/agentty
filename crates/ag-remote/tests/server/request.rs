@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use ag_remote::protocol::{
-    ClientFrame, RemoteMessage, RemoteMessageKind, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteMessage, RemoteMessageKind,
+    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -165,6 +165,44 @@ async fn each_request_reaches_the_session_service() -> TestResult {
             "answer:session-1:Which branch?=main"
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_diffs_reach_only_listed_sessions() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let diff = |session_id: &str, path: Option<&str>| RemoteRequest::GetSessionDiff {
+        path: path.map(str::to_string),
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let opened = call(&mut client, 1, diff("session-1", Some("a.rs"))).await?;
+    let unlisted = call(&mut client, 2, diff("other-project-session", None)).await?;
+
+    // Assert
+    assert_eq!(
+        opened,
+        RemoteResult::Ok(RemoteResponse::Diff {
+            files: vec![RemoteDiffFile {
+                added_lines: 1,
+                deleted_lines: 0,
+                old_path: None,
+                path: "a.rs".to_string(),
+                status: RemoteDiffFileStatus::Added,
+            }],
+            patch: Some("diff --git a/a.rs b/a.rs\n+new\n".to_string()),
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(server.backend.calls(), ["list", "diff:session-1", "list"]);
 
     Ok(())
 }

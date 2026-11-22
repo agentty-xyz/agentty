@@ -5,11 +5,15 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use ag_contracts::SessionStats;
+use ag_git::DiffFile;
+use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionError as ApiSessionError};
+use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::app::review::{self, FocusedReviewPersistence, ReviewAgent, ReviewCacheEntry};
 use crate::app::task::{SessionDiffTaskInput, SessionDiffTaskSource, TaskService};
-use crate::app::{App, session};
+use crate::app::{App, session, spawn};
 use crate::domain::agent::parse_persisted_session_agent_model;
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
@@ -751,6 +755,31 @@ impl App {
         });
     }
 
+    /// Answers one programmatic diff query: captures the session's diff
+    /// source on the foreground loop, then loads and splits the diff in a
+    /// background task so Git never blocks the terminal. A session the
+    /// host has not loaded answers `None`.
+    pub(super) fn start_api_session_diff(
+        &self,
+        session_id: &SessionId,
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionDiffFile>>, ApiSessionError>>,
+    ) {
+        let Some(session) = self.sessions.session_for_id(session_id) else {
+            let _ = response_tx.send(Ok(None));
+
+            return;
+        };
+        let (folder, source) = self.session_diff_task_target(session);
+        let session_id = session_id.clone();
+        spawn::spawn_detached(async move {
+            let result = TaskService::load_session_diff(folder, &session_id, source)
+                .await
+                .map(|diff| Some(api_diff_files(&diff)))
+                .map_err(ApiSessionError::Operation);
+            let _ = response_tx.send(result);
+        });
+    }
+
     /// Spawns the appropriate archive or worktree diff source and registers
     /// the continuation before the foreground task yields again.
     fn spawn_session_diff_request(
@@ -1135,6 +1164,41 @@ impl App {
 
         Ok(should_start)
     }
+}
+
+/// Splits a unified diff into its changed files, with each file's status,
+/// line counts, and patch.
+fn api_diff_files(diff: &str) -> Vec<SessionDiffFile> {
+    DiffFile::parse(diff)
+        .into_iter()
+        .map(|file| {
+            let header = file
+                .text
+                .split_once("\n@@")
+                .map_or(file.text, |(header, _)| header);
+            let has_header_line =
+                |prefix: &str| header.lines().any(|line| line.starts_with(prefix));
+            let status = if has_header_line("new file mode") {
+                SessionDiffFileStatus::Added
+            } else if has_header_line("deleted file mode") {
+                SessionDiffFileStatus::Deleted
+            } else if file.old_path != file.new_path {
+                SessionDiffFileStatus::Renamed
+            } else {
+                SessionDiffFileStatus::Modified
+            };
+            let (added_lines, deleted_lines) = SessionStats::line_change_counts(file.text);
+
+            SessionDiffFile {
+                added_lines,
+                deleted_lines,
+                old_path: (status == SessionDiffFileStatus::Renamed).then_some(file.old_path),
+                patch: file.text.to_string(),
+                path: file.new_path,
+                status,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

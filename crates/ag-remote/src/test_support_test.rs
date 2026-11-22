@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     HostContext, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
-    SessionBackend, SessionError, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionStatus, SessionSummary, SpeedMode,
+    SessionBackend, SessionDiffFile, SessionError, SessionId, SessionMessage, SessionMessageKind,
+    SessionOperation, SessionService, SessionSettings, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -181,11 +181,22 @@ impl DeviceStore for MemoryDeviceStore {
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
+    diff_files: Option<Vec<SessionDiffFile>>,
     is_failing: bool,
     supported: Vec<SessionOperation>,
 }
 
 impl RecordingBackend {
+    /// Creates a backend that serves diffs and reports `files` as the
+    /// changes of every session, or `None` as a session it has not loaded.
+    pub(crate) fn with_diff(files: Option<Vec<SessionDiffFile>>) -> Self {
+        Self {
+            diff_files: files,
+            supported: vec![SessionOperation::SessionDiff],
+            ..Self::default()
+        }
+    }
+
     /// Creates a backend that serves the optional `operations`.
     pub(crate) fn supporting(operations: &[SessionOperation]) -> Self {
         Self {
@@ -241,6 +252,13 @@ impl SessionBackend for RecordingBackend {
         let session = (session_id.as_str() != "missing").then(|| session_fixture(session_id));
 
         self.record(format!("get:{session_id}"), session)
+    }
+
+    async fn get_session_diff(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
+        self.record(format!("diff:{session_id}"), self.diff_files.clone())
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {

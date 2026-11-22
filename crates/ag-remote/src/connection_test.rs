@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ag_noise::PublicKey;
-use ag_session::SessionOperation;
+use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionOperation};
 use tokio::sync::watch;
 
 use super::{
@@ -12,8 +12,9 @@ use super::{
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
-    ClientFrame, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -657,6 +658,111 @@ async fn merge_reaches_the_host_only_for_listed_sessions_it_serves() {
     );
     assert_eq!(serving.backend.calls(), ["list", "merge:session-1", "list"]);
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+/// Returns one modified file whose patch is `text`.
+fn diff_file(path: &str, text: &str) -> SessionDiffFile {
+    SessionDiffFile {
+        added_lines: 1,
+        deleted_lines: 1,
+        old_path: None,
+        patch: text.to_string(),
+        path: path.to_string(),
+        status: SessionDiffFileStatus::Modified,
+    }
+}
+
+/// Builds a diff request for `session_id`, naming `path` when given.
+fn diff_request(session_id: &str, path: Option<&str>) -> RemoteRequest {
+    RemoteRequest::GetSessionDiff {
+        path: path.map(str::to_string),
+        session_id: session_id.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn session_diff_lists_files_and_returns_one_patch_for_listed_sessions() {
+    // Arrange
+    let patch = "diff --git a/a.rs b/a.rs\n-old\n+new\n";
+    let serving = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_diff(Some(vec![diff_file("a.rs", patch)])),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let expected_file = RemoteDiffFile {
+        added_lines: 1,
+        deleted_lines: 1,
+        old_path: None,
+        path: "a.rs".to_string(),
+        status: RemoteDiffFileStatus::Modified,
+    };
+
+    // Act
+    let listed = reply_result(&serving.state, diff_request("session-1", None)).await;
+    let opened = reply_result(&serving.state, diff_request("session-1", Some("a.rs"))).await;
+    let absent = reply_result(&serving.state, diff_request("session-1", Some("b.rs"))).await;
+    let unlisted = reply_result(&serving.state, diff_request("other-project", None)).await;
+    let unsupported = reply_result(&not_serving.state, diff_request("session-1", None)).await;
+
+    // Assert
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::Diff {
+            files: vec![expected_file.clone()],
+            patch: None,
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        opened,
+        RemoteResult::Ok(RemoteResponse::Diff {
+            files: vec![expected_file],
+            patch: Some(patch.to_string()),
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        absent,
+        RemoteResult::Error("File is not in the session diff".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list",
+            "diff:session-1",
+            "list",
+            "diff:session-1",
+            "list",
+            "diff:session-1",
+            "list"
+        ]
+    );
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn session_diff_of_a_session_the_host_no_longer_loads_is_not_found() {
+    // Arrange
+    let fixture = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_diff(None),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+
+    // Act
+    let result = reply_result(&fixture.state, diff_request("session-1", None)).await;
+
+    // Assert
+    assert_eq!(result, RemoteResult::Error("Session not found".to_string()));
 }
 
 #[tokio::test]
