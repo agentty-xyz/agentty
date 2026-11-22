@@ -2,13 +2,18 @@
 // the integration tests in crates/ag-remote/tests/server/web_client.rs.
 //
 // Usage: node app_flow.mjs <listener address> session <device token>
+//        node app_flow.mjs <listener address> route <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
 //
 // In `session` mode the test server lists `Build it`, waiting on one
-// question, and the draft `Plan it`, which counts as updated whenever a
-// message is sent. Between `sent` and `refreshed` the Rust test bumps the
-// server's revision, so the server pushes `changed` and `Plan it` turns
-// unread.
+// question, and `Plan it`, running a turn, which counts as updated
+// whenever a message is sent or a question answered. After `answered` and
+// after `queued` the Rust test bumps the server's revision, so the server
+// pushes `changed`: first `Plan it` turns unread, then its queued message
+// shows.
+//
+// In `route` mode the page loads at `#s=session-2` with a draft left in
+// this tab, as after a reload, and sends it.
 //
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
@@ -18,11 +23,12 @@
 
 import { readFileSync } from "node:fs";
 
-import { createDocument, createWindow } from "./fake_dom.mjs";
+import { FakeEvent, createDocument, createWindow } from "./fake_dom.mjs";
 
 const APP_URL = new URL("../../assets/app.js", import.meta.url);
 const PAGE = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
 const TOKEN_KEY = "agentty.remote.token";
+const ROUTED_DRAFT_KEY = "agentty.remote.draft.session-2";
 const WAIT_MS = 10000;
 
 if (typeof WebSocket === "undefined") {
@@ -31,9 +37,15 @@ if (typeof WebSocket === "undefined") {
 
 const [address, mode, secret] = process.argv.slice(2);
 const document = createDocument(PAGE);
-const window = createWindow(document, "http://" + address + "/");
-if (mode === "session") {
+const window = createWindow(
+  document,
+  "http://" + address + "/" + (mode === "route" ? "#s=session-2" : ""),
+);
+if (mode === "session" || mode === "route") {
   window.localStorage.setItem(TOKEN_KEY, secret);
+}
+if (mode === "route") {
+  window.sessionStorage.setItem(ROUTED_DRAFT_KEY, "Resume the plan");
 }
 globalThis.document = document;
 globalThis.window = window;
@@ -70,6 +82,13 @@ function texts(nodes) {
   return nodes.map((node) => node.textContent);
 }
 
+function transcript() {
+  return byId("transcript").children.map((item) => ({
+    kind: item.dataset.kind,
+    text: item.textContent,
+  }));
+}
+
 function rows() {
   return byId("sessions").querySelectorAll(".row");
 }
@@ -102,56 +121,76 @@ async function sessionFlow() {
   await waitFor("the transcript", () => byId("transcript").children.length > 0);
   report({
     step: "opened",
+    answerCount: byId("answer-count").textContent,
+    answerSendDisabled: byId("answer-send").disabled,
     cancelHidden: byId("cancel").hidden,
+    composerHidden: byId("composer").hidden,
     current: rows()[0].getAttribute("aria-current"),
     hash: window.location.hash,
     heading: byId("heading").textContent,
+    // The server lists `merge`, so Merge shows, disabled while a question
+    // waits.
+    mergeDisabled: byId("merge").disabled,
+    mergeHidden: byId("merge").hidden,
+    moreHidden: byId("session-more").hidden,
     questions: byId("questions")
       .querySelectorAll("[data-question]")
       .map((group) => ({
-        options: texts(group.querySelectorAll("button")),
+        eyebrow: group.querySelector(".eyebrow").textContent,
+        options: group.querySelectorAll(".option").map((option) => option.firstChild.textContent),
         text: group.dataset.question,
       })),
     status: byId("session-status").textContent,
-    transcript: byId("transcript").children.map((item) => ({
-      kind: item.className,
-      text: item.textContent,
-    })),
+    transcript: transcript(),
     view: visibleView(),
   });
 
-  byId("message").value = "Use the main branch";
-  byId("send").click();
-  await waitFor("the composer to clear", () => byId("message").value === "");
-  report({ step: "sent", error: byId("session-error").textContent });
+  const option = byId("questions").querySelector(".option");
+  option.click();
+  const chosen = {
+    answerCount: byId("answer-count").textContent,
+    answerSendDisabled: byId("answer-send").disabled,
+    pressed: option.getAttribute("aria-pressed"),
+  };
+  byId("answer-send").click();
+  // The button stays disabled while the request runs.
+  const isSending = byId("answer-send").disabled;
+  await waitFor("the answers to go through", () => !byId("answer-send").disabled);
+  report({
+    step: "answered",
+    chosen: chosen,
+    error: byId("answer-error").textContent,
+    isSending: isSending,
+  });
 
-  await waitFor("the queued message", () => byId("queued").children.length > 0);
+  await waitFor("the unread dot", () => unreadRows().length > 0);
   report({
     step: "refreshed",
-    queued: texts(byId("queued").children),
     unread: unreadRows(),
     unreadLabel: texts(byId("sessions").querySelectorAll(".unread")),
   });
 
-  const option = byId("questions").querySelector(".options button");
-  option.click();
-  const chosen = option.getAttribute("aria-pressed");
-  byId("questions").querySelector('button[type="submit"]').click();
-  // Cancel asks first: keeping the session sends nothing, confirming sends
-  // the request, which the test server refuses.
+  // Cancel sits in the session sheet and asks first: keeping the session
+  // sends nothing, confirming sends the request, which the test server
+  // refuses.
+  const sheet = byId("session-sheet");
   const dialog = byId("cancel-dialog");
+  byId("session-more").click();
+  const sheetOpened = sheet.open;
   byId("cancel").click();
   const askedFirst = dialog.open;
   dialog.querySelector('button[value="keep"]').click();
+  byId("session-more").click();
   byId("cancel").click();
   dialog.querySelector('button[value="confirm"]').click();
-  await waitFor("the cancel error", () => byId("session-error").textContent !== "");
+  await waitFor("the cancel error", () => byId("action-error").textContent !== "");
   report({
     step: "canceled",
     askedFirst: askedFirst,
-    chosen: chosen,
-    error: byId("session-error").textContent,
+    error: byId("action-error").textContent,
     isDialogOpen: dialog.open,
+    isSheetOpen: sheet.open,
+    sheetOpened: sheetOpened,
   });
 
   // The back gesture returns to where the session was opened from.
@@ -163,6 +202,59 @@ async function sessionFlow() {
     hash: window.location.hash,
     heading: byId("heading").textContent,
     view: visibleView(),
+  });
+
+  // A running session queues the message for its next turn. This page has
+  // no fine pointer, so Enter adds a line and Ctrl+Enter sends.
+  rows()[1].click();
+  await waitFor("the running transcript", () =>
+    byId("transcript").querySelector('[data-kind="activity"]'),
+  );
+  const activity = byId("transcript").querySelector("details");
+  report({
+    step: "running",
+    activity: {
+      isOpen: activity.open,
+      lines: activity.querySelectorAll("li").map((line) => [line.className, line.textContent]),
+      summary: activity.querySelector("summary").textContent,
+    },
+    answerBarHidden: byId("answer-bar").hidden,
+    composerHidden: byId("composer").hidden,
+    hint: byId("composer-meta").textContent,
+    notice: {
+      isError: byId("transcript").querySelector(".msg--notice").classList.contains("is-error"),
+      label: byId("transcript").querySelector(".notice-label").textContent,
+      text: byId("transcript").querySelector(".notice-body").textContent,
+    },
+    placeholder: byId("message").placeholder,
+    sendLabel: byId("send").getAttribute("aria-label"),
+    // Without the `stop_turn` capability the page offers no Stop.
+    stopHidden: byId("stop").hidden,
+    transcript: transcript(),
+  });
+
+  const message = byId("message");
+  message.value = "Use the main branch";
+  message.dispatchEvent(new FakeEvent("input"));
+  const enter = new FakeEvent("keydown", { key: "Enter" });
+  message.dispatchEvent(enter);
+  const keptOnEnter = message.value;
+  message.dispatchEvent(new FakeEvent("keydown", { ctrlKey: true, key: "Enter" }));
+  await waitFor("the composer to clear", () => message.value === "");
+  report({
+    step: "queued",
+    enterPrevented: enter.defaultPrevented,
+    error: byId("session-error").textContent,
+    keptOnEnter: keptOnEnter,
+  });
+
+  await waitFor("the queued message", () => byId("queued").children.length > 0);
+  report({
+    step: "shown",
+    queued: texts(byId("queued").children),
+    queuedBoxHidden: byId("queued-box").hidden,
+    // The transcript was already on screen, so the refresh kept its nodes.
+    keptActivity: byId("transcript").querySelector("details") === activity,
   });
 
   // Forgetting the device from an open session drops its route.
@@ -216,8 +308,31 @@ async function pairFlow() {
   });
 }
 
+// The session in the address opens with its draft, and the composer sends
+// to it.
+async function routeFlow() {
+  await waitFor("the routed transcript", () => byId("transcript").children.length > 0);
+  report({
+    step: "restored",
+    current: byId("sessions").querySelector('[aria-current="page"]')?.dataset.sessionId ?? null,
+    hash: window.location.hash,
+    heading: byId("heading").textContent,
+    message: byId("message").value,
+    view: visibleView(),
+  });
+
+  byId("send").click();
+  await waitFor("the composer to clear", () => byId("message").value === "");
+  report({
+    step: "sent",
+    draft: window.sessionStorage.getItem(ROUTED_DRAFT_KEY),
+    error: byId("session-error").textContent,
+  });
+}
+
 await import(APP_URL.href);
-await (mode === "pair" ? pairFlow() : sessionFlow());
+const flows = { pair: pairFlow, route: routeFlow, session: sessionFlow };
+await flows[mode]();
 
 // The client keeps its socket open, so the script ends itself once its
 // output has been written.

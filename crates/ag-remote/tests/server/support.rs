@@ -375,9 +375,9 @@ impl DeviceStore for MemoryDeviceStore {
 /// the message `panic` panics, every cancellation reports a missing
 /// session, every merge is refused, the host serves only regular sessions
 /// in project `1`, and every optional operation is served. It lists
-/// `session-1` and `session-2`, a draft that counts as updated once for
-/// every message sent to any session, so a device sees another session
-/// change.
+/// `session-1`, waiting on a question, and `session-2`, running a turn,
+/// which counts as updated once for every message sent and every answer
+/// given to any session, so a device sees another session change.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -447,7 +447,7 @@ impl SessionBackend for RecordingBackend {
         let plan_updated_at = self
             .calls()
             .iter()
-            .filter(|call| call.starts_with("send:"))
+            .filter(|call| call.starts_with("send:") || call.starts_with("answer:"))
             .fold(30, |updated_at, _| updated_at + 1);
         self.record("list".to_string());
 
@@ -460,7 +460,7 @@ impl SessionBackend for RecordingBackend {
             },
             SessionSummary {
                 id: SessionId::from("session-2"),
-                status: SessionStatus::Draft,
+                status: SessionStatus::InProgress,
                 title: Some("Plan it".to_string()),
                 updated_at: plan_updated_at,
             },
@@ -536,23 +536,53 @@ impl SessionBackend for RecordingBackend {
     }
 }
 
-/// Builds a session with a hidden prompt, an answer, one question, and
-/// `queued_messages` waiting behind its turn.
+/// Builds a session with `queued_messages` waiting behind its turn.
+/// `session-2` runs a turn after an activity summary and a notice; any
+/// other session has a hidden prompt, an answer, and one question.
 fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
+    let is_running = session_id.as_str() == "session-2";
+    let (messages, questions, status, title) = if is_running {
+        (
+            vec![
+                SessionMessage::new(0, SessionMessageKind::UserPrompt, "plan it"),
+                SessionMessage::new(
+                    1,
+                    SessionMessageKind::ActivitySummary,
+                    "✓ Read plan.md\n✗ Run tests\n… Edit plan.md",
+                ),
+                SessionMessage::new(
+                    2,
+                    SessionMessageKind::WorkflowNotice,
+                    "[Commit Error] hook failed",
+                ),
+            ],
+            Vec::new(),
+            SessionStatus::InProgress,
+            "Plan it",
+        )
+    } else {
+        (
+            vec![
+                SessionMessage::new(0, SessionMessageKind::UserPrompt, "build it"),
+                SessionMessage::new(1, SessionMessageKind::AgentPrompt, "hidden"),
+                SessionMessage::new(2, SessionMessageKind::AssistantAnswer, "which branch?"),
+            ],
+            vec![QuestionItem {
+                options: vec!["main".to_string()],
+                text: "Which branch?".to_string(),
+            }],
+            SessionStatus::Question,
+            "Build it",
+        )
+    };
+
     Session {
         created_at: 10,
         draft_prompt: None,
         id: session_id.clone(),
-        messages: vec![
-            SessionMessage::new(0, SessionMessageKind::UserPrompt, "build it"),
-            SessionMessage::new(1, SessionMessageKind::AgentPrompt, "hidden"),
-            SessionMessage::new(2, SessionMessageKind::AssistantAnswer, "which branch?"),
-        ],
+        messages,
         published_upstream_ref: None,
-        questions: vec![QuestionItem {
-            options: vec!["main".to_string()],
-            text: "Which branch?".to_string(),
-        }],
+        questions,
         queued_messages,
         review_request: None,
         settings: SessionSettings {
@@ -564,8 +594,8 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
             response_style: ag_session::ResponseStyle::Balanced,
             speed_mode: ag_session::SpeedMode::Normal,
         },
-        status: SessionStatus::Question,
-        title: Some("Build it".to_string()),
+        status,
+        title: Some(title.to_string()),
         updated_at: 20,
     }
 }

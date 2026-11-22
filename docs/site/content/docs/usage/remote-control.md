@@ -55,6 +55,22 @@ session that changed since you last opened it. Each browser tracks what it has s
 its own, so another device or a private window shows its own dots. With no session open,
 the page offers the sessions waiting for you.
 
+The open session shows its transcript, with each activity summary in a box you can open
+or close. When you scroll up, new messages leave your place alone and `Jump to latest`
+returns to the end. With a keyboard and mouse, `Enter` sends and `Shift+Enter` adds a
+line; on a touch screen, `Enter` adds a line and the button sends. `Ctrl+Enter` or
+`Cmd+Enter` always sends. While a turn runs, a message waits in the queue above the box
+for the next turn. While the agent asks questions, the box gives way to the questions:
+pick an option or type an answer, then press `Send answers` once each has one. A session
+that is merging or finished shows why you cannot chat. Unsent text stays in the box for
+each session until Agentty accepts it, even after a reload of the tab.
+
+The `⋯` button in the session header offers `Cancel session`. When this Agentty lets
+devices stop a turn or merge, the page also shows `Stop` next to the send button while a
+turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` returns the
+session to review and keeps its changes; `Merge` asks before it merges the session into
+its base branch.
+
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
 next to the device offers `Forget this device`. While the connection is down, a banner
