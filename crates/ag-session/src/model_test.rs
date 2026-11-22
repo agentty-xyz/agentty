@@ -209,6 +209,23 @@ fn watching_status_is_entered_from_review_and_leaves_like_review() {
 }
 
 #[test]
+fn queued_status_follows_forge_merge_queue_outcomes() {
+    // Arrange
+    let next_statuses = [
+        SessionStatus::Watching,
+        SessionStatus::Merged,
+        SessionStatus::Review,
+        SessionStatus::Done,
+    ];
+
+    // Act
+    let transitions = next_statuses.map(|status| SessionStatus::Queued.can_transition_to(status));
+
+    // Assert
+    assert_eq!(transitions, [true, true, true, false]);
+}
+
+#[test]
 fn active_branch_work_statuses_can_transition_to_canceled() {
     // Arrange
     let statuses = [

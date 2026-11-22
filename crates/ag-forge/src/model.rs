@@ -172,6 +172,9 @@ impl ReviewRequestSummary {
     /// only an approval is missing, or a conflict-free draft has no unresolved
     /// review threads.
     pub const GITHUB_BYPASS_READY_STATUS_COMPONENT: &str = "PR ready with bypass";
+    /// Status-summary component persisted for a GitHub PR waiting in its base
+    /// branch's merge queue at the latest forge refresh.
+    pub const GITHUB_MERGE_QUEUE_STATUS_COMPONENT: &str = "In merge queue";
     /// Status-summary component persisted for a GitHub PR with a clean merge
     /// state at the latest forge refresh.
     pub const GITHUB_READY_STATUS_COMPONENT: &str = "PR ready";
@@ -185,6 +188,12 @@ impl ReviewRequestSummary {
     /// merge by bypassing branch protections.
     pub fn is_github_pr_bypass_ready(&self) -> bool {
         self.has_open_github_status_component(Self::GITHUB_BYPASS_READY_STATUS_COMPONENT)
+    }
+
+    /// Returns whether the latest GitHub refresh found this open PR in its
+    /// base branch's merge queue.
+    pub fn is_github_pr_in_merge_queue(&self) -> bool {
+        self.has_open_github_status_component(Self::GITHUB_MERGE_QUEUE_STATUS_COMPONENT)
     }
 
     /// Returns whether this open GitHub PR status contains `component`.

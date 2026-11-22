@@ -1003,8 +1003,9 @@ impl SyncOrchestrator {
     /// A result equal to the previous one for the same polling key extends
     /// the unchanged run. After [`REVIEW_SYNC_IDLE_AFTER_UNCHANGED_PASSES`]
     /// such passes the target is polled once every
-    /// [`REVIEW_SYNC_IDLE_INTERVAL_PASSES`] passes. Any change, or running
-    /// checks on a watched review request, keeps the full cadence.
+    /// [`REVIEW_SYNC_IDLE_INTERVAL_PASSES`] passes. Any change, running checks
+    /// on a watched review request, or a merge-queue entry keeps the full
+    /// cadence.
     fn record_review_sync_cadence(
         &mut self,
         review_request_sync_target: &ReviewRequestSyncTarget,
@@ -1024,7 +1025,7 @@ impl SyncOrchestrator {
                 cadence_state.unchanged_passes.saturating_add(1)
             });
         let skipped_passes = if unchanged_passes >= REVIEW_SYNC_IDLE_AFTER_UNCHANGED_PASSES
-            && !has_running_checks(task_result)
+            && !has_imminent_change(task_result)
         {
             REVIEW_SYNC_IDLE_INTERVAL_PASSES - 1
         } else {
@@ -1164,10 +1165,19 @@ fn attribute_count(count: usize) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
 }
 
-/// Returns whether a watched review request reported checks that are still
-/// running, whose results review watching acts on once they finish.
-fn has_running_checks(task_result: &SyncReviewRequestTaskResult) -> bool {
-    matches!(&task_result.attention, Some(Ok(attention)) if attention.has_pending_checks)
+/// Returns whether a review request is expected to change soon: a watched
+/// one reported checks that are still running, whose results review watching
+/// acts on once they finish, or one waits in the forge's merge queue, which
+/// merges or removes it.
+fn has_imminent_change(task_result: &SyncReviewRequestTaskResult) -> bool {
+    let has_running_checks =
+        matches!(&task_result.attention, Some(Ok(attention)) if attention.has_pending_checks);
+    let is_in_merge_queue = task_result
+        .summary
+        .as_ref()
+        .is_some_and(crate::domain::session::ReviewRequestSummary::is_github_pr_in_merge_queue);
+
+    has_running_checks || is_in_merge_queue
 }
 
 /// Session base comparisons memoized by the commits they were computed from.

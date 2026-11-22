@@ -96,7 +96,7 @@ minutes is checked about every five minutes until it changes.
 | **AgentReview** | Focused review is running.                               |
 | **Watching**    | Review-ready; linked review request is watched.          |
 | **Question**    | Agent is waiting for clarification.                      |
-| **Queued**      | Waiting to merge.                                        |
+| **Queued**      | Waiting in the Agentty or GitHub merge queue.            |
 | **Rebasing**    | Session branch is syncing.                               |
 | **Merging**     | Changes are merging into the base branch.                |
 | **Merged**      | Merged remotely; waiting for manual local target sync.   |
@@ -127,6 +127,7 @@ flowchart TD
   Rebasing --> Review
   Review --> Queued
   Queued --> Merging
+  Queued --> Merged
   Merging --> Done
   Review --> Merged
   Merged -->|Manual target sync| Done
@@ -366,10 +367,12 @@ status in the background:
 | `✓ <id>`  | Request was merged.                 |
 | `✗ <id>`  | Request was closed.                 |
 
-A remote merge moves the session to read-only **Merged**, keeping its transcript and
-diff in Active. Sync its local target branch with `s` from the list to move it to
-**Done** and remove the worktree; if that fails, follow the warning and retry. Closing
-an unmerged request cancels its session and removes its worktree.
+A GitHub pull request waiting in its merge queue shows **Queued** until GitHub merges it
+or removes it from the queue, which returns the session to **Review** or **Watching**. A
+remote merge moves the session to read-only **Merged**, keeping its transcript and diff
+in Active. Sync its local target branch with `s` from the list to move it to **Done**
+and remove the worktree; if that fails, follow the warning and retry. Closing an
+unmerged request cancels its session and removes its worktree.
 
 ### Watching a Review Request
 

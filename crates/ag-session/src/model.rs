@@ -155,7 +155,8 @@ pub enum SessionStatus {
     Watching,
     /// The session is waiting for model clarification responses.
     Question,
-    /// The session is waiting in the merge queue.
+    /// The session is waiting in Agentty's merge queue, or its linked pull
+    /// request is waiting in the forge's merge queue.
     Queued,
     /// The session branch is being rebased.
     Rebasing,
@@ -280,7 +281,11 @@ impl SessionStatus {
                 )
                 | (
                     SessionStatus::Queued,
-                    SessionStatus::Merging | SessionStatus::Review | SessionStatus::AgentReview
+                    SessionStatus::Merging
+                        | SessionStatus::Review
+                        | SessionStatus::AgentReview
+                        | SessionStatus::Watching
+                        | SessionStatus::Merged
                 )
                 | (
                     SessionStatus::InProgress | SessionStatus::Rebasing,

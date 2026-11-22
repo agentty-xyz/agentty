@@ -969,13 +969,17 @@ fn review_pass_for_tick_schedules_every_second_tick() {
 
 #[test]
 /// A target whose result repeats for the idle threshold is polled once per
-/// idle interval, unless its watched checks are still running.
+/// idle interval, unless its watched checks are still running or it waits in
+/// the merge queue.
 fn record_review_sync_outcome_idles_unchanged_targets_unless_checks_run() {
     // Arrange
     let open_result = sync_task_result_from_summary(
         test_review_request_summary("#42", ReviewRequestState::Open),
         None,
     );
+    let mut queued_summary = test_review_request_summary("#42", ReviewRequestState::Open);
+    queued_summary.status_summary = Some("Mergeable, In merge queue".to_string());
+    let queued_result = sync_task_result_from_summary(queued_summary, None);
     let watched_result = |has_pending_checks| SyncReviewRequestTaskResult {
         attention: Some(Ok(ag_forge::ReviewRequestAttention {
             has_pending_checks,
@@ -988,6 +992,7 @@ fn record_review_sync_outcome_idles_unchanged_targets_unless_checks_run() {
         ("unwatched", open_result.clone(), true),
         ("watched_checks_settled", watched_result(false), true),
         ("watched_checks_running", watched_result(true), false),
+        ("in_merge_queue", queued_result, false),
     ];
     let target = review_request_sync_target(
         "session-1",

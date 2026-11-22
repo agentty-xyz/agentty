@@ -18,15 +18,17 @@ use super::{
 ///
 /// The rollup check names and the base branch's required status checks let
 /// bypass readiness wait for required checks that have not reported yet.
+/// `isInMergeQueue` reports whether the pull request waits in its base
+/// branch's merge queue.
 const PULL_REQUEST_STATUS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
-     isDraft mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup { state \
-     contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } \
-     pageInfo { hasNextPage } } } reviewThreads(first: 100) { totalCount nodes { isResolved } } \
-     baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 100) { totalCount nodes \
-     { parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks { context } } } \
-     } } } viewerCanMergeAsAdmin } } }";
+     isDraft isInMergeQueue mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup \
+     { state contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { \
+     context } } pageInfo { hasNextPage } } } reviewThreads(first: 100) { totalCount nodes { \
+     isResolved } } baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 100) { \
+     totalCount nodes { parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks \
+     { context } } } } } } viewerCanMergeAsAdmin } } }";
 
 /// Paginated GraphQL query used when a required check may be reported beyond
 /// the first page of rollup contexts.
@@ -1383,6 +1385,8 @@ struct GitHubViewResponse {
     head_ref_name: String,
     #[serde(rename = "isDraft")]
     is_draft: bool,
+    #[serde(default, rename = "isInMergeQueue")]
+    is_in_merge_queue: bool,
     mergeable: Option<String>,
     #[serde(rename = "mergeStateStatus")]
     merge_state_status: Option<String>,
@@ -1460,7 +1464,9 @@ impl GitHubViewResponse {
             parts.push(merge_summary);
         }
 
-        if self.is_ready() {
+        if self.is_in_merge_queue && self.state == "OPEN" {
+            parts.push(ReviewRequestSummary::GITHUB_MERGE_QUEUE_STATUS_COMPONENT.to_string());
+        } else if self.is_ready() {
             parts.push(ReviewRequestSummary::GITHUB_READY_STATUS_COMPONENT.to_string());
         } else if self.is_bypass_ready() {
             parts.push(ReviewRequestSummary::GITHUB_BYPASS_READY_STATUS_COMPONENT.to_string());

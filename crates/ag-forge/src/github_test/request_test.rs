@@ -196,6 +196,31 @@ fn github_status_marks_only_open_clean_pr_ready() {
 }
 
 #[test]
+fn github_merge_queue_entry_replaces_ready_marker() {
+    // Arrange
+    let mut queued: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    queued["data"]["repository"]["pullRequest"]["isInMergeQueue"] = serde_json::json!(true);
+    let mut merged = queued.clone();
+    merged["data"]["repository"]["pullRequest"]["state"] = serde_json::json!("MERGED");
+
+    // Act
+    let queued_summary =
+        parse_view_summary(&queued.to_string()).expect("queued response should parse");
+    let merged_summary =
+        parse_view_summary(&merged.to_string()).expect("merged response should parse");
+
+    // Assert
+    assert!(queued_summary.is_github_pr_in_merge_queue());
+    assert!(!queued_summary.is_github_pr_ready());
+    assert_eq!(
+        queued_summary.status_summary.as_deref(),
+        Some("Approved, Mergeable, In merge queue")
+    );
+    assert!(!merged_summary.is_github_pr_in_merge_queue());
+}
+
+#[test]
 fn github_clean_status_without_required_review_is_ready() {
     // Arrange
     let mut response: serde_json::Value =
