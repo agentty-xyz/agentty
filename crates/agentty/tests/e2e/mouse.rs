@@ -10,8 +10,9 @@ use crate::common::FeatureTest;
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Link typed into the dialog, then selected and clicked.
-const LINK: &str = "https://example.com/docs";
+/// Link typed into the dialog, then selected and clicked. It is wider than
+/// half the screen, so it covers the middle column wherever it is drawn.
+const LINK: &str = "https://example.com/docs/usage/keybindings/mouse";
 /// Terminal size the scenario runs at, in cells.
 const TERMINAL_SIZE: (u16, u16) = (80, 24);
 
@@ -44,14 +45,18 @@ fn left_button_report(action: u8, column: u16, row: u16, is_release: bool) -> St
     format!("\x1b[<{action};{column};{row}{suffix}")
 }
 
-/// Clicks a grid of cells that hits any text at least eight cells wide, so
-/// the scenario does not depend on where the dialog draws the link.
-fn click_grid() -> String {
+/// Clicks the middle column of every row, which hits [`LINK`] on whichever
+/// row the dialog draws it.
+///
+/// The reports stay well under one kilobyte. On Linux the terminal reader
+/// takes at most that much pending input per wake-up and leaves the rest
+/// until more input arrives, so a larger burst would strand its last clicks.
+fn click_middle_column() -> String {
     let (columns, rows) = TERMINAL_SIZE;
+    let column = columns / 2;
 
     (1..=rows)
-        .flat_map(|row| (1..=columns).step_by(8).map(move |column| (column, row)))
-        .flat_map(|(column, row)| {
+        .flat_map(|row| {
             [
                 left_button_report(0, column, row, false),
                 left_button_report(0, column, row, true),
@@ -113,7 +118,7 @@ async fn mouse_selection_copies_text_and_opens_links_inside_tmux() -> E2eResult 
                     .capture_labeled("selecting", "Dragging highlights the screen text")
                     .write_text(release)
                     .wait_for_stable_frame(300, 5000)
-                    .write_text(click_grid())
+                    .write_text(click_middle_column())
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, report| {
