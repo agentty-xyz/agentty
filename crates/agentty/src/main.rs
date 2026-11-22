@@ -109,17 +109,19 @@ async fn run(
     run_application(cli, runtime).with_context(context).await
 }
 
-/// Accepts a relay base URL: `ws://` or `wss://`, a host, and no query or
-/// fragment, since the pairing link appends its own fragment. A trailing
-/// slash is dropped.
+/// Accepts a relay base URL: `ws://` or `wss://`, a host without
+/// credentials, and no query or fragment, since the pairing link appends its
+/// own fragment. A trailing slash is dropped.
 fn parse_relay_url(value: &str) -> Result<String, String> {
     let url = value.trim().trim_end_matches('/');
     let host = url
         .strip_prefix("wss://")
         .or_else(|| url.strip_prefix("ws://"))
         .unwrap_or_default();
-    let is_valid = !host.is_empty()
-        && !host.starts_with('/')
+    let authority = host.split('/').next().unwrap_or_default();
+    // Credentials would end up in the pairing link and its QR code.
+    let is_valid = !authority.is_empty()
+        && !authority.contains('@')
         && !host.contains(['?', '#'])
         && !host.contains(char::is_whitespace);
     if !is_valid {

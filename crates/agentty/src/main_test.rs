@@ -153,6 +153,7 @@ fn relay_url_needs_a_websocket_scheme_and_a_host() {
         "wss://relay.example/?token=1",
         "wss://relay.example/#x",
         "wss://relay example",
+        "wss://user:token@relay.example",
     ];
 
     // Act
