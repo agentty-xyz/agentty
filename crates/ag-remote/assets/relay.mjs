@@ -53,7 +53,7 @@ class RelayTransport {
     this.onopen = onopen;
     // Runs encryption steps one at a time, so messages keep their order.
     this.queue = Promise.resolve();
-    this.relayUrl = relayUrl.replace(/\/+$/, "");
+    this.relayUrl = relayUrl.endsWith("/") ? relayUrl.slice(0, -1) : relayUrl;
     this.session = null;
     this.socket = null;
   }

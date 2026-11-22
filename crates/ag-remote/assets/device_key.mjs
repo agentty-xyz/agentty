@@ -168,11 +168,6 @@ export async function loadDeviceKey() {
 
 /** Deletes the saved device key, which unpairs this browser for good. */
 export async function forgetDeviceKey() {
-  for (const id of [DEVICE_KEY_ID, WRAPPED_KEY_ID]) {
-    try {
-      await remove(id);
-    } catch (_error) {
-      // Nothing was saved when storage is unavailable.
-    }
-  }
+  // A failed removal means storage is unavailable, so nothing was saved.
+  await Promise.allSettled([remove(DEVICE_KEY_ID), remove(WRAPPED_KEY_ID)]);
 }

@@ -30,6 +30,7 @@ export async function isSupported() {
 
     return true;
   } catch (_error) {
+    // No WebCrypto, as on a page without HTTPS, or no X25519 in it.
     return false;
   }
 }
@@ -250,16 +251,18 @@ export class Session {
 
   /** Encrypts one frame into the messages to send, in order. */
   async seal(frame) {
+    // Each call takes its nonce before it waits, so starting them in order
+    // keeps the messages in order.
     const messages = [];
     let offset = 0;
     do {
       const chunk = frame.subarray(offset, offset + CHUNK_BYTES);
       offset += chunk.length;
       const marker = offset < frame.length ? MORE_CHUNKS : FINAL_CHUNK;
-      messages.push(await this.sending.encrypt(EMPTY, concat(Uint8Array.of(marker), chunk)));
+      messages.push(this.sending.encrypt(EMPTY, concat(Uint8Array.of(marker), chunk)));
     } while (offset < frame.length);
 
-    return messages;
+    return Promise.all(messages);
   }
 
   /**

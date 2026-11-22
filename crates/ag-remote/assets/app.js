@@ -93,6 +93,7 @@ function storedRelay() {
 
     return isValid ? relay : null;
   } catch (_error) {
+    // A damaged entry counts as no stored pairing.
     return null;
   }
 }
@@ -730,7 +731,7 @@ async function startThroughRelay() {
 }
 
 if (usesRelay) {
-  void startThroughRelay();
+  await startThroughRelay();
 } else if (token()) {
   show("list");
   connect(helloFrame());
