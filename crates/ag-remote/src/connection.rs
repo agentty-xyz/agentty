@@ -1,12 +1,15 @@
 //! One client connection over a frame transport: authentication, pairing
 //! approval, requests, and change pushes.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::{oneshot, watch};
+use tokio::task::{self, JoinSet};
 use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
@@ -48,6 +51,8 @@ const UNSUPPORTED_REQUEST: &str = "Unsupported request";
 pub(crate) const MAX_REQUESTS_IN_PROGRESS: usize = 8;
 /// Error returned for a request beyond [`MAX_REQUESTS_IN_PROGRESS`].
 pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
+/// Error returned for a request whose task failed before it could reply.
+const REQUEST_FAILED: &str = "Request failed";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -357,8 +362,9 @@ pub(crate) async fn complete_pairing(
 ///
 /// Each request runs in its own task, so a slow host operation delays
 /// neither later requests nor change pushes. Replies go out as they
-/// complete, matched to their request by `id`. Closing the connection drops
-/// the replies still pending; the host work they belong to carries on.
+/// complete, matched to their request by `id`. Once the connection ends,
+/// the replies still pending are dropped, and the connection stays counted
+/// as open until the host work behind them finishes.
 async fn run<T: FrameTransport>(
     mut transport: T,
     state: &ServerState,
@@ -366,21 +372,42 @@ async fn run<T: FrameTransport>(
     mut shutdown_rx: watch::Receiver<bool>,
     mut close_rx: oneshot::Receiver<()>,
 ) {
+    let mut requests = RequestTasks::default();
+    serve_authenticated(
+        &mut transport,
+        state,
+        &mut requests,
+        &mut revisions,
+        &mut shutdown_rx,
+        &mut close_rx,
+    )
+    .await;
+    requests.finish().await;
+}
+
+/// Serves requests and change pushes until the connection ends, starting
+/// each request in `requests`.
+async fn serve_authenticated<T: FrameTransport>(
+    transport: &mut T,
+    state: &ServerState,
+    requests: &mut RequestTasks,
+    revisions: &mut watch::Receiver<u64>,
+    shutdown_rx: &mut watch::Receiver<bool>,
+    close_rx: &mut oneshot::Receiver<()>,
+) {
     let mut change_deadline: Option<Instant> = None;
     let mut revisions_open = true;
-    let request_slots = Arc::new(Semaphore::new(MAX_REQUESTS_IN_PROGRESS));
-    let (reply_tx, mut reply_rx) = mpsc::channel(MAX_REQUESTS_IN_PROGRESS);
 
     loop {
         tokio::select! {
             biased;
-            () = wait_until_stopping(&mut shutdown_rx) => {
+            () = wait_until_stopping(shutdown_rx) => {
                 transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
 
                 return;
             }
-            _ = &mut close_rx => {
-                reject(&mut transport, "Device revoked").await;
+            _ = &mut *close_rx => {
+                reject(transport, "Device revoked").await;
 
                 return;
             }
@@ -389,7 +416,7 @@ async fn run<T: FrameTransport>(
             {
                 change_deadline = None;
                 let revision = *revisions.borrow_and_update();
-                send(&mut transport, &ServerFrame::Changed { revision }).await;
+                send(transport, &ServerFrame::Changed { revision }).await;
             }
             changed = revisions.changed(), if revisions_open && change_deadline.is_none() => {
                 if changed.is_ok() {
@@ -398,28 +425,25 @@ async fn run<T: FrameTransport>(
                     revisions_open = false;
                 }
             }
-            Some(reply) = reply_rx.recv() => {
-                let Reply { frame, slot: _slot } = reply;
-                send(&mut transport, &frame).await;
+            Some(reply) = requests.next_reply(), if !requests.is_empty() => {
+                send(transport, &reply).await;
             }
             incoming = transport.receive() => {
                 match handle_incoming(incoming) {
                     MessageOutcome::Closed => return,
                     MessageOutcome::Ignored => {}
                     MessageOutcome::Rejected(reason) => {
-                        reject(&mut transport, reason).await;
+                        reject(transport, reason).await;
 
                         return;
                     }
                     MessageOutcome::Request { id, request } => {
-                        if let Ok(slot) = Arc::clone(&request_slots).try_acquire_owned() {
-                            spawn_request(state, id, request, slot, reply_tx.clone());
-                        } else {
+                        if !requests.start(state.sessions(), id, request) {
                             let busy = ServerFrame::Response {
                                 id,
                                 result: RemoteResult::Error(TOO_MANY_REQUESTS.to_string()),
                             };
-                            send(&mut transport, &busy).await;
+                            send(transport, &busy).await;
                         }
                     }
                 }
@@ -428,32 +452,116 @@ async fn run<T: FrameTransport>(
     }
 }
 
-/// Runs one request in its own task and hands its reply, with the request
-/// slot it holds, to `reply_tx`.
-fn spawn_request(
-    state: &ServerState,
-    id: u64,
-    request: RemoteRequest,
-    slot: OwnedSemaphorePermit,
-    reply_tx: mpsc::Sender<Reply>,
-) {
-    let sessions = state.sessions().clone();
-    tokio::spawn(async move {
-        let frame = ServerFrame::Response {
-            id,
-            result: execute(&sessions, request).await,
-        };
-        // A closed connection no longer wants the reply.
-        let _ = reply_tx.send(Reply { frame, slot }).await;
-    });
+/// Requests one connection is running, each in its own task.
+#[derive(Default)]
+struct RequestTasks {
+    /// Request `id` of each task, for replying when a task panics.
+    request_ids: HashMap<task::Id, u64>,
+    /// For each session with a mutation running, a receiver that closes
+    /// once the latest of those mutations finishes.
+    session_queues: HashMap<String, oneshot::Receiver<()>>,
+    /// Running tasks and finished ones whose reply is not yet sent.
+    tasks: JoinSet<ServerFrame>,
 }
 
-/// Response of a finished request, waiting for the connection to send it.
-struct Reply {
-    /// Frame to send.
-    frame: ServerFrame,
-    /// Request slot, freed once the frame is taken for sending.
-    slot: OwnedSemaphorePermit,
+impl RequestTasks {
+    /// Returns whether no task is running or waiting to reply.
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Starts `request` and returns `true`, or returns `false` when
+    /// [`MAX_REQUESTS_IN_PROGRESS`] requests are already in progress.
+    ///
+    /// A request that changes a session waits for the earlier ones that
+    /// change the same session, so they reach the host in arrival order.
+    fn start(&mut self, sessions: &SessionService, id: u64, request: RemoteRequest) -> bool {
+        if self.tasks.len() >= MAX_REQUESTS_IN_PROGRESS {
+            return false;
+        }
+        let queue = mutated_session(&request).map(|session_id| self.enqueue(session_id));
+        let sessions = sessions.clone();
+        let handle = self.tasks.spawn(async move {
+            let _done = match queue {
+                Some((previous, done)) => {
+                    if let Some(previous) = previous {
+                        // Closes, without a value, when the earlier
+                        // mutation finishes.
+                        let _ = previous.await;
+                    }
+
+                    Some(done)
+                }
+                None => None,
+            };
+
+            ServerFrame::Response {
+                id,
+                result: execute(&sessions, request).await,
+            }
+        });
+        self.request_ids.insert(handle.id(), id);
+
+        true
+    }
+
+    /// Queues one more mutation of `session_id`, returning the receiver of
+    /// the mutation it must wait for, if any, and the sender whose drop
+    /// releases the next one.
+    fn enqueue(
+        &mut self,
+        session_id: &str,
+    ) -> (Option<oneshot::Receiver<()>>, oneshot::Sender<()>) {
+        // Forget sessions whose last mutation already finished, so the map
+        // never outgrows the requests in progress.
+        self.session_queues
+            .retain(|_, previous| matches!(previous.try_recv(), Err(TryRecvError::Empty)));
+        let (done, next) = oneshot::channel();
+        let previous = self.session_queues.insert(session_id.to_string(), next);
+
+        (previous, done)
+    }
+
+    /// Waits for the next finished request and returns its reply. A
+    /// request whose task panicked gets an error reply.
+    ///
+    /// Cancel-safe: a dropped call loses no reply.
+    async fn next_reply(&mut self) -> Option<ServerFrame> {
+        let (task_id, reply) = match self.tasks.join_next_with_id().await? {
+            Ok((task_id, frame)) => (task_id, frame),
+            Err(error) => {
+                let id = self.request_ids.get(&error.id()).copied()?;
+                tracing::warn!(id, "remote request task failed");
+                let frame = ServerFrame::Response {
+                    id,
+                    result: RemoteResult::Error(REQUEST_FAILED.to_string()),
+                };
+
+                (error.id(), frame)
+            }
+        };
+        self.request_ids.remove(&task_id);
+
+        Some(reply)
+    }
+
+    /// Waits for every request still in progress to finish, without
+    /// sending its reply.
+    async fn finish(mut self) {
+        while self.tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Returns the session a request changes, or `None` for reads.
+fn mutated_session(request: &RemoteRequest) -> Option<&str> {
+    match request {
+        RemoteRequest::AnswerQuestions { session_id, .. }
+        | RemoteRequest::CancelSession { session_id }
+        | RemoteRequest::SendMessage { session_id, .. } => Some(session_id),
+        RemoteRequest::GetSession { .. }
+        | RemoteRequest::ListSessions
+        | RemoteRequest::Unsupported => None,
+    }
 }
 
 /// What the connection does after one authenticated client message.

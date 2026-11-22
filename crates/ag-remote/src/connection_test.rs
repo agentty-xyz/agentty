@@ -522,9 +522,7 @@ async fn handle_incoming_refuses_mutations_of_unlisted_sessions() {
     // Act
     let mut results = Vec::new();
     for request in requests {
-        results.push(reply_result(
-            handle_incoming(&fixture.state, request_message(request)).await,
-        ));
+        results.push(reply_result(&fixture.state, request).await);
     }
 
     // Assert

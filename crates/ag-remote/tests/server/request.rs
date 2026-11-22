@@ -253,6 +253,134 @@ async fn a_request_beyond_eight_in_progress_is_refused() -> TestResult {
     Ok(())
 }
 
+/// Takes the next `count` frames as responses and returns them sorted by
+/// request id.
+async fn responses(client: &mut Client, count: usize) -> TestResult<Vec<(u64, RemoteResult)>> {
+    let mut responses = Vec::new();
+    for _ in 0..count {
+        match next_frame(client).await? {
+            ServerFrame::Response { id, result } => responses.push((id, result)),
+            frame => return Err(format!("expected a response, got {frame:?}").into()),
+        }
+    }
+    responses.sort_unstable_by_key(|(id, _)| *id);
+
+    Ok(responses)
+}
+
+#[tokio::test]
+async fn mutations_of_one_session_reach_the_host_in_arrival_order() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    send_held_message(&mut client, 1).await?;
+    let cancel = RemoteRequest::CancelSession {
+        session_id: "session-1".to_string(),
+    };
+    send(
+        &mut client,
+        &ClientFrame::Request {
+            id: 2,
+            request: cancel,
+        },
+    )
+    .await?;
+    let listed = call(&mut client, 3, RemoteRequest::ListSessions).await?;
+    let mutations_while_held = host_mutations(&server);
+    server.backend.release();
+    let replies = responses(&mut client, 2).await?;
+
+    // Assert
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    assert_eq!(mutations_while_held, Vec::<String>::new());
+    assert_eq!(
+        replies,
+        [
+            (1, RemoteResult::Ok(RemoteResponse::Accepted)),
+            (2, RemoteResult::Error("Session not found".to_string())),
+        ]
+    );
+    assert_eq!(
+        host_mutations(&server),
+        ["send:session-1:wait", "cancel:session-1"]
+    );
+
+    Ok(())
+}
+
+/// Returns the recorded backend calls other than the session listings that
+/// run concurrently with them.
+fn host_mutations(server: &TestServer) -> Vec<String> {
+    server
+        .backend
+        .calls()
+        .into_iter()
+        .filter(|call| call != "list")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let message = |id, message: &str| ClientFrame::Request {
+        id,
+        request: RemoteRequest::SendMessage {
+            message: message.to_string(),
+            session_id: "session-1".to_string(),
+        },
+    };
+
+    // Act
+    send(&mut client, &message(1, "panic")).await?;
+    send(&mut client, &message(2, "next")).await?;
+    let replies = responses(&mut client, 2).await?;
+
+    // Assert
+    assert_eq!(
+        replies,
+        [
+            (1, RemoteResult::Error("Request failed".to_string())),
+            (2, RemoteResult::Ok(RemoteResponse::Accepted)),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_requests_in_progress() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    send_held_message(&mut client, 1).await?;
+    // A reply to a later request shows the held one has started.
+    call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let TestServer {
+        backend,
+        devices: _devices,
+        handle,
+        revisions_tx: _revisions_tx,
+    } = server;
+
+    // Act
+    let mut shutdown = tokio::spawn(handle.shutdown());
+    let finished_while_held = tokio::time::timeout(Duration::from_millis(300), &mut shutdown)
+        .await
+        .is_ok();
+    backend.release();
+    shutdown.await?;
+
+    // Assert
+    assert!(!finished_while_held);
+    assert_eq!(backend.calls(), ["list", "list", "send:session-1:wait"]);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
     // Arrange

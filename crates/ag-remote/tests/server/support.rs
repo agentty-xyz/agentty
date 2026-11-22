@@ -370,8 +370,9 @@ impl DeviceStore for MemoryDeviceStore {
 
 /// Session backend that records calls; a session snapshot queues the
 /// messages sent to it, the message `busy` is rejected, the message `wait`
-/// is held until [`RecordingBackend::release`], and every cancellation
-/// reports a missing session.
+/// is held, and recorded only once [`RecordingBackend::release`] is called,
+/// the message `panic` panics, and every cancellation reports a missing
+/// session.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -437,13 +438,16 @@ impl SessionBackend for RecordingBackend {
         session_id: &SessionId,
         message: String,
     ) -> Result<(), SessionError> {
+        if message == "wait" {
+            let mut released = self.released.subscribe();
+            let _ = released.wait_for(|is_released| *is_released).await;
+        }
         self.record(format!("send:{session_id}:{message}"));
         if message == "busy" {
             return Err(SessionError::Operation("Session is busy".to_string()));
         }
-        if message == "wait" {
-            let mut released = self.released.subscribe();
-            let _ = released.wait_for(|is_released| *is_released).await;
+        if message == "panic" {
+            std::panic::resume_unwind(Box::new("the test backend fails this message"));
         }
 
         Ok(())
