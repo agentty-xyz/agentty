@@ -82,10 +82,12 @@ function texts(nodes) {
   return nodes.map((node) => node.textContent);
 }
 
+// The messages on screen. An answer reports its rendered Markdown, not
+// its hidden source or the toggle beneath it.
 function transcript() {
   return byId("transcript").children.map((item) => ({
     kind: item.dataset.kind,
-    text: item.textContent,
+    text: (item.querySelector(".md") ?? item).textContent,
   }));
 }
 

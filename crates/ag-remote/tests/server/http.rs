@@ -47,6 +47,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let chat = get(addr, "/chat.mjs").await?;
     let device_key = get(addr, "/device_key.mjs").await?;
     let format = get(addr, "/format.mjs").await?;
+    let markdown = get(addr, "/markdown.mjs").await?;
     let noise = get(addr, "/noise.mjs").await?;
     let relay = get(addr, "/relay.mjs").await?;
     let session_list = get(addr, "/session_list.mjs").await?;
@@ -60,6 +61,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&chat, "text/javascript; charset=utf-8"),
         (&device_key, "text/javascript; charset=utf-8"),
         (&format, "text/javascript; charset=utf-8"),
+        (&markdown, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
         (&relay, "text/javascript; charset=utf-8"),
         (&session_list, "text/javascript; charset=utf-8"),
@@ -92,6 +94,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(relay.contains("from \"./noise.mjs\""));
     assert!(session_list.contains("from \"./format.mjs\""));
     assert!(chat.contains("from \"./format.mjs\""));
+    assert!(chat.contains("from \"./markdown.mjs\""));
 
     Ok(())
 }
@@ -178,6 +181,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/chat.mjs",
             "/device_key.mjs",
             "/format.mjs",
+            "/markdown.mjs",
             "/noise.mjs",
             "/relay.mjs",
             "/session_list.mjs",

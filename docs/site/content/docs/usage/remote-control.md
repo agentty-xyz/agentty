@@ -186,4 +186,8 @@ control.
   request for the host details or a new session then fails.
 - The transcript updates when a turn finishes; live streaming output is not shown.
 - Image attachments cannot be sent from a remote device.
+- Answers render as Markdown: headings, lists, quotes, code blocks, tables, and links.
+  Mermaid and other diagrams show as code, and images show as links. The page's own
+  renderer can differ from the terminal at the edges; `View source` under an answer
+  shows its text as the agent wrote it. An answer over 256 KB shows as plain text.
 - A browser remembers one relay pairing for each relay address.
