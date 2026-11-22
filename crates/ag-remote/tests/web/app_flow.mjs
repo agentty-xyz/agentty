@@ -83,20 +83,20 @@ function visibleView() {
 }
 
 function texts(nodes) {
-  return nodes.map((node) => node.textContent);
+  return Array.from(nodes, (node) => node.textContent);
 }
 
 // The messages on screen. An answer reports its rendered Markdown, not
 // its hidden source or the toggle beneath it.
 function transcript() {
-  return byId("transcript").children.map((item) => ({
+  return Array.from(byId("transcript").children, (item) => ({
     kind: item.dataset.kind,
     text: (item.querySelector(".md") ?? item).textContent,
   }));
 }
 
 function rows() {
-  return byId("sessions").querySelectorAll(".row");
+  return Array.from(byId("sessions").querySelectorAll(".row"));
 }
 
 // Ids of the rows that show the unread dot.
@@ -139,13 +139,11 @@ async function sessionFlow() {
     mergeDisabled: byId("merge").disabled,
     mergeHidden: byId("merge").hidden,
     moreHidden: byId("session-more").hidden,
-    questions: byId("questions")
-      .querySelectorAll("[data-question]")
-      .map((group) => ({
-        eyebrow: group.querySelector(".eyebrow").textContent,
-        options: group.querySelectorAll(".option").map((option) => option.firstChild.textContent),
-        text: group.dataset.question,
-      })),
+    questions: Array.from(byId("questions").querySelectorAll("[data-question]"), (group) => ({
+      eyebrow: group.querySelector(".eyebrow").textContent,
+      options: Array.from(group.querySelectorAll(".option"), (option) => option.firstChild.textContent),
+      text: group.dataset.question,
+    })),
     status: byId("session-status").textContent,
     transcript: transcript(),
     view: visibleView(),
@@ -221,7 +219,7 @@ async function sessionFlow() {
     step: "running",
     activity: {
       isOpen: activity.open,
-      lines: activity.querySelectorAll("li").map((line) => [line.className, line.textContent]),
+      lines: Array.from(activity.querySelectorAll("li"), (line) => [line.className, line.textContent]),
       summary: activity.querySelector("summary").textContent,
     },
     answerBarHidden: byId("answer-bar").hidden,
@@ -353,7 +351,7 @@ async function routeFlow() {
     step: "diff",
     chatHidden: byId("chat-scroll").hidden,
     files: texts(byId("diff-files").querySelectorAll("summary")),
-    patch: file.querySelectorAll(".patch-line").map((line) => [line.className, line.textContent]),
+    patch: Array.from(file.querySelectorAll(".patch-line"), (line) => [line.className, line.textContent]),
     summary: byId("diff-summary").textContent,
   });
 }

@@ -48,14 +48,11 @@ function mountList({ storage = new MemoryStorage(), time = () => NOW, isFilterSh
 }
 
 function rowIds(byId) {
-  return byId("sessions")
-    .querySelectorAll(".row")
-    .map((row) => row.dataset.sessionId);
+  return Array.from(byId("sessions").querySelectorAll(".row"), (row) => row.dataset.sessionId);
 }
 
 function unreadIds(byId) {
-  return byId("sessions")
-    .querySelectorAll(".row")
+  return Array.from(byId("sessions").querySelectorAll(".row"))
     .filter((row) => row.querySelector(".unread"))
     .map((row) => row.dataset.sessionId);
 }
@@ -71,7 +68,7 @@ test("groups follow merge queue, active, archive with counts, and the archive st
 
   // Act
   page.list.update(SESSIONS, null);
-  const groups = page.byId("sessions").children;
+  const groups = [...page.byId("sessions").children];
   const archive = groups[2];
   const collapsed = archive.querySelector(".rows").hidden;
   archive.querySelector(".group-toggle").click();
@@ -104,7 +101,7 @@ test("empty groups are left out and an empty project shows the empty line", () =
 
   // Act
   page.list.update([SESSIONS[1]], null);
-  const groups = page.byId("sessions").children.map((group) => group.dataset.group);
+  const groups = Array.from(page.byId("sessions").children, (group) => group.dataset.group);
   page.list.update([], null);
 
   // Assert
@@ -321,7 +318,7 @@ test("the filter matches titles without case, counts the chips and says how many
   const page = mountList();
   page.list.update(SESSIONS, null);
   const chips = () =>
-    page.byId("chips").children.map((chip) => [chip.textContent, chip.getAttribute("aria-pressed")]);
+    Array.from(page.byId("chips").children, (chip) => [chip.textContent, chip.getAttribute("aria-pressed")]);
   const unfiltered = chips();
   const summaryHiddenUnfiltered = page.byId("filter-summary").hidden;
 

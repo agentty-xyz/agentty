@@ -118,6 +118,41 @@ test("tree edits move nodes and keep parents consistent", () => {
   assert.equal(list.childNodes.length, 0);
 });
 
+test("node lists and children have no Array methods, as in a browser", () => {
+  // Arrange
+  const document = createDocument("<html><body><ul id=\"list\"><li>A</li><li>B</li></ul></body></html>");
+  const list = document.getElementById("list");
+
+  // Act
+  const found = list.querySelectorAll("li");
+  const children = list.children;
+  const visited = [];
+  found.forEach((node, index) => visited.push([index, node.textContent]));
+
+  // Assert
+  for (const collection of [found, children, document.children]) {
+    assert.equal(Array.isArray(collection), false);
+    assert.equal(collection.map, undefined);
+    assert.equal(collection.filter, undefined);
+    assert.equal(collection.slice, undefined);
+  }
+  assert.deepEqual(visited, [[0, "A"], [1, "B"]]);
+  assert.equal(children.forEach, undefined);
+  assert.deepEqual([found.length, children.length], [2, 2]);
+  assert.equal(found[1].textContent, "B");
+  assert.equal(found.item(0).textContent, "A");
+  assert.equal(found.item(5), null);
+  assert.equal(children.item(1), found[1]);
+  assert.deepEqual(Array.from(children, (node) => node.textContent), ["A", "B"]);
+  assert.deepEqual([...found.keys()], [0, 1]);
+  assert.deepEqual(Array.from(found.values(), (node) => node.textContent), ["A", "B"]);
+  assert.deepEqual(Array.from(found.entries(), ([index]) => index), [0, 1]);
+  assert.equal(document.getElementById("list").children.namedItem("missing"), null);
+  // A list is a snapshot: later changes leave it as it was.
+  list.append(document.createElement("li"));
+  assert.equal(found.length, 2);
+});
+
 test("selectors match tags, ids, classes, attributes and combinators", () => {
   // Arrange
   const document = createDocument(
@@ -136,11 +171,11 @@ test("selectors match tags, ids, classes, attributes and combinators", () => {
   assert.equal(open.dataset.id, "1");
   assert.equal(second.textContent, "B");
   assert.deepEqual(
-    direct.map((node) => node.textContent),
+    Array.from(direct, (node) => node.textContent),
     ["A"],
   );
   assert.deepEqual(
-    nested.map((node) => node.textContent),
+    Array.from(nested, (node) => node.textContent),
     ["A", "B"],
   );
   assert.equal(either.length, 2);

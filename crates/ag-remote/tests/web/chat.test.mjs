@@ -160,7 +160,7 @@ test("message kinds map to their renderings, and unknown kinds become notices", 
   );
   const items = byId("transcript").children;
   assert.deepEqual(
-    items.map((item) => [item.className, item.dataset.kind]),
+    Array.from(items, (item) => [item.className, item.dataset.kind]),
     [
       ["msg msg--user", "user"],
       ["msg msg--assistant", "assistant"],
@@ -175,7 +175,7 @@ test("message kinds map to their renderings, and unknown kinds become notices", 
   const source = items[1].querySelector(".md-source");
   const toggle = items[1].querySelector(".source-toggle");
   assert.deepEqual(
-    rendered.children.map((child) => child.localName),
+    Array.from(rendered.children, (child) => child.localName),
     ["p"],
   );
   assert.equal(rendered.querySelectorAll("br").length, 1);
@@ -242,7 +242,7 @@ test("a notice's label becomes a tagged prefix, and its tone marks the row", () 
       ],
     }),
   );
-  const rows = byId("transcript").children.map((item) => ({
+  const rows = Array.from(byId("transcript").children, (item) => ({
     classes: item.className,
     label: item.querySelector(".notice-label")?.textContent ?? null,
     text: item.querySelector(".notice-body").textContent,
@@ -270,11 +270,11 @@ test("activity lines take the tone of their first character, and long boxes star
   assert.equal(long.open, false);
   assert.equal(short.querySelector("summary").textContent, "Activity3 lines");
   assert.deepEqual(
-    long.querySelectorAll("li").map((line) => line.className),
+    Array.from(long.querySelectorAll("li"), (line) => line.className),
     ["tone-success", "tone-success", "tone-info", "tone-muted"],
   );
   assert.deepEqual(
-    short.querySelectorAll("li").map((line) => line.className),
+    Array.from(short.querySelectorAll("li"), (line) => line.className),
     ["tone-success", "tone-error", "tone-warning"],
   );
 });
@@ -449,7 +449,7 @@ test("the questions panel collects answers, survives refreshes, and sends the se
   assert.equal(byId("composer").hidden, true);
   assert.equal(byId("answer-bar").hidden, false);
   assert.deepEqual(
-    byId("questions").querySelectorAll(".eyebrow").map((node) => node.textContent),
+    Array.from(byId("questions").querySelectorAll(".eyebrow"), (node) => node.textContent),
     ["Question 1 of 2", "Question 2 of 2"],
   );
   const options = byId("questions").querySelectorAll(".option");
@@ -457,7 +457,7 @@ test("the questions panel collects answers, survives refreshes, and sends the se
   assert.equal(options[1].querySelector("small"), null);
   const inputs = byId("questions").querySelectorAll("input");
   assert.deepEqual(
-    inputs.map((input) => input.placeholder),
+    Array.from(inputs, (input) => input.placeholder),
     ["Or type an answer", "Your answer"],
   );
   assert.equal(byId("answer-count").textContent, "0 of 2 answered");
@@ -465,7 +465,7 @@ test("the questions panel collects answers, survives refreshes, and sends the se
 
   options[1].click();
   assert.deepEqual(
-    options.map((option) => option.getAttribute("aria-pressed")),
+    Array.from(options, (option) => option.getAttribute("aria-pressed")),
     ["false", "true"],
   );
   assert.equal(byId("answer-count").textContent, "1 of 2 answered");
@@ -986,7 +986,7 @@ test("queued messages show one row each with the full text in the title", () => 
   assert.equal(byId("queued-box").hidden, false);
   const [first] = byId("queued").children;
   assert.deepEqual(
-    byId("queued").children.map((item) => [item.title, item.textContent]),
+    Array.from(byId("queued").children, (item) => [item.title, item.textContent]),
     [
       ["first", "first"],
       ["second", "second"],
@@ -1062,9 +1062,7 @@ function detailedSummary(overrides = {}) {
 
 // The text of each part of the header's sub-line, after the status.
 function subParts(byId) {
-  return byId("heading-sub")
-    .children.slice(1)
-    .map((node) => node.textContent);
+  return Array.from(byId("heading-sub").children, (node) => node.textContent).slice(1);
 }
 
 test("the header shows size, lines, branches, model and the review request", () => {

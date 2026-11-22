@@ -87,7 +87,7 @@ test("applyTheme sets the site's class, the browser colour and the switch", () =
   // Arrange
   const document = pageWindow().document;
   const pressed = () =>
-    document.querySelectorAll("[data-theme]").map((button) => [
+    Array.from(document.querySelectorAll("[data-theme]"), (button) => [
       button.dataset.theme,
       button.getAttribute("aria-pressed"),
     ]);
