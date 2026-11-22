@@ -59,7 +59,11 @@ pub enum RemoteRequest {
         /// Session that asked the questions.
         session_id: String,
     },
-    /// Cancels the session's active work.
+    /// Cancels the whole session, not only its current turn.
+    ///
+    /// The host stops the session's agent work, marks the session `Canceled`,
+    /// and removes its worktree, Git record, and branch, which discards any
+    /// unmerged and unpublished changes.
     CancelSession {
         /// Session to cancel.
         session_id: String,

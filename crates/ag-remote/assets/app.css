@@ -291,3 +291,28 @@ button.icon {
   flex: 1;
   resize: vertical;
 }
+
+dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 50%);
+}
+
+dialog h2,
+dialog p {
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
