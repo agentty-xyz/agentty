@@ -46,6 +46,43 @@ fn summary(id: &str, status: &str, title: &str, updated_at: i64) -> RemoteSessio
     }
 }
 
+/// Returns the snapshot of the test backend's `session-1`, with its
+/// settings, branches, and chat-visible transcript.
+fn expected_session() -> RemoteSession {
+    RemoteSession {
+        agent: Some("codex".to_string()),
+        base_branch: Some("main".to_string()),
+        branch: Some("wt/session-".to_string()),
+        created_at: Some(10),
+        id: "session-1".to_string(),
+        is_draft: false,
+        messages: vec![
+            RemoteMessage {
+                content: "build it".to_string(),
+                kind: RemoteMessageKind::User,
+            },
+            RemoteMessage {
+                content: "which branch?".to_string(),
+                kind: RemoteMessageKind::Assistant,
+            },
+        ],
+        model: Some("gpt-6.1-sol".to_string()),
+        published_upstream_ref: None,
+        questions: vec![RemoteQuestion {
+            options: vec!["main".to_string()],
+            text: "Which branch?".to_string(),
+        }],
+        queued_messages: Vec::new(),
+        reasoning: Some("high".to_string()),
+        response_style: Some("balanced".to_string()),
+        review_request: None,
+        speed_mode: Some("normal".to_string()),
+        status: "Question".to_string(),
+        title: Some("Build it".to_string()),
+        updated_at: 20,
+    }
+}
+
 #[tokio::test]
 async fn each_request_reaches_the_session_service() -> TestResult {
     // Arrange
@@ -105,27 +142,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
     assert_eq!(
         loaded,
         RemoteResult::Ok(RemoteResponse::Session {
-            session: Some(RemoteSession {
-                id: "session-1".to_string(),
-                messages: vec![
-                    RemoteMessage {
-                        content: "build it".to_string(),
-                        kind: RemoteMessageKind::User,
-                    },
-                    RemoteMessage {
-                        content: "which branch?".to_string(),
-                        kind: RemoteMessageKind::Assistant,
-                    },
-                ],
-                questions: vec![RemoteQuestion {
-                    options: vec!["main".to_string()],
-                    text: "Which branch?".to_string(),
-                }],
-                queued_messages: Vec::new(),
-                status: "Question".to_string(),
-                title: Some("Build it".to_string()),
-                updated_at: 20,
-            }),
+            session: Some(Box::new(expected_session())),
         })
     );
     assert_eq!(

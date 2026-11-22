@@ -11,8 +11,8 @@
 //! fetch fresh snapshots.
 
 use ag_session::{
-    AgentSelectionMetadata, CreateSessionMode, HostContext, Session, SessionMessage,
-    SessionMessageKind, SessionSummary,
+    AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary, Session,
+    SessionMessage, SessionMessageKind, SessionSummary, session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -246,8 +246,8 @@ pub enum RemoteResponse {
     },
     /// One session snapshot, or `None` when it does not exist.
     Session {
-        /// Loaded session.
-        session: Option<RemoteSession>,
+        /// Loaded session, boxed to keep other responses small.
+        session: Option<Box<RemoteSession>>,
     },
     /// The host's loaded sessions in display order.
     Sessions {
@@ -296,16 +296,54 @@ impl From<SessionSummary> for RemoteSessionSummary {
 }
 
 /// Chat-visible snapshot of one session.
+///
+/// The settings, branch, and review-request fields are optional so a page
+/// and a server of different versions still understand each other: an older
+/// server omits them, and a page hides what is missing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteSession {
+    /// Agent provider, such as `codex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Branch the session started from and merges into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Session worktree branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Creation timestamp in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
     /// Stable session identifier.
     pub id: String,
+    /// Whether the session defers its worktree until its first message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_draft: bool,
     /// Durable transcript without hidden agent prompts.
     pub messages: Vec<RemoteMessage>,
+    /// Model name, as `get_host` reports `default_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Upstream branch the session branch was published to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_upstream_ref: Option<String>,
     /// Pending clarification questions.
     pub questions: Vec<RemoteQuestion>,
     /// Chat messages waiting behind the active turn.
     pub queued_messages: Vec<String>,
+    /// Reasoning level, such as `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Style of the agent's answers, such as `concise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_style: Option<String>,
+    /// Linked pull or merge request, when the session has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_request: Option<RemoteReviewRequest>,
+    /// Speed preference, `normal` or `fast`. Absent when the agent has no
+    /// speed control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
     /// Lifecycle status, such as `InProgress` or `Review`.
     pub status: String,
     /// Optional user-visible title.
@@ -316,7 +354,26 @@ pub struct RemoteSession {
 
 impl From<Session> for RemoteSession {
     fn from(session: Session) -> Self {
+        let settings = session.settings;
+        let agent = settings.agent;
+
         Self {
+            agent: Some(agent.kind().name().to_string()),
+            base_branch: Some(settings.base_branch),
+            branch: Some(session_branch(&session.id)),
+            created_at: Some(session.created_at),
+            is_draft: settings.is_draft,
+            model: Some(agent.model().name().to_string()),
+            published_upstream_ref: session.published_upstream_ref,
+            reasoning: Some(settings.reasoning_level.as_str().to_string()),
+            response_style: Some(settings.response_style.as_str().to_string()),
+            review_request: session
+                .review_request
+                .map(|review_request| RemoteReviewRequest::from(review_request.summary)),
+            speed_mode: agent
+                .kind()
+                .supports_speed_mode()
+                .then(|| settings.speed_mode.as_str().to_string()),
             id: session.id.to_string(),
             messages: session
                 .messages
@@ -335,6 +392,42 @@ impl From<Session> for RemoteSession {
             status: session.status.to_string(),
             title: session.title,
             updated_at: session.updated_at,
+        }
+    }
+}
+
+/// Pull or merge request linked to a session, as of the host's latest
+/// forge refresh.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteReviewRequest {
+    /// Forge display id, such as `#123`.
+    pub display_id: String,
+    /// Branch published for review.
+    pub source_branch: String,
+    /// Remote state: `Open`, `Merged`, or `Closed`.
+    pub state: String,
+    /// Condensed forge status, such as `PR ready`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_summary: Option<String>,
+    /// Branch receiving the review request.
+    pub target_branch: String,
+    /// Review-request title.
+    pub title: String,
+    /// Browser URL of the review request. Clients must check its scheme
+    /// before they link it.
+    pub web_url: String,
+}
+
+impl From<ReviewRequestSummary> for RemoteReviewRequest {
+    fn from(summary: ReviewRequestSummary) -> Self {
+        Self {
+            display_id: summary.display_id,
+            source_branch: summary.source_branch,
+            state: summary.state.as_str().to_string(),
+            status_summary: summary.status_summary,
+            target_branch: summary.target_branch,
+            title: summary.title,
+            web_url: summary.web_url,
         }
     }
 }

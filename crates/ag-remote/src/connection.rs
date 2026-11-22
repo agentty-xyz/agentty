@@ -751,7 +751,7 @@ async fn get_listed_session(
     let session = sessions.get_session(&session_id).await?;
 
     Ok(RemoteResponse::Session {
-        session: session.map(RemoteSession::from),
+        session: session.map(|session| Box::new(RemoteSession::from(session))),
     })
 }
 
