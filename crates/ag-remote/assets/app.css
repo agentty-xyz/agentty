@@ -788,6 +788,7 @@ kbd {
 }
 
 .list-summary {
+  display: block;
   margin: 0.75rem 0.5rem 0;
   color: var(--color-dim);
   font-family: var(--font-mono);

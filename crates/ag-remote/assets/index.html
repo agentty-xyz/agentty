@@ -148,12 +148,13 @@
                                spellcheck="false">
                         <kbd id="filter-key" class="wide-only" aria-hidden="true">/</kbd>
                     </label>
-                    <div id="chips" class="segmented chips" role="group" aria-label="Show"></div>
+                    <fieldset id="chips" class="segmented chips" aria-label="Show">
+                    </fieldset>
                 </div>
                 <nav class="session-list" aria-label="Session list">
                     <div id="sessions" class="sessions"></div>
                     <p id="sessions-empty" class="list-empty" hidden>No sessions in the active project.</p>
-                    <p id="filter-summary" class="list-summary" role="status" hidden></p>
+                    <output id="filter-summary" class="list-summary" hidden></output>
                     <p id="list-error" class="error" role="alert"></p>
                 </nav>
                 <footer class="sidebar-foot">
