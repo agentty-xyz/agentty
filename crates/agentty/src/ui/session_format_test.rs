@@ -293,7 +293,7 @@ fn test_session_header_keeps_speed_in_prompt_only() {
         assert!(!header[0].to_string().contains("Speed:"));
         assert_eq!(
             prompt_status,
-            format!("Balanced · {} · Auto Edit", speed.name())
+            format!("Concise · {} · Auto Edit", speed.name())
         );
     }
 }

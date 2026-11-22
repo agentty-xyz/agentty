@@ -60,7 +60,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
     // Assert
     assert_eq!(
         manager.settings().default_response_style,
-        ResponseStyle::Detailed
+        ResponseStyle::Balanced
     );
     assert!(!manager.is_selector_dropdown_open());
     assert_eq!(
@@ -70,7 +70,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
             .get_project_setting(project_id, SettingName::DefaultResponseStyle)
             .await
             .expect("failed to load response style setting"),
-        Some("detailed".to_string())
+        Some("balanced".to_string())
     );
 }
 

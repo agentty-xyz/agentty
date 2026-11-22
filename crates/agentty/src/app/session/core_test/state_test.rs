@@ -386,13 +386,13 @@ fn test_apply_session_response_style_updated_updates_only_matching_session() {
     // Act
     session_manager.apply_session_response_style_updated("other-session", ResponseStyle::Detailed);
     let style_after_non_matching_update = session_manager.state.sessions[0].response_style;
-    session_manager.apply_session_response_style_updated("session-id", ResponseStyle::Concise);
+    session_manager.apply_session_response_style_updated("session-id", ResponseStyle::Balanced);
 
     // Assert
-    assert_eq!(style_after_non_matching_update, ResponseStyle::Balanced);
+    assert_eq!(style_after_non_matching_update, ResponseStyle::Concise);
     assert_eq!(
         session_manager.state.sessions[0].response_style,
-        ResponseStyle::Concise
+        ResponseStyle::Balanced
     );
 }
 
