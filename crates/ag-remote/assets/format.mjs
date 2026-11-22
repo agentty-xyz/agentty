@@ -207,6 +207,8 @@ export function parseSeen(text) {
 
     return seen && typeof seen === "object" && !Array.isArray(seen) ? seen : null;
   } catch (_error) {
+    // A damaged value counts as no map: the caller then marks every
+    // session seen, as on a first load.
     return null;
   }
 }
