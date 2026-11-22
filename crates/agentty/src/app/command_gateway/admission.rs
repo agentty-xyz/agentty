@@ -236,6 +236,9 @@ impl App {
             SessionMutation::Cancel { session_id } => self.cancel_api_session(&session_id).await,
             SessionMutation::StopTurn { session_id } => self.stop_api_turn(&session_id).await,
             SessionMutation::Rebase { session_id } => self.rebase_api_session(&session_id).await,
+            SessionMutation::UpdateSettings { change, session_id } => {
+                self.update_api_session_settings(&session_id, change).await
+            }
             SessionMutation::Merge { session_id } => self.merge_api_session(&session_id).await,
         }
     }

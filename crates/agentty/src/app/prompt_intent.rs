@@ -649,8 +649,10 @@ impl App {
                 session_agent = selected_agent;
             }
             if let Some(speed_mode) = settings.speed_mode {
-                self.switch_session_speed_mode(&session_id, session_agent, speed_mode)
+                let result = self
+                    .switch_session_speed_mode(&session_id, session_agent, speed_mode)
                     .await;
+                warn_on_speed_mode_failure(&session_id, speed_mode, result);
             }
         }
     }
@@ -899,6 +901,27 @@ impl App {
         session_id: &SessionId,
         speed_mode: SpeedMode,
     ) {
+        let result = self
+            .try_update_prompt_session_speed_mode(session_id, speed_mode)
+            .await;
+
+        warn_on_speed_mode_failure(session_id, speed_mode, result);
+    }
+
+    /// Applies one response-speed preference like
+    /// [`App::update_prompt_session_speed_mode`], returning a persistence
+    /// failure instead of logging it.
+    ///
+    /// A deferred change, a missing session, and fast mode refused with an
+    /// error notice all return `Ok`, as none of them fails to persist.
+    ///
+    /// # Errors
+    /// Returns an error when the speed preference cannot be persisted.
+    pub(crate) async fn try_update_prompt_session_speed_mode(
+        &mut self,
+        session_id: &SessionId,
+        speed_mode: SpeedMode,
+    ) -> Result<(), crate::app::SessionError> {
         if let Some(busy_session) = self.busy_session(session_id) {
             let current_agent = busy_session.agent;
             let current_speed_mode = busy_session.speed_mode;
@@ -910,19 +933,22 @@ impl App {
             )
             .await;
 
-            return;
+            return Ok(());
         }
         let Some(session_agent) = self
             .sessions
             .session_for_id(session_id)
             .map(|session| session.agent)
         else {
-            return;
+            return Ok(());
         };
 
-        self.switch_session_speed_mode(session_id, session_agent, speed_mode)
+        let result = self
+            .switch_session_speed_mode(session_id, session_agent, speed_mode)
             .await;
         self.process_pending_app_events().await;
+
+        result
     }
 
     /// Persists one response-speed preference for a session running
@@ -931,31 +957,25 @@ impl App {
     /// Enabling fast mode on a model without Fast support appends an error
     /// notice and keeps the session unchanged. Emitted events are left for
     /// the caller to reduce.
+    ///
+    /// # Errors
+    /// Returns an error when the speed preference cannot be persisted.
     async fn switch_session_speed_mode(
         &mut self,
         session_id: &SessionId,
         session_agent: AgentSelection,
         speed_mode: SpeedMode,
-    ) {
+    ) -> Result<(), crate::app::SessionError> {
         if speed_mode == SpeedMode::Fast && !session_agent.supports_fast_mode() {
             self.append_unsupported_fast_mode_notice(session_id, session_agent)
                 .await;
 
-            return;
+            return Ok(());
         }
 
-        if let Err(error) = self
-            .sessions
+        self.sessions
             .set_session_speed_mode(&self.services, session_id, speed_mode)
             .await
-        {
-            warn!(
-                session_id = %session_id,
-                speed_mode = ?speed_mode,
-                error = %error,
-                "failed to update session speed mode from prompt slash command"
-            );
-        }
     }
 
     /// Handles `/apply` by extracting suggestions from the focused review and
@@ -1064,6 +1084,23 @@ impl App {
     ) {
         self.append_output_for_session(session_id, &notice.format(message))
             .await;
+    }
+}
+
+/// Logs a response-speed preference that failed to persist, with session
+/// context, for the terminal paths that report failures only in the log.
+fn warn_on_speed_mode_failure(
+    session_id: &SessionId,
+    speed_mode: SpeedMode,
+    result: Result<(), crate::app::SessionError>,
+) {
+    if let Err(error) = result {
+        warn!(
+            session_id = %session_id,
+            speed_mode = ?speed_mode,
+            error = %error,
+            "failed to update session speed mode from prompt slash command"
+        );
     }
 }
 

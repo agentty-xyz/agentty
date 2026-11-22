@@ -190,6 +190,11 @@ pub(crate) enum SessionMutation {
     Rebase {
         session_id: SessionId,
     },
+    /// Changes the session's model, reasoning, style, or speed.
+    UpdateSettings {
+        change: ag_session::SessionSettingsChange,
+        session_id: SessionId,
+    },
     /// Enqueues one session for merge.
     Merge {
         session_id: SessionId,
@@ -227,6 +232,7 @@ impl SessionMutation {
             Self::Cancel { session_id, .. } => ("cancel", Some(session_id)),
             Self::StopTurn { session_id } => ("stop_turn", Some(session_id)),
             Self::Rebase { session_id } => ("rebase", Some(session_id)),
+            Self::UpdateSettings { session_id, .. } => ("update_settings", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),
         }
     }

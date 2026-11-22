@@ -12,9 +12,9 @@ use super::{
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
-    ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteModelOption, RemoteQuestionAnswer,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -784,6 +784,9 @@ async fn get_host_describes_the_project_and_only_remote_modes() {
         RemoteResult::Ok(RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            models: vec![RemoteModelOption::from(
+                ag_session::test_support::codex_selection()
+            )],
             project: "agentty".to_string(),
             session_modes: vec![RemoteSessionMode::Regular],
         })
@@ -889,6 +892,80 @@ async fn sync_session_reaches_the_host_only_for_listed_sessions_it_serves() {
         RemoteResult::Error("Unsupported request".to_string())
     );
     assert_eq!(serving.backend.calls(), ["list", "sync:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn settings_reach_the_host_only_as_a_valid_change_to_a_listed_session() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::SessionSettings],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let codex_model = ag_session::test_support::CODEX_MODEL.as_str();
+    let settings =
+        |session_id: &str, model: &str, reasoning: &str| RemoteRequest::SetSessionSettings {
+            model: Some(model.to_string()),
+            reasoning: Some(reasoning.to_string()),
+            response_style: Some("concise".to_string()),
+            session_id: session_id.to_string(),
+            speed_mode: Some("fast".to_string()),
+        };
+    let reasoning_only = RemoteRequest::SetSessionSettings {
+        model: None,
+        reasoning: Some("low".to_string()),
+        response_style: None,
+        session_id: "session-1".to_string(),
+        speed_mode: None,
+    };
+
+    // Act
+    let changed = reply_result(&serving.state, settings("session-1", codex_model, "max")).await;
+    let partial = reply_result(&serving.state, reasoning_only).await;
+    let unknown_model = reply_result(&serving.state, settings("session-1", "vim", "max")).await;
+    let unknown_level =
+        reply_result(&serving.state, settings("session-1", codex_model, "huge")).await;
+    let unlisted = reply_result(
+        &serving.state,
+        settings("other-project", codex_model, "max"),
+    )
+    .await;
+    let unsupported = reply_result(
+        &not_serving.state,
+        settings("session-1", codex_model, "max"),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(changed, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(partial, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unknown_model,
+        RemoteResult::Error("unknown model: vim".to_string())
+    );
+    assert_eq!(
+        unknown_level,
+        RemoteResult::Error("unknown reasoning level: huge".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list".to_string(),
+            format!("settings:session-1:{codex_model}:max:concise:fast"),
+            "list".to_string(),
+            "settings:session-1:-:low:-:-".to_string(),
+            "list".to_string(),
+        ]
+    );
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }
 

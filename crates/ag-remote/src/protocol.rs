@@ -11,9 +11,9 @@
 //! fetch fresh snapshots.
 
 use ag_session::{
-    AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary, Session,
-    SessionDiffFile, SessionDiffFileStatus, SessionListEntry, SessionMessage, SessionMessageKind,
-    session_branch,
+    AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary,
+    Session, SessionDiffFile, SessionDiffFileStatus, SessionListEntry, SessionMessage,
+    SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +128,29 @@ pub enum RemoteRequest {
         /// Session whose branch is synced.
         session_id: String,
     },
+    /// Changes the session's settings for later turns; an omitted setting
+    /// stays as it is. The fields carry the values a session snapshot
+    /// reports, except that `model` is the snapshot's `model_id`. Reasoning
+    /// and style apply at once; a model or speed change waits while the
+    /// session still has accepted work, as in the terminal. Offered through
+    /// the `settings` capability.
+    SetSessionSettings {
+        /// Model identifier to switch to, one `get_host` lists for the
+        /// session's agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Reasoning level, such as `high`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
+        /// Style of the agent's answers, such as `concise`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_style: Option<String>,
+        /// Session whose settings change.
+        session_id: String,
+        /// Speed preference, `normal` or `fast`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speed_mode: Option<String>,
+    },
     /// Any method this server does not know, such as one a newer client
     /// sends. The server answers it with an error and keeps the connection.
     #[serde(other)]
@@ -162,6 +185,37 @@ impl RemoteSessionMode {
         match self {
             Self::Harness => CreateSessionMode::Harness,
             Self::Regular => CreateSessionMode::Regular,
+        }
+    }
+}
+
+/// One model a session can switch to, as `get_host` lists it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteModelOption {
+    /// Agent that runs the model; a session switches only among the models
+    /// of its own `agent`, as the terminal's `/model` offers them.
+    pub agent: String,
+    /// Short description of the model.
+    pub description: String,
+    /// Model identifier, as a session snapshot reports `model_id` and
+    /// `set_session_settings` accepts it as `model`.
+    pub model: String,
+    /// Display name of the model, as a session snapshot reports `model`.
+    pub name: String,
+    /// Whether the model can run in fast mode.
+    pub supports_fast: bool,
+}
+
+impl From<AgentSelection> for RemoteModelOption {
+    fn from(selection: AgentSelection) -> Self {
+        let model = selection.model();
+
+        Self {
+            agent: selection.kind().name().to_string(),
+            description: model.description().to_string(),
+            model: model.as_str().to_string(),
+            name: model.name().to_string(),
+            supports_fast: selection.supports_fast_mode(),
         }
     }
 }
@@ -278,6 +332,9 @@ pub enum RemoteResponse {
         base_branch: String,
         /// Model a new session starts with.
         default_model: String,
+        /// Models a session can switch to now, in display order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        models: Vec<RemoteModelOption>,
         /// Display name of the active project.
         project: String,
         /// Modes `create_session` accepts now, in display order.
@@ -384,6 +441,11 @@ impl From<HostContext> for RemoteResponse {
         Self::Host {
             base_branch: host.base_branch,
             default_model: host.default_model.name().to_string(),
+            models: host
+                .models
+                .into_iter()
+                .map(RemoteModelOption::from)
+                .collect(),
             project: host.project_name,
             session_modes: host
                 .session_modes
@@ -574,6 +636,10 @@ pub struct RemoteSession {
     /// Model name, as `get_host` reports `default_model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Model identifier, as `get_host` lists it in `models` and
+    /// `set_session_settings` accepts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
     /// Upstream branch the session branch was published to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_upstream_ref: Option<String>,
@@ -614,6 +680,7 @@ impl From<Session> for RemoteSession {
             created_at: Some(session.created_at),
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
+            model_id: Some(agent.model().as_str().to_string()),
             published_upstream_ref: session.published_upstream_ref,
             reasoning: Some(settings.reasoning_level.as_str().to_string()),
             response_style: Some(settings.response_style.as_str().to_string()),

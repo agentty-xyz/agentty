@@ -12,9 +12,9 @@ published are lost; the device asks before it cancels. While an execution graph 
 for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
-create sessions in the active project, and merge a session into its base branch, though
-the web page has no buttons for them yet. The page does not offer publishing or session
-settings yet.
+change a session's settings, create sessions in the active project, and merge a session
+into its base branch, though the web page has no buttons for them yet. The page does not
+offer publishing yet.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to offer
 `/remote-control`.
@@ -159,6 +159,11 @@ device can:
   kept but discards the messages queued behind the turn;
 - sync a session branch, which rebases it onto its base branch and starts an agent turn
   to resolve any conflicts;
+- change a session's model, reasoning level, response style, and speed wherever the
+  terminal's composer could, choosing among the models `/model` offers for the session's
+  agent, including the most expensive model and fast mode; reasoning and style apply at
+  once, while a model or speed change waits for the running turn as it does in the
+  terminal;
 - cancel a session, which deletes its worktree and branch;
 - merge a session, which lands its changes on the base branch; and
 - create a session in the active project, which adds a worktree and branch.

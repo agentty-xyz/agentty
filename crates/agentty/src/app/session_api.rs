@@ -10,18 +10,19 @@ use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, QuestionAnswer, ReviewRequest, ReviewRequestState,
     SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionStatus,
+    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
     parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 
 use crate::app::message_admission::MessagePlan;
+use crate::app::prompt_intent::PromptModelChange;
 use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::{
     App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
 };
-use crate::domain::agent::{AgentKind, AgentSelection};
+use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::domain::question::question_answer_message;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
@@ -37,6 +38,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::SessionDiff
                 | SessionOperation::StopTurn
                 | SessionOperation::RebaseSession
+                | SessionOperation::SessionSettings
         )
     }
 
@@ -235,6 +237,14 @@ impl SessionBackend for SessionRuntimeHandle {
 
     async fn rebase_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::rebase_session(self, session_id).await
+    }
+
+    async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::update_session_settings(self, session_id, change).await
     }
 
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
@@ -556,10 +566,134 @@ impl App {
         Ok(HostContext {
             base_branch: project.base_branch,
             default_model,
+            models: self.api_session_models(),
             project_id,
             project_name: self.projects.project_name().to_string(),
             session_modes,
         })
+    }
+
+    /// Lists the agents and models a session can switch to now: every model
+    /// of each available agent CLI, then, when the launch offers the harness,
+    /// its ready listed models, or its fixed catalog before any are listed.
+    /// A session
+    /// switches only among its own agent's entries, as the terminal's
+    /// `/model` offers them.
+    fn api_session_models(&self) -> Vec<AgentSelection> {
+        let mut models = self
+            .services
+            .available_agent_kinds()
+            .into_iter()
+            .flat_map(|kind| {
+                kind.models()
+                    .iter()
+                    .map(move |model| AgentSelection::new(kind, *model))
+            })
+            .collect::<Vec<_>>();
+        if self.services.harness_availability().is_visible() {
+            let options = self.services.harness_model_options();
+            let harness_models = if options.is_empty() {
+                AgentKind::Harness.models().to_vec()
+            } else {
+                options
+                    .into_iter()
+                    .filter(|option| option.status == HarnessModelStatus::Ready)
+                    .map(|option| option.model)
+                    .collect()
+            };
+            models.extend(
+                harness_models
+                    .into_iter()
+                    .map(|model| AgentSelection::new(AgentKind::Harness, model)),
+            );
+        }
+
+        models
+    }
+
+    /// Changes one session's settings through the terminal's own setting
+    /// workflows, after checking the whole change.
+    ///
+    /// Nothing is written until the whole change passes the checks the
+    /// terminal makes by construction: the session's status shows the
+    /// composer, where `/model` and the other setting commands are reachable;
+    /// a model is one the session's own agent offers in `/model`; and fast
+    /// mode suits the model the session will have. The writes then run in
+    /// the order model, reasoning, style, speed, so the switch most likely
+    /// to fail runs first. They are not transactional: when a later one fails
+    /// to persist, the earlier ones stay applied. A model or speed change
+    /// waits while the session still has accepted work, exactly as it does
+    /// in the terminal; reasoning and style apply at once.
+    pub(super) async fn update_api_session_settings(
+        &mut self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), ApiSessionError> {
+        let session = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        let status = session.status;
+        let current_agent = session.agent;
+        if !status.allows_chat_composer() {
+            return Err(ApiSessionError::Operation(format!(
+                "Session `{session_id}` cannot change settings in status `{status}`"
+            )));
+        }
+        if let Some(model) = change.model
+            && !self
+                .api_session_models()
+                .into_iter()
+                .any(|offered| offered.kind() == current_agent.kind() && offered.model() == model)
+        {
+            return Err(ApiSessionError::Operation(format!(
+                "Model `{}` is not available to session `{session_id}`",
+                model.as_str()
+            )));
+        }
+        let selected_agent = change
+            .model
+            .map(|model| AgentSelection::new(current_agent.kind(), model));
+        let resulting_agent = selected_agent
+            .or_else(|| {
+                self.deferred_session_settings
+                    .get(session_id)
+                    .and_then(|settings| settings.agent)
+            })
+            .unwrap_or(current_agent);
+        if change.speed_mode == Some(SpeedMode::Fast) && !resulting_agent.supports_fast_mode() {
+            return Err(ApiSessionError::Operation(format!(
+                "Fast mode is not supported by `{}`",
+                resulting_agent.model().as_str()
+            )));
+        }
+
+        if let Some(agent) = selected_agent
+            && self.update_prompt_session_model(session_id, agent).await
+                == PromptModelChange::Failed
+        {
+            return Err(ApiSessionError::Operation(format!(
+                "Session `{session_id}` could not switch to `{}`",
+                agent.model().as_str()
+            )));
+        }
+        if let Some(reasoning_level) = change.reasoning_level {
+            self.set_session_reasoning_level(session_id, reasoning_level)
+                .await
+                .map_err(api_error_from_app)?;
+        }
+        if let Some(response_style) = change.response_style {
+            self.set_session_response_style(session_id, response_style)
+                .await
+                .map_err(api_error_from_app)?;
+        }
+        if let Some(speed_mode) = change.speed_mode {
+            self.try_update_prompt_session_speed_mode(session_id, speed_mode)
+                .await
+                .map_err(api_error_from_session)?;
+        }
+
+        Ok(())
     }
 
     fn validate_api_session_request(

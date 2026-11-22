@@ -6,11 +6,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
+use crate::ReasoningLevel;
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionOperation, SessionService,
+    SessionSettingsChange,
 };
 
 #[tokio::test]
@@ -260,10 +262,66 @@ async fn service_delegates_session_sync_to_supporting_hosts() {
     );
 }
 
+#[tokio::test]
+async fn existing_hosts_report_unsupported_settings_changes() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::SessionSettings);
+    let changed = service
+        .update_session_settings(
+            &SessionId::from("session-1"),
+            SessionSettingsChange::default(),
+        )
+        .await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        changed,
+        Err(SessionError::Operation(
+            "Host does not support changing session settings".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_settings_changes_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+    let change = SessionSettingsChange {
+        reasoning_level: Some(ReasoningLevel::Low),
+        ..SessionSettingsChange::default()
+    };
+
+    // Act
+    let supported = service.supports(SessionOperation::SessionSettings);
+    let changed = service
+        .update_session_settings(&SessionId::from("session-1"), change)
+        .await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(changed, Ok(()));
+    assert_eq!(
+        backend
+            .settings_changes
+            .lock()
+            .expect("settings changes")
+            .as_slice(),
+        [(SessionId::from("session-1"), change)]
+    );
+}
+
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
     inner: FakeBackend,
+    settings_changes: Mutex<Vec<(SessionId, SessionSettingsChange)>>,
     stopped: Mutex<Vec<SessionId>>,
     synced: Mutex<Vec<SessionId>>,
 }
@@ -273,8 +331,23 @@ impl SessionBackend for OptionalBackend {
     fn supports(&self, operation: SessionOperation) -> bool {
         matches!(
             operation,
-            SessionOperation::StopTurn | SessionOperation::RebaseSession
+            SessionOperation::StopTurn
+                | SessionOperation::RebaseSession
+                | SessionOperation::SessionSettings
         )
+    }
+
+    async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        self.settings_changes
+            .lock()
+            .expect("settings changes")
+            .push((session_id.clone(), change));
+
+        Ok(())
     }
 
     async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
