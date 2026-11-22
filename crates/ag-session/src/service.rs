@@ -97,6 +97,8 @@ pub enum SessionOperation {
     /// Reading a session's changes through
     /// [`SessionBackend::get_session_diff`].
     SessionDiff,
+    /// Stopping a running turn through [`SessionBackend::stop_turn`].
+    StopTurn,
 }
 
 /// One file a session's diff changes.
@@ -434,6 +436,16 @@ pub trait SessionBackend: Send + Sync {
 
     /// Cancels one session through the host lifecycle workflow.
     async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError>;
+
+    /// Stops the session's running turn and returns the session to review,
+    /// keeping its worktree and changes. Older hosts may omit support.
+    async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        let _ = session_id;
+
+        Err(SessionError::Operation(
+            "Host does not support stopping a turn".to_string(),
+        ))
+    }
 
     /// Requests merge processing for one review-ready session.
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError>;
@@ -851,6 +863,16 @@ impl SessionService {
     /// in its current state.
     pub async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.backend.cancel_session(session_id).await
+    }
+
+    /// Stops the session's running turn and returns the session to review.
+    /// Unlike [`Self::cancel_session`], the worktree and its changes stay.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist, has no running
+    /// turn, or the host does not support stopping a turn.
+    pub async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.backend.stop_turn(session_id).await
     }
 
     /// Requests merge processing for one session.

@@ -114,6 +114,13 @@ pub enum RemoteRequest {
         /// Session that receives the message.
         session_id: String,
     },
+    /// Stops the session's running turn and returns the session to review,
+    /// keeping its worktree and changes. Offered through the `stop_turn`
+    /// capability.
+    StopTurn {
+        /// Session whose turn stops.
+        session_id: String,
+    },
     /// Any method this server does not know, such as one a newer client
     /// sends. The server answers it with an error and keeps the connection.
     #[serde(other)]

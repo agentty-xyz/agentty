@@ -1,14 +1,16 @@
 //! Session service delegation tests for backend reads and mutating operations.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
 use crate::error::SessionError;
-use crate::model::SessionId;
+use crate::model::{ReviewRequest, Session, SessionId};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, QuestionAnswer, SessionOperation, SessionService,
+    DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionOperation, SessionService,
 };
 
 #[tokio::test]
@@ -171,9 +173,124 @@ fn existing_hosts_serve_no_optional_operations() {
 
     // Act
     let supports_merge = service.supports(SessionOperation::MergeSession);
+    let supports_stop = service.supports(SessionOperation::StopTurn);
 
     // Assert
     assert!(!supports_merge);
+    assert!(!supports_stop);
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_turn_stop() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::StopTurn);
+    let stopped = service.stop_turn(&SessionId::from("session-1")).await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        stopped,
+        Err(SessionError::Operation(
+            "Host does not support stopping a turn".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_turn_stop_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(TurnStoppingBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::StopTurn);
+    let stopped = service.stop_turn(&SessionId::from("session-1")).await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(stopped, Ok(()));
+    assert_eq!(
+        backend.stopped.lock().expect("stopped sessions").as_slice(),
+        [SessionId::from("session-1")]
+    );
+}
+
+/// Host that supports stopping a turn and records each stop.
+#[derive(Default)]
+struct TurnStoppingBackend {
+    inner: FakeBackend,
+    stopped: Mutex<Vec<SessionId>>,
+}
+
+#[async_trait]
+impl SessionBackend for TurnStoppingBackend {
+    fn supports(&self, operation: SessionOperation) -> bool {
+        operation == SessionOperation::StopTurn
+    }
+
+    async fn create_session(
+        &self,
+        request: CreateSessionRequest,
+    ) -> Result<SessionId, SessionError> {
+        self.inner.create_session(request).await
+    }
+
+    async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError> {
+        self.inner.get_session(session_id).await
+    }
+
+    async fn send_message(
+        &self,
+        session_id: &SessionId,
+        message: String,
+    ) -> Result<(), SessionError> {
+        self.inner.send_message(session_id, message).await
+    }
+
+    async fn submit_durable_message(
+        &self,
+        session_id: &SessionId,
+        request: DurableMessageRequest,
+    ) -> Result<(), SessionError> {
+        self.inner.submit_durable_message(session_id, request).await
+    }
+
+    async fn answer_questions(
+        &self,
+        session_id: &SessionId,
+        request: AnswerQuestionsRequest,
+    ) -> Result<(), SessionError> {
+        self.inner.answer_questions(session_id, request).await
+    }
+
+    async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.inner.cancel_session(session_id).await
+    }
+
+    async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.stopped
+            .lock()
+            .expect("stopped sessions")
+            .push(session_id.clone());
+
+        Ok(())
+    }
+
+    async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.inner.merge_session(session_id).await
+    }
+
+    async fn create_review_request(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<ReviewRequest, SessionError> {
+        self.inner.create_review_request(session_id).await
+    }
 }
 
 #[tokio::test]

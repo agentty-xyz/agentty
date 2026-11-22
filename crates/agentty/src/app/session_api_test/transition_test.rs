@@ -16,6 +16,7 @@ use super::super::{api_error_from_app, api_error_from_session};
 use super::support::{
     request_cancellation, request_durable_message, request_merge, request_message,
     request_question_answers, request_review_request, request_session, request_session_creation,
+    request_turn_stop,
 };
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{AppError, SessionError};
@@ -191,6 +192,110 @@ async fn runtime_backend_preserves_workflow_validation_errors() {
     assert!(matches!(merge_error, ApiSessionError::Operation(_)));
     assert_eq!(missing_review_error, ApiSessionError::NotFound);
     assert!(matches!(review_error, ApiSessionError::Operation(_)));
+}
+
+#[tokio::test]
+async fn runtime_backend_stops_a_running_turn_and_returns_the_session_to_review() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Regular,
+            project_id,
+        },
+    )
+    .await
+    .expect("session should be created");
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &session_id,
+        SessionStatus::InProgress,
+    );
+    let cancel_token = app
+        .sessions
+        .session_handles()
+        .get(&session_id)
+        .map(|handles| Arc::clone(&handles.cancel_token))
+        .expect("session handles should exist");
+
+    // Act
+    let supported = app
+        .session_service()
+        .supports(ag_session::SessionOperation::StopTurn);
+    request_turn_stop(&mut app, session_id.clone())
+        .await
+        .expect("running turn should stop");
+    let idle_error = request_turn_stop(&mut app, session_id.clone())
+        .await
+        .expect_err("idle session should have no turn to stop");
+    let missing_error = request_turn_stop(&mut app, SessionId::from("missing"))
+        .await
+        .expect_err("missing session should not stop");
+
+    // Assert
+    assert!(supported);
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| session.status),
+        Some(Status::Review)
+    );
+    assert!(
+        cancel_token
+            .lock()
+            .expect("cancel token lock")
+            .is_cancelled()
+    );
+    assert!(matches!(
+        app.review_cache.get(&session_id),
+        Some(crate::app::ReviewCacheEntry::Suppressed)
+    ));
+    assert_eq!(
+        idle_error,
+        ApiSessionError::Operation(format!(
+            "Session `{session_id}` has no running turn in status `Review`"
+        ))
+    );
+    assert_eq!(missing_error, ApiSessionError::NotFound);
+}
+
+#[tokio::test]
+async fn runtime_backend_stops_a_running_session_without_runtime_handles() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Regular,
+            project_id,
+        },
+    )
+    .await
+    .expect("session should be created");
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &session_id,
+        SessionStatus::InProgress,
+    );
+    app.sessions.session_handles_mut().remove(&session_id);
+
+    // Act
+    request_turn_stop(&mut app, session_id.clone())
+        .await
+        .expect("running turn should stop without handles");
+
+    // Assert
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| session.status),
+        Some(Status::Review)
+    );
 }
 
 #[tokio::test]

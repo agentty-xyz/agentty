@@ -35,6 +35,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::HostContext
                 | SessionOperation::MergeSession
                 | SessionOperation::SessionDiff
+                | SessionOperation::StopTurn
         )
     }
 
@@ -225,6 +226,10 @@ impl SessionBackend for SessionRuntimeHandle {
 
     async fn cancel_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::cancel_session(self, session_id).await
+    }
+
+    async fn stop_turn(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::stop_turn(self, session_id).await
     }
 
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), ApiSessionError> {
@@ -899,6 +904,17 @@ impl App {
         session_id: &SessionId,
     ) -> Result<(), ApiSessionError> {
         self.cancel_session(session_id)
+            .await
+            .map_err(api_error_from_app)
+    }
+
+    /// Stops the session's running turn through the same workflow as the
+    /// terminal's `Ctrl+C`.
+    pub(super) async fn stop_api_turn(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
+        self.stop_session_turn(session_id)
             .await
             .map_err(api_error_from_app)
     }
