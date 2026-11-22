@@ -47,8 +47,10 @@ pub enum ClientFrame {
 
 /// Session operations a remote client may invoke.
 ///
-/// Merging, publishing, and settings changes are deliberately unavailable
-/// remotely.
+/// Each request beyond reading and chatting is a mutation the user approved
+/// for remote devices. A server offers an optional request only through its
+/// capability, and every request that names a session reaches only sessions
+/// the host lists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum RemoteRequest {

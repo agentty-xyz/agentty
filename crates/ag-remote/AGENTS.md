@@ -7,8 +7,13 @@ through `ag_session::SessionService`.
 
 - Keep Agentty UI state, SQLite rows, and listener policy (address, enablement) in the
   host. This crate receives a `SessionService`, a revision counter, and a `DeviceStore`.
-- Expose only the operations in `RemoteRequest`. Adding merge, publishing, settings, or
-  any other mutation is a security decision; do not extend the protocol without one.
+- Expose only the operations in `RemoteRequest`. The user approved stopping a turn,
+  creating sessions, merging, publishing, syncing, and session settings. Any other
+  mutation, any operation that runs a host command, and any read outside a listed
+  session is a new security decision; do not extend the protocol without one.
+- Every mutation names its capability, checks that the host lists the session it
+  targets, and is listed under Security in
+  `docs/site/content/docs/usage/remote-control.md` and in `SECURITY.md`.
 - Keep device tokens secret: persist only their SHA-256 hash, and never log tokens,
   pairing codes, or message content.
 - Keep the connection defences: a redeemed pairing code yields a token only after host
