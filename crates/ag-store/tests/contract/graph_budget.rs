@@ -7,8 +7,9 @@ use std::num::NonZeroU64;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
-    AgentDefinition, AgentKind, AgentModel, AgentSelection, EnvId, ExecutionGraph, GraphContext,
-    GraphExecutionProfile, GraphNode, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
+    AgentDefinition, AgentKind, AgentModel, AgentSelection, EnvId, ExecutionGraph,
+    ExtendGraphBudgetRequest, GraphContext, GraphControlRequest, GraphExecutionProfile, GraphNode,
+    GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
 };
 use ag_store::Database;
 
@@ -80,6 +81,133 @@ async fn launch_fixes_limits_and_reopening_resumes_from_recorded_spending()
             .await
             .is_err()
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_extensions_add_credit_once_and_keep_the_launch_limits()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("graph-budget-")
+        .tempdir_in(".")?;
+    let path = directory.path().join("budget.sqlite");
+    let database = open(&path).await?;
+    let limits = BTreeMap::from([("calls".to_string(), 2)]);
+    database
+        .graphs()
+        .launch_graph(&graph("graph"), &limits)
+        .await?;
+    database
+        .graphs()
+        .record_budget_spending("graph", "calls", 2)
+        .await?;
+    let extension = extension("extension", 3);
+
+    // Act
+    let recorded = database.graphs().extend_budget(&extension).await?;
+    let redelivered = database.graphs().extend_budget(&extension).await?;
+    database
+        .graphs()
+        .record_budget_spending("graph", "calls", 1)
+        .await?;
+    database.pool().close().await;
+    drop(database);
+    let reopened = Database::open(&path).await?;
+    let relaunched = reopened
+        .graphs()
+        .launch_graph(&graph("graph"), &limits)
+        .await?;
+
+    // Assert
+    assert!(recorded);
+    assert!(!redelivered);
+    assert_eq!(relaunched["calls"], 2);
+    assert_eq!(reopened.graphs().budget_limits("graph").await?, limits);
+    let extended_limits = BTreeMap::from([("calls".to_string(), 5)]);
+    assert!(
+        reopened
+            .graphs()
+            .launch_graph(&graph("graph"), &extended_limits)
+            .await
+            .is_err()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_or_conflicting_extensions_record_nothing() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let limits = BTreeMap::from([("calls".to_string(), 1)]);
+    database
+        .graphs()
+        .launch_graph(&graph("graph"), &limits)
+        .await?;
+    database
+        .graphs()
+        .launch_graph(&graph("canceled"), &limits)
+        .await?;
+    database
+        .graphs()
+        .cancel(&GraphControlRequest {
+            graph_id: "canceled".into(),
+            revision: NonZeroU64::MIN,
+        })
+        .await?;
+    database
+        .graphs()
+        .extend_budget(&extension("taken", 2))
+        .await?;
+    let mut stale = extension("stale", 2);
+    stale.graph.revision = NonZeroU64::new(2).ok_or("revision")?;
+    let mut unknown = extension("unknown", 2);
+    unknown.budget_id = "other".into();
+    let mut canceled = extension("canceled", 2);
+    canceled.graph.graph_id = "canceled".into();
+
+    // Act
+    let rejected = [
+        database.graphs().extend_budget(&extension("none", 0)).await,
+        database
+            .graphs()
+            .extend_budget(&extension(
+                "excessive",
+                ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS + 1,
+            ))
+            .await,
+        database
+            .graphs()
+            .extend_budget(&extension("taken", 3))
+            .await,
+        database.graphs().extend_budget(&stale).await,
+        database.graphs().extend_budget(&unknown).await,
+        database.graphs().extend_budget(&canceled).await,
+    ];
+
+    // Assert
+    let messages: Vec<String> = rejected
+        .into_iter()
+        .map(|result| result.expect_err("rejected extension").to_string())
+        .collect();
+    for (message, expected) in messages.iter().zip([
+        "Add between 1 and 1000 provider calls",
+        "Add between 1 and 1000 provider calls",
+        "used for a different extension",
+        "Stale graph revision",
+        "does not exist or cannot grow further",
+        "Canceled graphs cannot gain provider calls",
+    ]) {
+        assert!(message.contains(expected), "{message}");
+    }
+    let remaining = database
+        .graphs()
+        .launch_graph(&graph("graph"), &limits)
+        .await?;
+    assert_eq!(remaining["calls"], 3);
 
     Ok(())
 }
@@ -166,6 +294,18 @@ async fn a_graph_that_executed_without_a_ledger_cannot_gain_fresh_limits()
     );
 
     Ok(())
+}
+
+fn extension(action_id: &str, additional_calls: usize) -> ExtendGraphBudgetRequest {
+    ExtendGraphBudgetRequest {
+        action_id: action_id.into(),
+        additional_calls,
+        budget_id: "calls".into(),
+        graph: GraphControlRequest {
+            graph_id: "graph".into(),
+            revision: NonZeroU64::MIN,
+        },
+    }
 }
 
 async fn open(path: &std::path::Path) -> Result<Database, Box<dyn Error>> {

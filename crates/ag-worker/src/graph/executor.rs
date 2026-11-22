@@ -154,6 +154,15 @@ impl GraphExecutor {
             .map(ProviderCallBudget::remaining)
     }
 
+    /// Adds `calls` to a named live budget; unknown names are ignored. The
+    /// host records the extension first; the next dispatch pass can admit
+    /// nodes that were waiting for credit.
+    pub fn extend_provider_calls(&self, id: &str, calls: usize) {
+        if let Some(budget) = self.resources.budgets.get(id) {
+            budget.extend(calls);
+        }
+    }
+
     /// Composes durable admission, shared resources, and a trusted worker
     /// adapter.
     pub fn new(

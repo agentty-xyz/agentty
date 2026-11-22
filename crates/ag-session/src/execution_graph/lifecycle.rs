@@ -24,6 +24,27 @@ pub struct ResumeExecutionGraphRequest {
     pub graph: GraphControlRequest,
 }
 
+/// A user-initiated, recorded increase of one launched budget's provider
+/// calls. Launch limits stay fixed; each extension is a separate record, so
+/// resuming never refills spent credit on its own.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtendGraphBudgetRequest {
+    /// Idempotency identity: redelivering the same extension records it once.
+    pub action_id: String,
+    /// Provider calls to add, from one to `MAX_ADDITIONAL_CALLS`.
+    pub additional_calls: usize,
+    /// Named budget the graph's nodes share.
+    pub budget_id: String,
+    /// Graph whose budget grows, at its current revision.
+    pub graph: GraphControlRequest,
+}
+
+impl ExtendGraphBudgetRequest {
+    /// Largest increase one extension may record, which bounds a mistyped
+    /// amount.
+    pub const MAX_ADDITIONAL_CALLS: usize = 1000;
+}
+
 /// An explicit action against the exact latest execution of a node.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinueGraphNodeRequest {

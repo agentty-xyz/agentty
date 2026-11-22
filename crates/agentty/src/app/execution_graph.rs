@@ -371,6 +371,54 @@ impl App {
         .await
     }
 
+    /// Records an explicit budget extension, then adds its calls to a
+    /// retained driver's live budget and wakes dispatch. Recording comes
+    /// first, so spending charged against the new calls stays within the
+    /// stored limit; a graph without a driver picks the credit up when it is
+    /// resumed. A redelivered extension adds nothing.
+    pub(super) async fn extend_api_execution_graph_budget(
+        &mut self,
+        request: ag_session::ExtendGraphBudgetRequest,
+    ) -> Result<(), ag_session::SessionError> {
+        let invalid = ag_session::SessionError::Operation;
+        let status = self
+            .services
+            .db()
+            .graphs()
+            .progress(&request.graph.graph_id)
+            .await
+            .map_err(|error| invalid(error.to_string()))?
+            .ok_or_else(|| invalid("Graph is missing".into()))?
+            .status;
+        if status == ExecutionGraphStatus::Completed {
+            return Err(invalid(
+                "Completed graphs need no more provider calls".into(),
+            ));
+        }
+        let is_recorded = self
+            .services
+            .db()
+            .graphs()
+            .extend_budget(&request)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        if is_recorded
+            && let Some(driver) = self
+                .services
+                .graph_drivers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&request.graph.graph_id)
+        {
+            driver
+                .executor
+                .extend_provider_calls(&request.budget_id, request.additional_calls);
+        }
+        self.services.wake_graphs();
+
+        Ok(())
+    }
+
     pub(super) async fn continue_api_execution_graph_node(
         &mut self,
         request: ContinueGraphNodeRequest,

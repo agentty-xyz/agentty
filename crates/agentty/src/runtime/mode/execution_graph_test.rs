@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::{GraphKeyAction, open_editor, resolve_editor_key, resolve_key};
 use crate::app::graph_view::GraphViewAction;
 use crate::domain::input::InputState;
-use crate::presentation::execution_graph::tests::graph_view;
+use crate::presentation::execution_graph::tests::{budget_exhausted_view, graph_view};
 use crate::presentation::execution_graph::{GraphEditKind, GraphView};
 
 fn key(view: &mut GraphView, code: KeyCode) -> GraphKeyAction {
@@ -223,6 +223,44 @@ fn actions_and_editors_keep_exact_node_intent() {
     assert!(matches!(
         key(&mut view, KeyCode::Char('s')),
         GraphKeyAction::None
+    ));
+}
+
+#[test]
+fn budget_key_opens_a_call_count_editor_only_for_a_spent_budget() {
+    // Arrange
+    let mut view = budget_exhausted_view();
+    let mut credited = graph_view();
+
+    // Act
+    let unavailable = key(&mut credited, KeyCode::Char('b'));
+    key(&mut view, KeyCode::Char('b'));
+    let kind = view.editor.as_ref().expect("editor").kind;
+    let rejected: Vec<String> = ["0", "1001", "four", ""]
+        .into_iter()
+        .map(|text| {
+            view.editor.as_mut().expect("editor").input = InputState::with_text(text.into());
+            key(&mut view, KeyCode::Enter);
+
+            view.notice.clone()
+        })
+        .collect();
+    view.editor.as_mut().expect("editor").input = InputState::with_text(" 12 ".into());
+    let submitted = key(&mut view, KeyCode::Enter);
+
+    // Assert
+    assert!(matches!(unavailable, GraphKeyAction::None));
+    assert!(credited.editor.is_none());
+    assert_eq!(kind, GraphEditKind::ExtendBudget);
+    for notice in rejected {
+        assert_eq!(
+            notice,
+            "Enter a whole number of provider calls from 1 to 1000"
+        );
+    }
+    assert!(matches!(
+        submitted,
+        GraphKeyAction::Submit(GraphViewAction::ExtendBudget(12))
     ));
 }
 

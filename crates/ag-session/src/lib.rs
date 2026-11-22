@@ -50,10 +50,10 @@ pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
 pub use execution_graph::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
-    GenerateGraphProposalRequest, GraphBlockedReason, GraphCompletionGate, GraphContext,
-    GraphContractError, GraphControlRequest, GraphDependency, GraphExecutionProfile,
-    GraphExecutionRef, GraphInputBinding, GraphNode, GraphNodeContinuation, GraphNodeProgress,
-    GraphNodeStatus, GraphOutput, GraphOutputReplyOutcome, GraphPostProcessing,
+    ExtendGraphBudgetRequest, GenerateGraphProposalRequest, GraphBlockedReason,
+    GraphCompletionGate, GraphContext, GraphContractError, GraphControlRequest, GraphDependency,
+    GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode, GraphNodeContinuation,
+    GraphNodeProgress, GraphNodeStatus, GraphOutput, GraphOutputReplyOutcome, GraphPostProcessing,
     GraphProposalAction, GraphProposalApproval, GraphProposalLimits, GraphProposalReplyOutcome,
     GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
     GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,

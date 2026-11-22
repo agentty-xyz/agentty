@@ -110,7 +110,31 @@ impl GraphView {
                         })
             }
             GraphEditKind::Cancel => refreshed.can_cancel(),
+            GraphEditKind::ExtendBudget => {
+                refreshed.can_extend_budget()
+                    && refreshed.exhausted_budget() == self.exhausted_budget()
+            }
         }
+    }
+
+    /// The spent budget an extension adds calls to: the selected node's, or
+    /// else the first one a pending node waits for.
+    pub(crate) fn exhausted_budget(&self) -> Option<&str> {
+        self.node()
+            .and_then(Self::node_exhausted_budget)
+            .or_else(|| {
+                self.progress
+                    .as_ref()?
+                    .nodes
+                    .iter()
+                    .find_map(Self::node_exhausted_budget)
+            })
+    }
+
+    /// Whether the user can add provider calls: a pending node waits for a
+    /// spent budget of a graph that can still run.
+    pub(crate) fn can_extend_budget(&self) -> bool {
+        !self.is_focused_review() && self.can_cancel() && self.exhausted_budget().is_some()
     }
 
     /// Focused reviews have a host coordinator and must start a new generation.
@@ -186,6 +210,13 @@ impl GraphView {
                 .outputs
                 .get(self.selected_output)
                 .is_some_and(|output| output.result.state == GraphResultState::Validated)
+    }
+
+    fn node_exhausted_budget(node: &GraphNodeProgress) -> Option<&str> {
+        node.blocked.iter().find_map(|reason| match reason {
+            GraphBlockedReason::BudgetExhausted(id) => Some(id.as_str()),
+            _ => None,
+        })
     }
 }
 
@@ -342,6 +373,8 @@ pub(crate) struct GraphEditor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GraphEditKind {
     Cancel,
+    /// Number of provider calls to add to the exhausted budget.
+    ExtendBudget,
     Reply,
 }
 

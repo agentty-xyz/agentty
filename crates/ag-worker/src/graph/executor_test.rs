@@ -36,6 +36,30 @@ fn budget_progress_observes_shared_credit_without_reserving_it() {
     assert_eq!(executor.remaining_provider_calls("calls"), Some(0));
 }
 
+#[test]
+fn extending_a_live_budget_credits_the_shared_pool_and_ignores_unknown_ids() {
+    // Arrange
+    let budget = ProviderCallBudget::new(1);
+    budget.consume().expect("consume");
+    let executor = GraphExecutor::new(
+        Arc::new(MockGraphDispatchRepository::new()),
+        Arc::new(GraphResources::new(
+            NonZeroUsize::MIN,
+            HashMap::from([("calls".into(), budget.clone())]),
+        )),
+        Arc::new(MockGraphNodeRunner::new()),
+    );
+
+    // Act
+    executor.extend_provider_calls("calls", 2);
+    executor.extend_provider_calls("missing", 2);
+
+    // Assert
+    assert_eq!(executor.remaining_provider_calls("missing"), None);
+    assert_eq!(budget.remaining(), 2);
+    assert_eq!(executor.remaining_provider_calls("calls"), Some(2));
+}
+
 #[tokio::test]
 async fn capacity_releases_notify_only_registered_waiters_once() {
     // Arrange

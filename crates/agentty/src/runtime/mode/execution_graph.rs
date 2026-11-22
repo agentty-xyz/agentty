@@ -143,6 +143,9 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         }
         KeyCode::Char('e') if view.can_continue() => open_editor(view, GraphEditKind::Reply),
         KeyCode::Char('x') if view.can_cancel() => open_editor(view, GraphEditKind::Cancel),
+        KeyCode::Char('b') if view.can_extend_budget() => {
+            open_editor(view, GraphEditKind::ExtendBudget);
+        }
         KeyCode::Char('s') if view.can_resume() => {
             return GraphKeyAction::Submit(GraphViewAction::Resume);
         }

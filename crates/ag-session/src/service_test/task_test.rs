@@ -56,7 +56,17 @@ async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
     let progress = service.get_execution_graph("graph").await;
     let cancelled = service.cancel_execution_graph(control.clone()).await;
     let resumed = service
-        .resume_execution_graph(crate::ResumeExecutionGraphRequest { graph: control })
+        .resume_execution_graph(crate::ResumeExecutionGraphRequest {
+            graph: control.clone(),
+        })
+        .await;
+    let extended = service
+        .extend_execution_graph_budget(crate::ExtendGraphBudgetRequest {
+            action_id: "extension".into(),
+            additional_calls: 4,
+            budget_id: "calls".into(),
+            graph: control,
+        })
         .await;
     let continued = service.continue_execution_graph_node(action).await;
     let accepted = service.accept_execution_graph_result(reference).await;
@@ -67,6 +77,7 @@ async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
     assert_eq!(progress, Err(expected.clone()));
     assert_eq!(cancelled, Err(expected.clone()));
     assert_eq!(resumed, Err(expected.clone()));
+    assert_eq!(extended, Err(expected.clone()));
     assert_eq!(continued, Err(expected.clone()));
     assert_eq!(accepted, Err(expected));
 }

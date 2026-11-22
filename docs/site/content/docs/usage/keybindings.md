@@ -143,6 +143,7 @@ them; see [Workflow](@/docs/usage/workflow.md#execution-graph-inspector).
 | `e`                              | Reply to or revise the selected task             |
 | `t`                              | Retry selected failed node                       |
 | `s`                              | Resume paused graph dispatch                     |
+| `b`                              | Add provider calls to a spent budget             |
 | `x`                              | Confirm cancellation of the whole graph          |
 | `Enter`                          | Submit graph input                               |
 | `Ctrl+r`                         | Refresh and reconcile a rejected draft           |

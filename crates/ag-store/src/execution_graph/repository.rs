@@ -91,12 +91,22 @@ pub trait GraphRepository: Send + Sync {
         provider_call_limits: &BTreeMap<String, usize>,
     ) -> Result<BTreeMap<String, usize>, DbError>;
 
-    /// Loads the provider-call limits fixed at first launch; empty when the
-    /// graph has no ledger.
+    /// Loads the provider-call limits fixed at first launch, without
+    /// extensions; empty when the graph has no ledger.
     async fn budget_limits(&self, graph_id: &str) -> Result<BTreeMap<String, usize>, DbError>;
 
+    /// Records one explicit, revision-checked extension of a launched budget
+    /// and adds its calls to the credit a relaunch resumes from. Returns
+    /// `false` for an identical redelivery of the same action. Rejects
+    /// canceled graphs, unknown budgets, out-of-range amounts, and an action
+    /// identity reused for a different extension.
+    async fn extend_budget(
+        &self,
+        request: &ag_session::ExtendGraphBudgetRequest,
+    ) -> Result<bool, DbError>;
+
     /// Adds spent calls to one budget, or subtracts refunded reservations,
-    /// clamped between zero and the fixed limit.
+    /// clamped between zero and the current limit.
     async fn record_budget_spending(
         &self,
         graph_id: &str,
@@ -412,6 +422,13 @@ impl GraphRepository for SqliteGraphRepository {
 
     async fn budget_limits(&self, graph_id: &str) -> Result<BTreeMap<String, usize>, DbError> {
         self.budget_limits_for(graph_id).await
+    }
+
+    async fn extend_budget(
+        &self,
+        request: &ag_session::ExtendGraphBudgetRequest,
+    ) -> Result<bool, DbError> {
+        self.record_budget_extension(request).await
     }
 
     async fn record_budget_spending(

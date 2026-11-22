@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::GraphViewAction;
 use crate::presentation::app_mode::AppMode;
-use crate::presentation::execution_graph::tests::graph_view;
+use crate::presentation::execution_graph::tests::{budget_exhausted_view, graph_view};
 use crate::runtime::mode::execution_graph;
 use crate::test_support::new_test_app;
 use crate::ui::style::ColorSupport;
@@ -255,6 +255,55 @@ async fn inspector_resume_enters_the_existing_host_boundary() {
 
     // Assert
     assert!(result.is_err()); // Host denies dispatch without a prepared owning session.
+}
+
+#[tokio::test]
+async fn inspector_budget_extension_records_calls_for_the_spent_budget() {
+    for is_exhausted in [true, false] {
+        // Arrange
+        let (mut app, _directory) = new_test_app().await;
+        let mut view = if is_exhausted {
+            budget_exhausted_view()
+        } else {
+            graph_view()
+        };
+        let progress = view.progress.clone();
+        let mut repository = MockGraphRepository::new();
+        repository
+            .expect_progress()
+            .returning(move |_| Ok(progress.clone()));
+        repository
+            .expect_extend_budget()
+            .times(usize::from(is_exhausted))
+            .withf(|request| {
+                request.budget_id == "calls"
+                    && request.additional_calls == 4
+                    && request.graph.graph_id == "graph"
+                    && !request.action_id.is_empty()
+            })
+            .returning(|_| Ok(true));
+        app.services.set_graph_repository(Arc::new(repository));
+        // The inspected snapshot is the projection the app shows.
+        view.progress = app
+            .execution_graph_progress("graph")
+            .await
+            .expect("projection");
+
+        // Act
+        let result = app
+            .apply_graph_view_action(&view, GraphViewAction::ExtendBudget(4))
+            .await;
+
+        // Assert
+        if is_exhausted {
+            assert_eq!(result, Ok(()));
+        } else {
+            assert_eq!(
+                result,
+                Err("Action unavailable for this snapshot".to_string())
+            );
+        }
+    }
 }
 
 fn unavailable() -> DbError {

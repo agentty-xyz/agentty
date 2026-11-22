@@ -158,6 +158,14 @@ impl SessionRuntimeHandle {
             .await
     }
 
+    pub(crate) async fn extend_execution_graph_budget(
+        &self,
+        request: ag_session::ExtendGraphBudgetRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::ExtendExecutionGraphBudget { request })
+            .await
+    }
+
     pub(crate) async fn continue_execution_graph_node(
         &self,
         request: ag_session::ContinueGraphNodeRequest,

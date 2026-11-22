@@ -113,6 +113,10 @@ pub(crate) enum SessionMutation {
     ResumeExecutionGraph {
         request: ag_session::ResumeExecutionGraphRequest,
     },
+    /// Records an explicit provider-call increase for one launched budget.
+    ExtendExecutionGraphBudget {
+        request: ag_session::ExtendGraphBudgetRequest,
+    },
     ContinueExecutionGraphNode {
         request: Box<ag_session::ContinueGraphNodeRequest>,
     },
@@ -197,6 +201,7 @@ impl SessionMutation {
             }
             Self::CancelExecutionGraph { .. } => ("cancel_execution_graph", None),
             Self::ResumeExecutionGraph { .. } => ("resume_execution_graph", None),
+            Self::ExtendExecutionGraphBudget { .. } => ("extend_execution_graph_budget", None),
             Self::ContinueExecutionGraphNode { .. } => ("continue_execution_graph_node", None),
             Self::AcceptExecutionGraphResult { .. } => ("accept_execution_graph_result", None),
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),

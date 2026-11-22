@@ -72,6 +72,20 @@ impl ProviderCallBudget {
             .map_or(remaining, |ceiling| remaining.min(ceiling.remaining()))
     }
 
+    /// Adds `calls` to this budget's shared pool, for every clone and
+    /// reservation that draws from it. Enclosing ceilings keep their own
+    /// limits. The ledger is not told: a grant raises the limit the host
+    /// recorded, and no call is spent or refunded.
+    pub fn extend(&self, calls: usize) {
+        // Saturate instead of wrapping, like `remaining`.
+        let _ = self
+            .pool
+            .calls
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |available| {
+                Some(available.saturating_add(calls))
+            });
+    }
+
     /// Adds an enclosing workflow ceiling while preserving the caller's own
     /// limit. Each distinct shared counter charges every provider attempt once.
     #[must_use]

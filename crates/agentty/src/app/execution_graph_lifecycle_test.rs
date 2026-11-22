@@ -11,8 +11,8 @@ use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem, TurnPrompt};
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
-    GraphBlockedReason, GraphControlRequest, GraphNodeContinuation, GraphNodeStatus,
-    GraphQuestionAnswer, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
+    ExtendGraphBudgetRequest, GraphBlockedReason, GraphControlRequest, GraphNodeContinuation,
+    GraphNodeStatus, GraphQuestionAnswer, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_worker::SessionRunClient;
 use tokio::sync::{mpsc, watch};
@@ -25,7 +25,9 @@ use crate::infra::db::AppRepositories;
 use crate::infra::fs::MockFsClient;
 use crate::test_support::{new_test_app_with_clients, test_app_clients};
 
-async fn clarification_app() -> (
+async fn clarification_app(
+    graph_tasks: usize,
+) -> (
     App,
     tempfile::TempDir,
     mpsc::UnboundedReceiver<ag_contracts::TurnRequest>,
@@ -41,7 +43,7 @@ async fn clarification_app() -> (
     });
     factory
         .expect_create_graph_task()
-        .times(2)
+        .times(graph_tasks)
         .returning(move |context, _, _| {
             let mut channel = MockAgentChannel::new();
             let observed = observed_tx.clone();
@@ -109,7 +111,7 @@ async fn clarification_app() -> (
 #[tokio::test]
 async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt() {
     // Arrange
-    let (mut app, _directory, mut observed_rx) = clarification_app().await;
+    let (mut app, _directory, mut observed_rx) = clarification_app(2).await;
     let _consumer = app.sessions.foreground_consumer();
     let service = app.session_service();
     let mut snapshot = graph();
@@ -174,10 +176,19 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
         .await
         .expect("query")
         .expect("graph");
+    let late_extension = app
+        .drive_session_request(service.extend_execution_graph_budget(budget_extension("late")))
+        .await;
 
     // Assert
     assert_eq!(completed.status, ExecutionGraphStatus::Completed);
     assert_eq!(queried.nodes[0].executions.len(), 2);
+    assert!(
+        late_extension
+            .expect_err("completed graph")
+            .to_string()
+            .contains("Completed graphs need no more provider calls")
+    );
     let transcript = second
         .continuation
         .replay_transcript()
@@ -195,7 +206,7 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
 #[tokio::test]
 async fn graph_node_questions_are_asked_and_answered_in_session_chat() {
     // Arrange
-    let (mut app, _directory, mut observed_rx) = clarification_app().await;
+    let (mut app, _directory, mut observed_rx) = clarification_app(2).await;
     let _consumer = app.sessions.foreground_consumer();
     let service = app.session_service();
     let mut snapshot = graph();
@@ -366,6 +377,94 @@ async fn graph_lifecycle_resume_is_explicit_and_cancellation_is_terminal() {
     assert_eq!(cancelled.status, ExecutionGraphStatus::Cancelled);
     assert_eq!(cancelled.nodes[0].executions.len(), 0);
     app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn budget_extension_is_recorded_once_and_releases_the_waiting_node() {
+    // Arrange
+    let (mut app, _directory, mut observed_rx) = clarification_app(1).await;
+    let _consumer = app.sessions.foreground_consumer();
+    let service = app.session_service();
+    let mut snapshot = graph();
+    snapshot.nodes.truncate(1);
+    // A restored graph whose recorded spending exhausted its fixed limit.
+    app.services
+        .db()
+        .graphs()
+        .launch_graph(&snapshot, &BTreeMap::from([("calls".into(), 0)]))
+        .await
+        .expect("durable unstarted graph");
+    app.drive_session_request(service.resume_execution_graph(ResumeExecutionGraphRequest {
+        graph: GraphControlRequest {
+            graph_id: "graph".into(),
+            revision: snapshot.revision,
+        },
+    }))
+    .await
+    .expect("resume with exhausted budget");
+    let extension = budget_extension("extension");
+    let mut missing = budget_extension("missing");
+    missing.graph.graph_id = "missing".into();
+
+    // Act
+    app.drive_session_request(service.extend_execution_graph_budget(extension.clone()))
+        .await
+        .expect("extend");
+    app.drive_session_request(service.extend_execution_graph_budget(extension))
+        .await
+        .expect("redelivered extension");
+    let turn = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async { observed_rx.recv().await.expect("extended turn") }),
+    )
+    .await
+    .expect("provider handoff after the extension");
+    let question = wait_for_status(&mut app, GraphNodeStatus::AwaitingAnswers).await;
+    let missing = app
+        .drive_session_request(service.extend_execution_graph_budget(missing))
+        .await;
+
+    // Assert
+    assert_eq!(turn.request_kind, AgentRequestKind::SessionStart);
+    assert_eq!(question.nodes[0].executions.len(), 1);
+    let remaining = app
+        .services
+        .graph_drivers
+        .lock()
+        .expect("drivers")
+        .get("graph")
+        .and_then(|driver| driver.executor.remaining_provider_calls("calls"));
+    assert_eq!(remaining, Some(0));
+    assert_eq!(
+        app.services
+            .db()
+            .graphs()
+            .budget_limits("graph")
+            .await
+            .expect("launch limits"),
+        BTreeMap::from([("calls".to_string(), 0)])
+    );
+    assert!(
+        missing
+            .expect_err("missing graph")
+            .to_string()
+            .contains("Graph is missing")
+    );
+    app.services.stop_graph_drivers(None);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Adds one provider call to the `calls` budget of revision one of `graph`.
+fn budget_extension(action_id: &str) -> ExtendGraphBudgetRequest {
+    ExtendGraphBudgetRequest {
+        action_id: action_id.into(),
+        additional_calls: 1,
+        budget_id: "calls".into(),
+        graph: GraphControlRequest {
+            graph_id: "graph".into(),
+            revision: NonZeroU64::MIN,
+        },
+    }
 }
 
 async fn wait_for_status(app: &mut App, status: GraphNodeStatus) -> ExecutionGraphProgress {
