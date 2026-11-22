@@ -123,6 +123,8 @@ const elements = {
   composer: document.getElementById("composer"),
   message: document.getElementById("message"),
   "composer-meta": document.getElementById("composer-meta"),
+  "composer-hint": document.getElementById("composer-hint"),
+  "merge-lines": document.getElementById("merge-lines"),
   stop: document.getElementById("stop"),
   send: document.getElementById("send"),
   "session-error": document.getElementById("session-error"),
@@ -608,12 +610,15 @@ async function loadSessions() {
   const sessionId = state.currentSessionId;
   try {
     const listed = await request({ method: "list_sessions" });
-    renderSessions(listed.sessions || []);
+    const sessions = listed.sessions || [];
+    renderSessions(sessions);
     elements["list-error"].textContent = "";
     if (sessionId) {
       const loaded = await request({ method: "get_session", session_id: sessionId });
       if (sessionId === state.currentSessionId) {
-        chat.render(loaded.session);
+        // The listing carries the figures the header shows beside the
+        // snapshot.
+        chat.render(loaded.session, sessions.find((summary) => summary.id === sessionId));
       }
     }
   } catch (error) {
@@ -673,6 +678,7 @@ const chat = createChat({
     cancel: elements.cancel,
     cancelDialog: elements["cancel-dialog"],
     composer: elements.composer,
+    composerHint: elements["composer-hint"],
     composerMeta: elements["composer-meta"],
     gone: elements["session-gone"],
     goneHome: elements["session-gone-home"],
@@ -680,6 +686,7 @@ const chat = createChat({
     jump: elements.jump,
     merge: elements.merge,
     mergeDialog: elements["merge-dialog"],
+    mergeLines: elements["merge-lines"],
     mergeTarget: elements["merge-target"],
     message: elements.message,
     more: elements["session-more"],
@@ -764,6 +771,7 @@ const sessionList = createSessionList({
   window: window,
 });
 window.setInterval(sessionList.tick, TICK_MS);
+window.setInterval(chat.tick, 1000);
 // An update that arrived while the page was hidden stays unread on the
 // open session until the page shows again.
 document.addEventListener("visibilitychange", () => {

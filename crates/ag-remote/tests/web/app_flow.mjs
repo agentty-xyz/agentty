@@ -222,7 +222,14 @@ async function sessionFlow() {
     },
     answerBarHidden: byId("answer-bar").hidden,
     composerHidden: byId("composer").hidden,
-    hint: byId("composer-meta").textContent,
+    hint: byId("composer-hint").textContent,
+    // The listing's figures reach the header and the row beside the
+    // snapshot's settings and branches.
+    header: [...byId("heading-sub").children]
+      .filter((node) => !node.classList.contains("timer"))
+      .map((node) => node.textContent),
+    isTimerShown: /^Timer \d/.test(byId("heading-sub").querySelector(".timer")?.textContent ?? ""),
+    meta: byId("composer-meta").textContent,
     notice: {
       isError: byId("transcript").querySelector(".msg--notice").classList.contains("is-error"),
       label: byId("transcript").querySelector(".notice-label").textContent,

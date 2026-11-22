@@ -185,7 +185,8 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     assert_eq!(listed["groups"], json!(["Active2"]));
     assert_eq!(listed["sessions"][0]["title"], "Build it");
     assert_eq!(listed["sessions"][0]["status"], "Review");
-    assert_eq!(listed["sessions"][1]["title"], "Plan it");
+    // Only the running session comes with figures, so only it has a size.
+    assert_eq!(listed["sessions"][1]["title"], "[M] Plan it");
     assert_eq!(listed["sessions"][1]["status"], "In progress");
     let time = listed["sessions"][0]["time"].as_str().unwrap_or_default();
     assert!(time.ends_with('d'), "{time}");
@@ -358,6 +359,15 @@ fn assert_message_queued_while_running(running: &Value, queued: &Value, shown: &
             "composerHidden": false,
             // The host serves turn stops, so a running turn offers `Stop`.
             "hint": "Sending queues the message · Stop returns the session to Review",
+            "header": [
+                "In progress",
+                "[M]",
+                "+64 -9",
+                "wt/session- → main",
+                "codex/gpt-6.1-sol [high]",
+            ],
+            "isTimerShown": true,
+            "meta": "codex/gpt-6.1-sol [high]·balanced·normal speed",
             "notice": {"isError": true, "label": "Commit Error", "text": "hook failed"},
             "placeholder": "Queue a message for the next turn",
             "sendLabel": "Queue message",

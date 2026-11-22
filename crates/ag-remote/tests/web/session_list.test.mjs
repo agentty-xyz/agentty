@@ -135,6 +135,59 @@ test("a row shows its title, status in its tone, time and whether it is open", (
   assert.notEqual(row("done").querySelector(".time").title, "");
 });
 
+test("rows show size, model and PR ready, and cards add the line counts, when the host sends them", () => {
+  // Arrange
+  const page = mountList();
+  const figures = {
+    added_lines: 64,
+    deleted_lines: 9,
+    id: "review",
+    model: "claude-opus-5-5",
+    model_short_name: "opus-5.5",
+    review_ready: "ready",
+    size: "M",
+    status: "Review",
+    title: "Serve the pairing page",
+    updated_at: NOW - 180,
+  };
+  const fresh = {
+    added_lines: 0,
+    deleted_lines: 0,
+    id: "fresh",
+    model: "gpt-5.4",
+    model_short_name: "gpt-5.4",
+    review_ready: "blocked",
+    size: "XS",
+    status: "Question",
+    title: "Which lint?",
+    updated_at: NOW - 720,
+  };
+  const old = { id: "old", status: "Watching", title: "From an older host", updated_at: NOW };
+
+  // Act
+  page.list.update([figures, fresh, old], null);
+  const row = (id) => page.byId("sessions").querySelector('[data-session-id="' + id + '"]');
+  const card = (id) => page.byId("home-cards").querySelector('[data-session-id="' + id + '"]');
+
+  // Assert
+  assert.equal(row("review").querySelector(".row-title").textContent, "[M] Serve the pairing page");
+  assert.equal(row("review").querySelector(".size").textContent, "[M]");
+  // A row leaves the line counts to the card and the header.
+  assert.equal(row("review").querySelector(".row-meta").textContent, "Review·opus-5.5·PR ready3m");
+  assert.equal(row("review").querySelector(".model").title, "opus-5.5");
+  // A pull request that cannot merge shows nothing.
+  assert.equal(row("fresh").querySelector(".row-meta").textContent, "Question·gpt-5.412m");
+  assert.equal(row("old").querySelector(".row-title").textContent, "From an older host");
+  assert.equal(row("old").querySelector(".row-meta").textContent, "Watchingnow");
+  assert.equal(card("review").querySelector(".card-title").textContent, "[M] Serve the pairing page");
+  assert.equal(card("review").querySelector(".card-figures").textContent, "+64 -9·opus-5.5·PR ready");
+  assert.equal(card("review").querySelector(".add").textContent, "+64");
+  assert.equal(card("review").querySelector(".del").textContent, "-9");
+  // No changes yet, so no counts.
+  assert.equal(card("fresh").querySelector(".card-figures").textContent, "gpt-5.4");
+  assert.equal(card("old").querySelector(".card-figures"), null);
+});
+
 test("a row renders a hostile title only as a text node", () => {
   // Arrange
   const page = mountList();

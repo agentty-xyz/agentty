@@ -5,15 +5,21 @@ import {
   FILTERS,
   GROUPS,
   MAX_SEEN,
+  activeSeconds,
   filterCounts,
   filterSessions,
+  formatTimer,
   groupSessions,
   mergeSeen,
+  modelLabel,
   parseActivity,
   parseNotice,
   parseSeen,
   reconcileSeen,
   relativeTime,
+  reviewLabel,
+  sessionFigures,
+  settingsParts,
   statusInfo,
   unreadIds,
 } from "../../assets/format.mjs";
@@ -402,4 +408,97 @@ test("unreadIds lists sessions updated since seen, and new ones, but never the o
   // Assert
   assert.deepEqual([...unread], ["b", "new"]);
   assert.deepEqual([...withoutStorage], []);
+});
+
+test("formatTimer counts like the terminal's timer", () => {
+  assert.equal(formatTimer(0), "0s");
+  assert.equal(formatTimer(-5), "0s");
+  assert.equal(formatTimer(12.8), "12s");
+  assert.equal(formatTimer(252), "4m 12s");
+  assert.equal(formatTimer(3600), "1h 0s");
+  assert.equal(formatTimer(3723), "1h 2m 3s");
+});
+
+test("activeSeconds adds the open interval to earlier work, only while running", () => {
+  const running = { in_progress_started_at: 100, in_progress_total_seconds: 30 };
+
+  assert.equal(activeSeconds(running, 160), 90);
+  assert.equal(activeSeconds({ in_progress_started_at: 100 }, 160), 60);
+  // A clock behind the host's never counts backwards.
+  assert.equal(activeSeconds(running, 90), 30);
+  assert.equal(activeSeconds({ in_progress_total_seconds: 30 }, 160), null);
+  assert.equal(activeSeconds(null, 160), null);
+});
+
+test("sessionFigures reads the listing's figures and hides what an older host omits", () => {
+  assert.deepEqual(
+    sessionFigures({
+      added_lines: 64,
+      deleted_lines: 9,
+      model: "claude-opus-5-5",
+      model_short_name: "opus-5.5",
+      review_ready: "ready",
+      size: "M",
+    }),
+    { isPrReady: true, lines: { added: 64, deleted: 9 }, model: "opus-5.5", size: "M" },
+  );
+  assert.deepEqual(sessionFigures({ id: "old", status: "Review" }), {
+    isPrReady: false,
+    lines: null,
+    model: null,
+    size: null,
+  });
+  assert.equal(sessionFigures(null).size, null);
+  // No changes yet, so no counts; the model id stands in for a short name.
+  const fresh = sessionFigures({ added_lines: 0, deleted_lines: 0, model: "gpt-5.4", size: "XS" });
+  assert.equal(fresh.lines, null);
+  assert.equal(fresh.model, "gpt-5.4");
+  assert.equal(sessionFigures({ review_ready: "ready_with_bypass" }).isPrReady, true);
+  assert.equal(sessionFigures({ review_ready: "blocked" }).isPrReady, false);
+});
+
+test("modelLabel joins the agent and the listing's short name for the same model", () => {
+  const session = { agent: "claude", model: "claude-opus-5-5" };
+  const summary = { model: "claude-opus-5-5", model_short_name: "opus-5.5" };
+  const stale = { model: "gpt-5.4", model_short_name: "gpt-5.4" };
+
+  assert.equal(modelLabel(session, summary), "claude/opus-5.5");
+  assert.equal(modelLabel(session), "claude-opus-5-5");
+  // A listing from before a model change does not rename the session's.
+  assert.equal(modelLabel(session, stale), "claude-opus-5-5");
+  assert.equal(modelLabel({ model: "claude-opus-5-5" }, summary), "claude-opus-5-5");
+  assert.equal(modelLabel({ agent: "claude" }, summary), null);
+  assert.equal(modelLabel(null), null);
+});
+
+test("settingsParts lists model and reasoning, style and speed, leaving out what is missing", () => {
+  const session = {
+    agent: "claude",
+    model: "claude-opus-5-5",
+    reasoning: "high",
+    response_style: "balanced",
+    speed_mode: "normal",
+  };
+
+  assert.deepEqual(settingsParts(session), [
+    { label: "claude-opus-5-5", reasoning: "high", type: "model" },
+    { label: "balanced", type: "style" },
+    { label: "normal speed", type: "speed" },
+  ]);
+  assert.deepEqual(settingsParts({ model: "gpt-5.4" }), [
+    { label: "gpt-5.4", reasoning: null, type: "model" },
+  ]);
+  assert.deepEqual(settingsParts({ id: "old" }), []);
+  assert.deepEqual(settingsParts(null), []);
+});
+
+test("reviewLabel names the request, its state and the forge summary", () => {
+  assert.equal(
+    reviewLabel({ display_id: "#1261", state: "Open", status_summary: "PR ready" }),
+    "#1261 open · PR ready",
+  );
+  assert.equal(reviewLabel({ display_id: "!42", state: "Merged" }), "!42 merged");
+  assert.equal(reviewLabel({ display_id: "#7" }), "#7");
+  assert.equal(reviewLabel({ state: "Open" }), null);
+  assert.equal(reviewLabel(null), null);
 });

@@ -15,8 +15,8 @@ use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     ForgeKind, HostContext, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError, SessionId,
-    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
-    SessionSettingsChange, SessionStatus, SessionSummary,
+    SessionListEntry, SessionListStats, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -457,6 +457,31 @@ impl SessionBackend for RecordingBackend {
             path: "a.rs".to_string(),
             status: SessionDiffFileStatus::Added,
         }]))
+    }
+
+    /// Lists `session-2` with the figures of a running turn, and every
+    /// other session without figures, as an older host lists them.
+    async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
+        let summaries = self.list_sessions().await?;
+
+        Ok(summaries
+            .into_iter()
+            .map(|summary| {
+                let stats = (summary.id.as_str() == "session-2").then(|| SessionListStats {
+                    added_lines: 64,
+                    deleted_lines: 9,
+                    has_merge_conflict: false,
+                    in_progress_started_at: Some(100),
+                    in_progress_total_seconds: 12,
+                    model: ag_session::test_support::codex_selection().model(),
+                    reasoning_level: ag_session::ReasoningLevel::High,
+                    review_request: None,
+                    size_label: "M".to_string(),
+                });
+
+                SessionListEntry { stats, summary }
+            })
+            .collect())
     }
 
     // Lists `session-1`, waiting on a question, and `session-2`, running a

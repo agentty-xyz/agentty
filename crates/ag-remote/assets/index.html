@@ -314,6 +314,7 @@
                                     </button>
                                 </div>
                             </form>
+                            <p id="composer-hint" class="dock-hint wide-only"></p>
                             <p id="session-error" class="error" role="alert"></p>
                             <div id="answer-bar" class="answer-bar" hidden>
                                 <p id="answer-count"></p>
@@ -349,7 +350,7 @@
                 <form method="dialog">
                     <h2 id="merge-dialog-title">Merge this session?</h2>
                     <p>
-                        Agentty queues a squash merge of the session's changes into <code id="merge-target">its base branch</code> in the project's checkout, as <code>m</code> does in the terminal. A failed merge returns the session to review.
+                        Agentty queues a squash merge of the session's changes<span id="merge-lines"></span> into <code id="merge-target">its base branch</code> in the project's checkout, as <code>m</code> does in the terminal. A failed merge returns the session to review.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>
