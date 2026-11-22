@@ -38,7 +38,8 @@ through `ag_session::SessionService`.
 - Keep frame changes additive: a self-hosted relay serves its own copy of the web
   client, so the page and Agentty may differ in version. Give new frame fields a
   default, omit them when empty, and offer each new request only through a
-  `capabilities` entry. Bump `PROTOCOL_VERSION` only when a frame changes meaning or
+  `capabilities` entry. A new `ClientFrame` type is not additive: an older server closes
+  the connection on it. Bump `PROTOCOL_VERSION` only when a frame changes meaning or
   loses a field.
 - Update the web client and `crates/ag-remote/tests/server/` together with
   `crates/ag-remote/src/protocol.rs`.
