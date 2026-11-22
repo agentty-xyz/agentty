@@ -181,6 +181,16 @@ or review steps directly in a checkout.
   describes, and repeat for at most three rounds while actionable suggestions remain.
   Review again before marking it ready or merging it if that diff changed since the
   review; a rebase that leaves it unchanged needs no new review.
+- Remove a worktree once the pull request for its branch has merged and nothing is
+  working in it. Remove the ones this session created after merging their pull requests.
+  Before handoff, check `git worktree list` for other merged leftovers and list them for
+  the user; remove those only after the user confirms they are idle, because a clean,
+  unlocked worktree can still belong to a running session. Leave Agentty session
+  worktrees, on `wt/<id>` branches, to Agentty. Read the state from
+  `gh pr view <branch> --json state`, because a squash merge leaves the branch out of
+  `git branch --merged`. Run `git worktree remove <path>` without `--force`: a refusal
+  means uncommitted changes or a lock, so leave that worktree in place and report it.
+  Every worktree keeps its own build output, so leftovers hold tens of gigabytes.
 
 ## Instruction Files
 
