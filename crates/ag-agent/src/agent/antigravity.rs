@@ -79,7 +79,9 @@ impl AgentBackend for AntigravityBackend {
 
         command.arg("--sandbox");
         if permission_mode.is_read_only() {
-            command.arg("--mode").arg("plan");
+            command
+                .arg("--settings")
+                .arg(read_only_settings().to_string());
         } else {
             command.arg("--dangerously-skip-permissions");
         }
@@ -110,6 +112,20 @@ impl AgentBackend for AntigravityBackend {
 
         Ok(command)
     }
+}
+
+/// Returns session-only settings that keep `Read Only` turns inspection-only.
+///
+/// Explicit deny rules return a tool error the model can recover from. The
+/// headless fallback for unapproved tools instead ends the turn without a
+/// response, and provider plan mode answers with an implementation plan
+/// instead of the requested result.
+fn read_only_settings() -> serde_json::Value {
+    serde_json::json!({
+        "permissions": {
+            "deny": ["command(*)", "write_file(*)"],
+        },
+    })
 }
 
 #[cfg(test)]

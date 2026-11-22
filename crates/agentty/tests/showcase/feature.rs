@@ -132,7 +132,7 @@ async fn setup_feature_env(temp: &tempfile::TempDir) -> ShowcaseResult<(PathBuf,
 
 /// Deterministic CLI versions rendered in the Projects dashboard.
 const AGENT_CLI_STUBS: [(&str, &str); 3] = [
-    ("agy", "agy 1.2.0"),
+    ("agy", "agy 1.6.0"),
     ("claude", "claude 2.1.7"),
     ("codex", "codex-cli 0.114.0"),
 ];

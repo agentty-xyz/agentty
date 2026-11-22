@@ -18,7 +18,7 @@ Agentty fails at startup with an install hint when none is found.
   [Codex CLI](https://github.com/openai/codex), then run `codex login`.
 - Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code),
   then run `claude auth login`.
-- Antigravity (`agy` 1.1.18 or newer): install the
+- Antigravity (`agy` 1.5.8 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
   `agy` and follow its sign-in flow.
 
@@ -42,7 +42,8 @@ account, plan, and usage pattern.
   diff, and use `Read Only` for inspection-only work.
 - **Read Only**: Codex denies filesystem writes and permission escalation but allows
   shell network requests. Claude runs without a shell, using `Read`, `Glob`, `Grep`,
-  `WebSearch`, and `WebFetch`. This also applies to read-only graph nodes.
+  `WebSearch`, and `WebFetch`. Antigravity denies shell commands and file writes. This
+  also applies to read-only graph nodes.
 - Claude turns can always use `WebSearch` and `WebFetch` without a permission prompt,
   and Claude's file-edit tool cannot edit the main checkout. Treat fetched web content
   as untrusted, keep web-backed prompts specific, and review the diff before merging.

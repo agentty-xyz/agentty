@@ -99,9 +99,9 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
 }
 
 #[test]
-/// Verifies Antigravity research turns use provider plan mode without
-/// bypassing permission checks.
-fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
+/// Verifies Antigravity read-only turns deny commands and file writes through
+/// explicit rules instead of provider plan mode or bypassed permissions.
+fn test_antigravity_read_only_mode_denies_commands_and_writes() {
     // Arrange
     let temp_directory = visible_tempdir();
     let backend = supported_backend();
@@ -131,9 +131,22 @@ fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
+    let settings_index = args
+        .iter()
+        .position(|argument| argument == "--settings")
+        .expect("read-only command should pass session settings");
+    let settings =
+        serde_json::from_str::<Value>(&args[settings_index + 1]).expect("settings should be JSON");
+
     // Assert
     assert!(args.iter().any(|argument| argument == "--sandbox"));
-    assert!(args.windows(2).any(|pair| pair == ["--mode", "plan"]));
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "permissions": {"deny": ["command(*)", "write_file(*)"]},
+        })
+    );
+    assert!(!args.iter().any(|argument| argument == "--mode"));
     assert!(
         !args
             .iter()

@@ -214,7 +214,7 @@ async fn seed_antigravity_stream_prompt_project(
     let stub_agent_path = env.stub_bin.join("agy");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
-if [ "$1" = "--version" ]; then printf 'agy 1.2.0\n'; exit 0; fi
+if [ "$1" = "--version" ]; then printf 'agy 1.6.0\n'; exit 0; fi
 output_format=''
 input_format=''
 schema=''

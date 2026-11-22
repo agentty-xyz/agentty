@@ -99,7 +99,7 @@ async fn seed_rebase_pre_commit_hook_session(
     let antigravity_path = env.stub_bin.join("agy");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
-if [ "$1" = "--version" ]; then printf 'agy 1.2.0\n'; exit 0; fi
+if [ "$1" = "--version" ]; then printf 'agy 1.6.0\n'; exit 0; fi
 
 printf '%s\n' '{"event":"init","conversation_id":"rebase-hook-test","init":{"cwd":"stub"}}'
 turn=0
