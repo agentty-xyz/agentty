@@ -15,6 +15,11 @@ mod store;
 mod turn;
 mod utility;
 
+/// Host contract: a host whose runtime configuration enables harness
+/// sessions calls this first in `main`, before starting any runtime or
+/// thread, and returns its exit code at once when it is `Some`; the
+/// executable then serves as the native sandbox helper of its sessions.
+/// Without the call, their commands run unsandboxed and every turn warns.
 pub use ag_runtime::dispatch_sandbox_helper;
 pub use graph::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,

@@ -248,21 +248,36 @@ model.
   `bash`. Provider keys and endpoints are removed from the `bash` environment.
 - <a id="backends-harness-sandbox"></a> `bash` runs in the operating system's sandbox
   where it is available: Seatbelt on macOS, Bubblewrap on Linux. Commands can read the
-  disk but write only the session worktree, its Git metadata, and a temporary directory
-  per session, which also holds the Cargo, npm, Go, pip, and other tool caches, so
-  dependencies download again in each session. They keep network access but cannot reach
-  local sockets such as Docker's. Credential stores such as `~/.ssh`, `~/.aws`,
-  `~/.config/gh`, the keychains, browser profiles, and Agentty's harness history and
-  ChatGPT sign-in stay hidden; on macOS, Git over SSH can still use the SSH agent. Run
-  commands that need more access yourself; Agentty never reruns a blocked command
-  outside the sandbox, and shows a `[Sandbox]` hint when a command may have been
-  blocked.
-- Where the sandbox cannot run, commands run without it and the session shows a
-  `[Sandbox Warning]` once, naming what is missing and how to fix it. On Linux, install
-  Bubblewrap (for example `sudo apt install bubblewrap`), allow unprivileged user
-  namespaces, and run kernel 6.2 or later; on macOS, start Agentty outside other
-  sandboxes. Restart Agentty after upgrading it, since the running process uses its own
-  executable as the sandbox helper.
+  disk but write only the session worktree, its Git metadata, and the project's sandbox
+  directory. They keep network access but cannot reach local sockets such as Docker's.
+  Credential stores such as `~/.ssh`, `~/.aws`, `~/.config/gh`, the keychains, browser
+  profiles, and Agentty's harness history and ChatGPT sign-in stay hidden; on macOS, Git
+  over SSH can still use the SSH agent. Agentty never reruns a blocked command outside
+  the sandbox; it shows a `[Sandbox]` hint when a command may have been blocked.
+- The sandbox directory, `~/.agentty/harness/sandbox-cache/<project>/`, is the commands'
+  temporary directory and holds the Cargo (`CARGO_HOME`), npm, Go, pip, and
+  `XDG_CACHE_HOME` caches, shared by every Harness session of the repository. Host tools
+  never read it, so the first build in it downloads dependencies again; delete it any
+  time no session is running to reclaim space.
+- Your Cargo configuration still applies: Cargo finds `~/.cargo/config.toml` above a
+  worktree in the home directory, and otherwise Agentty links your `CARGO_HOME`'s
+  configuration into the sandbox, never its credentials. Other settings kept in
+  `~/.cargo` do not reach sandboxed commands.
+- Commands cannot install toolchains or tools into the home directory: `rustup`
+  toolchain installs (including those a `rust-toolchain.toml` triggers), `go install`
+  into `~/go/bin`, and Gradle, Maven, or pnpm homes in `~/.gradle`, `~/.m2`, or the pnpm
+  store fail. Install them in a terminal outside the session, then run the session's
+  commands again.
+- Where the sandbox cannot run, commands run without it, and the session shows a
+  `[Sandbox Warning]` as soon as the turn starts, naming what is missing and how to fix
+  it. It appears once, and again when the reason changes or after the sandbox worked in
+  between, which a `[Sandbox]` note confirms. On Linux, install Bubblewrap (for example
+  `sudo apt install bubblewrap`), allow unprivileged user namespaces, and run kernel 6.2
+  or later; on macOS, start Agentty outside other sandboxes. Restart Agentty after
+  upgrading it, since the running process uses its own executable as the sandbox helper.
+  Sync conflict assistance in a session warns the same way; merge conflict assistance
+  and commit assistance use the same sandbox but show no warning of their own, so the
+  session's turns are where it appears.
 - Answers and reasoning stream into the session view as the model writes them, with a
   short "Preparing a tool call" line while tool arguments arrive; the activity footer
   shows tool calls while a turn runs. Streamed text is replaced by the saved answer when

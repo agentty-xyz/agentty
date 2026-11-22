@@ -27,6 +27,9 @@ pub enum TurnNotice {
         /// How the user can fix it.
         remedy: String,
     },
+    /// The turn offered shell commands and the native sandbox ran them, so
+    /// a host can tell the user when an earlier warning no longer applies.
+    SandboxAvailable,
     /// A sandboxed command failed with an operating-system denial the
     /// sandbox may have caused. The guess is heuristic, since the command's
     /// own output can trigger it; hosts never rerun a command outside the

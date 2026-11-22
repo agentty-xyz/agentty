@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -1774,62 +1775,53 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
     Ok(())
 }
 
-/// Answer the scripted provider returns after the sandbox-less command ran.
-#[cfg(target_os = "linux")]
-const SANDBOX_ANSWER: &str = "Listed the files without the sandbox.";
+/// Answer the scripted provider returns to every sandbox scenario turn.
+const SANDBOX_ANSWER: &str = "Answered without the sandbox.";
 
-/// Scripts a provider that runs one `ls` through `bash`, then answers.
-#[cfg(target_os = "linux")]
-async fn listing_provider() -> MockServer {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(body_string_contains(r#""tool_call_id":"call-ls""#))
-        .respond_with(answer(SANDBOX_ANSWER))
-        .with_priority(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(body_string_contains("List the files"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call-ls",
-                        "type": "function",
-                        "function": {
-                            "name": "bash",
-                            "arguments": json!({"command": "ls"}).to_string()
-                        }
-                    }]
+/// Journey step that removes the running `agentty` copy at `binary`, the
+/// sandbox helper it registered at startup, as an upgrade that deletes the
+/// old executable would.
+fn remove_sandbox_helper(binary: PathBuf) -> Journey {
+    Journey::new("remove_sandbox_helper")
+        .with_description("Delete the running executable, which is the sandbox helper")
+        .step(Step::eventually(
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            move |frame| match std::fs::remove_file(&binary) {
+                // Retries on the next poll; on timeout the failure names the
+                // I/O error.
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    assertion::match_text_in_region(
+                        frame,
+                        &format!("E2E sandbox helper removed ({error})"),
+                        &Region::full(frame.cols(), frame.rows()),
+                    )
                 }
-            }]
-        })))
-        .with_priority(2)
-        .mount(&server)
-        .await;
-
-    server
+                _ => Ok(()),
+            },
+        ))
 }
 
-/// Runs where Bubblewrap is missing, as in the E2E container: the turn's
-/// command runs without the sandbox and the session shows why, once.
-#[cfg(target_os = "linux")]
+/// The session shows once that commands run without the sandbox when it
+/// cannot start, here because the running executable, its helper, is gone.
 #[tokio::test]
 async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E2eResult {
     // Arrange
-    assert!(
-        !std::path::Path::new("/usr/bin/bwrap").exists(),
-        "this scenario needs a host without Bubblewrap, such as the E2E container"
-    );
-    let server = listing_provider().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("List the files"))
+        .respond_with(answer(SANDBOX_ANSWER))
+        .mount(&server)
+        .await;
+    let binary_directory = tempfile::tempdir()?;
+    let binary = binary_directory.path().join("agentty");
+    std::fs::copy(assert_cmd::cargo::cargo_bin("agentty"), &binary)?;
 
     // Act, Assert
     FeatureTest::new("harness_sandbox_warning")
         .with_git()
+        .binary(binary.clone())
         .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
@@ -1846,6 +1838,7 @@ async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E
                     .press_key("j")
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
+                    .compose(&remove_sandbox_helper(binary))
                     .write_text("List the files")
                     .wait_for_text("List the files", 3000)
                     .press_key("Enter")
@@ -1861,7 +1854,7 @@ async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E
                     .wait_for_stable_frame(500, 10000)
                     .capture_labeled(
                         "harness_sandbox_warning",
-                        "The session warns that commands ran without the sandbox",
+                        "The session warns that commands run without the sandbox",
                     )
                     // The follow-up turn offers commands again; the session
                     // already shows the unchanged warning.
@@ -1885,37 +1878,13 @@ async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_match_count(frame, "[Sandbox Warning]", 1);
-                    assertion::assert_text_in_region(frame, "Install bubblewrap", &full);
-                    assertion::assert_text_in_region(frame, SANDBOX_ANSWER, &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Sandbox Warning] Commands run without the sandbox.",
+                        &full,
+                    );
                 })
             },
         )
-        .await?;
-
-    // Session requests advertise `bash` as running without the sandbox,
-    // never as sandboxed, and the command's result reaches the provider.
-    let bodies = server
-        .received_requests()
         .await
-        .unwrap_or_default()
-        .iter()
-        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
-        .collect::<Vec<_>>();
-    assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains("Run Bash directly on the host without a sandbox."))
-    );
-    assert!(
-        !bodies
-            .iter()
-            .any(|body| body.contains("Run Bash inside a host filesystem sandbox."))
-    );
-    assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains(r#""tool_call_id":"call-ls""#))
-    );
-
-    Ok(())
 }

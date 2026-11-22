@@ -50,7 +50,10 @@ flowchart TD
 <a id="supporting-boundaries"></a> Only `ag-worker` depends on `ag-runtime`, and only
 `ag-runtime` depends on `ag-agent`. Only `ag-harness-cli` and `ag-agent` may depend on
 `ag-harness`. Applications configure worker handles and import shared types from
-`ag-contracts`.
+`ag-contracts`. A host that enables harness sessions must also call
+`ag_worker::dispatch_sandbox_helper` first in `main`, before starting any runtime, so
+its own executable serves as the native sandbox helper; without the call, commands run
+unsandboxed and every turn warns about it.
 
 The `check-execution-boundary` hook enforces this boundary on every commit: dependency
 rules cover all workspace dependencies, including test code, and source checks keep raw

@@ -4,8 +4,9 @@
 //! The binary is its own test harness so that `main` can call
 //! `dispatch_sandbox_helper` before anything else, as Agentty's `main`
 //! does; the harness then starts this executable as the sandbox helper. It
-//! answers the `cargo nextest` listing protocol and runs its one test
-//! otherwise.
+//! answers the `cargo nextest` listing protocol, runs its one test when
+//! selected, and fails on any other argument or a filter that selects
+//! nothing, so it never passes without running.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -35,7 +36,7 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 const TEST_NAME: &str = "session_commands_commit_in_a_linked_worktree_and_stay_confined";
 /// Harness model served by the scripted provider.
 const MODEL: &str = "muse-spark-1.3";
-/// Session whose harness directory holds the command's temporary directory.
+/// Session whose harness history the command tries to read.
 const SESSION_ID: &str = "session-sandbox";
 
 fn main() -> ExitCode {
@@ -43,40 +44,89 @@ fn main() -> ExitCode {
         return helper;
     }
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    let has = |flag: &str| arguments.iter().any(|argument| argument == flag);
-    if has("--list") {
-        // This harness has no ignored tests.
-        let listing = if has("--ignored") {
-            String::new()
-        } else {
-            format!("{TEST_NAME}: test\n")
-        };
-
-        return match io::stdout().write_all(listing.as_bytes()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        };
-    }
-    let selected = arguments
-        .iter()
-        .find(|argument| !argument.starts_with("--"))
-        .is_none_or(|filter| {
-            if has("--exact") {
-                filter == TEST_NAME
+    let outcome = match Invocation::parse(&arguments) {
+        Ok(Invocation::List { ignored }) => {
+            // This harness has no ignored tests.
+            let listing = if ignored {
+                String::new()
             } else {
-                TEST_NAME.contains(filter.as_str())
-            }
-        });
-    if !selected {
-        return ExitCode::SUCCESS;
-    }
-    match run() {
+                format!("{TEST_NAME}: test\n")
+            };
+
+            io::stdout()
+                .write_all(listing.as_bytes())
+                .map_err(Box::<dyn Error>::from)
+        }
+        Ok(Invocation::Run) => run(),
+        Err(error) => Err(error.into()),
+    };
+
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            let _ = writeln!(io::stderr().lock(), "{TEST_NAME} failed: {error}");
+            let _ = writeln!(io::stderr().lock(), "{TEST_NAME}: {error}");
 
             ExitCode::FAILURE
         }
+    }
+}
+
+/// What the test runner asked this harness to do.
+enum Invocation {
+    /// List the tests, or the ignored ones, as `cargo nextest` expects.
+    List {
+        /// Whether only ignored tests are listed.
+        ignored: bool,
+    },
+    /// Run the test.
+    Run,
+}
+
+impl Invocation {
+    /// Parses the runner's arguments: `--list --format terse [--ignored]`,
+    /// or an optional name filter with `--exact` and `--nocapture`, as
+    /// `cargo nextest` and plain `cargo test` pass them.
+    ///
+    /// # Errors
+    /// Returns an error for any other argument, a second filter, or a
+    /// filter that does not select the test.
+    fn parse(arguments: &[String]) -> Result<Self, String> {
+        let mut list = false;
+        let mut ignored = false;
+        let mut exact = false;
+        let mut filter = None;
+        let mut remaining = arguments.iter();
+        while let Some(argument) = remaining.next() {
+            match argument.as_str() {
+                "--list" => list = true,
+                "--ignored" => ignored = true,
+                "--exact" => exact = true,
+                "--nocapture" => {}
+                "--format" if remaining.next().map(String::as_str) == Some("terse") => {}
+                name if !name.starts_with('-') && filter.is_none() => filter = Some(name),
+                other => return Err(format!("unsupported argument `{other}`")),
+            }
+        }
+        if list {
+            return Ok(Self::List { ignored });
+        }
+        if ignored {
+            return Err("this harness has no ignored tests to run".to_string());
+        }
+        let selected = filter.is_none_or(|filter| {
+            if exact {
+                filter == TEST_NAME
+            } else {
+                TEST_NAME.contains(filter)
+            }
+        });
+        if !selected {
+            return Err(format!(
+                "the filter selects no test; the only test is `{TEST_NAME}`"
+            ));
+        }
+
+        Ok(Self::Run)
     }
 }
 
@@ -147,6 +197,10 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
     assert!(
         notices.contains(&TurnNotice::LikelySandboxDenial),
         "the denied write must be reported: {notices:?}"
+    );
+    assert!(
+        notices.contains(&TurnNotice::SandboxAvailable),
+        "the sandboxed turn must report it: {notices:?}"
     );
     fixture.assert_effects()
 }
@@ -225,21 +279,19 @@ impl Fixture {
     }
 
     /// Asserts that the commit landed on the session branch, the temporary
-    /// file exists, and nothing was written outside.
+    /// file is in the project's one sandbox directory, and nothing was
+    /// written outside.
     fn assert_effects(&self) -> TestResult {
         let log = Command::new("git")
             .args(["log", "-1", "--format=%s", "session"])
             .current_dir(self.repository.path())
             .output()?;
         assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add notes");
-        assert!(
-            self.data_root
-                .path()
-                .join(SESSION_ID)
-                .join("tmp")
-                .join("scratch")
-                .exists()
-        );
+        let projects = std::fs::read_dir(self.data_root.path().join("sandbox-cache"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(projects.len(), 1, "{projects:?}");
+        assert!(projects[0].join("scratch").exists());
         assert!(!self.escape().exists());
 
         Ok(())

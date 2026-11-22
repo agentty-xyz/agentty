@@ -311,14 +311,6 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
-      - id: test-ag-agent-sandbox
-        name: cargo nextest ag-agent native sandbox
-        description: Run Agentty's command grants under the real native sandbox on a qualified Linux or macOS host.
-        entry: cargo nextest run --locked --timings --profile ci -p ag-agent --test native_sandbox
-        language: system
-        always_run: true
-        pass_filenames: false
-        stages: [manual]
       - id: test-agentty-e2e
         name: cargo nextest agentty e2e
         description: Agentty integration tests from `crates/agentty/tests`.
@@ -418,7 +410,7 @@ repos:
         stages: [manual]
       - id: coverage-ag-harness-sandbox
         name: native sandbox coverage
-        description: Cover ag-harness source and public contracts with native launcher profiling on qualified Linux and macOS hosts.
+        description: Cover ag-harness source and public contracts with native launcher profiling, and run Agentty's command grants under the real sandbox, on qualified Linux and macOS hosts.
         entry: >-
           bash -eu -o pipefail -c 'coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
           case "$(uname -s)" in Darwin)
@@ -435,6 +427,7 @@ repos:
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --locked --timings --profile ci -p ag-harness --test sandbox
           --lib --test public_api --test lifecycle --test telemetry --test benchmark_summary
+          -p ag-agent --test native_sandbox
           --lcov --output-path target/harness-sandbox.lcov'
         language: system
         always_run: true

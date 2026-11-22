@@ -465,12 +465,14 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
 - `ReadOnly` maps to `read`. Edit modes add `write` and `bash`, which inherits Agentty's
   environment without provider credential and endpoint variables.
 - `bash` runs in the native sandbox with Agentty's grants: full-disk reads, writes to
-  the worktree, its Git metadata, and a per-session temporary directory that holds the
-  tool caches, network, and on macOS the SSH agent socket. The harness data root and the
-  ChatGPT sign-in are hidden. The `agentty` executable calls
-  `ag_harness::sandbox::dispatch` first in `main`, so it is its own sandbox helper.
-  Where the sandbox cannot run, commands run unsandboxed and each turn reports
-  `SandboxUnavailable`, which the session view shows once per session.
+  the worktree, its Git metadata, and a per-project sandbox directory that is the
+  temporary directory and holds the tool caches, network, and on macOS the SSH agent
+  socket. The harness data root and the ChatGPT sign-in are hidden. The `agentty`
+  executable calls `ag_worker::dispatch_sandbox_helper`, which wraps the harness's
+  `sandbox::dispatch`, first in `main`, so it is its own sandbox helper. Where the
+  sandbox cannot run, commands run unsandboxed and each turn reports
+  `SandboxUnavailable`, which the session view shows once per session, or again when the
+  reason changes or the sandbox worked in between.
 - Each session's database lives under the Agentty data root, outside the session
   worktree; session deletion removes it.
 - A turn returns to Agentty only after `TurnControl::settled`, so Agentty commits a

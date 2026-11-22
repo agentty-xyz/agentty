@@ -1,79 +1,90 @@
-//! Sandbox notice reduction tests: the warning once per session or when it
-//! changes, and the denial hint for each turn that reports one.
+//! Sandbox notice tests: the warning once per change of the sandbox state,
+//! a note when it works again, and the denial hint once per turn.
 
-use super::TurnSandbox;
+use ag_contracts::TurnNotice;
+
+use super::SandboxNotices;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind};
 
-/// Returns the turn state after observing the warnings `messages`, each
-/// with the same remedy.
-fn unavailable(messages: &[&str]) -> TurnSandbox {
-    let mut sandbox = TurnSandbox::default();
-    for message in messages {
-        sandbox.observe_unavailable(message, "Install bubblewrap.");
+/// Returns a warning notice for `message`.
+fn unavailable(message: &str) -> TurnNotice {
+    TurnNotice::SandboxUnavailable {
+        message: message.to_string(),
+        remedy: "Install bubblewrap.".to_string(),
     }
+}
 
-    sandbox
+/// Returns `notices` as the workflow notices of a transcript.
+fn transcript(notices: &[&str]) -> Vec<SessionMessage> {
+    notices
+        .iter()
+        .zip(0..)
+        .map(|(notice, position)| {
+            SessionMessage::new(position, SessionMessageKind::WorkflowNotice, *notice)
+        })
+        .collect()
 }
 
 #[test]
-fn quiet_turns_add_no_notices() {
+fn the_warning_is_shown_once_per_change_of_the_sandbox_state() {
     // Arrange
-    let sandbox = TurnSandbox::default();
+    let mut sandbox = SandboxNotices::default();
+    let warning = sandbox
+        .notice(&unavailable("Bubblewrap is missing."), &[])
+        .expect("first warning");
+    let warned = transcript(&[&warning, "\n[Commit] committed\n"]);
 
     // Act
-    let notices = sandbox.notices(&[]);
+    let repeated = sandbox.notice(&unavailable("Bubblewrap is missing."), &warned);
+    let changed = sandbox.notice(&unavailable("User namespaces are disabled."), &warned);
+    let restored = sandbox
+        .notice(&TurnNotice::SandboxAvailable, &warned)
+        .expect("restored note");
+    let after_restore = transcript(&[&warning, &restored]);
+    let broken_again = sandbox.notice(&unavailable("Bubblewrap is missing."), &after_restore);
+    let still_working = sandbox.notice(&TurnNotice::SandboxAvailable, &after_restore);
 
     // Assert
-    assert_eq!(notices, Vec::<String>::new());
+    assert_eq!(
+        warning,
+        "\n[Sandbox Warning] Bubblewrap is missing. Install bubblewrap.\n"
+    );
+    assert_eq!(repeated, None);
+    assert_eq!(
+        changed.as_deref(),
+        Some("\n[Sandbox Warning] User namespaces are disabled. Install bubblewrap.\n")
+    );
+    assert_eq!(restored, "\n[Sandbox] Commands run in the sandbox again.\n");
+    assert_eq!(broken_again, Some(warning));
+    assert_eq!(still_working, None);
 }
 
 #[test]
-fn the_warning_is_shown_once_per_session_until_it_changes() {
+fn a_working_sandbox_adds_nothing_to_a_session_without_warnings() {
     // Arrange
-    let first = unavailable(&["Bubblewrap is missing."]);
-    let shown = first.notices(&[]);
-    let transcript = [
-        SessionMessage::new(0, SessionMessageKind::WorkflowNotice, shown[0].clone()),
-        SessionMessage::new(
-            1,
-            SessionMessageKind::WorkflowNotice,
-            "\n[Commit] committed\n",
-        ),
-        SessionMessage::new(2, SessionMessageKind::UserPrompt, "Next"),
-    ];
-    let changed = unavailable(&["User namespaces are disabled."]);
+    let mut sandbox = SandboxNotices::default();
 
     // Act
-    let repeated = first.notices(&transcript);
-    let after_change = changed.notices(&transcript);
+    let available = sandbox.notice(&TurnNotice::SandboxAvailable, &[]);
+    let compacted = sandbox.notice(&TurnNotice::ContextCompacted { model: None }, &[]);
 
     // Assert
-    assert_eq!(
-        shown,
-        ["\n[Sandbox Warning] Bubblewrap is missing. Install bubblewrap.\n"]
-    );
-    assert_eq!(repeated, Vec::<String>::new());
-    assert_eq!(
-        after_change,
-        ["\n[Sandbox Warning] User namespaces are disabled. Install bubblewrap.\n"]
-    );
+    assert_eq!(available, None);
+    assert_eq!(compacted, None);
 }
 
 #[test]
-fn a_likely_denial_adds_the_hint_after_the_latest_warning() {
+fn the_denial_hint_is_shown_once_per_turn() {
     // Arrange
-    let mut sandbox = unavailable(&["Old reason.", "New reason."]);
-    sandbox.observe_likely_denial();
+    let mut sandbox = SandboxNotices::default();
 
     // Act
-    let notices = sandbox.notices(&[]);
+    let first = sandbox.notice(&TurnNotice::LikelySandboxDenial, &[]);
+    let second = sandbox.notice(&TurnNotice::LikelySandboxDenial, &[]);
 
     // Assert
-    assert_eq!(notices.len(), 2);
-    assert_eq!(
-        notices[0],
-        "\n[Sandbox Warning] New reason. Install bubblewrap.\n"
-    );
-    assert!(notices[1].starts_with("\n[Sandbox] A command may have been blocked by the sandbox."));
-    assert!(notices[1].contains("You can run commands that need more access outside the session."));
+    let first = first.expect("hint");
+    assert!(first.starts_with("\n[Sandbox] A command may have been blocked by the sandbox."));
+    assert!(first.contains("You can run commands that need more access outside the session."));
+    assert_eq!(second, None);
 }

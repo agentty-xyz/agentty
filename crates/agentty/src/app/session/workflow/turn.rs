@@ -16,7 +16,7 @@ use tracing::debug;
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
-use super::sandbox::TurnSandbox;
+use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::service::HarnessModels;
@@ -229,7 +229,8 @@ pub(super) async fn run_channel_turn(
         &workspace.env,
     )
     .await;
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let consumer = spawn::spawn_traced(consume_turn_events(
         event_rx,
         context.app_event_tx.clone(),
@@ -248,8 +249,11 @@ pub(super) async fn run_channel_turn(
     )
     .await;
 
-    let turn_result =
-        run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx).await;
+    let sandbox_notices = sandbox_notice_target(context);
+    let (turn_result, ()) = tokio::join!(
+        run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx),
+        sandbox_notices.relay(relayed_rx, relay_tx),
+    );
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
         prompt.local_image_paths().cloned().collect(),
@@ -258,7 +262,6 @@ pub(super) async fn run_channel_turn(
 
     let activity = consumer.await.unwrap_or_default();
     // Notices describe how the turn ran, so they precede its answer.
-    append_sandbox_notices(context, activity.sandbox()).await;
     for notice in activity.notices() {
         append_transcript_notice(context, notice).await;
     }
@@ -746,16 +749,14 @@ pub(super) fn fresh_turn_cancel_token(
     Ok(guard.clone())
 }
 
-/// Appends what the turn reported about the native sandbox to the live and
-/// persisted transcript: a warning once per session or when it changes, and
-/// a hint when the sandbox may have blocked a command.
-async fn append_sandbox_notices(context: &SessionWorkerContext, sandbox: &TurnSandbox) {
-    let notices = context
-        .transcript
-        .lock()
-        .map_or_default(|transcript| sandbox.notices(transcript.messages()));
-    for notice in notices {
-        append_transcript_notice(context, &notice).await;
+/// Returns the session transcript that receives a turn's sandbox notices.
+fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
+    SandboxNoticeTarget {
+        app_event_tx: &context.app_event_tx,
+        db: &context.db,
+        session_id: &context.session_id,
+        session_update_versions: &context.session_update_versions,
+        transcript: &context.transcript,
     }
 }
 

@@ -222,9 +222,10 @@ This keeps the one-session-one-model rule free of cross-provider projection.
   follows the harness's `Sandbox` choice: by default it runs unsandboxed and emits a
   `SandboxUnavailable` warning event; `IfUnavailable::Refuse` fails it with
   `SandboxUnavailable` before any model call. It never runs unsandboxed silently.
-- **Sandbox grants.** Harness sessions already run `bash` in the native sandbox with
-  network and tool caches in a per-session temporary directory, falling back to
-  unsandboxed execution with a warning; writer nodes reuse those grants.
+- **Sandbox grants.** Harness sessions already run `bash` in the native sandbox with Git
+  writes, network, and tool caches in a per-project sandbox directory, falling back to
+  unsandboxed execution with a warning. Whether writer nodes reuse those grants or keep
+  Git metadata read-only as above, and how they surface the warning, is still open.
 
 ## Sequencing with the Migration Plan
 

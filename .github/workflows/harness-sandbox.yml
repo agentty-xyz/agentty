@@ -2,18 +2,21 @@ name: Native Harness Sandbox
 
 # Linux sandbox qualification runs in the coverage job, which installs the same
 # Bubblewrap setup and runs every `ag-harness` sandbox suite and `ag-agent`'s
-# session sandbox suite, so this workflow only qualifies the macOS launcher and
-# Agentty's grants under it. It also checks the `ag-harness` build without
-# default features, which shares the same path filter.
+# session sandbox suite, so this workflow only qualifies the macOS launcher and,
+# in the same coverage run, Agentty's grants under it. It also checks the
+# `ag-harness` build without default features, which shares the same path
+# filter.
 on:
   # Runs on `main` so its Rust caches exist for pull requests to restore.
   push:
     branches:
       - main
-  # Pull requests skip qualification unless they touch `ag-harness`, `ag-agent`,
-  # a crate either depends on, or shared build and CI configuration. The
-  # `harness_sandbox_filter` test in `ag-xtask` fails when the crate list drifts
-  # from Cargo's dependency graph; `main` still runs on every push.
+  # Pull requests skip qualification unless they touch `ag-harness`, a crate it
+  # depends on, `ag-agent`, which owns Agentty's grants, or shared build and CI
+  # configuration. The `harness_sandbox_filter` test in `ag-xtask` fails when
+  # the crate list drifts from Cargo's dependency graph. Other `ag-agent`
+  # dependencies rarely change the grants, so the merge queue and `main`
+  # pushes, which run without a path filter, cover them.
   pull_request:
     paths:
       - .cargo/**
@@ -26,12 +29,8 @@ on:
       - Cargo.lock
       - Cargo.toml
       - crates/ag-agent/**
-      - crates/ag-contracts/**
-      - crates/ag-forge/**
       - crates/ag-harness/**
-      - crates/ag-protocol/**
       - crates/ag-router/**
-      - crates/ag-session/**
       - crates/ag-telemetry/**
       - rust-toolchain.toml
   merge_group:
@@ -84,10 +83,6 @@ jobs:
           name: native-sandbox-test-results-macos
           build-directory: target/llvm-cov-target
           outcome: ${{ steps.sandbox-tests.outcome }}
-      # Agentty's command grants under Seatbelt. Linux runs the same suite
-      # with Bubblewrap in the workspace test and coverage jobs.
-      - name: Agentty session sandbox
-        run: prek run test-ag-agent-sandbox --all-files --hook-stage manual
 
   # Builds without default features drop SQLite, the native sandbox,
   # OpenTelemetry, or a provider family, so their own tests must still cover

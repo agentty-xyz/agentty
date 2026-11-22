@@ -23,6 +23,7 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
+use super::sandbox::SandboxNoticeTarget;
 use super::steering::{QueuedMessageSteering, SteeringDeliveries};
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, graph_turn, isolation, session_folder, task_turn, turn};
@@ -814,17 +815,26 @@ impl SessionWorkerRebaseAssistClient {
             response_style: ag_contracts::ResponseStyle::default(),
             speed_mode,
         };
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let consumer = spawn::spawn_detached(turn::consume_turn_events(
             event_rx,
             self.app_event_tx.clone(),
             self.session_id.clone(),
             Arc::clone(&self.child_pid),
         ));
+        let sandbox_notices = SandboxNoticeTarget {
+            app_event_tx: &self.app_event_tx,
+            db: &self.db,
+            session_id: &self.session_id,
+            session_update_versions: &self.session_update_versions,
+            transcript: &self.transcript,
+        };
 
-        let turn_result = self
-            .run_turn_with_cancellation(turn_cancel_token, req, event_tx)
-            .await;
+        let (turn_result, ()) = tokio::join!(
+            self.run_turn_with_cancellation(turn_cancel_token, req, event_tx),
+            sandbox_notices.relay(relayed_rx, relay_tx),
+        );
         let activity = consumer.await.unwrap_or_default();
         activity.clear_live(&self.app_event_tx, &self.session_id);
         let turn_result = turn_result.map_err(turn::session_error_from_agent_error)?;

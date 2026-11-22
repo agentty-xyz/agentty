@@ -27,6 +27,12 @@ harness-sandbox = { max-threads = 1 }
 filter = 'package(=ag-harness) and binary(=sandbox)'
 test-group = 'harness-sandbox'
 
+# Agentty's grants under the real sandbox start the same launchers, so they
+# never run beside the `ag-harness` sandbox suites.
+[[profile.default.overrides]]
+filter = 'package(=ag-agent) and binary(=native_sandbox)'
+test-group = 'harness-sandbox'
+
 [[profile.default.overrides]]
 filter = 'package(agentty) and kind(test) and binary(e2e)'
 slow-timeout = { period = "120s", terminate-after = 5 }

@@ -205,14 +205,15 @@ impl BuilderEnv {
         let path_with_stub_bin = self.path_with_stub_bin();
 
         self.builder_with_path_and_size(
+            &cargo_bin("agentty"),
             path_with_stub_bin,
             DEFAULT_TERMINAL_COLS,
             DEFAULT_TERMINAL_ROWS,
         )
     }
 
-    /// Return a configured [`PtySessionBuilder`] with an explicit `PATH` and
-    /// terminal size.
+    /// Return a configured [`PtySessionBuilder`] that launches `binary` with
+    /// an explicit `PATH` and terminal size.
     ///
     /// This keeps feature tests able to choose between inheriting system
     /// commands, using only deterministic stub agent executables, and
@@ -220,11 +221,12 @@ impl BuilderEnv {
     /// tmux state so host shortcuts cannot change captured frames.
     fn builder_with_path_and_size(
         &self,
+        binary: &Path,
         path_env: String,
         terminal_cols: u16,
         terminal_rows: u16,
     ) -> PtySessionBuilder {
-        PtySessionBuilder::new(cargo_bin("agentty"))
+        PtySessionBuilder::new(binary)
             .size(terminal_cols, terminal_rows)
             .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
             .env("HOME", self.home_dir.to_string_lossy())
@@ -1032,6 +1034,8 @@ impl ZolaFeaturePage {
 /// }
 /// ```
 pub(crate) struct FeatureTest {
+    /// Executable the PTY proof launches instead of the built `agentty`.
+    binary: Option<PathBuf>,
     /// Extra launch arguments for the PTY proof run.
     child_args: Vec<String>,
     /// Extra child-process environment variables applied to PTY and VHS runs.
@@ -1064,6 +1068,7 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
+            binary: None,
             child_args: Vec::new(),
             child_env: vec![
                 (
@@ -1100,6 +1105,15 @@ impl FeatureTest {
     /// Add an environment variable for the PTY session and VHS recording.
     pub(crate) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.child_env.push((key.into(), value.into()));
+
+        self
+    }
+
+    /// Launches the PTY proof from `binary`, such as a copy of `agentty` the
+    /// scenario removes while it runs, instead of the built binary. VHS
+    /// recordings still use the built binary.
+    pub(crate) fn binary(mut self, binary: PathBuf) -> Self {
+        self.binary = Some(binary);
 
         self
     }
@@ -1181,30 +1195,20 @@ impl FeatureTest {
         env.snapshot_replay_database().await?;
         let scenario = build_scenario(Scenario::new(&self.name));
         let vhs_binary_path = env.create_vhs_launcher(&cargo_bin("agentty"))?;
-        let terminal_cols = self.terminal_cols;
-        let terminal_rows = self.terminal_rows;
-        let uses_default_terminal_size =
-            terminal_cols == DEFAULT_TERMINAL_COLS && terminal_rows == DEFAULT_TERMINAL_ROWS;
-        let (mut builder, mut owned_pairs) =
-            if self.inherit_system_path && uses_default_terminal_size {
-                (env.builder(), env.as_vhs_env_pairs())
-            } else if self.inherit_system_path {
-                (
-                    env.builder_with_path_and_size(
-                        env.path_with_stub_bin(),
-                        terminal_cols,
-                        terminal_rows,
-                    ),
-                    env.as_vhs_env_pairs(),
-                )
-            } else {
-                let path_env = env.stub_only_path();
+        let binary = self.binary.clone().unwrap_or_else(|| cargo_bin("agentty"));
+        let (path_env, mut owned_pairs) = if self.inherit_system_path {
+            (env.path_with_stub_bin(), env.as_vhs_env_pairs())
+        } else {
+            let path_env = env.stub_only_path();
 
-                (
-                    env.builder_with_path_and_size(path_env.clone(), terminal_cols, terminal_rows),
-                    env.as_vhs_env_pairs_with_path(path_env),
-                )
-            };
+            (path_env.clone(), env.as_vhs_env_pairs_with_path(path_env))
+        };
+        let mut builder = env.builder_with_path_and_size(
+            &binary,
+            path_env,
+            self.terminal_cols,
+            self.terminal_rows,
+        );
         for (key, value) in &self.child_env {
             builder = builder.env(key.clone(), value.clone());
             owned_pairs.push((key.clone(), value.clone()));

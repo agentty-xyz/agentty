@@ -237,3 +237,124 @@ fn likely_denials_are_reported_only_for_marked_tool_calls() {
     assert_eq!(completed, None);
     assert_eq!(other, None);
 }
+
+/// Creates a main checkout `project` under `root` with one linked worktree,
+/// as Git lays them out, and returns both paths.
+fn repository_with_worktree(root: &Path) -> (PathBuf, PathBuf) {
+    let checkout = root.join("project");
+    let worktree_git = checkout.join(".git/worktrees/session");
+    std::fs::create_dir_all(&worktree_git).expect("worktree Git directory");
+    std::fs::write(worktree_git.join("commondir"), "../..\n").expect("commondir");
+    let worktree = root.join("session");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", worktree_git.display()),
+    )
+    .expect("worktree link");
+
+    (checkout, worktree)
+}
+
+/// Returns the temporary directory `sandbox` grants commands.
+fn sandbox_directory(sandbox: &CommandSandbox) -> PathBuf {
+    sandbox.temporary_directory.clone()
+}
+
+#[tokio::test]
+/// Shares one sandbox directory between a repository's checkout and its
+/// linked worktrees, named after the repository, and gives a directory
+/// outside any repository, or with an unreadable Git link, its own.
+async fn prepare_shares_one_directory_per_repository() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let data_root = root.path().join("data");
+    let (checkout, worktree) = repository_with_worktree(root.path());
+    let plain = root.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("plain directory");
+    let malformed = root.path().join("malformed");
+    std::fs::create_dir_all(&malformed).expect("malformed directory");
+    std::fs::write(malformed.join(".git"), "not a link\n").expect("malformed link");
+    let environment = BTreeMap::new();
+
+    // Act
+    let from_checkout = CommandSandbox::prepare(&data_root, &checkout, &environment).await;
+    let from_worktree = CommandSandbox::prepare(&data_root, &worktree, &environment).await;
+    let from_plain = CommandSandbox::prepare(&data_root, &plain, &environment).await;
+    let from_malformed = CommandSandbox::prepare(&data_root, &malformed, &environment).await;
+
+    // Assert
+    let from_checkout = sandbox_directory(&from_checkout.expect("checkout sandbox"));
+    assert_eq!(
+        from_checkout,
+        sandbox_directory(&from_worktree.expect("worktree sandbox"))
+    );
+    assert_eq!(
+        from_checkout.parent(),
+        Some(data_root.join("sandbox-cache").as_path())
+    );
+    let name = from_checkout
+        .file_name()
+        .expect("project name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.starts_with("project-"), "{name}");
+    assert!(from_checkout.join("cargo").is_dir());
+    let from_plain = sandbox_directory(&from_plain.expect("plain sandbox"));
+    let from_malformed = sandbox_directory(&from_malformed.expect("malformed sandbox"));
+    assert_ne!(from_plain, from_checkout);
+    assert_ne!(from_malformed, from_plain);
+}
+
+#[test]
+/// Names a repository without a usable directory name by its digest alone.
+fn project_names_fall_back_to_the_digest() {
+    // Arrange, Act
+    let name = CommandSandbox::project_name(Path::new("/"));
+
+    // Assert
+    assert_eq!(name.len(), 12);
+    assert!(name.chars().all(|character| character.is_ascii_hexdigit()));
+}
+
+#[tokio::test]
+/// Links the host's Cargo configuration into the sandbox `CARGO_HOME`
+/// unless Cargo finds it from the workspace anyway, refreshes the link,
+/// and never links what does not exist.
+async fn prepare_links_the_host_cargo_configuration() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let data_root = root.path().join("data");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let custom_home = root.path().join("custom-cargo");
+    std::fs::create_dir_all(&custom_home).expect("custom Cargo home");
+    std::fs::write(custom_home.join("config"), "[net]\n").expect("legacy config");
+    let custom = BTreeMap::from([("CARGO_HOME".to_string(), custom_home.display().to_string())]);
+    let home_above = BTreeMap::from([("HOME".to_string(), root.path().display().to_string())]);
+    std::fs::create_dir_all(root.path().join(".cargo")).expect("default Cargo home");
+    std::fs::write(root.path().join(".cargo/config.toml"), "[net]\n").expect("config");
+    let unrelated_home = root.path().join("elsewhere");
+    let empty_home = BTreeMap::from([("HOME".to_string(), unrelated_home.display().to_string())]);
+    let relative = BTreeMap::from([("CARGO_HOME".to_string(), "relative".to_string())]);
+
+    // Act
+    let linked = CommandSandbox::prepare(&data_root, &workspace, &custom)
+        .await
+        .expect("linked sandbox");
+    let link = sandbox_directory(&linked).join("cargo/config.toml");
+    let linked_target = std::fs::read_link(&link).ok();
+    let found = CommandSandbox::prepare(&data_root, &workspace, &home_above).await;
+    let after_found = std::fs::symlink_metadata(&link).is_ok();
+    let missing = CommandSandbox::prepare(&data_root, &workspace, &empty_home).await;
+    let unset = CommandSandbox::prepare(&data_root, &workspace, &relative).await;
+
+    // Assert
+    assert_eq!(linked_target, Some(custom_home.join("config")));
+    assert!(found.is_ok() && missing.is_ok() && unset.is_ok());
+    assert!(
+        !after_found,
+        "a configuration Cargo finds itself is not linked"
+    );
+    assert!(std::fs::symlink_metadata(&link).is_err());
+}

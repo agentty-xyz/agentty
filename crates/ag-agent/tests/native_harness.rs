@@ -827,10 +827,15 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
         .expect("bash result should reach the model");
     assert!(bash_result.contains("hello harness"));
     assert!(bash_result.contains("PATH="));
-    let cargo_home = data_root.path().join("session-tools/tmp/cargo");
+    let project = std::fs::read_dir(data_root.path().join("sandbox-cache"))
+        .expect("sandbox cache")
+        .next()
+        .expect("project sandbox directory")
+        .expect("project entry")
+        .path();
     assert!(
-        bash_result.contains(&format!("CARGO_HOME={}", cargo_home.display())),
-        "tool caches must live in the session's temporary directory"
+        bash_result.contains(&format!("CARGO_HOME={}", project.join("cargo").display())),
+        "tool caches must live in the project's sandbox directory"
     );
     assert!(!bash_result.contains("muse-key"));
     assert!(!bash_result.contains("MODEL_API_KEY"));

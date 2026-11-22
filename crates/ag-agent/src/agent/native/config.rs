@@ -61,12 +61,6 @@ const BASH_EXECUTABLE: &str = "/bin/bash";
 /// grants, the Bash executable, or the `ag-harness` sandbox enforcement
 /// change.
 const BASH_POLICY_REVISION: &str = "agentty-native-sandbox-1";
-/// Directory inside a session's harness directory that its commands use as
-/// `TMPDIR`.
-const SESSION_TEMPORARY_DIRECTORY: &str = "tmp";
-/// Directory under the data root holding one temporary directory per
-/// running utility prompt. Session ids never start with a dot.
-const UTILITY_TEMPORARY_PARENT: &str = ".utility";
 /// Deadline for one `bash` call.
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 /// Environment variable naming the model the OpenAI-compatible server serves
@@ -124,10 +118,11 @@ type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>
 /// Host configuration that enables in-process [`AgentKind::Harness`] turns.
 ///
 /// Each session keeps its durable harness history in
-/// `<data_root>/<session id>/`, outside the session worktree, with the
-/// temporary directory its commands use; hosts remove that directory when
-/// they delete the session. Commands cannot read the data root, apart from
-/// their own temporary directory.
+/// `<data_root>/<session id>/`, outside the session worktree; hosts remove
+/// that directory when they delete the session. Commands use
+/// `<data_root>/sandbox-cache/<project>/` as their temporary directory and
+/// tool cache, shared by the repository's sessions; deleting it only drops
+/// cached downloads. Commands cannot read the rest of the data root.
 ///
 /// `bash` runs inside the native sandbox, which needs the host to call
 /// [`super::dispatch_sandbox_helper`] first in `main`; where the sandbox
@@ -169,68 +164,6 @@ impl NativeHarnessConfig {
     /// Returns an error for an identifier that is not one path component or
     /// when the session directory cannot be created.
     pub(crate) async fn session_database(&self, session_id: &str) -> Result<PathBuf, String> {
-        Ok(self
-            .session_directory(session_id, None)
-            .await?
-            .join(SESSION_DATABASE_FILE))
-    }
-
-    /// Creates the session's temporary directory and returns the sandbox of
-    /// its commands. The directory keeps one path for the session's
-    /// lifetime, because the harness fingerprints it into the policy.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid session id or when the directory
-    /// cannot be created.
-    pub(crate) async fn session_sandbox(
-        &self,
-        session_id: &str,
-        environment: &BTreeMap<String, String>,
-    ) -> Result<CommandSandbox, String> {
-        let temporary_directory = self
-            .session_directory(session_id, Some(SESSION_TEMPORARY_DIRECTORY))
-            .await?;
-
-        Ok(CommandSandbox::new(
-            &self.data_root,
-            temporary_directory,
-            environment,
-        ))
-    }
-
-    /// Creates a fresh temporary directory for one utility prompt and
-    /// returns the sandbox of its commands with the directory, which is
-    /// removed when dropped.
-    ///
-    /// # Errors
-    /// Returns an error when the directory cannot be created.
-    pub(crate) fn utility_sandbox(
-        &self,
-        environment: &BTreeMap<String, String>,
-    ) -> Result<(CommandSandbox, tempfile::TempDir), String> {
-        let parent = self.data_root.join(UTILITY_TEMPORARY_PARENT);
-        let directory = std::fs::create_dir_all(&parent)
-            .and_then(|()| tempfile::Builder::new().prefix("run-").tempdir_in(&parent))
-            .map_err(|error| {
-                format!("Failed to create the harness temporary directory: {error}")
-            })?;
-        let sandbox =
-            CommandSandbox::new(&self.data_root, directory.path().to_path_buf(), environment);
-
-        Ok((sandbox, directory))
-    }
-
-    /// Creates the session's directory, or its `child` directory, and
-    /// returns it.
-    ///
-    /// # Errors
-    /// Returns an error for an identifier that is not one path component or
-    /// when the directory cannot be created.
-    async fn session_directory(
-        &self,
-        session_id: &str,
-        child: Option<&str>,
-    ) -> Result<PathBuf, String> {
         let is_single_component = !session_id.is_empty()
             && session_id != "."
             && session_id != ".."
@@ -238,16 +171,26 @@ impl NativeHarnessConfig {
         if !is_single_component {
             return Err(format!("Invalid harness session id `{session_id}`."));
         }
-        let session = self.data_root.join(session_id);
-        let directory = match child {
-            Some(child) => session.join(child),
-            None => session,
-        };
+        let directory = self.data_root.join(session_id);
         tokio::fs::create_dir_all(&directory)
             .await
             .map_err(|error| format!("Failed to create the harness session directory: {error}"))?;
 
-        Ok(directory)
+        Ok(directory.join(SESSION_DATABASE_FILE))
+    }
+
+    /// Returns the sandbox of commands run in `workspace`, whose project
+    /// directory every session and utility prompt of the same repository
+    /// shares.
+    ///
+    /// # Errors
+    /// Returns an error when the project directory cannot be created.
+    pub(crate) async fn command_sandbox(
+        &self,
+        workspace: &Path,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<CommandSandbox, String> {
+        CommandSandbox::prepare(&self.data_root, workspace, environment).await
     }
 }
 
@@ -1000,6 +943,11 @@ impl RunOptions {
             output,
             tools: ToolSet::builtins(),
         })
+    }
+
+    /// Returns whether the run offers `bash`, which the native sandbox runs.
+    pub(crate) fn offers_bash(&self) -> bool {
+        self.bash.is_some()
     }
 
     /// Returns a run request for `input` with these options.

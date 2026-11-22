@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, ContextCompaction, ReasoningLevel, SessionRef,
-    StartSessionRequest, TurnEvent, TurnRequest, TurnResult,
+    StartSessionRequest, TurnEvent, TurnNotice, TurnRequest, TurnResult,
 };
 use ag_harness::provider::chatgpt_is_signed_in;
 use ag_harness::transcript::TranscriptInput;
@@ -141,7 +141,7 @@ async fn run_session_turn(
     let profile = req.request_kind.protocol_profile();
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
-    let sandbox = config.session_sandbox(&session_id, &environment).await?;
+    let sandbox = config.command_sandbox(&req.folder, &environment).await?;
     let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
         .map_err(failure("Failed to apply the response style"))?
@@ -192,6 +192,7 @@ async fn run_session_turn(
     }
     .render()?;
     let input_digest = input_digest(&input);
+    let offers_bash = options.offers_bash();
     let (run, stream) = ActiveRun::start(session.run(options.request(input)));
     // Dropping this turn cancels the run, which keeps settling on its task.
     let _cancel_on_drop = CancelOnDrop(run.cancel.clone());
@@ -203,6 +204,11 @@ async fn run_session_turn(
     // Only a concurrent shutdown, which cancelled the run, observes its
     // outcome first.
     let outcome = outcome.ok_or(NativeTurnError::Stopped)?;
+    // The harness checks the sandbox before admitting a turn offering
+    // `bash`, so a successful turn without a warning ran in it.
+    if offers_bash && outcome.result.is_ok() && outcome.report.sandbox_warning().is_none() {
+        let _ = events.send(TurnEvent::Notice(TurnNotice::SandboxAvailable));
+    }
     let output = outcome.result.map_err(NativeTurnError::from_run)?;
     let assistant_message = parse_output(&output, profile)?;
     // An unversioned id makes the next session turn re-send the session

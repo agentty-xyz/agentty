@@ -1015,22 +1015,25 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
 }
 
 #[tokio::test]
-/// Gives each session one stable temporary directory inside its harness
-/// directory and rejects invalid session ids.
-async fn session_sandbox_creates_a_stable_temporary_directory() {
+/// Gives commands one stable sandbox directory per repository under the
+/// data root, and reports a data root that cannot hold one.
+async fn command_sandbox_is_stable_per_repository() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
     let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let file_root = tempfile::NamedTempFile::new().expect("file in place of a directory");
+    let unusable = NativeHarnessConfig::new(file_root.path().to_path_buf());
     let environment = BTreeMap::new();
 
     // Act
-    let first = config.session_sandbox("session-1", &environment).await;
-    let second = config.session_sandbox("session-1", &environment).await;
-    let invalid = config.session_sandbox("a/b", &environment).await;
+    let first = config.command_sandbox(workspace.path(), &environment).await;
+    let second = config.command_sandbox(workspace.path(), &environment).await;
+    let failure = unusable
+        .command_sandbox(workspace.path(), &environment)
+        .await;
 
     // Assert
-    let temporary = data_root.path().join("session-1").join("tmp");
-    assert!(temporary.is_dir());
     let policy = |sandbox: CommandSandbox| {
         RunOptions::new(
             ProtocolRequestProfile::SessionTurn,
@@ -1045,40 +1048,15 @@ async fn session_sandbox_creates_a_stable_temporary_directory() {
         policy(first.expect("first sandbox")),
         policy(second.expect("second sandbox"))
     );
-    assert!(invalid.is_err());
-}
-
-#[test]
-/// Gives each utility prompt a fresh temporary directory beside the session
-/// directories, removed when the prompt ends, and reports a data root that
-/// cannot hold one.
-fn utility_sandbox_creates_a_temporary_directory_per_prompt() {
-    // Arrange
-    let data_root = tempfile::tempdir().expect("data root");
-    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
-    let file_root = tempfile::NamedTempFile::new().expect("file in place of a directory");
-    let unusable = NativeHarnessConfig::new(file_root.path().to_path_buf());
-
-    // Act
-    let (_sandbox, directory) = config
-        .utility_sandbox(&BTreeMap::new())
-        .expect("utility sandbox");
-    let failure = unusable.utility_sandbox(&BTreeMap::new());
-
-    // Assert
-    let path = directory.path().to_path_buf();
-    assert_eq!(
-        path.parent(),
-        Some(data_root.path().join(".utility").as_path())
-    );
-    assert!(path.is_dir());
-    drop(directory);
-    assert!(!path.exists());
+    let projects = std::fs::read_dir(data_root.path().join("sandbox-cache"))
+        .expect("project directories")
+        .count();
+    assert_eq!(projects, 1);
     assert!(
         failure
             .err()
             .expect("a file root should fail")
-            .contains("Failed to create the harness temporary directory")
+            .contains("Failed to create the sandbox cache directory")
     );
 }
 
