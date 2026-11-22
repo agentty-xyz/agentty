@@ -163,6 +163,26 @@ Arguments after the image name go to the relay: behind a proxy, pass
 `--client-address-header` with the header your proxy sets to the client address, so the
 relay's limits count each client separately.
 
+### Run the Relay on Fly.io
+
+<a id="usage-remote-control-relay-fly"></a> Fly.io serves the relay over TLS and limits
+connections, so it needs no other proxy. With `flyctl` signed in, create an app and
+deploy the published image with `relay.fly.toml` from the repository's
+[`container` directory](https://github.com/agentty-xyz/agentty/tree/main/container),
+using a checkout or a downloaded copy of that file:
+
+```sh
+fly apps create <name>
+fly deploy --config container/relay.fly.toml --app <name> --ha=false
+```
+
+Keep the app on exactly one machine: the relay joins a device to Agentty only when both
+reach the same machine. `--ha=false` creates one instead of Fly's default two; do not
+scale it up. Then start Agentty with `--remote-relay wss://<name>.fly.dev`. For your own
+domain, run `fly certs add <domain>` and add the DNS records it prints.
+
+### Pair Through the Relay
+
 With a relay, the popup also shows the relay state, a pairing link, and a QR code of the
 link when the terminal is large enough. Scan the code or open the link on the other
 device. The relay's pairing page opens with the code filled in: name the device, press
