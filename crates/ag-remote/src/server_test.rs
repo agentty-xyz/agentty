@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, HeaderValue, header};
 
 use super::{
     ConnectionOrigin, MAX_UNAUTHENTICATED_SOCKETS, PairingRequest, RemoteConnection,
-    RemoteServerStatus, host_is_allowed, origin_matches_host, replace_status,
+    RemoteServerStatus, WEB_ASSETS, host_is_allowed, origin_matches_host, replace_status,
 };
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::server::{RemoteError, RemoteHost, RemoteServerConfig, start_with_entropy};
@@ -298,4 +298,36 @@ async fn issue_pairing_code_reports_missing_entropy() {
     // Assert
     assert!(matches!(code, Err(RemoteError::Entropy)));
     handle.shutdown().await;
+}
+
+#[test]
+fn every_web_asset_is_reached_from_the_page() {
+    // Arrange
+    let mut served: Vec<String> = WEB_ASSETS
+        .iter()
+        .map(|(path, ..)| (*path).to_string())
+        .collect();
+
+    // Act: follow the quoted file names each reached asset contains, so the
+    // HTTP tests that walk the page from `/` see every served file.
+    let mut reached = vec!["/".to_string()];
+    let mut next = 0;
+    while let Some(path) = reached.get(next).cloned() {
+        next += 1;
+        let body = WEB_ASSETS
+            .iter()
+            .find(|(served_path, ..)| *served_path == path)
+            .map_or("", |(.., body)| *body);
+        for quoted in body.split(['"', '\'']) {
+            let named = format!("/{}", quoted.trim_start_matches("./"));
+            if served.contains(&named) && !reached.contains(&named) {
+                reached.push(named);
+            }
+        }
+    }
+    served.sort_unstable();
+    reached.sort_unstable();
+
+    // Assert
+    assert_eq!(reached, served);
 }

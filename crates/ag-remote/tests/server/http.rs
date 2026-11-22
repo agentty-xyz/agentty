@@ -107,7 +107,7 @@ fn guarded_headers_and_body(response: &str) -> (Vec<&str>, &str) {
 
 /// Returns the request paths of the scripts and stylesheets `body` names.
 fn referenced_paths(body: &str) -> Vec<String> {
-    body.split('"')
+    body.split(['"', '\''])
         .filter(|quoted| {
             [".css", ".js", ".mjs"]
                 .iter()
@@ -174,15 +174,22 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
 /// Text no served file may contain, compared without case: markup parsed
 /// from strings, code built from strings, inline styles, and addresses of
 /// other origins.
-const FORBIDDEN_TEXT: [&str; 9] = [
+const FORBIDDEN_TEXT: [&str; 16] = [
     "innerhtml",
     "outerhtml",
     "insertadjacenthtml",
+    "sethtmlunsafe",
+    "domparser",
+    "parsefromstring",
+    "createcontextualfragment",
+    "srcdoc",
     "document.write",
     "new function",
     "style=",
     "http://",
     "https://",
+    "ws://",
+    "wss://",
     "@import",
 ];
 
@@ -218,7 +225,19 @@ async fn served_web_client_files_build_no_markup_from_strings_and_stay_on_their_
         for text in FORBIDDEN_TEXT.iter().chain(&OTHER_ORIGIN_REFERENCES) {
             assert!(!lowered.contains(text), "{path} contains `{text}`");
         }
-        assert!(!calls(&lowered, "eval"), "{path} calls `eval`");
+        for function in ["eval", "Function"] {
+            assert!(
+                call_arguments(body, function).next().is_none(),
+                "{path} calls `{function}`"
+            );
+        }
+        for timer in ["setTimeout", "setInterval"] {
+            assert!(
+                !call_arguments(body, timer)
+                    .any(|arguments| arguments.trim_start().starts_with(['"', '\'', '`'])),
+                "{path} passes code as a string to `{timer}`"
+            );
+        }
         for id in element_ids(body).map_err(|error| format!("{path}: {error}"))? {
             assert!(
                 page.contains(&format!("id=\"{id}\"")),
@@ -227,6 +246,11 @@ async fn served_web_client_files_build_no_markup_from_strings_and_stay_on_their_
             looked_up.push(id);
         }
     }
+    assert_eq!(
+        inline_handlers(&page.to_ascii_lowercase()),
+        Vec::<String>::new(),
+        "index.html has inline event handlers"
+    );
     assert!(files.len() > 1, "the page names no other file");
     assert!(!looked_up.is_empty(), "no script looks up an element by id");
 
@@ -253,19 +277,41 @@ async fn served_files(addr: SocketAddr) -> TestResult<Vec<(String, String)>> {
     Ok(files)
 }
 
-/// Returns whether `body` calls the global function `name`, as opposed to a
-/// function whose name merely ends with it.
-fn calls(body: &str, name: &str) -> bool {
-    let call = format!("{name}(");
+/// Returns, for each call of the function `name` in `body`, the text after
+/// its opening parenthesis. A name that only ends with `name`, such as
+/// `retrieval` for `eval`, is not a call of it; whitespace may separate the
+/// name from the parenthesis.
+fn call_arguments<'body>(body: &'body str, name: &str) -> impl Iterator<Item = &'body str> {
+    let is_identifier =
+        |character: char| character.is_ascii_alphanumeric() || character == '_' || character == '$';
 
-    body.match_indices(&call).any(|(index, _)| {
-        !body
-            .get(..index)
-            .and_then(|before| before.chars().next_back())
-            .is_some_and(|character| {
-                character.is_ascii_alphanumeric() || character == '_' || character == '$'
-            })
+    body.match_indices(name).filter_map(move |(index, _)| {
+        let before = body.get(..index)?.chars().next_back();
+        if before.is_some_and(is_identifier) {
+            return None;
+        }
+
+        body.get(index + name.len()..)?
+            .trim_start()
+            .strip_prefix('(')
     })
+}
+
+/// Returns the `on…=` attributes in the lowercased markup `page`.
+fn inline_handlers(page: &str) -> Vec<String> {
+    page.match_indices("on")
+        .filter_map(|(index, _)| {
+            let before = page.get(..index)?.chars().next_back()?;
+            let rest = page.get(index..)?;
+            let name_length = rest.chars().take_while(char::is_ascii_lowercase).count();
+            let attribute = rest.get(..name_length)?;
+            let is_handler = before.is_whitespace()
+                && name_length > 2
+                && rest.get(name_length..)?.trim_start().starts_with('=');
+
+            is_handler.then(|| attribute.to_string())
+        })
+        .collect()
 }
 
 /// Returns the ids `body` passes to `getElementById`, or an error when an

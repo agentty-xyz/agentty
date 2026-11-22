@@ -94,12 +94,12 @@ export function relativeTime(unixSeconds, nowSeconds) {
   if (minutes < 60) {
     return minutes + " min ago";
   }
-  const hours = Math.round(minutes / 60);
+  const hours = Math.round(seconds / 3600);
   if (hours < 48) {
     return hours + " h ago";
   }
 
-  return Math.round(hours / 24) + " d ago";
+  return Math.round(seconds / 86400) + " d ago";
 }
 
 // Splits `sessions` into the populated groups of `GROUPS`, in that order,
@@ -189,8 +189,11 @@ function activityTone(line) {
   if (line.startsWith("✗")) {
     return "error";
   }
-  if (line.startsWith("!") || line.startsWith("…")) {
-    return "working";
+  if (line.startsWith("!")) {
+    return "warning";
+  }
+  if (line.startsWith("…")) {
+    return "info";
   }
 
   return "muted";

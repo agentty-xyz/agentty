@@ -123,6 +123,8 @@ test("relativeTime rounds to the largest whole unit", () => {
     [now - 60, "1 min ago"],
     [now - 59 * 60, "59 min ago"],
     [now - 60 * 60, "1 h ago"],
+    [now - (3600 + 29 * 60 + 40), "1 h ago"],
+    [now - (47 * 3600 + 20 * 60), "47 h ago"],
     [now - 47 * 3600, "47 h ago"],
     [now - 48 * 3600, "2 d ago"],
     [now - 30 * 86400, "30 d ago"],
@@ -254,8 +256,8 @@ test("parseActivity keeps non-blank lines and colours them by their first charac
   assert.deepEqual(lines, [
     { text: "✓ Read file", tone: "success" },
     { text: "✗ Test failed", tone: "error" },
-    { text: "! Retrying", tone: "working" },
-    { text: "… Running", tone: "working" },
+    { text: "! Retrying", tone: "warning" },
+    { text: "… Running", tone: "info" },
     { text: "Used 2 tools", tone: "muted" },
   ]);
   assert.deepEqual(parseActivity(""), []);

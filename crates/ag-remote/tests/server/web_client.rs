@@ -25,9 +25,6 @@ const KEY_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/web/device_key_check.mjs"
 );
-/// The `node --test` suites in [`WEB_TESTS`], each run by its own test
-/// below.
-const NODE_SUITES: [&str; 2] = ["fake_dom.test.mjs", "format.test.mjs"];
 /// Longest wait for the script's next step before a test fails.
 const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Longest run of one `node --test` suite.
@@ -118,14 +115,10 @@ impl SuiteRun {
     }
 }
 
-#[test]
-fn every_node_suite_has_a_rust_test() -> TestResult {
-    // Arrange
-    let entries = fs::read_dir(WEB_TESTS)?;
-
-    // Act
+/// Returns the names of the `node --test` suites in [`WEB_TESTS`], sorted.
+fn node_suites() -> TestResult<Vec<String>> {
     let mut suites = Vec::new();
-    for entry in entries {
+    for entry in fs::read_dir(WEB_TESTS)? {
         let name = entry?.file_name().to_string_lossy().into_owned();
         if name.ends_with(".test.mjs") {
             suites.push(name);
@@ -133,36 +126,30 @@ fn every_node_suite_has_a_rust_test() -> TestResult {
     }
     suites.sort_unstable();
 
-    // Assert
-    assert_eq!(suites, NODE_SUITES);
-
-    Ok(())
+    Ok(suites)
 }
 
 #[tokio::test]
-async fn fake_dom_suite_passes() -> TestResult {
-    // Arrange
-    let suite = NODE_SUITES[0];
+async fn every_node_suite_in_the_web_tests_passes() -> TestResult {
+    // Arrange: every suite on disk runs, so a new one needs no runner.
+    let suites = node_suites()?;
 
     // Act
-    let run = SuiteRun::start(suite).await?;
+    let mut runs = Vec::new();
+    for suite in &suites {
+        runs.push((suite, SuiteRun::start(suite).await?));
+    }
 
     // Assert
-    assert!(run.passed, "{suite} failed:\n{}", run.report);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn format_suite_passes() -> TestResult {
-    // Arrange
-    let suite = NODE_SUITES[1];
-
-    // Act
-    let run = SuiteRun::start(suite).await?;
-
-    // Assert
-    assert!(run.passed, "{suite} failed:\n{}", run.report);
+    for known in ["fake_dom.test.mjs", "format.test.mjs"] {
+        assert!(
+            suites.iter().any(|suite| suite == known),
+            "{known} is missing"
+        );
+    }
+    for (suite, run) in runs {
+        assert!(run.passed, "{suite} failed:\n{}", run.report);
+    }
 
     Ok(())
 }
