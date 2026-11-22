@@ -386,16 +386,6 @@ export function createChat({ document, window, elements, request, onHome }) {
     return details;
   }
 
-  // An activity box the reader opened or closed stays that way when its
-  // content changes.
-  function keepActivityOpen(oldNode, newNode) {
-    const oldDetails = oldNode?.querySelector?.("details");
-    const newDetails = newNode.querySelector("details");
-    if (oldDetails && newDetails) {
-      newDetails.open = oldDetails.open;
-    }
-  }
-
   // Rebuilds the questions only when the set changes, so chosen options
   // and typed answers survive refreshes.
   function renderQuestions(questions) {
@@ -766,6 +756,16 @@ export function createChat({ document, window, elements, request, onHome }) {
       elements.actionError.textContent = message;
     },
   };
+}
+
+// An activity box the reader opened or closed stays that way when its
+// content changes.
+function keepActivityOpen(oldNode, newNode) {
+  const oldDetails = oldNode?.querySelector?.("details");
+  const newDetails = newNode.querySelector("details");
+  if (oldDetails && newDetails) {
+    newDetails.open = oldDetails.open;
+  }
 }
 
 function element(document, tag, className, text) {
