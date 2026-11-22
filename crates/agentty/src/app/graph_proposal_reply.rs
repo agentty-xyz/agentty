@@ -1,16 +1,17 @@
 //! Natural-language chat replies to a session's pending graph proposal.
 //!
-//! While the latest proposal is neither cancelled nor approved, every composer
-//! message is a reply to it. The reply is recorded once with its visible
-//! prompt, bound to the exact inspected version. A read-only utility run on
-//! the Run Worker decides whether it approves, cancels, or revises that
-//! version; the first decision is durable, and its action is admitted through
-//! the command gateway. Recovery after a restart or a project switch decides
-//! or applies every reply whose action was not attempted, including one whose
-//! session was unloaded, or whose session runtime stopped, before the action
-//! was answered. Only one reply per proposal is decided at a time. Pasted
-//! images travel with a revision into every later generation; only the reply
-//! text is recorded, so a recovered reply acts without its images.
+//! While the latest proposal is neither cancelled nor approved, every chat
+//! message, from the composer or the session API, is a reply to it. The reply
+//! is recorded once with its visible prompt, bound to the exact inspected
+//! version. A read-only utility run on the Run Worker decides whether it
+//! approves, cancels, or revises that version; the first decision is durable,
+//! and its action is admitted through the command gateway. Recovery after a
+//! restart or a project switch decides or applies every reply whose action was
+//! not attempted, including one whose session was unloaded, or whose session
+//! runtime stopped, before the action was answered. Only one reply per proposal
+//! is decided at a time. Pasted images travel with a revision into every later
+//! generation; only the reply text is recorded, so a recovered reply acts
+//! without its images.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,8 +28,8 @@ use uuid::Uuid;
 use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_proposal_decision::GraphProposalReplyDecision;
 use crate::app::graph_question::GraphAnswerOutcome;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::graph_reply_decision::ReplyDecision;
-use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::SessionId;
@@ -49,16 +50,16 @@ const DECISION_CANCELED: &str =
     "Graph proposal: the reply decision was canceled. Reply again to act on the proposal.";
 
 impl App {
-    /// Routes one composer message to the session's pending graph proposal.
+    /// Routes one chat message to the session's pending graph proposal.
     ///
     /// Returns `None` when the session has no pending proposal, so the caller
-    /// continues ordinary routing. Rejections keep the composer and its draft
-    /// open; an accepted reply is decided in the background.
+    /// continues ordinary routing. A rejected reply is not recorded; an
+    /// accepted reply is decided in the background.
     pub(crate) async fn submit_graph_proposal_reply(
         &mut self,
         session_id: &SessionId,
         prompt: &TurnPrompt,
-    ) -> Option<PromptWorkflowOutcome> {
+    ) -> Option<GraphReplyOutcome> {
         let state = match self.pending_graph_proposal(session_id).await {
             Ok(state) => state?,
             Err(error) => {
@@ -186,9 +187,9 @@ impl App {
         session_id: &SessionId,
         state: &GraphProposalState,
         prompt: &TurnPrompt,
-    ) -> PromptWorkflowOutcome {
+    ) -> GraphReplyOutcome {
         let Some((folder, transcript)) = self.reply_session_handles(session_id) else {
-            return PromptWorkflowOutcome::KeepPrompt;
+            return GraphReplyOutcome::Rejected(SessionError::NotFound);
         };
         if self.is_deciding_graph_proposal_reply(&state.input.id) {
             return self
@@ -232,9 +233,7 @@ impl App {
             transcript,
         );
 
-        PromptWorkflowOutcome::ShowSession {
-            session_id: session_id.clone(),
-        }
+        GraphReplyOutcome::Accepted
     }
 
     /// Reads the workspace and live transcript a decision reports into.
@@ -248,16 +247,16 @@ impl App {
             .map(|(session, handles)| (session.folder.clone(), Arc::clone(&handles.transcript)))
     }
 
-    /// Reports a rejected reply and keeps the composer open.
+    /// Reports a rejected reply in the session transcript and returns it.
     async fn reject_graph_proposal_reply(
         &self,
         session_id: &SessionId,
         message: &str,
-    ) -> PromptWorkflowOutcome {
+    ) -> GraphReplyOutcome {
         self.append_prompt_status_line(session_id, TranscriptNotice::ReplyError, message)
             .await;
 
-        PromptWorkflowOutcome::KeepPrompt
+        GraphReplyOutcome::Rejected(SessionError::Operation(message.to_string()))
     }
 
     /// Decides with the proposal's captured selection, session ownership,

@@ -1,17 +1,19 @@
 //! Natural-language chat replies to a graph node awaiting answers.
 //!
 //! A graph node asks its clarification questions in session chat, where the
-//! question panel answers that exact execution. While one waits, a composer
-//! message is also that node's answer; when several wait, it answers the
-//! question asked last. The reply is shown in chat and admitted through the
-//! command gateway as a reply to the exact execution that asked, so a new
-//! attempt of the same task conversation continues with it.
+//! question panel answers that exact execution. While one waits, a chat
+//! message, from the composer or the session API, is also that node's answer;
+//! when several wait, it answers the question asked last. The reply is shown
+//! in chat and admitted through the command gateway as a reply to the exact
+//! execution that asked, so a new attempt of the same task conversation
+//! continues with it.
 
 use std::sync::Arc;
 
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, GraphContext,
     GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus, QuestionItem,
+    SessionError,
 };
 use uuid::Uuid;
 
@@ -20,7 +22,7 @@ use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
 use crate::app::graph_question::GraphAnswerOutcome;
-use crate::app::prompt_intent::PromptWorkflowOutcome;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::session::SessionTaskService;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -42,16 +44,16 @@ struct AwaitingNode {
 }
 
 impl App {
-    /// Routes one composer message to the graph node whose pending question
-    /// was asked last.
+    /// Routes one chat message to the graph node whose pending question was
+    /// asked last.
     ///
     /// Returns `None` when no node waits, so the caller continues ordinary
-    /// routing. Rejections keep the composer and its draft open.
+    /// routing. A rejected answer is not admitted.
     pub(crate) async fn submit_graph_node_reply(
         &mut self,
         session_id: &SessionId,
         prompt: &TurnPrompt,
-    ) -> Option<PromptWorkflowOutcome> {
+    ) -> Option<GraphReplyOutcome> {
         let node = match self.awaiting_graph_node(session_id).await {
             Ok(node) => node?,
             Err(error) => {
@@ -110,7 +112,7 @@ impl App {
         session_id: &SessionId,
         node: AwaitingNode,
         prompt: &TurnPrompt,
-    ) -> PromptWorkflowOutcome {
+    ) -> GraphReplyOutcome {
         let request = ContinueGraphNodeRequest {
             action_id: Uuid::new_v4().to_string(),
             execution: node.execution,
@@ -168,9 +170,7 @@ impl App {
         }
         self.graph_chat.invalidate();
 
-        PromptWorkflowOutcome::ShowSession {
-            session_id: session_id.clone(),
-        }
+        GraphReplyOutcome::Accepted
     }
 
     /// Finds the node whose unanswered chat question was asked last, so a
@@ -266,20 +266,17 @@ impl App {
         Ok(candidates)
     }
 
-    /// Reports a rejected answer and keeps the composer open.
+    /// Reports a rejected answer in the session transcript and returns it.
     async fn reject_graph_node_reply(
         &self,
         session_id: &SessionId,
         message: &str,
-    ) -> PromptWorkflowOutcome {
-        self.append_prompt_status_line(
-            session_id,
-            TranscriptNotice::ReplyError,
-            &format!("Graph answer: {message}"),
-        )
-        .await;
+    ) -> GraphReplyOutcome {
+        let message = format!("Graph answer: {message}");
+        self.append_prompt_status_line(session_id, TranscriptNotice::ReplyError, &message)
+            .await;
 
-        PromptWorkflowOutcome::KeepPrompt
+        GraphReplyOutcome::Rejected(SessionError::Operation(message))
     }
 }
 

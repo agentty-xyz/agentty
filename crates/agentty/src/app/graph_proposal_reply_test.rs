@@ -12,15 +12,20 @@ use ag_protocol::{
     TurnPromptAttachment,
 };
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
-use ag_session::{GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersionOutcome};
+use ag_session::{
+    GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersionOutcome, SessionError,
+    SessionService,
+};
 use ag_store::{DbError, MockGraphProposalRepository};
 use ag_worker::MockRunClient;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::{DECISION_PENDING, clarification_questions};
+use crate::app::command_gateway::CommandInitiator;
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, session};
@@ -160,12 +165,56 @@ async fn reply_during_a_pending_decision_keeps_the_composer_and_starts_no_decisi
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     assert!(
         messages(&app)
             .await
             .iter()
             .any(|(_, content)| content.contains(DECISION_PENDING))
+    );
+    assert!(!stored(&app).await.version.is_cancelled);
+}
+
+#[tokio::test]
+async fn remote_message_replies_to_the_pending_proposal_instead_of_starting_a_turn() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
+    let _consumer = app.sessions.foreground_consumer();
+    let remote = remote_service(&app);
+
+    // Act
+    let result = app
+        .drive_session_request(remote.send_message(&SessionId::from("sess"), "Never mind, drop it"))
+        .await;
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Graph proposal v1 cancelled.").await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert!(stored(&app).await.version.is_cancelled);
+    assert!(
+        messages(&app)
+            .await
+            .contains(&("user_prompt".to_string(), "Never mind, drop it".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn api_message_during_a_pending_decision_returns_the_rejection() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
+    let service = app.session_service();
+    mark_deciding(&app, "preview");
+
+    // Act
+    let result = app
+        .drive_session_request(service.send_message(&SessionId::from("sess"), "Local"))
+        .await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(SessionError::Operation(DECISION_PENDING.to_string()))
     );
     assert!(!stored(&app).await.version.is_cancelled);
 }
@@ -346,7 +395,7 @@ async fn failed_proposal_read_keeps_the_composer() {
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     assert!(
         messages(&app)
             .await
@@ -375,7 +424,7 @@ async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
         .await;
 
     // Assert
-    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
     assert!(
         app.services
             .proposal_reply_decisions
@@ -483,6 +532,15 @@ fn submission(text: &str) -> PromptSubmission {
         session_id: "sess".into(),
         session_mode: PromptSessionMode::Existing,
     }
+}
+
+/// Session service a paired remote-control device sends commands through.
+pub(in crate::app) fn remote_service(app: &App) -> SessionService {
+    SessionService::new(Arc::new(
+        app.sessions
+            .handle()
+            .with_initiator(CommandInitiator::Remote),
+    ))
 }
 
 /// Admits the action the background decision sent through the gateway.
@@ -780,7 +838,7 @@ async fn failed_reply_persistence_keeps_the_composer_and_reports_the_error() {
 
         // Assert
         if failure == "record" {
-            assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+            assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
             assert!(
                 messages(&app)
                     .await

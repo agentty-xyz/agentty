@@ -16,7 +16,7 @@ use ag_session::{GraphExecutionRef, QuestionAnswer};
 
 use crate::app::App;
 use crate::app::graph_proposal_reply::clarification_questions;
-use crate::app::prompt_intent::PromptWorkflowOutcome;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::domain::question::{QuestionItem, question_answer_message};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
@@ -58,8 +58,8 @@ pub(crate) enum GraphAnswerOutcome {
 impl GraphAnswerOutcome {
     /// Classifies one admitted-or-rejected reply to graph work that still
     /// waited when the reply was routed.
-    pub(crate) fn from_reply(outcome: &PromptWorkflowOutcome) -> Self {
-        if *outcome == PromptWorkflowOutcome::KeepPrompt {
+    pub(crate) fn from_reply(outcome: &GraphReplyOutcome) -> Self {
+        if matches!(outcome, GraphReplyOutcome::Rejected(_)) {
             return Self::Retry;
         }
 

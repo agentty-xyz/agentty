@@ -603,6 +603,10 @@ output as awaiting approval, and your reply resumes the graph before acting on i
 applies to the session's newest graph only; an older paused graph leaves your message as
 an ordinary turn.
 
+Messages from a [remote device](@/docs/usage/remote-control.md) are routed the same way:
+they reply to a pending proposal, answer a waiting node, or act on an output awaiting
+approval before they start an ordinary turn.
+
 Duplicate approvals do not launch again. Pending proposals and undecided replies, to a
 proposal or to an output awaiting approval, survive a restart or project switch. A
 recovered proposal reply loses its images; a recovered output reply keeps them and

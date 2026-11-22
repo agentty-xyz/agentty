@@ -13,7 +13,8 @@ use tempfile::TempDir;
 
 use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
-use crate::app::prompt_intent::PromptWorkflowOutcome;
+use crate::app::graph_proposal_reply::tests::remote_service;
+use crate::app::graph_reply::GraphReplyOutcome;
 use crate::domain::session::SessionId;
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::test_support::new_test_app;
@@ -56,12 +57,7 @@ async fn chat_reply_answers_the_awaiting_node_of_a_paused_graph() {
         .await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(
         messages(&app).await,
         [
@@ -75,6 +71,47 @@ async fn chat_reply_answers_the_awaiting_node_of_a_paused_graph() {
                     .to_string()
             ),
         ]
+    );
+}
+
+#[tokio::test]
+async fn remote_message_answers_the_awaiting_node_instead_of_starting_a_turn() {
+    // Arrange
+    let (graph, progress) = awaiting_graph("graph", ExecutionGraphStatus::Running);
+    let expected_execution = progress.nodes[0].executions[0].clone();
+    let mut repository = MockGraphRepository::new();
+    repository
+        .expect_list_graphs()
+        .returning(move |_| Ok(vec![graph.clone()]));
+    repository
+        .expect_progress()
+        .returning(move |_| Ok(Some(progress.clone())));
+    repository
+        .expect_continue_node()
+        .once()
+        .withf(move |request| {
+            request.node_id == "first"
+                && request.execution == expected_execution
+                && request.kind
+                    == GraphNodeContinuation::Reply {
+                        attachments: Vec::new(),
+                        message: "Docs only".into(),
+                    }
+        })
+        .returning(|_| Ok(true));
+    let (mut app, _directory) = app_with(repository).await;
+    let remote = remote_service(&app);
+
+    // Act
+    let result = app
+        .drive_session_request(remote.send_message(&SessionId::from("sess"), "Docs only"))
+        .await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        messages(&app).await.first(),
+        Some(&("user_prompt".to_string(), "Docs only".to_string()))
     );
 }
 
@@ -144,12 +181,7 @@ async fn chat_reply_answers_the_question_asked_last_when_several_nodes_wait() {
         .await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: "sess".into()
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(
         messages(&app).await,
         [
@@ -189,12 +221,7 @@ async fn chat_reply_without_loaded_session_handles_is_admitted_without_chat_echo
         .await;
 
     // Assert
-    assert_eq!(
-        outcome,
-        Some(PromptWorkflowOutcome::ShowSession {
-            session_id: unloaded
-        })
-    );
+    assert_eq!(outcome, Some(GraphReplyOutcome::Accepted));
     assert_eq!(messages(&app).await, Vec::<(String, String)>::new());
 }
 
@@ -280,7 +307,10 @@ async fn failed_lookup_or_admission_keeps_the_draft_and_reports_why() {
             .await;
 
         // Assert
-        assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt), "{fault}");
+        assert!(
+            matches!(outcome, Some(GraphReplyOutcome::Rejected(_))),
+            "{fault}"
+        );
         let messages = messages(&app).await;
         assert_eq!(messages.len(), 1, "{fault}: {messages:?}");
         let (kind, content) = &messages[0];
