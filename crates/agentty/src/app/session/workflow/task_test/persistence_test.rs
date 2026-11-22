@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex};
 
 use ag_git::{GitError, MockGitClient};
 use ag_session::test_support as model_fixture;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use super::super::SessionTaskService;
 use super::support::insert_review_session;
+use crate::app::service::SessionUpdateVersionMap;
 use crate::db::AppRepositories;
 use crate::domain::session::{SessionDiffStats, SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -254,4 +255,33 @@ async fn test_workflow_notice_append_still_persists_when_live_transcript_is_pois
             .messages(),
         &[] as &[SessionMessage]
     );
+}
+
+#[tokio::test]
+async fn test_auto_address_notice_is_skipped_for_a_session_without_a_project() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let session_update_versions = SessionUpdateVersionMap::default();
+
+    // Act
+    SessionTaskService::append_auto_address_notice(
+        &transcript,
+        &database,
+        &app_event_tx,
+        &session_update_versions,
+        "missing-session",
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        transcript
+            .lock()
+            .expect("transcript lock should not be poisoned")
+            .messages(),
+        &[] as &[SessionMessage]
+    );
+    assert!(app_event_rx.try_recv().is_err());
 }
