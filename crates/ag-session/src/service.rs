@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId, SessionSummary};
-use crate::{AcceptTaskPlanRequest, CreateTaskRequest, SubmitTaskRequest, Task};
+use crate::{AcceptTaskPlanRequest, AgentModel, CreateTaskRequest, SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -85,9 +85,31 @@ pub enum DurableMessageVisibility {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum SessionOperation {
+    /// Creating a session in the active project through
+    /// [`SessionBackend::create_session`].
+    CreateSession,
+    /// Describing the active project through
+    /// [`SessionBackend::host_context`].
+    HostContext,
     /// Merging a review-ready session through
     /// [`SessionBackend::merge_session`].
     MergeSession,
+}
+
+/// The project a host creates new sessions in, and how it creates them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostContext {
+    /// Branch new sessions start from.
+    pub base_branch: String,
+    /// Model a new session starts with.
+    pub default_model: AgentModel,
+    /// Identifier of the active project, the only one that accepts new
+    /// sessions.
+    pub project_id: i64,
+    /// Display name of the active project.
+    pub project_name: String,
+    /// Creation modes the host can serve now, in display order.
+    pub session_modes: Vec<CreateSessionMode>,
 }
 
 /// Host implementation boundary for session persistence and workflows.
@@ -302,6 +324,14 @@ pub trait SessionBackend: Send + Sync {
     async fn complete_task(&self, _task_id: &str) -> Result<(), SessionError> {
         Err(SessionError::Operation(
             "Host does not support tasks".to_string(),
+        ))
+    }
+
+    /// Describes the active project new sessions are created in. Older hosts
+    /// may omit it.
+    async fn host_context(&self) -> Result<HostContext, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not describe its project".to_string(),
         ))
     }
 
@@ -654,6 +684,15 @@ impl SessionService {
     #[must_use]
     pub fn supports(&self, operation: SessionOperation) -> bool {
         self.backend.supports(operation)
+    }
+
+    /// Describes the active project new sessions are created in.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not describe its project or
+    /// cannot load its defaults.
+    pub async fn host_context(&self) -> Result<HostContext, SessionError> {
+        self.backend.host_context().await
     }
 
     /// Creates one session and returns its stable identifier.

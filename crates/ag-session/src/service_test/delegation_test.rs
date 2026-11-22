@@ -137,3 +137,22 @@ fn existing_hosts_serve_no_optional_operations() {
     // Assert
     assert!(!supports_merge);
 }
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_host_context() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let host = service.host_context().await;
+    let supports_host = service.supports(SessionOperation::HostContext);
+
+    // Assert
+    assert_eq!(
+        host,
+        Err(SessionError::Operation(
+            "Host does not describe its project".to_string()
+        ))
+    );
+    assert!(!supports_host);
+}

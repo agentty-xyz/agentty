@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
-    ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend, SessionError, SessionId,
-    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
-    SessionStatus, SessionSummary, SpeedMode,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    HostContext, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
+    SessionBackend, SessionError, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -225,9 +225,16 @@ impl SessionBackend for RecordingBackend {
 
     async fn create_session(
         &self,
-        _request: CreateSessionRequest,
+        request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
-        self.record("create".to_string(), SessionId::from("created"))
+        self.record(
+            format!("create:{:?}:{}", request.mode, request.project_id),
+            SessionId::from("created"),
+        )
+    }
+
+    async fn host_context(&self) -> Result<HostContext, SessionError> {
+        self.record("host".to_string(), host_fixture())
     }
 
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError> {
@@ -303,6 +310,18 @@ impl SessionBackend for RecordingBackend {
             .push(format!("review:{session_id}"));
 
         Err(SessionError::Operation("unsupported".to_string()))
+    }
+}
+
+/// Describes project `1` on `main`, which serves regular sessions and
+/// drafts but not the harness.
+pub(crate) fn host_fixture() -> HostContext {
+    HostContext {
+        base_branch: "main".to_string(),
+        default_model: ag_session::test_support::CODEX_MODEL,
+        project_id: 1,
+        project_name: "agentty".to_string(),
+        session_modes: vec![CreateSessionMode::Regular, CreateSessionMode::Draft],
     }
 }
 

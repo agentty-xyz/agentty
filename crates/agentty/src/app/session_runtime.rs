@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReviewRequest, Session,
-    SessionError, SessionId, SessionSummary,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
+    ReviewRequest, Session, SessionError, SessionId, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -67,6 +67,9 @@ pub(crate) enum SessionRuntimeCommand {
     },
     List {
         response_tx: oneshot::Sender<Result<Vec<SessionSummary>, SessionError>>,
+    },
+    HostContext {
+        response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
     },
     Mutation(SessionCommand),
 }
@@ -359,6 +362,13 @@ impl SessionRuntimeHandle {
             session_id,
         })
         .await
+    }
+
+    /// Describes the active project new sessions are created in through the
+    /// runtime actor.
+    pub(crate) async fn host_context(&self) -> Result<HostContext, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::HostContext { response_tx })
+            .await
     }
 
     /// Lists the loaded sessions in display order through the runtime actor.

@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteMessage, RemoteMessageKind, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionSummary, ServerFrame,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -453,6 +454,59 @@ async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
         RemoteResult::Error("Session not found".to_string())
     );
     assert_eq!(server.backend.calls(), ["list", "merge:session-1", "list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let host = call(&mut client, 1, RemoteRequest::GetHost).await?;
+    let created = call(
+        &mut client,
+        2,
+        RemoteRequest::CreateSession {
+            mode: RemoteSessionMode::Regular,
+        },
+    )
+    .await?;
+    let harness = call(
+        &mut client,
+        3,
+        RemoteRequest::CreateSession {
+            mode: RemoteSessionMode::Harness,
+        },
+    )
+    .await?;
+
+    // Assert
+    assert_eq!(
+        host,
+        RemoteResult::Ok(RemoteResponse::Host {
+            base_branch: "main".to_string(),
+            default_model: "gpt-6.1-sol".to_string(),
+            project: "agentty".to_string(),
+            session_modes: vec![RemoteSessionMode::Regular],
+        })
+    );
+    assert_eq!(
+        created,
+        RemoteResult::Ok(RemoteResponse::Created {
+            session_id: "session-2".to_string(),
+        })
+    );
+    assert_eq!(
+        harness,
+        RemoteResult::Error("Session mode is not available".to_string())
+    );
+    assert_eq!(
+        server.backend.calls(),
+        ["host", "host", "create:Regular:1", "host"]
+    );
 
     Ok(())
 }

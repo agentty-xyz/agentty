@@ -10,7 +10,10 @@
 //! [`ServerFrame::Changed`] when host session state changes, so the client can
 //! fetch fresh snapshots.
 
-use ag_session::{Session, SessionMessage, SessionMessageKind, SessionSummary};
+use ag_session::{
+    AgentSelectionMetadata, CreateSessionMode, HostContext, Session, SessionMessage,
+    SessionMessageKind, SessionSummary,
+};
 use serde::{Deserialize, Serialize};
 
 /// A frame sent by a remote client.
@@ -70,6 +73,16 @@ pub enum RemoteRequest {
         /// Session to cancel.
         session_id: String,
     },
+    /// Creates a session in the host's active project, with its worktree
+    /// and branch. Offered through the `create_session` capability.
+    CreateSession {
+        /// How the session runs; one of the modes `get_host` lists.
+        #[serde(default)]
+        mode: RemoteSessionMode,
+    },
+    /// Describes the host's active project. Offered through the `host`
+    /// capability.
+    GetHost,
     /// Loads one session snapshot.
     GetSession {
         /// Session to load.
@@ -94,6 +107,38 @@ pub enum RemoteRequest {
     /// sends. The server answers it with an error and keeps the connection.
     #[serde(other)]
     Unsupported,
+}
+
+/// How a session created remotely runs.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteSessionMode {
+    /// On the in-process harness with its default model.
+    Harness,
+    /// On the project's default agent and model.
+    #[default]
+    Regular,
+}
+
+impl RemoteSessionMode {
+    /// Returns the remote mode for a host creation mode, or `None` for a
+    /// mode remote devices cannot request.
+    fn from_session_mode(mode: &CreateSessionMode) -> Option<Self> {
+        match mode {
+            CreateSessionMode::Draft => None,
+            CreateSessionMode::Harness => Some(Self::Harness),
+            CreateSessionMode::Regular => Some(Self::Regular),
+        }
+    }
+
+    /// Returns the host creation mode this remote mode asks for.
+    #[must_use]
+    pub fn session_mode(self) -> CreateSessionMode {
+        match self {
+            Self::Harness => CreateSessionMode::Harness,
+            Self::Regular => CreateSessionMode::Regular,
+        }
+    }
 }
 
 /// One answer to a pending clarification question.
@@ -183,6 +228,22 @@ pub enum RemoteResult {
 pub enum RemoteResponse {
     /// The host admitted the mutation; its work may still be running.
     Accepted,
+    /// The host created a session.
+    Created {
+        /// Identifier of the new session.
+        session_id: String,
+    },
+    /// The host's active project, where new sessions are created.
+    Host {
+        /// Branch new sessions start from.
+        base_branch: String,
+        /// Model a new session starts with.
+        default_model: String,
+        /// Display name of the active project.
+        project: String,
+        /// Modes `create_session` accepts now, in display order.
+        session_modes: Vec<RemoteSessionMode>,
+    },
     /// One session snapshot, or `None` when it does not exist.
     Session {
         /// Loaded session.
@@ -193,6 +254,21 @@ pub enum RemoteResponse {
         /// Session listing entries.
         sessions: Vec<RemoteSessionSummary>,
     },
+}
+
+impl From<HostContext> for RemoteResponse {
+    fn from(host: HostContext) -> Self {
+        Self::Host {
+            base_branch: host.base_branch,
+            default_model: host.default_model.name().to_string(),
+            project: host.project_name,
+            session_modes: host
+                .session_modes
+                .iter()
+                .filter_map(RemoteSessionMode::from_session_mode)
+                .collect(),
+        }
+    }
 }
 
 /// Listing entry for one session.

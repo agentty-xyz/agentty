@@ -12,10 +12,10 @@ use ag_remote::{
     RemoteHost, RemoteRelayConfig, RemoteServerConfig, RemoteServerHandle, StaticKeypair,
 };
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
-    ReviewRequest, Session, SessionBackend, SessionError, SessionId, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionStatus,
-    SessionSummary,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    HostContext, QuestionItem, ReviewRequest, Session, SessionBackend, SessionError, SessionId,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -373,7 +373,8 @@ impl DeviceStore for MemoryDeviceStore {
 /// messages sent to it, the message `busy` is rejected, the message `wait`
 /// is held, and recorded only once [`RecordingBackend::release`] is called,
 /// the message `panic` panics, every cancellation reports a missing
-/// session, every merge is refused, and every optional operation is served.
+/// session, every merge is refused, the host serves only regular sessions
+/// in project `1`, and every optional operation is served.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -404,11 +405,23 @@ impl SessionBackend for RecordingBackend {
 
     async fn create_session(
         &self,
-        _request: CreateSessionRequest,
+        request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
-        self.record("create".to_string());
+        self.record(format!("create:{:?}:{}", request.mode, request.project_id));
 
-        Err(SessionError::Operation("unsupported".to_string()))
+        Ok(SessionId::from("session-2"))
+    }
+
+    async fn host_context(&self) -> Result<HostContext, SessionError> {
+        self.record("host".to_string());
+
+        Ok(HostContext {
+            base_branch: "main".to_string(),
+            default_model: ag_session::test_support::CODEX_MODEL,
+            project_id: 1,
+            project_name: "agentty".to_string(),
+            session_modes: vec![CreateSessionMode::Regular],
+        })
     }
 
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, SessionError> {
