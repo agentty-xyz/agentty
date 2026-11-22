@@ -344,6 +344,14 @@ export function lineCounts(document, lines) {
   return node;
 }
 
+// A `·` between two figures, which screen readers skip.
+export function separator(document) {
+  const node = element(document, "span", "sep", "·");
+  node.setAttribute("aria-hidden", "true");
+
+  return node;
+}
+
 // The line counts, the model and `PR ready` that a card shows from
 // `sessionFigures`, each after a `·` separator. Missing figures are left
 // out.
@@ -361,7 +369,7 @@ function figureNodes(document, figures) {
     nodes.push(element(document, "span", "pr-ready", "PR ready"));
   }
 
-  return nodes.flatMap((node) => [element(document, "span", "sep", "·"), node]);
+  return nodes.flatMap((node) => [separator(document), node]);
 }
 
 // A status dot and label in the status's tone.

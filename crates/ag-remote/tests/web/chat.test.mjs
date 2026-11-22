@@ -5,6 +5,7 @@ import test from "node:test";
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
 import {
   DRAFT_KEY_PREFIX,
+  clockSkew,
   collectAnswers,
   composerKeyAction,
   composerRows,
@@ -945,6 +946,51 @@ test("a review request links only through the Markdown link filter", () => {
   }
 });
 
+test("a refresh keeps the header parts that did not change, and the focus on the link", () => {
+  const { byId, chat, document } = mountChat();
+  chat.render(detailedSession(), detailedSummary());
+  const link = byId("heading-sub").querySelector("a");
+  const size = byId("heading-sub").querySelector(".size");
+  link.focus();
+
+  chat.render(detailedSession({ updated_at: 11 }), detailedSummary({ added_lines: 70 }));
+  assert.equal(byId("heading-sub").querySelector("a"), link);
+  assert.equal(byId("heading-sub").querySelector(".size"), size);
+  assert.equal(document.activeElement, link);
+  assert.equal(byId("heading-sub").querySelector(".add").textContent, "+70");
+
+  // Parts that go away are removed, and the timer stays last.
+  chat.render(
+    detailedSession({ review_request: undefined, status: "InProgress" }),
+    detailedSummary({ in_progress_started_at: 0, status: "InProgress" }),
+  );
+  const sub = byId("heading-sub");
+  assert.equal(sub.querySelector("a"), null);
+  assert.equal(sub.children[sub.children.length - 1].className, "timer");
+  chat.render(detailedSession({ status: "InProgress" }), detailedSummary({ in_progress_started_at: 0 }));
+  assert.equal(sub.children[sub.children.length - 1].className, "timer");
+  assert.equal(sub.querySelector("a").textContent, "#1261 open · PR ready");
+});
+
+test("the timer allows for a device clock behind the host's", () => {
+  let time = 100;
+  const { byId, chat } = mountChat({ now: () => time });
+  // The host started the turn at 200 by its clock, so this device is at
+  // least 100 seconds behind.
+  chat.render(
+    detailedSession({ status: "InProgress" }),
+    detailedSummary({ in_progress_started_at: 200, in_progress_total_seconds: 10, updated_at: 190 }),
+  );
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 10s");
+  time = 105;
+  chat.tick();
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 15s");
+
+  assert.equal(clockSkew({ updated_at: 50 }, 100), 0);
+  assert.equal(clockSkew({ updated_at: 150 }, 100), 50);
+  assert.equal(clockSkew(null, 100), 0);
+});
+
 test("the header's timer counts while the session runs and goes when it stops", () => {
   let time = 1000;
   const { byId, chat } = mountChat({ now: () => time });
@@ -981,7 +1027,9 @@ test("the composer line shows the settings, and the key hint moves below", () =>
     "claude/opus-5.5 [high]·balanced·normal speed",
   );
   assert.equal(byId("composer-meta").querySelector("b").textContent, "claude/opus-5.5");
-  assert.equal(byId("composer-meta").querySelectorAll(".sep").length, 2);
+  const separators = byId("composer-meta").querySelectorAll(".sep");
+  assert.equal(separators.length, 2);
+  assert.equal(separators[0].getAttribute("aria-hidden"), "true");
   assert.equal(byId("composer-hint").textContent, "Enter sends · Shift+Enter adds a line");
 
   // An agent without a speed control sends no speed.

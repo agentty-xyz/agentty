@@ -18,7 +18,7 @@ import {
   statusInfo,
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
-import { lineCounts } from "./session_list.mjs";
+import { lineCounts, separator } from "./session_list.mjs";
 
 // Unsent text of one session, in `sessionStorage`, under this prefix and
 // the session id.
@@ -280,6 +280,8 @@ export function createChat({
   const drafts = createDrafts(window);
   const state = {
     capabilities: [],
+    // Seconds this device's clock is known to run behind the host's.
+    clockSkew: 0,
     isAnswering: false,
     isCanceling: false,
     isConnected: false,
@@ -321,7 +323,9 @@ export function createChat({
     elements.badge.replaceChildren(element(document, "i"), info.label);
     const line = element(document, "span", "status narrow-only status--" + info.tone);
     line.append(element(document, "i"), info.label);
-    elements.sub.replaceChildren(line, ...headerDetails(document, session, state.summary));
+    // Parts that did not change stay in place, so a focused review link
+    // keeps its focus through a refresh.
+    updateChildren(elements.sub, [line, ...headerDetails(document, session, state.summary)]);
     renderTimer();
     elements.sheetTitle.textContent = session.title || "No title";
     elements.sheetSub.textContent = info.label;
@@ -331,7 +335,7 @@ export function createChat({
   // Shows how long the session has worked while it runs.
   function renderTimer() {
     const timer = elements.sub.querySelector(".timer");
-    const seconds = activeSeconds(state.summary, now());
+    const seconds = activeSeconds(state.summary, now() + state.clockSkew);
     if (seconds === null) {
       timer?.remove();
 
@@ -361,7 +365,7 @@ export function createChat({
           ? modelNode(document, part)
           : element(document, "span", null, part.label);
 
-      return index === 0 ? [node] : [element(document, "span", "sep", "·"), node];
+      return index === 0 ? [node] : [separator(document), node];
     });
     elements.composerMeta.replaceChildren(...nodes);
   }
@@ -676,6 +680,7 @@ export function createChat({
     const wasNearEnd = isNearEnd();
     state.session = session;
     state.summary = summary?.id === session.id ? summary : null;
+    state.clockSkew = clockSkew(state.summary, now());
     if (state.isLoadError) {
       // A snapshot arrived, so the earlier refresh failure is over.
       state.isLoadError = false;
@@ -925,6 +930,49 @@ function keepSourceView(oldNode, newNode) {
   if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
     showSource(newNode, true);
   }
+}
+
+// How many seconds this device's clock runs behind the host's, as far as
+// `summary` shows: the host's times cannot lie in its future, so a time
+// ahead of `nowSeconds` reveals the gap. The protocol carries no host
+// clock, so a device clock that runs ahead stays unnoticed and the timer
+// then reads high by that much.
+export function clockSkew(summary, nowSeconds) {
+  const latest = Math.max(
+    Number.isFinite(summary?.updated_at) ? summary.updated_at : -Infinity,
+    Number.isFinite(summary?.in_progress_started_at) ? summary.in_progress_started_at : -Infinity,
+  );
+
+  return Math.max(0, latest - nowSeconds);
+}
+
+// Makes `container`'s children match `nodes`, leaving each child whose
+// class, text, link and title did not change in place, so it keeps focus.
+// A `.timer` child goes, and `renderTimer` adds it again last.
+function updateChildren(container, nodes) {
+  container.querySelector(".timer")?.remove();
+  const current = [...container.children];
+  nodes.forEach((node, index) => {
+    const old = current[index];
+    if (!old) {
+      container.append(node);
+    } else if (nodeKey(old) !== nodeKey(node)) {
+      old.replaceWith(node);
+    }
+  });
+  for (const extra of current.slice(nodes.length)) {
+    extra.remove();
+  }
+}
+
+function nodeKey(node) {
+  return [
+    node.tagName,
+    node.className,
+    node.textContent,
+    node.getAttribute("href") ?? "",
+    node.title ?? "",
+  ].join("\u0000");
 }
 
 // The header's details after the status: the size badge and line counts

@@ -175,6 +175,8 @@ test("rows show size, model and PR ready, and cards add the line counts, when th
   // A row leaves the line counts to the card and the header.
   assert.equal(row("review").querySelector(".row-meta").textContent, "Review·opus-5.5·PR ready3m");
   assert.equal(row("review").querySelector(".model").title, "opus-5.5");
+  // Screen readers skip the separators.
+  assert.equal(row("review").querySelector(".sep").getAttribute("aria-hidden"), "true");
   // A pull request that cannot merge shows nothing.
   assert.equal(row("fresh").querySelector(".row-meta").textContent, "Question·gpt-5.412m");
   assert.equal(row("old").querySelector(".row-title").textContent, "From an older host");
