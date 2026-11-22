@@ -14,7 +14,8 @@ use ag_remote::{
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionItem,
     ReviewRequest, Session, SessionBackend, SessionError, SessionId, SessionMessage,
-    SessionMessageKind, SessionService, SessionSettings, SessionStatus, SessionSummary,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionStatus,
+    SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -371,8 +372,8 @@ impl DeviceStore for MemoryDeviceStore {
 /// Session backend that records calls; a session snapshot queues the
 /// messages sent to it, the message `busy` is rejected, the message `wait`
 /// is held, and recorded only once [`RecordingBackend::release`] is called,
-/// the message `panic` panics, and every cancellation reports a missing
-/// session.
+/// the message `panic` panics, every cancellation reports a missing
+/// session, every merge is refused, and every optional operation is served.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
@@ -397,6 +398,10 @@ impl RecordingBackend {
 
 #[async_trait]
 impl SessionBackend for RecordingBackend {
+    fn supports(&self, _operation: SessionOperation) -> bool {
+        true
+    }
+
     async fn create_session(
         &self,
         _request: CreateSessionRequest,
@@ -487,7 +492,9 @@ impl SessionBackend for RecordingBackend {
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"));
 
-        Ok(())
+        Err(SessionError::Operation(
+            "Session is not ready to merge".to_string(),
+        ))
     }
 
     async fn create_review_request(

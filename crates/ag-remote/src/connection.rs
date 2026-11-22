@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_noise::PublicKey;
-use ag_session::{AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionService};
+use ag_session::{
+    AnswerQuestionsRequest, QuestionAnswer, SessionError, SessionId, SessionOperation,
+    SessionService,
+};
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
 use tokio::task::{self, JoinSet};
@@ -53,6 +56,9 @@ pub(crate) const MAX_REQUESTS_IN_PROGRESS: usize = 8;
 pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
 /// Error returned for a request whose task failed before it could reply.
 const REQUEST_FAILED: &str = "Request failed";
+/// Optional requests, each named by the capability that offers it and served
+/// only when the host supports its operation.
+const CAPABILITIES: &[(SessionOperation, &str)] = &[(SessionOperation::MergeSession, "merge")];
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -261,7 +267,7 @@ async fn welcome(
             device_name: device.name,
         },
         reply: ServerFrame::Welcome {
-            capabilities: capabilities(),
+            capabilities: capabilities(state.sessions()),
             device_id: device.id,
             protocol_version: PROTOCOL_VERSION,
             revision,
@@ -273,10 +279,27 @@ async fn welcome(
 /// and `Paired`.
 ///
 /// Requests added after the first protocol version are offered only through
-/// this list, so a client never sends one to a server that lacks it. None
-/// exists yet.
-fn capabilities() -> Vec<String> {
-    Vec::new()
+/// this list, so a client never sends one to a server that lacks it. Each
+/// is listed only when the host serves its operation.
+fn capabilities(sessions: &SessionService) -> Vec<String> {
+    CAPABILITIES
+        .iter()
+        .filter(|(operation, _)| sessions.supports(*operation))
+        .map(|(_, capability)| (*capability).to_string())
+        .collect()
+}
+
+/// Refuses an optional request whose operation the host does not serve, so
+/// a client that skips the capability list still reaches nothing more.
+fn require_operation(
+    sessions: &SessionService,
+    operation: SessionOperation,
+) -> Result<(), SessionError> {
+    if sessions.supports(operation) {
+        return Ok(());
+    }
+
+    Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string()))
 }
 
 /// Lists the pairing request, tells the device to wait, and returns the
@@ -349,7 +372,7 @@ pub(crate) async fn complete_pairing(
             device_name: device.device_name,
         },
         ServerFrame::Paired {
-            capabilities: capabilities(),
+            capabilities: capabilities(state.sessions()),
             device_id: device.device_id,
             protocol_version: PROTOCOL_VERSION,
             revision,
@@ -557,6 +580,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
     match request {
         RemoteRequest::AnswerQuestions { session_id, .. }
         | RemoteRequest::CancelSession { session_id }
+        | RemoteRequest::MergeSession { session_id }
         | RemoteRequest::SendMessage { session_id, .. } => Some(session_id),
         RemoteRequest::GetSession { .. }
         | RemoteRequest::ListSessions
@@ -649,6 +673,13 @@ async fn respond(
                     .map(RemoteSessionSummary::from)
                     .collect(),
             })
+        }
+        RemoteRequest::MergeSession { session_id } => {
+            require_operation(sessions, SessionOperation::MergeSession)?;
+            let session_id = listed_session_id(sessions, session_id).await?;
+            sessions.merge_session(&session_id).await?;
+
+            Ok(RemoteResponse::Accepted)
         }
         RemoteRequest::SendMessage {
             message,

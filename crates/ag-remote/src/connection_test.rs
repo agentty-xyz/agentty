@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ag_noise::PublicKey;
+use ag_session::SessionOperation;
 use tokio::sync::watch;
 
 use super::{
@@ -26,6 +27,15 @@ fn fixture(devices: MemoryDeviceStore) -> StateFixture {
     StateFixture::new(
         devices,
         RecordingBackend::default(),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    )
+}
+
+/// State with deterministic entropy over a backend that serves `operations`.
+fn supporting_fixture(devices: MemoryDeviceStore, operations: &[SessionOperation]) -> StateFixture {
+    StateFixture::new(
+        devices,
+        RecordingBackend::supporting(operations),
         Arc::new(ReplayEntropy::new(vec![0])),
     )
 }
@@ -585,4 +595,65 @@ fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
     ));
     assert!(matches!(outcomes[3], MessageOutcome::Ignored));
     assert!(matches!(outcomes[4], MessageOutcome::Closed));
+}
+
+#[tokio::test]
+async fn authentication_lists_only_the_capabilities_the_host_serves() {
+    // Arrange
+    let fixture = supporting_fixture(
+        MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
+        &[SessionOperation::MergeSession],
+    );
+    let mut revisions = fixture.state.revisions();
+
+    // Act
+    let welcomed = authenticate(&fixture.state, hello("t"), &mut revisions).await;
+    let paired = complete_pairing(&fixture.state, pairing_device("Phone"), &mut revisions).await;
+
+    // Assert
+    let welcome_capabilities = match welcomed {
+        Ok(Authentication::Authenticated {
+            reply: ServerFrame::Welcome { capabilities, .. },
+            ..
+        }) => Some(capabilities),
+        _ => None,
+    };
+    let paired_capabilities = match paired {
+        Ok((_, ServerFrame::Paired { capabilities, .. })) => Some(capabilities),
+        _ => None,
+    };
+    let merge = vec!["merge".to_string()];
+    assert_eq!(welcome_capabilities, Some(merge.clone()));
+    assert_eq!(paired_capabilities, Some(merge));
+}
+
+#[tokio::test]
+async fn merge_reaches_the_host_only_for_listed_sessions_it_serves() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::MergeSession],
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let merge = |session_id: &str| RemoteRequest::MergeSession {
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let merged = reply_result(&serving.state, merge("session-1")).await;
+    let unlisted = reply_result(&serving.state, merge("other-project")).await;
+    let unsupported = reply_result(&not_serving.state, merge("session-1")).await;
+
+    // Assert
+    assert_eq!(merged, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(serving.backend.calls(), ["list", "merge:session-1", "list"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }

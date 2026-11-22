@@ -8,7 +8,7 @@ use ag_contracts::MockAgentChannel;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, QuestionAnswer, SessionError as ApiSessionError, SessionId,
-    SessionMessageKind, SessionStatus,
+    SessionMessageKind, SessionOperation, SessionStatus,
 };
 use tokio::sync::Notify;
 
@@ -338,4 +338,18 @@ async fn durable_messages_require_content_and_operation_id() {
             "Session `session-id` could not enqueue the durable message".to_string()
         )
     );
+}
+
+#[tokio::test]
+async fn runtime_backend_serves_merge_to_frontends_that_ask() {
+    // Arrange
+    let (app, _temp_dir) = crate::test_support::new_test_app().await;
+
+    // Act
+    let supports_merge = app
+        .session_service()
+        .supports(SessionOperation::MergeSession);
+
+    // Assert
+    assert!(supports_merge);
 }
