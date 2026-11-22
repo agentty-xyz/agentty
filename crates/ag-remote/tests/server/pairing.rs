@@ -30,7 +30,8 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
                 "merge",
                 "diff",
                 "stop_turn",
-                "sync"
+                "sync",
+                "settings"
             ]
             .map(String::from)
             .to_vec(),

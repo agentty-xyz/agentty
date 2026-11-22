@@ -107,6 +107,19 @@ pub(super) async fn request_sync(
         .await
 }
 
+pub(super) async fn request_settings(
+    app: &mut App,
+    session_id: SessionId,
+    change: ag_session::SessionSettingsChange,
+) -> Result<(), ApiSessionError> {
+    let service = app.session_service();
+
+    app.drive_session_request(
+        async move { service.update_session_settings(&session_id, change).await },
+    )
+    .await
+}
+
 pub(super) async fn request_merge(
     app: &mut App,
     session_id: SessionId,

@@ -475,6 +475,18 @@ impl SessionRuntimeHandle {
             .await
     }
 
+    /// Changes one session's settings through the runtime actor.
+    pub(crate) async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: ag_session::SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        let session_id = session_id.clone();
+
+        self.request_admission(SessionMutation::UpdateSettings { change, session_id })
+            .await
+    }
+
     /// Enqueues one session for merge through the runtime actor.
     pub(crate) async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();

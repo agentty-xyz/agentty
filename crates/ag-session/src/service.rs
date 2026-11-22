@@ -7,7 +7,10 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId, SessionListEntry, SessionSummary};
-use crate::{AcceptTaskPlanRequest, AgentModel, CreateTaskRequest, SubmitTaskRequest, Task};
+use crate::{
+    AcceptTaskPlanRequest, AgentModel, AgentSelection, CreateTaskRequest, ReasoningLevel,
+    ResponseStyle, SpeedMode, SubmitTaskRequest, Task,
+};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -102,6 +105,23 @@ pub enum SessionOperation {
     /// Rebasing a session branch onto its base branch through
     /// [`SessionBackend::rebase_session`].
     RebaseSession,
+    /// Changing a session's model, reasoning, style, or speed through
+    /// [`SessionBackend::update_session_settings`].
+    SessionSettings,
+}
+
+/// Settings to change on one session; `None` keeps a setting as it is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SessionSettingsChange {
+    /// Model to switch to; the session's own agent runs it, as in the
+    /// terminal's `/model`.
+    pub model: Option<AgentModel>,
+    /// Reasoning level to use for later turns.
+    pub reasoning_level: Option<ReasoningLevel>,
+    /// Response style to use for later turns.
+    pub response_style: Option<ResponseStyle>,
+    /// Response speed to use for later turns.
+    pub speed_mode: Option<SpeedMode>,
 }
 
 /// One file a session's diff changes.
@@ -143,6 +163,10 @@ pub struct HostContext {
     /// harness model when only Harness sessions are offered, otherwise the
     /// regular agent's default.
     pub default_model: AgentModel,
+    /// Agents and models a session can switch to now, in display order.
+    /// A session switches only among the entries of its own agent, as the
+    /// terminal's `/model` offers them; each gives the model's id and name.
+    pub models: Vec<AgentSelection>,
     /// Identifier of the active project, the only one that accepts new
     /// sessions.
     pub project_id: i64,
@@ -458,6 +482,21 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not support syncing a session branch".to_string(),
+        ))
+    }
+
+    /// Changes the session's settings for later turns. A model or speed
+    /// change waits while the session still has accepted work. Older hosts
+    /// may omit support.
+    async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        let _ = (session_id, change);
+
+        Err(SessionError::Operation(
+            "Host does not support changing session settings".to_string(),
         ))
     }
 
@@ -899,6 +938,33 @@ impl SessionService {
     /// its current state, or the host does not support syncing.
     pub async fn rebase_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.backend.rebase_session(session_id).await
+    }
+
+    /// Changes the session's model, reasoning, style, or speed for later
+    /// turns, where the terminal's composer could change them.
+    ///
+    /// The host refuses the whole change, applying none of it, when the
+    /// session's status has no composer, the model is not one the session's
+    /// agent offers, or fast mode does not suit the model the session will
+    /// have. It then applies the model, reasoning, style, and speed in that
+    /// order. Reasoning and style apply at once; a model or speed change
+    /// waits while the session still has accepted work. Changes are not
+    /// transactional: when one fails to apply, the ones before it stay
+    /// applied.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist or its status has no
+    /// composer, a model is not available to it, fast mode does not suit the
+    /// resulting model, switching or persisting a setting fails, or the host
+    /// does not support the change.
+    pub async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .update_session_settings(session_id, change)
+            .await
     }
 
     /// Requests merge processing for one session.

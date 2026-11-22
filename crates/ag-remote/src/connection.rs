@@ -2,13 +2,14 @@
 //! approval, requests, and change pushes.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, QuestionAnswer, SessionError, SessionId,
-    SessionOperation, SessionService,
+    SessionOperation, SessionService, SessionSettingsChange,
 };
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
@@ -65,6 +66,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::SessionDiff, "diff"),
     (SessionOperation::StopTurn, "stop_turn"),
     (SessionOperation::RebaseSession, "sync"),
+    (SessionOperation::SessionSettings, "settings"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -313,6 +315,15 @@ fn require_operation(
     }
 
     Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string()))
+}
+
+/// Parses one optional setting sent as its persisted name, such as `high`.
+fn parse_setting<Setting: FromStr<Err = String>>(
+    value: Option<String>,
+) -> Result<Option<Setting>, SessionError> {
+    value
+        .map(|value| value.parse().map_err(SessionError::Operation))
+        .transpose()
 }
 
 /// Lists the pairing request, tells the device to wait, and returns the
@@ -597,7 +608,8 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::MergeSession { session_id }
         | RemoteRequest::SendMessage { session_id, .. }
         | RemoteRequest::StopTurn { session_id }
-        | RemoteRequest::SyncSession { session_id } => Some(session_id),
+        | RemoteRequest::SyncSession { session_id }
+        | RemoteRequest::SetSessionSettings { session_id, .. } => Some(session_id),
         RemoteRequest::CreateSession { .. }
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
@@ -729,6 +741,27 @@ async fn respond(
             require_operation(sessions, SessionOperation::RebaseSession)?;
             let session_id = listed_session_id(sessions, session_id).await?;
             sessions.rebase_session(&session_id).await?;
+
+            Ok(RemoteResponse::Accepted)
+        }
+        RemoteRequest::SetSessionSettings {
+            model,
+            reasoning,
+            response_style,
+            session_id,
+            speed_mode,
+        } => {
+            require_operation(sessions, SessionOperation::SessionSettings)?;
+            let change = SessionSettingsChange {
+                model: parse_setting(model)?,
+                reasoning_level: parse_setting(reasoning)?,
+                response_style: parse_setting(response_style)?,
+                speed_mode: parse_setting(speed_mode)?,
+            };
+            let session_id = listed_session_id(sessions, session_id).await?;
+            sessions
+                .update_session_settings(&session_id, change)
+                .await?;
 
             Ok(RemoteResponse::Accepted)
         }

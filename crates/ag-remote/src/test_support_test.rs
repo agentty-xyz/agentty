@@ -5,10 +5,11 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    HostContext, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
-    SessionBackend, SessionDiffFile, SessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionStatus, SessionSummary, SpeedMode,
+    AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
+    DurableMessageRequest, HostContext, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest,
+    Session, SessionBackend, SessionDiffFile, SessionError, SessionId, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -322,6 +323,22 @@ impl SessionBackend for RecordingBackend {
         self.record(format!("sync:{session_id}"), ())
     }
 
+    async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        let model = change.model.map_or("-", AgentModel::as_str);
+        let reasoning = change.reasoning_level.map_or("-", ReasoningLevel::as_str);
+        let style = change.response_style.map_or("-", ResponseStyle::as_str);
+        let speed = change.speed_mode.map_or("-", SpeedMode::as_str);
+
+        self.record(
+            format!("settings:{session_id}:{model}:{reasoning}:{style}:{speed}"),
+            (),
+        )
+    }
+
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"), ())
     }
@@ -345,6 +362,7 @@ pub(crate) fn host_fixture() -> HostContext {
     HostContext {
         base_branch: "main".to_string(),
         default_model: ag_session::test_support::CODEX_MODEL,
+        models: vec![ag_session::test_support::codex_selection()],
         project_id: 1,
         project_name: "agentty".to_string(),
         session_modes: vec![CreateSessionMode::Regular, CreateSessionMode::Draft],

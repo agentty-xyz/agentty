@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteMessage, RemoteMessageKind,
-    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -68,6 +68,7 @@ fn expected_session() -> RemoteSession {
             },
         ],
         model: Some("gpt-6.1-sol".to_string()),
+        model_id: Some("gpt-6.1-sol".to_string()),
         published_upstream_ref: None,
         questions: vec![RemoteQuestion {
             options: vec!["main".to_string()],
@@ -503,6 +504,34 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
 }
 
 #[tokio::test]
+async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let settings = |reasoning: &str| RemoteRequest::SetSessionSettings {
+        model: None,
+        reasoning: Some(reasoning.to_string()),
+        response_style: None,
+        session_id: "session-1".to_string(),
+        speed_mode: None,
+    };
+
+    // Act
+    let changed = call(&mut client, 1, settings("low")).await?;
+    let refused = call(&mut client, 2, settings("huge")).await?;
+
+    // Assert
+    assert_eq!(changed, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        refused,
+        RemoteResult::Error("unknown reasoning level: huge".to_string())
+    );
+    assert_eq!(server.backend.calls(), ["list", "settings:session-1:low"]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
@@ -620,6 +649,9 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
         RemoteResult::Ok(RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            models: vec![RemoteModelOption::from(
+                ag_session::test_support::codex_selection()
+            )],
             project: "agentty".to_string(),
             session_modes: vec![RemoteSessionMode::Regular],
         })

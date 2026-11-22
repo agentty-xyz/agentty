@@ -15,7 +15,8 @@ use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     HostContext, QuestionItem, ReviewRequest, Session, SessionBackend, SessionDiffFile,
     SessionDiffFileStatus, SessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionStatus, SessionSummary,
+    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
+    SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -416,6 +417,7 @@ impl SessionBackend for RecordingBackend {
         Ok(HostContext {
             base_branch: "main".to_string(),
             default_model: ag_session::test_support::CODEX_MODEL,
+            models: vec![ag_session::test_support::codex_selection()],
             project_id: 1,
             project_name: "agentty".to_string(),
             session_modes: vec![CreateSessionMode::Regular],
@@ -542,6 +544,20 @@ impl SessionBackend for RecordingBackend {
     // Every turn stop succeeds.
     async fn stop_turn(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("stop:{session_id}"));
+
+        Ok(())
+    }
+
+    // Every settings change succeeds and records its reasoning level.
+    async fn update_session_settings(
+        &self,
+        session_id: &SessionId,
+        change: SessionSettingsChange,
+    ) -> Result<(), SessionError> {
+        let reasoning = change
+            .reasoning_level
+            .map_or("-", ag_session::ReasoningLevel::as_str);
+        self.record(format!("settings:{session_id}:{reasoning}"));
 
         Ok(())
     }

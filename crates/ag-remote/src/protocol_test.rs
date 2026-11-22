@@ -8,8 +8,9 @@ use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, MAX_DIFF_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
-    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteReviewReadiness, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteReviewReadiness, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    ServerFrame,
 };
 use crate::test_support::{host_fixture, session_fixture};
 
@@ -275,6 +276,7 @@ fn session_creation_frames_default_to_regular_mode() {
         RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            models: Vec::new(),
             project: "agentty".to_string(),
             session_modes: vec![RemoteSessionMode::Regular, RemoteSessionMode::Harness],
         },
@@ -335,6 +337,9 @@ fn host_context_converts_modes_remote_devices_may_request() {
         RemoteResponse::Host {
             base_branch: "main".to_string(),
             default_model: "gpt-6.1-sol".to_string(),
+            models: vec![RemoteModelOption::from(
+                ag_session::test_support::codex_selection()
+            )],
             project: "agentty".to_string(),
             session_modes: vec![RemoteSessionMode::Harness, RemoteSessionMode::Regular],
         }
@@ -477,6 +482,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             id: "session-1".to_string(),
             is_draft: false,
             model: Some("gpt-6.1-sol".to_string()),
+            model_id: Some("gpt-6.1-sol".to_string()),
             published_upstream_ref: None,
             reasoning: Some("high".to_string()),
             response_style: Some("balanced".to_string()),
@@ -710,4 +716,85 @@ fn long_file_lists_stop_within_the_encoded_budget() {
     assert!(truncated);
     assert!(!listed_files.is_empty() && listed_files.len() < files.len());
     assert!(encoded.len() <= MAX_DIFF_RESPONSE_BYTES);
+}
+
+#[test]
+fn session_conversion_reports_the_model_name_and_id_a_settings_change_takes() {
+    // Arrange
+    let mut session = session_fixture(&SessionId::from("session-1"));
+    let served = "openai-compatible/qwen3:latest"
+        .parse::<AgentModel>()
+        .expect("served model should parse");
+    session.settings.agent = AgentSelection::new(AgentKind::Harness, served);
+
+    // Act
+    let remote = RemoteSession::from(session);
+    let option = RemoteModelOption::from(AgentSelection::new(AgentKind::Harness, served));
+
+    // Assert
+    assert_eq!(remote.model.as_deref(), Some("qwen3:latest"));
+    assert_eq!(
+        remote.model_id.as_deref(),
+        Some("openai-compatible/qwen3:latest")
+    );
+    assert_eq!(remote.model.as_deref(), Some(option.name.as_str()));
+    assert_eq!(remote.model_id.as_deref(), Some(option.model.as_str()));
+}
+
+#[test]
+fn settings_requests_name_only_the_settings_that_change() {
+    // Arrange
+    let wire = json!([
+        {"method": "set_session_settings", "session_id": "s", "reasoning": "low"},
+        {
+            "method": "set_session_settings",
+            "session_id": "s",
+            "model": "gpt-6.1-sol",
+            "response_style": "concise",
+            "speed_mode": "fast"
+        }
+    ]);
+
+    // Act
+    let requests: Vec<RemoteRequest> =
+        serde_json::from_value(wire.clone()).expect("settings requests should parse");
+    let encoded = serde_json::to_value(&requests).expect("settings requests should encode");
+
+    // Assert
+    assert_eq!(
+        requests,
+        [
+            RemoteRequest::SetSessionSettings {
+                model: None,
+                reasoning: Some("low".to_string()),
+                response_style: None,
+                session_id: "s".to_string(),
+                speed_mode: None,
+            },
+            RemoteRequest::SetSessionSettings {
+                model: Some("gpt-6.1-sol".to_string()),
+                reasoning: None,
+                response_style: Some("concise".to_string()),
+                session_id: "s".to_string(),
+                speed_mode: Some("fast".to_string()),
+            },
+        ]
+    );
+    assert_eq!(encoded, wire);
+}
+
+#[test]
+fn model_options_describe_the_model_and_its_fast_mode() {
+    // Arrange
+    let selection = ag_session::test_support::codex_selection();
+
+    // Act
+    let option = RemoteModelOption::from(selection);
+
+    // Assert
+    assert_eq!(option.agent, "codex");
+    assert_eq!(option.model, selection.model().as_str());
+    assert_eq!(option.supports_fast, selection.supports_fast_mode());
+    assert_ne!(option.name, "");
+    assert_ne!(option.description, "");
 }
