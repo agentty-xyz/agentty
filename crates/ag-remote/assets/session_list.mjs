@@ -127,18 +127,6 @@ export function createSessionList({
     return null;
   }
 
-  function restoreFocus(focused) {
-    if (!focused?.key) {
-      return;
-    }
-    for (const button of focused.container.querySelectorAll("button")) {
-      if (keyOf(button) === focused.key) {
-        button.focus({ preventScroll: true });
-
-        return;
-      }
-    }
-  }
 
   // A collapsed group still shows its label and count. A query shows its
   // matches in every group.
@@ -325,6 +313,21 @@ export function statusLine(document, statusName) {
   node.append(element(document, "i"), info.label);
 
   return node;
+}
+
+// Focuses the button in `focused.container` with the key `focusedKey`
+// recorded before a render, if it is still there.
+function restoreFocus(focused) {
+  if (!focused?.key) {
+    return;
+  }
+  for (const button of focused.container.querySelectorAll("button")) {
+    if (keyOf(button) === focused.key) {
+      button.focus({ preventScroll: true });
+
+      return;
+    }
+  }
 }
 
 // What identifies a list button across renders: its session, its filter,
