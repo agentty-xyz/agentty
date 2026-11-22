@@ -6,7 +6,6 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
-use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -723,8 +722,7 @@ async fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::
     let canonical_workdir = env.workdir.canonicalize()?;
 
     (async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         let project_id = database
             .projects()
             .upsert_project(

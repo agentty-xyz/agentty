@@ -3,6 +3,7 @@
 use ag_session::{SessionMessageKind, stored_message_content};
 use async_trait::async_trait;
 
+use crate::connection::begin_write;
 use crate::session::SqliteSessionRepository;
 use crate::session_message::SessionMessageStore;
 use crate::{DbError, PersistedSessionCreation};
@@ -103,7 +104,7 @@ pub trait SessionPreparationRepository: Send + Sync {
 #[async_trait]
 impl SessionPreparationRepository for SqliteSessionRepository {
     async fn reserve_session(&self, session: PersistedSessionCreation<'_>) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0, "reserve session").await?;
         let session_id = session.id;
         let start_ref = session.base_branch;
         Self::insert_with_draft_mode(&mut *transaction, self.now(), session).await?;
@@ -256,7 +257,7 @@ impl SessionPreparationRepository for SqliteSessionRepository {
         session_id: &str,
         transcript_text: &str,
     ) -> Result<bool, DbError> {
-        let mut transaction = self.0.begin().await?;
+        let mut transaction = begin_write(&self.0, "begin preparation prompt operation").await?;
         let operation_id = format!("workspace:{session_id}");
         let operation_kind: Option<String> = sqlx::query_scalar(
             "UPDATE session_operation SET status = 'running', started_at = ?, heartbeat_at = ?, \

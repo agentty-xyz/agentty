@@ -10,6 +10,7 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
+use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
@@ -599,8 +600,11 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
             Box::pin(async move {
                 seed_published_session_output_chronology(env).await?;
                 common::seed_second_project(env).await?;
+                // The observer reads this pool after the shared fixture pool
+                // closes, so it keeps its own.
+                let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
                 database_tx
-                    .send(common::open_database(env).await?)
+                    .send(common::open_fixture_database(&db_path).await?)
                     .map_err(|_| io::Error::other("branch-push notice observer was dropped"))?;
 
                 Ok(())

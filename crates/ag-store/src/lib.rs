@@ -24,7 +24,7 @@ mod timestamp;
 mod usage;
 
 pub use activity::ActivityRepository;
-pub use connection::Database;
+pub use connection::{BACKGROUND_BUSY_TIMEOUT, Database, INTERACTIVE_BUSY_TIMEOUT};
 pub use error::DbError;
 pub(crate) use error::DbResultExt;
 pub use execution_graph::{

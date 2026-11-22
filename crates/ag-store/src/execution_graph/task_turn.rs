@@ -9,6 +9,7 @@ use ag_session::{
 use ag_worker::GraphDispatch;
 
 use super::SqliteGraphRepository;
+use crate::connection::begin_write;
 use crate::session_message::SessionMessageStore;
 use crate::{DbError, TaskAgentTurnMetadata, session};
 
@@ -18,9 +19,8 @@ impl SqliteGraphRepository {
         dispatch: &GraphDispatch,
         metadata: &TaskAgentTurnMetadata,
     ) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool, "save graph task turn").await?;
         let record = &dispatch.record;
-        Self::lock(&mut transaction, &record.graph_id).await?;
         let graph =
             Self::current(&mut transaction, &record.graph_id, record.graph_revision).await?;
         let (id, existing) = Self::execution(&mut transaction, &record.execution)

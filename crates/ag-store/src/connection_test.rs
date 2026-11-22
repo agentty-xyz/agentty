@@ -4,6 +4,9 @@
 #[path = "connection_test/connection_test.rs"]
 mod connection;
 
+#[path = "connection_test/contention_test.rs"]
+mod contention;
+
 #[path = "connection_test/migration_test.rs"]
 mod migration;
 

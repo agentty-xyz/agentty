@@ -1,7 +1,6 @@
 //! Settings page E2E tests: content rendering, navigation, and editing.
 
 use agentty::app::Tab;
-use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::theme::ColorTheme;
 use testty::assertion;
@@ -40,8 +39,7 @@ async fn seed_settings_models_without_fast_support(
 /// Starts both the semantic proof and its recording on the Settings tab.
 async fn seed_settings_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_active_project_setting(env).await?;
-    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-    let database = Database::open(&db_path).await?;
+    let database = common::open_database(env).await?;
 
     persist_active_tab_for_test(&database, Tab::Settings).await?;
 
@@ -62,8 +60,7 @@ async fn seed_settings_models(
     let canonical_workdir = env.workdir.canonicalize()?;
 
     (async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         let project_id = database
             .projects()
             .upsert_project(&canonical_workdir.to_string_lossy(), None)
@@ -117,8 +114,7 @@ async fn seed_settings_model_reasoning_levels(
     let canonical_workdir = env.workdir.canonicalize()?;
 
     (async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         let project_id = database
             .projects()
             .upsert_project(&canonical_workdir.to_string_lossy(), None)

@@ -56,6 +56,8 @@ pub(crate) struct BuilderEnv {
     pub(crate) stub_bin: PathBuf,
     /// Deterministic working directory registered as a project on startup.
     pub(crate) workdir: PathBuf,
+    /// One fixture pool shared by every setup helper; see [`open_database`].
+    database: Mutex<Option<Database>>,
 }
 
 impl BuilderEnv {
@@ -154,7 +156,19 @@ impl BuilderEnv {
             home_dir,
             stub_bin,
             workdir,
+            database: Mutex::new(None),
         })
+    }
+
+    /// Closes the shared fixture pool, if open, and waits for its connections
+    /// to finish closing.
+    ///
+    /// Closing checkpoints the WAL, so the snapshot and the app launched next
+    /// never race a pool still closing in the background.
+    pub(crate) async fn close_database(&self) {
+        if let Some(database) = self.database.lock().await.take() {
+            database.pool().close().await;
+        }
     }
 
     /// Runs every agent CLI stub once before the app starts.
@@ -250,7 +264,8 @@ impl BuilderEnv {
             )
             .execute(database.pool())
             .await?;
-        database.pool().close().await;
+        drop(database);
+        self.close_database().await;
 
         Ok(())
     }
@@ -603,13 +618,31 @@ async fn open_database_with_seeded_project(
 
 /// Open the isolated E2E database for direct test data setup.
 ///
+/// Every call shares one fixture pool, so setup helpers never open, write,
+/// and close pools on the same file at once. [`FeatureTest::run`] closes it
+/// with [`BuilderEnv::close_database`] before the snapshot and the app
+/// launch; a later call, or one after a caller closed the pool, opens a fresh
+/// pool. Keep a database past setup with [`open_fixture_database`] instead.
+///
 /// # Errors
 ///
 /// Returns an error if the database cannot be opened or migrated.
 pub(crate) async fn open_database(env: &BuilderEnv) -> Result<Database, DbError> {
-    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+    let mut shared = env.database.lock().await;
+    let open = shared
+        .as_ref()
+        .filter(|database| !database.pool().is_closed());
+    let database = if let Some(database) = open {
+        database.clone()
+    } else {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = open_fixture_database(&db_path).await?;
+        *shared = Some(database.clone());
 
-    let database = Database::open(&db_path).await?;
+        database
+    };
+    drop(shared);
+
     if database
         .settings()
         .get_setting(ag_session::SettingName::ProjectDiscoveryPromptSeen)
@@ -623,6 +656,19 @@ pub(crate) async fn open_database(env: &BuilderEnv) -> Result<Database, DbError>
     }
 
     Ok(database)
+}
+
+/// Opens the database at `db_path` for a fixture outside a [`BuilderEnv`].
+///
+/// Fixtures block no interface, so they wait out a slow lock holder with
+/// [`ag_store::BACKGROUND_BUSY_TIMEOUT`] instead of failing. Close the
+/// returned pool before the app or another fixture opens the file.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or migrated.
+pub(crate) async fn open_fixture_database(db_path: &Path) -> Result<Database, DbError> {
+    Database::open_with_busy_timeout(db_path, ag_store::BACKGROUND_BUSY_TIMEOUT).await
 }
 
 /// Insert one seeded session row and apply any row-level seed updates.

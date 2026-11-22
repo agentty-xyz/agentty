@@ -19,6 +19,7 @@ use sqlx::SqliteConnection;
 
 use super::{GraphEvidence, SqliteGraphRepository, StoredGraphResult};
 use crate::DbError;
+use crate::connection::begin_write;
 use crate::task::SqliteTaskRepository;
 
 #[async_trait]
@@ -76,8 +77,7 @@ impl SqliteGraphRepository {
                 "Dispatch requires an execution identity and Env folder",
             ));
         }
-        let mut transaction = self.pool.begin().await?;
-        Self::lock(&mut transaction, graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "claim graph node").await?;
         let graph = Self::current(&mut transaction, graph_id, revision).await?;
         let node = graph
             .nodes
@@ -474,9 +474,8 @@ impl SqliteGraphRepository {
     }
 
     async fn finish_node(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_write(&self.pool, "finish graph node").await?;
         let record = &dispatch.record;
-        Self::lock(&mut transaction, &record.graph_id).await?;
         let graph =
             Self::current(&mut transaction, &record.graph_id, record.graph_revision).await?;
         let (id, existing) = Self::execution(&mut transaction, &record.execution)
@@ -569,8 +568,7 @@ impl SqliteGraphRepository {
     }
 
     async fn fail_node(&self, record: &GraphExecutionRecord, error: &str) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
-        Self::lock(&mut transaction, &record.graph_id).await?;
+        let mut transaction = begin_write(&self.pool, "fail graph node").await?;
         let (_, existing) = Self::execution(&mut transaction, &record.execution)
             .await?
             .ok_or_else(|| Self::invalid("Missing admitted execution"))?;

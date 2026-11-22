@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ag_session::{SessionMessageKind, stored_message_content};
 use sqlx::SqlitePool;
 
+use crate::connection::begin_write;
 use crate::timestamp::TimestampSource;
 use crate::{DbError, DbResultExt};
 
@@ -40,7 +41,7 @@ impl SessionMessageStore {
         }
 
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await.db_context(APPEND_SESSION_MESSAGE)?;
+        let mut transaction = begin_write(&self.pool, APPEND_SESSION_MESSAGE).await?;
         Self::append_normalized_in_transaction(&mut transaction, id, kind, &content, now).await?;
 
         transaction

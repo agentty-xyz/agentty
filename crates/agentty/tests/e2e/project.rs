@@ -28,11 +28,13 @@ async fn test_relative_agentty_root_excludes_managed_worktrees()
             Box::pin(async move {
                 let root = env.workdir.join("managed-root");
                 std::fs::create_dir_all(root.join("wt/session/.git"))?;
-                let database = agentty::db::Database::open(&root.join("db/agentty.db")).await?;
+                let database = common::open_fixture_database(&root.join("db/agentty.db")).await?;
                 database
                     .settings()
                     .upsert_setting(SettingName::ProjectDiscoveryPromptSeen, "true")
                     .await?;
+                database.pool().close().await;
+
                 Ok(())
             })
         })

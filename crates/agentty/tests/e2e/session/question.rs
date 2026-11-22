@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agentty::db::{DB_DIR, DB_FILE, Database};
+use agentty::db::{DB_DIR, DB_FILE};
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
@@ -423,7 +423,7 @@ async fn load_question_refresh_metadata(
     agentty_root: &Path,
 ) -> Result<(Option<String>, String), Box<dyn std::error::Error>> {
     (async {
-        let database = Database::open(&agentty_root.join(DB_DIR).join(DB_FILE))
+        let database = common::open_fixture_database(&agentty_root.join(DB_DIR).join(DB_FILE))
             .await
             .map_err(|error| std::io::Error::other(format!("feature database: {error}")))?;
         let selected_session = database
@@ -450,6 +450,7 @@ async fn load_question_refresh_metadata(
             .await
             .map_err(|error| std::io::Error::other(format!("question session: {error}")))?
             .ok_or_else(|| std::io::Error::other("question session does not exist"))?;
+        database.pool().close().await;
 
         Result::<_, Box<dyn std::error::Error>>::Ok((
             question_session.title,

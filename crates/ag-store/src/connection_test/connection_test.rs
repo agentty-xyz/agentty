@@ -4,7 +4,7 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use crate::connection::{DB_POOL_MAX_CONNECTIONS, Database};
+use crate::connection::{DB_POOL_MAX_CONNECTIONS, Database, INTERACTIVE_BUSY_TIMEOUT};
 use crate::error::DbError;
 
 /// Verifies `open()` creates missing parent directories before opening the
@@ -136,7 +136,11 @@ FROM pragma_busy_timeout
     );
     assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
     assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
-    assert_eq!(busy_timeout, 2_000, "expected PRAGMA busy_timeout = 2000");
+    assert_eq!(busy_timeout, expected_busy_timeout_millis());
+    assert_eq!(
+        database.pool().options().get_acquire_timeout(),
+        INTERACTIVE_BUSY_TIMEOUT
+    );
 }
 
 #[tokio::test]
@@ -167,5 +171,10 @@ FROM pragma_busy_timeout
     // Assert
     assert_eq!(database.pool().options().get_max_connections(), 1);
     assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
-    assert_eq!(busy_timeout, 2_000, "expected PRAGMA busy_timeout = 2000");
+    assert_eq!(busy_timeout, expected_busy_timeout_millis());
+}
+
+/// Returns `INTERACTIVE_BUSY_TIMEOUT` as `PRAGMA busy_timeout` reports it.
+fn expected_busy_timeout_millis() -> i64 {
+    i64::try_from(INTERACTIVE_BUSY_TIMEOUT.as_millis()).expect("busy timeout fits in i64")
 }
