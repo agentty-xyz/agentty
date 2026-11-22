@@ -1,7 +1,7 @@
 name: Publish Relay Image
 
 # Publishes the remote-control relay's multi-architecture image to GHCR.
-# Pushes to `main` that touch the relay tag it `main` and `sha-<commit>`;
+# Every push to `main` tags it `main` and `sha-<commit>`;
 # `.github/workflows/release.yml` calls it after publishing each GitHub release,
 # which tags it with the release version and `latest`. Each architecture builds
 # natively and passes the relay's health and pairing page probe before the
@@ -9,17 +9,6 @@ name: Publish Relay Image
 on:
   push:
     branches: [main]
-    # Matches the inputs of the `Relay Image` pull request check.
-    paths:
-      - .github/workflows/publish-relay-image.yml
-      - Cargo.lock
-      - Cargo.toml
-      - container/relay.Containerfile
-      - container/relay.containerignore
-      - crates/ag-noise/**
-      - crates/ag-relay/**
-      - crates/ag-remote/assets/**
-      - rust-toolchain.toml
   workflow_call:
     inputs:
       plan:
@@ -27,9 +16,7 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
 
 env:
   RELAY_REPOSITORY: ghcr.io/agentty-xyz/agentty-relay
@@ -59,6 +46,9 @@ jobs:
             runner_arch: ARM64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     # Each matrix leg sets only its architecture's digest; matrix job outputs
     # are combined, and the publish job asserts both are present.
     outputs:
@@ -145,6 +135,9 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Choose tags
