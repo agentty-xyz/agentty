@@ -156,16 +156,13 @@ async fn decided_action_fails_visibly_when_the_version_changed_meanwhile() {
 async fn reply_during_a_pending_decision_keeps_the_composer_and_starts_no_decision() {
     // Arrange
     let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
-    let prompt = TurnPrompt::from_text("Local".into());
     mark_deciding(&app, "preview");
 
     // Act
-    let outcome = app
-        .submit_graph_proposal_reply(&SessionId::from("sess"), &prompt)
-        .await;
+    let outcome = app.submit_prompt(submission("Local")).await;
 
     // Assert
-    assert!(matches!(outcome, Some(GraphReplyOutcome::Rejected(_))));
+    assert_eq!(outcome, PromptWorkflowOutcome::KeepPrompt);
     assert!(
         messages(&app)
             .await
