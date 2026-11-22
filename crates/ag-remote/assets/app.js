@@ -3,6 +3,7 @@
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
+import { relativeTime } from "./format.mjs";
 import { isSupported } from "./noise.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 
@@ -23,16 +24,36 @@ const CANCELABLE_STATUSES = new Set([
 const usesRelay =
   document.querySelector('meta[name="agentty-transport"]')?.content === "relay";
 
-const elements = {};
-for (const id of [
-  "back", "heading", "connection", "pair-view", "pair-hint-local", "pair-hint-relay",
-  "pair-form", "pair-code", "pair-name", "pair-status", "pair-error", "list-view",
-  "sessions", "sessions-empty", "list-error",
-  "forget", "session-view", "session-status", "cancel", "cancel-dialog", "transcript",
-  "queued", "questions", "composer", "message", "session-error",
-]) {
-  elements[id] = document.getElementById(id);
-}
+// Each id is a literal, so the contract test in
+// crates/ag-remote/tests/server/http.rs can check it exists in index.html.
+const elements = {
+  back: document.getElementById("back"),
+  heading: document.getElementById("heading"),
+  connection: document.getElementById("connection"),
+  "pair-view": document.getElementById("pair-view"),
+  "pair-hint-local": document.getElementById("pair-hint-local"),
+  "pair-hint-relay": document.getElementById("pair-hint-relay"),
+  "pair-form": document.getElementById("pair-form"),
+  "pair-code": document.getElementById("pair-code"),
+  "pair-name": document.getElementById("pair-name"),
+  "pair-status": document.getElementById("pair-status"),
+  "pair-error": document.getElementById("pair-error"),
+  "list-view": document.getElementById("list-view"),
+  sessions: document.getElementById("sessions"),
+  "sessions-empty": document.getElementById("sessions-empty"),
+  "list-error": document.getElementById("list-error"),
+  forget: document.getElementById("forget"),
+  "session-view": document.getElementById("session-view"),
+  "session-status": document.getElementById("session-status"),
+  cancel: document.getElementById("cancel"),
+  "cancel-dialog": document.getElementById("cancel-dialog"),
+  transcript: document.getElementById("transcript"),
+  queued: document.getElementById("queued"),
+  questions: document.getElementById("questions"),
+  composer: document.getElementById("composer"),
+  message: document.getElementById("message"),
+  "session-error": document.getElementById("session-error"),
+};
 
 const state = {
   backoffMs: 1000,
@@ -410,23 +431,6 @@ async function loadSessions() {
   }
 }
 
-function relativeTime(unixSeconds) {
-  const seconds = Math.max(0, Math.round(Date.now() / 1000 - unixSeconds));
-  if (seconds < 60) {
-    return "just now";
-  }
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) {
-    return minutes + " min ago";
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return hours + " h ago";
-  }
-
-  return Math.round(hours / 24) + " d ago";
-}
-
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) {
@@ -447,7 +451,11 @@ function renderSessions(sessions) {
       button.type = "button";
       button.append(
         element("span", "title", session.title || session.id),
-        element("span", "detail", session.status + " · " + relativeTime(session.updated_at)),
+        element(
+          "span",
+          "detail",
+          session.status + " · " + relativeTime(session.updated_at, Date.now() / 1000),
+        ),
       );
       button.addEventListener("click", () => openSession(session.id));
       item.append(button);

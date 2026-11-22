@@ -21,13 +21,18 @@ async fn get(addr: SocketAddr, path: &str) -> TestResult<String> {
 /// Sends one HTTP/1.1 `GET` with `host` and returns the lowercased raw
 /// response.
 async fn get_with_host(addr: SocketAddr, path: &str, host: &str) -> TestResult<String> {
+    Ok(fetch(addr, path, host).await?.to_ascii_lowercase())
+}
+
+/// Sends one HTTP/1.1 `GET` with `host` and returns the raw response.
+async fn fetch(addr: SocketAddr, path: &str, host: &str) -> TestResult<String> {
     let mut stream = TcpStream::connect(addr).await?;
     let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await?;
     let mut response = String::new();
     stream.read_to_string(&mut response).await?;
 
-    Ok(response.to_ascii_lowercase())
+    Ok(response)
 }
 
 #[tokio::test]
@@ -40,6 +45,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let page = get(addr, "/").await?;
     let script = get(addr, "/app.js").await?;
     let device_key = get(addr, "/device_key.mjs").await?;
+    let format = get(addr, "/format.mjs").await?;
     let noise = get(addr, "/noise.mjs").await?;
     let relay = get(addr, "/relay.mjs").await?;
     let stylesheet = get(addr, "/app.css").await?;
@@ -49,6 +55,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
         (&device_key, "text/javascript; charset=utf-8"),
+        (&format, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
         (&relay, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
@@ -67,6 +74,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(page.contains("<script type=\"module\" src=\"app.js\""));
     assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
     assert!(script.contains("from \"./device_key.mjs\""));
+    assert!(script.contains("from \"./format.mjs\""));
     assert!(script.contains("from \"./relay.mjs\""));
     assert!(device_key.contains("from \"./noise.mjs\""));
     assert!(relay.contains("from \"./noise.mjs\""));
@@ -154,12 +162,128 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/app.css",
             "/app.js",
             "/device_key.mjs",
+            "/format.mjs",
             "/noise.mjs",
             "/relay.mjs"
         ]
     );
 
     Ok(())
+}
+
+/// Text no served file may contain, compared without case: markup parsed
+/// from strings, code built from strings, inline styles, and addresses of
+/// other origins.
+const FORBIDDEN_TEXT: [&str; 9] = [
+    "innerhtml",
+    "outerhtml",
+    "insertadjacenthtml",
+    "document.write",
+    "new function",
+    "style=",
+    "http://",
+    "https://",
+    "@import",
+];
+
+/// Places where a protocol-relative `//` would load from another origin.
+const OTHER_ORIGIN_REFERENCES: [&str; 7] = [
+    "src=\"//",
+    "src='//",
+    "href=\"//",
+    "href='//",
+    "url(//",
+    "url(\"//",
+    "url('//",
+];
+
+#[tokio::test]
+async fn served_web_client_files_build_no_markup_from_strings_and_stay_on_their_origin()
+-> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+
+    // Act
+    let files = served_files(server.handle.local_addr()).await?;
+
+    // Assert
+    let page = files
+        .iter()
+        .find(|(path, _)| path == "/")
+        .map(|(_, body)| body.as_str())
+        .ok_or("the page is not served")?;
+    let mut looked_up = Vec::new();
+    for (path, body) in &files {
+        let lowered = body.to_ascii_lowercase();
+        for text in FORBIDDEN_TEXT.iter().chain(&OTHER_ORIGIN_REFERENCES) {
+            assert!(!lowered.contains(text), "{path} contains `{text}`");
+        }
+        assert!(!calls(&lowered, "eval"), "{path} calls `eval`");
+        for id in element_ids(body).map_err(|error| format!("{path}: {error}"))? {
+            assert!(
+                page.contains(&format!("id=\"{id}\"")),
+                "{path} looks up `{id}`, which index.html lacks"
+            );
+            looked_up.push(id);
+        }
+    }
+    assert!(files.len() > 1, "the page names no other file");
+    assert!(!looked_up.is_empty(), "no script looks up an element by id");
+
+    Ok(())
+}
+
+/// Returns the path and body of the page and of every file it and its
+/// scripts name, as the listener at `addr` serves them.
+async fn served_files(addr: SocketAddr) -> TestResult<Vec<(String, String)>> {
+    let mut paths = vec!["/".to_string()];
+    let mut files: Vec<(String, String)> = Vec::new();
+    while let Some(path) = paths.pop() {
+        if files.iter().any(|(seen, _)| *seen == path) {
+            continue;
+        }
+        let response = fetch(addr, &path, &addr.to_string()).await?;
+        let (_, body) = response
+            .split_once("\r\n\r\n")
+            .ok_or("response has no body")?;
+        paths.extend(referenced_paths(body));
+        files.push((path, body.to_string()));
+    }
+
+    Ok(files)
+}
+
+/// Returns whether `body` calls the global function `name`, as opposed to a
+/// function whose name merely ends with it.
+fn calls(body: &str, name: &str) -> bool {
+    let call = format!("{name}(");
+
+    body.match_indices(&call).any(|(index, _)| {
+        !body
+            .get(..index)
+            .and_then(|before| before.chars().next_back())
+            .is_some_and(|character| {
+                character.is_ascii_alphanumeric() || character == '_' || character == '$'
+            })
+    })
+}
+
+/// Returns the ids `body` passes to `getElementById`, or an error when an
+/// argument is not a string literal and so cannot be checked.
+fn element_ids(body: &str) -> Result<Vec<String>, String> {
+    body.split("getElementById(")
+        .skip(1)
+        .map(|rest| {
+            rest.strip_prefix('"')
+                .and_then(|literal| literal.split_once('"'))
+                .filter(|(_, after)| after.starts_with(')'))
+                .map(|(id, _)| id.to_string())
+                .ok_or_else(|| {
+                    let call: String = rest.chars().take(40).collect();
+                    format!("`getElementById({call}` does not name a literal id")
+                })
+        })
+        .collect()
 }
 
 #[tokio::test]

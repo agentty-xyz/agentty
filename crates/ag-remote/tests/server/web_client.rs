@@ -1,7 +1,9 @@
-//! The web client's relay modules, run in Node: against a real relay and
-//! server, so the JavaScript handshake cannot drift from `ag-noise`, and
-//! against an in-memory key store with the faults a browser can show.
+//! The web client, run in Node: its modules' unit suites, `app.js` over a
+//! fake DOM against a real server, the relay modules against a real relay
+//! and server, so the JavaScript handshake cannot drift from `ag-noise`,
+//! and the key store with the faults a browser can show.
 
+use std::fs;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -10,8 +12,12 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 
-use crate::support::{TestResult, start_linked_server, start_relay};
+use crate::support::{TestResult, TestServer, start_linked_server, start_relay};
 
+/// Directory of the web client's Node scripts and suites.
+const WEB_TESTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web");
+/// Node script that runs `app.js` over the fake DOM.
+const APP_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/app_flow.mjs");
 /// Node script that drives the web client's relay modules.
 const DEVICE_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/relay_device.mjs");
 /// Node script that runs the client's key storage over a fake `IndexedDB`.
@@ -19,8 +25,13 @@ const KEY_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/web/device_key_check.mjs"
 );
+/// The `node --test` suites in [`WEB_TESTS`], each run by its own test
+/// below.
+const NODE_SUITES: [&str; 2] = ["fake_dom.test.mjs", "format.test.mjs"];
 /// Longest wait for the script's next step before a test fails.
 const STEP_TIMEOUT: Duration = Duration::from_secs(20);
+/// Longest run of one `node --test` suite.
+const SUITE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Message size that needs several Noise messages in each direction.
 const LARGE_MESSAGE_BYTES: usize = 200_000;
 
@@ -72,6 +83,166 @@ impl WebDevice {
 
         Ok(status.success())
     }
+}
+
+/// Outcome of one `node --test` run.
+struct SuiteRun {
+    /// Whether every test in the suite passed.
+    passed: bool,
+    /// What Node printed, for the failure message.
+    report: String,
+}
+
+impl SuiteRun {
+    /// Runs the `node --test` suite `name` from [`WEB_TESTS`].
+    async fn start(name: &str) -> TestResult<Self> {
+        let output = tokio::time::timeout(
+            SUITE_TIMEOUT,
+            Command::new("node")
+                .arg("--test")
+                .arg(format!("{WEB_TESTS}/{name}"))
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await?
+        .map_err(|error| format!("Node.js 22 or newer must be on PATH: {error}"))?;
+
+        Ok(Self {
+            passed: output.status.success(),
+            report: format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        })
+    }
+}
+
+#[test]
+fn every_node_suite_has_a_rust_test() -> TestResult {
+    // Arrange
+    let entries = fs::read_dir(WEB_TESTS)?;
+
+    // Act
+    let mut suites = Vec::new();
+    for entry in entries {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".test.mjs") {
+            suites.push(name);
+        }
+    }
+    suites.sort_unstable();
+
+    // Assert
+    assert_eq!(suites, NODE_SUITES);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_dom_suite_passes() -> TestResult {
+    // Arrange
+    let suite = NODE_SUITES[0];
+
+    // Act
+    let run = SuiteRun::start(suite).await?;
+
+    // Assert
+    assert!(run.passed, "{suite} failed:\n{}", run.report);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn format_suite_passes() -> TestResult {
+    // Arrange
+    let suite = NODE_SUITES[1];
+
+    // Act
+    let run = SuiteRun::start(suite).await?;
+
+    // Assert
+    assert!(run.passed, "{suite} failed:\n{}", run.report);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listener() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (_paired, _device_id, token) = server.pair("Node browser").await?;
+    let address = server.handle.local_addr().to_string();
+
+    // Act
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, &token])?;
+    let listed = app.next_step().await?;
+    let opened = app.next_step().await?;
+    let sent = app.next_step().await?;
+    server.revisions_tx.send(2)?;
+    let refreshed = app.next_step().await?;
+    let canceled = app.next_step().await?;
+    let closed = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(listed["connection"], "Connected");
+    assert_eq!(listed["isOnline"], true);
+    assert_eq!(listed["view"], "list-view");
+    assert_eq!(listed["sessions"][0]["title"], "Build it");
+    let detail = listed["sessions"][0]["detail"].as_str().unwrap_or_default();
+    assert!(detail.starts_with("Review · ") && detail.ends_with(" d ago"));
+    assert_eq!(
+        opened,
+        json!({
+            "step": "opened",
+            "cancelHidden": false,
+            "heading": "Build it",
+            "questions": [{"options": ["main"], "text": "Which branch?"}],
+            "status": "Question",
+            "transcript": [
+                {"kind": "user", "text": "build it"},
+                {"kind": "assistant", "text": "which branch?"},
+            ],
+            "view": "session-view",
+        })
+    );
+    assert_eq!(sent, json!({"step": "sent", "error": ""}));
+    assert_eq!(
+        refreshed,
+        json!({"step": "refreshed", "queued": ["Queued: Use the main branch"]})
+    );
+    assert_eq!(
+        canceled,
+        json!({
+            "step": "canceled",
+            "askedFirst": true,
+            "chosen": "true",
+            "error": "Session not found",
+            "isDialogOpen": false,
+        })
+    );
+    assert_eq!(
+        closed,
+        json!({"step": "closed", "heading": "Agentty", "view": "list-view"})
+    );
+    assert!(succeeded);
+    let mutations: Vec<String> = server
+        .backend
+        .calls()
+        .into_iter()
+        .filter(|call| !call.starts_with("list") && !call.starts_with("get:"))
+        .collect();
+    assert_eq!(
+        mutations,
+        [
+            "send:session-1:Use the main branch",
+            "answer:session-1:Which branch?=main",
+            "cancel:session-1",
+        ]
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
