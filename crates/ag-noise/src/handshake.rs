@@ -5,11 +5,11 @@ use crate::key::{PublicKey, StaticKeypair};
 use crate::session::Session;
 
 /// Noise protocol between a device and an instance.
-pub(crate) const DEVICE_PATTERN: &str = "Noise_IK_25519_ChaChaPoly_SHA256";
+pub(crate) const DEVICE_PATTERN: &str = "Noise_IK_25519_AESGCM_SHA256";
 /// Largest Noise message, in bytes.
 pub(crate) const MAX_MESSAGE_BYTES: usize = 65_535;
 /// Noise protocol between an instance and a relay.
-const RELAY_PATTERN: &str = "Noise_XN_25519_ChaChaPoly_SHA256";
+const RELAY_PATTERN: &str = "Noise_XN_25519_AESGCM_SHA256";
 /// Context mixed into device handshakes so they cannot be replayed as
 /// relay handshakes or against another protocol version.
 const DEVICE_PROLOGUE: &[u8] = b"agentty-remote-device/1";
