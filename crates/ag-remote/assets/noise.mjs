@@ -23,16 +23,19 @@ const EMPTY = new Uint8Array(0);
 const subtle = globalThis.crypto?.subtle;
 const encoder = new TextEncoder();
 
-/** Whether this browser can run the handshake at all. */
+/**
+ * Whether this browser can run the handshake at all. It cannot without
+ * WebCrypto, as on a page without HTTPS, or without X25519 in it.
+ */
 export async function isSupported() {
-  try {
-    await generateKeyPair();
-
-    return true;
-  } catch (_error) {
-    // No WebCrypto, as on a page without HTTPS, or no X25519 in it.
+  if (!subtle) {
     return false;
   }
+
+  return generateKeyPair().then(
+    () => true,
+    () => false,
+  );
 }
 
 /** Creates a key pair whose private half scripts can use but never read. */

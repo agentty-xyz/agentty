@@ -84,18 +84,12 @@ function setToken(value) {
   writeStored(TOKEN_KEY, value);
 }
 
-// The relay and instance this browser last paired with, if any.
+// The relay and instance this browser last paired with, if any, saved as
+// the instance key and the relay address with a space between them.
 function storedRelay() {
-  try {
-    const relay = JSON.parse(readStored(RELAY_KEY));
-    const isValid =
-      relay && typeof relay.instanceKey === "string" && typeof relay.relayUrl === "string";
+  const [instanceKey, relayUrl] = (readStored(RELAY_KEY) || "").split(" ");
 
-    return isValid ? relay : null;
-  } catch (_error) {
-    // A damaged entry counts as no stored pairing.
-    return null;
-  }
+  return instanceKey && relayUrl ? { instanceKey: instanceKey, relayUrl: relayUrl } : null;
 }
 
 function hasCredential() {
@@ -316,7 +310,7 @@ function onAuthenticated() {
   if (usesRelay) {
     state.isRelayPaired = true;
     state.pairingLink = null;
-    writeStored(RELAY_KEY, JSON.stringify(state.relay));
+    writeStored(RELAY_KEY, state.relay.instanceKey + " " + state.relay.relayUrl);
   }
   state.isAuthenticated = true;
   state.backoffMs = 1000;
