@@ -143,8 +143,16 @@ a free one.
 tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
 with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`. No hosted
 relay is offered yet, so run your own `ag-relay` behind a reverse proxy that serves it
-over TLS. From a checkout of the Agentty repository, build its container image, which
+over TLS. Its container image is published for `amd64` and `arm64`: each release tags it
+with the version and `latest`, and each commit to `main` tags it `main`. The relay
 listens on port `8787`:
+
+```sh
+podman run --detach --name agentty-relay --publish 127.0.0.1:8787:8787 \
+  ghcr.io/agentty-xyz/agentty-relay:latest --client-address-header X-Real-IP
+```
+
+To build the image yourself instead, run this from a checkout of the Agentty repository:
 
 ```sh
 podman build --file container/relay.Containerfile \

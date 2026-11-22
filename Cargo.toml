@@ -219,6 +219,14 @@ permissions = { contents = "read" }
 plan = true
 secrets = ["HOMEBREW_TAP_DEPLOY_KEY"]
 
+# Pushes the relay's multi-architecture image to GHCR, tagged with the release
+# version and `latest`.
+[workspace.metadata.release.workflow.jobs.publish-relay-image]
+stage = "publish"
+uses = "$/.github/workflows/publish-relay-image.yml"
+permissions = { contents = "read", packages = "write" }
+plan = true
+
 [profile.dev]
 debug = "line-tables-only"
 
