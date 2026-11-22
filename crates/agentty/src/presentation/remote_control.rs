@@ -1,5 +1,7 @@
 //! Remote-control state projected for the overlay and the status bar.
 
+use qrcode::{Color as QrColor, EcLevel, QrCode};
+
 /// Remote-control listener and paired-device state for one frame.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoteControlView {
@@ -9,6 +11,8 @@ pub struct RemoteControlView {
     pub error: Option<String>,
     /// Running listener, or `None` while remote control is off.
     pub listener: Option<RemoteListenerView>,
+    /// Confirmation of the latest link action, such as a copy.
+    pub notice: Option<String>,
     /// Devices waiting for approval in arrival order.
     pub pairing_requests: Vec<RemotePairingRequestView>,
 }
@@ -46,8 +50,72 @@ pub struct RemoteControlNotice {
 pub struct RemoteListenerView {
     /// One-time code a new device enters to pair.
     pub pairing_code: String,
+    /// Relay link, when remote control registers with a relay.
+    pub relay: Option<RemoteRelayView>,
     /// Loopback URL serving the web client.
     pub url: String,
+}
+
+/// The relay a running listener registers with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteRelayView {
+    /// Whether the relay currently accepts devices for this instance.
+    pub is_connected: bool,
+    /// Pairing link a device opens, or scans as a QR code, to pair through
+    /// the relay. It carries the one-time code, so it works once.
+    pub link: String,
+    /// The link as QR code rows of half-block characters, encoded once per
+    /// link; empty when the link cannot be encoded.
+    pub qr_code: Vec<String>,
+}
+
+impl RemoteRelayView {
+    /// Projects `link` and its QR code.
+    pub fn new(link: String, is_connected: bool) -> Self {
+        Self {
+            is_connected,
+            qr_code: qr_rows(&link),
+            link,
+        }
+    }
+}
+
+/// Light modules around a QR code; scanners need a margin.
+const QR_QUIET_ZONE: usize = 2;
+
+/// Encodes `link` as QR code rows. Each character covers two module rows:
+/// `█` both dark, `▀` top dark, `▄` bottom dark, and a space both light,
+/// with a two-module quiet zone. Returns no rows when the link is too long
+/// to encode.
+fn qr_rows(link: &str) -> Vec<String> {
+    let Ok(code) = QrCode::with_error_correction_level(link.as_bytes(), EcLevel::L) else {
+        return Vec::new();
+    };
+    let modules = code.width();
+    let colors = code.to_colors();
+    let size = modules + QR_QUIET_ZONE * 2;
+    let is_dark = |column: usize, row: usize| {
+        let column = column.wrapping_sub(QR_QUIET_ZONE);
+        let row = row.wrapping_sub(QR_QUIET_ZONE);
+
+        column < modules && row < modules && colors[row * modules + column] == QrColor::Dark
+    };
+
+    (0..size)
+        .step_by(2)
+        .map(|row| {
+            (0..size)
+                .map(
+                    |column| match (is_dark(column, row), is_dark(column, row + 1)) {
+                        (true, true) => '█',
+                        (true, false) => '▀',
+                        (false, true) => '▄',
+                        (false, false) => ' ',
+                    },
+                )
+                .collect()
+        })
+        .collect()
 }
 
 /// One paired device.

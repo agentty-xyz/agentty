@@ -4,16 +4,20 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use ag_remote::{
-    DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, RemoteConnection, RemoteDevice,
-    RemoteError, RemoteHost, RemoteServerStatus,
+    DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, PublicKey, RelayStatus,
+    RemoteConnection, RemoteDevice, RemoteError, RemoteHost, RemoteRelayConfig, RemoteServerStatus,
+    StaticKeypair,
 };
 use async_trait::async_trait;
 use mockall::predicate::eq;
 use tokio::sync::watch;
 
-use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
+use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl, pairing_link};
 use crate::app::{App, AppRuntimeEvent};
+use crate::domain::setting::SettingName;
+use crate::infra::browser::MockBrowserClient;
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
+use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::presentation::remote_control::{
     RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
 };
@@ -91,6 +95,7 @@ impl RemoteControlServer for FakeServer {
 struct FakeServerProbe {
     calls: CallLog,
     host: Arc<Mutex<Option<RemoteHost>>>,
+    relay: Arc<Mutex<Option<RemoteRelayConfig>>>,
     status_tx: watch::Sender<RemoteServerStatus>,
 }
 
@@ -103,6 +108,7 @@ fn fake_launcher(
 ) -> (MockRemoteControlLauncher, FakeServerProbe) {
     let calls = CallLog::default();
     let host = Arc::new(Mutex::new(None));
+    let relay = Arc::new(Mutex::new(None));
     let (status_tx, _status_rx) = watch::channel(RemoteServerStatus::default());
     let server = FakeServer {
         calls: Arc::clone(&calls),
@@ -111,6 +117,7 @@ fn fake_launcher(
         status_tx: status_tx.clone(),
     };
     let captured_host = Arc::clone(&host);
+    let captured_relay = Arc::clone(&relay);
     let mut launcher = MockRemoteControlLauncher::new();
     launcher
         .expect_start()
@@ -118,10 +125,12 @@ fn fake_launcher(
             eq(port),
             mockall::predicate::always(),
             mockall::predicate::always(),
+            mockall::predicate::always(),
         )
         .times(1)
-        .return_once(move |_, _, host| {
+        .return_once(move |_, _, relay, host| {
             *captured_host.lock().expect("host lock") = Some(host);
+            *captured_relay.lock().expect("relay lock") = relay;
 
             Ok(Box::new(server) as Box<dyn RemoteControlServer>)
         });
@@ -131,16 +140,61 @@ fn fake_launcher(
         FakeServerProbe {
             calls,
             host,
+            relay,
             status_tx,
         },
     )
 }
 
+/// Builds remote control over `launcher` with link actions that do nothing.
+fn remote_control(app: &App, launcher: MockRemoteControlLauncher) -> RemoteControl {
+    remote_control_with_links(
+        app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    )
+}
+
+/// Builds remote control over `launcher`, `browser`, and `clipboard`.
+fn remote_control_with_links(
+    app: &App,
+    launcher: MockRemoteControlLauncher,
+    browser: MockBrowserClient,
+    clipboard: MockTerminalClipboard,
+) -> RemoteControl {
+    RemoteControl::new(
+        Arc::new(launcher),
+        Arc::new(browser),
+        Arc::new(clipboard),
+        app.services.db(),
+    )
+}
+
 /// Replaces the app's remote control with `launcher` over the app database.
 fn install_launcher(app: &mut App, launcher: MockRemoteControlLauncher) {
-    app.remote_control = RemoteControl::new(Arc::new(launcher), app.services.db());
-    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new());
+    app.remote_control = remote_control(app, launcher);
+    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), None);
 }
+
+/// Replaces the app's remote control with a relay-linked one over
+/// `launcher`, `browser`, and `clipboard`.
+fn install_relay_launcher(
+    app: &mut App,
+    launcher: MockRemoteControlLauncher,
+    browser: MockBrowserClient,
+    clipboard: MockTerminalClipboard,
+) {
+    app.remote_control = remote_control_with_links(app, launcher, browser, clipboard);
+    app.enable_remote_control(
+        DEFAULT_REMOTE_CONTROL_PORT,
+        Vec::new(),
+        Some(RELAY_URL.to_string()),
+    );
+}
+
+/// Relay the relay-linked tests register with.
+const RELAY_URL: &str = "wss://relay.example/";
 
 /// Stores one paired device directly in the app database.
 async fn pair_device(app: &App, id: &str, name: &str) {
@@ -220,6 +274,7 @@ async fn open_remote_control_starts_listener_on_default_port_and_shows_code() {
         view.listener,
         Some(RemoteListenerView {
             pairing_code: "ABCD-EFGH".to_string(),
+            relay: None,
             url: "http://127.0.0.1:4646/".to_string(),
         })
     );
@@ -260,7 +315,7 @@ async fn open_remote_control_reports_start_failure() {
     launcher
         .expect_start()
         .times(1)
-        .return_once(|_, _, _| Err("Port 4646 is in use".to_string()));
+        .return_once(|_, _, _, _| Err("Port 4646 is in use".to_string()));
     install_launcher(&mut app, launcher);
 
     // Act
@@ -278,7 +333,7 @@ async fn enable_remote_control_selects_the_listener_port() {
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let (launcher, _probe) = fake_launcher(0, Vec::new(), Ok(()));
     install_launcher(&mut app, launcher);
-    app.enable_remote_control(0, Vec::new());
+    app.enable_remote_control(0, Vec::new(), None);
 
     // Act
     app.open_remote_control().await;
@@ -297,14 +352,16 @@ async fn enable_remote_control_passes_allowed_hosts_to_the_listener() {
         .with(
             eq(DEFAULT_REMOTE_CONTROL_PORT),
             eq(vec!["box.tailnet.ts.net".to_string()]),
+            eq(None),
             mockall::predicate::always(),
         )
         .times(1)
-        .return_once(|_, _, _| Err("stop here".to_string()));
+        .return_once(|_, _, _, _| Err("stop here".to_string()));
     install_launcher(&mut app, launcher);
     app.enable_remote_control(
         DEFAULT_REMOTE_CONTROL_PORT,
         vec!["box.tailnet.ts.net".to_string()],
+        None,
     );
 
     // Act
@@ -403,10 +460,7 @@ async fn stopping_clears_pending_pairings() {
 async fn open_remote_control_without_the_flag_reports_how_to_enable_it() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    app.remote_control = RemoteControl::new(
-        Arc::new(MockRemoteControlLauncher::new()),
-        app.services.db(),
-    );
+    app.remote_control = remote_control(&app, MockRemoteControlLauncher::new());
 
     // Act
     app.open_remote_control().await;
@@ -649,4 +703,196 @@ async fn publish_session_change_advances_the_remote_revision() {
             .expect("revision sender should live")
     );
     assert_eq!(*revisions.borrow(), initial_revision + 1);
+}
+
+/// Public key of the instance in the link tests.
+fn instance_key() -> PublicKey {
+    PublicKey::from_bytes(&[0xAB; 32]).expect("key should load")
+}
+
+#[test]
+fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {
+    // Arrange
+    let key = instance_key();
+
+    // Act
+    let secure = pairing_link("wss://relay.example/", &key, "ABCD-EFGH");
+    let plain = pairing_link("ws://127.0.0.1:8787", &key, "ABCD-EFGH");
+    let other = pairing_link("relay.example", &key, "CODE");
+
+    // Assert
+    assert_eq!(
+        secure,
+        format!(
+            "https://relay.example/#relay=wss%3A%2F%2Frelay%2Eexample&key={}&code=ABCD%2DEFGH",
+            "ab".repeat(32)
+        )
+    );
+    assert!(plain.starts_with("http://127.0.0.1:8787/#relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A8787&"));
+    assert!(other.starts_with("relay.example/#relay=relay%2Eexample&"));
+}
+
+#[tokio::test]
+async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_relay_launcher(
+        &mut app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    );
+
+    // Act
+    app.open_remote_control().await;
+    let generation = app.remote_control.generation;
+    let status = RemoteServerStatus {
+        relay: Some(RelayStatus::Connected),
+        ..RemoteServerStatus::default()
+    };
+    app.apply_remote_control_status(generation, status).await;
+    app.issue_remote_pairing_code();
+
+    // Assert
+    let relay = probe
+        .relay
+        .lock()
+        .expect("relay lock")
+        .clone()
+        .expect("listener should get a relay");
+    assert_eq!(relay.url, RELAY_URL);
+    let stored = app
+        .services
+        .db()
+        .settings()
+        .get_setting(SettingName::RemoteInstanceKey)
+        .await
+        .expect("setting should load")
+        .expect("key should be saved");
+    assert!(stored.ends_with(&relay.instance_key.public().to_hex()));
+    let relay_view = app
+        .remote_control
+        .view()
+        .listener
+        .clone()
+        .and_then(|listener| listener.relay)
+        .expect("relay should be shown");
+    assert!(relay_view.is_connected);
+    assert_eq!(
+        relay_view.link,
+        pairing_link(RELAY_URL, relay.instance_key.public(), "LAST-CODE")
+    );
+    assert_ne!(relay_view.qr_code, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn relay_listener_reuses_the_saved_key() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let saved = StaticKeypair::generate().expect("key should generate");
+    app.services
+        .db()
+        .settings()
+        .upsert_setting(
+            SettingName::RemoteInstanceKey,
+            &format!(
+                "{}:{}",
+                hex::encode(saved.private_bytes()),
+                saved.public().to_hex()
+            ),
+        )
+        .await
+        .expect("setting should save");
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_relay_launcher(
+        &mut app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    );
+
+    // Act
+    app.open_remote_control().await;
+
+    // Assert
+    let relay = probe.relay.lock().expect("relay lock").clone();
+    assert_eq!(relay.map(|relay| relay.instance_key), Some(saved));
+}
+
+#[tokio::test]
+async fn invalid_saved_key_stops_the_listener_from_starting() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.services
+        .db()
+        .settings()
+        .upsert_setting(SettingName::RemoteInstanceKey, "not a key")
+        .await
+        .expect("setting should save");
+    install_relay_launcher(
+        &mut app,
+        MockRemoteControlLauncher::new(),
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    );
+
+    // Act
+    app.open_remote_control().await;
+
+    // Assert
+    assert_eq!(app.remote_control.view().listener, None);
+    assert_eq!(
+        app.remote_control.view().error.as_deref(),
+        Some("The stored remote key is invalid.")
+    );
+}
+
+#[tokio::test]
+async fn link_actions_open_and_copy_the_relay_link() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, _probe) = fake_launcher(
+        DEFAULT_REMOTE_CONTROL_PORT,
+        vec![Some("CODE-0001".to_string())],
+        Ok(()),
+    );
+    let mut browser = MockBrowserClient::new();
+    browser
+        .expect_open()
+        .withf(|link| link.contains("code=CODE%2D0001"))
+        .times(1)
+        .return_const(());
+    let mut clipboard = MockTerminalClipboard::new();
+    let mut copy_order = mockall::Sequence::new();
+    clipboard
+        .expect_copy()
+        .times(1)
+        .in_sequence(&mut copy_order)
+        .return_const(true);
+    clipboard
+        .expect_copy()
+        .times(1)
+        .in_sequence(&mut copy_order)
+        .return_const(false);
+    install_relay_launcher(&mut app, launcher, browser, clipboard);
+    app.open_remote_control().await;
+
+    // Act
+    app.open_remote_link();
+    app.copy_remote_link();
+    let copied = app.remote_control.view().notice.clone();
+    app.copy_remote_link();
+    let not_copied = app.remote_control.view().notice.clone();
+    app.stop_remote_control().await;
+    app.open_remote_link();
+    app.copy_remote_link();
+
+    // Assert
+    assert_eq!(copied.as_deref(), Some("Link copied. It works once."));
+    assert_eq!(
+        not_copied.as_deref(),
+        Some("Could not copy the link; select it instead.")
+    );
+    assert_eq!(app.remote_control.view().notice, None);
 }

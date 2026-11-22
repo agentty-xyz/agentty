@@ -3,6 +3,7 @@
 use super::RemoteControlOverlay;
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
+    RemoteRelayView,
 };
 use crate::ui::render::Component;
 use crate::ui::style;
@@ -51,8 +52,10 @@ fn running_listener_shows_address_code_devices_and_hints() {
         error: None,
         listener: Some(RemoteListenerView {
             pairing_code: "ABCD-EFGH".to_string(),
+            relay: None,
             url: "http://127.0.0.1:4646/".to_string(),
         }),
+        notice: None,
         pairing_requests: Vec::new(),
     };
     let overlay = RemoteControlOverlay::new(&view).selected_device_index(1);
@@ -84,8 +87,10 @@ fn pending_pairing_shows_device_confirmation_and_approval_hints() {
         error: None,
         listener: Some(RemoteListenerView {
             pairing_code: "ABCD-EFGH".to_string(),
+            relay: None,
             url: "http://127.0.0.1:4646/".to_string(),
         }),
+        notice: None,
         pairing_requests: vec![request(1), request(2)],
     };
     let overlay = RemoteControlOverlay::new(&view);
@@ -133,7 +138,7 @@ fn selected_device_row_uses_the_selection_style() {
     let overlay = RemoteControlOverlay::new(&view).selected_device_index(1);
 
     // Act
-    let lines = overlay.lines(40);
+    let lines = overlay.lines(40, 40);
 
     // Assert
     let tablet_line = lines
@@ -149,6 +154,88 @@ fn selected_device_row_uses_the_selection_style() {
     assert_eq!(tablet_line.width(), 40);
 }
 
+/// Builds a running listener linked to a relay.
+fn relay_view(is_connected: bool, notice: Option<&str>) -> RemoteControlView {
+    RemoteControlView {
+        listener: Some(RemoteListenerView {
+            pairing_code: "ABCD-EFGH".to_string(),
+            relay: Some(RemoteRelayView::new(
+                "https://relay.example/#code=ABCD".to_string(),
+                is_connected,
+            )),
+            url: "http://127.0.0.1:4646/".to_string(),
+        }),
+        notice: notice.map(str::to_string),
+        ..RemoteControlView::default()
+    }
+}
+
+#[test]
+fn relay_listener_shows_status_link_qr_code_and_link_hints() {
+    // Arrange
+    let view = relay_view(true, Some("Link copied. It works once."));
+    let overlay = RemoteControlOverlay::new(&view);
+
+    // Act
+    let lines = overlay.lines(80, 60);
+    let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+
+    // Assert
+    let relay_index = text
+        .iter()
+        .position(|line| line.starts_with("Relay   Connected"))
+        .expect("relay row should render");
+    let qr_rows = view
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.qr_code.clone())
+        .expect("relay should have a QR code");
+    assert_eq!(text[relay_index + 1], qr_rows[0]);
+    assert_eq!(
+        lines[relay_index + 1].spans[0].style,
+        style::scannable_code_style()
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains("https://relay.example/#code=ABCD"))
+    );
+    assert!(
+        text.iter()
+            .any(|line| line == "Link copied. It works once.")
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains("o: open link | c: copy link"))
+    );
+}
+
+#[test]
+fn relay_qr_code_is_left_out_when_it_does_not_fit() {
+    // Arrange
+    let view = relay_view(false, None);
+    let overlay = RemoteControlOverlay::new(&view);
+    let qr_height = view
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map_or(0, |relay| relay.qr_code.len());
+
+    // Act
+    let too_short = overlay.lines(80, qr_height);
+    let too_narrow = overlay.lines(10, 200);
+
+    // Assert
+    for lines in [too_short, too_narrow] {
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+        let relay_index = text
+            .iter()
+            .position(|line| line.starts_with("Relay   Connecting"))
+            .expect("relay row should render");
+        assert!(text[relay_index + 1].starts_with("Link"));
+    }
+}
+
 #[test]
 fn stopped_listener_shows_error_empty_devices_and_start_hint() {
     // Arrange
@@ -156,6 +243,7 @@ fn stopped_listener_shows_error_empty_devices_and_start_hint() {
         devices: Vec::new(),
         error: Some("Port 4646 is in use".to_string()),
         listener: None,
+        notice: None,
         pairing_requests: Vec::new(),
     };
     let overlay = RemoteControlOverlay::new(&view);

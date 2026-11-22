@@ -197,7 +197,12 @@ async fn real_launcher_serves_on_loopback_until_shutdown() {
 
     // Act
     let server = launcher
-        .start(0, vec!["box.tailnet.ts.net".to_string()], host(devices))
+        .start(
+            0,
+            vec!["box.tailnet.ts.net".to_string()],
+            None,
+            host(devices),
+        )
         .await
         .expect("listener should start on a free port");
     let local_addr = server.local_addr();
@@ -234,6 +239,7 @@ async fn real_launcher_reports_store_failure_when_revoking() {
         .start(
             0,
             Vec::new(),
+            None,
             host(Arc::new(RepositoryDeviceStore::new(Arc::new(
                 failing_repository(),
             )))),
@@ -268,6 +274,7 @@ async fn real_launcher_reports_a_port_in_use() {
         .start(
             port,
             Vec::new(),
+            None,
             host(Arc::new(database_device_store().await)),
         )
         .await;

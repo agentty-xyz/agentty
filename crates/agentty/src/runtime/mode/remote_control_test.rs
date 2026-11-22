@@ -90,7 +90,7 @@ async fn keys_are_ignored_outside_the_popup() {
 async fn s_starts_and_stops_and_n_replaces_the_code() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new());
+    app.enable_remote_control(0, Vec::new(), None);
     open_popup(&mut app, 0);
 
     // Act
@@ -108,6 +108,24 @@ async fn s_starts_and_stops_and_n_replaces_the_code() {
     assert_ne!(replaced.pairing_code, started.pairing_code);
     assert_eq!(app.remote_control.view().listener, None);
     assert_eq!(selected_device_index(&app), Some(0));
+}
+
+#[tokio::test]
+async fn o_and_c_keep_the_popup_open_without_a_relay_link() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.enable_remote_control(0, Vec::new(), None);
+    open_popup(&mut app, 0);
+    press(&mut app, KeyCode::Char('s')).await;
+
+    // Act
+    press(&mut app, KeyCode::Char('o')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+
+    // Assert
+    assert_eq!(app.remote_control.view().notice, None);
+    assert_eq!(selected_device_index(&app), Some(0));
+    app.stop_remote_control().await;
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ag_remote::{
     DeviceStore, DeviceStoreError, NewRemoteDevice, RemoteDevice, RemoteError, RemoteHost,
-    RemoteServerConfig, RemoteServerHandle, RemoteServerStatus,
+    RemoteRelayConfig, RemoteServerConfig, RemoteServerHandle, RemoteServerStatus,
 };
 use ag_store::{RemoteDeviceRepository, RemoteDeviceRow};
 use async_trait::async_trait;
@@ -88,7 +88,8 @@ impl DeviceStore for RepositoryDeviceStore {
 pub(crate) trait RemoteControlLauncher: Send + Sync {
     /// Binds `127.0.0.1:port` and serves `host` until the returned server
     /// shuts down. Port `0` selects a free port. Requests must name a
-    /// loopback host or one of `allowed_hosts`.
+    /// loopback host or one of `allowed_hosts`. With `relay`, the server also
+    /// registers with that relay and serves devices that connect through it.
     ///
     /// # Errors
     /// Returns a user-facing message when the listener cannot start.
@@ -96,6 +97,7 @@ pub(crate) trait RemoteControlLauncher: Send + Sync {
         &self,
         port: u16,
         allowed_hosts: Vec<String>,
+        relay: Option<RemoteRelayConfig>,
         host: RemoteHost,
     ) -> Result<Box<dyn RemoteControlServer>, String>;
 }
@@ -142,12 +144,13 @@ impl RemoteControlLauncher for RealRemoteControlLauncher {
         &self,
         port: u16,
         allowed_hosts: Vec<String>,
+        relay: Option<RemoteRelayConfig>,
         host: RemoteHost,
     ) -> Result<Box<dyn RemoteControlServer>, String> {
         let config = RemoteServerConfig {
             allowed_hosts,
             bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-            relay: None,
+            relay,
         };
         let handle = ag_remote::start(config, host)
             .await

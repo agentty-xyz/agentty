@@ -53,6 +53,29 @@ tunnels: anyone who finds the address can try to pair.
 Add `--remote-control-port <PORT>` to use another port, or `0` to let the system choose
 a free one.
 
+## Connect Through a Relay
+
+<a id="usage-remote-control-relay"></a> A relay lets devices reach Agentty without a
+tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
+with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`. No hosted
+relay is offered yet, so run your own `ag-relay` behind a reverse proxy that serves it
+over TLS.
+
+With a relay, the popup also shows the relay state, a pairing link, and a QR code of the
+link when the terminal is large enough. Scan the code or open the link on the other
+device, then approve the pairing as usual. On this computer, press `o` to open the link;
+press `c` to copy it for another device. Copying uses the terminal clipboard, which
+`tmux` passes on only with `set-clipboard on`; otherwise select the link. The link
+carries the pairing code, so it works once.
+
+The relay pairing page is not available yet, so the link does not lead anywhere until it
+arrives in a later release.
+
+Traffic through the relay is encrypted between the device and Agentty. The relay sees
+when devices connect and how much they send, but not what they send. A device paired
+through a relay proves itself with its own key instead of a stored token. Agentty keeps
+its relay key in its database; removing it unpairs every relay device.
+
 ## Security
 
 <a id="usage-remote-control-security"></a> A paired device can send prompts that agents

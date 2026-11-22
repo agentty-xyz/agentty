@@ -53,6 +53,11 @@ struct Cli {
     /// accepted.
     #[arg(long, value_name = "HOST", requires = "remote")]
     remote_control_host: Vec<String>,
+    /// Relay that `/remote-control` registers with, such as
+    /// `wss://relay.example`, so devices can pair and connect without a
+    /// tunnel. Traffic through it is encrypted end to end.
+    #[arg(long, value_name = "URL", requires = "remote")]
+    remote_relay: Option<String>,
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
@@ -222,7 +227,11 @@ async fn run_application(
             let mut app = app?;
             app.set_analytics(analytics.clone());
             if cli.experimental.remote {
-                app.enable_remote_control(cli.remote_control_port, cli.remote_control_host);
+                app.enable_remote_control(
+                    cli.remote_control_port,
+                    cli.remote_control_host,
+                    cli.remote_relay,
+                );
             }
 
             runtime(&mut app).await

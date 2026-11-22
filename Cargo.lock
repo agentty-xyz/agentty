@@ -411,16 +411,20 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
+ "base64 0.23.1",
  "clap",
  "crossterm",
+ "hex",
  "ignore",
  "image",
  "mockall",
  "opentelemetry",
  "opentelemetry-proto",
  "opentelemetry_sdk",
+ "percent-encoding",
  "prost",
  "pulldown-cmark",
+ "qrcode",
  "ratatui",
  "reqwest",
  "rustc-hash",
@@ -3460,6 +3464,12 @@ name = "pxfm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
+
+[[package]]
+name = "qrcode"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ace1a365f55004297f2cf24acfd96d02966246ca423385273b58a7dc873ee14d"
 
 [[package]]
 name = "quick-error"

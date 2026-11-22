@@ -276,6 +276,8 @@ Opens from `/remote-control`. See [Remote Control](@/docs/usage/remote-control.m
 | `y`         | Approve the oldest pairing request              |
 | `x`         | Deny the oldest pairing request                 |
 | `n`         | Replace the pairing code                        |
+| `o`         | Open the relay pairing link in this browser     |
+| `c`         | Copy the relay pairing link                     |
 | `s`         | Stop remote control, or start it when it is off |
 | `j` / `k`   | Move between paired devices                     |
 | `d`         | Remove the selected device                      |
