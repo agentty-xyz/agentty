@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::{env, fs};
 
 use agentty::analytics::Analytics;
-use agentty::app::{App, AppError, agentty_home};
+use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -77,6 +77,28 @@ fn cli_parses_experimental_harness_flag() {
 
     // Assert
     assert!(cli.experimental.harness);
+}
+
+#[test]
+fn cli_gates_remote_control_behind_experimental_remote() {
+    // Arrange / Act
+    let disabled = Cli::try_parse_from(["agentty"]).expect("default arguments");
+    let enabled = Cli::try_parse_from([
+        "agentty",
+        "--experimental-remote",
+        "--remote-control-port",
+        "0",
+    ])
+    .expect("--experimental-remote with a port should parse");
+    let port_without_flag = Cli::try_parse_from(["agentty", "--remote-control-port", "0"])
+        .expect_err("a port needs --experimental-remote");
+
+    // Assert
+    assert!(!disabled.experimental.remote);
+    assert_eq!(disabled.remote_control_port, DEFAULT_REMOTE_CONTROL_PORT);
+    assert!(enabled.experimental.remote);
+    assert_eq!(enabled.remote_control_port, 0);
+    assert_eq!(port_without_flag.kind(), ErrorKind::MissingRequiredArgument);
 }
 
 #[test]
@@ -218,6 +240,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: None,
+            remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         };
 
         // Act
@@ -267,6 +290,7 @@ async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
         no_update: false,
         otlp_capture_content: false,
         otlp_endpoint: Some("http://localhost:4318".to_string()),
+        remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
     };
 
     // Act
@@ -289,6 +313,7 @@ async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
+            remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         };
 
         // Act
@@ -351,6 +376,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             },
             closed_runtime,
         )
@@ -404,6 +430,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             },
             closed_runtime,
         )
@@ -455,6 +482,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             },
             root_working_dir_runtime,
         )
@@ -497,22 +525,29 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
     );
 }
 
+/// Builds the launch options the telemetry startup child reads from its
+/// environment, with remote control enabled so the full launch wires it.
+fn telemetry_child_cli() -> Cli {
+    Cli {
+        disable_telemetry: true,
+        experimental: ExperimentalFeatures {
+            harness: false,
+            remote: true,
+        },
+        no_update: true,
+        otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
+        otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
+        remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
+    }
+}
+
 #[tokio::test]
 async fn startup_runs_application_through_telemetry_wrapper() {
     if env::var_os(TELEMETRY_STARTUP_CHILD_ENV).is_some() {
         // Arrange / Act
-        let error = run(
-            Cli {
-                disable_telemetry: true,
-                experimental: ExperimentalFeatures::default(),
-                no_update: true,
-                otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
-                otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
-            },
-            traced_closed_runtime,
-        )
-        .await
-        .expect_err("injected runtime failure");
+        let error = run(telemetry_child_cli(), traced_closed_runtime)
+            .await
+            .expect_err("injected runtime failure");
 
         // Assert
         assert!(

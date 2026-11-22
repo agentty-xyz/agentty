@@ -62,6 +62,48 @@ async fn runtime_backend_creates_and_loads_complete_sessions() {
 }
 
 #[tokio::test]
+async fn runtime_backend_lists_loaded_sessions_and_signals_mutations() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let revisions = app.remote_control.subscribe_revisions();
+    let service = app.session_service();
+
+    // Act
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Draft,
+            project_id,
+        },
+    )
+    .await
+    .expect("draft session should be created");
+    let listed = app
+        .drive_session_request(async move { service.list_sessions().await })
+        .await
+        .expect("sessions should list");
+
+    // Assert
+    assert_eq!(
+        listed,
+        vec![ag_session::SessionSummary {
+            id: session_id,
+            status: SessionStatus::Draft,
+            title: None,
+            updated_at: listed[0].updated_at,
+        }]
+    );
+    assert!(
+        revisions
+            .has_changed()
+            .expect("revision sender should live"),
+        "the creation mutation should notify remote clients"
+    );
+}
+
+#[tokio::test]
 async fn runtime_backend_rejects_creation_for_inactive_projects() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;

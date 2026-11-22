@@ -265,6 +265,18 @@ open.
 | `Enter`     | Open worktree and run selected command |
 | `Esc` / `q` | Cancel and return to session view      |
 
+## Remote Control Popup
+
+Opens from `/remote-control`. See [Remote Control](@/docs/usage/remote-control.md).
+
+| Key         | Action                                          |
+| ----------- | ----------------------------------------------- |
+| `n`         | Replace the pairing code                        |
+| `s`         | Stop remote control, or start it when it is off |
+| `j` / `k`   | Move between paired devices                     |
+| `d`         | Remove the selected device                      |
+| `Esc` / `q` | Close and return to session view                |
+
 ## Prompt Input
 
 Prompt input also supports

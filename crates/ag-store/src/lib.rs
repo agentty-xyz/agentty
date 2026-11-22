@@ -6,6 +6,7 @@ mod error;
 mod execution_graph;
 mod operation;
 mod project;
+mod remote_device;
 mod repository;
 mod review;
 mod run;
@@ -35,6 +36,9 @@ pub use execution_graph::{
 pub use execution_graph::{MockGraphProposalRepository, MockGraphRepository};
 pub use operation::{OperationRepository, SessionOperationRow};
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
+#[cfg(any(test, feature = "test-utils"))]
+pub use remote_device::MockRemoteDeviceRepository;
+pub use remote_device::{RemoteDeviceRepository, RemoteDeviceRow};
 pub use repository::AppRepositories;
 pub use review::{
     NewSessionReviewCommentResolution, ReviewRepository, SessionReviewCommentResolutionRow,

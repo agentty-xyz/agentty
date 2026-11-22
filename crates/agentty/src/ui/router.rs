@@ -24,6 +24,7 @@ use crate::presentation::chatgpt_sign_in::{
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::diff_comment_submit_overlay::DiffCommentSubmitOverlay;
@@ -55,6 +56,8 @@ struct RouteSharedContext<'a> {
     process_resources: Option<SessionResources>,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
+    /// Remote-control listener and paired-device state for its overlay.
+    remote_control: &'a RemoteControlView,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     sessions: &'a [Session],
     settings_screen: Option<&'a SettingsScreenSnapshot>,
@@ -220,6 +223,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         mode,
         mru_project_order,
         process_resources,
+        remote_control,
         render_cache_store,
         project_table_state,
         projects,
@@ -249,6 +253,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         process_resources,
         project_table_state,
         projects,
+        remote_control,
         session_git_statuses,
         sessions,
         settings_screen,
@@ -313,7 +318,8 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         }
         | AppMode::ViewInfoPopup { restore_view, .. }
         | AppMode::LaunchConfigurationSelector { restore_view, .. }
-        | AppMode::PublishBranchInput { restore_view, .. } => Surface::Session {
+        | AppMode::PublishBranchInput { restore_view, .. }
+        | AppMode::RemoteControl { restore_view, .. } => Surface::Session {
             mode: SessionSurfaceMode::View,
             scroll_offset: restore_view.scroll_offset,
             session_id: &restore_view.session_id,
@@ -619,6 +625,12 @@ fn render_mode_overlay(
             locked_upstream_ref.as_deref(),
         )
         .render(frame, area),
+        AppMode::RemoteControl {
+            selected_device_index,
+            ..
+        } => component::remote_control_overlay::RemoteControlOverlay::new(shared.remote_control)
+            .selected_device_index(*selected_device_index)
+            .render(frame, area),
     }
 }
 

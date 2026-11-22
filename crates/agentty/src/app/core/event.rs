@@ -125,6 +125,12 @@ pub(crate) enum AppEvent {
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
     },
+    /// Reports the authenticated connections of the remote-control listener
+    /// identified by `generation`.
+    RemoteControlStatusUpdated {
+        generation: u64,
+        status: ag_remote::RemoteServerStatus,
+    },
     /// Indicates locally available agent CLI versions finished loading.
     AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
     /// Indicates a background listing of harness models finished.
@@ -424,6 +430,8 @@ pub(super) struct AppEventBatch {
     /// matching decides which completion may start review.
     pub(super) implementer_attempt_successes: Vec<(SessionId, String)>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
+    /// Latest remote-control connections with their listener generation.
+    pub(super) remote_control_status: Option<(u64, ag_remote::RemoteServerStatus)>,
     pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
@@ -508,6 +516,7 @@ impl AppEventBatch {
             || !self.chatgpt_sign_in_updates.is_empty()
             || self.git_status_update.is_some()
             || self.latest_available_version_update.is_some()
+            || self.remote_control_status.is_some()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
             || !self.implementer_attempt_successes.is_empty()
@@ -609,6 +618,9 @@ impl AppEventBatch {
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
+            AppEvent::RemoteControlStatusUpdated { generation, status } => {
+                self.remote_control_status = Some((generation, status));
+            }
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
                 self.agent_cli_updates = Some(agent_clis);
             }
@@ -747,6 +759,7 @@ impl AppEventBatch {
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
+            | AppEvent::RemoteControlStatusUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::HarnessModelsUpdated { .. }
             | AppEvent::ChatGptSignInUpdated { .. }
@@ -1259,6 +1272,12 @@ impl App {
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
+        if !event_batch.session_ids.is_empty() {
+            self.publish_session_change();
+        }
+        if let Some((generation, status)) = event_batch.remote_control_status.take() {
+            self.apply_remote_control_status(generation, status).await;
+        }
         self.apply_session_transient_updates(&mut event_batch);
         self.apply_deferred_session_settings().await;
         let mut auto_review_session_ids =
@@ -2063,6 +2082,14 @@ impl App {
                 ..
             }
             | AppMode::LaunchConfigurationSelector {
+                restore_view:
+                    ConfirmationViewMode {
+                        session_id: view_id,
+                        ..
+                    },
+                ..
+            }
+            | AppMode::RemoteControl {
                 restore_view:
                     ConfirmationViewMode {
                         session_id: view_id,

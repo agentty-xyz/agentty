@@ -54,6 +54,7 @@ impl App {
         if is_harness_session {
             slash_state.harness_models = self.services.harness_model_options();
         }
+        slash_state.is_remote_control_available = self.remote_control.is_enabled();
 
         slash_state
     }
@@ -107,6 +108,10 @@ impl App {
                 ..
             }
             | AppMode::PublishBranchInput {
+                restore_view: ConfirmationViewMode { session_id, .. },
+                ..
+            }
+            | AppMode::RemoteControl {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
             } => self.session_has_tick_driven_ui(session_id),

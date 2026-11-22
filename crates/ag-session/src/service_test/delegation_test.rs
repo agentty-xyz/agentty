@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
+use crate::error::SessionError;
 use crate::model::SessionId;
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
@@ -105,5 +106,22 @@ async fn service_delegates_mutating_operations_through_clones() {
             "merge:session-1",
             "review:session-1"
         ]
+    );
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_session_listing() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let listed = service.list_sessions().await;
+
+    // Assert
+    assert_eq!(
+        listed,
+        Err(SessionError::Operation(
+            "Host does not support session listing".to_string()
+        ))
     );
 }

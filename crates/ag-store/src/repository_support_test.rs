@@ -59,6 +59,7 @@ impl AppRepositories {
                 graph_proposal,
                 operation: Arc::clone(&existing.operation),
                 project: Arc::clone(&existing.project),
+                remote_device: Arc::clone(&existing.remote_device),
                 review: Arc::clone(&existing.review),
                 run: Arc::clone(&existing.run),
                 session: Arc::clone(&existing.session),
@@ -83,6 +84,7 @@ impl AppRepositories {
                 graph_proposal: Arc::clone(&existing.graph_proposal),
                 operation: Arc::clone(&existing.operation),
                 project: Arc::clone(&existing.project),
+                remote_device: Arc::clone(&existing.remote_device),
                 review: Arc::clone(&existing.review),
                 run: Arc::clone(&existing.run),
                 session: Arc::clone(&existing.session),
@@ -107,6 +109,36 @@ impl AppRepositories {
                 graph_proposal: Arc::clone(&existing.graph_proposal),
                 operation: Arc::clone(&existing.operation),
                 project: Arc::clone(&existing.project),
+                remote_device: Arc::clone(&existing.remote_device),
+                review: Arc::clone(&existing.review),
+                run: Arc::clone(&existing.run),
+                session: Arc::clone(&existing.session),
+                setting: Arc::clone(&existing.setting),
+                task: Arc::clone(&existing.task),
+                usage: Arc::clone(&existing.usage),
+            }),
+        }
+    }
+
+    /// Replaces only paired-device persistence for deterministic host
+    /// remote-control tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_remote_device_repository(
+        &self,
+        remote_device: Arc<dyn crate::RemoteDeviceRepository>,
+    ) -> Self {
+        let existing = &self.repositories;
+
+        Self {
+            repositories: Arc::new(RepositorySet {
+                activity: Arc::clone(&existing.activity),
+                graph: Arc::clone(&existing.graph),
+                graph_dispatch: Arc::clone(&existing.graph_dispatch),
+                graph_proposal: Arc::clone(&existing.graph_proposal),
+                operation: Arc::clone(&existing.operation),
+                project: Arc::clone(&existing.project),
+                remote_device,
                 review: Arc::clone(&existing.review),
                 run: Arc::clone(&existing.run),
                 session: Arc::clone(&existing.session),

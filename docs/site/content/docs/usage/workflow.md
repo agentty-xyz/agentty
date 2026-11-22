@@ -148,10 +148,10 @@ accept stays queued with a notice. Stopping the turn discards them like the rest
 queue. Other harnesses keep queued chat for the next turn, and so do task and graph
 runs, which work in their own conversations.
 
-While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/style`, and `/fast`.
-`/model` and `/fast` changes wait until the active work and queue finish and appear as
-the last queued action; choosing the current value cancels the change. Pending changes
-are lost on restart.
+While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/remote-control`,
+`/style`, and `/fast`. `/model` and `/fast` changes wait until the active work and queue
+finish and appear as the last queued action; choosing the current value cancels the
+change. Pending changes are lost on restart.
 
 While composing, `Tab` focuses chat for scrolling; from there, `d` previews changes and
 `q` returns to the list with the draft kept. `Shift+Tab` cycles permission modes.
@@ -459,15 +459,16 @@ this activity. Provider failures show a short error and captured output where av
 command picker. From session view, `/` opens a fresh composer, replacing any saved
 draft.
 
-| Command      | Action                                                       |
-| ------------ | ------------------------------------------------------------ |
-| `/apply`     | Verify and apply valid focused-review suggestions.           |
-| `/graph`     | Request a graph proposal.                                    |
-| `/mode`      | Choose permissions and review automation.                    |
-| `/model`     | Choose a backend and model; local or paid models in Harness. |
-| `/reasoning` | Set reasoning effort for this session.                       |
-| `/style`     | Choose concise, balanced, or detailed answers.               |
-| `/fast`      | Toggle normal or fast responses for Claude or Codex.         |
+| Command           | Action                                                       |
+| ----------------- | ------------------------------------------------------------ |
+| `/apply`          | Verify and apply valid focused-review suggestions.           |
+| `/graph`          | Request a graph proposal.                                    |
+| `/mode`           | Choose permissions and review automation.                    |
+| `/model`          | Choose a backend and model; local or paid models in Harness. |
+| `/reasoning`      | Set reasoning effort for this session.                       |
+| `/remote-control` | Control sessions from another device.                        |
+| `/style`          | Choose concise, balanced, or detailed answers.               |
+| `/fast`           | Toggle normal or fast responses for Claude or Codex.         |
 
 `/apply` requires a completed focused review. `/mode` selects:
 
@@ -481,6 +482,9 @@ draft.
 `Shift+Tab` cycles these modes while composing. See
 [Agents & Models](@/docs/agents/backends.md#switching-models) for speed costs and model
 compatibility.
+
+`/remote-control` appears only with `agentty --experimental-remote` and pairs a phone or
+browser with this Agentty; see [Remote Control](@/docs/usage/remote-control.md).
 
 `/style` applies to later turns: **Concise** keeps essential results, caveats, and
 verification; **Balanced** adds useful context; **Detailed** explains decisions and

@@ -19,6 +19,8 @@ pub mod home;
 pub(crate) mod install_receipt;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
+/// Remote-control listener and paired-device persistence boundary.
+pub(crate) mod remote_control;
 /// Host process-accounting boundary.
 pub(crate) mod resource;
 /// Total provider-call deadline for focused reviews.

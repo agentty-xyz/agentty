@@ -19,6 +19,7 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::remote_control::RemoteControlView;
 use crate::ui::{RenderCacheStore, component, layout, router, style};
 
 /// Focused-review display state projected from the app cache for one visible
@@ -85,6 +86,8 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
+    /// Remote-control listener and paired-device state.
+    pub remote_control: &'a RemoteControlView,
     /// UI-owned cache resources shared by every page in this frame.
     pub render_cache_store: &'a RenderCacheStore,
     /// Detected session worktree branch names keyed by session id.
@@ -176,6 +179,7 @@ pub fn render(frame: &mut Frame, context: RenderContext<'_>) {
             context.projects,
         ))
         .project_sync_status(context.project_sync_status.cloned())
+        .remote_control_connections(context.remote_control.status_bar_connections())
         .update_status(context.update_status.cloned())
         .render(frame, status_bar_area);
     render_footer_bar(
@@ -240,6 +244,10 @@ fn render_footer_bar(
             ..
         }
         | AppMode::PublishBranchInput {
+            restore_view: ConfirmationViewMode { session_id, .. },
+            ..
+        }
+        | AppMode::RemoteControl {
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
         }

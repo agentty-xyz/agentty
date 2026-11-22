@@ -587,6 +587,7 @@ impl AppServices {
             AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",
             AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
             AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
+            AppEvent::RemoteControlStatusUpdated { .. } => "RemoteControlStatusUpdated",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",
             AppEvent::ChatGptSignInUpdated { .. } => "ChatGptSignInUpdated",

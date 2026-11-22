@@ -406,6 +406,19 @@ impl Session {
     }
 }
 
+/// Listing entry for one session, without its transcript or settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSummary {
+    /// Stable session identifier.
+    pub id: SessionId,
+    /// Current lifecycle status.
+    pub status: SessionStatus,
+    /// Optional user-visible session title.
+    pub title: Option<String>,
+    /// Last update timestamp in Unix seconds.
+    pub updated_at: i64,
+}
+
 /// Converts Unix timestamp seconds to a day key after applying a UTC offset.
 pub fn activity_day_key_with_offset(timestamp_seconds: i64, utc_offset_seconds: i64) -> i64 {
     timestamp_seconds

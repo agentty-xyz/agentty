@@ -71,6 +71,26 @@ fn test_status_bar_render_shows_current_version_without_update() {
 }
 
 #[test]
+fn test_status_bar_render_shows_remote_control_connections() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(100, 1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let status_bar = StatusBar::new("v0.1.12".to_string()).remote_control_connections(Some(1));
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&status_bar, frame, area);
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Agentty v0.1.12 | Remote control on, 1 device connected"));
+}
+
+#[test]
 fn test_status_bar_render_right_aligns_help_hint_with_accent_key() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);

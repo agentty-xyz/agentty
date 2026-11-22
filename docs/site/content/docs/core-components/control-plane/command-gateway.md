@@ -18,6 +18,7 @@ directly to their existing handlers.
 flowchart LR
   T[Terminal] -->|direct call or mailbox| G[Command Gateway]
   A[Session API] -->|mailbox| G
+  R[Remote control] -->|session API| A
   G -->|applies command| WF[Session workflows]
   WF -->|save| D[(Durable components)]
   WF -->|queue work| W[Run Worker]
@@ -34,11 +35,13 @@ accepts proposal generation, actions on an exact proposal version, explicit star
 cancellation, resume, node continuation, and acceptance of an exact result. Session,
 task, and graph reads remain separate queries.
 
-Each request carries a fresh command ID and an initiator: terminal or session API.
-Durable messages, task attempts, and review publication also carry an operation
-correlation. The command ID identifies one admission attempt; the durable operation ID
-retains its existing deduplication semantics. Initiator metadata records provenance
-rather than granting permissions.
+Each request carries a fresh command ID and an initiator: terminal, session API, or
+remote control. Durable messages, task attempts, and review publication also carry an
+operation correlation. The command ID identifies one admission attempt; the durable
+operation ID retains its existing deduplication semantics. Initiator metadata records
+provenance rather than granting permissions; the
+[remote-control](@/docs/usage/remote-control.md) server limits paired devices to its own
+subset of session API calls before they reach the gateway.
 
 ## Delivery and Acknowledgement
 

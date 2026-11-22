@@ -411,6 +411,39 @@ fn test_prompt_slash_commands_lists_all_commands() {
     );
 }
 
+/// Verifies `/remote-control` appears only when `--experimental-remote`
+/// makes it available.
+#[test]
+fn test_prompt_slash_commands_offer_remote_control_only_when_available() {
+    // Arrange
+    let available = PromptSlashState {
+        is_remote_control_available: true,
+        ..PromptSlashState::default()
+    };
+    let labels = |slash_state: &PromptSlashState| {
+        crate::presentation::prompt::build_prompt_slash_suggestion_list(
+            "/remote",
+            slash_state,
+            AgentKind::Codex,
+            PromptSlashCommandSet::SettingsOnly,
+        )
+        .map(|list| {
+            list.items
+                .into_iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    // Act
+    let hidden = labels(&PromptSlashState::default());
+    let offered = labels(&available);
+
+    // Assert
+    assert_eq!(hidden, None);
+    assert_eq!(offered, Some(vec!["/remote-control".to_string()]));
+}
+
 #[test]
 fn test_prompt_slash_commands_no_match() {
     // Arrange & Act
@@ -2349,6 +2382,31 @@ fn graph_subcommands_do_not_bypass_the_mode_selector() {
             .iter()
             .any(|effect| matches!(effect, PromptEffect::SubmitPrompt(_)))
     );
+}
+
+#[tokio::test]
+async fn remote_control_slash_command_starts_listener_and_opens_popup() {
+    // Arrange
+    let (mut app, _root) = new_test_prompt_app("/remote-control", None).await;
+    app.enable_remote_control(0);
+    let context = prompt_context(&mut app).expect("context");
+    let enabled_slash_state = app.prompt_slash_state(&context.session_id);
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        *slash_state = enabled_slash_state;
+    }
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Enter).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::RemoteControl {
+            restore_view,
+            selected_device_index: 0,
+        } if restore_view.session_id == context.session_id
+    ));
+    assert!(app.remote_control.view().listener.is_some());
 }
 
 #[tokio::test]
