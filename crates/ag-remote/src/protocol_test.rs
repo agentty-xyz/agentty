@@ -83,17 +83,90 @@ fn client_frames_use_snake_case_type_and_method_tags() {
 }
 
 #[test]
-fn client_frames_reject_excluded_methods() {
+fn unknown_methods_parse_as_unsupported_requests() {
     // Arrange
-    let wire = json!({"type": "request", "id": 1, "request": {
+    let with_fields = json!({"type": "request", "id": 1, "request": {
         "method": "merge_session", "session_id": "s"
     }});
+    let bare = json!({"type": "request", "id": 2, "request": {"method": "get_host"}});
 
     // Act
-    let parsed = serde_json::from_value::<ClientFrame>(wire);
+    let with_fields = serde_json::from_value::<ClientFrame>(with_fields);
+    let bare = serde_json::from_value::<ClientFrame>(bare);
 
     // Assert
-    assert!(parsed.is_err());
+    assert_eq!(
+        with_fields.expect("unknown method should parse"),
+        ClientFrame::Request {
+            id: 1,
+            request: RemoteRequest::Unsupported,
+        }
+    );
+    assert_eq!(
+        bare.expect("unknown method should parse"),
+        ClientFrame::Request {
+            id: 2,
+            request: RemoteRequest::Unsupported,
+        }
+    );
+}
+
+#[test]
+fn known_methods_with_malformed_fields_stay_invalid() {
+    // Arrange
+    let missing_field = json!({"type": "request", "id": 1, "request": {"method": "get_session"}});
+    let missing_method = json!({"type": "request", "id": 2, "request": {"session_id": "s"}});
+
+    // Act
+    let missing_field = serde_json::from_value::<ClientFrame>(missing_field);
+    let missing_method = serde_json::from_value::<ClientFrame>(missing_method);
+
+    // Assert
+    assert!(missing_field.is_err());
+    assert!(missing_method.is_err());
+}
+
+#[test]
+fn authentication_frames_list_capabilities_and_accept_frames_without_them() {
+    // Arrange
+    let listed = ServerFrame::Welcome {
+        capabilities: vec!["stop_turn".to_string()],
+        device_id: "d".to_string(),
+        protocol_version: 1,
+        revision: 3,
+    };
+    let old_paired =
+        json!({"type": "paired", "device_id": "d", "protocol_version": 1, "revision": 3});
+
+    // Act
+    let encoded = serde_json::to_value(&listed).expect("welcome should encode");
+    let decoded: ServerFrame =
+        serde_json::from_value(encoded.clone()).expect("welcome should decode");
+    let old_paired: ServerFrame =
+        serde_json::from_value(old_paired).expect("old paired frame should decode");
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "type": "welcome",
+            "capabilities": ["stop_turn"],
+            "device_id": "d",
+            "protocol_version": 1,
+            "revision": 3
+        })
+    );
+    assert_eq!(decoded, listed);
+    assert_eq!(
+        old_paired,
+        ServerFrame::Paired {
+            capabilities: Vec::new(),
+            device_id: "d".to_string(),
+            protocol_version: 1,
+            revision: 3,
+            token: String::new(),
+        }
+    );
 }
 
 #[test]
@@ -101,11 +174,13 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
     // Arrange
     let frames = vec![
         ServerFrame::Welcome {
+            capabilities: Vec::new(),
             device_id: "d".to_string(),
             protocol_version: 1,
             revision: 3,
         },
         ServerFrame::Paired {
+            capabilities: Vec::new(),
             device_id: "d".to_string(),
             protocol_version: 1,
             revision: 3,

@@ -36,6 +36,8 @@ for (const id of [
 
 const state = {
   backoffMs: 1000,
+  // Optional requests the server supports; offer a feature only when listed.
+  capabilities: [],
   currentSessionId: null,
   // This browser's key pair for relay streams.
   deviceKey: null,
@@ -276,6 +278,7 @@ function handleFrame(data) {
       if (!usesRelay) {
         setToken(frame.token);
       }
+      state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
       state.pendingPairing = null;
       elements["pair-status"].textContent = "";
       onAuthenticated();
@@ -283,6 +286,7 @@ function handleFrame(data) {
     case "welcome":
       // A relay device that pairs again with a key Agentty already knows
       // is welcomed directly.
+      state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
       state.pendingPairing = null;
       elements["pair-status"].textContent = "";
       onAuthenticated();

@@ -42,6 +42,8 @@ const PAIRING_TIMED_OUT: &str = "Pairing was not approved in time";
 const PAIRING_PENDING: &str = "Wait for pairing approval";
 /// Close reason sent to every connection when the server stops.
 const SERVER_STOPPED: &str = "Server stopped";
+/// Error returned for a request method this server does not know.
+const UNSUPPORTED_REQUEST: &str = "Unsupported request";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -250,11 +252,22 @@ async fn welcome(
             device_name: device.name,
         },
         reply: ServerFrame::Welcome {
+            capabilities: capabilities(),
             device_id: device.id,
             protocol_version: PROTOCOL_VERSION,
             revision,
         },
     })
+}
+
+/// Returns the optional requests this server supports, sent in `Welcome`
+/// and `Paired`.
+///
+/// Requests added after the first protocol version are offered only through
+/// this list, so a client never sends one to a server that lacks it. None
+/// exists yet.
+fn capabilities() -> Vec<String> {
+    Vec::new()
 }
 
 /// Lists the pairing request, tells the device to wait, and returns the
@@ -327,6 +340,7 @@ pub(crate) async fn complete_pairing(
             device_name: device.device_name,
         },
         ServerFrame::Paired {
+            capabilities: capabilities(),
             device_id: device.device_id,
             protocol_version: PROTOCOL_VERSION,
             revision,
@@ -484,6 +498,7 @@ async fn respond(
 
             Ok(RemoteResponse::Accepted)
         }
+        RemoteRequest::Unsupported => Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string())),
     }
 }
 

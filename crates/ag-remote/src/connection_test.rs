@@ -105,6 +105,7 @@ async fn hello_with_known_token_welcomes_and_touches_device() {
                 device_name: "phone name".to_string(),
             },
             reply: ServerFrame::Welcome {
+                capabilities: Vec::new(),
                 device_id: "phone".to_string(),
                 protocol_version: PROTOCOL_VERSION,
                 revision: 8,
@@ -331,6 +332,7 @@ async fn complete_pairing_stores_only_the_token_hash() {
                 device_name: "My phone".to_string(),
             },
             ServerFrame::Paired {
+                capabilities: Vec::new(),
                 device_id: device_id.clone(),
                 protocol_version: PROTOCOL_VERSION,
                 revision: 8,

@@ -24,6 +24,7 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
     assert_eq!(
         welcome,
         ServerFrame::Welcome {
+            capabilities: Vec::new(),
             device_id: device_id.clone(),
             protocol_version: PROTOCOL_VERSION,
             revision: 1,
