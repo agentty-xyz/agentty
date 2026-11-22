@@ -522,8 +522,6 @@ pub struct PromptSlashState {
     /// Harness models `/model` lists for [`AgentKind::Harness`], local models
     /// first; empty lists the fixed catalog.
     pub harness_models: Vec<HarnessModelOption>,
-    /// Whether `--experimental-remote` offers `/remote-control`.
-    pub is_remote_control_available: bool,
     /// Agent selected for the current slash workflow, when applicable.
     pub selected_agent: Option<AgentKind>,
     /// Highlighted option inside the active slash menu.
@@ -534,14 +532,13 @@ pub struct PromptSlashState {
 
 impl PromptSlashState {
     /// Creates a new slash state scoped to the provided locally available
-    /// agent kinds, without the experimental `/remote-control` command.
+    /// agent kinds.
     #[must_use]
     pub fn with_available_agent_kinds(available_agent_kinds: Vec<AgentKind>) -> Self {
         Self {
             available_agent_kinds,
             graph: PromptGraphState::Available,
             harness_models: Vec::new(),
-            is_remote_control_available: false,
             selected_agent: None,
             selected_index: 0,
             stage: PromptSlashStage::Command,
@@ -1121,16 +1118,15 @@ fn build_slash_suggestion_list(
 
     let (title, items): (&str, Vec<PromptSuggestionItem>) = match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands =
-                prompt_slash_commands(input, slash_state, session_agent_kind, command_set)
-                    .into_iter()
-                    .map(|command| PromptSuggestionItem {
-                        badge: None,
-                        detail: Some(command_description(command).to_string()),
-                        label: command.to_string(),
-                        metadata: None,
-                    })
-                    .collect::<Vec<_>>();
+            let commands = prompt_slash_commands(input, session_agent_kind, command_set)
+                .into_iter()
+                .map(|command| PromptSuggestionItem {
+                    badge: None,
+                    detail: Some(command_description(command).to_string()),
+                    label: command.to_string(),
+                    metadata: None,
+                })
+                .collect::<Vec<_>>();
 
             ("Slash Command (j/k move, Enter select)", commands)
         }
@@ -1197,8 +1193,7 @@ fn selected_slash_action(
 ) -> Option<PromptSuggestionSelection> {
     match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands =
-                prompt_slash_commands(input, slash_state, session_agent_kind, command_set);
+            let commands = prompt_slash_commands(input, session_agent_kind, command_set);
             let selected_command = commands
                 .get(clamp_selected_index(
                     slash_state.selected_index,
@@ -1445,7 +1440,6 @@ fn command_description(command: &str) -> &'static str {
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",
         "/fast" => "Toggle between normal and fast responses for this session.",
-        "/remote-control" => "Control Agentty sessions from another device.",
         _ => "Prompt slash command.",
     }
 }
@@ -1453,7 +1447,6 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose fuzzy characters match the current input.
 fn prompt_slash_commands(
     input: &str,
-    slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
     command_set: PromptSlashCommandSet,
 ) -> Vec<&'static str> {
@@ -1463,7 +1456,6 @@ fn prompt_slash_commands(
         "/graph",
         "/model",
         "/reasoning",
-        "/remote-control",
         "/style",
         "/fast",
     ];
@@ -1472,9 +1464,6 @@ fn prompt_slash_commands(
     }
     if command_set == PromptSlashCommandSet::SettingsOnly {
         commands.retain(|command| *command != "/graph");
-    }
-    if !slash_state.is_remote_control_available {
-        commands.retain(|command| *command != "/remote-control");
     }
     if !session_agent_kind.supports_speed_mode() {
         commands.retain(|command| *command != "/fast");

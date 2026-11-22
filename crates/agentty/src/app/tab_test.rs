@@ -10,7 +10,7 @@ fn test_tab_title() {
     let titles = Tab::ALL.map(Tab::title);
 
     // Assert
-    assert_eq!(titles, ["Projects", "Sessions", "Settings"]);
+    assert_eq!(titles, ["Projects", "Sessions", "Settings", "Remote"]);
 }
 
 #[test]
@@ -23,7 +23,12 @@ fn test_tab_scope_marks_only_projects_as_global() {
     // Assert
     assert_eq!(
         scopes,
-        [TabScope::Global, TabScope::Project, TabScope::Project]
+        [
+            TabScope::Global,
+            TabScope::Project,
+            TabScope::Project,
+            TabScope::Project
+        ]
     );
 }
 
@@ -34,6 +39,7 @@ fn test_tab_from_str_parses_persisted_values() {
         ("Projects", Some(Tab::Projects)),
         ("Sessions", Some(Tab::Sessions)),
         ("Settings", Some(Tab::Settings)),
+        ("Remote", Some(Tab::Remote)),
         ("Invalid", None),
     ];
 
@@ -51,40 +57,65 @@ fn test_tab_as_str_matches_persisted_values() {
     let values = Tab::ALL.map(Tab::as_str);
 
     // Assert
-    assert_eq!(values, ["Projects", "Sessions", "Settings"]);
+    assert_eq!(values, ["Projects", "Sessions", "Settings", "Remote"]);
 }
 
 #[test]
-fn test_tab_next_cycles_in_display_order() {
+fn test_tab_manager_offers_remote_only_once_enabled() {
     // Arrange
+    let mut manager = TabManager::default();
 
     // Act
-    let next_tabs = Tab::ALL.map(Tab::next);
+    let default_tabs = manager.available_tabs();
+    manager.enable_remote();
+    let remote_tabs = manager.available_tabs();
 
     // Assert
-    assert_eq!(next_tabs, [Tab::Sessions, Tab::Settings, Tab::Projects]);
+    assert_eq!(default_tabs, &Tab::WITHOUT_REMOTE);
+    assert_eq!(remote_tabs, &Tab::ALL);
 }
 
 #[test]
-fn test_tab_previous_cycles_in_display_order() {
+fn test_tab_manager_cycles_through_remote_once_enabled() {
     // Arrange
+    let mut manager = TabManager::new(Tab::Settings);
+    manager.enable_remote();
 
     // Act
-    let previous_tabs = Tab::ALL.map(Tab::previous);
+    manager.next();
+    let after_settings = manager.current();
+    manager.next();
+    let after_remote = manager.current();
+    manager.previous();
+    let before_projects = manager.current();
 
     // Assert
-    assert_eq!(previous_tabs, [Tab::Settings, Tab::Projects, Tab::Sessions]);
+    assert_eq!(after_settings, Tab::Remote);
+    assert_eq!(after_remote, Tab::Projects);
+    assert_eq!(before_projects, Tab::Remote);
 }
 
 #[test]
-fn test_tab_project_scoped_order_keeps_project_pages_grouped() {
+fn test_tab_manager_reads_unoffered_remote_as_sessions() {
     // Arrange
+    let mut manager = TabManager::new(Tab::Remote);
 
     // Act
-    let project_scoped_tabs = Tab::project_scoped_tabs();
+    let restored_tab = manager.current();
+    manager.next();
+    let next_tab = manager.current();
+    manager.set(Tab::Remote);
+    manager.previous();
+    let previous_tab = manager.current();
+    manager.set(Tab::Remote);
+    manager.enable_remote();
+    let enabled_tab = manager.current();
 
     // Assert
-    assert_eq!(project_scoped_tabs, &[Tab::Sessions, Tab::Settings]);
+    assert_eq!(restored_tab, Tab::Sessions);
+    assert_eq!(next_tab, Tab::Settings);
+    assert_eq!(previous_tab, Tab::Projects);
+    assert_eq!(enabled_tab, Tab::Remote);
 }
 
 #[test]

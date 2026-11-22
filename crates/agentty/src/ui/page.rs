@@ -8,6 +8,8 @@ pub(crate) mod execution_graph;
 pub(crate) mod graph_chat;
 /// Project selection and activity list page.
 pub mod project_list;
+/// Remote-control listener, pairing, and paired-device page.
+pub mod remote_control;
 /// Session-linked forge-review panels embedded in Diff mode.
 pub mod review_comment;
 /// Session transcript and prompt page.

@@ -21,8 +21,8 @@ import {
 } from "./settings.mjs";
 
 // The commands a remote device can run, in the terminal's order and with
-// its descriptions. `/apply`, `/graph` and `/remote-control` need
-// operations the host does not offer remotely.
+// its descriptions. `/apply` and `/graph` need operations the host does
+// not offer remotely.
 export const SLASH_COMMANDS = [
   { description: "Choose an agent and model for this session.", name: "/model" },
   { description: "Override the reasoning level for this session.", name: "/reasoning" },

@@ -27,7 +27,9 @@ use crate::presentation::app_mode::{
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
-use crate::presentation::remote_control::RemoteControlView;
+use crate::presentation::remote_control::{
+    RemoteControlView, RemoteDeviceView, RemoteListenerView,
+};
 use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
@@ -89,6 +91,16 @@ fn render_list_tab(
     current_tab: Tab,
     settings_screen: Option<&SettingsScreenSnapshot>,
 ) -> (String, ReasoningLevel) {
+    render_list_tab_with_remote(current_tab, settings_screen, None)
+}
+
+/// Renders one list tab, offering the Remote tab when `remote_control` is
+/// present.
+fn render_list_tab_with_remote(
+    current_tab: Tab,
+    settings_screen: Option<&SettingsScreenSnapshot>,
+    remote_control: Option<&RemoteControlView>,
+) -> (String, ReasoningLevel) {
     let backend = ratatui::backend::TestBackend::new(120, 30);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let available_agent_clis = Vec::new();
@@ -111,7 +123,7 @@ fn render_list_tab(
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &projects,
-        remote_control: &RemoteControlView::default(),
+        remote_control,
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen,
@@ -153,7 +165,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
-        remote_control: &RemoteControlView::default(),
+        remote_control: None,
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen: None,
@@ -473,6 +485,35 @@ fn render_list_background_leaves_settings_tab_blank_without_snapshot() {
 }
 
 #[test]
+fn render_list_background_renders_the_remote_tab_only_when_offered() {
+    // Arrange
+    let remote_control = RemoteControlView {
+        devices: vec![RemoteDeviceView {
+            id: "phone".to_string(),
+            is_connected: true,
+            name: "Phone".to_string(),
+        }],
+        listener: Some(RemoteListenerView {
+            pairing_code: "ABCD-EFGH".to_string(),
+            relay: None,
+            url: "http://127.0.0.1:4646/".to_string(),
+        }),
+        ..RemoteControlView::default()
+    };
+
+    // Act
+    let (offered, _) = render_list_tab_with_remote(Tab::Remote, None, Some(&remote_control));
+    let (hidden, _) = render_list_tab(Tab::Remote, None);
+
+    // Assert
+    assert!(offered.contains(" Settings | Remote (1 online) "));
+    assert!(offered.contains("Remote control"));
+    assert!(offered.contains("ABCD-EFGH"));
+    assert!(hidden.contains(" Sessions | Settings "));
+    assert!(!hidden.contains("Remote"));
+}
+
+#[test]
 fn active_project_name_labels_only_the_matching_project() {
     // Arrange
     let projects = vec![
@@ -567,7 +608,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
-        remote_control: &RemoteControlView::default(),
+        remote_control: None,
         session_git_statuses: &HashMap::new(),
         sessions: &sessions,
         settings_screen: None,
@@ -1095,26 +1136,6 @@ fn render_mode_overlay_renders_publish_input() {
     // Assert
     assert!(text.contains("Publish Review Request"));
     assert!(text.contains("wt/session-publish"));
-}
-
-#[test]
-fn render_mode_overlay_renders_remote_control_popup() {
-    // Arrange
-    let mode = AppMode::RemoteControl {
-        restore_view: ConfirmationViewMode {
-            scroll_offset: None,
-            session_id: "session-remote".into(),
-        },
-        selected_device_index: 0,
-    };
-
-    // Act
-    let (handled, text) = render_list_backed_mode(&mode);
-
-    // Assert
-    assert!(handled);
-    assert!(text.contains("Remote Control"));
-    assert!(text.contains("s: start | Esc: close"));
 }
 
 #[test]

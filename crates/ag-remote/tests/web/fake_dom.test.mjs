@@ -23,7 +23,7 @@ test("createDocument reads the client's page with its ids, attributes and text",
   assert.equal(document.querySelector("script").getAttribute("src"), "app.js");
   assert.equal(document.querySelectorAll("symbol").length, 15);
   assert.equal(document.querySelector("#menu use").getAttribute("href"), "#i-menu");
-  assert.match(document.getElementById("pair-hint-local").textContent, /Run \/remote-control in Agentty/);
+  assert.match(document.getElementById("pair-hint-local").textContent, /Start remote control in Agentty's Remote tab/);
 });
 
 test("createDocument handles comments, entities, self-closing and raw text elements", () => {

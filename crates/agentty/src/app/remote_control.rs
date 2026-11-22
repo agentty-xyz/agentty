@@ -109,9 +109,23 @@ impl RemoteControl {
         self.port.is_some()
     }
 
-    /// Returns the state projected into the overlay and status bar.
+    /// Returns the state projected into the Remote tab.
     pub(crate) fn view(&self) -> &RemoteControlView {
         &self.view
+    }
+
+    /// Moves the paired-device highlight one row down, stopping at the last
+    /// device.
+    pub(crate) fn select_next_device(&mut self) {
+        let last_device_index = self.view.devices.len().saturating_sub(1);
+        self.view.selected_device_index =
+            (self.view.selected_device_index + 1).min(last_device_index);
+    }
+
+    /// Moves the paired-device highlight one row up, stopping at the first
+    /// device.
+    pub(crate) fn select_previous_device(&mut self) {
+        self.view.selected_device_index = self.view.selected_device_index.saturating_sub(1);
     }
 
     /// Subscribes to the session-change revision that remote clients follow.
@@ -128,11 +142,11 @@ impl RemoteControl {
 }
 
 impl App {
-    /// Enables the experimental `/remote-control` command, listening on the
-    /// loopback `port` when it starts and accepting requests that name a
-    /// loopback host or one of `allowed_hosts`. With `relay_url`, the
-    /// listener also registers with that relay.
-    pub fn enable_remote_control(
+    /// Offers the experimental Remote tab with its paired devices. Remote
+    /// control listens on the loopback `port` once it starts and accepts
+    /// requests that name a loopback host or one of `allowed_hosts`. With
+    /// `relay_url`, the listener also registers with that relay.
+    pub async fn enable_remote_control(
         &mut self,
         port: u16,
         allowed_hosts: Vec<String>,
@@ -141,6 +155,8 @@ impl App {
         self.remote_control.allowed_hosts = allowed_hosts;
         self.remote_control.port = Some(port);
         self.remote_control.relay_url = relay_url;
+        self.tabs.enable_remote();
+        self.refresh_remote_devices().await;
     }
 
     /// Tells connected remote clients that session state changed, so they
@@ -173,8 +189,17 @@ impl App {
         self.publish_session_change();
     }
 
+    /// Prepares the Remote tab for display: drops the outcome of earlier
+    /// actions and, while the listener runs, replaces the pairing code,
+    /// which may be spent or expired by now.
+    pub(crate) fn show_remote_control(&mut self) {
+        self.remote_control.view.error = None;
+        self.remote_control.view.notice = None;
+        self.issue_remote_pairing_code();
+    }
+
     /// Starts the listener when it is off, then issues a fresh pairing code.
-    pub(crate) async fn open_remote_control(&mut self) {
+    pub(crate) async fn start_remote_control(&mut self) {
         let Some(port) = self.remote_control.port else {
             self.remote_control.view.error = Some(REMOTE_CONTROL_DISABLED.to_string());
 
@@ -402,7 +427,8 @@ impl App {
         self.refresh_remote_devices().await;
     }
 
-    /// Reloads paired devices and marks the connected ones.
+    /// Reloads paired devices, marks the connected ones, and keeps the
+    /// highlight on a listed device.
     async fn refresh_remote_devices(&mut self) {
         match self.remote_control.devices.list_devices().await {
             Ok(devices) => {
@@ -417,6 +443,12 @@ impl App {
                         name: device.name,
                     })
                     .collect();
+                let last_device_index = self.remote_control.view.devices.len().saturating_sub(1);
+                self.remote_control.view.selected_device_index = self
+                    .remote_control
+                    .view
+                    .selected_device_index
+                    .min(last_device_index);
             }
             Err(error) => {
                 self.remote_control.view.error =

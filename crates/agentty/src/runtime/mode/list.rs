@@ -1,5 +1,5 @@
-//! Key handling for list mode across the projects, sessions, and settings
-//! tabs.
+//! Key handling for list mode across the projects, sessions, settings, and
+//! remote tabs.
 
 use std::io;
 
@@ -12,11 +12,12 @@ use crate::domain::session::{Session, Status};
 use crate::domain::session_order::ArchiveAction;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, HelpContext};
 use crate::presentation::help_action::{
-    HelpAction, archive_action, project_list_actions, session_list_actions, settings_actions,
+    HelpAction, archive_action, project_list_actions, remote_actions, session_list_actions,
+    settings_actions,
 };
 use crate::presentation::setting::{SettingsAction, SettingsInput, SettingsPresentationState};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::runtime::mode::input_key;
+use crate::runtime::mode::{input_key, remote_control};
 use crate::runtime::{EventResult, key_handler};
 
 /// Handles key input while the app is in list mode.
@@ -27,7 +28,9 @@ use crate::runtime::{EventResult, key_handler};
 /// `c` opens a cancel confirmation overlay for running sessions, review
 /// sessions, sessions waiting on questions and unstarted draft sessions, and
 /// `Tab`
-/// cycles tabs forward while `Shift+Tab` cycles backward.
+/// cycles tabs forward while `Shift+Tab` cycles backward. On the `Remote`
+/// tab, `Enter` starts or stops remote control and keys no other arm takes
+/// go to its own handler.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings
         && (app
@@ -85,11 +88,13 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
             Tab::Settings => apply_settings_action(app, SettingsAction::Next).await,
+            Tab::Remote => app.remote_control.select_next_device(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Settings => apply_settings_action(app, SettingsAction::Previous).await,
+            Tab::Remote => app.remote_control.select_previous_device(),
         },
         KeyCode::Enter => return handle_enter_key(app).await,
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
@@ -101,6 +106,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('?') => {
             open_list_help_overlay(app);
         }
+        _ if app.tabs.current() == Tab::Remote => remote_control::handle(app, key).await,
         _ => {}
     }
 
@@ -229,6 +235,13 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             apply_settings_action(app, SettingsAction::Activate).await;
         }
+        Tab::Remote => {
+            if app.remote_control.view().listener.is_some() {
+                app.stop_remote_control().await;
+            } else {
+                app.start_remote_control().await;
+            }
+        }
     }
 
     Ok(EventResult::Continue)
@@ -271,6 +284,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Settings {
         return settings_actions();
+    }
+
+    if app.tabs.current() == Tab::Remote {
+        return remote_actions(app.remote_control.view());
     }
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;

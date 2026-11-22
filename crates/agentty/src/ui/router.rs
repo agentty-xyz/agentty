@@ -56,8 +56,9 @@ struct RouteSharedContext<'a> {
     process_resources: Option<SessionResources>,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state for its overlay.
-    remote_control: &'a RemoteControlView,
+    /// Remote-control listener and paired-device state for the Remote tab,
+    /// when this launch offers it.
+    remote_control: Option<&'a RemoteControlView>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     sessions: &'a [Session],
     settings_screen: Option<&'a SettingsScreenSnapshot>,
@@ -318,8 +319,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         }
         | AppMode::ViewInfoPopup { restore_view, .. }
         | AppMode::LaunchConfigurationSelector { restore_view, .. }
-        | AppMode::PublishBranchInput { restore_view, .. }
-        | AppMode::RemoteControl { restore_view, .. } => Surface::Session {
+        | AppMode::PublishBranchInput { restore_view, .. } => Surface::Session {
             mode: SessionSurfaceMode::View,
             scroll_offset: restore_view.scroll_offset,
             session_id: &restore_view.session_id,
@@ -625,12 +625,6 @@ fn render_mode_overlay(
             locked_upstream_ref.as_deref(),
         )
         .render(frame, area),
-        AppMode::RemoteControl {
-            selected_device_index,
-            ..
-        } => component::remote_control_overlay::RemoteControlOverlay::new(shared.remote_control)
-            .selected_device_index(*selected_device_index)
-            .render(frame, area),
     }
 }
 
@@ -856,6 +850,7 @@ fn render_list_background(
 
     component::tab::Tabs::new(shared.current_tab)
         .process_stats(shared.process_resources)
+        .remote_label(shared.remote_control.map(RemoteControlView::tab_label))
         .render(frame, chunks[0]);
 
     match shared.current_tab {
@@ -891,6 +886,14 @@ fn render_list_background(
                 active_project_name(shared.active_project_id, shared.projects);
             if let Some(settings_screen) = shared.settings_screen {
                 page::setting::SettingsPage::new(settings_screen, active_project_name)
+                    .render(frame, chunks[1]);
+            }
+        }
+        Tab::Remote => {
+            let active_project_name =
+                active_project_name(shared.active_project_id, shared.projects);
+            if let Some(remote_control) = shared.remote_control {
+                page::remote_control::RemoteControlPage::new(remote_control, active_project_name)
                     .render(frame, chunks[1]);
             }
         }

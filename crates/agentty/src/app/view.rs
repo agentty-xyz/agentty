@@ -55,8 +55,9 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) project_selected_index: Option<usize>,
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state.
-    pub(crate) remote_control: &'a RemoteControlView,
+    /// Remote-control listener and paired-device state, or `None` unless
+    /// `--experimental-remote` offers the Remote tab.
+    pub(crate) remote_control: Option<&'a RemoteControlView>,
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
@@ -111,7 +112,10 @@ impl App {
             project_selected_index: project.selected_index,
             project_sync_status: self.project_sync_status.as_ref(),
             projects: project.project_items,
-            remote_control: self.remote_control.view(),
+            remote_control: self
+                .remote_control
+                .is_enabled()
+                .then(|| self.remote_control.view()),
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,
@@ -148,7 +152,6 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         }
         | AppMode::LaunchConfigurationSelector { restore_view, .. }
         | AppMode::PublishBranchInput { restore_view, .. }
-        | AppMode::RemoteControl { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
         AppMode::ExecutionGraph(_)

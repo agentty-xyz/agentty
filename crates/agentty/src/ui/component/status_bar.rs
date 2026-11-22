@@ -11,7 +11,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
-use crate::presentation::remote_control::RemoteControlNotice;
 use crate::ui::{Component, help_format, style};
 
 /// Minimum columns a shortened project name keeps before it is omitted.
@@ -27,8 +26,6 @@ pub struct StatusBar {
     latest_available_version: Option<String>,
     project_name: Option<String>,
     project_sync_status: Option<ProjectSyncStatus>,
-    /// Remote-control counts while the listener runs.
-    remote_control: Option<RemoteControlNotice>,
     update_status: Option<UpdateStatus>,
 }
 
@@ -40,40 +37,8 @@ impl StatusBar {
             latest_available_version: None,
             project_name: None,
             project_sync_status: None,
-            remote_control: None,
             update_status: None,
         }
-    }
-
-    /// Shows that remote control is listening; `None` hides the notice.
-    #[must_use]
-    pub fn remote_control(mut self, notice: Option<RemoteControlNotice>) -> Self {
-        self.remote_control = notice;
-
-        self
-    }
-
-    /// Builds the remote-control notice, asking for approval first when a
-    /// device waits to pair.
-    fn remote_control_text(&self) -> Option<(String, ratatui::style::Color)> {
-        let notice = self.remote_control?;
-        if notice.pairing_requests > 0 {
-            return Some((
-                format!(
-                    "Remote control: approve {} in /remote-control",
-                    count_label(notice.pairing_requests, "pairing request")
-                ),
-                style::palette::warning(),
-            ));
-        }
-
-        Some((
-            format!(
-                "Remote control on, {} connected",
-                count_label(notice.connected_devices, "device")
-            ),
-            style::palette::success(),
-        ))
     }
 
     /// Sets the latest available version for update notification.
@@ -246,14 +211,6 @@ impl Component for StatusBar {
         }
 
         if let Some((text, color)) = self.project_sync_text() {
-            version_spans.push(Span::raw(" | "));
-            version_spans.push(Span::styled(
-                text,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
-        }
-
-        if let Some((text, color)) = self.remote_control_text() {
             version_spans.push(Span::raw(" | "));
             version_spans.push(Span::styled(
                 text,

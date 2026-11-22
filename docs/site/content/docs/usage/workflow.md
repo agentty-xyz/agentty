@@ -20,6 +20,9 @@ Agentty restores the last tab on startup.
   `p` to switch projects. Each row shows a short model name, such as `opus-5.5`, and its
   reasoning level.
 - **Settings**: Configure appearance, model defaults, and launch commands.
+- **Remote**: Pair a phone or browser with the project's sessions. The tab appears only
+  with `agentty --experimental-remote`; see
+  [Remote Control](@/docs/usage/remote-control.md).
 
 Press `?`, shown as `?: help` in the top bar, to list the shortcuts available on the
 current page. With `NO_COLOR`, selections use bold reverse video.
@@ -148,10 +151,10 @@ accept stays queued with a notice. Stopping the turn discards them like the rest
 queue. Other harnesses keep queued chat for the next turn, and so do task and graph
 runs, which work in their own conversations.
 
-While work runs, `/` offers only `/model`, `/reasoning`, `/remote-control`, `/style`,
-and `/fast`. `/model` and `/fast` changes wait until the active work and queue finish
-and appear as the last queued action; choosing the current value cancels the change.
-Pending changes are lost on restart.
+While work runs, `/` offers only `/model`, `/reasoning`, `/style`, and `/fast`. `/model`
+and `/fast` changes wait until the active work and queue finish and appear as the last
+queued action; choosing the current value cancels the change. Pending changes are lost
+on restart.
 
 While composing, `Tab` focuses chat for scrolling; from there, `d` previews changes and
 `q` returns to the list with the draft kept.
@@ -465,15 +468,14 @@ this activity. Provider failures show a short error and captured output where av
 command picker. From session view, `/` opens a fresh composer, replacing any saved
 draft.
 
-| Command           | Action                                                       |
-| ----------------- | ------------------------------------------------------------ |
-| `/apply`          | Verify and apply valid focused-review suggestions.           |
-| `/graph`          | Request a graph proposal.                                    |
-| `/model`          | Choose a backend and model; local or paid models in Harness. |
-| `/reasoning`      | Set reasoning effort for this session.                       |
-| `/remote-control` | Control sessions from another device.                        |
-| `/style`          | Choose concise, balanced, or detailed answers.               |
-| `/fast`           | Toggle normal or fast responses for Claude or Codex.         |
+| Command      | Action                                                       |
+| ------------ | ------------------------------------------------------------ |
+| `/apply`     | Verify and apply valid focused-review suggestions.           |
+| `/graph`     | Request a graph proposal.                                    |
+| `/model`     | Choose a backend and model; local or paid models in Harness. |
+| `/reasoning` | Set reasoning effort for this session.                       |
+| `/style`     | Choose concise, balanced, or detailed answers.               |
+| `/fast`      | Toggle normal or fast responses for Claude or Codex.         |
 
 `/apply` requires a completed focused review. Chat turns always run with editing
 permissions; see [Permissions](@/docs/agents/backends.md#permissions).
@@ -485,9 +487,6 @@ Agentty verifies and applies focused-review suggestions automatically, for up to
 turns per message; a new prompt resets that limit. A notice in the chat explains this
 after a session's first message. Turn off `Auto Address Comments` in the project's
 Settings to disable it.
-
-`/remote-control` appears only with `agentty --experimental-remote` and pairs a phone or
-browser with this Agentty; see [Remote Control](@/docs/usage/remote-control.md).
 
 `/style` applies to later turns: **Concise** keeps essential results, caveats, and
 verification; **Balanced** adds useful context; **Detailed** explains decisions and

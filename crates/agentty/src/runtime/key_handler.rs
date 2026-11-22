@@ -56,7 +56,6 @@ where
             handle_launch_configuration_selector_key(app, key).await
         }
         AppMode::PublishBranchInput { .. } => Ok(handle_publish_branch_input_key(app, key).await),
-        AppMode::RemoteControl { .. } => Ok(mode::remote_control::handle(app, key).await),
         AppMode::ExecutionGraph(_) => Ok(mode::execution_graph::handle(app, key).await),
         AppMode::List => mode::list::handle(app, key).await,
         AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),

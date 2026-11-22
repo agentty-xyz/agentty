@@ -15,7 +15,7 @@ fn test_tab_spans_use_equal_spacing_between_labels() {
     let current_tab = Tab::Projects;
 
     // Act
-    let spans = tab_spans(current_tab);
+    let spans = tab_spans(current_tab, None);
     let rendered_tabs: String = spans
         .iter()
         .map(|span| span.content.as_ref())
@@ -32,7 +32,7 @@ fn test_tab_spans_highlight_the_active_tab() {
     let current_tab = Tab::Settings;
 
     // Act
-    let spans = tab_spans(current_tab);
+    let spans = tab_spans(current_tab, None);
 
     // Assert
     assert_eq!(spans[0].style.fg, Some(style::palette::text_muted()));
@@ -53,7 +53,7 @@ fn test_tab_spans_render_divider_spans_with_border_color() {
     let current_tab = Tab::Projects;
 
     // Act
-    let spans = tab_spans(current_tab);
+    let spans = tab_spans(current_tab, None);
 
     // Assert
     assert_eq!(spans.len(), 5);
@@ -119,6 +119,26 @@ fn test_tabs_omit_process_stats_before_the_first_sample() {
 
     // Assert
     assert_eq!(tab_row.trim_end(), " Projects | Sessions | Settings");
+}
+
+#[test]
+fn test_tabs_show_the_remote_tab_under_its_label_when_offered() {
+    // Arrange
+    let inactive = Tabs::new(Tab::Sessions).remote_label(Some("Remote (1 online)".to_string()));
+    let active_spans = tab_spans(Tab::Remote, Some("Remote"));
+
+    // Act
+    let tab_row = rendered_tab_row(&inactive, 100);
+
+    // Assert
+    assert_eq!(
+        tab_row.trim_end(),
+        " Projects | Sessions | Settings | Remote (1 online)"
+    );
+    assert_eq!(active_spans.len(), 7);
+    assert_eq!(active_spans[6].content.as_ref(), " Remote ");
+    assert_eq!(active_spans[6].style, style::selection_style());
+    assert_eq!(active_spans[4].style.fg, Some(style::palette::text_muted()));
 }
 
 #[test]

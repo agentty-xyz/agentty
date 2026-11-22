@@ -39,8 +39,7 @@ struct Cli {
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
-    /// Loopback port that `/remote-control` listens on; `0` picks a free
-    /// port.
+    /// Loopback port that remote control listens on; `0` picks a free port.
     #[arg(
         long,
         value_name = "PORT",
@@ -48,12 +47,12 @@ struct Cli {
         requires = "remote"
     )]
     remote_control_port: u16,
-    /// Host name a tunnel uses to reach `/remote-control`, such as a
+    /// Host name a tunnel uses to reach remote control, such as a
     /// Tailscale machine name; repeat for several. Loopback names are always
     /// accepted.
     #[arg(long, value_name = "HOST", requires = "remote")]
     remote_control_host: Vec<String>,
-    /// Relay that `/remote-control` registers with, such as
+    /// Relay that remote control registers with, such as
     /// `wss://relay.example`, so devices can pair and connect without a
     /// tunnel. Traffic through it is encrypted end to end.
     #[arg(long, value_name = "URL", requires = "remote", value_parser = parse_relay_url)]
@@ -69,7 +68,7 @@ struct ExperimentalFeatures {
     /// `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
-    /// Offers `/remote-control`, which lets a paired phone or browser follow
+    /// Offers the Remote tab, which lets a paired phone or browser follow
     /// and reply to sessions through a loopback listener.
     #[arg(long = "experimental-remote")]
     remote: bool,
@@ -253,7 +252,8 @@ async fn run_application(
                     cli.remote_control_port,
                     cli.remote_control_host,
                     cli.remote_relay,
-                );
+                )
+                .await;
             }
 
             runtime(&mut app).await

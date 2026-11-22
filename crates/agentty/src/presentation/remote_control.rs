@@ -1,4 +1,4 @@
-//! Remote-control state projected for the overlay and the status bar.
+//! Remote-control state projected for the Remote tab.
 
 use qrcode::{Color as QrColor, EcLevel, QrCode};
 
@@ -15,6 +15,8 @@ pub struct RemoteControlView {
     pub notice: Option<String>,
     /// Devices waiting for approval in arrival order.
     pub pairing_requests: Vec<RemotePairingRequestView>,
+    /// Highlighted row in `devices`.
+    pub selected_device_index: usize,
 }
 
 impl RemoteControlView {
@@ -26,23 +28,14 @@ impl RemoteControlView {
             .count()
     }
 
-    /// Returns the status-bar notice while the listener runs, or `None`
-    /// while remote control is off.
-    pub fn status_bar_notice(&self) -> Option<RemoteControlNotice> {
-        self.listener.as_ref().map(|_| RemoteControlNotice {
-            connected_devices: self.connected_device_count(),
-            pairing_requests: self.pairing_requests.len(),
-        })
+    /// Returns the Remote tab's header label, which counts the connected
+    /// devices while the listener runs.
+    pub fn tab_label(&self) -> String {
+        match self.listener {
+            Some(_) => format!("Remote ({} online)", self.connected_device_count()),
+            None => "Remote".to_string(),
+        }
     }
-}
-
-/// Counts the status bar reports while remote control listens.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RemoteControlNotice {
-    /// Paired devices connected now.
-    pub connected_devices: usize,
-    /// Devices waiting for approval.
-    pub pairing_requests: usize,
 }
 
 /// One running remote-control listener.
