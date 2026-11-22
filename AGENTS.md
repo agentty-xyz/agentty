@@ -136,8 +136,8 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 ## Standalone Harnesses
 
 Agentty sessions leave these steps to Agentty's own workflows and prompts. Follow them
-when a harness such as Claude Code or Codex runs directly in a checkout and owns its
-checks, Git, pull request, and review steps.
+whenever you, or a harness such as Claude Code or Codex, run checks, Git, pull request,
+or review steps directly in a checkout.
 
 - Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
   equivalent flag. Fix the failure.
@@ -161,7 +161,9 @@ checks, Git, pull request, and review steps.
   unlinked silently.
 - Merge a stack from the top so the whole stack enters the merge queue at once:
   `gh stack merge <top pull request> --yes`. A bare number resolves to a stack number
-  before a pull request number, so check that it names the intended pull request.
+  before a pull request number, so check that it names the intended pull request. Stacks
+  cannot bypass merge requirements, so the approval bypass above covers single pull
+  requests only; an unapproved stack waits for a maintainer's approval.
 - Before marking a pull request ready or merging it, run Agentty's focused review on
   `git diff origin/main...HEAD`: follow
   `crates/agentty/src/app/template/review_assist_prompt.md` with the criteria
