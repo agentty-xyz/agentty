@@ -25,6 +25,7 @@ the module docstrings directly.
 | `ag-git`         | Worktrees, captured diff parsing, sync, rebase, merge            |
 | `ag-harness`     | Native model loop, tools, durable sessions                       |
 | `ag-harness-cli` | Companion harness CLI                                            |
+| `ag-noise`       | Noise handshakes and encrypted sessions for remote control       |
 | `ag-protocol`    | Response schemas, parsing, prompt envelopes                      |
 | `ag-remote`      | Remote-control server, pairing, and embedded web client          |
 | `ag-router`      | Structured chat routing and provider transports                  |

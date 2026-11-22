@@ -79,6 +79,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 serde_yaml_ng = "0.10"
 sha2 = "0.11.0"
+snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-curve25519", "use-getrandom", "use-sha2"] }
 sqlx = { version = "0.9.1", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tachyonfx = { version = "0.25.2", default-features = false, features = ["std"] }
 tar = { version = "0.4.46", default-features = false }

@@ -237,6 +237,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-noise-src
+        name: cargo nextest ag-noise src
+        description: Source tests for `crates/ag-noise/src`.
+        entry: cargo nextest run --locked --timings --profile ci -p ag-noise --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-remote
         name: cargo nextest ag-remote
         description: Remote control source tests and the public server contract.

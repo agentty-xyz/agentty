@@ -1,0 +1,17 @@
+[package]
+name = "ag-noise"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+sha2.workspace = true
+snow.workspace = true
+thiserror.workspace = true
