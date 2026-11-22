@@ -914,6 +914,42 @@ fn external_consumer_selects_a_harness_model_from_a_host_catalog() -> Result<(),
     Ok(())
 }
 
+#[test]
+fn external_consumer_names_the_summary_model_of_a_registered_harness() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let catalog = ModelCatalog::builder()
+        .model(
+            ModelSpec::new("host/text").with_profile(unbounded_model_profile()),
+            Arc::new(ExternalModel),
+        )
+        .model(
+            ModelSpec::new("host/summary")
+                .with_capabilities(Capabilities::NONE.with_structured_output(true)),
+            Arc::new(ExternalModel),
+        )
+        .model(ModelSpec::new("host/plain"), Arc::new(ExternalModel))
+        .build()?;
+    let entry = |id: &str| catalog.resolve(&ModelSelector::Id(ModelId::new(id)));
+    let mut registry = ModelRegistry::new();
+    registry.register_catalog_entry(&entry("host/text")?, "host-1")?;
+
+    // Act
+    let summarizing =
+        Harness::from_registry(&registry, "host/text")?.summary_model(&entry("host/summary")?);
+    let unsupported =
+        Harness::from_registry(&registry, "host/text")?.summary_model(&entry("host/plain")?);
+
+    // Assert
+    assert!(summarizing.is_ok());
+    assert!(matches!(
+        unsupported.err().map(|error| error.kind()),
+        Some(ErrorKind::Config)
+    ));
+
+    Ok(())
+}
+
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn external_consumer_reads_built_in_specs_by_role_defaults() {

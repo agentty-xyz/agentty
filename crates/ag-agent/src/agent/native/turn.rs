@@ -121,6 +121,7 @@ pub(crate) async fn run_one_shot(
     let activity_tx = request.activity_tx.clone();
     let harness = selection.harness(
         &HarnessContext {
+            compaction_model: None,
             environment: &environment,
             provider_call_budget: request.provider_call_budget.as_ref(),
             reasoning_level: request.reasoning_level,

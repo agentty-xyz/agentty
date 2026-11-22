@@ -273,6 +273,12 @@ pub struct TurnContinuationParts {
 /// Input payload for one provider-agnostic agent turn.
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
+    /// Model that summarizes the session's earlier turns once its context
+    /// grows long, such as the user's Default Fast Model, or `None` to
+    /// summarize on [`Self::model`]. Only in-process harness turns compact
+    /// this way; they also use [`Self::model`] when this model cannot serve
+    /// summaries, and other agents ignore it.
+    pub compaction_model: Option<String>,
     /// Prior context needed to continue this turn.
     pub continuation: TurnContinuation,
     /// Resolved harness policy. The worker replaces this with its configured
@@ -321,6 +327,9 @@ pub enum TurnEvent {
     /// Model output streamed by an in-process harness turn, shown
     /// transiently until the turn result is persisted.
     Output(crate::OutputEvent),
+    /// Something about how the turn ran that the user should know, such as
+    /// a compaction of the session's earlier context.
+    Notice(crate::TurnNotice),
     /// The turn completed successfully with final token counts.
     Completed {
         /// Whether the provider reset its context for this turn.

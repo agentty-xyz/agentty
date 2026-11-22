@@ -210,6 +210,24 @@ pub(crate) async fn load_session_utility_agent_selection_from_repositories(
     session_agent
 }
 
+/// Loads the model that compacts a session's earlier context: for a Harness
+/// `session_agent`, the project's Default Fast Model when it names a Harness
+/// model, and otherwise `None`. A Fast default on an agent CLI never
+/// compacts a Harness session, and the harness compacts on the session's own
+/// model when this model cannot serve summaries.
+pub(crate) async fn load_harness_compaction_model(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    session_agent: AgentSelection,
+) -> Option<String> {
+    if session_agent.kind() != AgentKind::Harness {
+        return None;
+    }
+    let selection = load_harness_fast_selection(repositories, project_id).await?;
+
+    Some(selection.model().provider_model_str().to_string())
+}
+
 /// Loads the persisted smart-model default from repositories as an agent/model
 /// selection.
 ///

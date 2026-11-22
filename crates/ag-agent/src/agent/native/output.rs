@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use ag_contracts::{OutputEvent, OutputKind};
-use ag_harness::event::{Delta, Item, ItemKind};
+use ag_contracts::{OutputEvent, OutputKind, TurnNotice};
+use ag_harness::event::{CompactionOutcome, Delta, Item, ItemKind};
 use ag_harness::{RunEventKind, RunOutput};
 use serde_json::Value;
 
@@ -205,6 +205,32 @@ impl OutputProjector {
         }
 
         vec![OutputEvent::Discard { ids }]
+    }
+}
+
+/// Returns the notice a run event warrants: a compaction that published a
+/// checkpoint, or one that failed so the turn continued without its oldest
+/// turns. Any other event warrants none, including a compaction that found
+/// nothing to cover.
+pub(crate) fn turn_notice(event: &RunEventKind) -> Option<TurnNotice> {
+    let RunEventKind::Compacted(report) = event else {
+        return None;
+    };
+
+    match &report.outcome {
+        CompactionOutcome::Compacted { model, .. } => Some(TurnNotice::ContextCompacted {
+            // Catalog identifiers name the provider first, as in
+            // `qwen/qwen3.8-flash`; users know the model by the rest.
+            model: model.as_ref().map(|model| {
+                let id = model.as_str();
+
+                id.split_once('/').map_or(id, |(_, name)| name).to_string()
+            }),
+        }),
+        CompactionOutcome::Failed(failure) => Some(TurnNotice::ContextCompactionFailed {
+            reason: failure.message.clone(),
+        }),
+        _ => None,
     }
 }
 

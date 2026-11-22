@@ -7,6 +7,7 @@ use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnRequest};
 
 pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
     TurnRequest {
+        compaction_model: None,
         provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: ag_contracts::TurnContinuation::fresh(),

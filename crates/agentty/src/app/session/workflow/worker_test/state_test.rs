@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, OutputEvent,
-    OutputKind, TurnEvent, TurnResult,
+    OutputKind, TurnEvent, TurnNotice, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -579,6 +579,72 @@ async fn test_run_channel_turn_clears_streamed_output_beside_the_saved_answer() 
     assert!(cleared < rows_cleared);
     assert_eq!(events.iter().filter(|event| is_cleared(event)).count(), 1);
     assert!(transcript_text(&context.transcript).contains("done"));
+}
+
+#[tokio::test]
+/// Verifies compaction notices, including one that arrives inside a burst of
+/// progress events, are saved once, in order, before the turn's answer.
+async fn test_run_channel_turn_saves_compaction_notices_before_the_answer() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .once()
+        .returning(|_session_id, _req, events| {
+            Box::pin(async move {
+                for event in [
+                    TurnEvent::Notice(TurnNotice::ContextCompacted {
+                        model: Some("qwen3.8-flash".to_string()),
+                    }),
+                    TurnEvent::ThoughtDelta("Thinking".to_string()),
+                    TurnEvent::Notice(TurnNotice::ContextCompactionFailed {
+                        reason: "summary rejected".to_string(),
+                    }),
+                    TurnEvent::Notice(TurnNotice::ContextCompacted { model: None }),
+                ] {
+                    events.send(event).expect("turn event");
+                }
+
+                Ok(successful_turn_result("done"))
+            })
+        });
+    let (context, db, _queued_messages, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+
+    // Act
+    let result = run_channel_turn(
+        &context,
+        auto_commit_run_client(),
+        default_turn_metadata(),
+        AgentRequestKind::SessionStart,
+        None,
+        "test prompt".into(),
+    )
+    .await;
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    let messages = db
+        .sessions()
+        .load_session_messages(context.session_id.as_str())
+        .await
+        .expect("messages");
+    let notices = messages
+        .iter()
+        .filter(|message| message.kind == "workflow_notice")
+        .map(|message| message.content.trim().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notices,
+        [
+            "[Context] Summarized earlier turns with `qwen3.8-flash` to fit the context window.",
+            "[Context Warning] Could not summarize earlier turns, so the oldest were left out of \
+             this turn: summary rejected",
+            "[Context] Summarized earlier turns to fit the context window.",
+        ]
+    );
+    let position = |kind: &str| messages.iter().position(|message| message.kind == kind);
+    assert!(position("workflow_notice") < position("assistant_answer"));
 }
 
 #[tokio::test]

@@ -356,6 +356,7 @@ async fn prepare(
     );
     Ok(TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
+        compaction_model: None,
         continuation: history.map_or_else(TurnContinuation::fresh, |history| {
             TurnContinuation::replaying(history.text)
         }),

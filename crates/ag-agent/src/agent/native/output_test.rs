@@ -1,8 +1,8 @@
-use ag_contracts::{OutputEvent, OutputKind};
+use ag_contracts::{OutputEvent, OutputKind, TurnNotice};
 use ag_harness::RunEventKind;
 use serde_json::{Value, json};
 
-use super::OutputProjector;
+use super::{OutputProjector, turn_notice};
 
 /// Decodes one run event from its wire form.
 fn event(value: Value) -> RunEventKind {
@@ -434,4 +434,51 @@ fn retries_and_run_completion_drop_unfinished_items() {
     assert_eq!(retried[2], OutputEvent::Discard { ids: vec![0] });
     assert_eq!(ended[3], OutputEvent::Discard { ids: vec![1, 2] });
     assert_eq!(ended.len(), 4);
+}
+
+/// Returns a `compacted` event with `outcome`.
+fn compacted(outcome: &Value) -> RunEventKind {
+    event(json!({"type": "compacted", "outcome": outcome}))
+}
+
+#[test]
+fn compactions_that_changed_the_context_are_noted_once() {
+    // Arrange
+    let events = [
+        compacted(&json!({
+            "status": "compacted", "covered_through": 2, "model": "qwen/qwen3.8-flash"
+        })),
+        compacted(&json!({"status": "compacted", "covered_through": 2, "model": "local"})),
+        compacted(&json!({"status": "compacted", "covered_through": 2, "model": null})),
+        compacted(&json!({
+            "status": "failed",
+            "kind": "invalid_output",
+            "message": "summary rejected",
+            "retryable": false
+        })),
+        compacted(&json!({"status": "nothing_to_cover"})),
+        started(0, "message"),
+    ];
+
+    // Act
+    let notices = events.iter().map(turn_notice).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        notices,
+        [
+            Some(TurnNotice::ContextCompacted {
+                model: Some("qwen3.8-flash".to_string())
+            }),
+            Some(TurnNotice::ContextCompacted {
+                model: Some("local".to_string())
+            }),
+            Some(TurnNotice::ContextCompacted { model: None }),
+            Some(TurnNotice::ContextCompactionFailed {
+                reason: "summary rejected".to_string()
+            }),
+            None,
+            None,
+        ]
+    );
 }

@@ -57,6 +57,22 @@ of calls, so these are observations, not an exhaustive audit log. Utility caller
 supply `OneShotRequest::activity_tx` through `RunClient::submit` to receive the same
 events, including repairs. Hosts own persistence and rendering.
 
+## Context Compaction
+
+Native session turns compact their durable history automatically
+(`ContextPolicy::auto_compact`). `TurnRequest::compaction_model` carries the host's
+choice of summary model, Agentty's Default Fast Model on a Harness session; the adapter
+hands it to the harness with `Harness::summary_model` only when it resolves to another
+ready harness model with structured output, and otherwise lets the session's model
+summarize. The summary model is not part of the recorded registration, so sessions
+recorded before or without it resume unchanged. Compaction requests run inside the
+turn's harness run, so they stay on the Run Worker, Agent Runtime, Harness, LLM path,
+count toward the turn's usage, and are priced at the summary model. A failed compaction
+never fails the turn: the harness evicts the oldest turns instead. The adapter reports a
+published checkpoint or a failure as `TurnEvent::Notice`, which the host saves as a
+transcript notice before the turn's answer; a compaction with nothing to cover reports
+none.
+
 ## Streamed Output
 
 `TurnEvent::Output` carries the model output an in-process `ag-harness` session turn

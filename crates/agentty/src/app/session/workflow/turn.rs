@@ -256,6 +256,10 @@ pub(super) async fn run_channel_turn(
     .await;
 
     let activity = consumer.await.unwrap_or_default();
+    // Notices describe how the turn ran, so they precede its answer.
+    for notice in activity.notices() {
+        append_transcript_notice(context, notice).await;
+    }
 
     let turn_result =
         add_main_checkout_warning(context, workspace.snapshot.as_ref(), turn_result).await;
@@ -386,9 +390,16 @@ async fn prepare_turn_request(
                 settings,
             } = ResolvedTurnContext::load(context, replay_transcript).await;
             let model = turn_metadata.session_agent.model().provider_model_str();
+            let compaction_model = setting::load_harness_compaction_model(
+                &context.db,
+                session_project_id,
+                turn_metadata.session_agent,
+            )
+            .await;
 
             PreparedTurnRequest {
                 request: TurnRequest {
+                    compaction_model,
                     provider_call_budget: None,
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
                     continuation,
@@ -571,6 +582,8 @@ pub(super) async fn load_session_speed_mode(
 ///   summary.
 /// - [`TurnEvent::Output`]: accumulates streamed model output, published at
 ///   most once per frame.
+/// - [`TurnEvent::Notice`]: keeps a transcript notice the caller appends once
+///   the turn ends.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -589,6 +602,7 @@ pub(super) async fn consume_turn_events(
         match event {
             TurnEvent::Activity(event) => activity.observe_live(event, &app_event_tx, &session_id),
             TurnEvent::Output(event) => activity.observe_output(event, &app_event_tx, &session_id),
+            TurnEvent::Notice(notice) => activity.observe_notice(&notice),
             TurnEvent::ThoughtDelta(thought) => {
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
@@ -652,6 +666,7 @@ fn coalesce_ready_turn_progress_events(
         match event {
             TurnEvent::Activity(event) => activity.observe_live(event, app_event_tx, session_id),
             TurnEvent::Output(event) => activity.observe_output(event, app_event_tx, session_id),
+            TurnEvent::Notice(notice) => activity.observe_notice(&notice),
             TurnEvent::ThoughtDelta(thought) => {
                 if let Some(thought) = normalize_thinking_stream_text(&thought) {
                     latest_thought = thought;
@@ -702,7 +717,7 @@ async fn add_main_checkout_warning(
     };
     match main_checkout_snapshot.dirty_warning(context).await {
         Ok(Some(warning)) => {
-            append_main_checkout_warning(context, warning).await;
+            append_transcript_notice(context, &warning).await;
 
             Ok(result)
         }
@@ -728,15 +743,16 @@ pub(super) fn fresh_turn_cancel_token(
     Ok(guard.clone())
 }
 
-/// Appends one main-checkout warning to the live and persisted transcript.
-async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
+/// Appends one turn notice, such as a main-checkout warning, to the live and
+/// persisted transcript.
+async fn append_transcript_notice(context: &SessionWorkerContext, notice: &str) {
     SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
         &context.session_id,
-        &warning,
+        notice,
     )
     .await;
 }

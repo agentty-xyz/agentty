@@ -1651,6 +1651,35 @@ impl Harness {
         self
     }
 
+    /// Chooses the cataloged model `summary` to write compaction checkpoints
+    /// and in-turn round summaries, like
+    /// [`HarnessBuilder::summary_model_selector`], for a harness built
+    /// another way, such as [`Self::from_registry`]. A `summary` that is the
+    /// harness's own cataloged model summarizes on it, as without this call.
+    ///
+    /// The summary model is sized, priced, and limited as
+    /// [`HarnessBuilder::summary_model_selector`] describes, with this
+    /// harness's explicit sizing; a later [`Self::context_estimator`] also
+    /// sizes it. The choice applies to sessions created or resumed afterwards
+    /// and leaves durable sessions' recorded registration unchanged, so they
+    /// resume with or without it. [`Session::switch_model`] drops it, and
+    /// summaries then follow the new model.
+    ///
+    /// # Errors
+    /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
+    /// wrapping [`HarnessBuildError::SummaryModelUnsupported`] when
+    /// `summary` lacks structured output or rejects the summary schema,
+    /// leaving the harness unchanged.
+    pub fn summary_model(mut self, summary: &ModelHandle) -> Result<Self, HarnessError> {
+        let summary = self
+            .inner
+            .supported_summary_model(summary)
+            .map_err(|id| HarnessBuildError::SummaryModelUnsupported { id })?;
+        self.config_mut().summary_model = summary;
+
+        Ok(self)
+    }
+
     /// Configures the validated repository root and Git executable used by
     /// tools.
     #[must_use]

@@ -6,6 +6,7 @@ mod activity;
 mod contract;
 mod execution_policy;
 mod input_size;
+mod notice;
 mod one_shot;
 mod output;
 mod permission;
@@ -24,6 +25,7 @@ pub use contract::{
 };
 pub use execution_policy::{ExecutionPolicy, McpPolicy, ToolPolicy};
 pub use input_size::is_input_size_error;
+pub use notice::TurnNotice;
 #[cfg(any(test, feature = "test-utils"))]
 pub use one_shot::MockOneShotClient;
 pub use one_shot::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};

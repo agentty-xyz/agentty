@@ -112,6 +112,105 @@ fn chatgpt_registry_reads_the_sign_in_under_agentty_root() {
     assert_eq!(registration.identity().revision(), "agentty-native-2");
 }
 
+#[test]
+/// Compacts on the requested model only when it is another harness model
+/// that is ready now and declares structured output; every other request
+/// falls back to the session's model.
+fn compaction_model_falls_back_to_the_session_model() {
+    // Arrange
+    let environment = environment(&[
+        ("DASHSCOPE_API_KEY", "key"),
+        ("DASHSCOPE_BASE_URL", "http://qwen"),
+        ("MODEL_API_KEY", "key"),
+        ("OPENAI_API_KEY", "sk-key"),
+        ("CHATGPT_AUTH_FILE", "/tmp/chatgpt.json"),
+    ]);
+    let session = ModelSelection::resolve("muse-spark-1.3", &environment).expect("session");
+    let cases: [(Option<&str>, bool, Option<&str>); 10] = [
+        // Unset: the session model compacts.
+        (None, true, None),
+        // A ready model with structured output compacts.
+        (Some("gpt-5.6-terra"), false, Some("openai/gpt-5.6-terra")),
+        // Credentials missing.
+        (Some("claude-haiku-5-5"), true, None),
+        // Ready, but without structured output.
+        (Some("qwen3.8-flash"), true, None),
+        // A local server's model declares no structured output.
+        (Some("openai-compatible/qwen3:latest"), true, None),
+        // The session's own model.
+        (Some("muse-spark-1.3"), true, None),
+        // A model no harness provider serves, such as an agent CLI's.
+        (Some("gemini-4-argon"), true, None),
+        (Some(""), true, None),
+        // A sign-in provider compacts only while signed in.
+        (Some("chatgpt/gpt-6-luna"), false, None),
+        (Some("chatgpt/gpt-6-luna"), true, Some("chatgpt/gpt-6-luna")),
+    ];
+
+    for (requested, signed_in, expected) in cases {
+        // Act
+        let compaction = session.compaction_model(requested, &environment, |_| signed_in);
+
+        // Assert
+        assert_eq!(
+            compaction.as_ref().map(ModelSelection::key).as_deref(),
+            expected,
+            "{requested:?}"
+        );
+    }
+}
+
+#[test]
+/// Builds a harness that compacts on a usable compaction model, and one that
+/// compacts on its own model when the compaction model's client cannot be
+/// built, without failing either.
+fn harness_compacts_on_a_usable_compaction_model() {
+    // Arrange
+    let worktree = tempfile::tempdir().expect("worktree");
+    let real_path = std::env::var("PATH").expect("test PATH should be set");
+    let keyed = environment(&[
+        ("MODEL_API_KEY", "key"),
+        ("OPENAI_API_KEY", "sk-key"),
+        ("PATH", &real_path),
+    ]);
+    let unkeyed_summary = environment(&[("MODEL_API_KEY", "key"), ("PATH", &real_path)]);
+    let repository = repository(worktree.path(), &keyed).expect("repository");
+    let session = ModelSelection::resolve("muse-spark-1.3", &keyed).expect("session");
+    let summary = ModelSelection::resolve("gpt-5.6-terra", &keyed).expect("summary");
+    let context = |environment| HarnessContext {
+        compaction_model: Some(&summary),
+        environment,
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::Medium,
+        repository: &repository,
+        running_context_window: None,
+    };
+
+    // Act
+    let summarizing = session.harness(&context(&keyed), |_: LifecycleEvent| {});
+    let unsummarized = session.harness(&context(&unkeyed_summary), |_: LifecycleEvent| {});
+    let unlisted = ModelSelection::resolve("openai-compatible/local", &keyed)
+        .expect("served model")
+        .summary_entry(&keyed, None);
+
+    // Assert
+    let summarizing = summarizing.expect("harness with a summary model");
+    let unsummarized = unsummarized.expect("harness without a summary model");
+    let key = |harness: &Harness| {
+        harness
+            .model_registration()
+            .map(|registration| registration.identity().key().to_string())
+    };
+    // The summary model never changes the recorded registration.
+    assert_eq!(key(&summarizing).as_deref(), Some("muse/muse-spark-1.3"));
+    assert_eq!(key(&unsummarized), key(&summarizing));
+    assert!(
+        unlisted
+            .err()
+            .is_some_and(|error| error.contains("does not list")),
+    );
+}
+
 /// Builds an environment snapshot from string pairs.
 fn environment(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
@@ -675,6 +774,7 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
     let selection =
         ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("plan model");
     let context = HarnessContext {
+        compaction_model: None,
         environment: &environment,
         provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
@@ -1020,6 +1120,7 @@ fn claude_models_register_on_the_anthropic_provider() {
             .expect("client should build"),
     };
     let context = HarnessContext {
+        compaction_model: None,
         environment: &unkeyed,
         provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,

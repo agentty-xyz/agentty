@@ -20,6 +20,7 @@ use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, ReasoningLevel, SessionRef, StartSessionRequest,
     TurnEvent, TurnRequest, TurnResult,
 };
+use ag_harness::provider::chatgpt_is_signed_in;
 use ag_harness::transcript::TranscriptInput;
 use ag_harness::{
     CancelToken, ErrorKind, EventStream, Harness, HarnessError, Repository, Run, RunOutcome,
@@ -35,6 +36,7 @@ use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
     NativeTurnError, OutputProjector, RunOptions, cleanup_failure, failure, output_schema,
     parse_output, reject_attachments, repository, running_context_window, system_prompt,
+    turn_notice,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -129,6 +131,11 @@ async fn run_session_turn(
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
     let selection = ModelSelection::resolve(&req.model, &environment)?;
+    let compaction_model = selection.compaction_model(
+        req.compaction_model.as_deref(),
+        &environment,
+        chatgpt_is_signed_in,
+    );
     let profile = req.request_kind.protocol_profile();
     let options = RunOptions::new(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;
@@ -147,6 +154,7 @@ async fn run_session_turn(
     let running_context_window = running_context_window(&selection, &environment).await?;
     let database = config.session_database(&session_id).await?;
     let opener = SessionOpener {
+        compaction_model: compaction_model.as_ref(),
         database: &database,
         environment: &environment,
         events: &events,
@@ -218,11 +226,15 @@ async fn run_session_turn(
     })
 }
 
-/// Forwards the output a run streams as [`TurnEvent::Output`] events until
-/// the run's stream ends.
+/// Forwards the output a run streams as [`TurnEvent::Output`] events, and
+/// its compaction attempts worth noting as [`TurnEvent::Notice`] events,
+/// until the run's stream ends.
 async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
     let mut projector = OutputProjector::default();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
+        if let Some(notice) = turn_notice(&event.kind) {
+            let _ = events.send(TurnEvent::Notice(notice));
+        }
         for output in projector.project(event.kind) {
             let _ = events.send(TurnEvent::Output(output));
         }
@@ -394,6 +406,7 @@ fn lock(active: &ActiveTurns) -> MutexGuard<'_, HashMap<String, ActiveRun>> {
 
 /// Inputs needed to create, resume, or switch one durable harness session.
 struct SessionOpener<'a> {
+    compaction_model: Option<&'a ModelSelection>,
     database: &'a Path,
     environment: &'a BTreeMap<String, String>,
     events: &'a mpsc::UnboundedSender<TurnEvent>,
@@ -499,6 +512,7 @@ impl SessionOpener<'_> {
         let events = self.events.clone();
         let harness = build(
             &HarnessContext {
+                compaction_model: self.compaction_model,
                 environment: self.environment,
                 provider_call_budget: self.provider_call_budget,
                 running_context_window: self.running_context_window,

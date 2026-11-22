@@ -793,6 +793,7 @@ impl SessionWorkerRebaseAssistClient {
             .ok()
             .flatten();
         let req = TurnRequest {
+            compaction_model: None,
             provider_call_budget: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::provider(

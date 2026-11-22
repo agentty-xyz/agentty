@@ -234,6 +234,7 @@ async fn prepare(
         if persistent { None } else { replay },
     );
     let prepared = TurnRequest {
+        compaction_model: None,
         provider_call_budget: None,
         continuation,
         execution_policy: ag_contracts::ExecutionPolicy::default(),

@@ -129,7 +129,10 @@ activity rows. One notification stays armed while the output changes, and the fo
 applies further changes once per frame, so a fast stream cannot flood the event loop.
 The runtime drops a discarded response's items and reports which message the validated
 answer replaces. The worker removes the snapshot right after it saves the answer or
-failure notice to the transcript; streamed output is never persisted or replayed.
+failure notice to the transcript; streamed output is never persisted or replayed. When a
+harness turn compacts the session's earlier context, or fails to, the runtime also sends
+a `TurnEvent::Notice`; the worker saves it as a workflow notice ahead of the turn's
+answer, like other workflow notices.
 
 Session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is

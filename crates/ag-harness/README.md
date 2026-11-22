@@ -1026,6 +1026,12 @@ resumes sessions created by the catalog harness. A catalog registration also kee
 entry's prices, `max_concurrency`, and output limit through `from_registry` and
 `switch_model`. A harness given an explicit `model` cannot record one.
 
+A harness built by `Harness::from_registry` has no catalog to resolve a summary model,
+so it summarizes on its own model until `Harness::summary_model` names a catalog entry
+for it. That entry must have structured output and accept the summary schema, and it is
+sized, priced, and limited like a selected summary model. The choice is not part of the
+recorded registration, so sessions resume with or without it; `switch_model` drops it.
+
 Built-in and specification-defined clients call `ag-router` for provider transport and
 schema validation. Hosts can also use `ag-router` directly for structured chat calls
 without a harness. Implement the `model::Model` trait to bring a provider whose wire
