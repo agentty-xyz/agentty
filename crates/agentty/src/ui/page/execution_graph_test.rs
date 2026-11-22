@@ -311,6 +311,7 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
         None,
         Some(GraphEditKind::Reply),
         Some(GraphEditKind::Cancel),
+        Some(GraphEditKind::ExtendBudget),
     ] {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
         view.editor = kind.map(|kind| GraphEditor {
@@ -336,6 +337,13 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
         }));
         if kind == Some(GraphEditKind::Reply) {
             assert!(rendered.contains("Ctrl+r reconcile draft"));
+        }
+        match kind {
+            None => assert!(rendered.contains("b add provider calls")),
+            Some(GraphEditKind::ExtendBudget) => {
+                assert!(rendered.contains("provider calls to add to budget calls"));
+            }
+            Some(_) => {}
         }
     }
 }

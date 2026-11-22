@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ag_contracts::{OneShotError, PermissionMode};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
-    ContinueGraphNodeRequest, ExecutionGraphStatus, GraphBlockedReason, GraphContext,
-    GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus,
-    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
+    ContinueGraphNodeRequest, ExecutionGraphStatus, ExtendGraphBudgetRequest, GraphBlockedReason,
+    GraphContext, GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation,
+    GraphNodeStatus, GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_store::MockGraphRepository;
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
@@ -330,7 +330,11 @@ async fn graph_lifecycle_storage_errors_do_not_signal_or_admit_work() {
     let results = [
         app.execution_graph_progress("graph").await.map(|_| ()),
         app.cancel_api_execution_graph(control.clone()).await,
-        app.resume_api_execution_graph(ResumeExecutionGraphRequest { graph: control })
+        app.resume_api_execution_graph(ResumeExecutionGraphRequest {
+            graph: control.clone(),
+        })
+        .await,
+        app.extend_api_execution_graph_budget(budget_extension(control))
             .await,
         app.continue_api_execution_graph_node(continuation).await,
         app.services
@@ -371,14 +375,24 @@ async fn graph_lifecycle_direct_progress_exposes_budget_exhaustion_and_cancellat
         .await
         .expect("progress")
         .expect("graph");
-    app.cancel_api_execution_graph(GraphControlRequest {
+    let control = GraphControlRequest {
         graph_id: "graph".into(),
         revision: NonZeroU64::MIN,
-    })
-    .await
-    .expect("cancel");
+    };
+    app.cancel_api_execution_graph(control.clone())
+        .await
+        .expect("cancel");
+    let extended = app
+        .extend_api_execution_graph_budget(budget_extension(control))
+        .await;
 
     // Assert
+    assert!(
+        extended
+            .expect_err("canceled graph")
+            .to_string()
+            .contains("Canceled graphs cannot gain provider calls")
+    );
     assert_eq!(progress.status, ExecutionGraphStatus::Blocked);
     assert!(
         progress.nodes[0]
@@ -390,6 +404,16 @@ async fn graph_lifecycle_direct_progress_exposes_budget_exhaustion_and_cancellat
         .is_cancelled();
     assert!(cancelled);
     app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// Adds one call to the `calls` budget of the graph `control` names.
+fn budget_extension(control: GraphControlRequest) -> ExtendGraphBudgetRequest {
+    ExtendGraphBudgetRequest {
+        action_id: uuid::Uuid::new_v4().to_string(),
+        additional_calls: 1,
+        budget_id: "calls".into(),
+        graph: control,
+    }
 }
 
 #[tokio::test]

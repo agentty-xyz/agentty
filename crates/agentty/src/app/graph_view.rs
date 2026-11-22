@@ -1,7 +1,7 @@
 //! Graph inspector reads and snapshot-bound mutations through shared admission.
 
 use ag_session::{
-    ContinueGraphNodeRequest, GraphControlRequest, GraphNodeContinuation,
+    ContinueGraphNodeRequest, ExtendGraphBudgetRequest, GraphControlRequest, GraphNodeContinuation,
     ResumeExecutionGraphRequest,
 };
 use uuid::Uuid;
@@ -155,6 +155,19 @@ impl App {
             GraphViewAction::Resume if view.can_resume() => SessionMutation::ResumeExecutionGraph {
                 request: ResumeExecutionGraphRequest { graph: control },
             },
+            GraphViewAction::ExtendBudget(additional_calls)
+                if let Some(budget_id) =
+                    view.exhausted_budget().filter(|_| view.can_extend_budget()) =>
+            {
+                SessionMutation::ExtendExecutionGraphBudget {
+                    request: ExtendGraphBudgetRequest {
+                        action_id: Uuid::new_v4().to_string(),
+                        additional_calls,
+                        budget_id: budget_id.to_string(),
+                        graph: control,
+                    },
+                }
+            }
             GraphViewAction::Continue(kind)
                 if match &kind {
                     GraphNodeContinuation::Retry => view.can_retry(),
@@ -196,6 +209,19 @@ impl App {
         match editor.kind {
             GraphEditKind::Cancel if text == "cancel" => Ok(GraphViewAction::Cancel),
             GraphEditKind::Cancel => Err("Type cancel to confirm graph cancellation".into()),
+            GraphEditKind::ExtendBudget => text
+                .parse::<usize>()
+                .ok()
+                .filter(|calls| {
+                    (1..=ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS).contains(calls)
+                })
+                .map(GraphViewAction::ExtendBudget)
+                .ok_or_else(|| {
+                    format!(
+                        "Enter a whole number of provider calls from 1 to {}",
+                        ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS
+                    )
+                }),
             GraphEditKind::Reply if !text.is_empty() => {
                 Ok(GraphViewAction::Continue(GraphNodeContinuation::Reply {
                     attachments: Vec::new(),
@@ -211,6 +237,8 @@ pub(crate) enum GraphViewAction {
     Accept,
     Cancel,
     Continue(GraphNodeContinuation),
+    /// Adds this many provider calls to the exhausted budget.
+    ExtendBudget(usize),
     Resume,
 }
 

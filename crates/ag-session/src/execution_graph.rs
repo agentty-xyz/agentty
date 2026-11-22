@@ -16,9 +16,9 @@ mod test_support;
 pub use error::GraphContractError;
 pub use graph::ExecutionGraph;
 pub use lifecycle::{
-    ContinueGraphNodeRequest, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,
-    GraphControlRequest, GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus,
-    GraphQuestionAnswer, ResumeExecutionGraphRequest,
+    ContinueGraphNodeRequest, ExecutionGraphProgress, ExecutionGraphStatus,
+    ExtendGraphBudgetRequest, GraphBlockedReason, GraphControlRequest, GraphNodeContinuation,
+    GraphNodeProgress, GraphNodeStatus, GraphQuestionAnswer, ResumeExecutionGraphRequest,
 };
 pub use node::{
     GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile, GraphInputBinding,

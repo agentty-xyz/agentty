@@ -431,3 +431,38 @@ fn ledger_hears_a_refund_before_its_call_can_be_charged_again() {
     assert_eq!(budget.remaining(), 1);
     ledger.budget.lock().expect("observed budget").take();
 }
+
+#[test]
+fn extending_an_exhausted_pool_credits_every_clone_without_reporting_spending() {
+    // Arrange
+    let ledger = Arc::new(CountingLedger::default());
+    let budget = ProviderCallBudget::with_ledger(1, ledger.clone());
+    let clone = budget.clone();
+    let ceiling = ProviderCallBudget::new(1);
+    let constrained = budget.clone().with_ceiling(ceiling.clone());
+    budget.consume().expect("spend the only call");
+
+    // Act
+    budget.extend(2);
+
+    // Assert
+    assert_eq!(clone.remaining(), 2);
+    assert_eq!(constrained.remaining(), 1);
+    assert_eq!(ceiling.remaining(), 1);
+    clone.consume().expect("spend an extended call");
+    assert_eq!(budget.remaining(), 1);
+    assert_eq!(ledger.charges.load(Ordering::Relaxed), 2);
+    assert_eq!(ledger.refunds.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn extending_saturates_instead_of_wrapping() {
+    // Arrange
+    let budget = ProviderCallBudget::new(usize::MAX - 1);
+
+    // Act
+    budget.extend(5);
+
+    // Assert
+    assert_eq!(budget.remaining(), usize::MAX);
+}

@@ -153,6 +153,19 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
+    /// Records an explicit increase of one budget's provider calls, then
+    /// releases nodes waiting for that credit.
+    async fn extend_execution_graph_budget(
+        &self,
+        request: crate::ExtendGraphBudgetRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
     /// Authorizes one new attempt against an exact failed/question execution.
     async fn continue_execution_graph_node(
         &self,
@@ -461,6 +474,20 @@ impl SessionService {
         request: crate::ResumeExecutionGraphRequest,
     ) -> Result<(), SessionError> {
         self.backend.resume_execution_graph(request).await
+    }
+
+    /// Adds provider calls to one launched budget through a recorded,
+    /// idempotent extension; the launch limits stay unchanged.
+    ///
+    /// # Errors
+    /// Rejects stale, completed, or canceled graphs, unknown budgets,
+    /// amounts outside `1..=ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS`,
+    /// conflicting action identities, and failed persistence.
+    pub async fn extend_execution_graph_budget(
+        &self,
+        request: crate::ExtendGraphBudgetRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.extend_execution_graph_budget(request).await
     }
 
     /// Retries a failed node or answers its exact settled clarification set.

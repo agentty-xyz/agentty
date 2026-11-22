@@ -45,7 +45,9 @@ provider-call budget.
 A provider-call budget is one shared limit across a request, its retries, repairs, and
 utility children; a child's own limit is an additional ceiling. A budget built with
 `ProviderCallBudget::with_ledger` reports each charge and refund to a host ledger, which
-graph hosts persist so restarts never replenish spent calls.
+graph hosts persist so restarts never replenish spent calls. `extend` adds calls to a
+live pool after the host records an explicit extension; it reports nothing to the
+ledger.
 
 ## Steering
 

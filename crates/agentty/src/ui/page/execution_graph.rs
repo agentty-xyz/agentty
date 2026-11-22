@@ -162,8 +162,12 @@ fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &Ma
 
 fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
     let label = match editor.kind {
-        GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)",
-        GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph",
+        GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)".into(),
+        GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph".into(),
+        GraphEditKind::ExtendBudget => format!(
+            "Type how many provider calls to add to budget {}, then Enter (recorded; Esc cancels)",
+            view.exhausted_budget().unwrap_or_default()
+        ),
     };
     let editor_areas = Layout::vertical([
         Constraint::Length(3),
@@ -232,6 +236,9 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
     }
     if view.can_resume() {
         actions.push("s resume graph");
+    }
+    if view.can_extend_budget() {
+        actions.push("b add provider calls");
     }
     if view.can_cancel() {
         actions.push("x cancel graph");

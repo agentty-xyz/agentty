@@ -161,6 +161,9 @@ impl App {
             SessionMutation::ResumeExecutionGraph { request } => {
                 self.resume_api_execution_graph(request).await
             }
+            SessionMutation::ExtendExecutionGraphBudget { request } => {
+                self.extend_api_execution_graph_budget(request).await
+            }
             SessionMutation::ContinueExecutionGraphNode { request } => {
                 self.continue_api_execution_graph_node(*request).await
             }

@@ -55,7 +55,7 @@ flowchart LR
   records.
 - Revisions are rejected once executions are linked.
 - Provider-call limits are fixed at first launch and spending is recorded, so a restart
-  never replenishes spent calls.
+  never replenishes spent calls. Only an explicit, recorded extension adds calls.
 
 See [Execution Graphs](@/docs/architecture/execution-graphs.md) for the full contract
 and [the proposal workflow](@/docs/usage/workflow.md#generated-graph-proposals) for

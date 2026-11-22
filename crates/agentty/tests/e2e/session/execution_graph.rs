@@ -154,6 +154,56 @@ esac
     Ok(())
 }
 
+/// Seeds a restored one-node graph whose earlier run spent every call of its
+/// `calls` budget. A provider stub's turn asks a question, which shows in
+/// chat that the node ran.
+async fn seed_spent_budget_graph(env: &BuilderEnv) -> E2eResult {
+    let workspace = env.agentty_root.join("wt").join("graph-ui");
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/graph-ui",
+            workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
+        ],
+    )?;
+    common::seed_active_project_setting(env).await?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
+            .with_title("Graph controls"),
+    )
+    .await?;
+    let database = common::open_database(env).await?;
+    let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
+    let agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
+    let graph = ExecutionGraph {
+        id: "spent-budget".into(),
+        nodes: vec![reader_node(agent, &definition, "check")],
+        revision: NonZeroU64::MIN,
+        session_id: SESSION.into(),
+    };
+    launch_restored(&database, &graph).await?;
+    database
+        .graphs()
+        .record_budget_spending(&graph.id, "calls", 1)
+        .await?;
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+IFS= read -r prompt
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Checked with added calls.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#;
+    let executable = env.stub_bin.join("claude");
+    std::fs::write(&executable, script)?;
+    std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
 /// Read-only task-conversation node `id` that draws on the shared `calls`
 /// budget.
 fn reader_node(agent: AgentSelection, definition: &AgentDefinition, id: &str) -> GraphNode {
@@ -739,6 +789,61 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Remo
                         assertion::assert_text_in_region(&exhausted, expected, &full);
                     }
                     assertion::assert_not_visible(&exhausted, "s resume graph");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn added_provider_calls_let_an_exhausted_graph_continue() -> E2eResult {
+    // Arrange
+    FeatureTest::new("exhausted_graph_budget_extension")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| Box::pin(seed_spent_budget_graph(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("w")
+                    .wait_for_text("spent-budget", 5000)
+                    .wait_for_text("resume required", 5000)
+                    .press_key("s")
+                    .wait_for_text("Provider-call budget exhausted: calls", 5000)
+                    .capture_labeled("exhausted", "Resume never refills the spent budget")
+                    .press_key("b")
+                    .wait_for_text("provider calls to add to budget calls", 5000)
+                    .write_text("2")
+                    .press_key("Enter")
+                    .wait_for_text("Action admitted", 5000)
+                    .press_key("q")
+                    .wait_for_text("Which branch next?", 15000)
+                    .wait_for_text("Question 1/1", 5000)
+                    .capture_labeled("continued", "Added calls let the waiting node run")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let exhausted = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(exhausted.cols(), exhausted.rows());
+                    for expected in [
+                        "check: Pending",
+                        "Provider-call budget exhausted: calls",
+                        "b add provider calls",
+                    ] {
+                        assertion::assert_text_in_region(&exhausted, expected, &full);
+                    }
+                    let continued = common::frame_from_capture(&report.captures[1]);
+                    let full = Region::full(continued.cols(), continued.rows());
+                    for expected in ["Checked with added calls.", "Question 1/1"] {
+                        assertion::assert_text_in_region(&continued, expected, &full);
+                    }
                 })
             },
         )

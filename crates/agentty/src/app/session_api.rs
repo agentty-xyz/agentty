@@ -71,6 +71,13 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::resume_execution_graph(self, request).await
     }
 
+    async fn extend_execution_graph_budget(
+        &self,
+        request: ag_session::ExtendGraphBudgetRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::extend_execution_graph_budget(self, request).await
+    }
+
     async fn continue_execution_graph_node(
         &self,
         request: ag_session::ContinueGraphNodeRequest,

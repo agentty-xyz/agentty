@@ -525,3 +525,73 @@ fn draft_reconciliation_preserves_the_original_graph_and_execution() {
         );
     }
 }
+
+/// [`graph_view`] with a live driver whose pending `second` node waits for
+/// provider calls from the spent `calls` budget.
+pub(crate) fn budget_exhausted_view() -> GraphView {
+    let mut view = graph_view();
+    let progress = view.progress.as_mut().expect("progress");
+    progress.status = ExecutionGraphStatus::Blocked;
+    progress.nodes[1].blocked = vec![GraphBlockedReason::BudgetExhausted("calls".into())];
+
+    view
+}
+
+#[test]
+fn budget_extension_targets_the_spent_budget_of_a_graph_that_can_still_run() {
+    // Arrange
+    let view = budget_exhausted_view();
+    let mut selected = view.clone();
+    selected.selected_node = 1;
+    selected.progress.as_mut().expect("progress").nodes[1]
+        .blocked
+        .insert(0, GraphBlockedReason::BudgetExhausted("selected".into()));
+
+    // Act / Assert
+    assert_eq!(view.exhausted_budget(), Some("calls"));
+    assert_eq!(selected.exhausted_budget(), Some("selected"));
+    assert!(view.can_extend_budget());
+    assert!(!graph_view().can_extend_budget());
+    assert_eq!(graph_view().exhausted_budget(), None);
+    for scenario in [
+        "focused-review",
+        "cancelled-graph",
+        "completed",
+        "missing-progress",
+    ] {
+        let mut changed = view.clone();
+        change_view(&mut changed, scenario);
+        assert!(!changed.can_extend_budget(), "{scenario}");
+    }
+}
+
+#[test]
+fn budget_extension_drafts_reconcile_only_while_the_same_budget_is_spent() {
+    // Arrange
+    let mut original = budget_exhausted_view();
+    original.editor = Some(GraphEditor {
+        input: InputState::with_text("4".into()),
+        kind: GraphEditKind::ExtendBudget,
+        needs_reconciliation: true,
+    });
+
+    // Act / Assert
+    for scenario in ["same", "credited", "other-budget", "cancelled"] {
+        let mut current = original.clone();
+        let blocked = &mut current.progress.as_mut().expect("progress").nodes[1].blocked;
+        match scenario {
+            "credited" => blocked.clear(),
+            "other-budget" => *blocked = vec![GraphBlockedReason::BudgetExhausted("other".into())],
+            "cancelled" => {
+                current.progress.as_mut().expect("progress").status =
+                    ExecutionGraphStatus::Cancelled;
+            }
+            _ => {}
+        }
+        assert_eq!(
+            original.can_reconcile_editor(&current),
+            scenario == "same",
+            "{scenario}"
+        );
+    }
+}

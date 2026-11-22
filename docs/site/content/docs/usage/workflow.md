@@ -631,13 +631,15 @@ rejected reply keeps its draft: press `Ctrl+r` to refresh and resubmit, or `Esc`
 discard it.
 
 Provider-call limits are fixed when a graph first launches, and resuming continues from
-the calls that remain; a node whose budget is spent stays blocked. Nothing replays
+the calls that remain; a node whose budget is spent stays blocked. To continue it, press
+`b` and type how many calls to add, from 1 to 1000. Each increase is recorded and never
+happens on its own; completed and canceled graphs cannot get more. Nothing replays
 automatically on restart; only a chat reply you sent before it is still applied.
 Focused-review graphs can be inspected and canceled here; regenerate them with `f`.
 
 Programmatic integrations can track outcomes through the
 [Task API](@/docs/core-components/durable-components/task.md) and query, answer, retry,
-resume, or cancel graphs through `SessionService`; see
+resume, extend, or cancel graphs through `SessionService`; see
 [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 ## Telemetry

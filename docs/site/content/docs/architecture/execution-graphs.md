@@ -134,9 +134,13 @@ separate.
 
 `SessionService::start_execution_graph` saves and starts a static graph in a prepared
 session. Named provider-call limits are fixed at first launch and every charge and
-refund is written to a durable ledger, so no relaunch refills spent calls. Acceptance
-uses `accept_execution_graph_result` with an exact validated reference. Graph writers
-exclude ordinary session work, merges, and focused-review readers.
+refund is written to a durable ledger, so no relaunch refills spent calls. Only
+`extend_execution_graph_budget` adds calls: it records one idempotent extension per
+action ID, refuses canceled or completed graphs, and credits a retained driver's live
+budget after the record commits. Launch limits stay unchanged, so a proposal graph still
+relaunches against its approved limits. Acceptance uses `accept_execution_graph_result`
+with an exact validated reference. Graph writers exclude ordinary session work, merges,
+and focused-review readers.
 
 ## Focused Review Graph
 
@@ -174,8 +178,8 @@ identical delivery never executes twice.
 
 Startup restores records without dispatching them. `resume_execution_graph` explicitly
 restarts dispatch for the saved revision, starting from the limits fixed at first launch
-minus recorded spending. Recording continuation intent alone never recreates a driver or
-replenishes budgets.
+plus recorded extensions minus recorded spending. Recording continuation intent alone
+never recreates a driver or replenishes budgets.
 
 A chat reply to an output awaiting acceptance is saved with the exact output version and
 execution it answered, and a read-only decision run classifies it once. A reply that a
