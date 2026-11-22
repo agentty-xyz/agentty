@@ -182,43 +182,43 @@ function parseBlocks(lines, depth) {
       blocks.push(paragraph(lines.slice(index).filter((rest) => !isBlank(rest))));
       break;
     }
-    const fence = fenceOpening(line);
-    if (fence) {
-      index = parseFence(lines, index, fence, blocks);
-      continue;
-    }
-    const heading = headingOf(line);
-    if (heading) {
-      blocks.push({
-        children: parseInline(heading.text),
-        level: heading.level,
-        type: "heading",
-      });
-      index += 1;
-      continue;
-    }
-    if (isThematicBreak(line)) {
-      blocks.push({ type: "rule" });
-      index += 1;
-      continue;
-    }
-    if (isQuoteLine(line)) {
-      index = parseQuote(lines, index, depth, blocks);
-      continue;
-    }
-    const marker = listMarker(line);
-    if (marker) {
-      index = parseList(lines, index, marker, depth, blocks);
-      continue;
-    }
-    if (tableColumns(lines, index)) {
-      index = parseTable(lines, index, blocks);
-      continue;
-    }
-    index = parseParagraph(lines, index, blocks);
+    index = parseBlock(lines, index, depth, blocks);
   }
 
   return blocks;
+}
+
+// Parses the block starting at the non-blank `lines[index]` into
+// `blocks`, and returns the index after it.
+function parseBlock(lines, index, depth, blocks) {
+  const line = lines[index];
+  const fence = fenceOpening(line);
+  if (fence) {
+    return parseFence(lines, index, fence, blocks);
+  }
+  const heading = headingOf(line);
+  if (heading) {
+    blocks.push({ children: parseInline(heading.text), level: heading.level, type: "heading" });
+
+    return index + 1;
+  }
+  if (isThematicBreak(line)) {
+    blocks.push({ type: "rule" });
+
+    return index + 1;
+  }
+  if (isQuoteLine(line)) {
+    return parseQuote(lines, index, depth, blocks);
+  }
+  const marker = listMarker(line);
+  if (marker) {
+    return parseList(lines, index, marker, depth, blocks);
+  }
+  if (tableColumns(lines, index)) {
+    return parseTable(lines, index, blocks);
+  }
+
+  return parseParagraph(lines, index, blocks);
 }
 
 // Whether `line`, inside a paragraph, starts a different block.
@@ -429,42 +429,55 @@ function sameList(marker, other) {
   return other !== null && other.ordered === marker.ordered && other.delimiter === marker.delimiter;
 }
 
+// Collects the lines of the list item whose marker is on `lines[start]`.
+// Returns its content lines without their indentation, the index after
+// it, whether a blank line separated two of its blocks, and whether it
+// ended on a blank line.
+function itemLines(lines, start, marker) {
+  const content = [marker.content];
+  let hasInnerBlank = false;
+  let sawBlank = false;
+  let index = start + 1;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isBlank(line)) {
+      sawBlank = true;
+      content.push("");
+    } else if (leadingSpaces(line) >= marker.contentIndent) {
+      hasInnerBlank = hasInnerBlank || sawBlank;
+      content.push(line.slice(marker.contentIndent));
+      sawBlank = false;
+    } else if (!sawBlank && !interruptsParagraph(lines, index) && !listMarker(line)) {
+      // A lazy continuation of the item's paragraph.
+      content.push(line.trim());
+    } else {
+      break;
+    }
+  }
+  while (content.length > 1 && content.at(-1) === "") {
+    content.pop();
+  }
+
+  return { content: content, end: index, endsBlank: sawBlank, hasInnerBlank: hasInnerBlank };
+}
+
+// A list whose first marker is on `lines[start]`. A blank line between
+// items, or between two blocks of one item, loosens it.
 function parseList(lines, start, first, depth, blocks) {
   const items = [];
   let isLoose = false;
   let index = start;
   let marker = first;
   while (marker) {
-    const content = [marker.content];
-    let sawBlank = false;
-    index += 1;
-    while (index < lines.length) {
-      const line = lines[index];
-      if (isBlank(line)) {
-        sawBlank = true;
-        content.push("");
-      } else if (leadingSpaces(line) >= marker.contentIndent) {
-        // A blank line between two blocks of one item loosens the list.
-        isLoose = isLoose || sawBlank;
-        content.push(line.slice(marker.contentIndent));
-        sawBlank = false;
-      } else if (!sawBlank && !interruptsParagraph(lines, index) && !listMarker(line)) {
-        // A lazy continuation of the item's paragraph.
-        content.push(line.trim());
-      } else {
-        break;
-      }
-      index += 1;
-    }
-    while (content.length > 1 && content.at(-1) === "") {
-      content.pop();
-    }
-    items.push(listItem(content, depth));
+    const item = itemLines(lines, index, marker);
+    items.push(listItem(item.content, depth));
+    isLoose = isLoose || item.hasInnerBlank;
+    index = item.end;
     const next = index < lines.length ? listMarker(lines[index]) : null;
     if (!sameList(first, next)) {
       break;
     }
-    isLoose = isLoose || sawBlank;
+    isLoose = isLoose || item.endsBlank;
     marker = next;
   }
   blocks.push({
@@ -497,7 +510,7 @@ function tableCells(line) {
   if (text.startsWith("|")) {
     text = text.slice(1);
   }
-  if (text.endsWith("|") && !text.endsWith("\\|")) {
+  if (text.endsWith("|") && !text.endsWith(String.raw`\|`)) {
     text = text.slice(0, -1);
   }
   const cells = [];
@@ -532,8 +545,11 @@ function alignmentOf(cell) {
   if (left && right) {
     return "center";
   }
+  if (right) {
+    return "right";
+  }
 
-  return right ? "right" : left ? "left" : null;
+  return left ? "left" : null;
 }
 
 // The alignments of the table starting at `lines[index]`, or `null` when
@@ -638,54 +654,68 @@ function boundedIndexOf(text, character, start, limit) {
 // `null`.
 function linkDestination(text, open) {
   const limit = Math.min(text.length, open + MAX_DESTINATION_LENGTH);
-  let index = open + 1;
-  const skipSpaces = () => {
-    while (index < limit && (text[index] === " " || text[index] === "\n")) {
-      index += 1;
-    }
-  };
-  skipSpaces();
-  let destination = "";
-  if (text[index] === "<") {
-    const end = boundedIndexOf(text, ">", index, limit);
-    if (end === -1 || text.slice(index, end).includes("\n")) {
-      return null;
-    }
-    destination = text.slice(index + 1, end);
-    index = end + 1;
-  } else {
-    let parentheses = 0;
-    const begin = index;
-    while (index < limit && !isWhitespace(text[index])) {
-      const character = text[index];
-      if (character === "\\" && index + 1 < limit) {
-        index += 2;
-        continue;
-      }
-      if (character === "(") {
-        parentheses += 1;
-      } else if (character === ")") {
-        if (parentheses === 0) {
-          break;
-        }
-        parentheses -= 1;
-      }
-      index += 1;
-    }
-    destination = text.slice(begin, index);
+  const read = readDestination(text, skipLinkSpaces(text, open + 1, limit), limit);
+  if (!read) {
+    return null;
   }
-  skipSpaces();
+  let index = skipLinkSpaces(text, read.end, limit);
   const quote = text[index];
   if (quote === '"' || quote === "'") {
     const end = boundedIndexOf(text, quote, index + 1, limit);
     if (end === -1) {
       return null;
     }
-    index = end + 1;
-    skipSpaces();
+    index = skipLinkSpaces(text, end + 1, limit);
   }
 
-  return text[index] === ")" ? { destination: destination, end: index + 1 } : null;
+  return text[index] === ")" ? { destination: read.destination, end: index + 1 } : null;
+}
+
+function skipLinkSpaces(text, index, limit) {
+  let next = index;
+  while (next < limit && (text[next] === " " || text[next] === "\n")) {
+    next += 1;
+  }
+
+  return next;
+}
+
+// A destination in `<…>`, or a bare one that ends at a space or at a
+// `)` it did not open. Returns it and the index after it, or `null`.
+function readDestination(text, index, limit) {
+  if (text[index] === "<") {
+    const end = boundedIndexOf(text, ">", index, limit);
+    if (end === -1 || text.slice(index, end).includes("\n")) {
+      return null;
+    }
+
+    return { destination: text.slice(index + 1, end), end: end + 1 };
+  }
+  let parentheses = 0;
+  let end = index;
+  while (end < limit && !isWhitespace(text[end])) {
+    const character = text[end];
+    if (character === "\\" && end + 1 < limit) {
+      end += 2;
+      continue;
+    }
+    if (character === ")" && parentheses === 0) {
+      break;
+    }
+    parentheses += parenthesisStep(character);
+    end += 1;
+  }
+
+  return { destination: text.slice(index, end), end: end };
+}
+
+// How `character` changes the count of open parentheses.
+function parenthesisStep(character) {
+  if (character === "(") {
+    return 1;
+  }
+
+  return character === ")" ? -1 : 0;
 }
 
 // An autolink `<scheme:…>` or `<name@host>` starting at `index`. Returns
@@ -710,51 +740,55 @@ function autolink(text, index) {
 // A bare `http:` or `https:` URL starting at `index`, or `null`. Inside
 // a link text, `]` ends it. A URL longer than `MAX_DESTINATION_LENGTH`
 // is not linked, so a failed attempt never reads far.
-function bareUrl(text, index, isInBrackets) {
-  if (!text.startsWith("http", index) || isAsciiAlphanumeric(text[index - 1])) {
+function bareUrl(scanner, index, isInBrackets) {
+  const text = scanner.text;
+  const host = urlHostStart(text, index);
+  if (host === -1) {
     return null;
   }
-  let scheme = index + 4;
-  if (text[scheme] === "s") {
-    scheme += 1;
-  }
-  if (!text.startsWith("://", scheme)) {
-    return null;
-  }
-  const limit = index + MAX_DESTINATION_LENGTH;
-  let end = scheme + 3;
-  while (
-    end < text.length &&
-    !isWhitespace(text[end]) &&
-    text[end] !== "<" &&
-    !(isInBrackets && text[end] === "]")
-  ) {
-    end += 1;
-    if (end > limit) {
-      return null;
-    }
-  }
-  // Trailing punctuation belongs to the sentence, and so does a closing
-  // parenthesis the URL did not open.
-  let opened = 0;
-  for (let position = index; position < end; position += 1) {
-    opened += text[position] === "(" ? 1 : text[position] === ")" ? -1 : 0;
-  }
-  while (end > scheme + 3) {
-    const last = text[end - 1];
-    if (URL_TRAILING.includes(last)) {
-      end -= 1;
-    } else if (last === ")" && opened < 0) {
-      end -= 1;
-      opened += 1;
-    } else {
-      break;
-    }
-  }
-  const raw = text.slice(index, end);
-  const href = end > scheme + 3 ? safeLink(raw) : null;
+  const end = urlEnd(scanner, index, host, isInBrackets);
+  const raw = end > host ? text.slice(index, end) : "";
+  const href = raw ? safeLink(raw) : null;
 
   return href ? { end: end, href: href, text: raw } : null;
+}
+
+// Where the host starts after the `http` or `https` scheme and its `://`
+// at `index`, or -1
+// when no URL starts there.
+function urlHostStart(text, index) {
+  if (!text.startsWith("http", index) || isAsciiAlphanumeric(text[index - 1])) {
+    return -1;
+  }
+  const scheme = text[index + 4] === "s" ? index + 5 : index + 4;
+
+  return text.startsWith("://", scheme) ? scheme + 3 : -1;
+}
+
+// Where a bare URL whose host starts at `host` ends, or -1 when it runs
+// past `MAX_DESTINATION_LENGTH`. Trailing punctuation belongs to the
+// sentence, and so does a closing parenthesis the URL did not open.
+function urlEnd(scanner, index, host, isInBrackets) {
+  let end = scanner.urlStop(host, isInBrackets);
+  if (end > index + MAX_DESTINATION_LENGTH) {
+    return -1;
+  }
+  let opened = scanner.parenthesesBetween(host, end);
+  while (end > host) {
+    const last = scanner.text[end - 1];
+    if (last === ")" && opened < 0) {
+      opened += 1;
+    } else if (!URL_TRAILING.includes(last)) {
+      break;
+    }
+    end -= 1;
+  }
+
+  return end;
+}
+
+function endsBareUrl(character, isInBrackets) {
+  return isWhitespace(character) || character === "<" || (isInBrackets && character === "]");
 }
 
 // A delimiter run of `*`, `_` or `~~` at `index`, with whether it can
@@ -786,124 +820,231 @@ function delimiterRun(text, index) {
   return { canClose: canClose, canOpen: canOpen, count: count, mark: mark, type: "delimiter" };
 }
 
-function parseInline(text) {
-  const runs = backtickRuns(text);
-  // Open `[` and `![`, innermost last, each with the tokens after it.
-  const frames = [{ tokens: [] }];
-  let buffer = "";
-  const tokens = () => frames.at(-1).tokens;
-  const flush = () => {
-    if (buffer) {
-      tokens().push({ text: buffer, type: "text" });
-      buffer = "";
+// The state of one inline parse: the position, text not yet made a
+// token, the backtick runs, and the open `[` and `![`, innermost last,
+// each with the tokens after it.
+class InlineScanner {
+  constructor(text) {
+    this.text = text;
+    this.index = 0;
+    this.buffer = "";
+    this.runs = backtickRuns(text);
+    this.frames = [{ isImage: false, tokens: [] }];
+    // The next character that ends a bare URL, outside and inside link
+    // text, as found by the last search. Bare URLs start further along
+    // the text each time, so the searches together read it once.
+    this.urlStops = [-1, -1];
+    this.parentheses = null;
+  }
+
+  // The first character at or after `from` that ends a bare URL.
+  urlStop(from, isInBrackets) {
+    const slot = isInBrackets ? 1 : 0;
+    if (this.urlStops[slot] < from) {
+      let stop = from;
+      while (stop < this.text.length && !endsBareUrl(this.text[stop], isInBrackets)) {
+        stop += 1;
+      }
+      this.urlStops[slot] = stop;
     }
-  };
-  const push = (token) => {
-    flush();
-    tokens().push(token);
-  };
+
+    return this.urlStops[slot];
+  }
+
+  // Open parentheses minus closed ones in `text[start..end]`, from
+  // running counts made once.
+  parenthesesBetween(start, end) {
+    if (!this.parentheses) {
+      this.parentheses = new Int32Array(this.text.length + 1);
+      for (let index = 0; index < this.text.length; index += 1) {
+        this.parentheses[index + 1] = this.parentheses[index] + parenthesisStep(this.text[index]);
+      }
+    }
+
+    return this.parentheses[end] - this.parentheses[start];
+  }
+
+  get tokens() {
+    return this.frames.at(-1).tokens;
+  }
+
+  flush() {
+    if (this.buffer) {
+      this.tokens.push({ text: this.buffer, type: "text" });
+      this.buffer = "";
+    }
+  }
+
+  push(token) {
+    this.flush();
+    this.tokens.push(token);
+  }
+
   // Returns an unclosed or unlinked bracket's tokens to the frame around
   // it, after its opening bracket as text.
-  const reopen = (frame) => {
-    const outer = tokens();
+  reopen(frame) {
+    const outer = this.tokens;
     outer.push({ text: frame.isImage ? "![" : "[", type: "text" });
     for (const token of frame.tokens) {
       outer.push(token);
     }
-  };
+  }
+}
 
-  let index = 0;
-  while (index < text.length) {
-    const character = text[index];
-    if (character === "\\" && ASCII_PUNCTUATION.includes(text[index + 1] ?? "")) {
-      buffer += text[index + 1];
-      index += 2;
-    } else if (character === "\n") {
-      push({ type: "break" });
-      index += 1;
-    } else if (character === "`") {
-      let end = index;
-      while (text[end] === "`") {
-        end += 1;
-      }
-      const length = end - index;
-      const close = closingRun(runs, length, index);
-      if (close === -1) {
-        buffer += text.slice(index, end);
-        index = end;
-      } else {
-        push({ text: codeSpanText(text.slice(end, close)), type: "code" });
-        index = close + length;
-      }
-    } else if (character === "*" || character === "_" || character === "~") {
-      const run = delimiterRun(text, index);
-      if (run.canOpen || run.canClose) {
-        push(run);
-      } else {
-        buffer += character.repeat(run.count);
-      }
-      index += run.count;
-    } else if (character === "[" || (character === "!" && text[index + 1] === "[")) {
-      if (frames.length > MAX_NESTING) {
-        buffer += character;
-        index += 1;
-        continue;
-      }
-      flush();
-      const isImage = character === "!";
-      frames.push({ isImage: isImage, tokens: [] });
-      index += isImage ? 2 : 1;
-    } else if (character === "]" && frames.length > 1) {
-      flush();
-      const frame = frames.pop();
-      const target = text[index + 1] === "(" ? linkDestination(text, index + 1) : null;
-      const href = target ? safeLink(target.destination) : null;
-      const content = href ? processEmphasis(frame.tokens) : null;
-      if (content && content.depth < MAX_NESTING) {
-        tokens().push(
-          frame.isImage
-            ? { alt: plainText(content.nodes), depth: 1, href: href, type: "image" }
-            : { children: content.nodes, depth: content.depth + 1, href: href, type: "link" },
-        );
-        index = target.end;
-      } else {
-        // Not a link: the brackets are text and the inside is parsed
-        // with what surrounds it. An unsafe destination stays text too.
-        reopen(frame);
-        buffer = "]";
-        index += 1;
-      }
-    } else if (character === "<") {
-      const link = autolink(text, index);
-      if (link) {
-        push({ children: [{ text: link.text, type: "text" }], depth: 1, href: link.href, type: "link" });
-        index = link.end;
-      } else {
-        buffer += character;
-        index += 1;
-      }
-    } else if (character === "h") {
-      const link = bareUrl(text, index, frames.length > 1);
-      if (link) {
-        push({ children: [{ text: link.text, type: "text" }], depth: 1, href: link.href, type: "link" });
-        index = link.end;
-      } else {
-        buffer += character;
-        index += 1;
-      }
-    } else {
-      buffer += character;
-      index += 1;
+// What each special character starts. A scanner returns `false` when the
+// character is plain text after all.
+const INLINE_SCANNERS = {
+  "\n": scanBreak,
+  "!": scanOpenBracket,
+  "*": scanDelimiter,
+  "<": scanAutolink,
+  "[": scanOpenBracket,
+  "\\": scanEscape,
+  "]": scanCloseBracket,
+  _: scanDelimiter,
+  "`": scanCodeSpan,
+  h: scanBareUrl,
+  "~": scanDelimiter,
+};
+
+function parseInline(text) {
+  const scanner = new InlineScanner(text);
+  while (scanner.index < text.length) {
+    const scan = INLINE_SCANNERS[text[scanner.index]];
+    if (!scan?.(scanner)) {
+      scanner.buffer += text[scanner.index];
+      scanner.index += 1;
     }
   }
-  flush();
+  scanner.flush();
   // Brackets left open are text.
-  while (frames.length > 1) {
-    const frame = frames.pop();
-    reopen(frame);
+  while (scanner.frames.length > 1) {
+    scanner.reopen(scanner.frames.pop());
   }
 
-  return mergeText(processEmphasis(frames[0].tokens).nodes);
+  return mergeText(processEmphasis(scanner.frames[0].tokens).nodes);
+}
+
+function scanEscape(scanner) {
+  const next = scanner.text[scanner.index + 1];
+  if (next === undefined || !ASCII_PUNCTUATION.includes(next)) {
+    return false;
+  }
+  scanner.buffer += next;
+  scanner.index += 2;
+
+  return true;
+}
+
+function scanBreak(scanner) {
+  scanner.push({ type: "break" });
+  scanner.index += 1;
+
+  return true;
+}
+
+// A code span, or its backticks as text when no run of the same length
+// closes it.
+function scanCodeSpan(scanner) {
+  const { index, text } = scanner;
+  let end = index;
+  while (text[end] === "`") {
+    end += 1;
+  }
+  const length = end - index;
+  const close = closingRun(scanner.runs, length, index);
+  if (close === -1) {
+    scanner.buffer += text.slice(index, end);
+    scanner.index = end;
+  } else {
+    scanner.push({ text: codeSpanText(text.slice(end, close)), type: "code" });
+    scanner.index = close + length;
+  }
+
+  return true;
+}
+
+function scanDelimiter(scanner) {
+  const run = delimiterRun(scanner.text, scanner.index);
+  if (run.canOpen || run.canClose) {
+    scanner.push(run);
+  } else {
+    scanner.buffer += run.mark.repeat(run.count);
+  }
+  scanner.index += run.count;
+
+  return true;
+}
+
+function scanOpenBracket(scanner) {
+  const isImage = scanner.text[scanner.index] === "!";
+  if ((isImage && scanner.text[scanner.index + 1] !== "[") || scanner.frames.length > MAX_NESTING) {
+    return false;
+  }
+  scanner.flush();
+  scanner.frames.push({ isImage: isImage, tokens: [] });
+  scanner.index += isImage ? 2 : 1;
+
+  return true;
+}
+
+// Closes the innermost bracket: a link when a safe destination follows,
+// otherwise text, with the inside parsed with what surrounds it.
+function scanCloseBracket(scanner) {
+  if (scanner.frames.length <= 1) {
+    return false;
+  }
+  scanner.flush();
+  const frame = scanner.frames.pop();
+  const link = bracketLink(scanner.text, scanner.index, frame);
+  if (link) {
+    scanner.tokens.push(link.token);
+    scanner.index = link.end;
+  } else {
+    scanner.reopen(frame);
+    scanner.buffer = "]";
+    scanner.index += 1;
+  }
+
+  return true;
+}
+
+// The link or image `frame` makes with the `(destination)` after the
+// `]` at `index`, and the index after it, or `null`. An unsafe
+// destination makes none.
+function bracketLink(text, index, frame) {
+  const target = text[index + 1] === "(" ? linkDestination(text, index + 1) : null;
+  const href = target ? safeLink(target.destination) : null;
+  if (!href) {
+    return null;
+  }
+  const content = processEmphasis(frame.tokens);
+  if (content.depth >= MAX_NESTING) {
+    return null;
+  }
+  const token = frame.isImage
+    ? { alt: plainText(content.nodes), depth: 1, href: href, type: "image" }
+    : { children: content.nodes, depth: content.depth + 1, href: href, type: "link" };
+
+  return { end: target.end, token: token };
+}
+
+function scanAutolink(scanner) {
+  return pushLink(scanner, autolink(scanner.text, scanner.index));
+}
+
+function scanBareUrl(scanner) {
+  return pushLink(scanner, bareUrl(scanner, scanner.index, scanner.frames.length > 1));
+}
+
+function pushLink(scanner, link) {
+  if (!link) {
+    return false;
+  }
+  scanner.push({ children: [{ text: link.text, type: "text" }], depth: 1, href: link.href, type: "link" });
+  scanner.index = link.end;
+
+  return true;
 }
 
 // The inside of a code span: line breaks become spaces, and one space on
@@ -923,72 +1064,123 @@ function codeSpanText(raw) {
 // become text. Returns the nodes and how deeply they nest; a pair that
 // would nest deeper than `MAX_NESTING` stays text.
 function processEmphasis(tokens) {
-  const out = [];
-  // Open delimiter runs, innermost last, each with where its text sits
-  // in `out` and the deepest node after it.
-  const stack = [];
-  const openers = { "*": 0, _: 0, "~": 0 };
-  let outerDepth = 0;
-  const note = (depth) => {
-    if (stack.length > 0) {
-      stack.at(-1).depth = Math.max(stack.at(-1).depth, depth);
-    } else {
-      outerDepth = Math.max(outerDepth, depth);
-    }
-  };
-  const drop = () => {
-    const entry = stack.pop();
-    openers[entry.mark] -= 1;
-    note(entry.depth);
-
-    return entry;
-  };
-
+  const pairing = new EmphasisPairing();
   for (const token of tokens) {
-    if (token.type !== "delimiter") {
-      out.push(token);
-      note(token.depth ?? 0);
-      continue;
-    }
-    let remaining = token.count;
-    while (token.canClose && remaining > 0 && openers[token.mark] > 0) {
-      while (stack.at(-1).mark !== token.mark) {
-        drop();
-      }
-      const opener = stack.at(-1);
-      if (opener.depth + 1 > MAX_NESTING) {
-        drop();
-        break;
-      }
-      const used = token.mark === "~" ? 2 : remaining >= 2 && opener.remaining >= 2 ? 2 : 1;
-      const children = mergeText(out.splice(opener.index + 1));
-      const depth = opener.depth + 1;
-      opener.remaining -= used;
-      opener.text.text = token.mark.repeat(opener.remaining);
-      opener.depth = 0;
-      remaining -= used;
-      if (opener.remaining === 0) {
-        out.pop();
-        stack.pop();
-        openers[token.mark] -= 1;
-      }
-      const type = used === 1 ? "emphasis" : token.mark === "~" ? "strike" : "strong";
-      out.push({ children: children, depth: depth, type: type });
-      note(depth);
-    }
-    if (remaining === 0) {
-      continue;
-    }
-    const text = { text: token.mark.repeat(remaining), type: "text" };
-    out.push(text);
-    if (token.canOpen) {
-      stack.push({ depth: 0, index: out.length - 1, mark: token.mark, remaining: remaining, text: text });
-      openers[token.mark] += 1;
+    if (token.type === "delimiter") {
+      pairing.delimiter(token);
+    } else {
+      pairing.append(token, token.depth ?? 0);
     }
   }
-  const depth = stack.reduce((deepest, entry) => Math.max(deepest, entry.depth), outerDepth);
 
-  return { depth: depth, nodes: out.filter((node) => node.type !== "text" || node.text !== "") };
+  return pairing.result();
+}
+
+// The state of `processEmphasis`: the nodes so far, and the open
+// delimiter runs, innermost last, each with where its text sits in `out`
+// and the deepest node after it.
+class EmphasisPairing {
+  constructor() {
+    this.out = [];
+    this.stack = [];
+    this.openers = { "*": 0, _: 0, "~": 0 };
+    this.outerDepth = 0;
+  }
+
+  append(node, depth) {
+    this.out.push(node);
+    this.note(depth);
+  }
+
+  // Records a node of `depth` after the innermost open run.
+  note(depth) {
+    const top = this.stack.at(-1);
+    if (top) {
+      top.depth = Math.max(top.depth, depth);
+    } else {
+      this.outerDepth = Math.max(this.outerDepth, depth);
+    }
+  }
+
+  // Forgets the innermost open run; its text stays text.
+  drop() {
+    const entry = this.stack.pop();
+    this.openers[entry.mark] -= 1;
+    this.note(entry.depth);
+  }
+
+  delimiter(token) {
+    let remaining = token.count;
+    while (token.canClose && remaining > 0 && this.openers[token.mark] > 0) {
+      const used = this.close(token, remaining);
+      if (used === 0) {
+        break;
+      }
+      remaining -= used;
+    }
+    if (remaining === 0) {
+      return;
+    }
+    const text = { text: token.mark.repeat(remaining), type: "text" };
+    this.out.push(text);
+    if (token.canOpen) {
+      this.stack.push({ depth: 0, index: this.out.length - 1, mark: token.mark, remaining: remaining, text: text });
+      this.openers[token.mark] += 1;
+    }
+  }
+
+  // Pairs a closing run with `remaining` marks against the nearest open
+  // run of its mark, and returns how many marks that used: 0 when the
+  // pair would nest too deep.
+  close(token, remaining) {
+    while (this.stack.at(-1).mark !== token.mark) {
+      this.drop();
+    }
+    const opener = this.stack.at(-1);
+    if (opener.depth + 1 > MAX_NESTING) {
+      this.drop();
+
+      return 0;
+    }
+    const used = marksUsed(token.mark, remaining, opener.remaining);
+    const children = mergeText(this.out.splice(opener.index + 1));
+    const depth = opener.depth + 1;
+    opener.remaining -= used;
+    opener.text.text = token.mark.repeat(opener.remaining);
+    opener.depth = 0;
+    if (opener.remaining === 0) {
+      this.out.pop();
+      this.stack.pop();
+      this.openers[token.mark] -= 1;
+    }
+    this.append({ children: children, depth: depth, type: pairType(token.mark, used) }, depth);
+
+    return used;
+  }
+
+  result() {
+    const depth = this.stack.reduce((deepest, entry) => Math.max(deepest, entry.depth), this.outerDepth);
+
+    return { depth: depth, nodes: this.out.filter((node) => node.type !== "text" || node.text !== "") };
+  }
+}
+
+// How many marks a pair takes: `~~` always two, `*` and `_` two for
+// strong when both runs have them, else one.
+function marksUsed(mark, closing, opening) {
+  if (mark === "~" || (closing >= 2 && opening >= 2)) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function pairType(mark, used) {
+  if (used === 1) {
+    return "emphasis";
+  }
+
+  return mark === "~" ? "strike" : "strong";
 }
 
 // Joins neighbouring text nodes.
@@ -1038,60 +1230,50 @@ function appendInline(parent, nodes, context, isInLink) {
   return parent;
 }
 
+// How each node type renders. A type not listed, `plain`, is a message
+// too large to parse.
+const RENDERERS = {
+  blockquote: (node, context) => appendInline(create(context, "blockquote"), node.children, context, false),
+  break: (_node, context) => create(context, "break"),
+  code: (node, context) => withText(create(context, "code"), node.text),
+  code_block: (node, context) => renderCodeBlock(node, context),
+  emphasis: renderSpan,
+  heading: (node, context) =>
+    appendInline(create(context, "heading" + Math.min(node.level, 3)), node.children, context, false),
+  image: (node, context) =>
+    renderLink({ children: [{ text: node.alt || node.href, type: "text" }], href: node.href, image: true }, context),
+  // A link inside a link text is only its text.
+  link: (node, context, isInLink) =>
+    isInLink
+      ? appendInline(context.document.createDocumentFragment(), node.children, context, true)
+      : renderLink(node, context),
+  list: (node, context) => renderList(node, context),
+  paragraph: (node, context) => appendInline(create(context, "paragraph"), node.children, context, false),
+  rule: (_node, context) => create(context, "rule"),
+  strike: renderSpan,
+  strong: renderSpan,
+  table: (node, context) => renderTable(node, context),
+  text: (node, context) => context.document.createTextNode(node.text),
+};
+
 function renderNode(node, context, isInLink) {
-  const document = context.document;
-  switch (node.type) {
-    case "text":
-      return document.createTextNode(node.text);
-    case "break":
-      return create(context, "break");
-    case "code": {
-      const code = create(context, "code");
-      code.textContent = node.text;
-
-      return code;
-    }
-    case "emphasis":
-    case "strong":
-    case "strike":
-      return appendInline(create(context, node.type), node.children, context, isInLink);
-    case "link":
-      // A link inside a link text is only its text.
-      return isInLink
-        ? appendInline(document.createDocumentFragment(), node.children, context, true)
-        : renderLink(node, context);
-    case "image":
-      return renderLink(
-        { children: [{ text: node.alt || node.href, type: "text" }], href: node.href, image: true },
-        context,
-      );
-    case "paragraph":
-      return appendInline(create(context, "paragraph"), node.children, context, false);
-    case "heading":
-      return appendInline(
-        create(context, "heading" + Math.min(node.level, 3)),
-        node.children,
-        context,
-        false,
-      );
-    case "rule":
-      return create(context, "rule");
-    case "blockquote":
-      return appendInline(create(context, "blockquote"), node.children, context, false);
-    case "list":
-      return renderList(node, context);
-    case "code_block":
-      return renderCodeBlock(node, context);
-    case "table":
-      return renderTable(node, context);
-    default: {
-      // `plain`: too large to parse.
-      const plain = create(context, "plain", "md-plain");
-      plain.textContent = node.text ?? "";
-
-      return plain;
-    }
+  const render = Object.hasOwn(RENDERERS, node.type) ? RENDERERS[node.type] : null;
+  if (render) {
+    return render(node, context, isInLink);
   }
+
+  return withText(create(context, "plain", "md-plain"), node.text ?? "");
+}
+
+// `emphasis`, `strong` and `strike`, whose part names are their types.
+function renderSpan(node, context, isInLink) {
+  return appendInline(create(context, node.type), node.children, context, isInLink);
+}
+
+function withText(element, text) {
+  element.textContent = text;
+
+  return element;
 }
 
 function renderLink(node, context) {
@@ -1113,26 +1295,36 @@ function renderList(node, context) {
     list.setAttribute("start", String(node.start));
   }
   for (const entry of node.children) {
-    const item = create(context, "listItem");
-    if (entry.task !== null) {
-      const task = create(context, "task", "md-task");
-      task.textContent = entry.task ? "[x]" : "[ ]";
-      task.setAttribute("aria-label", entry.task ? "Done" : "Not done");
-      item.classList.add("md-task-item");
-      item.append(task, " ");
-    }
-    for (const child of entry.children) {
-      // A tight list shows its paragraphs without paragraph spacing.
-      if (!node.loose && child.type === "paragraph") {
-        appendInline(item, child.children, context, false);
-      } else {
-        item.append(renderNode(child, context, false));
-      }
-    }
-    list.append(item);
+    list.append(renderListItem(entry, node.loose, context));
   }
 
   return list;
+}
+
+function renderListItem(entry, isLoose, context) {
+  const item = create(context, "listItem");
+  if (entry.task !== null) {
+    item.classList.add("md-task-item");
+    item.append(renderTask(entry.task, context), " ");
+  }
+  for (const child of entry.children) {
+    // A tight list shows its paragraphs without paragraph spacing.
+    if (!isLoose && child.type === "paragraph") {
+      appendInline(item, child.children, context, false);
+    } else {
+      item.append(renderNode(child, context, false));
+    }
+  }
+
+  return item;
+}
+
+function renderTask(isDone, context) {
+  const task = create(context, "task", "md-task");
+  task.textContent = isDone ? "[x]" : "[ ]";
+  task.setAttribute("aria-label", isDone ? "Done" : "Not done");
+
+  return task;
 }
 
 function renderCodeBlock(node, context) {
