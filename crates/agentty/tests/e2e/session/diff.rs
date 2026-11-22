@@ -365,12 +365,7 @@ async fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
-    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|path| path.join("git"))
-        .find(|path| path.is_file())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
-    let real_git = real_git.to_string_lossy().replace('\'', "'\"'\"'");
-    let git_path = env.stub_bin.join("git");
+    let real_git = real_git_shell_path()?;
     let script = format!(
         r#"#!/bin/sh
 is_diff=false
@@ -388,6 +383,54 @@ fi
 exec '{real_git}' "$@"
 "#
     );
+
+    write_stub_git(env, &script)
+}
+
+/// Seeds a running session whose second full patch read sees a new worktree
+/// edit, so only a live re-read of the open diff can show it.
+async fn seed_in_progress_session_with_later_edit(env: &BuilderEnv) -> E2eResult {
+    seed_in_progress_session_with_live_edit(env).await?;
+    let quote = |path: &std::path::Path| path.to_string_lossy().replace('\'', "'\"'\"'");
+    let first_read_marker = quote(&env.stub_bin.join("first-patch-read"));
+    let edited_file = quote(&env.agentty_root.join("wt/review-s/src/main.rs"));
+    let real_git = real_git_shell_path()?;
+    let script = format!(
+        r#"#!/bin/sh
+is_patch=false
+for argument in "$@"; do
+  case "$argument" in
+    --src-prefix=a/) is_patch=true ;;
+    --name-only|--numstat|--stat) exec '{real_git}' "$@" ;;
+  esac
+done
+if [ "$is_patch" = true ]; then
+  if [ -e '{first_read_marker}' ]; then
+    printf 'fn main() {{\n    println!("live refresh");\n}}\n' > '{edited_file}'
+  else
+    : > '{first_read_marker}'
+  fi
+fi
+exec '{real_git}' "$@"
+"#
+    );
+
+    write_stub_git(env, &script)
+}
+
+/// Returns the real `git` path quoted for a single-quoted shell string.
+fn real_git_shell_path() -> Result<String, Box<dyn std::error::Error>> {
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+
+    Ok(real_git.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+/// Installs `script` as the executable `git` wrapper seen by Agentty.
+fn write_stub_git(env: &BuilderEnv, script: &str) -> E2eResult {
+    let git_path = env.stub_bin.join("git");
     std::fs::write(&git_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
@@ -750,6 +793,50 @@ async fn test_in_progress_session_diff_shows_live_edits() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that an open diff re-reads a running session's worktree and shows
+/// edits made after it opened.
+#[tokio::test]
+async fn test_open_diff_refreshes_live_edits() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("open_diff_refreshes_live_edits")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| Box::pin(async move { seed_in_progress_session_with_later_edit(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Working...", 5000)
+                    .press_key("d")
+                    .wait_for_text("println!(\"review\")", 5000)
+                    .capture_labeled("opened_diff", "Diff opened before the later edit")
+                    .wait_for_text("live refresh", 20000)
+                    .capture_labeled("refreshed_diff", "Open diff shows the later edit")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let opened_frame = common::frame_from_capture(&report.captures[0]);
+                    let opened_full = Region::full(opened_frame.cols(), opened_frame.rows());
+                    assertion::assert_text_in_region(
+                        &opened_frame,
+                        "println!(\"review\")",
+                        &opened_full,
+                    );
+                    assertion::assert_not_visible(&opened_frame, "live refresh");
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "live refresh", &full);
                     assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
                 })
             },

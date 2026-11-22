@@ -1707,3 +1707,193 @@ async fn review_diff_failure_restores_review_status() {
         Some(ReviewCacheEntry::Failed { error, .. }) if error.contains("unavailable")
     ));
 }
+
+/// Builds an open Diff page showing `diff` for `session_id`.
+fn open_diff_mode(session_id: &SessionId, diff: &str) -> AppMode {
+    AppMode::Diff {
+        diff: diff.to_string(),
+        file_explorer_selected_index: 0,
+        focus: crate::presentation::app_mode::DiffFocus::Files,
+        line_comments: crate::presentation::app_mode::DiffLineComments::default(),
+        preview: crate::presentation::app_mode::DiffPreview::default(),
+        review_comments: None,
+        restore: None,
+        scroll_cache: None,
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+        session_id: session_id.clone(),
+    }
+}
+
+/// Returns the request ids of pending open-diff refreshes.
+fn pending_refresh_request_ids(app: &App) -> Vec<u64> {
+    app.pending_session_diff_requests
+        .iter()
+        .filter(|(_, request)| matches!(request.purpose, SessionDiffPurpose::Refresh))
+        .map(|(request_id, _)| *request_id)
+        .collect()
+}
+
+/// Registers one open-diff refresh continuation and returns its request id.
+fn insert_pending_refresh(app: &mut App, request_id: u64, session_id: &SessionId) -> u64 {
+    app.pending_session_diff_requests.insert(
+        request_id,
+        PendingSessionDiffRequest {
+            purpose: SessionDiffPurpose::Refresh,
+            session_id: session_id.clone(),
+        },
+    );
+
+    request_id
+}
+
+#[tokio::test]
+async fn open_diff_refresh_rereads_worktree_diff_once_per_interval() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    app.mode = open_diff_mode(&session_id, "diff --git a/old b/old\n+old");
+    let opened_at = std::time::Instant::now();
+
+    // Act
+    app.start_open_diff_refresh_if_due(opened_at);
+    app.start_open_diff_refresh_if_due(opened_at + std::time::Duration::from_secs(9));
+    let requests_before_interval = pending_refresh_request_ids(&app);
+    app.start_open_diff_refresh_if_due(opened_at + std::time::Duration::from_secs(10));
+    app.start_open_diff_refresh_if_due(opened_at + std::time::Duration::from_secs(20));
+    let requests_after_interval = pending_refresh_request_ids(&app);
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: requests_after_interval[0],
+        result: Ok("diff --git a/new b/new\n+new".to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert_eq!(requests_before_interval, Vec::<u64>::new());
+    assert_eq!(requests_after_interval.len(), 1);
+    assert!(app.pending_session_diff_requests.is_empty());
+    let refreshed = app
+        .take_refreshed_session_diff()
+        .expect("changed diff should wait for the runtime");
+    assert_eq!(refreshed.diff, "diff --git a/new b/new\n+new");
+    assert_eq!(refreshed.session_id, session_id);
+}
+
+#[tokio::test]
+async fn open_diff_refresh_skips_closed_archived_and_missing_sessions() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    let missing_session_id = SessionId::from("missing-session");
+    let opened_at = std::time::Instant::now();
+    let interval = std::time::Duration::from_secs(10);
+
+    // Act — closing the page clears its schedule, so reopening re-arms it.
+    app.mode = open_diff_mode(&session_id, "");
+    app.start_open_diff_refresh_if_due(opened_at);
+    app.mode = AppMode::List;
+    app.start_open_diff_refresh_if_due(opened_at + interval);
+    app.mode = open_diff_mode(&session_id, "");
+    app.start_open_diff_refresh_if_due(opened_at + interval);
+    let requests_after_reopen = pending_refresh_request_ids(&app);
+    app.sessions.sessions_mut()[0].status = Status::Done;
+    app.start_open_diff_refresh_if_due(opened_at + interval * 2);
+    let requests_for_archived_session = pending_refresh_request_ids(&app);
+    app.mode = open_diff_mode(&missing_session_id, "");
+    app.start_open_diff_refresh_if_due(opened_at + interval * 2);
+    app.start_open_diff_refresh_if_due(opened_at + interval * 3);
+
+    // Assert
+    assert_eq!(requests_after_reopen, Vec::<u64>::new());
+    assert_eq!(requests_for_archived_session, Vec::<u64>::new());
+    assert_eq!(pending_refresh_request_ids(&app), Vec::<u64>::new());
+}
+
+#[tokio::test]
+async fn reopening_diff_ignores_refresh_started_by_closed_page() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    let other_session_id = SessionId::from("other-session");
+    app.mode = open_diff_mode(&session_id, "diff --git a/file b/file\n+first");
+    let stale_request_id = insert_pending_refresh(&mut app, u64::MAX, &session_id);
+    let other_request_id = insert_pending_refresh(&mut app, u64::MAX - 1, &other_session_id);
+    app.queue_refreshed_session_diff(
+        session_id.clone(),
+        "diff --git a/file b/file\n+queued".to_string(),
+    );
+    app.mode = AppMode::List;
+
+    // Act
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files));
+    let open_request_id =
+        loading_request_id(&app).expect("diff loading mode should have a request");
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: open_request_id,
+        result: Ok("diff --git a/file b/file\n+reopened".to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: stale_request_id,
+        result: Ok("diff --git a/file b/file\n+stale".to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert!(app.take_refreshed_session_diff().is_none());
+    assert_eq!(pending_refresh_request_ids(&app), vec![other_request_id]);
+    assert!(matches!(
+        app.mode,
+        AppMode::Diff { ref diff, .. } if diff == "diff --git a/file b/file\n+reopened"
+    ));
+}
+
+#[tokio::test]
+async fn open_diff_refresh_ignores_unchanged_failed_and_stale_results() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+    let other_session_id = SessionId::from("other-session");
+    let visible_diff = "diff --git a/file b/file\n+visible";
+    app.mode = open_diff_mode(&session_id, visible_diff);
+    app.queue_refreshed_session_diff(
+        session_id.clone(),
+        "diff --git a/file b/file\n+older".to_string(),
+    );
+
+    // Act
+    let unchanged_request_id = insert_pending_refresh(&mut app, u64::MAX, &session_id);
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: unchanged_request_id,
+        result: Ok(visible_diff.to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+    let unchanged_refresh = app.take_refreshed_session_diff();
+    let failed_request_id = insert_pending_refresh(&mut app, u64::MAX - 1, &session_id);
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: failed_request_id,
+        result: Err("Failed to run git diff: unavailable".to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+    let other_request_id = insert_pending_refresh(&mut app, u64::MAX - 2, &other_session_id);
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: other_request_id,
+        result: Ok("diff --git a/other b/other\n+other".to_string()),
+        session_id: other_session_id,
+    })
+    .await;
+    app.mode = AppMode::List;
+    let closed_request_id = insert_pending_refresh(&mut app, u64::MAX - 3, &session_id);
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id: closed_request_id,
+        result: Ok("diff --git a/closed b/closed\n+closed".to_string()),
+        session_id,
+    })
+    .await;
+
+    // Assert
+    assert!(unchanged_refresh.is_none());
+    assert!(app.take_refreshed_session_diff().is_none());
+    assert!(app.pending_session_diff_requests.is_empty());
+}

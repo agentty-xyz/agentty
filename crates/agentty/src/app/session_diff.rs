@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use tracing::warn;
 
@@ -24,6 +25,10 @@ use crate::presentation::app_mode::{
 /// Maximum number of delayed persistence attempts after an automatic-review
 /// deferral write fails.
 const MAX_DEFERRED_AUTO_REVIEW_PERSISTENCE_RETRIES: u8 = 3;
+
+/// Time between background re-reads of the full diff shown on an open Diff
+/// page.
+const OPEN_DIFF_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 /// One delayed automatic-review deferral persistence attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,6 +73,24 @@ pub(crate) struct PendingSessionDiffRequest {
     session_id: SessionId,
 }
 
+/// Periodic live-refresh state for the full diff shown on an open Diff page.
+#[derive(Default)]
+pub(crate) struct OpenDiffRefresh {
+    /// Session whose open diff is scheduled and the instant its next
+    /// background re-read is due.
+    deadline: Option<(SessionId, Instant)>,
+    /// Newer diff waiting for the runtime to apply it to the open page.
+    refreshed: Option<RefreshedSessionDiff>,
+}
+
+/// Newer full diff text loaded for one open Diff page.
+pub(crate) struct RefreshedSessionDiff {
+    /// Complete replacement diff text.
+    pub(crate) diff: String,
+    /// Session whose open Diff page requested this diff.
+    pub(crate) session_id: SessionId,
+}
+
 /// Stable focused-review inputs captured before a project switch can unload
 /// the session snapshot.
 struct FocusedReviewTarget {
@@ -83,6 +106,7 @@ enum SessionDiffPurpose {
         suggestions: String,
     },
     Open,
+    Refresh,
     Review {
         cached_diff_hash: Option<u64>,
         is_manual: bool,
@@ -118,6 +142,7 @@ impl App {
             } if viewed_session_id == session_id => *scroll_offset,
             _ => None,
         };
+        self.discard_open_diff_refresh(session_id);
         let Some(request_id) =
             self.spawn_session_diff_request(session_id, SessionDiffPurpose::Open)
         else {
@@ -164,6 +189,66 @@ impl App {
             },
             |restore| restore.into_mode(),
         );
+    }
+
+    /// Starts one background re-read of the open Diff page's full diff each
+    /// time its refresh interval elapses, so worktree changes made while the
+    /// page stays open appear without reopening it. Archived and unstarted
+    /// sessions are skipped because their diff cannot change.
+    pub(crate) fn start_open_diff_refresh_if_due(&mut self, now: Instant) {
+        let AppMode::Diff { session_id, .. } = &self.mode else {
+            self.open_diff_refresh.deadline = None;
+
+            return;
+        };
+        let session_id = session_id.clone();
+        let next_deadline = Some((session_id.clone(), now + OPEN_DIFF_REFRESH_INTERVAL));
+        match &self.open_diff_refresh.deadline {
+            Some((scheduled_session_id, deadline)) if *scheduled_session_id == session_id => {
+                if now < *deadline {
+                    return;
+                }
+            }
+            Some(_) | None => {
+                self.open_diff_refresh.deadline = next_deadline;
+
+                return;
+            }
+        }
+
+        self.open_diff_refresh.deadline = next_deadline;
+        let is_refresh_pending = self.pending_session_diff_requests.values().any(|request| {
+            request.session_id == session_id
+                && matches!(request.purpose, SessionDiffPurpose::Refresh)
+        });
+        if is_refresh_pending {
+            return;
+        }
+        let Some(session) = self.sessions.session_for_id(&session_id) else {
+            return;
+        };
+        let (folder, source) = self.session_diff_task_target(session);
+        if !matches!(source, SessionDiffTaskSource::Worktree { .. }) {
+            return;
+        }
+
+        self.spawn_session_diff_request_for_target(
+            &session_id,
+            SessionDiffPurpose::Refresh,
+            folder,
+            source,
+        );
+    }
+
+    /// Takes the newer diff waiting to replace the open Diff page's content.
+    pub(crate) fn take_refreshed_session_diff(&mut self) -> Option<RefreshedSessionDiff> {
+        self.open_diff_refresh.refreshed.take()
+    }
+
+    /// Holds a newer diff for `session_id` until the runtime can apply it to
+    /// the open page. A later refresh replaces it.
+    pub(crate) fn queue_refreshed_session_diff(&mut self, session_id: SessionId, diff: String) {
+        self.open_diff_refresh.refreshed = Some(RefreshedSessionDiff { diff, session_id });
     }
 
     /// Discards every diff continuation, deferred automatic-review trigger,
@@ -527,6 +612,7 @@ impl App {
                 .await;
             }
             SessionDiffPurpose::Open => self.apply_open_diff_update(update),
+            SessionDiffPurpose::Refresh => self.apply_refreshed_diff_update(update),
             SessionDiffPurpose::Review {
                 cached_diff_hash,
                 is_manual,
@@ -650,6 +736,16 @@ impl App {
         }
 
         self.reply(session_id, prompt).await;
+    }
+
+    /// Discards refresh reads and any queued refreshed diff left by an earlier
+    /// Diff page, so their older results cannot replace a newly opened diff.
+    fn discard_open_diff_refresh(&mut self, session_id: &SessionId) {
+        self.pending_session_diff_requests.retain(|_, request| {
+            request.session_id != *session_id
+                || !matches!(request.purpose, SessionDiffPurpose::Refresh)
+        });
+        self.open_diff_refresh.refreshed = None;
     }
 
     /// Discards detached diff tasks whose continuations belong to an obsolete
@@ -880,6 +976,30 @@ impl App {
             selected_diff_line_index: 0,
             session_id,
         };
+    }
+
+    /// Queues a reloaded diff for the open page only when it differs from the
+    /// visible diff. A failed re-read keeps the visible diff unchanged.
+    fn apply_refreshed_diff_update(&mut self, update: SessionDiffUpdate) {
+        let AppMode::Diff {
+            diff, session_id, ..
+        } = &self.mode
+        else {
+            return;
+        };
+        if *session_id != update.session_id {
+            return;
+        }
+        let Ok(refreshed_diff) = update.result else {
+            return;
+        };
+        if *diff == refreshed_diff {
+            self.open_diff_refresh.refreshed = None;
+
+            return;
+        }
+
+        self.queue_refreshed_session_diff(update.session_id, refreshed_diff);
     }
 
     /// Validates and starts focused review generation from one background

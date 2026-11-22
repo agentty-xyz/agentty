@@ -40,7 +40,7 @@ use crate::analytics::Analytics;
 use crate::app;
 use crate::app::graph_question::{GraphQuestionState, GraphQuestionTarget};
 use crate::app::prompt_intent::DeferredSessionSettings;
-use crate::app::session_diff::PendingSessionDiffRequest;
+use crate::app::session_diff::{OpenDiffRefresh, PendingSessionDiffRequest};
 use crate::app::{AppError, session, spawn};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
@@ -260,6 +260,9 @@ pub struct App {
     pub(crate) needs_redraw: bool,
     /// Monotonic identifier assigned to the next explicit project sync.
     pub(crate) next_sync_operation_id: u64,
+    /// Schedules live re-reads of the open Diff page and holds a newer diff
+    /// until the runtime applies it.
+    pub(crate) open_diff_refresh: OpenDiffRefresh,
     /// Retains focused-review cache generations until their durable writes
     /// settle so project-scoped refreshes cannot discard off-project output.
     pub(crate) pending_focused_review_persistence: HashMap<SessionId, FocusedReviewPersistence>,
@@ -1887,12 +1890,14 @@ impl App {
             .and_then(|transcript| transcript.conversation_replay_text())
     }
 
-    /// Reloads sessions when metadata cache indicates changes and opens the
-    /// question panel for the viewed session's pending graph questions.
+    /// Reloads sessions when metadata cache indicates changes, opens the
+    /// question panel for the viewed session's pending graph questions, and
+    /// schedules the open Diff page's live re-read.
     ///
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
+        self.start_open_diff_refresh_if_due(self.services.clock().now_instant());
         let graph_refreshed = self.refresh_graph_chat_if_needed().await;
         let graph_questions_opened = self.reconcile_graph_question_mode().await;
         let resources_refreshed = self.sessions.refresh_resources().await;

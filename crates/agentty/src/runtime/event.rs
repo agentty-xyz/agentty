@@ -214,6 +214,7 @@ where
         tick,
         timing,
         |app, terminal, event| {
+            mode::diff::apply_refreshed_diff(app, presentation.render_cache_store());
             if let Some(Event::Key(key)) = event.as_ref()
                 && is_press_key_event(*key)
             {

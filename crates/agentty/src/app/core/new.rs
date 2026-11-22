@@ -198,6 +198,7 @@ impl App {
             last_seen_session_update_versions: std::collections::HashMap::new(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             next_sync_operation_id: 1,
+            open_diff_refresh: crate::app::session_diff::OpenDiffRefresh::default(),
             project_sync_status: None,
             project_sync_status_expires_at: None,
             session_progress_messages: std::collections::HashMap::new(),

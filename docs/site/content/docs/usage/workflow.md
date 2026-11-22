@@ -161,6 +161,10 @@ draft and images. Leaving Diff mode with unsent comments asks whether to submit 
 declined comments are kept until the next turn starts. Read-only sessions cannot submit
 comments. See [Diff Mode](@/docs/usage/keybindings.md#diff-mode).
 
+An open diff of a live worktree re-reads it every 10 seconds, so edits made while it is
+open appear without reopening it. The selected file and line stay selected while they
+still exist; an update waits while you edit a comment or select rows.
+
 ### Continuing Long Sessions
 
 Follow-ups keep the active goal and accepted decisions unless you cancel or replace

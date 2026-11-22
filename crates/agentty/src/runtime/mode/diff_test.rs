@@ -18,6 +18,9 @@ mod prompt;
 #[path = "diff_test/question_test.rs"]
 mod question;
 
+#[path = "diff_test/refresh_test.rs"]
+mod refresh;
+
 #[path = "diff_test/review_test.rs"]
 mod review;
 
