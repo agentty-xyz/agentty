@@ -235,6 +235,7 @@ fn replace_status_reports_only_real_changes() {
             device_name: "Phone".to_string(),
         }],
         pairing_requests: Vec::new(),
+        relay: None,
     };
     let mut status = RemoteServerStatus::default();
 
@@ -283,6 +284,7 @@ async fn issue_pairing_code_reports_missing_entropy() {
     let config = RemoteServerConfig {
         allowed_hosts: Vec::new(),
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        relay: None,
     };
     let handle = start_with_entropy(config, host, Arc::new(FailingEntropy))
         .await

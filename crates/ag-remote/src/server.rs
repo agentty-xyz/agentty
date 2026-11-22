@@ -16,10 +16,11 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::connection;
+use crate::connection::{self, DeviceProof};
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::entropy::{Entropy, OsEntropy};
 use crate::pairing::{PairingCode, PairingState};
+use crate::relay::{self, RelayStatus, RemoteRelayConfig};
 
 /// Largest accepted WebSocket message or frame, in bytes.
 const MAX_MESSAGE_SIZE: usize = 1 << 20;
@@ -54,6 +55,10 @@ pub struct RemoteServerConfig {
     pub allowed_hosts: Vec<String>,
     /// Address to bind; port `0` selects a free port.
     pub bind_addr: SocketAddr,
+    /// Relay to register with, so devices can also connect without reaching
+    /// the listener. Those devices encrypt end to end and pair with their
+    /// own key.
+    pub relay: Option<RemoteRelayConfig>,
 }
 
 /// Failure starting or controlling the server.
@@ -78,6 +83,8 @@ pub struct RemoteServerStatus {
     /// Devices that redeemed a pairing code and wait for approval, in
     /// arrival order.
     pub pairing_requests: Vec<PairingRequest>,
+    /// State of the relay link; `None` when no relay is configured.
+    pub relay: Option<RelayStatus>,
 }
 
 /// One device waiting for the host to approve its pairing.
@@ -148,6 +155,9 @@ pub(crate) async fn start_with_entropy(
             .with_graceful_shutdown(shutdown)
             .await;
     });
+    if let Some(relay) = config.relay {
+        tokio::spawn(relay::run(Arc::clone(&state), relay));
+    }
 
     Ok(RemoteServerHandle {
         local_addr,
@@ -253,6 +263,8 @@ pub(crate) struct ServerState {
     open_sockets_tx: watch::Sender<usize>,
     pairing: Mutex<PairingState>,
     pairing_requests: Mutex<PairingRequestRegistry>,
+    /// State of the relay link, once a relay task reports it.
+    relay_status: Mutex<Option<RelayStatus>>,
     status_tx: watch::Sender<RemoteServerStatus>,
     /// Sockets holding a [`HandshakeSlot`].
     unauthenticated_sockets: Mutex<usize>,
@@ -275,6 +287,7 @@ impl ServerState {
             open_sockets_tx: watch::Sender::new(0),
             pairing: Mutex::new(PairingState::default()),
             pairing_requests: Mutex::new(PairingRequestRegistry::default()),
+            relay_status: Mutex::new(None),
             shutdown_rx,
             status_tx: watch::Sender::new(RemoteServerStatus::default()),
             unauthenticated_sockets: Mutex::new(0),
@@ -294,6 +307,24 @@ impl ServerState {
     /// Returns a fresh subscription to host revisions.
     pub(crate) fn revisions(&self) -> watch::Receiver<u64> {
         self.host.revisions.clone()
+    }
+
+    /// Resolves once the server starts stopping or its handle is gone.
+    pub(crate) fn stopping(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
+        async move {
+            let _ = shutdown_rx.wait_for(|is_stopping| *is_stopping).await;
+        }
+    }
+
+    /// Records the state of the relay link and publishes it.
+    pub(crate) fn set_relay_status(&self, status: RelayStatus) {
+        *self
+            .relay_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(status);
+        self.publish_status();
     }
 
     /// Locks the pairing state, recovering it after a panic elsewhere.
@@ -462,9 +493,14 @@ impl ServerState {
             .values()
             .map(|pending| pending.request.clone())
             .collect();
+        let relay = *self
+            .relay_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let next = RemoteServerStatus {
             connections,
             pairing_requests,
+            relay,
         };
         self.status_tx
             .send_if_modified(|status| replace_status(status, next));
@@ -621,7 +657,7 @@ async fn upgrade(
     upgrade
         .max_message_size(MAX_MESSAGE_SIZE)
         .max_frame_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| connection::serve(socket, state, handshake))
+        .on_upgrade(move |socket| connection::serve(socket, state, handshake, DeviceProof::Token))
 }
 
 /// Refuses every request whose `Host` is neither loopback nor allowed.

@@ -1,17 +1,20 @@
 use std::sync::Arc;
 
+use ag_noise::PublicKey;
+use tokio::sync::watch;
+
 use super::{
-    Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, MAX_DEVICE_NAME_CHARS,
-    MessageOutcome, PairingDevice, authenticate, complete_pairing, device_display_name,
+    Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, DeviceProof,
+    MAX_DEVICE_NAME_CHARS, MessageOutcome, PairingDevice, complete_pairing, device_display_name,
     handle_incoming,
 };
 use crate::PROTOCOL_VERSION;
-use crate::device::token_hash;
+use crate::device::{key_hash, token_hash};
 use crate::protocol::{
     ClientFrame, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
     RemoteSessionSummary, ServerFrame,
 };
-use crate::server::RemoteConnection;
+use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
     FIND, FailingEntropy, INSERT, MemoryDeviceStore, RecordingBackend, ReplayEntropy, StateFixture,
     TOUCH,
@@ -25,6 +28,21 @@ fn fixture(devices: MemoryDeviceStore) -> StateFixture {
         RecordingBackend::default(),
         Arc::new(ReplayEntropy::new(vec![0])),
     )
+}
+
+/// Authenticates the first frame of a connection that proves itself with a
+/// token.
+async fn authenticate(
+    state: &ServerState,
+    frame: ClientFrame,
+    revisions: &mut watch::Receiver<u64>,
+) -> Result<Authentication, &'static str> {
+    super::authenticate(state, frame, revisions, &DeviceProof::Token).await
+}
+
+/// Public key of the device that connects through a relay in these tests.
+fn device_key() -> PublicKey {
+    PublicKey::from_bytes(&[7; 32]).expect("key should load")
 }
 
 /// Issues the code `AAAA-AAAA` that [`fixture`] entropy produces.
@@ -157,10 +175,74 @@ async fn first_frames_reject_other_protocol_versions() {
 fn pairing_device(device_name: &str) -> PairingDevice {
     PairingDevice {
         confirmation: "AAAA".to_string(),
+        credential_hash: token_hash(&"00".repeat(32)),
         device_id: "00".repeat(16),
         device_name: device_name.to_string(),
         token: "00".repeat(32),
     }
+}
+
+#[tokio::test]
+async fn key_device_pairs_and_authenticates_without_a_token() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::default());
+    let code = issue_code(&fixture);
+    let proof = DeviceProof::Key(device_key());
+    let mut revisions = fixture.state.revisions();
+
+    // Act
+    let requested =
+        super::authenticate(&fixture.state, pair(&code, "Phone"), &mut revisions, &proof).await;
+    let device = match requested {
+        Ok(Authentication::PairingRequested(device)) => Some(device),
+        _ => None,
+    }
+    .expect("pairing should be requested");
+    let token = device.token.clone();
+    let paired = complete_pairing(&fixture.state, device, &mut revisions).await;
+    let welcomed =
+        super::authenticate(&fixture.state, hello("ignored"), &mut revisions, &proof).await;
+
+    // Assert
+    assert_eq!(token, "");
+    assert!(paired.is_ok());
+    assert_eq!(
+        fixture.devices.stored(),
+        [(
+            "00".repeat(16),
+            "Phone".to_string(),
+            key_hash(&device_key())
+        )]
+    );
+    assert!(matches!(welcomed, Ok(Authentication::Authenticated { .. })));
+}
+
+#[tokio::test]
+async fn a_public_key_presented_as_a_token_authenticates_nothing() {
+    // Arrange
+    let fixture =
+        fixture(MemoryDeviceStore::default().with_device("phone", &key_hash(&device_key())));
+    let key_as_token = device_key().to_hex();
+    let other_key = DeviceProof::Key(PublicKey::from_bytes(&[8; 32]).expect("key should load"));
+
+    // Act
+    let with_token = authenticate(
+        &fixture.state,
+        hello(&key_as_token),
+        &mut fixture.state.revisions(),
+    )
+    .await;
+    let with_other_key = super::authenticate(
+        &fixture.state,
+        hello(""),
+        &mut fixture.state.revisions(),
+        &other_key,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(with_token, Err("Unknown device token"));
+    assert_eq!(with_other_key, Err("Unknown device token"));
 }
 
 #[tokio::test]

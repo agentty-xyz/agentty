@@ -1,7 +1,12 @@
 //! Paired-device records and the host persistence port.
 
+use ag_noise::PublicKey;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+
+/// Starts the digest input of a device public key. `0xFF` never occurs in
+/// UTF-8 text, so no token shares this prefix.
+const KEY_HASH_PREFIX: &[u8] = b"\xFFagentty-device-key";
 
 /// One paired device, as the host stores it. Tokens are never retained.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,7 +28,8 @@ pub struct NewRemoteDevice {
     pub id: String,
     /// Name the device chose while pairing.
     pub name: String,
-    /// Lowercase hexadecimal SHA-256 digest of the device token.
+    /// Lowercase hexadecimal SHA-256 digest of the device credential: its
+    /// token, or its public key for a device paired through a relay.
     pub token_hash: String,
 }
 
@@ -41,7 +47,7 @@ pub trait DeviceStore: Send + Sync {
     /// Lists every paired device.
     async fn list_devices(&self) -> Result<Vec<RemoteDevice>, DeviceStoreError>;
 
-    /// Finds the device whose token hashes to `token_hash`.
+    /// Finds the device whose credential digest is `token_hash`.
     async fn find_device_by_token_hash(
         &self,
         token_hash: &str,
@@ -60,6 +66,20 @@ pub trait DeviceStore: Send + Sync {
 /// Returns the lowercase hexadecimal SHA-256 digest that stores `token`.
 pub(crate) fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+/// Returns the digest that stores the public key of a device paired through
+/// a relay.
+///
+/// The digest input starts with a byte that no token can contain, because
+/// tokens arrive as text. A key digest therefore never equals a token
+/// digest, and presenting a public key as a token authenticates nothing.
+pub(crate) fn key_hash(public_key: &PublicKey) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(KEY_HASH_PREFIX);
+    hasher.update(public_key.as_bytes());
+
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]

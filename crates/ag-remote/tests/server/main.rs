@@ -3,5 +3,6 @@
 mod http;
 mod lifecycle;
 mod pairing;
+mod relay;
 mod request;
 mod support;

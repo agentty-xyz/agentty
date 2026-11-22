@@ -14,6 +14,10 @@ through `ag_session::SessionService`.
 - Keep the connection defences: a redeemed pairing code yields a token only after host
   approval, every route refuses a `Host` outside loopback and `allowed_hosts`, and
   unauthenticated sockets stay capped.
+- Treat the relay as untrusted: relay devices talk only through `EncryptedTransport`,
+  authenticate by the key their handshake proved, and share the same pairing approval
+  and unauthenticated-socket cap as local devices. Keep key digests domain-separated
+  from token digests.
 - Keep the web client in `crates/ag-remote/assets/` free of build steps and external
   resources, and render untrusted text with `textContent` so the content security policy
   can stay strict.

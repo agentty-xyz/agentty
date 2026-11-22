@@ -21,7 +21,10 @@ pub enum ClientFrame {
     Hello {
         /// Protocol version the client speaks.
         protocol_version: u32,
-        /// Device token returned by [`ServerFrame::Paired`].
+        /// Device token returned by [`ServerFrame::Paired`]. A device
+        /// connected through a relay omits it: its encrypted channel already
+        /// proves its key.
+        #[serde(default)]
         token: String,
     },
     /// Pairs a new device with a one-time code shown in the terminal.
@@ -109,7 +112,10 @@ pub enum ServerFrame {
         protocol_version: u32,
         /// Host revision at authentication time.
         revision: u64,
-        /// Secret device token. The server keeps only its hash.
+        /// Secret device token. The server keeps only its hash. Absent for
+        /// a device paired through a relay, which authenticates with its
+        /// key instead.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         token: String,
     },
     /// The server refused the connection and closes it next.

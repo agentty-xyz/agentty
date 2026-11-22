@@ -180,6 +180,7 @@ fn connected(device_id: &str) -> RemoteServerStatus {
             device_name: device_id.to_string(),
         }],
         pairing_requests: Vec::new(),
+        relay: None,
     }
 }
 
@@ -195,6 +196,7 @@ fn pairing(request_ids: &[u64]) -> RemoteServerStatus {
                 id: *id,
             })
             .collect(),
+        relay: None,
     }
 }
 
