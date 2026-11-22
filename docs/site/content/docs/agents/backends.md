@@ -129,8 +129,8 @@ to an installed backend.
 | Review | Focused reviews            |
 
 Session overrides take precedence, and changing defaults does not alter existing
-sessions. `Default Response Style` starts new sessions as `Concise`, `Balanced`, or
-`Detailed`.
+sessions. `Default Response Style` starts new sessions as `Concise`, the default,
+`Balanced`, or `Detailed`.
 
 Antigravity maps `xhigh` and `max` reasoning to `high`, except `gemini-4-neon` and
 `gemini-4-hydrogen`, which use `xhigh`; `gpt-oss-120b` always uses `medium`, and

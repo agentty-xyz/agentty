@@ -469,7 +469,7 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         // Assert
         let buffer = terminal.backend().buffer();
         let settings = format!(
-            "codex/{} [high] · Balanced · Normal · Auto Edit",
+            "codex/{} [high] · Concise · Normal · Auto Edit",
             model_fixture::CODEX_MODEL_ID
         );
         let composer_row = (0..height)
@@ -559,11 +559,11 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
 
     // Assert
     assert!(text.contains(&format!(
-        "codex/{} [high] · Balanced · Normal · Auto Edit",
+        "codex/{} [high] · Concise · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains(&format!(
-        "codex/{} [high]  · Balanced · Normal · Auto Edit",
+        "codex/{} [high]  · Concise · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
 }
@@ -580,7 +580,7 @@ fn test_render_prompt_composer_shows_saved_reasoning_level() {
 
     // Assert
     assert!(text.contains(&format!(
-        "codex/{} [low] · Balanced · Normal · Auto Edit",
+        "codex/{} [low] · Concise · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains("Reasoning:"));

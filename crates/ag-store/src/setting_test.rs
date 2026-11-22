@@ -46,9 +46,9 @@ async fn project_response_style_loads_persisted_value_and_defaults_invalid_value
         .expect("invalid style should default");
 
     // Assert
-    assert_eq!(missing_style, ResponseStyle::Balanced);
+    assert_eq!(missing_style, ResponseStyle::Concise);
     assert_eq!(detailed_style, ResponseStyle::Detailed);
-    assert_eq!(invalid_style, ResponseStyle::Balanced);
+    assert_eq!(invalid_style, ResponseStyle::Concise);
 }
 
 #[tokio::test]

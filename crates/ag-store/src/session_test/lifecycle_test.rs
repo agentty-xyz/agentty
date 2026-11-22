@@ -158,7 +158,7 @@ async fn test_session_response_style_defaults_and_round_trips_updates() {
         .expect("updated style should load");
 
     // Assert
-    assert_eq!(default_style, ResponseStyle::Balanced);
+    assert_eq!(default_style, ResponseStyle::Concise);
     assert_eq!(updated_style, ResponseStyle::Detailed);
 }
 

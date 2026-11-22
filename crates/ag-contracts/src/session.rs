@@ -7,9 +7,9 @@ use std::str::FromStr;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ResponseStyle {
     /// Keep responses compact while retaining essential results and caveats.
+    #[default]
     Concise,
     /// Balance brevity with enough context to understand and verify the result.
-    #[default]
     Balanced,
     /// Explain decisions, trade-offs, effects, and verification thoroughly.
     Detailed,

@@ -379,7 +379,7 @@ async fn response_style_load_returns_persisted_value_and_defaults_missing_sessio
         .expect("failed to insert worker session");
     repositories
         .sessions()
-        .update_session_response_style("worker", ResponseStyle::Concise)
+        .update_session_response_style("worker", ResponseStyle::Detailed)
         .await
         .expect("failed to persist response style");
 
@@ -388,8 +388,8 @@ async fn response_style_load_returns_persisted_value_and_defaults_missing_sessio
     let missing_style = load_session_response_style(&repositories, "missing").await;
 
     // Assert
-    assert_eq!(persisted_style, ResponseStyle::Concise);
-    assert_eq!(missing_style, ResponseStyle::Balanced);
+    assert_eq!(persisted_style, ResponseStyle::Detailed);
+    assert_eq!(missing_style, ResponseStyle::Concise);
 }
 
 #[tokio::test]
