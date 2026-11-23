@@ -154,8 +154,10 @@ or review steps directly in a checkout.
   source, tests, dependencies, toolchain, configuration, and relevant environment remain
   unchanged; rerun after invalidating edits, failures, or new evidence. Record each
   command, scope, and result at handoff.
-- Bring a branch up to date by rebasing it onto `origin/main` and pushing with
-  `--force-with-lease`; never merge `main` into it.
+- Leave a branch that is only behind `main` alone: the merge queue tests each pull
+  request on top of `main`. Rebase it onto `origin/main` and push with
+  `--force-with-lease` only when it conflicts with `main` or a check fails because of
+  its base; never merge `main` into it.
 - Fill `.github/pull_request_template.md` for PR descriptions. Its HTML comments are
   writing guidance: follow them, but never copy them into commit messages or PR
   descriptions.
