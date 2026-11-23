@@ -36,7 +36,7 @@ const VIEWPORT = { height: 900, mobile: false, name: "desktop", width: 1280 };
 // outside every specimen, which the check ignores.
 function specimenBody(badgeColor = "green", hoverColor = "focus") {
   const body = new FakeElement("body");
-  const root = new FakeElement("div", { attributes: { "data-specimen": "badge" } });
+  const root = new FakeElement("div", { dataset: { specimen: "badge" } });
   const link = new FakeElement("a", {
     selectors: [SELECTORS.hover, SELECTORS.focus],
     states: { hover: { color: hoverColor } },
@@ -421,7 +421,7 @@ test("check reports a surface's differences in each state and its own rules once
 test("capture forces each state on a target's ancestors too, and reads them", async () => {
   const page = new FakePage(() => {
     const body = new FakeElement("body");
-    const root = new FakeElement("div", { attributes: { "data-specimen": "table" } });
+    const root = new FakeElement("div", { dataset: { specimen: "table" } });
     const row = new FakeElement("tr", {
       selectors: [SELECTORS.hover],
       states: { "focus-within": { "border-color": "focus" }, hover: { background: "surface" } },

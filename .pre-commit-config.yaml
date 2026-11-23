@@ -66,13 +66,16 @@ repos:
         pass_filenames: false
       - id: design-gallery-check-test
         name: design gallery check tests
-        description: Test the exported design gallery check against a fake page and browser process, with complete JavaScript line coverage.
+        description: Test the exported design gallery check against a fake page and browser process, with complete JavaScript line coverage, and write its LCOV report for SonarQube.
         entry: >-
+          bash -eu -o pipefail -c 'rm -f design-gallery-check.lcov;
           node --test --experimental-test-coverage --test-coverage-lines=100
           --test-coverage-include=design/gallery-check.mjs
-          design/test/gallery-check.test.mjs
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=lcov --test-reporter-destination=design-gallery-check.lcov
+          design/tests/gallery-check.test.mjs && test -s design-gallery-check.lcov'
         language: system
-        files: ^(design/gallery-check\.mjs|design/test/|\.pre-commit-config\.yaml$)
+        files: ^(design/gallery-check\.mjs|design/tests/|\.pre-commit-config\.yaml$)
         pass_filenames: false
       - id: design-gallery
         name: design gallery

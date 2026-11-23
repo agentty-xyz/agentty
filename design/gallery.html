@@ -122,6 +122,14 @@
                 margin: 0;
             }
 
+            /* A visible label above a field. */
+            .gallery-field-label {
+                display: grid;
+                gap: var(--space-xs);
+                color: var(--color-muted);
+                font-size: var(--font-size-sm);
+            }
+
             /* Narrow enough that a long status wraps. */
             .gallery-narrow {
                 max-width: 16rem;
@@ -254,7 +262,10 @@
                                 <option>Default model</option>
                                 <option>Faster model</option>
                             </select>
-                            <textarea class="field" rows="2" aria-label="Message">A longer answer</textarea>
+                            <label class="gallery-field-label">
+                                Message
+                                <textarea class="field" rows="2">A longer answer</textarea>
+                            </label>
                         </div>
                     </figure>
                     <figure class="gallery-item">

@@ -1,6 +1,7 @@
 /target
 /coverage.lcov
 /timing-action.lcov
+/design-gallery-check.lcov
 docs/site/public/
 
 # Claude Code session worktrees

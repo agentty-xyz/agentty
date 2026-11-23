@@ -31,6 +31,10 @@ runs:
       shell: bash
       run: prek run test-timing-action --all-files
 
+    - name: Check design gallery check and generate JavaScript coverage
+      shell: bash
+      run: prek run design-gallery-check-test --all-files
+
     - name: Prepare coverage timing reports
       uses: $/.github/actions/test-timing
       with:

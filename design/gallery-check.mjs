@@ -173,8 +173,9 @@ export function parseArguments(argv) {
   if (surfaces.length === 0) {
     throw new Error("name at least one --surface to compare with the gallery");
   }
-  for (const entry of markup.filter((candidate) => !surfaces.some((surface) => surface.name === candidate.name))) {
-    throw new Error("--markup names " + entry.name + ", which no --surface names");
+  const stray = markup.find((candidate) => !surfaces.some((surface) => surface.name === candidate.name));
+  if (stray) {
+    throw new Error("--markup names " + stray.name + ", which no --surface names");
   }
 
   return {
@@ -328,37 +329,52 @@ export async function capture(page, html, viewport) {
     styles[key] = { ...styles[key], ...values };
   }
   const nodes = await page.nodes(SPECIMENS);
+  // One page, so each state is forced, read, and released in turn.
   for (const state of STATES) {
     for (const element of elements.filter((candidate) => candidate[state.target])) {
-      await page.force(nodes[element.index], state.forced);
-      for (const ancestor of element.ancestors) {
-        await page.force(nodes[ancestor], state.ancestors);
-      }
-      // The whole specimen, since a forced state also styles ancestors,
-      // such as a field that shows its input's focus with :focus-within.
-      const forced = await page.evaluate(collectPage, {
-        layout: layout,
-        mode: "styles",
-        motion: false,
-        root: element.specimen,
-        selector: SPECIMENS,
-      });
-      // Only what the state changes from rest, so a difference at rest is
-      // reported once rather than again under every forced state.
-      for (const [key, values] of Object.entries(forced)) {
-        const rest = styles[key] ?? {};
-        const changed = Object.entries(values).filter(([name, value]) => rest[name] !== value);
-        if (changed.length > 0) {
-          styles[state.name + " " + element.key + " | " + key] = Object.fromEntries(changed);
-        }
-      }
-      for (const node of [element.index, ...element.ancestors]) {
-        await page.force(nodes[node], []);
-      }
+      const forced = await readForced(page, nodes, element, state, layout);
+      Object.assign(styles, stateChanges(styles, forced, state.name + " " + element.key + " | "));
     }
   }
 
   return { rules: rules, specimens: elements.filter((element) => element.root).length, styles: styles };
+}
+
+// Forces `state` on `element` and its ancestors inside the specimen, reads
+// the whole specimen, since a forced state also styles ancestors, such as a
+// field that shows its input's focus with :focus-within, and releases it.
+async function readForced(page, nodes, element, state, layout) {
+  await page.force(nodes[element.index], state.forced);
+  for (const ancestor of element.ancestors) {
+    await page.force(nodes[ancestor], state.ancestors);
+  }
+  const forced = await page.evaluate(collectPage, {
+    layout: layout,
+    mode: "styles",
+    motion: false,
+    root: element.specimen,
+    selector: SPECIMENS,
+  });
+  for (const node of [element.index, ...element.ancestors]) {
+    await page.force(nodes[node], []);
+  }
+
+  return forced;
+}
+
+// Returns, under `prefix`, only what a forced state changes from `rest`, so
+// a difference at rest is reported once rather than again in every state.
+function stateChanges(rest, forced, prefix) {
+  const changes = {};
+  for (const [key, values] of Object.entries(forced)) {
+    const before = rest[key] ?? {};
+    const changed = Object.entries(values).filter(([name, value]) => before[name] !== value);
+    if (changed.length > 0) {
+      changes[prefix + key] = Object.fromEntries(changed);
+    }
+  }
+
+  return changes;
 }
 
 // Runs in the page, and in tests against a fake window: lists the
@@ -368,83 +384,84 @@ export async function capture(page, html, viewport) {
 export function collectPage(window, options) {
   const document = window.document;
   const elements = options.selector ? Array.from(document.querySelectorAll(options.selector)) : [];
+  const isSpecimen = (element) => "specimen" in element.dataset;
   const keyOf = (element) => {
     const parts = [];
     let node = element;
-    while (!node.hasAttribute("data-specimen")) {
+    while (!isSpecimen(node)) {
       const parent = node.parentElement;
       const name = node.localName + Array.from(node.classList, (name) => "." + name).join("");
       parts.unshift(name + ":" + Array.prototype.indexOf.call(parent.children, node));
       node = parent;
     }
-    parts.unshift(node.getAttribute("data-specimen"));
+    parts.unshift(node.dataset.specimen);
 
     return parts.join(" > ");
   };
-  if (options.mode === "list") {
-    return elements.map((element, index) => {
+  const list = () =>
+    elements.map((element, index) => {
       const ancestors = [];
       let node = element;
-      while (!node.hasAttribute("data-specimen")) {
+      while (!isSpecimen(node)) {
         node = node.parentElement;
         ancestors.unshift(elements.indexOf(node));
       }
+      const root = isSpecimen(element);
 
       return {
-        ancestors: element.hasAttribute("data-specimen") ? [] : ancestors.slice(1),
+        ancestors: root ? [] : ancestors.slice(1),
         focus: element.matches(options.focus),
         hover: element.matches(options.hover),
         index: index,
         key: keyOf(element),
-        root: element.hasAttribute("data-specimen"),
-        specimen: element.hasAttribute("data-specimen") ? index : ancestors[0],
+        root: root,
+        specimen: root ? index : ancestors[0],
       };
     });
-  }
-  if (options.mode === "freeze") {
+  const freeze = () => {
     const style = document.createElement("style");
     style.textContent = options.css;
     document.head.append(style);
 
     return true;
-  }
-  if (options.mode === "rules") {
-    const rules = [];
-    const visit = (list, conditions) => {
-      for (const rule of Array.from(list)) {
-        if (rule.selectorText !== undefined) {
-          const declarations = Array.from(rule.style, (name) => name);
-          // A rule is known by its conditions, selector, and the properties
-          // it sets: a compiler may rewrite values, as Sass does with
-          // `transparent`, without changing what they mean.
-          const text = conditions.concat(rule.selectorText, "{" + declarations.join(";") + "}").join(" ");
-          rules.push({
-            conditions: conditions,
-            declarations: declarations,
-            hidden: rule.style.getPropertyValue("display") === "none",
-            selector: rule.selectorText,
-            text: text,
-          });
-        } else if (rule.cssRules) {
-          const kind = rule.media
-            ? "@media "
-            : rule.conditionText === undefined
-              ? "@layer "
-              : rule.containerName === undefined
-                ? "@supports "
-                : "@container ";
-          visit(rule.cssRules, conditions.concat(kind + (rule.conditionText ?? rule.name)));
-        }
-      }
-    };
-    for (const sheet of Array.from(document.styleSheets)) {
-      if (sheet.ownerNode.hasAttribute("data-gallery-chain")) {
-        visit(sheet.cssRules, []);
-      }
+  };
+  // The at-rule a grouping rule's conditions start with.
+  const conditionPrefix = (rule) => {
+    if (rule.media) {
+      return "@media ";
+    }
+    if (rule.conditionText === undefined) {
+      return "@layer ";
     }
 
-    return rules;
-  }
+    return rule.containerName === undefined ? "@supports " : "@container ";
+  };
+  // A rule is known by its conditions, selector, and the properties it
+  // sets: a compiler may rewrite values, as Sass does with `transparent`,
+  // without changing what they mean.
+  const styleRule = (rule, conditions) => {
+    const declarations = Array.from(rule.style, (name) => name);
+
+    return {
+      conditions: conditions,
+      declarations: declarations,
+      hidden: rule.style.getPropertyValue("display") === "none",
+      selector: rule.selectorText,
+      text: conditions.concat(rule.selectorText, "{" + declarations.join(";") + "}").join(" "),
+    };
+  };
+  const visit = (rules, conditions) =>
+    Array.from(rules).flatMap((rule) => {
+      if (rule.selectorText !== undefined) {
+        return [styleRule(rule, conditions)];
+      }
+
+      return rule.cssRules ? visit(rule.cssRules, conditions.concat(conditionPrefix(rule) + (rule.conditionText ?? rule.name))) : [];
+    });
+  const chainRules = () =>
+    Array.from(document.styleSheets)
+      .filter((sheet) => "galleryChain" in sheet.ownerNode.dataset)
+      .flatMap((sheet) => visit(sheet.cssRules, []));
   const layout = new Set(options.layout);
   const isMotion = (name) => name.startsWith("transition") || name.startsWith("animation");
   const read = (element, pseudo) => {
@@ -452,32 +469,32 @@ export function collectPage(window, options) {
     if (pseudo && pseudo !== "::placeholder" && (style.content === "none" || style.content === "normal")) {
       return null;
     }
-    const values = {};
-    for (const name of Array.from(style)) {
-      if (!name.startsWith("--") && !layout.has(name) && isMotion(name) === options.motion) {
-        values[name] = style.getPropertyValue(name);
-      }
-    }
+    const names = Array.from(style).filter(
+      (name) => !name.startsWith("--") && !layout.has(name) && isMotion(name) === options.motion,
+    );
 
-    return values;
+    return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
   };
-  const root = options.root === undefined ? null : elements[options.root];
-  const styles = {};
-  for (const element of elements) {
-    if (element.hasAttribute("data-specimen") || (root && root !== element && !root.contains(element))) {
-      continue;
-    }
-    const key = keyOf(element);
-    const pseudos = ["", "::before", "::after"].concat(element.matches("input, textarea") ? ["::placeholder"] : []);
-    for (const pseudo of pseudos) {
-      const values = read(element, pseudo);
-      if (values) {
-        styles[key + pseudo] = values;
+  const styles = () => {
+    const root = options.root === undefined ? null : elements[options.root];
+    const inScope = (element) => !isSpecimen(element) && (!root || root === element || root.contains(element));
+    const collected = {};
+    for (const element of elements.filter(inScope)) {
+      const key = keyOf(element);
+      const pseudos = ["", "::before", "::after"].concat(element.matches("input, textarea") ? ["::placeholder"] : []);
+      for (const pseudo of pseudos) {
+        const values = read(element, pseudo);
+        if (values) {
+          collected[key + pseudo] = values;
+        }
       }
     }
-  }
 
-  return styles;
+    return collected;
+  };
+  const modes = { freeze: freeze, list: list, rules: chainRules };
+
+  return (modes[options.mode] ?? styles)();
 }
 
 // Returns every property whose computed value on the surface differs from
@@ -569,7 +586,10 @@ export function auditRules(reference, surface, markup = []) {
 export function companionClasses(markup, component) {
   const companions = new Map();
   for (const text of markup) {
-    const code = withoutComments(text).replace(/^\s*\/\/.*$/gm, "");
+    const code = withoutComments(text)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//"))
+      .join("\n");
     for (const quoted of code.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g)) {
       const tokens = (quoted[1] ?? quoted[2] ?? quoted[3]).split(/\s+/).filter((token) => /^-?[A-Za-z_][\w-]*$/.test(token));
       const shared = tokens.find((token) => component(token));
@@ -627,7 +647,11 @@ export function selectorParts(selector) {
 // Returns how `character` changes the nesting depth of parentheses and
 // attribute brackets.
 function nesting(character) {
-  return "([".includes(character) ? 1 : ")]".includes(character) ? -1 : 0;
+  if ("([".includes(character)) {
+    return 1;
+  }
+
+  return ")]".includes(character) ? -1 : 0;
 }
 
 function splitTopLevel(text, separator) {
@@ -666,39 +690,46 @@ function splitCompounds(complex) {
   return current ? compounds.concat(current) : compounds;
 }
 
+// Splits a compound into its own text and its functional pseudo-classes,
+// each with its name and argument, nested parentheses kept in the argument.
+function splitPseudoFunctions(compound) {
+  let own = "";
+  const functions = [];
+  let depth = 0;
+  for (const character of compound) {
+    const closes = character === ")" && depth === 1;
+    if (character === "(" && depth === 0) {
+      const name = /:([\w-]+)$/.exec(own)?.[1] ?? "";
+      own = own.slice(0, own.length - name.length - 1);
+      functions.push({ argument: "", name: name });
+    } else if (depth > 0 && !closes) {
+      functions.at(-1).argument += character;
+    } else if (depth === 0) {
+      own += character;
+    }
+    depth += character === "(" ? 1 : 0;
+    depth -= character === ")" ? 1 : 0;
+  }
+
+  return { functions: functions, own: own };
+}
+
+// Returns `text` without attribute selectors, such as `[aria-pressed="true"]`.
+function withoutAttributes(text) {
+  return text
+    .split("[")
+    .map((part, index) => (index === 0 ? part : part.slice(part.indexOf("]") + 1)))
+    .join("");
+}
+
 // Returns a compound's own classes and type, and for :is() and :where()
 // arguments the subject of each alternative.
 function compoundNames(compound) {
-  let own = "";
-  const alternatives = [];
-  let depth = 0;
-  let argument = "";
-  let functionName = "";
-  for (let index = 0; index < compound.length; index += 1) {
-    const character = compound[index];
-    if (character === "(") {
-      if (depth === 0) {
-        functionName = /:([\w-]+)$/.exec(own)?.[1] ?? "";
-        own = own.slice(0, own.length - functionName.length - 1);
-        argument = "";
-      } else {
-        argument += character;
-      }
-      depth += 1;
-    } else if (character === ")") {
-      depth -= 1;
-      if (depth === 0 && (functionName === "is" || functionName === "where")) {
-        alternatives.push(...selectorParts(argument));
-      } else if (depth > 0) {
-        argument += character;
-      }
-    } else if (depth > 0) {
-      argument += character;
-    } else {
-      own += character;
-    }
-  }
-  const bare = own.replace(/\[[^\]]*\]/g, "");
+  const { functions, own } = splitPseudoFunctions(compound);
+  const alternatives = functions
+    .filter((pseudo) => pseudo.name === "is" || pseudo.name === "where")
+    .flatMap((pseudo) => selectorParts(pseudo.argument));
+  const bare = withoutAttributes(own);
   const classes = Array.from(bare.matchAll(/\.([\w-]+)/g), (match) => match[1]);
   const type = /^[a-z][\w-]*/i.exec(bare)?.[0]?.toLowerCase();
   const types = type ? [type] : [];
@@ -779,12 +810,13 @@ export function formatReport(result) {
 // A browser driven over the DevTools protocol through a pipe, so it opens
 // no port.
 export class Browser {
+  buffer = "";
+  nextId = 1;
+  pending = new Map();
+
   constructor(child, input, output, profile, timeout = COMMAND_TIMEOUT_MS) {
-    this.buffer = "";
     this.child = child;
     this.input = input;
-    this.nextId = 1;
-    this.pending = new Map();
     this.profile = profile;
     this.timeout = timeout;
     this.exited = new Promise((resolveExit) => child.once("exit", resolveExit));

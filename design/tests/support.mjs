@@ -10,12 +10,13 @@ import { SELECTORS } from "../gallery-check.mjs";
 // An element with fixed computed styles, optional styles in forced states,
 // and the selectors it matches beyond the specimen selector.
 export class FakeElement {
+  children = [];
+  parentElement = null;
+
   constructor(localName, options = {}) {
-    this.attributes = options.attributes ?? {};
-    this.children = [];
     this.classList = options.classes ?? [];
+    this.dataset = options.dataset ?? {};
     this.localName = localName;
-    this.parentElement = null;
     this.pseudo = options.pseudo ?? {};
     this.selectors = new Set(options.selectors ?? []);
     this.states = options.states ?? {};
@@ -41,23 +42,9 @@ export class FakeElement {
     return false;
   }
 
-  getAttribute(name) {
-    return this.attributes[name] ?? null;
-  }
-
-  hasAttribute(name) {
-    return name in this.attributes;
-  }
-
   matches(selector) {
     if (selector === SELECTORS.specimens) {
-      for (let node = this; node; node = node.parentElement) {
-        if (node.hasAttribute("data-specimen")) {
-          return true;
-        }
-      }
-
-      return false;
+      return "specimen" in this.dataset || Boolean(this.parentElement?.matches(selector));
     }
     if (selector === "input, textarea") {
       return this.localName === "input" || this.localName === "textarea";
@@ -129,7 +116,7 @@ export function fakeWindow(body, sheets = []) {
 
 // A stylesheet owned by a style element, the stylesheet chain when `chain`.
 export function fakeSheet(rules, chain = true) {
-  return { cssRules: rules, ownerNode: { hasAttribute: (name) => chain && name === "data-gallery-chain" } };
+  return { cssRules: rules, ownerNode: { dataset: chain ? { galleryChain: "" } : {} } };
 }
 
 // A style rule that sets `declarations`, each to "value" unless `values`
@@ -144,10 +131,11 @@ export function styleRule(selector, declarations, values = {}) {
 // A page whose documents `build(html, viewport)` creates, and which runs
 // collectors against them as the browser would, by value.
 export class FakePage {
+  forcedCalls = [];
+  loads = [];
+
   constructor(build) {
     this.build = build;
-    this.forcedCalls = [];
-    this.loads = [];
   }
 
   async load(html, viewport) {
@@ -157,7 +145,7 @@ export class FakePage {
   }
 
   async evaluate(collect, options) {
-    return JSON.parse(JSON.stringify(collect(this.window, options)));
+    return structuredClone(collect(this.window, options));
   }
 
   async nodes(selector) {
