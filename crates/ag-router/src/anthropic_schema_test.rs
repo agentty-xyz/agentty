@@ -225,3 +225,171 @@ fn property_named_like_a_keyword_is_still_a_property() {
         })
     );
 }
+
+#[test]
+fn keywords_beside_any_of_move_into_each_branch() {
+    // Arrange
+    let schema = json!({
+        "type": "object",
+        "description": "Outcome.",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id"],
+        "oneOf": [
+            {
+                "type": "object",
+                "title": "A",
+                "properties": {"kind": {"const": "a"}, "id": {"type": "string"}},
+                "required": ["kind", "id"]
+            },
+            {"properties": {"kind": {"const": "b"}}, "required": ["kind"]}
+        ]
+    });
+
+    // Act
+    let wire = wire_schema(&schema);
+
+    // Assert
+    assert_eq!(
+        wire,
+        json!({
+            "description": "Outcome.",
+            "anyOf": [
+                {
+                    "type": "object",
+                    "title": "A",
+                    "properties": {"kind": {"const": "a"}, "id": {"type": "string"}},
+                    "required": ["kind", "id"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {"kind": {"const": "b"}, "id": {"type": "string"}},
+                    "required": ["kind", "id"],
+                    "additionalProperties": false
+                }
+            ]
+        })
+    );
+}
+
+#[test]
+fn any_of_that_cannot_absorb_its_siblings_moves_into_the_description() {
+    // Arrange
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "typed": {"type": "string", "anyOf": [{"type": "null"}]},
+            "referenced": {"type": "object", "anyOf": [{"$ref": "#/$defs/a"}]},
+            "boolean": {"pattern": "^a", "anyOf": [true]},
+            "shadowed": {
+                "properties": {"a": {"type": "string"}},
+                "anyOf": [{"properties": {"a": {"type": "integer"}}}]
+            }
+        }
+    });
+
+    // Act
+    let wire = wire_schema(&schema);
+
+    // Assert
+    assert_eq!(
+        wire["properties"],
+        json!({
+            "typed": {"type": "string", "description": "{anyOf: [{\"type\":\"null\"}]}"},
+            "referenced": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "{anyOf: [{\"$ref\":\"#/$defs/a\"}]}"
+            },
+            "boolean": {"pattern": "^a", "description": "{anyOf: [true]}"},
+            "shadowed": {
+                "properties": {"a": {"type": "string"}},
+                "additionalProperties": false,
+                "description": "{anyOf: [{\"properties\":{\"a\":{\"type\":\"integer\"}},\"additionalProperties\":false}]}"
+            }
+        })
+    );
+}
+
+#[test]
+fn all_of_holding_any_of_merges_into_its_schema() {
+    // Arrange
+    let schema = json!({
+        "allOf": [
+            {
+                "type": "object",
+                "description": "First.",
+                "properties": {"a": {"type": "string"}},
+                "required": ["a"]
+            },
+            {
+                "description": "Second.",
+                "anyOf": [
+                    {"properties": {"b": {"type": "integer"}}, "required": ["b"]},
+                    {"properties": {"c": {"type": "boolean"}}}
+                ]
+            }
+        ]
+    });
+
+    // Act
+    let wire = wire_schema(&schema);
+
+    // Assert
+    assert_eq!(
+        wire,
+        json!({
+            "description": "First.",
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {"b": {"type": "integer"}, "a": {"type": "string"}},
+                    "required": ["b", "a"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {"c": {"type": "boolean"}, "a": {"type": "string"}},
+                    "required": ["a"],
+                    "additionalProperties": false
+                }
+            ]
+        })
+    );
+}
+
+#[test]
+fn all_of_that_cannot_merge_moves_into_the_description() {
+    // Arrange
+    let schema = json!({
+        "properties": {
+            "referenced": {"allOf": [{"$ref": "#/$defs/a"}, {"title": "T"}]},
+            "nested": {"allOf": [{"allOf": [{"type": "string"}]}, {"type": "string"}]},
+            "conflicting": {
+                "allOf": [{"anyOf": [{"type": "string"}]}, {"type": "integer"}, {"type": "string"}]
+            },
+            "boolean": {"allOf": [true, {"anyOf": [{"type": "null"}]}]},
+            "single": {"allOf": [{"$ref": "#/$defs/a"}]}
+        }
+    });
+
+    // Act
+    let wire = wire_schema(&schema);
+
+    // Assert
+    assert_eq!(
+        wire["properties"],
+        json!({
+            "referenced": {"description": "{allOf: [{\"$ref\":\"#/$defs/a\"},{\"title\":\"T\"}]}"},
+            "nested": {
+                "description": "{allOf: [{\"allOf\":[{\"type\":\"string\"}]},{\"type\":\"string\"}]}"
+            },
+            "conflicting": {
+                "description": "{allOf: [{\"anyOf\":[{\"type\":\"string\"}]},{\"type\":\"integer\"},{\"type\":\"string\"}]}"
+            },
+            "boolean": {"description": "{allOf: [true,{\"anyOf\":[{\"type\":\"null\"}]}]}"},
+            "single": {"allOf": [{"$ref": "#/$defs/a"}]}
+        })
+    );
+}

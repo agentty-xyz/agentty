@@ -163,8 +163,9 @@ the native `output_config.format`, or with `StructuredOutputMode::ForcedTool` a
 without a reasoning mapping, since thinking forbids a forced tool. The native schema
 keeps only the JSON Schema keywords Anthropic structured outputs support: constraints
 such as `maxItems`, `minimum`, or `maxLength` move into the field's `description`,
-`oneOf` becomes `anyOf`, and every object sets `additionalProperties: false`, while the
-response is still validated against the full schema. A reasoning effort is sent as
+`oneOf` becomes `anyOf`, every object sets `additionalProperties: false`, and `anyOf` or
+`allOf` shapes the API rejects are merged into accepted ones where that is safe, while
+the response is still validated against the full schema. A reasoning effort is sent as
 `output_config.effort` with summarized adaptive thinking. A response's signed `thinking`
 and `redacted_thinking` blocks are returned as one JSON array in the reasoning content
 of its first call or output, with markers where its text and calls went, and replayed

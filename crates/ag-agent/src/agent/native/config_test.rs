@@ -1560,9 +1560,19 @@ async fn protocol_schemas_send_only_keywords_claude_accepts() {
     }
 }
 
-/// Asserts that `schema`, found at `at`, uses only the keywords and values
-/// Anthropic documents as supported for structured outputs.
+/// Asserts that `schema`, found at `at`, uses only the keywords, values, and
+/// combinator shapes Anthropic documents as supported for structured
+/// outputs: an `anyOf` only beside annotations, and no `allOf` of two or
+/// more schemas where one directly holds `$ref`, `anyOf`, or `allOf`.
 fn assert_claude_accepts(schema: &Value, at: &str) {
+    const ANY_OF_SIBLINGS: [&str; 6] = [
+        "$defs",
+        "anyOf",
+        "default",
+        "definitions",
+        "description",
+        "title",
+    ];
     const FORMATS: [&str; 10] = [
         "date",
         "date-time",
@@ -1578,6 +1588,25 @@ fn assert_claude_accepts(schema: &Value, at: &str) {
     let Some(object) = schema.as_object() else {
         return;
     };
+    if object.contains_key("anyOf") {
+        let siblings: Vec<_> = object
+            .keys()
+            .filter(|keyword| !ANY_OF_SIBLINGS.contains(&keyword.as_str()))
+            .collect();
+        assert!(siblings.is_empty(), "{at}: `anyOf` beside {siblings:?}");
+    }
+    if let Some(branches) = object
+        .get("allOf")
+        .and_then(Value::as_array)
+        .filter(|branches| branches.len() > 1)
+    {
+        assert!(
+            branches.iter().all(|branch| ["$ref", "anyOf", "allOf"]
+                .iter()
+                .all(|keyword| branch.get(keyword).is_none())),
+            "{at}: `allOf` of several schemas holds `$ref`, `anyOf`, or `allOf`"
+        );
+    }
     for (keyword, value) in object {
         let at = format!("{at}/{keyword}");
         match keyword.as_str() {
