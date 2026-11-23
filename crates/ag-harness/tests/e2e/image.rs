@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use ag_harness::model::{ModelCapabilities, ModelClient, ModelRegistry};
 use ag_harness::provider::{
-    CLAUDE_HAIKU_5_5, GPT_6_LUNA, KIMI_K2_6, KIMI_K3, KimiConfig, MUSE_SPARK_1_3,
-    MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration, ModelProvider, MuseConfig, QWEN_PLUS,
-    QWEN3_8_MAX, QwenConfig,
+    KIMI_K2_6, KIMI_K3, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, MuseConfig,
+    QWEN_PLUS, QWEN3_8_MAX, QwenConfig,
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::{Harness, SessionError};
 
+use crate::features::Provider;
 use crate::model_profile_fixture::unbounded_model_profile;
 use crate::{DynError, vision};
 
@@ -116,25 +116,15 @@ async fn test_qwen_images() -> Result<(), DynError> {
 #[tokio::test]
 #[ignore = "requires live Anthropic credentials"]
 async fn test_anthropic_images() -> Result<(), DynError> {
-    // Arrange
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| CLAUDE_HAIKU_5_5.into());
-    let client = ModelConfiguration::new(ModelProvider::Anthropic, model.as_str())
-        .client_from_environment(|name| std::env::var(name))?;
-
     // Act & Assert
-    vision::describes_images(client, &model).await
+    vision::describes_images(Provider::Anthropic.client()?, &Provider::Anthropic.model()).await
 }
 
 #[tokio::test]
 #[ignore = "requires live OpenAI credentials"]
 async fn test_openai_images() -> Result<(), DynError> {
-    // Arrange
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| GPT_6_LUNA.into());
-    let client = ModelConfiguration::new(ModelProvider::OpenAi, model.as_str())
-        .client_from_environment(|name| std::env::var(name))?;
-
     // Act & Assert
-    vision::describes_images(client, &model).await
+    vision::describes_images(Provider::OpenAi.client()?, &Provider::OpenAi.model()).await
 }
 
 /// `qwen3-max` accepts image parts over the wire but invents their content,

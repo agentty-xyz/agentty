@@ -118,16 +118,17 @@ cargo test --locked -p ag-harness --test e2e image:: -- --test-threads=1 --ignor
 `gpt-6-luna` unless `ANTHROPIC_MODEL` or `OPENAI_MODEL` names another model.
 
 The `hosted` checks take their models from the environment catalog, so every run is
-priced, and cap each run at eight model requests. They cover a streamed text turn (text
-deltas before the response completes), a nested structured output, reasoning replayed
-across three turns after a tool loop (Claude's signed thinking), a prompt-cache read on
-a repeated 16 KB prefix, seven reasoning turns under a budget that evicts the oldest
-(Claude must accept the trimmed history ahead of bound thinking), automatic compaction
-of a `claude-sonnet-5-5` or `gpt-6.1-sol` session on the cheap summary model, usage and
-its catalog cost, and an invalid key failing at once as a non-retryable `Auth` error.
-Without `AG_LIVE_PROVIDERS`, each provider runs when its key is set and is reported as
-skipped otherwise; naming one runs it regardless, which the invalid-key check needs no
-real key for:
+priced, and cap every run and session turn at eight model requests and 200,000 tokens,
+compaction included. They cover a streamed text turn (text deltas spread over at least a
+quarter of the request), a nested structured output, reasoning replayed across three
+turns after a tool loop (Claude's signed thinking), a prompt-cache read on a repeated 16
+KB prefix, reasoning turns under a budget that evicts the oldest until two more turns
+and a recall follow the first eviction (Claude must accept the trimmed history ahead of
+bound thinking), automatic compaction of a `claude-sonnet-5-5` or `gpt-6.1-sol` session
+on the cheap summary model, usage and its catalog cost, and an invalid key failing at
+once as a non-retryable `Auth` error. Without `AG_LIVE_PROVIDERS`, each provider runs
+when its key is set; naming providers runs only those, and the invalid-key check needs
+no real key. Every provider left out prints a `LIVE ... result=skipped` line:
 
 ```sh
 AG_LIVE_ROUNDS=1 \

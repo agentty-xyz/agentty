@@ -14,14 +14,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ag_harness::catalog::{ModelCatalog, ModelId};
-use ag_harness::event::{Delta, Item};
+use ag_harness::event::{CompactionOutcome, Delta, Item};
 use ag_harness::model::{ContextBudget, ContextPolicy, ReasoningEffort};
 use ag_harness::provider::{CLAUDE_SONNET_5_5, GPT_6_1_SOL, ModelConfiguration, ModelProvider};
-use ag_harness::store::{MemoryStore, SessionCheckpoint};
+use ag_harness::store::MemoryStore;
 use ag_harness::turn::ModelRequestPurpose;
 use ag_harness::{
     Cost, ErrorKind, Harness, HarnessBuilder, OutputMode, OutputSchema, RunError, RunEventKind,
-    RunLimits, RunRequest, ToolSet, TurnRange,
+    RunLimits, RunRequest, Session, ToolSet, TurnInput, TurnRange, TurnReport,
 };
 use futures_core::Stream;
 use serde_json::{Value, json};
@@ -35,54 +35,57 @@ use crate::features::{
 /// Model requests one turn may send, so a misbehaving model cannot loop up
 /// a bill.
 const MAX_REQUESTS: u32 = 8;
+/// Input plus output tokens one turn may use, compaction included.
+const MAX_TOKENS: u64 = 200_000;
+/// Share of the streamed request's duration that must separate the first
+/// text delta from the request's completion, so a response buffered and
+/// replayed as deltas just before completion fails the check.
+const MIN_STREAMED_SHARE: f64 = 0.25;
 
 impl Provider {
     /// Hosted providers to check: those `AG_LIVE_PROVIDERS` names, or else
-    /// each whose API key is set. A provider left out for a missing key is
-    /// reported as skipped.
-    fn hosted() -> Result<Vec<Self>, DynError> {
+    /// each whose API key is set. A provider left out, by the filter or for
+    /// a missing key, is reported as skipped.
+    fn hosted() -> Vec<Self> {
         let filter = std::env::var("AG_LIVE_PROVIDERS").unwrap_or_default();
         let mut selected = Vec::new();
         for provider in [Self::Anthropic, Self::OpenAi] {
-            if !filter.is_empty() {
-                if filter.split(',').any(|name| name == provider.name()) {
-                    selected.push(provider);
-                }
-                continue;
-            }
-            if std::env::var(provider.key_env()).is_ok_and(|key| !key.trim().is_empty()) {
-                selected.push(provider);
+            let skipped = if !filter.is_empty() {
+                (!filter.split(',').any(|name| name == provider.name()))
+                    .then(|| "AG_LIVE_PROVIDERS does not name it".to_string())
+            } else if std::env::var(provider.key_env()).is_ok_and(|key| !key.trim().is_empty()) {
+                None
             } else {
-                let _ = writeln!(
-                    io::stdout().lock(),
-                    "LIVE provider={} result=skipped detail={} is not set",
-                    provider.name(),
-                    provider.key_env()
-                );
+                Some(format!("{} is not set", provider.key_env()))
+            };
+            match skipped {
+                None => selected.push(provider),
+                Some(reason) => {
+                    let _ = writeln!(
+                        io::stdout().lock(),
+                        "LIVE provider={} result=skipped detail={reason}",
+                        provider.name()
+                    );
+                }
             }
-        }
-        if selected.is_empty() {
-            return Err(
-                "no hosted provider selected: set ANTHROPIC_API_KEY or OPENAI_API_KEY, or name \
-                 one in AG_LIVE_PROVIDERS"
-                    .into(),
-            );
         }
 
-        Ok(selected)
+        selected
     }
 
     fn key_env(self) -> &'static str {
         match self {
+            Self::Anthropic => "ANTHROPIC_API_KEY",
             Self::OpenAi => "OPENAI_API_KEY",
-            _ => "ANTHROPIC_API_KEY",
+            Self::Kimi | Self::Muse | Self::Qwen => unreachable!("not a hosted provider"),
         }
     }
 
     fn catalog_provider(self) -> ModelProvider {
         match self {
+            Self::Anthropic => ModelProvider::Anthropic,
             Self::OpenAi => ModelProvider::OpenAi,
-            _ => ModelProvider::Anthropic,
+            Self::Kimi | Self::Muse | Self::Qwen => unreachable!("not a hosted provider"),
         }
     }
 
@@ -90,8 +93,9 @@ impl Provider {
     /// catalog model.
     fn session_model(self) -> String {
         match self {
+            Self::Anthropic => CLAUDE_SONNET_5_5.into(),
             Self::OpenAi => GPT_6_1_SOL.into(),
-            _ => CLAUDE_SONNET_5_5.into(),
+            Self::Kimi | Self::Muse | Self::Qwen => unreachable!("not a hosted provider"),
         }
     }
 
@@ -110,8 +114,24 @@ impl Provider {
     }
 }
 
+/// Caps every run's model requests and tokens, so a looping model cannot run
+/// up a bill.
 fn limits() -> Result<RunLimits, DynError> {
-    Ok(RunLimits::default().with_max_model_requests(NonZeroU32::new(MAX_REQUESTS).ok_or("limit")?))
+    Ok(RunLimits::default()
+        .with_max_model_requests(NonZeroU32::new(MAX_REQUESTS).ok_or("limit")?)
+        .with_max_total_tokens(NonZeroU64::new(MAX_TOKENS).ok_or("limit")?))
+}
+
+/// Runs one session turn under [`limits`] and returns its validated output
+/// with its report.
+async fn send(
+    session: &Session,
+    input: impl Into<TurnInput>,
+) -> Result<(Value, TurnReport), DynError> {
+    let outcome = session.run(RunRequest::new(input).limits(limits()?)).await;
+    let output = outcome.result?.parse::<Value>()?;
+
+    Ok((output, outcome.report))
 }
 
 /// Runs `case` once per round for every selected hosted provider.
@@ -120,7 +140,7 @@ where
     F: Fn(Provider) -> Fut,
     Fut: Future<Output = Result<String, DynError>>,
 {
-    let providers = Provider::hosted()?;
+    let providers = Provider::hosted();
     let mut report = Report::new(name);
     for round in 1..=rounds() {
         for &provider in &providers {
@@ -136,7 +156,9 @@ where
 // Streaming
 // ---------------------------------------------------------------------------
 
-/// Text deltas must arrive before the response that carries them completes.
+/// Text deltas must arrive while the response is generated: they must span
+/// at least [`MIN_STREAMED_SHARE`] of the request's duration, which a
+/// response buffered and then replayed as deltas cannot.
 async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
     let harness = provider.harness(&provider.model())?.build()?;
     let request = RunRequest::new(
@@ -149,6 +171,7 @@ async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
     let outcome = tokio::spawn(handle.outcome());
     let mut text_deltas = 0_usize;
     let mut first_delta = None;
+    let mut last_delta = None;
     let mut completed = None;
     while let Some(event) = poll_fn(|context| Pin::new(&mut events).poll_next(context)).await {
         match event.kind {
@@ -157,7 +180,9 @@ async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
                 ..
             } => {
                 text_deltas += 1;
-                first_delta.get_or_insert_with(|| started.elapsed());
+                let now = started.elapsed();
+                first_delta.get_or_insert(now);
+                last_delta = Some(now);
             }
             RunEventKind::ModelRequestCompleted { .. } => {
                 completed.get_or_insert_with(|| started.elapsed());
@@ -171,13 +196,17 @@ async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
         other => return Err(format!("expected text output, got {other:?}").into()),
     };
     let first_delta = first_delta.ok_or("no text delta streamed")?;
+    let last_delta = last_delta.ok_or("no text delta streamed")?;
     let completed = completed.ok_or("no model request completed")?;
+    let spread = last_delta.saturating_sub(first_delta);
     let summary = format!(
-        "deltas={text_deltas} first_delta={first_delta:?} completed={completed:?} chars={}",
+        "deltas={text_deltas} first_delta={first_delta:?} last_delta={last_delta:?} \
+         completed={completed:?} chars={}",
         text.len()
     );
-    if text_deltas < 2 || first_delta >= completed {
-        return Err(format!("text did not stream ahead of completion: {summary}").into());
+    if text_deltas < 2 || first_delta >= completed || spread < completed.mul_f64(MIN_STREAMED_SHARE)
+    {
+        return Err(format!("text did not stream while it was generated: {summary}").into());
     }
 
     Ok(summary)
@@ -257,23 +286,27 @@ async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
         .tools(ToolSet::empty().with_read())
         .model_reasoning_effort(ReasoningEffort::Medium)
         .build()?;
-    let mut session = harness
+    let session = harness
         .session("reasoning", answer_schema()?)
         .create()
         .await?;
-    let first = session
-        .send(
-            "Read notes.txt with the read tool. Its code word ends in a two-digit number: work \
-             out that number multiplied by 7, and set answer to the code word followed by a space \
-             and the product.",
-        )
-        .await?;
-    let second = session
-        .send("Set answer to the product you computed in the previous turn, digits only.")
-        .await?;
-    let third = session
-        .send("Set answer to the code word from the first turn, unchanged.")
-        .await?;
+    let (first, first_report) = send(
+        &session,
+        "Read notes.txt with the read tool. Its code word ends in a two-digit number: work out \
+         that number multiplied by 7, and set answer to the code word followed by a space and the \
+         product.",
+    )
+    .await?;
+    let (second, _) = send(
+        &session,
+        "Set answer to the product you computed in the previous turn, digits only.",
+    )
+    .await?;
+    let (third, _) = send(
+        &session,
+        "Set answer to the code word from the first turn, unchanged.",
+    )
+    .await?;
     let transcript = session.transcript(TurnRange::All).await?;
     let reasoning = transcript.first().map_or(0, |turn| {
         turn.items
@@ -283,17 +316,17 @@ async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
     });
     let summary = format!(
         "turn1_requests={} turn1_reasoning_items={reasoning} answers=[{}|{}|{}]",
-        first.report().model_requests().len(),
-        answer(first.output()),
-        answer(second.output()),
-        answer(third.output())
+        first_report.model_requests().len(),
+        answer(&first),
+        answer(&second),
+        answer(&third)
     );
     if reasoning == 0 {
         return Err(format!("the first turn recorded no reasoning: {summary}").into());
     }
-    if !answer(first.output()).contains("406")
-        || !answer(second.output()).contains("406")
-        || !answer(third.output()).contains("lantern-58")
+    if !answer(&first).contains("406")
+        || !answer(&second).contains("406")
+        || !answer(&third).contains("lantern-58")
     {
         return Err(format!("replayed turns lost the first turn's work: {summary}").into());
     }
@@ -390,16 +423,18 @@ async fn history_trimming(provider: Provider) -> Result<String, DynError> {
         .context_budget(budget)
         .model_reasoning_effort(ReasoningEffort::Low)
         .build()?;
-    let mut session = harness.session("trim", answer_schema()?).create().await?;
+    let session = harness.session("trim", answer_schema()?).create().await?;
     let mut evicted = Vec::new();
     let mut latest = TRIM_FACTS[0];
     let mut after_eviction = None;
     for (index, fact) in TRIM_FACTS.iter().enumerate() {
-        let outcome = session
-            .send(fact_turn(fact.0, fact.1, u8::try_from(index)? + 1))
-            .await
-            .map_err(|error| format!("turn {} failed: {error} (evicted {evicted:?})", index + 1))?;
-        evicted.push(outcome.report().history().evicted_turns());
+        let (_, report) = send(
+            &session,
+            fact_turn(fact.0, fact.1, u8::try_from(index)? + 1),
+        )
+        .await
+        .map_err(|error| format!("turn {} failed: {error} (evicted {evicted:?})", index + 1))?;
+        evicted.push(report.history().evicted_turns());
         latest = *fact;
         if after_eviction.is_none() && evicted[index] > 0 {
             after_eviction = Some(0);
@@ -411,21 +446,21 @@ async fn history_trimming(provider: Provider) -> Result<String, DynError> {
         }
     }
     let (name, value) = latest;
-    let recall = session
-        .send(format!(
-            "What is the value of fact {name}? Set answer to only the value."
-        ))
-        .await
-        .map_err(|error| format!("recall failed: {error} (evicted {evicted:?})"))?;
+    let (recall, recall_report) = send(
+        &session,
+        format!("What is the value of fact {name}? Set answer to only the value."),
+    )
+    .await
+    .map_err(|error| format!("recall failed: {error} (evicted {evicted:?})"))?;
     let summary = format!(
         "evicted_per_turn={evicted:?} recall_evicted={} answer={}",
-        recall.report().history().evicted_turns(),
-        answer(recall.output())
+        recall_report.history().evicted_turns(),
+        answer(&recall)
     );
     if after_eviction != Some(2) {
         return Err(format!("too few turns followed the first eviction: {summary}").into());
     }
-    if !answer(recall.output()).contains(value) {
+    if !answer(&recall).contains(value) {
         return Err(format!("the latest fact was lost: {summary}").into());
     }
 
@@ -446,6 +481,11 @@ async fn test_history_trimming_with_reasoning() -> Result<(), DynError> {
 /// A session on the provider's more capable model compacts automatically,
 /// and the catalog sends the compaction to its cheap model, which must
 /// carry the oldest fact into the checkpoint.
+///
+/// On Claude models this fails until the Anthropic request translation
+/// drops the JSON Schema keywords the Messages API rejects in
+/// `output_config.format`: the compaction summary schema's `maxItems` is
+/// answered with HTTP 400, which the reported compaction outcomes show.
 async fn automatic_compaction(provider: Provider) -> Result<String, DynError> {
     let facts = &TRIM_FACTS[..8];
     let session_model = provider.session_model();
@@ -462,25 +502,30 @@ async fn automatic_compaction(provider: Provider) -> Result<String, DynError> {
         .summary_model()
         .cloned()
         .ok_or("the catalog resolved no summary model")?;
-    let mut session = harness
+    let session = harness
         .session("compact", answer_schema()?)
         .create()
         .await?;
     let mut compactions = Vec::new();
     let mut outcomes = Vec::new();
+    let mut checkpoint = None;
     let mut cost = 0_u64;
     let mut turns = 0;
     for (index, (name, value)) in facts.iter().enumerate() {
         let (mut events, handle) = session
-            .run(RunRequest::new(fact_turn(
-                name,
-                value,
-                u8::try_from(index)? + 1,
-            )))
+            .run(
+                RunRequest::new(fact_turn(name, value, u8::try_from(index)? + 1)).limits(limits()?),
+            )
             .into_parts();
         let outcome = tokio::spawn(handle.outcome());
         while let Some(event) = poll_fn(|context| Pin::new(&mut events).poll_next(context)).await {
             if let RunEventKind::Compacted(report) = event.kind {
+                if let CompactionOutcome::Compacted {
+                    covered_through, ..
+                } = &report.outcome
+                {
+                    checkpoint = Some(covered_through.get());
+                }
                 outcomes.push(format!("turn{}:{:?}", index + 1, report.outcome));
             }
         }
@@ -493,31 +538,28 @@ async fn automatic_compaction(provider: Provider) -> Result<String, DynError> {
                 compactions.push(request.model().map(ToString::to_string));
             }
         }
-        if session.checkpoint().is_some() {
+        if checkpoint.is_some() {
             break;
         }
     }
-    let checkpoint = session
-        .checkpoint()
-        .map(SessionCheckpoint::covered_through)
-        .ok_or_else(|| {
-            format!(
-                "no checkpoint after {turns} turns (compaction requests {compactions:?}, outcomes \
-                 {outcomes:?})"
-            )
-        })?;
-    let recall = session
-        .send(
-            "What is the value of fact alpha? Set answer to only the value, or to the word \
-             unknown if this conversation never established it.",
+    let checkpoint = checkpoint.ok_or_else(|| {
+        format!(
+            "no checkpoint after {turns} turns (compaction requests {compactions:?}, outcomes \
+             {outcomes:?})"
         )
-        .await?;
+    })?;
+    let (recall, recall_report) = send(
+        &session,
+        "What is the value of fact alpha? Set answer to only the value, or to the word unknown if \
+         this conversation never established it.",
+    )
+    .await?;
     let summary = format!(
         "session={session_model} summary_model={summary_model} turns={turns} \
          compactions={compactions:?} outcomes={outcomes:?} checkpoint_through={checkpoint} \
          replayed={} cost_micro_usd={cost} answer={}",
-        recall.report().history().checkpoint_replayed(),
-        answer(recall.output())
+        recall_report.history().checkpoint_replayed(),
+        answer(&recall)
     );
     if compactions.is_empty()
         || compactions
@@ -526,7 +568,7 @@ async fn automatic_compaction(provider: Provider) -> Result<String, DynError> {
     {
         return Err(format!("compaction did not run on the summary model: {summary}").into());
     }
-    if !answer(recall.output()).contains("maroon-11") {
+    if !answer(&recall).contains("maroon-11") {
         return Err(format!("the checkpoint lost the oldest fact: {summary}").into());
     }
 
