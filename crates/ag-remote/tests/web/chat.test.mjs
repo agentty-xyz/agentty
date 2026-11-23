@@ -15,8 +15,10 @@ import {
   diffKey,
   collectAnswers,
   composerState,
+  connectionLostError,
   createChat,
   createRefreshGate,
+  isConnectionLost,
   mergeTarget,
   messageKind,
   publishBranch,
@@ -1290,6 +1292,84 @@ test("Publish during a turn says it waits, stays queued until the turn ends, the
   assert.equal(requests.length, 1);
 });
 
+test("a publish queued behind a turn stays queued when the connection drops", async () => {
+  const answer = deferred();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => (body.method === "publish_session" ? answer.promise : { kind: "accepted" }),
+  });
+  const confirmPublish = async () => {
+    byId("publish").click();
+    byId("publish-dialog").querySelector('button[value="confirm"]').click();
+    await settle();
+  };
+  chat.render(session({ status: "InProgress" }));
+  await confirmPublish();
+  // The connection drops; Agentty still runs the publish after the turn.
+  answer.reject(connectionLostError("Disconnected"));
+  chat.setConnected(false);
+  await settle();
+  chat.setConnected(true);
+  chat.render(session({ status: "InProgress" }));
+
+  assert.ok(isConnectionLost(connectionLostError("Disconnected")));
+  assert.equal(isConnectionLost(new Error("Disconnected")), false);
+  assert.equal(byId("publish-label").textContent, "Publish queued");
+  assert.equal(byId("sheet-publish-note").textContent, "queued");
+  assert.equal(byId("publish").disabled, true);
+  assert.equal(byId("action-error").textContent, "");
+  // It is not offered again, even through a confirmation left open.
+  byId("publish-dialog").dataset.sessionId = "s1";
+  byId("publish-dialog").showModal();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(requests.length, 1);
+  // Another session meanwhile does not end it.
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  chat.open("s1");
+  chat.render(session({ status: "Rebasing" }));
+  assert.equal(byId("publish-label").textContent, "Publish queued");
+
+  // The turn is over, so the publish ran: Publish is offered again, with
+  // no error.
+  chat.render(session({ review_request: REVIEW_REQUEST }));
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("action-error").textContent, "");
+  assert.equal(byId("action-note").textContent, "");
+});
+
+test("a publish during a turn still shows Agentty's refusal, and one in review a dropped connection", async () => {
+  let failure = new Error("Session is busy");
+  const { byId, chat } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => {
+      if (body.method === "publish_session") {
+        throw failure;
+      }
+
+      return { kind: "accepted" };
+    },
+  });
+  chat.render(session({ status: "InProgress" }));
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-error").textContent, "Session is busy");
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(byId("publish").disabled, false);
+
+  // In review the publish runs at once, so a dropped connection says so.
+  failure = connectionLostError("Disconnected");
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-error").textContent, "Disconnected");
+  assert.equal(byId("publish-label").textContent, "Publish");
+});
+
 test("a failed publish shows the host's error once, until the publication changes", async () => {
   const { byId, chat } = mountChat({
     capabilities: ["publish"],
@@ -1919,6 +1999,28 @@ test("a sent earlier prompt gives way to the draft, and the draft stays saved", 
   assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "half typed");
   // Browsing ended with the send.
   assert.equal(pressArrow(byId, "ArrowDown"), false);
+});
+
+test("text sent while browsing starts is not brought back as the draft", async () => {
+  const storage = new MemoryStorage();
+  const reply = deferred();
+  const { byId, chat, requests } = mountChat({
+    respond: (body) => (body.method === "send_message" ? reply.promise : { kind: "accepted" }),
+    sessionStorage: storage,
+  });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  typeMessage(byId, "fresh text");
+  pressKey(byId, "Enter");
+  // Before Agentty answers, Up starts browsing from the text in flight.
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message(byId).value, "Add tests\nand docs");
+  reply.resolve({ kind: "accepted" });
+  await settle();
+
+  assert.deepEqual(requests, [{ method: "send_message", message: "fresh text", session_id: "s1" }]);
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), null);
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(message(byId).value, "");
 });
 
 function message(byId) {

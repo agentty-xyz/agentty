@@ -47,6 +47,21 @@ const PUBLISH_WAIT_HINT = "Publishes after the current turn";
 // The classes of the timing parts that end the header's details, in order.
 const TIMING_PARTS = ["timer", "started"];
 
+// The error a request in flight ends with when the connection drops
+// before Agentty answers. The request may still run on the host.
+export function connectionLostError(message) {
+  const error = new Error(message);
+  error.isConnectionLost = true;
+
+  return error;
+}
+
+// Whether `error` says the connection dropped rather than Agentty
+// refusing; see `connectionLostError`.
+export function isConnectionLost(error) {
+  return error?.isConnectionLost === true;
+}
+
 // The kind a message renders as. A kind this client does not know, from a
 // newer Agentty, renders as a notice.
 export function messageKind(message) {
@@ -264,6 +279,10 @@ export function createChat({
     // Sessions with a publish in flight. A publish can take long and
     // outlasts switching sessions, so this outlives `reset`.
     publishing: new Set(),
+    // Sessions whose publish, queued behind a turn, lost its answer to a
+    // dropped connection. Agentty still runs it, so until a snapshot shows
+    // the turn over the page keeps saying it is queued.
+    queuedPublishes: new Set(),
     // How the last publish of each session ended, `{ reviewRequest }` or
     // `{ error }`, until it shows once with that session open.
     published: new Map(),
@@ -430,7 +449,7 @@ export function createChat({
   // during a turn waits for it: the host answers only once it ran, so
   // until the turn ends both say it is queued.
   function renderPublish(actions) {
-    const isPublishing = state.publishing.has(state.sessionId);
+    const isPublishing = isPublishingSession(state.sessionId);
     elements.publish.hidden = !actions.publish;
     elements.publish.disabled = !actions.publishEnabled || isPublishing || !state.isConnected;
     elements.publish.setAttribute("aria-busy", String(isPublishing));
@@ -511,12 +530,20 @@ export function createChat({
     }
   }
 
+  // Whether a publish of `sessionId` is on its way, answered or not.
+  function isPublishingSession(sessionId) {
+    return state.publishing.has(sessionId) || state.queuedPublishes.has(sessionId);
+  }
+
   // Publishes `sessionId` once at a time, whichever session is open when
-  // it ends.
+  // it ends. A publish asked for during a turn that loses its answer to a
+  // dropped connection still runs on the host, so it stays queued instead
+  // of failing.
   async function publish(sessionId) {
-    if (!sessionId || state.publishing.has(sessionId) || !state.isConnected) {
+    if (!sessionId || isPublishingSession(sessionId) || !state.isConnected) {
       return;
     }
+    const waits = state.sessionId === sessionId && QUEUEING_STATUSES.has(state.session?.status);
     state.publishing.add(sessionId);
     state.published.delete(sessionId);
     if (state.sessionId === sessionId) {
@@ -529,7 +556,11 @@ export function createChat({
       const result = await request({ method: "publish_session", session_id: sessionId });
       state.published.set(sessionId, { reviewRequest: result?.review_request ?? null });
     } catch (error) {
-      state.published.set(sessionId, { error: error.message });
+      if (waits && isConnectionLost(error)) {
+        state.queuedPublishes.add(sessionId);
+      } else {
+        state.published.set(sessionId, { error: error.message });
+      }
     } finally {
       state.publishing.delete(sessionId);
       if (state.sessionId === sessionId) {
@@ -983,6 +1014,11 @@ export function createChat({
       elements.actionError.textContent = "";
     }
     expirePublished(session);
+    // The turn a publish waited for is over, so it ran; the header's
+    // review link is the lasting record.
+    if (!QUEUEING_STATUSES.has(session.status)) {
+      state.queuedPublishes.delete(session.id);
+    }
     elements.gone.hidden = true;
     // The header closes the diff when the new status allows none.
     renderHeader(session);

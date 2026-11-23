@@ -2,7 +2,7 @@
 // WebSocket at /ws, or over an encrypted stream through the relay that
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
-import { createChat, createRefreshGate } from "./chat.mjs";
+import { connectionLostError, createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
 import { parseProject } from "./format.mjs";
@@ -475,9 +475,11 @@ function request(body) {
   });
 }
 
+// Ends the requests in flight when the connection drops. Their error says
+// so, as Agentty may still run them.
 function failPending(message) {
   for (const pending of state.pending.values()) {
-    pending.reject(new Error(message));
+    pending.reject(connectionLostError(message));
   }
   state.pending.clear();
 }

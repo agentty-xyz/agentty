@@ -379,8 +379,13 @@ export function createComposer({
       }
     },
     // Empties the field when it still holds `text`; text typed since
-    // stays. A sent earlier prompt gives way to the draft it replaced.
+    // stays. A sent earlier prompt gives way to the draft it replaced, and
+    // a draft browsing replaced that went out meanwhile is not brought
+    // back.
     clearText: (text) => {
+      if (browsing.draft === text) {
+        browsing.draft = "";
+      }
       if (elements.message.value === text) {
         const draft = browsing.draft;
         stopBrowsing();

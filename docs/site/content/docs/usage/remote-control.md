@@ -117,11 +117,12 @@ sheet on a phone, while the session is in review or works. It asks first and nam
 remote branch: the one the session was published to before, or the session branch the
 first time. Publishing pushes the branch and opens its pull request, or refreshes the
 one it has. During a turn, the publish waits and runs after it, as `p` does in the
-terminal, and the button says `Publish queued`. Then it says `Publishing…` until Agentty
-answers, also when you open another session meanwhile, and then the page links the pull
-request under the header or shows why publishing failed. When this Agentty lets devices
-sync, the `⋯` sheet offers `Sync with` the base branch, which asks first and rebases the
-session branch, after the running turn if there is one.
+terminal, and the button says `Publish queued` until the turn ends, even if the
+connection drops meanwhile. Then it says `Publishing…` until Agentty answers, also when
+you open another session meanwhile, and then the page links the pull request under the
+header or shows why publishing failed. When this Agentty lets devices sync, the `⋯`
+sheet offers `Sync with` the base branch, which asks first and rebases the session
+branch, after the running turn if there is one.
 
 When this Agentty lets devices change settings, the line under the message box is a
 button. It opens a sheet with the models of the session's agent, the reasoning level,
