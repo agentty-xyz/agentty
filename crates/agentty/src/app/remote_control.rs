@@ -64,6 +64,9 @@ pub(crate) struct RemoteControl {
     /// Identifies the latest link copy so the result of an earlier one, or
     /// of a link that is no longer shown, is ignored.
     link_copy_request: u64,
+    /// Status line and queued-action labels of each session showing either,
+    /// as remote clients last learned of them.
+    live_details: HashMap<SessionId, (Option<String>, Vec<String>)>,
     /// Loopback port, or `None` until `--experimental-remote` enables
     /// remote control.
     port: Option<u16>,
@@ -71,9 +74,6 @@ pub(crate) struct RemoteControl {
     relay_url: Option<String>,
     revision_tx: watch::Sender<u64>,
     server: Option<Box<dyn RemoteControlServer>>,
-    /// Status line of each session showing one, as remote clients last
-    /// learned of it.
-    status_lines: HashMap<SessionId, String>,
     view: RemoteControlView,
 }
 
@@ -99,11 +99,11 @@ impl RemoteControl {
             instance_key: None,
             launcher,
             link_copy_request: 0,
+            live_details: HashMap::new(),
             port: None,
             relay_url: None,
             revision_tx,
             server: None,
-            status_lines: HashMap::new(),
             view: RemoteControlView::default(),
         }
     }
@@ -181,25 +181,28 @@ impl App {
             .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
-    /// Tells connected remote clients when a session's status line changed,
-    /// such as a new thought after `Working...` or a review step, which no
-    /// session event marks.
-    pub(crate) fn publish_status_line_changes(&mut self) {
-        let status_lines = self
+    /// Tells connected remote clients when a session's status line or its
+    /// queued actions changed, such as a new thought after `Working...`, a
+    /// review step, or a sync queued in the terminal, which no session event
+    /// marks.
+    pub(crate) fn publish_live_session_changes(&mut self) {
+        let live_details = self
             .sessions
             .sessions()
             .iter()
             .filter_map(|session| {
-                session
-                    .status_line(self.session_progress_message(&session.id))
-                    .map(|line| (session.id.clone(), line))
+                let status_line = session.status_line(self.session_progress_message(&session.id));
+                let queued_actions = session.queued_action_labels();
+
+                (status_line.is_some() || !queued_actions.is_empty())
+                    .then(|| (session.id.clone(), (status_line, queued_actions)))
             })
             .collect::<HashMap<_, _>>();
-        if status_lines == self.remote_control.status_lines {
+        if live_details == self.remote_control.live_details {
             return;
         }
 
-        self.remote_control.status_lines = status_lines;
+        self.remote_control.live_details = live_details;
         self.publish_session_change();
     }
 

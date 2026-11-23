@@ -605,6 +605,14 @@ export class FakeElement extends FakeNode {
     refuse("insertAdjacentHTML");
   }
 
+  // There is no layout: every box is empty at the origin, unless a test
+  // sets `document.layout(element)` to place it.
+  getBoundingClientRect() {
+    const box = this.ownerDocument?.layout?.(this) ?? {};
+
+    return { height: 0, left: 0, top: 0, width: 0, ...box };
+  }
+
   matches(selector) {
     return parseSelector(selector).some((complex) => matchesComplex(this, complex));
   }

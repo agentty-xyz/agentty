@@ -58,11 +58,13 @@ The list groups sessions as the terminal does, with the archive collapsed. Type 
 `All`, `Needs you`, and `Running` buttons narrow the list by status. A dot marks a
 session that changed since you last opened it. Each browser tracks what it has seen on
 its own, so another device or a private window shows its own dots. Each row also shows
-the session's size and model. In place of the model, `merge conflict` marks a session
-whose branch conflicts with its base, and `PR ready` or `PR ready (bypass)` a pull
-request that can merge; see [Project Sync](@/docs/usage/workflow.md#project-sync) for
-what the terminal's same labels mean. With no session open, the page offers the sessions
-waiting for you, with their changed lines.
+the session's size and model. After the status, `↑` marks a published branch, and
+`⊙ #12`, `✓ #12`, or `✗ #12` its open, merged, or closed pull request, as in the
+terminal's status column. In place of the model, `merge conflict` marks a session whose
+branch conflicts with its base, and `PR ready` or `PR ready (bypass)` a pull request
+that can merge; see [Project Sync](@/docs/usage/workflow.md#project-sync) for what the
+terminal's same labels mean. With no session open, the page offers the sessions waiting
+for you, with their changed lines.
 
 The top of the sidebar names the active project, its branch, and how far that branch is
 from its remote: `↓2 ↑1` means two commits to pull and one to push, and `✓` means none.
@@ -84,11 +86,16 @@ settings or the message do not go through, the new session opens with your text 
 its box.
 
 The header of the open session shows its size and changed lines, a merge conflict with
-its base branch, the session branch and its base branch, the model and reasoning level,
-a link to its pull request, and, as in the terminal, `Timer:` with the session's active
-time, counting while a turn runs, and when it started, such as `Started 3h 5m ago`. The
-line under the message box shows the model, reasoning level, answer style, and speed. An
-older Agentty sends fewer details, and the page leaves out what it does not know.
+its base branch, the session branch and its base branch, the remote branch it was
+published to, the model and reasoning level, a link to its pull request, and, as in the
+terminal, `Timer:` with the session's active time, counting while a turn runs, and when
+it started, such as `Started 3h 5m ago`. As in the terminal's footer, `↓1 ↑3` after the
+base branch means the session branch is one commit behind it and three ahead, and the
+same counts after the remote branch compare with that branch; `✓` means even. The header
+shows what fits on its line, most important first; the `⋯` button lists the session's
+branch, remote branch, model, timer, age, and pull request in full. The line under the
+message box shows the model, reasoning level, answer style, and speed. An older Agentty
+sends fewer details, and the page leaves out what it does not know.
 
 The open session shows its transcript, with each activity summary in a box you can open
 or close. While the session works or waits, the transcript ends with the same status
@@ -99,7 +106,10 @@ line as the terminal, such as `Working...` with the agent's latest step, or
 `Ctrl+Enter` or `Cmd+Enter` always sends. As in the terminal, `Up` on the first line
 brings back your earlier messages to the session, newest first, and `Down` on the last
 line goes forward and then back to the text you were typing. While a turn runs, a
-message waits in the queue above the box for the next turn. While the agent asks
+message waits in the queue above the box for the next turn. The queue also lists, marked
+`Action`, what waits for the turn besides messages, such as a sync, a publish, or a
+model change. A draft session starts with a `Draft session` preview of the messages
+staged for it; your next message starts the session with them. While the agent asks
 questions, the box gives way to the questions: pick an option or type an answer, then
 press `Send answers` once each has one. A session that is merging or finished shows why
 you cannot chat. Unsent text stays in the box for each session until Agentty accepts it,
@@ -260,10 +270,11 @@ run with the session's permissions, so treat a pairing like a login.
 <a id="usage-remote-control-device-access"></a> Within the sessions it lists, a paired
 device can:
 
-- list sessions and read their transcripts, questions, queued messages, agent and model
-  settings, branches, and linked pull request;
+- list sessions and read their transcripts, questions, queued messages and actions,
+  staged draft messages, agent and model settings, branches, and linked pull request;
 - see each listed session's diff size, changed lines, model, active time, merge
-  conflicts, and pull request state;
+  conflicts, pull request state, whether its branch is published, and how far its branch
+  is ahead of and behind its base branch and its remote branch;
 - read a session's diff against its base branch, which shows the repository content the
   session changed;
 - list the names of the files and directories in a session's worktree, as `@` lookup in

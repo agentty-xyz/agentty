@@ -445,7 +445,8 @@ pub(crate) fn project_status_fixture() -> HostProjectStatus {
     }
 }
 
-/// Builds a session with every transcript message kind and one question.
+/// Builds a session with every transcript message kind, one question, and
+/// one queued message and action.
 pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
     Session {
         created_at: 10,
@@ -464,6 +465,7 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
             options: vec!["main".to_string(), "develop".to_string()],
             text: "Which branch?".to_string(),
         }],
+        queued_actions: vec!["sync after this turn".to_string()],
         queued_messages: vec!["next".to_string()],
         review_request: None,
         settings: SessionSettings {

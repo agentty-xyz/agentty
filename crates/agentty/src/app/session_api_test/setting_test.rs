@@ -14,7 +14,7 @@ use super::support::{
     request_host_context, request_session_creation, request_settings, session_row,
 };
 use crate::app::App;
-use crate::infra::db::SessionMessageRow;
+use crate::infra::db::{SessionMessageRow, SessionRow};
 
 /// Creates one regular session in `app`'s active project.
 async fn create_regular_session(app: &mut App) -> SessionId {
@@ -415,4 +415,20 @@ fn build_api_session_returns_complete_settings_and_messages() {
             .forge_kind,
         ForgeKind::GitHub
     );
+}
+
+#[test]
+fn build_api_session_stages_no_draft_prompt_once_the_draft_starts() {
+    // Arrange
+    let row = SessionRow {
+        status: "InProgress".to_string(),
+        ..session_row()
+    };
+
+    // Act
+    let session = build_api_session(row, Vec::new(), Vec::new()).expect("row should convert");
+
+    // Assert
+    assert!(session.settings.is_draft);
+    assert_eq!(session.draft_prompt, None);
 }

@@ -69,6 +69,7 @@ fn expected_session() -> RemoteSession {
         base_branch: Some("main".to_string()),
         branch: Some("wt/session-".to_string()),
         created_at: Some(10),
+        draft_prompt: None,
         id: "session-1".to_string(),
         is_draft: false,
         messages: vec![
@@ -89,6 +90,7 @@ fn expected_session() -> RemoteSession {
             options: vec!["main".to_string()],
             text: "Which branch?".to_string(),
         }],
+        queued_actions: Vec::new(),
         queued_messages: Vec::new(),
         reasoning: Some("high".to_string()),
         response_style: Some("balanced".to_string()),
@@ -155,6 +157,8 @@ async fn each_request_reaches_the_session_service() -> TestResult {
                 summary("session-1", "Review", "Build it", 20),
                 RemoteSessionSummary {
                     added_lines: Some(64),
+                    base_ahead: Some(2),
+                    base_behind: Some(0),
                     deleted_lines: Some(9),
                     in_progress_started_at: Some(100),
                     in_progress_total_seconds: Some(12),

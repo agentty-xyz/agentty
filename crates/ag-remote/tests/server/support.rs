@@ -522,8 +522,9 @@ impl SessionBackend for RecordingBackend {
         }])
     }
 
-    /// Lists `session-2` with the figures of a running turn, and every
-    /// other session without figures, as an older host lists them.
+    /// Lists `session-2` with the figures of a running turn two commits
+    /// ahead of its base, and every other session without figures, as an
+    /// older host lists them.
     async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
         let summaries = self.list_sessions().await?;
 
@@ -532,14 +533,17 @@ impl SessionBackend for RecordingBackend {
             .map(|summary| {
                 let stats = (summary.id.as_str() == "session-2").then(|| SessionListStats {
                     added_lines: 64,
+                    base_ahead_behind: Some((2, 0)),
                     deleted_lines: 9,
                     has_merge_conflict: false,
                     in_progress_started_at: Some(100),
                     in_progress_total_seconds: 12,
+                    is_published: false,
                     model: ag_session::test_support::codex_selection().model(),
                     reasoning_level: ag_session::ReasoningLevel::High,
                     review_request: None,
                     size_label: "M".to_string(),
+                    upstream_ahead_behind: None,
                 });
 
                 SessionListEntry { stats, summary }
@@ -742,6 +746,7 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
         progress: None,
         published_upstream_ref: None,
         questions,
+        queued_actions: Vec::new(),
         queued_messages,
         review_request: None,
         settings: SessionSettings {

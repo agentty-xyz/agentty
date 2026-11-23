@@ -724,32 +724,38 @@ async fn publish_session_change_advances_the_remote_revision() {
 }
 
 #[tokio::test]
-async fn status_line_changes_advance_the_remote_revision_once_each() {
+async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_each() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.sessions.push_session(test_support::session_fixture(
         "session-1",
         Status::InProgress,
     ));
+    app.sessions
+        .push_session(test_support::session_fixture("session-2", Status::Review));
     let mut revisions = app.remote_control.subscribe_revisions();
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
-    app.publish_status_line_changes();
+    app.publish_live_session_changes();
     let after_first_line = *revisions.borrow_and_update();
-    app.publish_status_line_changes();
+    app.publish_live_session_changes();
     let unchanged = revisions
         .has_changed()
         .expect("revision sender should live");
     app.session_progress_messages
         .insert("session-1".into(), "Reading files".to_string());
-    app.publish_status_line_changes();
+    app.publish_live_session_changes();
     let after_progress = *revisions.borrow_and_update();
+    app.sessions.queue_session_sync("session-2", 1);
+    app.publish_live_session_changes();
+    let after_queued_action = *revisions.borrow_and_update();
 
     // Assert
     assert_eq!(after_first_line, initial_revision + 1);
     assert!(!unchanged);
     assert_eq!(after_progress, initial_revision + 2);
+    assert_eq!(after_queued_action, initial_revision + 3);
 }
 
 #[tokio::test]

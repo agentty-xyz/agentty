@@ -484,7 +484,8 @@ fn assert_message_queued_while_running(running: &Value, queued: &Value, shown: &
                 "In progress",
                 "[M]",
                 "+64 -9",
-                "wt/session- → main",
+                // The listing carries how far the branch is from its base.
+                "wt/session- → main ↓0 ↑2",
                 "codex/gpt-6.1-sol [high]",
             ],
             "isStartedShown": true,

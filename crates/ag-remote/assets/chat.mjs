@@ -1,6 +1,7 @@
 // Open session of the remote control client: the header with its status
-// and actions, the transcript, the questions panel, the queued messages,
-// and the composer from composer.mjs. Transcript text, titles and questions are untrusted
+// and actions, a draft's preview, the transcript, the questions panel, the
+// queued messages and actions, and the composer from composer.mjs.
+// Transcript text, titles, staged drafts and questions are untrusted
 // and only ever become text nodes, directly or through the element
 // builder in markdown.mjs for answers, notices and questions. Updates change the nodes in place, so a
 // refresh keeps focus, scroll position and what the user is typing.
@@ -46,6 +47,10 @@ const MERGE_OFF_NOTE = "has a pull request";
 const PUBLISH_WAIT_HINT = "Publishes after the current turn";
 // The classes of the timing parts that end the header's details, in order.
 const TIMING_PARTS = ["timer", "started"];
+// What a draft session's preview says: a message sent to a draft stages
+// it beside any staged ones and starts the session.
+const DRAFT_STAGED_NOTE = "Staged on the host. Your next message starts the session with it.";
+const DRAFT_EMPTY_NOTE = "Your first message starts the session.";
 
 // The error a request in flight ends with when the connection drops
 // before Agentty answers. The request may still run on the host.
@@ -93,6 +98,15 @@ export function transcriptEntries(messages) {
     content: String(message.content ?? ""),
     key: index + ":" + messageKind(message),
   }));
+}
+
+// Which of the header's parts, at the given `tops`, wrapped below its
+// one line, which starts at `lineTop` and is `lineHeight` tall. A part
+// counts as wrapped once it starts half a line or more down; a part with
+// no box, such as a phone's hidden `wide-only` part, measures at 0 and
+// stays as it is.
+export function wrappedParts(tops, lineTop, lineHeight) {
+  return tops.map((top) => top - lineTop >= Math.max(lineHeight / 2, 1));
 }
 
 // Decides what the dock shows for a session in `statusName`: `compose`
@@ -297,6 +311,8 @@ export function createChat({
     clockSkew: 0,
     // Where the transcript was when the diff replaced it.
     chatPlace: null,
+    // How many rows the sheet's details list.
+    detailCount: 0,
     // What the open diff was loaded for; see `diffKey`.
     diffKey: null,
     isAnswering: false,
@@ -368,19 +384,58 @@ export function createChat({
     renderTimer();
     elements.sheetTitle.textContent = session.title || "No title";
     elements.sheetSub.textContent = info.label;
+    renderSheetDetails(session);
     renderActions();
+  }
+
+  // The header's timing values now: the active time and the session's
+  // age, each `null` when the host does not say.
+  function timing() {
+    const time = now() + state.clockSkew;
+    const seconds = activeSeconds(state.summary, time);
+
+    return {
+      started: startedLabel(state.session?.created_at, time),
+      timer: seconds === null ? null : formatTimer(seconds),
+    };
+  }
+
+  // Lists the session's details in the `⋯` sheet, in full, for what the
+  // header line has no room for. The list is built again only when a row
+  // other than the timing ones changes, so a focused link keeps its
+  // focus; `renderTimer` updates the timing rows in place.
+  function renderSheetDetails(session) {
+    const rows = session ? sheetDetailRows(document, session, state.summary, timing()) : [];
+    const key = JSON.stringify(rows.map((row) => [row.label, row.isTiming ? "" : nodeKey(row.value)]));
+    state.detailCount = rows.length;
+    elements.sheetDetails.hidden = rows.length === 0;
+    if (elements.sheetDetails.dataset.key === key) {
+      return;
+    }
+    elements.sheetDetails.dataset.key = key;
+    elements.sheetDetails.replaceChildren(
+      ...rows.map((row) => {
+        const item = element(document, "div", "sheet-detail");
+        const value = element(document, "dd");
+        value.append(row.value);
+        item.append(element(document, "dt", null, row.label), value);
+
+        return item;
+      }),
+    );
   }
 
   // Ends the header's details as the terminal's composer border does:
   // `Timer: 4m 12s`, counting while a turn runs and still between turns,
-  // then `Started 3h 5m ago`. Each goes when the host does not say.
+  // then `Started 3h 5m ago`. Each goes when the host does not say. The
+  // sheet's timing rows follow.
   function renderTimer() {
-    const time = now() + state.clockSkew;
-    const seconds = activeSeconds(state.summary, time);
+    const values = timing();
     const labels = {
-      started: startedLabel(state.session?.created_at, time),
-      timer: seconds === null ? null : "Timer: " + formatTimer(seconds),
+      started: values.started,
+      timer: values.timer === null ? null : "Timer: " + values.timer,
     };
+    renderSheetTiming(values);
     const parts = TIMING_PARTS.filter((part) => labels[part] !== null);
     const nodes = TIMING_PARTS.map((part) => elements.sub.querySelector("." + part)).filter(Boolean);
     // The same parts update in place, so the timer keeps its node.
@@ -389,14 +444,45 @@ export function createChat({
         node.remove();
       }
       elements.sub.append(...parts.map((part) => element(document, "span", part, labels[part])));
-
-      return;
-    }
-    for (const node of nodes) {
-      if (node.textContent !== labels[node.className]) {
-        node.textContent = labels[node.className];
+    } else {
+      for (const node of nodes) {
+        if (node.textContent !== labels[node.className]) {
+          node.textContent = labels[node.className];
+        }
       }
     }
+    // Every header render ends here, and a longer time can push a part
+    // off the line.
+    markWrappedParts();
+  }
+
+  // Updates the sheet's timing rows in place to the header's `values`.
+  function renderSheetTiming(values) {
+    for (const [part, value] of Object.entries(sheetTimingValues(values))) {
+      const node = elements.sheetDetails.querySelector(".sheet-" + part);
+      if (node && node.textContent !== value) {
+        node.textContent = value;
+      }
+    }
+  }
+
+  // Makes the header's parts that wrapped onto its hidden second line
+  // `inert`, so Tab and screen readers skip what is not on screen, and
+  // frees them once they fit again. A part on the line, such as a focused
+  // review link, is never marked.
+  function markWrappedParts() {
+    const line = elements.sub.getBoundingClientRect();
+    const parts = [...elements.sub.children];
+    const isWrapped = wrappedParts(
+      parts.map((part) => part.getBoundingClientRect().top),
+      line.top,
+      line.height,
+    );
+    parts.forEach((part, index) => {
+      if (part.hasAttribute("inert") !== isWrapped[index]) {
+        part.toggleAttribute("inert", isWrapped[index]);
+      }
+    });
   }
 
   // Shows the actions the status and the host allow. Merge sits in the
@@ -429,11 +515,7 @@ export function createChat({
     elements.sheetSync.disabled = isActing("sync_session") || !state.isConnected;
     elements.cancel.hidden = !actions.cancel;
     elements.cancel.disabled = isActing("cancel_session") || !state.isConnected;
-    elements.more.hidden =
-      !actions.cancel && !actions.merge && !actions.diff && !actions.publish && !actions.sync;
-    // With only Diff, Publish and Merge in it, the sheet adds nothing to
-    // the wide header.
-    elements.more.classList.toggle("narrow-only", !actions.cancel && !actions.sync);
+    renderMore(actions);
     const target = mergeTarget(state.session);
     elements.sheetMergeLabel.textContent = target ? "Merge into " + target : "Merge";
     elements.mergeTarget.textContent = target || "its base branch";
@@ -441,6 +523,16 @@ export function createChat({
     elements.syncTarget.textContent = target || "its base branch";
     const lines = sessionFigures(state.summary).lines;
     elements.mergeLines.textContent = lines ? " (+" + lines.added + " -" + lines.deleted + ")" : "";
+  }
+
+  // Shows the `⋯` button when its sheet has details or an action to offer.
+  function renderMore(actions) {
+    const hasDetails = state.detailCount > 0;
+    elements.more.hidden = !hasDetails &&
+      !actions.cancel && !actions.merge && !actions.diff && !actions.publish && !actions.sync;
+    // With only Diff, Publish and Merge in it and no details, the sheet
+    // adds nothing to the wide header.
+    elements.more.classList.toggle("narrow-only", !hasDetails && !actions.cancel && !actions.sync);
   }
 
   // Publish sits in the header on wide screens and in the sheet on
@@ -660,6 +752,36 @@ export function createChat({
     return true;
   }
 
+  // Heads the transcript of a draft session, as the terminal's
+  // `## Draft Session` preview does, with the messages it has staged on the
+  // host, which are untrusted text. Older hosts send no staged messages.
+  // Returns whether the preview changed.
+  function renderDraft(session) {
+    const node = elements.draftPreview;
+    const isDraft = session?.is_draft === true && session.status === "Draft";
+    const staged = isDraft && typeof session.draft_prompt === "string" ? session.draft_prompt : "";
+    const key = isDraft ? "draft:" + staged : "";
+    if ((node.dataset.draft ?? "") === key) {
+      return false;
+    }
+    node.dataset.draft = key;
+    node.hidden = !isDraft;
+    if (!isDraft) {
+      node.replaceChildren();
+
+      return true;
+    }
+    node.replaceChildren(
+      element(document, "p", "eyebrow", "Draft session"),
+      element(document, "p", "draft-note", staged ? DRAFT_STAGED_NOTE : DRAFT_EMPTY_NOTE),
+    );
+    if (staged) {
+      node.append(element(document, "div", "msg msg--user", staged));
+    }
+
+    return true;
+  }
+
   function renderMessage(message) {
     const kind = messageKind(message);
     const content = String(message.content ?? "");
@@ -862,18 +984,31 @@ export function createChat({
     elements.answerSend.disabled = !collected.isComplete || state.isAnswering || !state.isConnected;
   }
 
-  function renderQueued(queued) {
+  // Lists the queued chat messages, then the workflow actions the host
+  // queued, such as a sync or a model change, marked as actions. Older
+  // hosts send no actions.
+  function renderQueued(messages, actions) {
+    const queued = [
+      ...messages.map((text) => ({ isAction: false, text: String(text) })),
+      ...actions.map((text) => ({ isAction: true, text: String(text) })),
+    ];
     elements.queuedBox.hidden = queued.length === 0;
     const items = [...elements.queued.children];
-    queued.forEach((text, index) => {
-      if (items[index]?.title === text) {
+    queued.forEach((entry, index) => {
+      const old = items[index];
+      const isAction = old?.classList.contains("queued-action");
+      if (old?.title === entry.text && isAction === entry.isAction) {
         return;
       }
       const item = element(document, "li");
-      item.title = text;
-      item.append(element(document, "span", null, text));
-      if (items[index]) {
-        items[index].replaceWith(item);
+      item.title = entry.text;
+      if (entry.isAction) {
+        item.classList.add("queued-action");
+        item.append(element(document, "b", "queued-tag", "Action"));
+      }
+      item.append(element(document, "span", null, entry.text));
+      if (old) {
+        old.replaceWith(item);
       } else {
         elements.queued.append(item);
       }
@@ -929,6 +1064,7 @@ export function createChat({
     state.picks = [];
     forgetAnswerLookups();
     elements.transcript.replaceChildren();
+    renderDraft(null);
     renderStatusLine(null);
     elements.queued.replaceChildren();
     elements.queuedBox.hidden = true;
@@ -952,6 +1088,7 @@ export function createChat({
     elements.badge.hidden = true;
     elements.sub.replaceChildren();
     state.summary = null;
+    renderSheetDetails(null);
     elements.heading.textContent = "";
     state.isLoadError = false;
     // Nothing asked about the previous session may act once it is gone.
@@ -1025,10 +1162,11 @@ export function createChat({
     const isDiffOpen = Boolean(diff?.isOpen());
     const wasNearEnd = isNearEnd();
     elements.scroller.hidden = isDiffOpen;
-    const transcriptChanged = renderTranscript(session.messages || []);
+    const draftChanged = renderDraft(session);
+    const transcriptChanged = renderTranscript(session.messages || []) || draftChanged;
     const statusLineChanged = renderStatusLine(session.status, session.progress);
     const questionsChanged = renderQuestions(session.questions || []);
-    renderQueued(session.queued_messages || []);
+    renderQueued(session.queued_messages || [], session.queued_actions || []);
     renderDock();
     settings?.update(session, { isRunning: statusInfo(session.status).running });
     if (isDiffOpen) {
@@ -1175,6 +1313,11 @@ export function createChat({
   elements.jump.addEventListener("click", scrollToEnd);
   elements.goneHome.addEventListener("click", () => onHome());
   elements.more.addEventListener("click", () => confirmWith(elements.sheet));
+  // The header line's width changes with the window, the sidebar and the
+  // drawer, and with it which parts fit.
+  if (window.ResizeObserver) {
+    new window.ResizeObserver(markWrappedParts).observe(elements.sub);
+  }
   // A tap beside the sheet, on its backdrop, closes it.
   elements.sheet.addEventListener("click", (event) => {
     if (event.target === elements.sheet) {
@@ -1373,37 +1516,173 @@ function nodeKey(node) {
 
 // The header's details after the status: the size badge and line counts
 // from the listing, a merge conflict with the base branch, the branch and
-// its base, the model, and the review request as a link. Whatever the
-// host omits is left out. The branch and model give way first on a phone.
+// its base with how far apart they are, the remote the branch was
+// published to with how far apart those are, the model, and the review
+// request as a link. Whatever the host omits is left out. The branches
+// and model give way first on a phone. When the line is full, app.css
+// drops whole parts by priority, so their order here is the reading
+// order, not the priority.
 function headerDetails(document, session, summary) {
   const figures = sessionFigures(summary);
-  const nodes = [];
-  if (figures.size) {
-    nodes.push(element(document, "span", "size", "[" + figures.size + "]"));
-  }
-  if (figures.lines) {
-    nodes.push(lineCounts(document, figures.lines));
-  }
-  const branch = typeof session.branch === "string" ? session.branch : "";
-  const base = typeof session.base_branch === "string" ? session.base_branch : "";
-  if (figures.hasConflict) {
-    nodes.push(conflictLabel(document, base ? "Merge conflict with " + base : "Merge conflict"));
-  }
-  if (branch) {
-    nodes.push(element(document, "span", "wide-only", base ? branch + " → " + base : branch));
-  }
-  const settings = settingsParts(session, summary).find((part) => part.type === "model");
-  if (settings) {
-    const model = modelNode(document, settings);
-    model.classList.add("wide-only");
-    nodes.push(model);
-  }
-  const review = reviewNode(document, session.review_request);
-  if (review) {
-    nodes.push(review);
+  const branches = sessionBranches(session);
+  const settings = modelSetting(session, summary);
+
+  return [
+    figures.size ? element(document, "span", "size", "[" + figures.size + "]") : null,
+    figures.lines ? lineCounts(document, figures.lines) : null,
+    figures.hasConflict ? conflictPart(document, branches.base) : null,
+    branches.branch ? branchPart(document, branches, figures.base) : null,
+    branches.upstream ? upstreamPart(document, branches, figures.upstream) : null,
+    settings ? wideOnly(modelNode(document, settings)) : null,
+    reviewNode(document, session.review_request),
+  ].filter(Boolean);
+}
+
+// The session's branch, its base branch, and the upstream ref it was
+// published to, each `""` when the host omits it.
+function sessionBranches(session) {
+  return {
+    base: textOrEmpty(session.base_branch),
+    branch: textOrEmpty(session.branch),
+    upstream: textOrEmpty(session.published_upstream_ref),
+  };
+}
+
+// `value` when it is a string, otherwise `""`.
+function textOrEmpty(value) {
+  return typeof value === "string" ? value : "";
+}
+
+// The model part of `settingsParts`, or `undefined` when the host names
+// no model.
+function modelSetting(session, summary) {
+  return settingsParts(session, summary).find((part) => part.type === "model");
+}
+
+// `node`, hidden on a phone.
+function wideOnly(node) {
+  node.classList.add("wide-only");
+
+  return node;
+}
+
+// `branch → base`, or the branch alone without a base.
+function branchLabel({ base, branch }) {
+  return base ? branch + " → " + base : branch;
+}
+
+// `node` followed by `counts` against `target`, when there are counts.
+function withCounts(document, node, counts, target) {
+  if (counts) {
+    node.append(" ", branchCountsNode(document, counts, target));
   }
 
-  return nodes;
+  return node;
+}
+
+// The header's merge conflict. A phone has room for the conflict, not
+// for the branch it is with.
+function conflictPart(document, base) {
+  const conflict = conflictLabel(document, "Merge conflict");
+  if (base) {
+    conflict.append(element(document, "span", "wide-only", " with " + base));
+  }
+
+  return conflict;
+}
+
+// The header's branch and its base with their counts, as one part, so a
+// full line drops them together. A long name may be cut short.
+function branchPart(document, branches, counts) {
+  const label = branchLabel(branches);
+  const node = element(document, "span", "branch wide-only");
+  const name = element(document, "span", "branch-name", label);
+  name.title = label;
+  node.append(name);
+
+  return withCounts(document, node, branches.base ? counts : null, branches.base);
+}
+
+// The header's upstream with its counts, as one part. An upstream named
+// after the session branch, such as `origin/wt/3f9a1c2e` for branch
+// `wt/3f9a1c2e`, shows as its remote, `origin`.
+function upstreamPart(document, { branch, upstream }, counts) {
+  const suffix = "/" + branch;
+  const remote = branch && upstream.endsWith(suffix) ? upstream.slice(0, -suffix.length) : upstream;
+  const node = element(document, "span", "upstream wide-only", "⇡ " + remote);
+  node.title = "Published to " + upstream;
+
+  return withCounts(document, node, counts, upstream);
+}
+
+// The labelled rows of the `⋯` sheet's details, as `{ label, value,
+// isTiming }`, from the same helpers as the header: the branch and its
+// base with their counts, the whole upstream ref with its counts, the
+// model, the active time and age from `timing`, and the review request as
+// a link. Whatever the host omits is left out.
+function sheetDetailRows(document, session, summary, timing) {
+  const figures = sessionFigures(summary);
+  const branches = sessionBranches(session);
+  const model = modelSetting(session, summary);
+  const review = reviewNode(document, session.review_request);
+
+  return [
+    branches.branch ? branchRow(document, branches, figures.base) : null,
+    branches.upstream ? upstreamRow(document, branches.upstream, figures.upstream) : null,
+    model ? { label: "Model", value: modelNode(document, model) } : null,
+    ...timingRows(document, timing),
+    review ? { label: "Pull request", value: review } : null,
+  ].filter(Boolean);
+}
+
+// The sheet's branch row: the branch and its base with their counts.
+function branchRow(document, branches, counts) {
+  const value = element(document, "span", null, branchLabel(branches));
+
+  return {
+    label: "Branch",
+    value: withCounts(document, value, branches.base ? counts : null, branches.base),
+  };
+}
+
+// The sheet's upstream row: the whole ref with its counts.
+function upstreamRow(document, upstream, counts) {
+  const value = element(document, "span", null, upstream);
+
+  return { label: "Upstream", value: withCounts(document, value, counts, upstream) };
+}
+
+// The sheet's timer and age rows, which `renderTimer` updates in place.
+function timingRows(document, timing) {
+  return Object.entries(sheetTimingValues(timing)).map(([part, value]) => ({
+    isTiming: true,
+    label: part === "timer" ? "Timer" : "Started",
+    value: element(document, "span", "sheet-" + part, value),
+  }));
+}
+
+// The sheet's values for the header's timing parts it has, keyed `timer`
+// and `started`: the active time, and the age without the header's
+// `Started` that the row's label says.
+function sheetTimingValues(timing) {
+  const values = {};
+  if (timing.timer !== null) {
+    values.timer = timing.timer;
+  }
+  if (timing.started !== null) {
+    values.started = timing.started.replace(/^Started /, "");
+  }
+
+  return values;
+}
+
+// How far the session branch is from `target`, such as `↓1 ↑3`, in the
+// muted tone of the terminal's footer counts.
+function branchCountsNode(document, counts, target) {
+  const node = element(document, "span", "branch-counts", counts);
+  node.title = counts === "✓" ? "Even with " + target : "Behind and ahead of " + target;
+
+  return node;
 }
 
 // The linked review request as a link to the forge. Its address goes

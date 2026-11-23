@@ -198,17 +198,65 @@ test("rows show size and the model or its labels, and cards add the line counts,
   assert.equal(card("fresh").querySelector(".card-figures").textContent, "gpt-5.4");
   assert.equal(card("old").querySelector(".card-figures"), null);
   // A conflict with the base branch and a bypass-only pull request are
-  // labelled as in the terminal.
-  assert.equal(
-    row("conflicted").querySelector(".row-meta").textContent,
-    "Review·merge conflict·PR ready (bypass)now",
-  );
+  // labelled as in the terminal; a row has room only for the conflict.
+  assert.equal(row("conflicted").querySelector(".row-meta").textContent, "Review·merge conflictnow");
   assert.equal(row("conflicted").querySelector(".conflict").textContent, "merge conflict");
   assert.equal(row("review").querySelector(".conflict"), null);
   assert.equal(
     card("conflicted").querySelector(".card-figures").textContent,
     "merge conflict·PR ready (bypass)",
   );
+});
+
+test("rows and cards show the forge indicator after the status, and older hosts show none", () => {
+  // Arrange
+  const page = mountList();
+  const linked = {
+    id: "linked",
+    is_published: true,
+    model_short_name: "opus-5.5",
+    review_display_id: "#12",
+    review_state: "Open",
+    status: "Review",
+    title: "Linked",
+    updated_at: NOW,
+  };
+  const published = {
+    ...linked,
+    id: "published",
+    review_display_id: undefined,
+    review_state: undefined,
+  };
+  const merged = { ...linked, id: "merged", review_state: "Merged", status: "Merged" };
+  const old = { id: "old", review_state: "Closed", status: "Done", title: "Old", updated_at: NOW };
+  const plain = { id: "plain", status: "Review", title: "Not published", updated_at: NOW };
+  const conflicted = { ...linked, has_merge_conflict: true, id: "conflicted", review_ready: "ready" };
+
+  // Act
+  page.list.update([linked, published, merged, old, plain, conflicted], null);
+  const row = (id) => page.byId("sessions").querySelector('[data-session-id="' + id + '"]');
+  const card = (id) => page.byId("home-cards").querySelector('[data-session-id="' + id + '"]');
+
+  // Assert
+  assert.equal(row("linked").querySelector(".row-meta").textContent, "Review⊙ #12·opus-5.5now");
+  assert.equal(row("linked").querySelector(".forge").className, "forge forge--open");
+  assert.equal(row("linked").querySelector(".forge").title, "Review request #12 open");
+  assert.equal(row("published").querySelector(".forge").textContent, "↑");
+  assert.equal(row("published").querySelector(".forge").className, "forge forge--published");
+  assert.equal(row("merged").querySelector(".forge").textContent, "✓ #12");
+  // An older host sends the state alone; a session neither published nor
+  // linked shows no indicator.
+  page.byId("sessions").querySelector(".group-toggle").click();
+  assert.equal(row("old").querySelector(".forge").textContent, "✗");
+  assert.equal(row("old").querySelector(".forge").className, "forge forge--closed");
+  assert.equal(card("linked").querySelector(".card-meta").textContent, "Review⊙ #12now");
+  assert.equal(card("merged").querySelector(".forge").textContent, "✓ #12");
+  assert.equal(row("plain").querySelector(".forge"), null);
+  assert.equal(card("plain").querySelector(".forge"), null);
+  // Beside a merge conflict a row keeps only the mark; the card has room.
+  assert.equal(row("conflicted").querySelector(".row-meta").textContent, "Review⊙·merge conflictnow");
+  assert.equal(row("conflicted").querySelector(".forge").title, "Review request #12 open");
+  assert.equal(card("conflicted").querySelector(".card-meta").textContent, "Review⊙ #12now");
 });
 
 test("a row renders a hostile title only as a text node", () => {

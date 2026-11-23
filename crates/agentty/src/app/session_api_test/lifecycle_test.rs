@@ -232,13 +232,14 @@ async fn runtime_backend_lists_sessions_with_their_list_stats() {
             last_refreshed_at: 1,
             summary: review_summary.clone(),
         });
+        session.published_upstream_ref = Some("origin/wt/branch".to_string());
     }
     app.sessions.replace_session_git_statuses(HashMap::from([(
         session_id.clone(),
         SessionGitStatus {
-            base_status: None,
+            base_status: Some((2, 1)),
             has_merge_conflict: Some(true),
-            remote_status: None,
+            remote_status: Some((0, 3)),
         },
     )]));
     let model = app.sessions.sessions()[0].agent.model();
@@ -256,14 +257,17 @@ async fn runtime_backend_lists_sessions_with_their_list_stats() {
         entries[0].stats,
         Some(ag_session::SessionListStats {
             added_lines: 25,
+            base_ahead_behind: Some((2, 1)),
             deleted_lines: 5,
             has_merge_conflict: true,
             in_progress_started_at: Some(100),
             in_progress_total_seconds: 60,
+            is_published: true,
             model,
             reasoning_level: ReasoningLevel::Max,
             review_request: Some(review_summary),
             size_label: "S".to_string(),
+            upstream_ahead_behind: Some((0, 3)),
         })
     );
 }

@@ -45,6 +45,7 @@ fn session() -> Session {
         progress: None,
         published_upstream_ref: None,
         questions: Vec::new(),
+        queued_actions: Vec::new(),
         queued_messages: Vec::new(),
         review_request: None,
         settings: SessionSettings {

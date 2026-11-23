@@ -614,6 +614,29 @@ impl Session {
         (!message.is_empty()).then(|| message.to_string())
     }
 
+    /// Returns the labels of the workflow actions queued behind the active
+    /// turn, such as a sync or a publish, in the order they run.
+    pub(crate) fn queued_action_labels(&self) -> Vec<String> {
+        let mut queued_actions = self
+            .transient_messages
+            .messages()
+            .iter()
+            .filter_map(|message| {
+                if let TransientMessageBody::Queued(queued_action) = &message.body {
+                    Some(queued_action)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        queued_actions.sort_by_key(|queued_action| queued_action.order);
+
+        queued_actions
+            .into_iter()
+            .map(|queued_action| queued_action.text.clone())
+            .collect()
+    }
+
     /// Returns the loading text of a running review, when one runs.
     pub(crate) fn review_loading_message(&self) -> Option<&str> {
         self.loading_message(TransientMessageSlot::Review)

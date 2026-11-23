@@ -19,7 +19,9 @@ use tokio::sync::oneshot;
 
 use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptModelChange;
-use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
+use crate::app::session::{
+    SessionCreationSettings, SessionGitStatus, migrate_session_off_retired_model,
+};
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
 use crate::app::{
@@ -29,6 +31,7 @@ use crate::app::{
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::question_answer_message;
+use crate::domain::session::Session;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
@@ -443,38 +446,26 @@ impl App {
     }
 
     /// Summarizes the loaded sessions in their display order, with the diff
-    /// size, model, timer, merge-conflict, and review figures the session
-    /// list shows.
+    /// size, model, timer, branch, and review figures the session list and
+    /// the session footer show.
     fn list_api_session_entries(&self) -> Vec<ag_session::SessionListEntry> {
         let git_statuses = self.sessions.render_parts().session_git_statuses;
 
         self.sessions
             .sessions()
             .iter()
-            .map(|session| ag_session::SessionListEntry {
-                stats: Some(ag_session::SessionListStats {
-                    added_lines: session.stats.added_lines,
-                    deleted_lines: session.stats.deleted_lines,
-                    has_merge_conflict: git_statuses
-                        .get(&session.id)
-                        .and_then(|status| status.has_merge_conflict)
-                        .unwrap_or(false),
-                    in_progress_started_at: session.in_progress_started_at,
-                    in_progress_total_seconds: session.in_progress_total_seconds,
-                    model: session.agent.model(),
-                    reasoning_level: session.effective_reasoning_level(),
-                    review_request: session
-                        .review_request
-                        .as_ref()
-                        .map(|review_request| review_request.summary.clone()),
-                    size_label: session.size.label().to_string(),
-                }),
-                summary: ag_session::SessionSummary {
-                    id: session.id.clone(),
-                    status: session.status,
-                    title: session.title.clone(),
-                    updated_at: session.updated_at,
-                },
+            .map(|session| {
+                let git_status = git_statuses.get(&session.id).copied().unwrap_or_default();
+
+                ag_session::SessionListEntry {
+                    stats: Some(api_session_list_stats(session, git_status)),
+                    summary: ag_session::SessionSummary {
+                        id: session.id.clone(),
+                        status: session.status,
+                        title: session.title.clone(),
+                        updated_at: session.updated_at,
+                    },
+                }
             })
             .collect()
     }
@@ -920,10 +911,12 @@ impl App {
         });
         let progress = live_session
             .and_then(|session| session.status_line(self.session_progress_message(session_id)));
+        let queued_actions = live_session.map_or_default(Session::queued_action_labels);
 
         build_api_session(row, message_rows, queued_messages).map(|session| {
             Some(ag_session::Session {
                 progress,
+                queued_actions,
                 ..session
             })
         })
@@ -1392,6 +1385,31 @@ struct InheritedCreationSettings {
     settings: SessionCreationSettings,
 }
 
+/// Collects the list figures of one loaded session, with the branch
+/// distances that the background Git poll last reported for it.
+fn api_session_list_stats(
+    session: &Session,
+    git_status: SessionGitStatus,
+) -> ag_session::SessionListStats {
+    ag_session::SessionListStats {
+        added_lines: session.stats.added_lines,
+        base_ahead_behind: git_status.base_status,
+        deleted_lines: session.stats.deleted_lines,
+        has_merge_conflict: git_status.has_merge_conflict.unwrap_or(false),
+        in_progress_started_at: session.in_progress_started_at,
+        in_progress_total_seconds: session.in_progress_total_seconds,
+        is_published: session.published_upstream_ref.is_some(),
+        model: session.agent.model(),
+        reasoning_level: session.effective_reasoning_level(),
+        review_request: session
+            .review_request
+            .as_ref()
+            .map(|review_request| review_request.summary.clone()),
+        size_label: session.size.label().to_string(),
+        upstream_ahead_behind: git_status.remote_status,
+    }
+}
+
 /// Converts the status bar's project sync into its programmatic form.
 fn api_project_sync(status: &ProjectSyncStatus) -> HostProjectSync {
     let phase = match &status.phase {
@@ -1516,7 +1534,9 @@ fn build_api_session(
         .review_request
         .map(api_review_request_from_row)
         .transpose()?;
-    let draft_prompt = (row.is_draft && !row.prompt.is_empty()).then_some(row.prompt);
+    // Like the terminal's draft preview, a started draft stages nothing.
+    let draft_prompt = (row.is_draft && status == SessionStatus::Draft && !row.prompt.is_empty())
+        .then_some(row.prompt);
 
     Ok(ag_session::Session {
         created_at: row.created_at,
@@ -1526,6 +1546,7 @@ fn build_api_session(
         progress: None,
         published_upstream_ref: row.published_upstream_ref,
         questions,
+        queued_actions: Vec::new(),
         queued_messages,
         review_request,
         settings: SessionSettings {
