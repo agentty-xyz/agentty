@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteMessage,
-    RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync,
+    RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -45,6 +46,18 @@ fn summary(id: &str, status: &str, title: &str, updated_at: i64) -> RemoteSessio
         title: Some(title.to_string()),
         updated_at,
         ..RemoteSessionSummary::default()
+    }
+}
+
+/// Builds the test backend's project as a listing describes it, with `sync`
+/// as its latest sync.
+fn project(sync: Option<RemoteProjectSync>) -> RemoteProject {
+    RemoteProject {
+        ahead: Some(0),
+        behind: Some(2),
+        branch: Some("main".to_string()),
+        name: "agentty".to_string(),
+        sync,
     }
 }
 
@@ -137,6 +150,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
     assert_eq!(
         listed,
         RemoteResult::Ok(RemoteResponse::Sessions {
+            project: Some(project(None)),
             sessions: vec![
                 summary("session-1", "Review", "Build it", 20),
                 RemoteSessionSummary {
@@ -729,6 +743,38 @@ async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
         RemoteResult::Error("Session cannot sync in status `Done`".to_string())
     );
     assert_eq!(server.backend.calls(), ["list", "sync:session-1"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_project_reaches_the_host_and_the_listing_reports_its_progress() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+
+    // Act
+    let synced = call(&mut client, 1, RemoteRequest::SyncProject).await?;
+    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+
+    // Assert
+    let listed_project = match listed {
+        RemoteResult::Ok(RemoteResponse::Sessions { project, .. }) => project,
+        _ => None,
+    };
+    assert_eq!(synced, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        listed_project,
+        Some(project(Some(RemoteProjectSync {
+            branch: "main".to_string(),
+            conflicts: None,
+            message: None,
+            phase: RemoteProjectSyncPhase::Running,
+            pulled_commits: None,
+            pushed_commits: None,
+        })))
+    );
+    assert_eq!(server.backend.calls(), ["sync_project", "list"]);
 
     Ok(())
 }

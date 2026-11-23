@@ -13,7 +13,8 @@ for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
 change a session's settings, create sessions in the active project, merge a session into
-its base branch, and publish its branch; the web page offers each of these.
+its base branch, publish its branch, and sync the active project's branch with its
+remote; the web page offers each of these.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to add
 the `Remote` tab to the right of `Settings`.
@@ -57,26 +58,36 @@ The list groups sessions as the terminal does, with the archive collapsed. Type 
 `All`, `Needs you`, and `Running` buttons narrow the list by status. A dot marks a
 session that changed since you last opened it. Each browser tracks what it has seen on
 its own, so another device or a private window shows its own dots. Each row also shows
-the session's size, changed lines, model, and `PR ready` when its pull request can
-merge. With no session open, the page offers the sessions waiting for you.
+the session's size and model. In place of the model, `merge conflict` marks a session
+whose branch conflicts with its base, and `PR ready` or `PR ready (bypass)` a pull
+request that can merge; see [Project Sync](@/docs/usage/workflow.md#project-sync) for
+what the terminal's same labels mean. With no session open, the page offers the sessions
+waiting for you, with their changed lines.
 
-When this Agentty lets devices create sessions, the sidebar names the active project and
-offers `New session`. Home then asks what the agent should work on in the active project
-and base branch, with a choice of session type when Agentty offers more than one. Its
-message box is the open session's: the line under it shows the new session's model,
-reasoning level, answer style, and speed, and when the device may change session
-settings, the line and the slash commands change them, with models from the agent that
-session type starts on. Because the session has no worktree yet, `@` lists the files in
-the active project's checkout, as it does for a draft in the terminal. Sending creates
-the session, applies the settings you changed, sends your text as its first message, and
-opens it. If the settings or the message do not go through, the new session opens with
-your text still in its box.
+The top of the sidebar names the active project, its branch, and how far that branch is
+from its remote: `↓2 ↑1` means two commits to pull and one to push, and `✓` means none.
+When this Agentty lets devices sync the project, `Sync` beside it asks first, then pulls
+and pushes that branch as `s` does in the terminal. The line under it follows the sync
+and shows its result for a few seconds. A sync that cannot start, such as while a merge
+runs, says why.
 
-The header of the open session shows its size and changed lines, the session branch and
-its base branch, the model and reasoning level, a link to its pull request, and the
-active time while a turn runs. The line under the message box shows the model, reasoning
-level, answer style, and speed. An older Agentty sends fewer details, and the page
-leaves out what it does not know.
+When this Agentty lets devices create sessions, the sidebar offers `New session`. Home
+then asks what the agent should work on in the active project and base branch, with a
+choice of session type when Agentty offers more than one. Its message box is the open
+session's: the line under it shows the new session's model, reasoning level, answer
+style, and speed, and when the device may change session settings, the line and the
+slash commands change them, with models from the agent that session type starts on.
+Because the session has no worktree yet, `@` lists the files in the active project's
+checkout, as it does for a draft in the terminal. Sending creates the session, applies
+the settings you changed, sends your text as its first message, and opens it. If the
+settings or the message do not go through, the new session opens with your text still in
+its box.
+
+The header of the open session shows its size and changed lines, a merge conflict with
+its base branch, the session branch and its base branch, the model and reasoning level,
+a link to its pull request, and the active time while a turn runs. The line under the
+message box shows the model, reasoning level, answer style, and speed. An older Agentty
+sends fewer details, and the page leaves out what it does not know.
 
 The open session shows its transcript, with each activity summary in a box you can open
 or close. While the session works or waits, the transcript ends with the same status
@@ -95,7 +106,8 @@ The `⋯` button in the session header offers `Cancel session`. When this Agentt
 devices stop a turn or merge, the page also shows `Stop` next to the send button while a
 turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` returns the
 session to review and keeps its changes; `Merge` asks before it merges the session into
-its base branch, and names that branch and the changed lines.
+its base branch, and names that branch and the changed lines. `Merge` is off for a
+session with a pull request, which merges on the forge.
 
 When this Agentty lets devices publish, `Publish` sits beside `Merge`, or in the `⋯`
 sheet on a phone, while the session is in review. It asks first and names the remote
@@ -251,6 +263,9 @@ device can:
   the terminal does, without reading their contents;
 - list the names of the files and directories in the active project's checkout, for `@`
   lookup in the first message of a new session, without reading their contents;
+- see the active project's name and branch, how far the branch is ahead of and behind
+  its remote, and the progress and result of its sync, including Git's message when it
+  fails;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions;
@@ -265,9 +280,11 @@ device can:
   terminal;
 - cancel a session, which deletes its worktree and branch;
 - merge a session, which lands its changes on the base branch;
-- create a session in the active project, which adds a worktree and branch; and
+- create a session in the active project, which adds a worktree and branch;
 - publish a session, which pushes its branch and opens or refreshes its pull request
-  with this computer's Git and forge credentials.
+  with this computer's Git and forge credentials; and
+- sync the active project, which pulls its branch with a rebase and pushes it with this
+  computer's Git credentials, and starts an agent to resolve any conflicts.
 
 Anyone holding a paired device can do the same, so remove a device you no longer
 control.
@@ -282,8 +299,8 @@ control.
   the `Remote` tab with `d`; its open connection closes at once. Keys do not expire, so
   remove a device you no longer control.
 - A device can read and act on only the sessions it lists, which are the sessions of the
-  active project, and creates sessions only in that project. Agentty refuses a request
-  for any other session.
+  active project, and creates sessions in and syncs only that project. Agentty refuses a
+  request for any other session.
 - A device that publishes a session pushes it to the branch it was published to before,
   or under the default name the first time, and opens or refreshes its pull request with
   this computer's Git and forge credentials; it cannot choose a branch name. See

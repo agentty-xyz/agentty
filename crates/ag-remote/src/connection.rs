@@ -21,7 +21,7 @@ use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
-    ClientFrame, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    ClientFrame, RemoteProject, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
     RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
@@ -70,6 +70,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::RebaseSession, "sync"),
     (SessionOperation::SessionSettings, "settings"),
     (SessionOperation::PublishSession, "publish"),
+    (SessionOperation::SyncProject, "sync_project"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -602,8 +603,9 @@ impl RequestTasks {
     }
 }
 
-/// Returns the session a request changes, or `None` for reads, for creation,
-/// which changes no existing session, and for a publish. A publish can wait
+/// Returns the session a request changes, or `None` for reads, for creation
+/// and a project sync, which change no existing session, and for a publish.
+/// A publish can wait
 /// behind a running turn, so queueing it would hold a later stop, cancel,
 /// answer, or message until the turn ends; the host serializes the push
 /// itself.
@@ -624,6 +626,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::ListSessionFiles { .. }
         | RemoteRequest::ListSessions
         | RemoteRequest::PublishSession { .. }
+        | RemoteRequest::SyncProject
         | RemoteRequest::Unsupported => None,
     }
 }
@@ -708,16 +711,7 @@ async fn respond(
         RemoteRequest::ListSessionFiles { session_id } => {
             list_listed_session_files(sessions, session_id).await
         }
-        RemoteRequest::ListSessions => {
-            let summaries = sessions.list_session_entries().await?;
-
-            Ok(RemoteResponse::Sessions {
-                sessions: summaries
-                    .into_iter()
-                    .map(RemoteSessionSummary::from)
-                    .collect(),
-            })
-        }
+        RemoteRequest::ListSessions => list_sessions(sessions).await,
         RemoteRequest::MergeSession { session_id } => {
             require_operation(sessions, SessionOperation::MergeSession)?;
             let session_id = listed_session_id(sessions, session_id).await?;
@@ -747,6 +741,12 @@ async fn respond(
             require_operation(sessions, SessionOperation::StopTurn)?;
             let session_id = listed_session_id(sessions, session_id).await?;
             sessions.stop_turn(&session_id).await?;
+
+            Ok(RemoteResponse::Accepted)
+        }
+        RemoteRequest::SyncProject => {
+            require_operation(sessions, SessionOperation::SyncProject)?;
+            sessions.sync_project().await?;
 
             Ok(RemoteResponse::Accepted)
         }
@@ -833,6 +833,25 @@ async fn create_session(
 
     Ok(RemoteResponse::Created {
         session_id: session_id.to_string(),
+    })
+}
+
+/// Lists the host's sessions and, when the host reports it, the active
+/// project they belong to.
+async fn list_sessions(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
+    let summaries = sessions.list_session_entries().await?;
+    let project = if sessions.supports(SessionOperation::ProjectStatus) {
+        Some(RemoteProject::from(sessions.project_status().await?))
+    } else {
+        None
+    };
+
+    Ok(RemoteResponse::Sessions {
+        project,
+        sessions: summaries
+            .into_iter()
+            .map(RemoteSessionSummary::from)
+            .collect(),
     })
 }
 

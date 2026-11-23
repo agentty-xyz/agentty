@@ -1590,6 +1590,7 @@ impl App {
             },
         };
         self.schedule_project_sync_status_expiry();
+        self.publish_session_change();
     }
 
     /// Applies completed linked-session comment loads only while the matching
@@ -1735,9 +1736,17 @@ impl App {
         if let Some(git_status_update) = &event_batch.git_status_update
             && git_status_update.generation == self.sync_handle.current_generation()
         {
+            // Remote clients list the project's counts and each session's
+            // merge conflict, which no session event marks.
+            let is_changed = self.projects.render_parts().git_status != git_status_update.status
+                || *self.sessions.render_parts().session_git_statuses
+                    != event_batch.session_git_status_updates;
             self.projects.set_git_status(git_status_update.status);
             self.sessions
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
+            if is_changed {
+                self.publish_session_change();
+            }
         }
 
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
@@ -1922,6 +1931,7 @@ impl App {
         status.phase = ProjectSyncPhase::ResolvingConflicts {
             conflicted_file_count: conflicted_files.len(),
         };
+        self.publish_session_change();
     }
 
     /// Updates the last-seen session-handle versions and returns whether any
@@ -2599,10 +2609,25 @@ impl App {
         };
 
         if let Some(summary) = task_result.summary {
+            // Remote clients list the review state and whether the request
+            // can merge, which no session event marks.
+            let is_changed = self
+                .sessions
+                .session_for_id(&session_id)
+                .is_some_and(|session| {
+                    session
+                        .review_request
+                        .as_ref()
+                        .map(|review_request| &review_request.summary)
+                        != Some(&summary)
+                });
             let _ = self
                 .sessions
                 .store_review_request_summary(&self.services, &session_id, summary)
                 .await;
+            if is_changed {
+                self.publish_session_change();
+            }
         }
 
         match task_result.outcome {

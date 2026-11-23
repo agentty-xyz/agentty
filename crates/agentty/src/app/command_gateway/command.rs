@@ -199,6 +199,8 @@ pub(crate) enum SessionMutation {
     Merge {
         session_id: SessionId,
     },
+    /// Syncs the active project's branch with its upstream.
+    SyncProject,
 }
 
 impl SessionMutation {
@@ -234,6 +236,7 @@ impl SessionMutation {
             Self::Rebase { session_id } => ("rebase", Some(session_id)),
             Self::UpdateSettings { session_id, .. } => ("update_settings", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),
+            Self::SyncProject => ("sync_project", None),
         }
     }
 }

@@ -15,8 +15,8 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    ReviewRequest, Session, SessionDiffFile, SessionError, SessionFileEntry, SessionId,
-    SessionListEntry, SessionSummary,
+    HostProjectStatus, ReviewRequest, Session, SessionDiffFile, SessionError, SessionFileEntry,
+    SessionId, SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -82,6 +82,9 @@ pub(crate) enum SessionRuntimeCommand {
     },
     HostContext {
         response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
+    },
+    ProjectStatus {
+        response_tx: oneshot::Sender<Result<HostProjectStatus, SessionError>>,
     },
     Mutation(SessionCommand),
 }
@@ -419,6 +422,19 @@ impl SessionRuntimeHandle {
     pub(crate) async fn host_context(&self) -> Result<HostContext, SessionError> {
         self.request(|response_tx| SessionRuntimeCommand::HostContext { response_tx })
             .await
+    }
+
+    /// Reports the active project's branch, its distance from upstream, and
+    /// its latest explicit sync through the runtime actor.
+    pub(crate) async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::ProjectStatus { response_tx })
+            .await
+    }
+
+    /// Starts or queues a sync of the active project's branch through the
+    /// runtime actor.
+    pub(crate) async fn sync_project(&self) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::SyncProject).await
     }
 
     /// Lists the loaded sessions in display order through the runtime actor.

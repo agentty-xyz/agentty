@@ -11,8 +11,8 @@ use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionOperation, SessionService,
-    SessionSettingsChange,
+    DurableMessageVisibility, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
+    QuestionAnswer, SessionBackend, SessionOperation, SessionService, SessionSettingsChange,
 };
 
 #[tokio::test]
@@ -361,6 +361,8 @@ async fn service_delegates_settings_changes_to_supporting_hosts() {
 #[derive(Default)]
 struct OptionalBackend {
     inner: FakeBackend,
+    /// Whether a project sync was asked for and still runs.
+    is_project_syncing: Mutex<bool>,
     settings_changes: Mutex<Vec<(SessionId, SessionSettingsChange)>>,
     stopped: Mutex<Vec<SessionId>>,
     synced: Mutex<Vec<SessionId>>,
@@ -374,7 +376,29 @@ impl SessionBackend for OptionalBackend {
             SessionOperation::StopTurn
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
+                | SessionOperation::ProjectStatus
+                | SessionOperation::SyncProject
         )
+    }
+
+    async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
+        let is_syncing = *self.is_project_syncing.lock().expect("project sync");
+
+        Ok(HostProjectStatus {
+            ahead_behind: Some((1, 2)),
+            branch: Some("main".to_string()),
+            project_name: "agentty".to_string(),
+            sync: is_syncing.then(|| HostProjectSync {
+                branch: "main".to_string(),
+                phase: HostProjectSyncPhase::Running,
+            }),
+        })
+    }
+
+    async fn sync_project(&self) -> Result<(), SessionError> {
+        *self.is_project_syncing.lock().expect("project sync") = true;
+
+        Ok(())
     }
 
     async fn update_session_settings(
@@ -476,4 +500,70 @@ async fn existing_hosts_report_unsupported_host_context() {
         ))
     );
     assert!(!supports_host);
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_project_status_and_sync() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supports_status = service.supports(SessionOperation::ProjectStatus);
+    let supports_sync = service.supports(SessionOperation::SyncProject);
+    let status = service.project_status().await;
+    let synced = service.sync_project().await;
+
+    // Assert
+    assert!(!supports_status);
+    assert!(!supports_sync);
+    assert_eq!(
+        status,
+        Err(SessionError::Operation(
+            "Host does not report its project status".to_string()
+        ))
+    );
+    assert_eq!(
+        synced,
+        Err(SessionError::Operation(
+            "Host does not support syncing its project".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_project_status_and_sync_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supports_status = service.supports(SessionOperation::ProjectStatus);
+    let supports_sync = service.supports(SessionOperation::SyncProject);
+    let idle_status = service.project_status().await;
+    let synced = service.sync_project().await;
+    let syncing_status = service.project_status().await;
+
+    // Assert
+    assert!(supports_status);
+    assert!(supports_sync);
+    assert_eq!(synced, Ok(()));
+    let idle_project = HostProjectStatus {
+        ahead_behind: Some((1, 2)),
+        branch: Some("main".to_string()),
+        project_name: "agentty".to_string(),
+        sync: None,
+    };
+    assert_eq!(idle_status, Ok(idle_project.clone()));
+    assert_eq!(
+        syncing_status,
+        Ok(HostProjectStatus {
+            sync: Some(HostProjectSync {
+                branch: "main".to_string(),
+                phase: HostProjectSyncPhase::Running,
+            }),
+            ..idle_project
+        })
+    );
 }

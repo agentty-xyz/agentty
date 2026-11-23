@@ -186,12 +186,13 @@ that agents run with edit permissions.
 
 **Decision.** A paired device may stop a turn, create sessions, merge a session into its
 base branch, publish a session branch and open or refresh its review request, sync a
-session branch, and change session settings. Each operation is a separate request with
-its own capability, reaches only sessions the host lists, and creates sessions only in
-the active project. Merge and publish ask for confirmation on the device, not in the
-terminal, and Agentty keeps no audit trail of remote actions yet. Running host commands,
-opening worktrees, changing Agentty settings, managing projects, and choosing the remote
-branch name stay out of reach.
+session branch, sync the active project's branch with its remote, and change session
+settings. Each operation is a separate request with its own capability, reaches only
+sessions the host lists, and creates sessions in and syncs only the active project.
+Merge and publish ask for confirmation on the device, not in the terminal, and Agentty
+keeps no audit trail of remote actions yet. Running host commands, opening worktrees,
+changing Agentty settings, managing projects, and choosing the remote branch name stay
+out of reach.
 
 **Consequences.**
 

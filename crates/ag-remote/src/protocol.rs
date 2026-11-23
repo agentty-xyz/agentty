@@ -11,9 +11,10 @@
 //! fetch fresh snapshots.
 
 use ag_session::{
-    AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, ReviewRequestSummary,
-    Session, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionListEntry,
-    SessionMessage, SessionMessageKind, session_branch,
+    AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, HostProjectStatus,
+    HostProjectSync, HostProjectSyncPhase, ReviewRequestSummary, Session, SessionDiffFile,
+    SessionDiffFileStatus, SessionFileEntry, SessionListEntry, SessionMessage, SessionMessageKind,
+    session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +142,13 @@ pub enum RemoteRequest {
         /// Session whose turn stops.
         session_id: String,
     },
+    /// Syncs the branch of the host's active project with its upstream: a
+    /// pull with rebase, then a push, in the host's checkout with the
+    /// user's Git credentials. A conflict starts an agent-assisted
+    /// resolution. The `project` of a `list_sessions` response reports the
+    /// progress and the outcome. Offered through the `sync_project`
+    /// capability.
+    SyncProject,
     /// Rebases the session branch onto its base branch, or queues the rebase
     /// behind a running turn. A conflict starts an agent-assisted resolution
     /// turn. Offered through the `sync` capability.
@@ -412,6 +420,10 @@ pub enum RemoteResponse {
     },
     /// The host's loaded sessions in display order.
     Sessions {
+        /// The active project the sessions belong to. Absent from hosts
+        /// that do not report it and from older servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<RemoteProject>,
         /// Session listing entries.
         sessions: Vec<RemoteSessionSummary>,
     },
@@ -576,6 +588,123 @@ impl From<HostContext> for RemoteResponse {
             mode_models,
         }
     }
+}
+
+/// The host's active project as the session list shows it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteProject {
+    /// Commits the branch is ahead of its upstream, as of the host's latest
+    /// fetch. Absent while the host has not compared them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    /// Commits the branch is behind its upstream, as of the host's latest
+    /// fetch. Absent while the host has not compared them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u32>,
+    /// Branch the project's checkout is on. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Display name of the project.
+    pub name: String,
+    /// Latest sync of this project, started by a device or in the terminal,
+    /// while the host still shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<RemoteProjectSync>,
+}
+
+impl From<HostProjectStatus> for RemoteProject {
+    fn from(status: HostProjectStatus) -> Self {
+        Self {
+            ahead: status.ahead_behind.map(|(ahead, _)| ahead),
+            behind: status.ahead_behind.map(|(_, behind)| behind),
+            branch: status.branch,
+            name: status.project_name,
+            sync: status.sync.map(RemoteProjectSync::from),
+        }
+    }
+}
+
+/// One sync of the active project's branch with its upstream.
+///
+/// The count and message fields depend on `phase`; a page ignores the ones
+/// it does not expect.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteProjectSync {
+    /// Branch the sync updates.
+    pub branch: String,
+    /// Files in conflict that an agent is resolving, or has resolved once
+    /// the sync is complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflicts: Option<usize>,
+    /// Why the sync is blocked or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// How far the sync has come.
+    pub phase: RemoteProjectSyncPhase,
+    /// Commits a complete sync pulled, when the host counted them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulled_commits: Option<u32>,
+    /// Commits a complete sync pushed, when the host counted them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_commits: Option<u32>,
+}
+
+impl From<HostProjectSync> for RemoteProjectSync {
+    fn from(sync: HostProjectSync) -> Self {
+        let mut remote = Self {
+            branch: sync.branch,
+            conflicts: None,
+            message: None,
+            phase: RemoteProjectSyncPhase::Running,
+            pulled_commits: None,
+            pushed_commits: None,
+        };
+        match sync.phase {
+            HostProjectSyncPhase::Running => {}
+            HostProjectSyncPhase::ResolvingConflicts {
+                conflicted_file_count,
+            } => {
+                remote.phase = RemoteProjectSyncPhase::ResolvingConflicts;
+                remote.conflicts = Some(conflicted_file_count);
+            }
+            HostProjectSyncPhase::Complete {
+                pulled_commits,
+                pushed_commits,
+                resolved_conflict_count,
+            } => {
+                remote.phase = RemoteProjectSyncPhase::Complete;
+                remote.conflicts = (resolved_conflict_count > 0).then_some(resolved_conflict_count);
+                remote.pulled_commits = pulled_commits;
+                remote.pushed_commits = pushed_commits;
+            }
+            HostProjectSyncPhase::Blocked { message } => {
+                remote.phase = RemoteProjectSyncPhase::Blocked;
+                remote.message = Some(message);
+            }
+            HostProjectSyncPhase::Failed { message } => {
+                remote.phase = RemoteProjectSyncPhase::Failed;
+                remote.message = Some(message);
+            }
+        }
+
+        remote
+    }
+}
+
+/// How far a project sync has come.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteProjectSyncPhase {
+    /// The host did not start the sync, such as while a merge runs.
+    Blocked,
+    /// The branch matches its upstream.
+    Complete,
+    /// Git, authentication, or conflict resolution failed.
+    Failed,
+    /// An agent is resolving conflicts.
+    ResolvingConflicts,
+    /// The host is pulling, rebasing, or pushing.
+    Running,
 }
 
 /// One file a session's diff changes.

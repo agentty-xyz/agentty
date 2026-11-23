@@ -385,6 +385,28 @@ async function routeFlow() {
     error: byId("action-error").textContent,
     label: syncLabel,
   });
+
+  // The sidebar names the project and its branch. Its Sync asks first, and
+  // the next listing reports the sync.
+  const branch = byId("project-branch").textContent + " " + byId("project-counts").textContent;
+  byId("project-sync").click();
+  const projectAskedFirst = byId("project-sync-dialog").open;
+  const target = byId("project-sync-target").textContent;
+  byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
+  await waitFor("the sync to be accepted", () => byId("project-sync-label").textContent === "Sync");
+  report({
+    step: "project",
+    askedFirst: projectAskedFirst,
+    branch: branch,
+    error: byId("project-error").textContent,
+    target: target,
+  });
+  await waitFor("the sync's progress", () => !byId("project-status").hidden);
+  report({
+    step: "syncing",
+    status: byId("project-status").textContent,
+    syncDisabled: byId("project-sync").disabled,
+  });
 }
 
 // Home describes the host's project, creates a session, sends it the
