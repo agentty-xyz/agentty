@@ -817,10 +817,11 @@ function routedInstance(route) {
 // session`; otherwise the one home already describes a host for, so a
 // draft never moves to another Agentty when connections come and go;
 // otherwise the first connected one that offers new sessions, otherwise
-// the first one.
+// the first one. One that refused this device for good is chosen only as
+// a last resort.
 function homeInstance() {
   const chosen = state.homeId === null ? null : findInstance(state.homeId);
-  if (chosen) {
+  if (chosen && !chosen.rejection) {
     return chosen;
   }
   const target = state.homeTarget;

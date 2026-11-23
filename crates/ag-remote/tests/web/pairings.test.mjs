@@ -70,13 +70,11 @@ test("two tabs keep each other's pairings when they save or forget one", async (
   assert.deepEqual(await loadPairings(storage), [first]);
 });
 
-test("storage that reads but takes no writes keeps this page's pairings", async () => {
-  // Arrange
+test("storage that refuses writes, as when it is full, keeps this page's pairings", async () => {
+  // Arrange: a full storage refuses new values but still reads and
+  // removes.
   const storage = new MemoryStorage();
   storage.setItem = () => {
-    throw new Error("quota");
-  };
-  storage.removeItem = () => {
     throw new Error("quota");
   };
   const first = await pairing(FIRST_KEY);
@@ -85,12 +83,37 @@ test("storage that reads but takes no writes keeps this page's pairings", async 
   // Act
   const saved = savePairing(storage, savePairing(storage, [], first), second);
   const afterForget = forgetPairing(storage, saved, second.instanceId);
-  const afterLast = forgetPairing(storage, afterForget, first.instanceId);
 
   // Assert
   assert.deepEqual(saved, [first, second]);
   assert.deepEqual(afterForget, [first]);
-  assert.deepEqual(afterLast, []);
+});
+
+test("once storage refuses a write, the stored pairings no longer replace this page's", async () => {
+  // Arrange: the first pairing fits; a longer value does not.
+  const storage = new MemoryStorage();
+  const setItem = storage.setItem.bind(storage);
+  const first = await pairing(FIRST_KEY);
+  const second = await pairing(SECOND_KEY);
+  const third = await pairing("ef".repeat(32));
+  const stored = savePairing(storage, [], first);
+  const limit = storage.getItem(PAIRINGS_KEY).length;
+  storage.setItem = (key, value) => {
+    if (value.length > limit) {
+      throw new Error("quota");
+    }
+    setItem(key, value);
+  };
+
+  // Act
+  const withSecond = savePairing(storage, stored, second);
+  const withThird = savePairing(storage, withSecond, third);
+  const afterForget = forgetPairing(storage, withThird, third.instanceId);
+
+  // Assert
+  assert.deepEqual(withSecond, [first, second]);
+  assert.deepEqual(withThird, [first, second, third]);
+  assert.deepEqual(afterForget, [first, second]);
 });
 
 test("a pairing of an earlier version moves over once and comes first", async () => {

@@ -82,8 +82,16 @@ export function forgetPairing(storage, pairings, instanceId) {
   return isSaved ? next : drop(pairings);
 }
 
-// The pairings stored now, or `fallback` when storage cannot be read.
+// Storages that refused a write. Their stored pairings may lack ones this
+// page holds, so from then on the page's own pairings count instead.
+const refusing = new WeakSet();
+
+// The pairings stored now, or `fallback` when storage cannot be read or
+// has refused a write.
 function latest(storage, fallback) {
+  if (refusing.has(storage)) {
+    return fallback;
+  }
   try {
     return parsePairings(storage.getItem(PAIRINGS_KEY));
   } catch (_error) {
@@ -136,12 +144,15 @@ function read(storage, key) {
   }
 }
 
+// Writes `value` under `key` and reports whether storage took it.
 function write(storage, key, value) {
   try {
     storage.setItem(key, value);
 
     return true;
   } catch (_error) {
+    refusing.add(storage);
+
     return false;
   }
 }
@@ -153,6 +164,8 @@ function remove(storage, key) {
 
     return true;
   } catch (_error) {
+    refusing.add(storage);
+
     return false;
   }
 }
