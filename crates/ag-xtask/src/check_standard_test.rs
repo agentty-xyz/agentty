@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::check_standard::{Host, MockHost, RealHost, StandardCheck, run};
+use crate::check_standard::{ASSET_LIMIT, Host, MockHost, RealHost, StandardCheck, run};
 
 const ROOT: &str = "repo";
 
-const MANIFEST: &str = r#"version = 2
+const MANIFEST: &str = r#"version = 3
 files = [".rustfmt.toml"]
 skills = ["review"]
 
@@ -29,6 +29,8 @@ sections = ["Shared"]
 [design]
 guide = "design/DESIGN.md"
 files = ["design/tokens.css", "design/base.css"]
+tokens = "design/tokens.json"
+assets = ["design/mark.svg", "design/icon.ico", "design/gallery.html"]
 "#;
 
 const DESIGN_GUIDE: &str = "# Design
@@ -36,7 +38,32 @@ const DESIGN_GUIDE: &str = "# Design
 ## Colors
 
 - Load `tokens.css`, then `design/base.css`, then page rules.
+- Read values from `design/tokens.json` and draw `design/mark.svg`.
 ";
+
+/// A token file whose extension namespace repeats a crate name as one label
+/// of a reverse-domain name.
+const TOKENS: &str = r##"{
+  "color": {
+    "bg": {
+      "$type": "color",
+      "$value": { "colorSpace": "srgb", "components": [0, 0, 0], "hex": "#000000" },
+      "$extensions": { "org.ag_demo.theme": { "dark": "#000000" } }
+    }
+  }
+}
+"##;
+
+const MARK: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">\n  \
+                    <defs><path id=\"p\" d=\"M0 0\"/></defs>\n  <use href=\"#p\" \
+                    fill=\"url(#g)\"/>\n  <image href=\"data:image/png;base64,AA\"/>\n  <a \
+                    href=\"#p\">mark</a>\n</svg>\n";
+
+const GALLERY: &str = "<!DOCTYPE html>\n<link rel=\"stylesheet\" href=\"tokens.css\">\n<link \
+                       rel=\"icon\" href=\"icon.ico?v=1\">\n<a href=\"https://example.com/\">More</a>\n<img src='mark.svg#p' alt=\"\">\n<script type=\"module\">\n  import \"./mark.svg\";\n  const mark = await fetch(\"mark.svg\");\n</script>\n";
+
+/// Bytes that are not UTF-8, as in an icon.
+const ICON: [u8; 4] = [0, 0, 1, 0xff];
 
 const GUIDE: &str = "# Crates
 
@@ -66,6 +93,7 @@ rule:
 
 /// In-memory repository whose inventory lists every written or listed path.
 struct Fixture {
+    binaries: BTreeMap<PathBuf, Vec<u8>>,
     failures: BTreeMap<PathBuf, io::ErrorKind>,
     files: BTreeMap<PathBuf, String>,
     listed: BTreeSet<PathBuf>,
@@ -74,6 +102,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let mut fixture = Self {
+            binaries: BTreeMap::new(),
             failures: BTreeMap::new(),
             files: BTreeMap::new(),
             listed: BTreeSet::new(),
@@ -114,8 +143,13 @@ impl Fixture {
         fixture.write("design/tokens.css", ":root {\n  --color-bg: #000000;\n}\n");
         fixture.write(
             "design/base.css",
-            ".mark {\n  background: url(\"data:image/svg+xml,<svg/>\"), url(#mark);\n}\n",
+            ".mark {\n  background: url(\"data:image/svg+xml,<svg/>\"), url(#mark), \
+             url(mark.svg);\n}\n",
         );
+        fixture.write("design/tokens.json", TOKENS);
+        fixture.write("design/mark.svg", MARK);
+        fixture.write_binary("design/icon.ico", &ICON);
+        fixture.write("design/gallery.html", GALLERY);
 
         fixture
     }
@@ -124,8 +158,13 @@ impl Fixture {
         self.files.insert(PathBuf::from(path), text.to_owned());
     }
 
+    fn write_binary(&mut self, path: &str, bytes: &[u8]) {
+        self.binaries.insert(PathBuf::from(path), bytes.to_vec());
+    }
+
     fn remove(&mut self, path: &str) {
         self.files.remove(Path::new(path));
+        self.binaries.remove(Path::new(path));
     }
 
     /// Lists `path` in the Git inventory without a readable file, as for a
@@ -140,23 +179,45 @@ impl Fixture {
 
     fn check(&self) -> Result<usize, String> {
         let mut host = MockHost::new();
-        let inventory: Vec<_> = self.files.keys().chain(&self.listed).cloned().collect();
+        let inventory: Vec<_> = self
+            .files
+            .keys()
+            .chain(self.binaries.keys())
+            .chain(&self.listed)
+            .cloned()
+            .collect();
         host.expect_inventory()
             .withf(|root| root == Path::new(ROOT))
             .return_once(|_| Ok(inventory));
-        let files = self.files.clone();
+        let mut contents: BTreeMap<PathBuf, Vec<u8>> = self
+            .files
+            .iter()
+            .map(|(path, text)| (path.clone(), text.clone().into_bytes()))
+            .collect();
+        contents.extend(self.binaries.clone());
+        let read_bytes = move |path: &Path| -> io::Result<Vec<u8>> {
+            let relative = path.strip_prefix(ROOT).unwrap_or(path);
+
+            contents
+                .get(relative)
+                .cloned()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        };
         let failures = self.failures.clone();
-        host.expect_read().returning(move |path| {
+        let read = move |path: &Path| -> io::Result<Vec<u8>> {
             let relative = path.strip_prefix(ROOT).unwrap_or(path);
             if let Some(kind) = failures.get(relative) {
                 return Err(io::Error::new(*kind, "denied"));
             }
 
-            files
-                .get(relative)
-                .cloned()
-                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+            read_bytes(path)
+        };
+        let read_text = read.clone();
+        host.expect_read().returning(move |path| {
+            String::from_utf8(read_text(path)?)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         });
+        host.expect_read_bytes().returning(read);
 
         StandardCheck::new(&host)
             .expect("patterns")
@@ -185,7 +246,7 @@ fn portable_exports_pass_and_count_each_checked_document() {
     let result = fixture.check();
 
     // Assert
-    assert_eq!(result, Ok(8));
+    assert_eq!(result, Ok(12));
 }
 
 #[test]
@@ -252,6 +313,8 @@ fn manifest_paths_that_do_not_exist_are_reported() {
         "crates/AGENTS.md",
         "design/DESIGN.md",
         "design/base.css",
+        "design/tokens.json",
+        "design/icon.ico",
     ] {
         fixture.remove(path);
     }
@@ -275,6 +338,8 @@ fn manifest_paths_that_do_not_exist_are_reported() {
             "standards.toml: missing path crates/AGENTS.md",
             "standards.toml: missing path design/DESIGN.md",
             "standards.toml: missing path design/base.css",
+            "standards.toml: missing path design/tokens.json",
+            "standards.toml: missing path design/icon.ico",
         ]
     );
 }
@@ -313,13 +378,164 @@ fn design_exports_must_be_portable_plain_css() {
             "design/DESIGN.md:5: names workspace hook check",
             "design/tokens.css:1: uses @import; an exported stylesheet is plain CSS that stands \
              alone",
-            "design/tokens.css:1: loads fonts.css; an exported stylesheet loads nothing from a \
-             path or the network",
+            "design/tokens.css:1: loads fonts.css; an exported stylesheet loads only data: URIs, \
+             fragments, and exported files beside it",
             "design/tokens.css:5: loads https://example.com/a.png; an exported stylesheet loads \
-             nothing from a path or the network",
+             only data: URIs, fragments, and exported files beside it",
             "design/base.scss: a design stylesheet must be a plain .css file",
             "design/base.scss:1: names workspace crate ag-demo",
             "design/base.scss:1: uses @use; an exported stylesheet is plain CSS that stands alone",
+        ]
+    );
+}
+
+#[test]
+fn token_files_name_a_crate_only_as_a_reverse_domain_label() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        "design/tokens.json",
+        "{\n  \"$description\": \"Shared by ag_demo::Theme and ~/.ag_demo/.\",\n  \
+         \"$extensions\": { \"org.ag_demo.contrast\": [], \"ag_demo.first\": [] }\n}\n",
+    );
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    assert_eq!(
+        errors,
+        [
+            "design/tokens.json:2: names workspace crate ag_demo",
+            "design/tokens.json:2: names workspace crate ag_demo",
+            "design/tokens.json:3: names workspace crate ag_demo",
+        ]
+    );
+}
+
+#[test]
+fn token_files_must_be_json_token_groups() {
+    // Arrange
+    for (path, text) in [
+        ("design/tokens.json", "[]\n"),
+        ("design/tokens.json", "{ unterminated\n"),
+        ("design/tokens.yaml", TOKENS),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.write(
+            "standards.toml",
+            &MANIFEST.replace("design/tokens.json", path),
+        );
+        fixture.write(
+            "design/DESIGN.md",
+            &DESIGN_GUIDE.replace("design/tokens.json", path),
+        );
+        fixture.write(path, text);
+
+        // Act
+        let errors = fixture.errors();
+
+        // Assert
+        assert_eq!(
+            errors,
+            [format!(
+                "{path}: the design token file must be a .json file whose root is a token group"
+            )],
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn design_assets_load_nothing_beyond_their_exported_siblings() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        "design/mark.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\">\n<script>alert(1)</script>\n<use \
+         xlink:href='https://example.com/s.svg#a'/>\n<rect style=\"fill: url(other.svg#g)\"/>\n<a \
+         href=\"tokens.css\">tokens</a>\n<g onload=\"fetch('/x')\"><a \
+         href=\"javascript:void(0)\">x</a></g>\n</svg>\n",
+    );
+    fixture.write(
+        "design/gallery.html",
+        "<link rel=stylesheet href=../site.css>\n<script \
+         src=\"https://cdn.example.com/x.js\"></script>\n<style>@import \"fonts.css\"; body { \
+         background: url('/bg.png'); }</style>\n<video poster=\"design/mark.svg\"></video>\n<script \
+         type=\"module\">import { x } from \"https://esm.example.com/x\"; \
+         fetch('/api');</script>\n<img alt=\"1 > 0\" src=\"https://img.example.com/a.png\" \
+         srcset=\"mark.svg 1x, https://img.example.com/b.png 2x\">\n<object \
+         data=\"https://obj.example.com/o\"></object><a href=\"https://example.com/\" \
+         ping=\"https://ping.example.com/\">p</a>\n<button \
+         onclick=\"fetch('https://api.example.com/')\">go</button><a \
+         href=\"javascript:fetch('/y')\">y</a>\n<a href=\" javascript:fetch('/z')\">z</a><a \
+         href=\"java&#9;script:t\">t</a><a href=\"javascript&#58;c\">c</a><a \
+         href=\"guide.html#top\">g</a><a href=\"mailto:team@example.com\">m</a>\n",
+    );
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    let svg = "an exported SVG references only its own fragments and data: URIs";
+    let page = "an exported page loads only data: URIs, fragments, and exported files beside it";
+    assert_eq!(
+        errors,
+        [
+            "design/mark.svg:2: holds a script; an exported SVG draws without one".to_owned(),
+            format!("design/mark.svg:3: loads https://example.com/s.svg#a; {svg}"),
+            format!("design/mark.svg:5: loads tokens.css; {svg}"),
+            "design/mark.svg:6: holds a script in onload; an exported SVG draws without one"
+                .to_owned(),
+            format!("design/mark.svg:6: loads javascript:void(0); {svg}"),
+            format!("design/mark.svg:4: loads other.svg#g; {svg}"),
+            format!("design/mark.svg:6: loads /x; {svg}"),
+            format!("design/gallery.html:1: loads ../site.css; {page}"),
+            format!("design/gallery.html:2: loads https://cdn.example.com/x.js; {page}"),
+            format!("design/gallery.html:4: loads design/mark.svg; {page}"),
+            format!("design/gallery.html:6: loads https://img.example.com/a.png; {page}"),
+            format!("design/gallery.html:6: loads https://img.example.com/b.png; {page}"),
+            format!("design/gallery.html:7: loads https://obj.example.com/o; {page}"),
+            format!("design/gallery.html:7: loads https://ping.example.com/; {page}"),
+            format!("design/gallery.html:8: loads javascript:fetch('/y'); {page}"),
+            format!("design/gallery.html:9: loads javascript:fetch('/z'); {page}"),
+            format!("design/gallery.html:9: loads java&#9;script:t; {page}"),
+            format!("design/gallery.html:9: loads javascript&#58;c; {page}"),
+            format!("design/gallery.html:3: loads /bg.png; {page}"),
+            format!("design/gallery.html:3: loads fonts.css; {page}"),
+            format!("design/gallery.html:5: loads https://esm.example.com/x; {page}"),
+            format!("design/gallery.html:5: loads /api; {page}"),
+            format!("design/gallery.html:8: loads https://api.example.com/; {page}"),
+        ]
+    );
+}
+
+#[test]
+fn design_assets_are_bounded_typed_and_listed_once() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        "standards.toml",
+        &MANIFEST.replace("\"design/gallery.html\"]", "\"design/base.css\"]"),
+    );
+    fixture.write_binary("design/icon.ico", &vec![0; ASSET_LIMIT + 1]);
+    fixture.write_binary("design/mark.svg", &ICON);
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    assert_eq!(
+        errors,
+        [
+            "standards.toml: design export design/base.css is listed more than once".to_owned(),
+            "design/mark.svg: an HTML or SVG asset must be UTF-8 text".to_owned(),
+            format!(
+                "design/icon.ico: {} bytes is over the {ASSET_LIMIT}-byte limit for a design asset",
+                ASSET_LIMIT + 1
+            ),
+            "design/base.css: list a stylesheet under files, in load order, not under assets"
+                .to_owned(),
         ]
     );
 }
@@ -337,16 +553,18 @@ fn invalid_manifests_and_unsupported_versions_fail() {
             "standards.toml: invalid manifest:",
         ),
         (
-            MANIFEST.replace("version = 2", "version = 1"),
-            "standards.toml: unsupported version 1; expected 2",
+            MANIFEST.replace("version = 3", "version = 2"),
+            "standards.toml: unsupported version 2; expected 3",
         ),
-        // A version 1 manifest has no `[design]` table.
+        // A version 2 manifest has no design `tokens` or `assets`.
         (
             MANIFEST
-                .replace("version = 2", "version = 1")
-                .replace("[design]", "")
-                .replace("guide = \"design/DESIGN.md\"\n", "")
-                .replace("files = [\"design/tokens.css\", \"design/base.css\"]\n", ""),
+                .replace("version = 3", "version = 2")
+                .replace("tokens = \"design/tokens.json\"\n", ""),
+            "standards.toml: invalid manifest:",
+        ),
+        (
+            MANIFEST.replace("assets = [", "assets = 1\nicons = ["),
             "standards.toml: invalid manifest:",
         ),
     ] {
@@ -549,6 +767,10 @@ fn unreadable_inputs_are_errors() {
             "skills/review/notes.md",
             "Failed to read repo/skills/review/notes.md: denied",
         ),
+        (
+            "design/icon.ico",
+            "Failed to read repo/design/icon.ico: denied",
+        ),
     ] {
         let mut fixture = Fixture::new();
         fixture.fail(path, io::ErrorKind::PermissionDenied);
@@ -600,10 +822,16 @@ fn real_adapter_reads_files_and_lists_the_git_checkout() {
 
     // Act
     let manifest = host.read(&crate_root.join("Cargo.toml"));
+    let bytes = host.read_bytes(&crate_root.join("Cargo.toml"));
     let listing = host.inventory(crate_root);
 
     // Assert
     assert!(manifest.expect("crate manifest").contains("ag-xtask"));
+    assert!(
+        bytes
+            .expect("crate manifest bytes")
+            .starts_with(b"[package]")
+    );
     assert!(
         listing
             .expect("real Git inventory")

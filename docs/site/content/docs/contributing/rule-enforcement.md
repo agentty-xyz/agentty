@@ -80,15 +80,39 @@ toolchain, the `[workspace.lints]` tables, the ast-grep rules in `lint/rules/sha
 with their tests, whole skills, and `AGENTS.md` sections named by heading. Rules that
 name this workspace's crates or paths stay in `lint/rules/workspace/`.
 
-Its `[design]` table names the design guide, `design/DESIGN.md`, and the stylesheets a
-web page copies beside it, `design/tokens.css` and then `design/base.css`, so another
-workspace's pages can share the same look. The manifest's `version` is 2 since that
-table was added; a reader of version 1 rejects it.
+Its `[design]` table lets another workspace's pages share the same look. It has exactly
+four keys:
 
-Exported means portable. An exported section, skill, rule, guide, or stylesheet names no
-crate, hook, or repository path that only this workspace has, unless the manifest
-exports that path too, and a shared rule selects files by pattern, such as
-`**/src/**/*.rs`, rather than by one of this workspace's directories. A design
-stylesheet is plain CSS that stands alone: it uses no Sass or `@import`, and its `url()`
-targets are only `data:` URIs or fragments. The `check-standards` hook enforces this and
-checks that every path, skill, and heading the manifest names exists.
+- `guide`: the design guide, `design/DESIGN.md`.
+- `files`: the stylesheets a web page copies beside it, in load order:
+  `design/tokens.css`, then `design/base.css`.
+- `tokens`: the machine-readable token source, `design/tokens.json`, in the W3C Design
+  Tokens format, for consumers that need a value outside CSS.
+- `assets`: other files copied byte for byte, text or binary, such as the brand mark and
+  favicon.
+
+The manifest's `version` is 3 since `tokens` and `assets` were added; a reader of an
+older version rejects it, and every table rejects keys it does not know.
+
+Exported means portable. An exported section, skill, rule, guide, stylesheet, token
+file, or text asset names no crate, hook, or repository path that only this workspace
+has, unless the manifest exports that path too; a crate name that follows another label
+and a dot, as in a reverse-domain `$extensions` namespace such as `org.example.theme`,
+is a different name. A shared rule selects files by pattern, such as `**/src/**/*.rs`,
+rather than by one of this workspace's directories. A design export loads nothing from
+the network or from outside the export:
+
+- A stylesheet is plain CSS with no Sass or `@import`, and its `url()` targets are
+  `data:` URIs, fragments, or exported files in its own directory.
+- The token file is JSON whose root is a token group.
+- An HTML asset loads, through `src`, `srcset`, `href`, `poster`, `data`, `ping`,
+  `url()`, `@import`, and the `import` and `fetch` calls of its scripts and event
+  handlers, only `data:` URIs, fragments, and exported files in its own directory. A
+  link to a web, mail, or plain relative address is not a load; any other link
+  destination, such as a `javascript:` URL, is.
+- An SVG asset holds no script or event handler and references only its own fragments
+  and `data:` URIs.
+- Every asset is at most 256 KiB, and a stylesheet belongs in `files`, not `assets`.
+
+The `check-standards` hook enforces this and checks that every path, skill, and heading
+the manifest names exists and that no design export is listed twice.

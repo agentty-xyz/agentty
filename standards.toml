@@ -1,7 +1,7 @@
 # Coding and design standards that another workspace can reuse. Paths are relative to the repository root.
 # The `check-standards` hook keeps every export present and portable.
-# Version 2 added the required `[design]` table.
-version = 2
+# Version 2 added the required `[design]` table, and version 3 its `tokens` and `assets` keys.
+version = 3
 
 # Copied byte-for-byte to the same path.
 files = [".rustfmt.toml", "clippy.toml"]
@@ -31,8 +31,13 @@ sections = ["Shared Gates", "Writing Instructions"]
 file = "crates/AGENTS.md"
 sections = ["Workspace and Modules", "Readability", "Tests and Boundaries", "Tokio"]
 
-# The design guide, and the plain CSS files a web page copies beside it: the generated design tokens, then the shared
-# foundations and components. Each stylesheet stands alone; it uses no Sass and loads nothing from a path or the network.
+# The design guide and what a web page copies beside it. Every export loads only `data:` URIs, fragments, and exported
+# files in its own directory, and nothing from the network.
 [design]
 guide = "design/DESIGN.md"
+# Plain CSS stylesheets in load order: the generated design tokens, then the shared foundations and components.
 files = ["design/tokens.css", "design/base.css"]
+# The machine-readable token source, in the W3C Design Tokens format.
+tokens = "design/tokens.json"
+# Other files copied byte-for-byte, text or binary, each at most 256 KiB. An SVG holds no script and references only itself.
+assets = ["design/mark.svg", "design/favicon.ico"]
