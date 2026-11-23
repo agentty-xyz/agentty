@@ -38,13 +38,12 @@ fn respond(content_type: &'static str, body: &'static str) -> Response {
     let mut response = body.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    let page_headers = PAGE.headers().into_iter().filter_map(|(name, value)| {
-        Some((
+    headers.extend(PAGE.headers().map(|(name, value)| {
+        (
             HeaderName::from_static(name),
-            HeaderValue::from_str(value).ok()?,
-        ))
-    });
-    headers.extend(page_headers);
+            HeaderValue::from_static(value),
+        )
+    }));
 
     response
 }

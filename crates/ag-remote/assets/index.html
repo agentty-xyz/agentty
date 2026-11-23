@@ -110,6 +110,18 @@
                 <p id="pair-hint-relay" hidden>
                     Open the pairing link or scan the QR code that Agentty's <code class="code">Remote</code> tab shows.
                 </p>
+                <p id="pair-hint-paste" hidden>
+                    Copy the pairing link from Agentty's <code class="code">Remote</code> tab and paste it here.
+                </p>
+                <label id="pair-link-field" hidden>
+                    Pairing link
+                    <input id="pair-link"
+                           class="field"
+                           type="url"
+                           name="link"
+                           autocomplete="off"
+                           spellcheck="false">
+                </label>
                 <section id="pair-directory"
                          class="directory"
                          aria-labelledby="pair-directory-title"
@@ -239,6 +251,11 @@
                             </svg>
                         </button>
                         <div id="device-menu" class="menu" role="menu" hidden>
+                            <button id="pair-another"
+                                    class="menu-item"
+                                    type="button"
+                                    role="menuitem"
+                                    hidden>Pair another Agentty</button>
                             <button id="forget" class="menu-item is-danger" type="button" role="menuitem">Forget this device</button>
                         </div>
                     </div>

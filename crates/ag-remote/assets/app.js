@@ -67,6 +67,9 @@ const elements = {
   "pair-view": document.getElementById("pair-view"),
   "pair-hint-local": document.getElementById("pair-hint-local"),
   "pair-hint-relay": document.getElementById("pair-hint-relay"),
+  "pair-hint-paste": document.getElementById("pair-hint-paste"),
+  "pair-link-field": document.getElementById("pair-link-field"),
+  "pair-link": document.getElementById("pair-link"),
   "pair-form": document.getElementById("pair-form"),
   "pair-fields": document.getElementById("pair-fields"),
   "pair-code": document.getElementById("pair-code"),
@@ -98,6 +101,7 @@ const elements = {
   connection: document.getElementById("connection"),
   "device-more": document.getElementById("device-more"),
   "device-menu": document.getElementById("device-menu"),
+  "pair-another": document.getElementById("pair-another"),
   forget: document.getElementById("forget"),
   "forget-dialog": document.getElementById("forget-dialog"),
   "forget-target": document.getElementById("forget-target"),
@@ -408,19 +412,7 @@ async function refreshDirectory(force = false) {
 // browser has not paired in the sidebar and on the pairing card. Without
 // an answer yet, nothing shows.
 function renderDirectoryState() {
-  let isRenamed = false;
-  for (const instance of state.instances) {
-    const name = instanceName(instance.id);
-    if (name !== instance.name) {
-      instance.name = name;
-      instance.view.setName(name);
-      isRenamed = true;
-    }
-  }
-  if (isRenamed) {
-    renderForgetItems();
-    renderSessions();
-  }
+  renameInstances();
   const { entries, status } = state.directory;
   const unpaired = entries.filter((entry) => !findInstance(entry.instanceId));
   const now = Date.now() / 1000;
@@ -434,16 +426,45 @@ function renderDirectoryState() {
   }
 }
 
+// Gives each paired Agentty the name the directory gives it, and shows the
+// new names wherever the page names an Agentty.
+function renameInstances() {
+  const renamed = state.instances.filter((instance) => instanceName(instance.id) !== instance.name);
+  for (const instance of renamed) {
+    instance.name = instanceName(instance.id);
+    instance.view.setName(instance.name);
+  }
+  if (renamed.length === 0) {
+    return;
+  }
+  renderForgetItems();
+  renderSessions();
+  renderOffline();
+  if (!state.current) {
+    renderHome();
+  }
+}
+
 // The pairing link in the address, read for this page's relay.
 function parseLink(hash) {
   return parsePairingLink(hash, configuredRelay);
 }
 
-// Whether `link` names this page's relay; a page without one takes any.
+// Whether `link` names this page's relay, compared as addresses so case
+// and a trailing slash do not matter; a page without one takes any.
 function isOwnRelay(link) {
-  const strip = (url) => url.replace(/\/+$/, "");
+  const normal = (address) => {
+    try {
+      const url = new URL(address);
 
-  return !configuredRelay || strip(link.relayUrl) === strip(configuredRelay);
+      return url.protocol + "//" + url.host + url.pathname.replace(/\/+$/, "");
+    } catch (_error) {
+      // Not an address, so it names no relay this page uses.
+      return null;
+    }
+  };
+
+  return !configuredRelay || (normal(link.relayUrl) !== null && normal(link.relayUrl) === normal(configuredRelay));
 }
 
 // Builds the Agentty with `id`; `pairing` holds its relay pairing.
@@ -650,7 +671,8 @@ function tickCountdown() {
 
 // Shows the pairing card instead of the app. Through a relay the code
 // comes from the pairing link, so the fields appear only once a link was
-// opened.
+// opened. A page that names its relay is on another origin than the
+// page an Agentty's link opens, so it takes the link pasted.
 function showPairing() {
   // The drawer and the session route belong to the app this card replaces.
   shell.reset();
@@ -659,8 +681,11 @@ function showPairing() {
   setPairingWait(null);
   if (usesRelay) {
     const link = state.pairingLink;
+    const takesPaste = Boolean(configuredRelay) && !link;
     elements["pair-hint-local"].hidden = true;
-    elements["pair-hint-relay"].hidden = Boolean(link);
+    elements["pair-hint-relay"].hidden = Boolean(link) || takesPaste;
+    elements["pair-hint-paste"].hidden = !takesPaste;
+    elements["pair-link-field"].hidden = !takesPaste;
     elements["pair-fields"].hidden = !link;
     elements["pair-submit"].hidden = !link;
     elements["pair-foot"].hidden = false;
@@ -1513,14 +1538,49 @@ function adoptPairingLink() {
     return false;
   }
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  // A page that names its relay pairs only through it.
-  state.pairingLink = isOwnRelay(route.link) ? route.link : null;
-  elements["pair-error"].textContent = state.pairingLink
-    ? ""
-    : "This pairing link is for another relay. Open it from the address it names.";
+  takeLink(route.link);
 
   return true;
 }
+
+// Pairs with `link` from here on, unless it names another relay than the
+// one this page names.
+function takeLink(link) {
+  state.pairingLink = isOwnRelay(link) ? link : null;
+  elements["pair-error"].textContent = state.pairingLink
+    ? ""
+    : "This pairing link is for another relay. Open it from the address it names.";
+}
+
+// A pairing link pasted on a page that names its relay counts as one
+// opened at this page's address.
+elements["pair-link"].addEventListener("input", () => {
+  const text = elements["pair-link"].value.trim();
+  let link = null;
+  try {
+    link = parseLink(new URL(text).hash);
+  } catch (_error) {
+    // Not an address yet.
+  }
+  if (!link) {
+    elements["pair-error"].textContent = text ? "Paste the whole pairing link from the Remote tab." : "";
+
+    return;
+  }
+  elements["pair-link"].value = "";
+  takeLink(link);
+  showPairing();
+});
+
+// A page that names its relay offers pairing another Agentty from the
+// device menu, since links from Agentty open the relay's page.
+elements["pair-another"].hidden = !(usesRelay && configuredRelay);
+elements["pair-another"].addEventListener("click", () => {
+  setDeviceMenu(false);
+  state.pairingLink = null;
+  elements["pair-error"].textContent = "";
+  showPairing();
+});
 
 // Opens the session the address names, if any, once the app connects.
 function adoptSessionRoute() {

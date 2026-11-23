@@ -336,8 +336,10 @@ relay's own:
 
 - Links to the application's other sections sit at the top of the sidebar, its own badge
   stands beside the brand, and a link to your account sits under the theme switch.
-- Pairing links to the page may leave out the relay, and the page refuses a link for
-  another relay.
+- The pairing link that Agentty's `Remote` tab shows opens the relay's own page, so copy
+  it and paste it into the page's pairing card instead; `Pair another Agentty` in the
+  device menu opens that card once one Agentty is paired. A link to the page itself may
+  leave out the relay, and the page refuses a link for another relay.
 - The page may list the Agenttys of your account that this browser has not paired yet,
   with when each last connected and how to pair it, and name the paired ones as the
   application does. When the list says you are signed out, sign in to the application

@@ -1,47 +1,6 @@
 //! The remote-control web client as files and a rendered page, for the
-//! relay and for another web application that serves the client itself.
-//!
-//! The page reaches Agentty instances through a relay, encrypted end to
-//! end, exactly as on the relay's own page. A program that serves it on
-//! another origin passes [`WebClientOptions`]: the relay's address, an
-//! optional instance directory on its own origin, and its own navigation.
-//! It serves [`WebClientPage::html`] at the page's address and each of
-//! [`web_client_files`] at its path relative to the page, every response with
-//! its content type and the headers [`WebClientPage::headers`] lists, which
-//! include the content security policy the page needs.
-//!
-//! ```
-//! use ag_relay::{
-//!     WebClientLink, WebClientOptions, WebClientPage, WebClientSection, web_client_files,
-//! };
-//!
-//! let options = WebClientOptions {
-//!     relay_url: Some("wss://relay.example".to_string()),
-//!     directory_path: Some("/api/instances".to_string()),
-//!     brand_badge: Some("cloud".to_string()),
-//!     sections: vec![WebClientSection {
-//!         label: "Sessions".to_string(),
-//!         href: "/sessions/".to_string(),
-//!         current: true,
-//!         badge: Some("2".to_string()),
-//!     }],
-//!     account: Some(WebClientLink {
-//!         label: "ada".to_string(),
-//!         href: "/account".to_string(),
-//!     }),
-//! };
-//! let page = WebClientPage::new(&options)?;
-//!
-//! assert!(page.html().contains(r#"<meta name="agentty-relay" content="wss://relay.example">"#));
-//! assert_eq!(page.connect_sources(), ["'self'", "wss://relay.example"]);
-//! assert!(page.content_security_policy().contains("connect-src 'self' wss://relay.example;"));
-//! assert!(web_client_files().iter().any(|file| file.path == "app.js"));
-//! # Ok::<(), ag_relay::WebClientError>(())
-//! ```
-//!
-//! Whoever serves the page controls the code it runs, so its page is as
-//! trusted as a relay's own page: it pairs only through the links an
-//! Agentty shows, and every Agentty approves each device itself.
+//! relay and for another web application that serves the client itself;
+//! see [`WebClientPage`].
 
 /// Content type of the client's scripts.
 const SCRIPT: &str = "text/javascript; charset=utf-8";
@@ -204,6 +163,49 @@ pub enum WebClientError {
 
 /// The page rendered for a set of [`WebClientOptions`], and the content
 /// security policy it needs.
+///
+/// The page reaches Agentty instances through a relay, encrypted end to
+/// end, exactly as on the relay's own page. A program that serves it on
+/// another origin passes the relay's address, an optional instance
+/// directory on its own origin, and its own navigation. It serves
+/// [`Self::html`] at the page's address and each of [`web_client_files`]
+/// at its path relative to the page, every response with its content type
+/// and the headers [`Self::headers`] lists, which include the content
+/// security policy the page needs. Pairing links that Agentty shows open
+/// the relay's own page, so such a page takes a pasted link as well.
+///
+/// ```
+/// use ag_relay::{
+///     WebClientLink, WebClientOptions, WebClientPage, WebClientSection, web_client_files,
+/// };
+///
+/// let options = WebClientOptions {
+///     relay_url: Some("wss://relay.example".to_string()),
+///     directory_path: Some("/api/instances".to_string()),
+///     brand_badge: Some("cloud".to_string()),
+///     sections: vec![WebClientSection {
+///         label: "Sessions".to_string(),
+///         href: "/sessions/".to_string(),
+///         current: true,
+///         badge: Some("2".to_string()),
+///     }],
+///     account: Some(WebClientLink {
+///         label: "ada".to_string(),
+///         href: "/account".to_string(),
+///     }),
+/// };
+/// let page = WebClientPage::new(&options)?;
+///
+/// assert!(page.html().contains(r#"<meta name="agentty-relay" content="wss://relay.example">"#));
+/// assert_eq!(page.connect_sources(), ["'self'", "wss://relay.example"]);
+/// assert!(page.content_security_policy().contains("connect-src 'self' wss://relay.example;"));
+/// assert!(web_client_files().iter().any(|file| file.path == "app.js"));
+/// # Ok::<(), ag_relay::WebClientError>(())
+/// ```
+///
+/// Whoever serves the page controls the code it runs, so its page is as
+/// trusted as a relay's own page: it pairs only through the links an
+/// Agentty shows, and every Agentty approves each device itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebClientPage {
     connect_sources: Vec<String>,
@@ -319,18 +321,38 @@ fn relay_origin(relay_url: &str) -> Result<String, WebClientError> {
         .filter(|(scheme, _)| matches!(*scheme, "ws" | "wss"))
         .ok_or(WebClientError::RelayUrl)?;
     let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    let is_authority = !authority.is_empty()
-        && authority.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
-        });
     let is_path = path
         .bytes()
         .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'?' | b'#' | b'\\'));
-    if !is_authority || !is_path {
+    if !is_authority(authority) || !is_path {
         return Err(WebClientError::RelayUrl);
     }
 
     Ok(format!("{scheme}://{}", authority.to_ascii_lowercase()))
+}
+
+/// Whether `authority` is a host, a name or an address in brackets, with
+/// an optional port of digits.
+fn is_authority(authority: &str) -> bool {
+    // `port` is empty or `:` and the port.
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((address, rest)) = bracketed.split_once(']') else {
+            return false;
+        };
+        (address, rest)
+    } else {
+        authority.split_at(authority.find(':').unwrap_or(authority.len()))
+    };
+    let is_host = !host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':'));
+    let is_port = port.is_empty()
+        || port.strip_prefix(':').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        });
+
+    is_host && is_port
 }
 
 /// Returns `path` when it is a path on the page's origin: it starts with

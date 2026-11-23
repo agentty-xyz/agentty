@@ -194,29 +194,25 @@ fn relay_origin_accepts_websocket_addresses_only() {
         "wss://relay.example/a\\b",
         "wss://relay.example/a b",
         "relay.example",
+        "wss://:8443",
+        "wss://relay.example:",
+        "wss://relay.example:84a3",
+        "wss://[::1",
+        "wss://[::1]8443",
+        "wss://[]:8443",
     ];
 
     // Act
     let origins = addresses.map(|address| relay_origin(address).ok());
 
     // Assert
-    assert_eq!(
-        origins,
-        [
-            Some("ws://127.0.0.1:8787".to_string()),
-            Some("wss://[::1]:8443".to_string()),
-            Some("wss://relay.example".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ]
-    );
+    let mut expected = vec![
+        Some("ws://127.0.0.1:8787".to_string()),
+        Some("wss://[::1]:8443".to_string()),
+        Some("wss://relay.example".to_string()),
+    ];
+    expected.resize(addresses.len(), None);
+    assert_eq!(origins.to_vec(), expected);
 }
 
 #[test]

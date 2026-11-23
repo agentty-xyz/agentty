@@ -66,6 +66,7 @@ test("loadDirectory reads with the page's credentials and tells a sign-out from 
   // Arrange
   const listed = fakeFetch(200, { instances: [{ instance_id: FIRST, name: "laptop" }] });
   const signedOut = fakeFetch(401, {});
+  const redirected = fakeFetch(302, {});
   const failing = fakeFetch(500, {});
   const unreachable = fakeFetch(new TypeError("Failed to fetch"));
   const notJson = fakeFetch(200, "<html>");
@@ -74,6 +75,7 @@ test("loadDirectory reads with the page's credentials and tells a sign-out from 
   const results = [
     await loadDirectory(listed.fetch, "/api/instances"),
     await loadDirectory(signedOut.fetch, "/api/instances"),
+    await loadDirectory(redirected.fetch, "/api/instances"),
     await loadDirectory(failing.fetch, "/api/instances"),
     await loadDirectory(unreachable.fetch, "/api/instances"),
     await loadDirectory(notJson.fetch, "/api/instances"),
@@ -83,6 +85,7 @@ test("loadDirectory reads with the page's credentials and tells a sign-out from 
   assert.deepEqual(results, [
     { entries: [{ instanceId: FIRST, lastConnectedAt: null, name: "laptop" }], status: "listed" },
     { status: "signed_out" },
+    { status: "signed_out" },
     { status: "failed" },
     { status: "failed" },
     { status: "failed" },
@@ -90,7 +93,12 @@ test("loadDirectory reads with the page's credentials and tells a sign-out from 
   assert.deepEqual(listed.calls, [
     [
       "/api/instances",
-      { cache: "no-store", credentials: "same-origin", headers: { accept: "application/json" } },
+      {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+        redirect: "manual",
+      },
     ],
   ]);
   assert.equal(directoryError("signed_out"), "You are signed out. Sign in again to see your Agenttys.");
@@ -122,8 +130,8 @@ test("each unpaired Agentty shows its name as text, when it last connected, and 
       Array.from(item.children, (part) => part.textContent),
     ]),
     [
-      ["a", [name, "Last connected 3h ago", "To pair, open the pairing link in its Remote tab."]],
-      ["b", ["server", "Never connected", "To pair, open the pairing link in its Remote tab."]],
+      ["a", [name, "Last connected 3h ago", "To pair, use the pairing link from its Remote tab."]],
+      ["b", ["server", "Never connected", "To pair, use the pairing link from its Remote tab."]],
     ],
   );
   assert.equal(list.querySelectorAll("img").length, 0);

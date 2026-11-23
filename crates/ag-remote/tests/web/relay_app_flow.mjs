@@ -345,29 +345,46 @@ async function embedFlow() {
     stored: storedIds(),
   });
 
-  // A link that names another relay is refused; this page pairs only
-  // through its own.
-  const other = new URLSearchParams(new URL(secondLink).hash.slice(1));
-  other.set("relay", "ws://127.0.0.1:9");
-  window.location.hash = "#" + other.toString();
-  await waitFor("the refusal", () => visibleView() === "pair-view" && byId("pair-error").textContent !== "");
+  // The device menu opens the pairing card, which takes a link pasted from
+  // Agentty's Remote tab. Text that is not a link, and a link that names
+  // another relay, are refused: this page pairs only through its own.
+  byId("device-more").click();
+  byId("pair-another").click();
+  const paste = (text) => {
+    byId("pair-link").value = text;
+    byId("pair-link").dispatchEvent(new FakeEvent("input"));
+  };
+  const pairCard = {
+    hintHidden: byId("pair-hint-paste").hidden,
+    linkHidden: byId("pair-link-field").hidden,
+    view: visibleView(),
+  };
+  paste("ABCD-EFGH");
+  const notLink = byId("pair-error").textContent;
+  const other = new URL(secondLink);
+  const parameters = new URLSearchParams(other.hash.slice(1));
+  parameters.set("relay", "ws://127.0.0.1:9");
+  other.hash = parameters.toString();
+  paste(other.href);
   report({
     step: "otherRelay",
+    card: pairCard,
     error: byId("pair-error").textContent,
     fieldsHidden: byId("pair-fields").hidden,
+    notLink: notLink,
     submitHidden: byId("pair-submit").hidden,
   });
 
-  window.location.hash = withoutRelay(secondLink);
+  paste(secondLink);
   await pairThroughPage();
-  report({ step: "awaitingB" });
+  report({ step: "awaitingB", linkHidden: byId("pair-link-field").hidden, pasted: byId("pair-link").value });
 
   await waitFor("both Agenttys", () => sections().length === 2 && heads().every((head) => head.state === "Connected"));
   await waitFor("the directory to empty", () => byId("directory").hidden);
   report({
     step: "pairedB",
     directoryHidden: byId("directory").hidden,
-    forgetItems: texts(byId("forget-each"), "button"),
+    forgetItems: Array.from(forgetItems(), (item) => item.textContent),
     heads: heads(),
   });
 

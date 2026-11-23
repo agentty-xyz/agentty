@@ -42,8 +42,9 @@ export function parseDirectory(body) {
 }
 
 // Reads the directory at `url` with `fetch`. Resolves to `{ status:
-// "listed", entries }`, `{ status: "signed_out" }` for a `401`, or `{
-// status: "failed" }` for anything else.
+// "listed", entries }`, `{ status: "signed_out" }` for a `401` or a
+// redirect, as to a sign-in page, or `{ status: "failed" }` for anything
+// else.
 export async function loadDirectory(fetch, url) {
   let response;
   try {
@@ -51,11 +52,14 @@ export async function loadDirectory(fetch, url) {
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
+      redirect: "manual",
     });
   } catch (_error) {
+    // The page is offline or the directory unreachable; the list says so.
     return { status: "failed" };
   }
-  if (response.status === 401) {
+  const isRedirect = response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400);
+  if (response.status === 401 || isRedirect) {
     return { status: "signed_out" };
   }
   if (!response.ok) {
@@ -64,6 +68,7 @@ export async function loadDirectory(fetch, url) {
   try {
     return { entries: parseDirectory(await response.json()), status: "listed" };
   } catch (_error) {
+    // An answer that is not JSON lists nothing; the list says so.
     return { status: "failed" };
   }
 }
@@ -99,7 +104,7 @@ export function renderDirectory(document, list, entries, nowSeconds) {
       item.append(
         name,
         element(document, "span", "directory-meta", lastConnectedText(entry.lastConnectedAt, nowSeconds)),
-        element(document, "span", "directory-hint", "To pair, open the pairing link in its Remote tab."),
+        element(document, "span", "directory-hint", "To pair, use the pairing link from its Remote tab."),
       );
 
       return item;

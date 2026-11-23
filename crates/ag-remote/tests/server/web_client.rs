@@ -1044,7 +1044,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
             "directory": [[
                 "server",
                 "Never connected",
-                "To pair, open the pairing link in its Remote tab.",
+                "To pair, use the pairing link from its Remote tab.",
             ]],
             "rows": ["A/session-1", "A/session-2"],
             "sections": [
@@ -1054,16 +1054,22 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
             "stored": ["A"],
         })
     );
+    // Agentty's link opens the relay's page, so this page takes it pasted.
     assert_eq!(
         other_relay,
         json!({
             "step": "otherRelay",
+            "card": {"hintHidden": false, "linkHidden": false, "view": "pair-view"},
             "error": "This pairing link is for another relay. Open it from the address it names.",
             "fieldsHidden": true,
+            "notLink": "Paste the whole pairing link from the Remote tab.",
             "submitHidden": true,
         })
     );
-    assert_eq!(awaiting_second["step"], "awaitingB");
+    assert_eq!(
+        awaiting_second,
+        json!({"step": "awaitingB", "linkHidden": true, "pasted": ""})
+    );
     assert_eq!(
         paired_second,
         json!({
