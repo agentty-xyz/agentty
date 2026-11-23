@@ -195,7 +195,7 @@ fn default_prefers_a_ready_model_over_one_that_needs_sign_in() {
 }
 
 #[test]
-fn default_falls_back_to_a_model_that_needs_sign_in_when_none_is_ready() {
+fn default_is_none_when_models_only_need_a_key_or_sign_in() {
     // Arrange
     let options = [
         paid(
@@ -212,5 +212,5 @@ fn default_falls_back_to_a_model_that_needs_sign_in_when_none_is_ready() {
     let model = default_harness_model(&options, None);
 
     // Assert
-    assert_eq!(model, Some(AgentModel::ChatGptGpt6Luna));
+    assert_eq!(model, None);
 }

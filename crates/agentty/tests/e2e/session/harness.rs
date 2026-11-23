@@ -30,16 +30,6 @@ const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
 /// joins a scenario's harness models.
 const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
-/// Starts the scenario `name` with the developer's Anthropic key and
-/// endpoint blanked, so an exported `ANTHROPIC_API_KEY` never adds ready
-/// Claude rows to a scenario's frames; a scenario serving Claude sets them
-/// again.
-fn harness_test(name: &str) -> FeatureTest {
-    FeatureTest::new(name)
-        .env("ANTHROPIC_API_KEY", "")
-        .env("ANTHROPIC_BASE_URL", "")
-}
-
 /// Returns one terminal session answer.
 fn answer(text: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
@@ -138,7 +128,7 @@ async fn test_harness_session_runs_with_a_provider_key() -> E2eResult {
     let server = scripted_provider().await;
 
     // Act, Assert
-    harness_test("harness_session")
+    FeatureTest::new("harness_session")
         .with_git()
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
@@ -267,7 +257,7 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
     let server = unavailable_tool_provider().await;
 
     // Act, Assert
-    harness_test("harness_unavailable_tool")
+    FeatureTest::new("harness_unavailable_tool")
         .with_git()
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
@@ -330,7 +320,7 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
         .await;
 
     // Act, Assert
-    harness_test("harness_temporary_failure")
+    FeatureTest::new("harness_temporary_failure")
         .with_git()
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
@@ -378,15 +368,10 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
 #[tokio::test]
 async fn test_ag_harness_models_are_listed_without_provider_keys() -> E2eResult {
     // Arrange, Act, Assert
-    harness_test("harness_without_keys")
+    // The shared scenario environment sets no provider key and no reachable
+    // local model server.
+    FeatureTest::new("harness_without_keys")
         .with_git()
-        .env("CHATGPT_AUTH_FILE", "")
-        .env("DASHSCOPE_API_KEY", "")
-        .env("KIMI_API_KEY", "")
-        .env("MODEL_API_KEY", "")
-        .env("OPENAI_API_KEY", "")
-        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
-        .env("OPENAI_COMPATIBLE_MODEL", "")
         .run(
             |scenario| {
                 scenario
@@ -468,7 +453,7 @@ async fn test_harness_only_launch_starts_regular_sessions_on_harness() -> E2eRes
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_only")
+    FeatureTest::new("harness_only")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -527,7 +512,7 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_local_model")
+    FeatureTest::new("harness_local_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -671,7 +656,7 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_openai_model")
+    FeatureTest::new("harness_openai_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -863,7 +848,7 @@ async fn test_harness_session_runs_on_claude_with_an_api_key() -> E2eResult {
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_claude_model")
+    FeatureTest::new("harness_claude_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -963,7 +948,7 @@ async fn test_harness_fast_model_lists_claude_on_both_backends() -> E2eResult {
     // Arrange, Act, Assert
     // The stub agent CLIs stay on `PATH`, so Claude Code offers its models
     // beside the harness rows the Anthropic key makes ready.
-    harness_test("harness_claude_fast_model")
+    FeatureTest::new("harness_claude_fast_model")
         .with_git()
         .with_stub_only_path()
         .with_terminal_size(120, 60)
@@ -1102,7 +1087,7 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_model_picker")
+    FeatureTest::new("harness_model_picker")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -1204,7 +1189,7 @@ async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_kimi_default_endpoint")
+    FeatureTest::new("harness_kimi_default_endpoint")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -1309,7 +1294,7 @@ async fn test_harness_fast_model_writes_commit_messages_on_a_cheap_model() -> E2
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_cheap_fast_model")
+    FeatureTest::new("harness_cheap_fast_model")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -1454,7 +1439,7 @@ async fn test_harness_model_picker_signs_in_with_chatgpt() -> E2eResult {
     let auth_file = auth_directory.path().join("chatgpt.json");
 
     // Act, Assert
-    harness_test("harness_chatgpt_sign_in")
+    FeatureTest::new("harness_chatgpt_sign_in")
         .with_git()
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
@@ -1635,7 +1620,7 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
     let server = gated_stream_provider(gate.clone())?;
 
     // Act, Assert
-    harness_test("harness_streaming")
+    FeatureTest::new("harness_streaming")
         .with_git()
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
@@ -1774,7 +1759,7 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
     let git_directory = git_only_path()?;
 
     // Act, Assert
-    harness_test("harness_context_compaction")
+    FeatureTest::new("harness_context_compaction")
         .with_git()
         // Wide enough to keep the notice on one line.
         .with_terminal_size(160, 40)

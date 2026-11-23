@@ -24,6 +24,7 @@ use crate::infra::db::{AppRepositories, Database};
 use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
 
 const PUBLIC_CONSTRUCTOR_COVERAGE_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_COVERAGE";
+const PUBLIC_CONSTRUCTOR_NO_BACKEND_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_NO_BACKEND";
 
 #[test]
 fn current_version_display_text_pins_only_explicit_feature_runs() {
@@ -273,6 +274,70 @@ async fn test_new_uses_production_client_bundle() {
         .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1")
         .env_remove("OPENAI_COMPATIBLE_MODEL")
         .env("PATH", child_path);
+    if let Some(profile) = child_coverage_profile {
+        child.env("LLVM_PROFILE_FILE", profile);
+    }
+    let child_status = child
+        .status()
+        .await
+        .expect("failed to run isolated constructor test");
+
+    // Assert
+    assert!(child_status.success());
+}
+
+#[tokio::test]
+/// Verifies a launch with no agent CLI and no ready harness model fails
+/// with the no-backend error, even though the real harness listing offers
+/// models that still need a key or a `ChatGPT` sign-in.
+async fn test_new_rejects_a_launch_without_cli_or_ready_harness_model() {
+    if std::env::var_os(PUBLIC_CONSTRUCTOR_NO_BACKEND_ENV).is_some() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory database");
+
+        // Act
+        let result = App::new(false, base_path.clone(), base_path, None, database).await;
+
+        // Assert
+        let error = result
+            .err()
+            .expect("startup should reject a launch without a backend");
+        assert!(matches!(error, AppError::NoAgentAvailable));
+
+        return;
+    }
+
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let empty_bin = base_dir.path().join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("failed to create empty bin directory");
+    let test_binary = std::env::current_exe().expect("failed to locate test binary");
+    let child_coverage_profile = std::env::var_os("LLVM_PROFILE_FILE").map(|profile| {
+        profile
+            .to_string_lossy()
+            .replace(".profraw", "-no-backend-child.profraw")
+    });
+
+    // Act
+    // The child starts from an empty environment, so no exported provider
+    // key, sign-in file, or agent CLI on the host can make a backend ready.
+    let mut child = Command::new(test_binary);
+    child
+        .arg("--exact")
+        .arg("app::core::new::tests::test_new_rejects_a_launch_without_cli_or_ready_harness_model")
+        .arg("--nocapture")
+        .env_clear()
+        .env(PUBLIC_CONSTRUCTOR_NO_BACKEND_ENV, "1")
+        .env("HOME", base_dir.path())
+        .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1")
+        .env("PATH", &empty_bin);
+    if let Some(temp_dir) = std::env::var_os("TMPDIR") {
+        child.env("TMPDIR", temp_dir);
+    }
     if let Some(profile) = child_coverage_profile {
         child.env("LLVM_PROFILE_FILE", profile);
     }

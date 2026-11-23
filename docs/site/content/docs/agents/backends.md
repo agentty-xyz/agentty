@@ -239,10 +239,13 @@ free local model server or a paid hosted provider:
 Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
 `KIMI_BASE_URL` to use another, such as `https://api.moonshot.cn/v1`.
 
-A model runs once its key, sign-in, or local server is available; selecting one that is
-not ready shows what it needs and keeps the current model. While an agent CLI is
-installed, new sessions keep starting on the configured CLI model. With a runnable model
-and no backend CLI, Agentty still starts, and new sessions start on the harness model.
+`/model` lists every hosted model, but one runs only once its key, sign-in, or local
+server is available: selecting a model without its key shows the missing variable and
+keeps the current model, and a `chatgpt/` model offers its sign-in. While an agent CLI
+is installed, new sessions keep starting on the configured CLI model. Without one,
+Agentty starts only when a harness model is ready or you picked a local model earlier,
+and new sessions start on it; a model that still needs a key or sign-in is never chosen
+as the default.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
   `bash`. Provider keys and endpoints are removed from the `bash` environment.

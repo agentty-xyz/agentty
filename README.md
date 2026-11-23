@@ -191,9 +191,9 @@ agentty --version    # Show the installed Agentty version
   phone or browser to start, follow, reply to, and merge sessions through a tunnel you
   provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
 - **Harness**: `/model` lists `ag-harness`, Agentty's built-in agent loop, with local
-  models and hosted models whose provider key is set. Its edit mode runs shell commands
-  in the operating system's sandbox where available (Seatbelt on macOS, Bubblewrap on
-  Linux), and warns when they run without it. See
+  models and hosted models that run once their provider key or sign-in is set. Its edit
+  mode runs shell commands in the operating system's sandbox where available (Seatbelt
+  on macOS, Bubblewrap on Linux), and warns when they run without it. See
   [Harness agent](https://agentty.xyz/docs/agents/backends/#backends-harness).
 - **Tracing**: disabled unless `--otlp-endpoint` supplies a complete OTLP HTTP/protobuf
   traces URL. A URL ending in `/v1/traces` also sends usage events as OTLP log records

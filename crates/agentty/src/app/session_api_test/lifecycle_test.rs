@@ -19,7 +19,7 @@ use super::support::{
 };
 use crate::app::session::SessionGitStatus;
 use crate::app::{App, AppEvent};
-use crate::domain::agent::AgentCliInfo;
+use crate::domain::agent::{AgentCliInfo, HarnessModelStatus};
 use crate::domain::session::SessionSize;
 
 #[tokio::test]
@@ -360,6 +360,52 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
             speed_mode: session.settings.speed_mode,
         }
     );
+}
+
+#[tokio::test]
+async fn runtime_backend_offers_no_harness_mode_without_a_ready_model() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let mut missing_key = crate::test_support::ready_harness_model(AgentModel::KimiK3);
+    missing_key.status = HarnessModelStatus::MissingConfiguration("KIMI_API_KEY");
+    crate::test_support::set_test_harness_options(
+        &mut app.services,
+        vec![
+            missing_key,
+            crate::test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt61Sol),
+        ],
+    );
+
+    // Act
+    let host = request_host_context(&mut app)
+        .await
+        .expect("host context should load");
+    let creation_error = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Harness,
+            project_id,
+        },
+    )
+    .await
+    .expect_err("models that need a key or a sign-in should not start harness sessions");
+
+    // Assert
+    assert_eq!(
+        host.session_modes
+            .iter()
+            .map(|session_mode| session_mode.mode.clone())
+            .collect::<Vec<_>>(),
+        [CreateSessionMode::Regular]
+    );
+    assert_ne!(host.session_modes[0].agent.kind(), AgentKind::Harness);
+    assert!(matches!(
+        creation_error,
+        ApiSessionError::Operation(message)
+            if message.starts_with("Harness sessions need a runnable model")
+    ));
 }
 
 #[tokio::test]

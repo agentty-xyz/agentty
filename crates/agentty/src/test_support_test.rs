@@ -479,10 +479,18 @@ pub(crate) fn set_test_harness_models(
     services: &mut app::AppServices,
     ready_model: Option<AgentModel>,
 ) {
-    let options = ready_model
-        .map(ready_harness_model)
-        .into_iter()
-        .collect::<Vec<_>>();
+    set_test_harness_options(
+        services,
+        ready_model.map(ready_harness_model).into_iter().collect(),
+    );
+}
+
+/// Lists exactly `options` as this launch's harness models, now and on
+/// every refresh.
+pub(crate) fn set_test_harness_options(
+    services: &mut app::AppServices,
+    options: Vec<HarnessModelOption>,
+) {
     services.set_harness_models(
         HarnessModelCatalog::new(options.clone(), None),
         Arc::new(ListedHarnessModelsProbe { options }),
