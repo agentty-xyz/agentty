@@ -372,11 +372,7 @@ async fn confirmed_fork_opens_the_forked_session() {
 async fn test_regular_session_offers_harness_after_agent_clis_in_model_picker() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    crate::test_support::set_test_harness_models(
-        &mut app.services,
-        true,
-        Some(AgentModel::QwenPlus),
-    );
+    crate::test_support::set_test_harness_models(&mut app.services, Some(AgentModel::QwenPlus));
     app.mode = session_creation_mode();
 
     // Act
@@ -417,7 +413,7 @@ async fn test_session_creation_options_need_a_runnable_agent() {
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
     // The harness model stops being runnable after startup.
-    crate::test_support::set_test_harness_models(&mut app.services, true, None);
+    crate::test_support::set_test_harness_models(&mut app.services, None);
     app.mode = session_creation_mode();
 
     // Act

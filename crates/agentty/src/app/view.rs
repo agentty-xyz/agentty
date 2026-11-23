@@ -41,7 +41,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) git_status: Option<(u32, u32)>,
     pub(crate) git_upstream_ref: Option<&'a str>,
     pub(crate) graph_chat: Option<&'a GraphChatSnapshot>,
-    /// Whether this launch offers the in-process harness and can run it.
+    /// Whether the in-process harness can run new sessions, and on which
+    /// model.
     pub(crate) harness_availability: HarnessAvailability,
     /// Whether the session list has an archive pagination action.
     pub(crate) has_more_archived_sessions: bool,

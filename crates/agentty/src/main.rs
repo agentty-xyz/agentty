@@ -62,12 +62,6 @@ struct Cli {
 /// Opt-in preview features, disabled unless their launch flags are present.
 #[derive(Debug, Default, clap::Args)]
 struct ExperimentalFeatures {
-    /// Offers the preview `ag-harness` agent in `/model`, which runs the
-    /// built-in agent loop on a local Ollama or OpenAI-compatible model, or a
-    /// hosted model when its provider's API key, such as `MODEL_API_KEY`, is
-    /// set.
-    #[arg(long = "experimental-harness")]
-    harness: bool,
     /// Offers the Remote tab, which lets a paired phone or browser follow
     /// and reply to sessions through a loopback listener.
     #[arg(long = "experimental-remote")]
@@ -241,16 +235,9 @@ async fn run_application(
 
     let result = run_with_analytics(
         Box::pin(async {
-            let app = App::new(
-                !cli.no_update,
-                cli.experimental.harness,
-                base_path,
-                working_dir,
-                git_branch,
-                db,
-            )
-            .with_context(trace)
-            .await;
+            let app = App::new(!cli.no_update, base_path, working_dir, git_branch, db)
+                .with_context(trace)
+                .await;
             startup.finish(app.as_ref().map_or(Outcome::Failed, |_| Outcome::Completed));
             let mut app = app?;
             app.set_analytics(analytics.clone());

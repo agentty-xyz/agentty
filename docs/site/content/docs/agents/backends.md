@@ -185,9 +185,8 @@ finished sessions keep their historical model.
 
 ### Harness Models
 
-Listed under `ag-harness` in `/model` when the
-[preview harness](@/docs/agents/backends.md#backends-harness) is enabled, alongside
-local models stored as `openai-compatible/<model>`:
+Listed under [`ag-harness`](@/docs/agents/backends.md#backends-harness) in `/model`,
+alongside local models stored as `openai-compatible/<model>`:
 
 - Muse: `muse-spark-1.3` and the discounted `muse-spark-1.3-contributor`.
 - Kimi: `kimi-k3` (latest) and `kimi-k2.6`.
@@ -221,11 +220,11 @@ control. See the provider guides for
 <a id="backends-switching-default-model"></a> Session changes do not alter project
 defaults; change those in [Settings](@/docs/usage/workflow.md#settings-scope).
 
-## Harness Agent (Preview)
+## Harness Agent
 
-<a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
-an **ag-harness** agent to `/model`. It runs Agentty's built-in agent loop instead of an
-external CLI, against a free local model server or a paid hosted provider:
+<a id="backends-harness"></a> `/model` lists an **ag-harness** agent after the installed
+agent CLIs. It runs Agentty's built-in agent loop instead of an external CLI, against a
+free local model server or a paid hosted provider:
 
 | Provider     | Cost | Key                                  | Endpoint                              |
 | ------------ | ---- | ------------------------------------ | ------------------------------------- |
@@ -240,9 +239,13 @@ external CLI, against a free local model server or a paid hosted provider:
 Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
 `KIMI_BASE_URL` to use another, such as `https://api.moonshot.cn/v1`.
 
-Without the flag `ag-harness` is hidden. With the flag and a runnable model, Agentty
-starts even when no backend CLI is installed, and new sessions then start on the harness
-model.
+`/model` lists every hosted model, but one runs only once its key, sign-in, or local
+server is available: selecting a model without its key shows the missing variable and
+keeps the current model, and a `chatgpt/` model offers its sign-in. While an agent CLI
+is installed, new sessions keep starting on the configured CLI model. Without one,
+Agentty starts only when a harness model is ready or you picked a local model earlier,
+and new sessions start on it; a model that still needs a key or sign-in is never chosen
+as the default.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
   `bash`. Provider keys and endpoints are removed from the `bash` environment.
@@ -320,12 +323,12 @@ model.
   tokens count toward the session's usage, and its report entry is priced at the
   summarizing model's prices. Task agents and graph nodes do not compact.
 
-<a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
-Model** also lists every ready harness model with its price class, such as
-`harness/qwen3.8-flash · cheap`, to run commit messages and titles for every session
-type, and to summarize long harness sessions when it has structured output, which this
-Qwen example lacks. Agentty never picks a harness model for this itself; while the
-chosen model is not ready, or without the flag, the Fast default falls back as if unset.
+<a id="backends-harness-fast-model"></a> **Settings → Default Fast Model** also lists
+every ready harness model with its price class, such as `harness/qwen3.8-flash · cheap`,
+to run commit messages and titles for every session type, and to summarize long harness
+sessions when it has structured output, which this Qwen example lacks. Agentty never
+picks a harness model for this itself; while the chosen model is not ready, the Fast
+default falls back as if unset.
 
 ### Choosing a Model
 
@@ -376,7 +379,7 @@ Platform API key:
 
 ```sh
 export OPENAI_API_KEY=sk-...
-agentty --experimental-harness   # then choose a gpt-* model under ag-harness in /model
+agentty   # then choose a gpt-* model under ag-harness in /model
 ```
 
 - Usage is billed to the key's organization. To use a ChatGPT subscription instead, pick
@@ -399,7 +402,7 @@ API credits. Sign in once; the harness stores and refreshes the sign-in in
 
 ```sh
 ag-harness login chatgpt
-agentty --experimental-harness   # then choose a chatgpt/ model under ag-harness in /model
+agentty   # then choose a chatgpt/ model under ag-harness in /model
 ```
 
 - Usage counts against your plan's limits.
@@ -417,7 +420,7 @@ Messages API with a Claude Console API key:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-agentty --experimental-harness   # then choose a claude-* model under ag-harness in /model
+agentty   # then choose a claude-* model under ag-harness in /model
 ```
 
 - Usage is billed to the key's Console organization at API rates, never to a Claude
@@ -453,7 +456,7 @@ endpoint.
 
 ```sh
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # or raise the Ollama app's context length
-agentty --experimental-harness
+agentty
 ```
 
 | Variable                              | Default                     | Meaning                                    |

@@ -2441,13 +2441,13 @@ async fn unconfigured_harness_fails_before_execution() {
     // Assert
     assert!(
         turn.expect_err("unconfigured turn should fail")
-            .contains("--experimental-harness")
+            .contains("harness transport")
     );
     assert!(
         utility
             .expect_err("unconfigured utility should fail")
             .to_string()
-            .contains("--experimental-harness")
+            .contains("harness transport")
     );
 }
 

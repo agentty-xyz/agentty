@@ -103,9 +103,8 @@ impl HarnessModelOption {
 /// a remembered local model wins even while its server is unreachable, so a
 /// stopped server never moves new sessions onto a paid provider. Without one,
 /// the first ready local model is preferred over the first ready paid model.
-/// When no model is ready, the first model that only needs a sign-in is
-/// returned, so the session can start and its first turn asks the user to
-/// sign in.
+/// A model that still needs a key or a sign-in is never chosen, so without a
+/// ready model this returns `None` and the harness offers no default.
 #[must_use]
 pub fn default_harness_model(
     options: &[HarnessModelOption],
@@ -127,11 +126,6 @@ pub fn default_harness_model(
 
     first_ready(false)
         .or_else(|| first_ready(true))
-        .or_else(|| {
-            options
-                .iter()
-                .find(|option| matches!(option.status, HarnessModelStatus::SignInRequired(_)))
-        })
         .map(|option| option.model)
 }
 

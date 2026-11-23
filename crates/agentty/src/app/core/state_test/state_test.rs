@@ -366,7 +366,7 @@ async fn apply_app_events_harness_models_updates_app_services_outside_prompts() 
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    crate::test_support::set_test_harness_models(&mut app.services, true, None);
+    crate::test_support::set_test_harness_models(&mut app.services, None);
     let listed = crate::test_support::ready_harness_model(AgentModel::KimiK3);
 
     // Act

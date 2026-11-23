@@ -29,41 +29,39 @@ fn local_qwen() -> HarnessModelOption {
 }
 
 #[test]
-/// Hides the row without the flag, disables it without a runnable model,
-/// and otherwise starts on the catalog default.
-fn harness_availability_follows_flag_and_runnable_models() {
+/// Offers no Harness sessions without a runnable model, and otherwise starts
+/// them on the catalog default.
+fn harness_availability_follows_runnable_models() {
     // Arrange
     let missing_key = kimi(HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"));
     let cases = [
         (
-            HarnessModelCatalog::new(false, vec![kimi(HarnessModelStatus::Ready)], None),
-            HarnessAvailability::Hidden,
-            false,
-        ),
-        (
-            HarnessModelCatalog::new(true, vec![missing_key], None),
+            HarnessModelCatalog::default(),
             HarnessAvailability::MissingCredentials,
-            true,
         ),
         (
-            HarnessModelCatalog::new(true, vec![kimi(HarnessModelStatus::Ready)], None),
+            HarnessModelCatalog::new(vec![missing_key], None),
+            HarnessAvailability::MissingCredentials,
+        ),
+        (
+            HarnessModelCatalog::new(vec![kimi(HarnessModelStatus::Ready)], None),
             HarnessAvailability::Available(AgentModel::KimiK3),
-            true,
         ),
     ];
 
     // Act / Assert
-    for (catalog, expected, visible) in cases {
+    for (catalog, expected) in cases {
         let availability = catalog.availability();
         assert_eq!(availability, expected);
-        assert_eq!(availability.is_visible(), visible);
-        assert_eq!(catalog.is_enabled(), visible);
         assert_eq!(
             availability.is_available(),
             availability.default_model().is_some()
         );
     }
-    assert_eq!(HarnessAvailability::default(), HarnessAvailability::Hidden);
+    assert_eq!(
+        HarnessAvailability::default(),
+        HarnessAvailability::MissingCredentials
+    );
 }
 
 #[test]
@@ -71,7 +69,7 @@ fn harness_availability_follows_flag_and_runnable_models() {
 /// once the user picks one, and keeps refreshed options.
 fn catalog_prefers_local_models_until_a_choice_is_remembered() {
     // Arrange
-    let mut catalog = HarnessModelCatalog::new(true, Vec::new(), None);
+    let mut catalog = HarnessModelCatalog::new(Vec::new(), None);
     catalog.replace_options(vec![kimi(HarnessModelStatus::Ready), local_qwen()]);
     let local_default = catalog.availability();
 

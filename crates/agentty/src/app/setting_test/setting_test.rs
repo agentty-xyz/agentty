@@ -1120,11 +1120,7 @@ async fn load_default_fast_agent_setting_uses_a_ready_harness_fast_default() {
     // Act
     let without_harness =
         load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
-    crate::test_support::set_test_harness_models(
-        &mut services,
-        true,
-        Some(AgentModel::Qwen38Flash),
-    );
+    crate::test_support::set_test_harness_models(&mut services, Some(AgentModel::Qwen38Flash));
     let ready = load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
     let without_project = load_default_fast_agent_setting(&services, None, fallback).await;
     persist_harness_fast_default(&services, project_id, "kimi-k9").await;
@@ -1214,11 +1210,7 @@ async fn shared_claude_fast_defaults_keep_the_backend_they_were_saved_on() {
     // Arrange
     let (mut services, project_id) =
         test_services_with_available_agent_kinds(vec![AgentKind::Claude]).await;
-    crate::test_support::set_test_harness_models(
-        &mut services,
-        true,
-        Some(AgentModel::ClaudeHaiku55),
-    );
+    crate::test_support::set_test_harness_models(&mut services, Some(AgentModel::ClaudeHaiku55));
     let fallback = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
     let claude_haiku = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
     let harness_haiku = AgentSelection::new(AgentKind::Harness, AgentModel::ClaudeHaiku55);
@@ -1273,11 +1265,7 @@ async fn shared_harness_models_report_ready_models_as_the_list_changes() {
 
     // Act
     let without_models = harness_models.ready_models();
-    crate::test_support::set_test_harness_models(
-        &mut services,
-        true,
-        Some(AgentModel::Qwen38Flash),
-    );
+    crate::test_support::set_test_harness_models(&mut services, Some(AgentModel::Qwen38Flash));
     let after_listing = harness_models.ready_models();
     services.replace_harness_model_options(vec![unready]);
     let after_refresh = harness_models.ready_models();
@@ -1293,11 +1281,7 @@ async fn settings_offer_ready_harness_models_for_the_fast_default() {
     // Arrange
     let (mut services, project_id) =
         test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
-    crate::test_support::set_test_harness_models(
-        &mut services,
-        true,
-        Some(AgentModel::Qwen38Flash),
-    );
+    crate::test_support::set_test_harness_models(&mut services, Some(AgentModel::Qwen38Flash));
     persist_harness_fast_default(&services, project_id, AgentModel::Qwen38Flash.as_str()).await;
     let qwen_flash = AgentSelection::new(AgentKind::Harness, AgentModel::Qwen38Flash);
     let mut unready = crate::test_support::ready_harness_model(AgentModel::KimiK3);

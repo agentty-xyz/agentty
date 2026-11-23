@@ -194,12 +194,8 @@ impl AppServices {
     }
 
     /// Lists the harness models again without blocking the caller and emits
-    /// [`AppEvent::HarnessModelsUpdated`] when the listing completes. Launches
-    /// without `--experimental-harness` skip the refresh.
+    /// [`AppEvent::HarnessModelsUpdated`] when the listing completes.
     pub(crate) fn refresh_harness_models(&self) {
-        if !self.with_harness_models(|catalog| catalog.is_enabled()) {
-            return;
-        }
         let probe = Arc::clone(&self.harness_model_probe);
         let event_tx = self.event_tx.clone();
         spawn::spawn_detached(async move {

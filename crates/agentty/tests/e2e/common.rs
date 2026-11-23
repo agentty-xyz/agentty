@@ -39,6 +39,27 @@ pub(crate) use crate::clock::{
 /// resolves, painting different frames locally and on CI.
 const STUB_AGENT_EXECUTABLES: [&str; 3] = ["agy", "claude", "codex"];
 
+/// Harness provider variables every scenario starts with: keys and
+/// endpoints blank, and the local model server on a port nothing listens
+/// on. A scenario serving a provider sets its variables again.
+const HARNESS_PROVIDER_ENV: [(&str, &str); 15] = [
+    ("ANTHROPIC_API_KEY", ""),
+    ("ANTHROPIC_BASE_URL", ""),
+    ("DASHSCOPE_API_KEY", ""),
+    ("DASHSCOPE_BASE_URL", ""),
+    ("KIMI_API_KEY", ""),
+    ("KIMI_BASE_URL", ""),
+    ("MODEL_API_BASE_URL", ""),
+    ("MODEL_API_KEY", ""),
+    ("OPENAI_API_KEY", ""),
+    ("OPENAI_BASE_URL", ""),
+    ("OPENAI_COMPATIBLE_API_KEY", ""),
+    ("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1"),
+    ("OPENAI_COMPATIBLE_CONTEXT_WINDOW", ""),
+    ("OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS", ""),
+    ("OPENAI_COMPATIBLE_MODEL", ""),
+];
+
 /// Isolated test environment carrying `agentty_root` and `workdir` paths.
 ///
 /// Use [`BuilderEnv::new`] to create a fresh environment under a temporary
@@ -218,7 +239,9 @@ impl BuilderEnv {
     /// This keeps feature tests able to choose between inheriting system
     /// commands, using only deterministic stub agent executables, and
     /// exercising responsive layouts at their intended widths. Clear inherited
-    /// tmux state so host shortcuts cannot change captured frames.
+    /// tmux state so host shortcuts cannot change captured frames, and the
+    /// harness provider environment so a host's keys or local model server
+    /// cannot add ready `ag-harness` models.
     fn builder_with_path_and_size(
         &self,
         binary: &Path,
@@ -226,15 +249,18 @@ impl BuilderEnv {
         terminal_cols: u16,
         terminal_rows: u16,
     ) -> PtySessionBuilder {
-        PtySessionBuilder::new(binary)
-            .size(terminal_cols, terminal_rows)
-            .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
-            .env("HOME", self.home_dir.to_string_lossy())
-            .env("XDG_CONFIG_HOME", self.config_dir().to_string_lossy())
-            .env(NO_COLOR_ENV_VAR, NO_COLOR_ENV_VALUE)
-            .env("PATH", path_env)
-            .env("TMUX", "")
-            .workdir(&self.workdir)
+        HARNESS_PROVIDER_ENV.iter().fold(
+            PtySessionBuilder::new(binary)
+                .size(terminal_cols, terminal_rows)
+                .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
+                .env("HOME", self.home_dir.to_string_lossy())
+                .env("XDG_CONFIG_HOME", self.config_dir().to_string_lossy())
+                .env(NO_COLOR_ENV_VAR, NO_COLOR_ENV_VALUE)
+                .env("PATH", path_env)
+                .env("TMUX", "")
+                .workdir(&self.workdir),
+            |builder, (key, value)| builder.env(*key, *value),
+        )
     }
 
     /// Return environment variable pairs for VHS tape compilation.
@@ -323,7 +349,7 @@ impl BuilderEnv {
     /// This mirrors [`BuilderEnv::builder_with_path_and_size`] so PTY proof
     /// runs and VHS recordings see the same command lookup environment.
     fn as_vhs_env_pairs_with_path(&self, path_env: String) -> Vec<(String, String)> {
-        vec![
+        let mut pairs = vec![
             (
                 "AGENTTY_ROOT".to_string(),
                 self.agentty_root.to_string_lossy().into_owned(),
@@ -339,7 +365,14 @@ impl BuilderEnv {
             (NO_COLOR_ENV_VAR.to_string(), NO_COLOR_ENV_VALUE.to_string()),
             ("PATH".to_string(), path_env),
             ("TMUX".to_string(), String::new()),
-        ]
+        ];
+        pairs.extend(
+            HARNESS_PROVIDER_ENV
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+        );
+
+        pairs
     }
 
     /// Returns the `XDG_CONFIG_HOME` the app sees: the default below the

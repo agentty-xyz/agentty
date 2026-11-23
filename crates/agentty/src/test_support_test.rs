@@ -473,31 +473,38 @@ impl AgentAvailabilityProbe for ListedHarnessModelsProbe {
     }
 }
 
-/// Offers Harness sessions on `ready_model` when `enabled`, or shows the row
-/// disabled without one; refreshes list the same models.
+/// Offers Harness sessions on `ready_model`, or no runnable harness model
+/// without one; refreshes list the same models.
 pub(crate) fn set_test_harness_models(
     services: &mut app::AppServices,
-    enabled: bool,
     ready_model: Option<AgentModel>,
 ) {
-    let options = ready_model
-        .map(ready_harness_model)
-        .into_iter()
-        .collect::<Vec<_>>();
+    set_test_harness_options(
+        services,
+        ready_model.map(ready_harness_model).into_iter().collect(),
+    );
+}
+
+/// Lists exactly `options` as this launch's harness models, now and on
+/// every refresh.
+pub(crate) fn set_test_harness_options(
+    services: &mut app::AppServices,
+    options: Vec<HarnessModelOption>,
+) {
     services.set_harness_models(
-        HarnessModelCatalog::new(enabled, options.clone(), None),
+        HarnessModelCatalog::new(options.clone(), None),
         Arc::new(ListedHarnessModelsProbe { options }),
     );
 }
 
-/// Builds one client bundle for an `--experimental-harness` launch whose only
-/// backend is Harness on `AgentModel::KimiK3`, keeping scripted session runs.
+/// Builds one client bundle for a launch whose only backend is Harness on
+/// `AgentModel::KimiK3`, keeping scripted session runs.
 pub(crate) fn harness_only_test_app_clients(
     harness_data_root: PathBuf,
 ) -> app::test_support::AppClients {
     test_app_clients_with_available_agent_kinds(Vec::new())
         .with_agent_availability_probe(Arc::new(HarnessOnlyAvailabilityProbe))
-        .with_experimental_harness(harness_data_root)
+        .with_harness_data_root(harness_data_root)
         .with_session_run_factory(Arc::new(app::test_support::TestSessionRunFactory::default()))
 }
 

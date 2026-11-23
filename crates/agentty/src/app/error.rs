@@ -31,7 +31,9 @@ pub enum AppError {
     /// in-process Harness.
     #[error(
         "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or Antigravity CLI \
-         1.5.8 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
+         1.5.8 or newer. For an older `agy`, run `agy update`, then restart `agentty`. To use the \
+         built-in `ag-harness` instead, set a provider key such as `MODEL_API_KEY` or serve a \
+         model from a local Ollama server."
     )]
     NoAgentAvailable,
 

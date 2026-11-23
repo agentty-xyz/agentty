@@ -9,8 +9,7 @@ weight = 6
 `ag-harness` is the base layer between an application and an LLM. It is Rust-native,
 app-facing, and lightweight: an agent loop, three built-in tools selected by `ToolSet`,
 durable sessions, and content-free lifecycle events. Product decisions stay in the
-application. Agentty runs it as the preview `AgentKind::Harness` backend behind
-`--experimental-harness`, following the
+application. Agentty runs it as the `AgentKind::Harness` backend, following the
 [Execution](@/docs/core-components/execution-components/execution-boundary.md) boundary.
 
 This page describes the design and its boundaries. `crates/ag-harness/README.md` covers
@@ -456,8 +455,8 @@ and a unit test fails when the file is stale.
 
 ## Agentty integration
 
-Shipped as a preview: `AgentKind::Harness` runs in process through `ag-agent`, offered
-only when Agentty starts with `--experimental-harness` and a provider is configured.
+`AgentKind::Harness` runs in process through `ag-agent`. `/model` always lists it;
+sessions start on a harness model only once its provider is configured.
 
 - A native transport beside the CLI and app-server transports provides a durable
   `AgentChannel` and the one-shot path. The harness session shares the Agentty session
