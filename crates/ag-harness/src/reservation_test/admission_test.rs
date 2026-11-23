@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::fixture::AcquiredTurnFixture as _;
 use crate::TurnInput;
 use crate::bash::CommandIntent;
 use crate::model_profile_fixture::unbounded_model_profile;

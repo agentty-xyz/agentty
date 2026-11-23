@@ -137,6 +137,7 @@ pub trait BashProcess: Send {
 
 /// One supervision observation delivered by [`BashProcess::next_event`].
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum ProcessEvent {
     /// Internal progress without output, exit, or scope acknowledgment.
     Progress,
@@ -482,6 +483,7 @@ impl ExecutionPolicy {
 
 /// Lexical policy intent for one absolute path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ExecutionAccess {
     /// The path lies outside every granted root, or beneath a hidden path.
     Denied,
@@ -644,6 +646,7 @@ impl StreamCapture {
 
 /// One captured binary stream of the main process and its pipe inheritors.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum OutputStream {
     /// Standard output.
     Stdout,
@@ -654,6 +657,7 @@ pub enum OutputStream {
 /// Main-process observation, independent of descendants and overall
 /// termination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum MainExit {
     /// The main process exited with this status code.
     Code(i32),
@@ -722,6 +726,7 @@ pub(crate) trait ExecutionControl: Send + Sync {
 
 /// Content-free executor failure classification.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ExecutionError {
     /// The executor cannot execute this policy, platform, or configuration.
     #[error("execution unsupported for this policy or platform")]

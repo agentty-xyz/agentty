@@ -1,4 +1,4 @@
-//! Checkpoint record validation, codec, and source-rendering unit tests.
+//! Checkpoint record validation and source-rendering unit tests.
 
 use serde_json::{Value, json};
 
@@ -31,25 +31,19 @@ fn checkpoint() -> SessionCheckpoint {
 }
 
 #[test]
-fn encode_decode_round_trips_every_field() {
-    // Arrange
+fn construction_keeps_every_field() {
+    // Arrange and act
     let original = checkpoint();
     let anonymous = SessionCheckpoint::new(0, 0, None, None, summary()).expect("valid checkpoint");
 
-    // Act
-    let decoded = SessionCheckpoint::decode(&original.encode()).expect("decode");
-    let decoded_anonymous = SessionCheckpoint::decode(&anonymous.encode()).expect("decode");
-
     // Assert
-    assert_eq!(decoded, original);
-    assert_eq!(decoded.covered_through(), 3);
-    assert_eq!(decoded.model_generation(), 1);
-    assert_eq!(decoded.provider(), Some("provider"));
-    assert_eq!(decoded.model(), Some("model"));
-    assert_eq!(decoded.summary(), &summary());
-    assert_eq!(decoded_anonymous, anonymous);
-    assert_eq!(decoded_anonymous.provider(), None);
-    assert_eq!(decoded_anonymous.model(), None);
+    assert_eq!(original.covered_through(), 3);
+    assert_eq!(original.model_generation(), 1);
+    assert_eq!(original.provider(), Some("provider"));
+    assert_eq!(original.model(), Some("model"));
+    assert_eq!(original.summary(), &summary());
+    assert_eq!(anonymous.provider(), None);
+    assert_eq!(anonymous.model(), None);
 }
 
 #[test]
@@ -105,39 +99,6 @@ fn construction_rejects_oversized_summaries() {
         rejected,
         Err(CheckpointError::SummaryTooLarge { max_bytes, .. }) if max_bytes == MAX_SUMMARY_BYTES
     ));
-}
-
-#[test]
-fn decode_rejects_malformed_payloads() {
-    // Arrange
-    let payloads = [
-        "not json".to_string(),
-        json!({"version": 2}).to_string(),
-        json!({
-            "version": 1,
-            "covered_through": "three",
-            "model_generation": 0,
-            "summary": summary()
-        })
-        .to_string(),
-        json!({
-            "version": 1,
-            "covered_through": 0,
-            "model_generation": 0,
-            "provider": 7,
-            "model": "model",
-            "summary": summary()
-        })
-        .to_string(),
-    ];
-
-    // Act and assert
-    for payload in payloads {
-        assert!(matches!(
-            SessionCheckpoint::decode(&payload),
-            Err(CheckpointError::InvalidRecord { .. })
-        ));
-    }
 }
 
 #[test]

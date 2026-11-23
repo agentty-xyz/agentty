@@ -10,6 +10,7 @@ use crate::store::TurnOwner;
 /// Frozen invocation stored before a sandbox can spawn. Environment values are
 /// excluded; policy contains their names and host-supplied revision.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct CommandIntent {
     /// Provider tool-call identifier.
     pub call_id: String,
@@ -23,6 +24,7 @@ pub struct CommandIntent {
 
 /// Recorded command result. Exit, timeout, output, and cleanup are independent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct CommandOutcome {
     /// Whether the executor could not acknowledge its cleanup scope.
     pub cleanup_failed: bool,
@@ -65,6 +67,7 @@ pub struct CommandOutcome {
 /// durable record.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CommandCleanupScope {
     /// Linux PID namespace termination includes detached descendants.
     PidNamespace,
@@ -79,6 +82,7 @@ pub enum CommandCleanupScope {
 /// Overall execution reason; this never overwrites a known main exit.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CommandTermination {
     /// The backend reported completion in its documented scope.
     Completed,
@@ -93,6 +97,7 @@ pub enum CommandTermination {
 /// An invocation and its observed result. `None` is an unknown outcome, never
 /// permission to replay. Reconciliation does not fabricate a missing result.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct CommandRecord {
     /// Store-assigned command identifier.
     pub id: i64,
@@ -106,9 +111,9 @@ pub struct CommandRecord {
 }
 
 impl CommandRecord {
-    /// Constructs an unobserved invocation for a host-implemented store. The
-    /// store must assign the ID atomically while validating the live owner.
-    pub fn pending(id: i64, owner: TurnOwner, intent: CommandIntent) -> Self {
+    /// Constructs an unobserved invocation. The store must assign the ID
+    /// atomically while validating the live owner.
+    pub(crate) fn pending(id: i64, owner: TurnOwner, intent: CommandIntent) -> Self {
         Self {
             id,
             intent,
@@ -119,7 +124,7 @@ impl CommandRecord {
     }
 
     /// Original owner, retained across expiry, interruption, and reopen.
-    pub fn owner(&self) -> &TurnOwner {
+    pub(crate) fn owner(&self) -> &TurnOwner {
         &self.owner
     }
 

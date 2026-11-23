@@ -1,10 +1,14 @@
 //! Local model server discovery against recorded Ollama and `OpenAI` API
 //! shapes.
 
-use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
+use ag_router::{LocalInventory, LocalServer, LocalServerError, LocalServerKind};
 use serde_json::json;
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// A model's context window, identifier, loaded context window, and tool
+/// support.
+type ModelFields<'a> = (Option<u64>, &'a str, Option<u64>, Option<bool>);
 
 /// Returns a client for `server`'s `/v1` endpoint.
 fn local_server(server: &MockServer) -> LocalServer {
@@ -57,26 +61,31 @@ async fn ollama_inventory_reads_tags_capabilities_and_loaded_windows() {
     let inventory = local_server(&server).inventory().await;
 
     // Assert
+    let inventory = inventory.expect("Ollama answers");
+    assert_eq!(inventory.kind, LocalServerKind::Ollama);
     assert_eq!(
-        inventory.expect("Ollama answers"),
-        LocalInventory {
-            kind: LocalServerKind::Ollama,
-            models: vec![
-                LocalModel {
-                    context_window: Some(40_960),
-                    id: "qwen3:latest".to_string(),
-                    loaded_context_window: Some(4096),
-                    supports_tools: Some(true),
-                },
-                LocalModel {
-                    context_window: Some(8192),
-                    id: "gemma:latest".to_string(),
-                    loaded_context_window: None,
-                    supports_tools: Some(false),
-                },
-            ],
-        }
+        model_fields(&inventory),
+        [
+            (Some(40_960), "qwen3:latest", Some(4096), Some(true)),
+            (Some(8192), "gemma:latest", None, Some(false)),
+        ]
     );
+}
+
+/// Returns each model's fields in the inventory's order.
+fn model_fields(inventory: &LocalInventory) -> Vec<ModelFields<'_>> {
+    inventory
+        .models
+        .iter()
+        .map(|model| {
+            (
+                model.context_window,
+                model.id.as_str(),
+                model.loaded_context_window,
+                model.supports_tools,
+            )
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -114,20 +123,10 @@ async fn older_ollama_tags_are_completed_from_show() {
     // Assert
     assert_eq!(inventory.kind, LocalServerKind::Ollama);
     assert_eq!(
-        inventory.models,
-        vec![
-            LocalModel {
-                context_window: Some(131_072),
-                id: "llama3.2:3b".to_string(),
-                loaded_context_window: None,
-                supports_tools: Some(true),
-            },
-            LocalModel {
-                context_window: None,
-                id: "broken:latest".to_string(),
-                loaded_context_window: None,
-                supports_tools: None,
-            },
+        model_fields(&inventory),
+        [
+            (Some(131_072), "llama3.2:3b", None, Some(true)),
+            (None, "broken:latest", None, None),
         ]
     );
 }
@@ -161,20 +160,10 @@ async fn other_servers_are_listed_through_the_models_api_with_credentials() {
     );
     assert_eq!(LocalServerKind::Ollama.display_name(), "Ollama");
     assert_eq!(
-        inventory.models,
-        vec![
-            LocalModel {
-                context_window: Some(32_768),
-                id: "Qwen/Qwen3-8B".to_string(),
-                loaded_context_window: Some(32_768),
-                supports_tools: None,
-            },
-            LocalModel {
-                context_window: None,
-                id: "local-model".to_string(),
-                loaded_context_window: None,
-                supports_tools: None,
-            },
+        model_fields(&inventory),
+        [
+            (Some(32_768), "Qwen/Qwen3-8B", Some(32_768), None),
+            (None, "local-model", None, None),
         ]
     );
 }

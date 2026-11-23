@@ -9,9 +9,10 @@ use tempfile::tempdir;
 
 use super::support::{create_version_one_database, schema, turn_options};
 use crate::input::TurnInput;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::Database;
-use crate::store::{AcquiredTurn, SessionStore as _};
+use crate::store::{AcquiredTurn, StoreBackend as _};
 use crate::turn_options_snapshot::StoredTurnOptions;
 use crate::{OutputSchema, TurnError};
 

@@ -11,10 +11,11 @@ use tokio::sync::Notify;
 use super::support::{AcquisitionGate, CommitGate};
 use crate::context::HistoryProjection;
 use crate::input::TurnInput;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::tests::support::{schema, turn_options};
 use crate::sqlite_store::{Database, ReservationObserver};
-use crate::store::{AcquiredTurn, SessionStore};
+use crate::store::{AcquiredTurn, StoreBackend};
 
 #[tokio::test]
 async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
@@ -141,7 +142,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
     // Assert
     assert!(matches!(
         result,
-        Err(SessionError::QueryContext {
+        Err(SessionError::Store {
             operation: "reserve persistent session turn",
             ..
         })

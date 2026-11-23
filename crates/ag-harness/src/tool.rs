@@ -75,35 +75,6 @@ const WRITE_DESCRIPTION: &str = concat!(
 );
 const WRITE_NAME: &str = "write";
 
-/// Built-in tool that can be enabled for a harness run.
-///
-/// A turn offers the tools its [`ToolSet`] holds; select built-ins with
-/// [`ToolSet::with_read`], [`ToolSet::with_write`], and
-/// [`ToolSet::with_bash`] or the matching [`ToolSetBuilder`] methods.
-#[deprecated(
-    since = "0.20.0",
-    note = "select built-in tools with `ToolSet`; a turn offers the tools its set holds"
-)]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Tool {
-    /// Bash through the host-selected executor, which may or may not sandbox
-    /// commands.
-    Bash,
-    /// Read-only repository inspection.
-    Read,
-    /// Repository-relative patch writes.
-    Write,
-}
-
-#[expect(deprecated, reason = "implements the deprecated `Tool`")]
-impl Tool {
-    /// Returns the function name advertised to models.
-    pub fn name(self) -> &'static str {
-        Builtin::from(self).name()
-    }
-}
-
 /// A built-in tool, bound to a turn's repository and options when the turn
 /// starts and dispatched, like every tool, through its handler. Variants
 /// are declared, and so ordered, in their advertised order.
@@ -129,28 +100,6 @@ impl Builtin {
             Self::Bash => BASH_NAME,
             Self::Read => READ_NAME,
             Self::Write => WRITE_NAME,
-        }
-    }
-}
-
-#[expect(deprecated, reason = "maps the deprecated `Tool` onto built-ins")]
-impl From<Tool> for Builtin {
-    fn from(tool: Tool) -> Self {
-        match tool {
-            Tool::Bash => Self::Bash,
-            Tool::Read => Self::Read,
-            Tool::Write => Self::Write,
-        }
-    }
-}
-
-#[expect(deprecated, reason = "maps built-ins onto the deprecated `Tool`")]
-impl From<Builtin> for Tool {
-    fn from(builtin: Builtin) -> Self {
-        match builtin {
-            Builtin::Bash => Self::Bash,
-            Builtin::Read => Self::Read,
-            Builtin::Write => Self::Write,
         }
     }
 }
@@ -414,10 +363,11 @@ impl ToolCall {
             return Err(model::ModelError::InvalidToolCallId);
         }
 
-        schema_contract::ensure_content_size(arguments).map_err(model::ModelError::from)?;
+        schema_contract::ensure_content_size(arguments)
+            .map_err(model::ModelError::from_validation)?;
         if let Some(reasoning_content) = &reasoning_content {
             schema_contract::ensure_content_size(reasoning_content)
-                .map_err(model::ModelError::from)?;
+                .map_err(model::ModelError::from_validation)?;
         }
         let tool = match Builtin::named(name) {
             Some(builtin) => builtin,
@@ -472,7 +422,8 @@ impl ToolCall {
     /// Returns [`crate::ModelError`] for oversized text.
     pub fn with_assistant_text(mut self, text: Option<String>) -> Result<Self, model::ModelError> {
         if let Some(text) = &text {
-            schema_contract::ensure_content_size(text).map_err(model::ModelError::from)?;
+            schema_contract::ensure_content_size(text)
+                .map_err(model::ModelError::from_validation)?;
         }
         self.assistant_text = text.filter(|text| !text.trim().is_empty());
 
@@ -696,24 +647,9 @@ impl MalformedArguments {
         &self.reason
     }
 
-    /// Returns the tool the model called.
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `MalformedArguments::name` for the name of the called tool"
-    )]
-    #[expect(deprecated, reason = "returns the deprecated `Tool`")]
-    pub fn tool(&self) -> Tool {
-        self.tool.into()
-    }
-
     /// Returns the name of the built-in tool the model called.
     pub fn name(&self) -> &'static str {
         self.tool.name()
-    }
-
-    /// Returns the built-in tool the model called.
-    pub(crate) fn builtin(&self) -> Builtin {
-        self.tool
     }
 }
 
@@ -925,6 +861,7 @@ impl<'de> Deserialize<'de> for ReadArguments {
 /// Read-only operation selected within the built-in `read` tool.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ReadAction {
     /// Host-bound review diff.
     Diff,
@@ -954,6 +891,7 @@ impl ReadAction {
 /// Revision side available to the `show` read action.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ReadSide {
     /// Host-selected comparison commit, fixed for the turn.
     Base,
@@ -1170,9 +1108,5 @@ fn validate_repository_path(path: &str) -> Result<(), &'static str> {
 }
 
 #[cfg(test)]
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage of the deprecated `Tool`"
-)]
 #[path = "tool_test.rs"]
 mod tests;

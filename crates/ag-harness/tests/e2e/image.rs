@@ -142,11 +142,9 @@ async fn test_qwen_text_model_rejects_images() -> Result<(), DynError> {
 #[ignore = "requires live Qwen and Muse credentials"]
 async fn test_image_history_switches_between_providers() -> Result<(), DynError> {
     // Arrange
-    let vision_capabilities = ModelCapabilities {
-        image_input: true,
-        profile: unbounded_model_profile(),
-        tool_calls: true,
-    };
+    let vision_capabilities = ModelCapabilities::new(unbounded_model_profile())
+        .with_image_input(true)
+        .with_tool_calls(true);
     let mut registry = ModelRegistry::new();
     registry.register(
         ExecutionIdentity::new("qwen-vl", "1")?,

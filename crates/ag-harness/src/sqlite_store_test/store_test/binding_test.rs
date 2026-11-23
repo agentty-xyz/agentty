@@ -11,10 +11,11 @@ use tokio::sync::Notify;
 use super::support::{AcquisitionGate, CommitGate};
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::NewSession;
 use crate::sqlite_store::tests::support::{schema, turn_options};
 use crate::sqlite_store::{Database, ReservationObserver};
-use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, SessionStore, StoreBackend as _, WriteStatus};
 
 #[tokio::test]
 async fn acquired_journal_and_cleanup_dispatch_through_the_decorator() {

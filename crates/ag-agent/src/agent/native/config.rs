@@ -379,14 +379,14 @@ fn hosted_model(
 }
 
 /// Returns the cost Agentty shows for a model of the harness catalog's
-/// price class `tier`.
+/// price class `tier`; a tier added to the catalog later shows as standard.
 fn model_cost(tier: CostTier) -> ModelCost {
     match tier {
         CostTier::Local => ModelCost::Local,
         CostTier::Plan => ModelCost::Plan,
         CostTier::Cheap => ModelCost::Cheap,
-        CostTier::Standard => ModelCost::Standard,
         CostTier::Premium => ModelCost::Premium,
+        _ => ModelCost::Standard,
     }
 }
 

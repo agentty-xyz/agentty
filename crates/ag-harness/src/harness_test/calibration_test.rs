@@ -85,15 +85,9 @@ impl Model for InflatingModel {
         let Some(inflation) = self.inflation else {
             return Ok(ModelCompletion::from_response(response));
         };
-        let usage = CompletionUsage::new(
-            None,
-            None,
-            Some(OVERHEAD + weight * inflation),
-            None,
-            None,
-            None,
-        );
-        let metadata = CompletionMetadata::new("stop".to_string(), None, None, None, Some(usage));
+        let usage =
+            CompletionUsage::default().with_input_tokens(Some(OVERHEAD + weight * inflation));
+        let metadata = CompletionMetadata::new("stop").with_usage(Some(usage));
 
         Ok(ModelCompletion::new(metadata, response))
     }

@@ -134,6 +134,33 @@ mod context_budget_fixture;
 #[path = "../tests/support/model_profile.rs"]
 mod model_profile_fixture;
 
+#[cfg(test)]
+#[path = "../tests/support/public_store.rs"]
+mod public_store;
+
+#[cfg(test)]
+#[path = "../tests/support/repository.rs"]
+mod repository_fixture;
+
+#[cfg(test)]
+#[path = "../tests/support/store_gate.rs"]
+mod store_gate;
+
+// Suites that inject stores of their own or drive store operations directly;
+// the sealed `SessionStore` admits only in-crate implementations, and every
+// other contract suite stays in `tests/public_api.rs`.
+#[cfg(test)]
+#[path = "../tests/support/cancellation.rs"]
+mod cancellation_contract_test;
+
+#[cfg(test)]
+#[path = "../tests/support/model_switch.rs"]
+mod model_switch_contract_test;
+
+#[cfg(test)]
+#[path = "../tests/support/store_conformance.rs"]
+mod store_conformance_test;
+
 mod admission;
 pub mod approval;
 pub mod bash;
@@ -165,7 +192,6 @@ mod memory_store;
 pub mod model;
 mod model_profile;
 mod model_registry;
-mod policy;
 #[cfg(any(
     feature = "providers-anthropic",
     feature = "providers-compat",
@@ -211,11 +237,6 @@ pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBu
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use limit::{LimitKind, RunLimits};
 pub use model::{Model, ModelError};
-#[expect(
-    deprecated,
-    reason = "re-exports the deprecated `ToolPolicy` until its removal"
-)]
-pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
 pub use request_option::{GenerationParams, OutputMode};
 pub use run::{
@@ -223,11 +244,6 @@ pub use run::{
 };
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::{ModelSelectionError, SessionError};
-#[expect(
-    deprecated,
-    reason = "re-exports the deprecated `Tool` until its removal"
-)]
-pub use tool::Tool;
 pub use tool::{ToolHandler, ToolSet};
 pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};

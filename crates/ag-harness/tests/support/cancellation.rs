@@ -17,7 +17,7 @@ use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation,
-    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    SessionStore, StoreBackend, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::{SettlementError, SettlementPhase};
@@ -106,20 +106,11 @@ impl Model for TestModel {
             "wait" => pending().await,
             "panic" => std::panic::resume_unwind(Box::new("injected model panic")),
             "write" => Ok(ModelCompletion::new(
-                CompletionMetadata::new(
-                    "tool_calls".into(),
-                    None,
-                    None,
-                    None,
-                    Some(CompletionUsage::new(
-                        None,
-                        None,
-                        Some(30),
-                        Some(5),
-                        None,
-                        None,
-                    )),
-                ),
+                CompletionMetadata::new("tool_calls").with_usage(Some(
+                    CompletionUsage::default()
+                        .with_input_tokens(Some(30))
+                        .with_output_tokens(Some(5)),
+                )),
                 ModelResponse::ToolCall(
                     ToolCall::from_json(
                         "write".into(),
@@ -195,7 +186,7 @@ impl Gate {
 }
 
 #[async_trait]
-impl SessionStore for Gate {
+impl StoreBackend for Gate {
     fn identity(&self) -> &StoreIdentity {
         self.store.identity()
     }

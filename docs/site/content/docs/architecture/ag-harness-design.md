@@ -30,13 +30,11 @@ flowchart LR
   `ToolSet`; the built-in `read`, `write` (git-style patches), and sandboxed `bash` are
   handlers bound to the turn's repository and journal.
 - **Deny-by-default tools** — a turn offers exactly the handlers of its set, and a
-  harness offers none until the host gives it one; the deprecated `ToolPolicy` offers
-  its allowed built-ins only when no set is given.
+  harness offers none until the host gives it one.
 - **Host approvals** — an optional `ApprovalHandler` decides every call that changes
   state, within a bounded decision timeout.
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
-- **Durable sessions** — SQLite by default; memory and custom stores share the same
-  public contract.
+- **Durable sessions** — SQLite by default, or a memory store for one process.
 - **Provider-neutral models** — built-in Muse, Kimi, Qwen, OpenAI, ChatGPT-plan, and
   generic OpenAI-compatible clients use `ag-router` behind the object-safe `Model`
   trait.
@@ -47,20 +45,20 @@ flowchart LR
 ```text
 crates/
 ├── ag-router        # structured chat routing + provider transports
-├── ag-harness       # library + ag-harness-sandbox launcher binary
+├── ag-harness       # library + standalone ag-harness-sandbox helper binary
 └── ag-harness-cli   # interactive terminal host and unstable stdio protocol server
 ```
 
 `ag-harness` gates its optional backends behind Cargo features that are all on by
 default: `sqlite` (the SQLite store and migrations), `native-sandbox` (the native Bash
-executor and launcher), `otel` (OpenTelemetry metrics, traces, and context propagation),
-`providers-openai`, `providers-compat`, and `providers-anthropic` (the Anthropic
-Messages client). `unstable-protocol` is reserved and empty. The core without default
-features keeps the memory store, the `Model` boundary, and host-selected executors; a
-provider whose family is off fails before reading credentials. Features are additive,
-and CI covers the core and each provider family on their own. Dependents enable the
-features they use explicitly. `ag-router` stays unsplit: it compiles every provider
-transport either way.
+executor and `sandbox::dispatch`, which makes the host executable its own helper; the
+standalone helper binary only calls it), `otel` (OpenTelemetry metrics, traces, and
+context propagation), `providers-openai`, `providers-compat`, and `providers-anthropic`
+(the Anthropic Messages client). The core without default features keeps the memory
+store, the `Model` boundary, and host-selected executors; a provider whose family is off
+fails before reading credentials. Features are additive, and CI covers the core and each
+provider family on their own. Dependents enable the features they use explicitly.
+`ag-router` stays unsplit: it compiles every provider transport either way.
 
 ## Public boundary
 
@@ -90,9 +88,13 @@ transport either way.
   `HarnessBuilder::registration_revision`; it records the same identity as an equal
   manual registration, so durable sessions resume across both, and it keeps the entry's
   prices and concurrency cap.
-- `SessionStore` (persistence) and `BashExecutor` (command execution) accept host
-  implementations. Stores expose atomic record operations; the harness applies admission
-  rules.
+- `BashExecutor` (command execution) accepts host implementations. `SessionStore` is
+  sealed: the memory and SQLite stores expose atomic record operations internally, and
+  the harness applies admission rules.
+- The public surface is pinned by `cargo public-api` snapshots of `ag-harness` and
+  `ag-router` under `crates/<crate>/public-api.txt`, which the `public-api` hook checks.
+  Embedder-facing enums and crate-built records are `#[non_exhaustive]`; `ag-router`
+  types appear only where `ag-harness` re-exports them.
 
 ## Agent loop
 

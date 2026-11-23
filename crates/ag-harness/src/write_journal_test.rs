@@ -15,9 +15,10 @@ use tokio::io::AsyncRead;
 
 use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
 use crate::reservation::TurnGuard;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, WriteRecordRow};
-use crate::store::{AcquiredTurn, SessionStore as _};
+use crate::store::{AcquiredTurn, StoreBackend as _};
 use crate::tool::{WriteArguments, WriteError};
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
@@ -156,7 +157,7 @@ async fn intent_failure_prevents_mutation_and_outcome_failure_keeps_pending_inte
             _ => None,
         }
         .expect("journal failure must retain its typed persistence source");
-        assert!(matches!(persistence, SessionError::QueryContext { .. }));
+        assert!(matches!(persistence, SessionError::Store { .. }));
         if phase == "INSERT" {
             assert!(!root.join("file.txt").exists());
             assert_eq!(records, Vec::<WriteRecord>::new());
@@ -217,7 +218,7 @@ async fn rejected_intent_commit_prevents_file_mutation() {
     };
     assert!(matches!(
         persistence,
-        Some(SessionError::QueryContext {
+        Some(SessionError::Store {
             operation: "commit write intent",
             ..
         })
@@ -251,10 +252,10 @@ async fn unavailable_intent_transaction_prevents_file_mutation() {
     };
     assert!(matches!(
         persistence,
-        Some(SessionError::QueryContext {
+        Some(SessionError::Store {
             operation: "begin write intent",
-            source: sqlx::Error::PoolClosed,
-        })
+            source,
+        }) if matches!(source.downcast_ref(), Some(sqlx::Error::PoolClosed))
     ));
 }
 
@@ -431,7 +432,7 @@ async fn journal_reports_corrupt_status_and_unavailable_storage() {
     assert!(matches!(invalid, Err(SessionError::InvalidData { .. })));
     assert!(matches!(
         missing,
-        Err(SessionError::QueryContext {
+        Err(SessionError::Store {
             operation: "load persistent writes",
             ..
         })

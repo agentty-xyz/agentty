@@ -170,13 +170,8 @@ fn maps_output_validation_failures_to_model_errors() {
 fn preserves_request_sources_with_and_without_response_metadata() {
     // Arrange
     let request = ModelError::request(io::Error::other("offline"));
-    let wrapped = ModelError::InvalidResponse.with_metadata(crate::model::CompletionMetadata::new(
-        "stop".to_string(),
-        None,
-        None,
-        None,
-        None,
-    ));
+    let wrapped =
+        ModelError::InvalidResponse.with_metadata(crate::model::CompletionMetadata::new("stop"));
 
     // Act
     let request_source = request.into_source();

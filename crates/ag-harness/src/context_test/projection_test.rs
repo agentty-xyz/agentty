@@ -10,6 +10,7 @@ use crate::context::{
 };
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session_model::{self, RecordedModel, ReplayTarget};
+use crate::store_fixture::HistoryTurnFixture as _;
 
 /// A completed turn reading one file of `bytes` bytes with reasoning beside
 /// its call, then answering.
@@ -52,8 +53,8 @@ fn projection_boundaries_stay_ordered_and_give_each_turn_its_form() {
     assert_eq!(
         (
             projection.start(),
-            projection.brief_before(),
-            projection.elided_before()
+            projection.brief_before,
+            projection.elided_before
         ),
         (2, 2, 4)
     );
@@ -68,7 +69,7 @@ fn projection_boundaries_stay_ordered_and_give_each_turn_its_form() {
             Some(ReplayForm::Full),
         ]
     );
-    assert_eq!(HistoryProjection::new(3, 0, 1).elided_before(), 3);
+    assert_eq!(HistoryProjection::new(3, 0, 1).elided_before, 3);
     assert_eq!(projection.drop_before(5), HistoryProjection::new(5, 5, 5));
     assert_eq!(projection.drop_before(1), projection);
     assert_eq!(projection.elide_before(5), HistoryProjection::new(2, 2, 5));

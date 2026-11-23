@@ -120,7 +120,11 @@ async fn migrations_opting_out_of_transactions_are_rejected() {
     // Assert
     let error = result.expect_err("a no-transaction migration should be rejected");
     assert!(
-        matches!(error, SessionError::Migration(MigrateError::Source(_))),
+        matches!(
+            &error,
+            SessionError::Store { source, .. }
+                if matches!(source.downcast_ref(), Some(MigrateError::Source(_)))
+        ),
         "unexpected error: {error:?}"
     );
     assert!(

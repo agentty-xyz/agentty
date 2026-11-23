@@ -530,10 +530,7 @@ where
         registry.register_shared(
             identity,
             model,
-            ModelCapabilities {
-                tool_calls: true,
-                ..ModelCapabilities::new(profile)
-            },
+            ModelCapabilities::new(profile).with_tool_calls(true),
         )?;
 
         Ok(registry)

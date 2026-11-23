@@ -22,17 +22,10 @@ pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{CompletionMetadata, ModelError};
-#[expect(deprecated, reason = "maps the deprecated `TurnOptions` policy API")]
-use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::sandbox::SandboxWarning;
 use crate::schema_contract::OutputSchema;
-#[expect(
-    deprecated,
-    reason = "`MalformedArguments` still names the deprecated `Tool`"
-)]
-use crate::tool::Tool;
 use crate::tool::{ReadAction, ToolSet};
 use crate::usage::Cost;
 use crate::write::WriteError;
@@ -69,17 +62,6 @@ impl TurnOptions {
             output: output.into(),
             tools: ToolSet::empty(),
         }
-    }
-
-    /// Resolves an output mode and explicit permissions, offering the
-    /// built-in tools the policy allows.
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `TurnOptions::from_output(output).with_tools(tools)`"
-    )]
-    #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
-    pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
-        Self::from_output(output).with_tools(ToolSet::builtins().restricted_to(tool_policy.into()))
     }
 
     /// Bounds this turn's model requests, tool calls, tokens, and wall-clock
@@ -167,18 +149,6 @@ impl TurnOptions {
     /// turn answers in plain text.
     pub fn schema(&self) -> Option<&OutputSchema> {
         self.output.schema()
-    }
-
-    /// Returns a policy allowing exactly the built-ins [`Self::tools`]
-    /// holds, which for options from the deprecated [`Self::new`] is the
-    /// policy given there.
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `TurnOptions::tools` for the tools this turn offers"
-    )]
-    #[expect(deprecated, reason = "returns the deprecated `ToolPolicy`")]
-    pub fn tool_policy(&self) -> ToolPolicy {
-        self.tools.permissions().into()
     }
 
     /// Sets the host-validated comparison base for this turn only.
@@ -752,17 +722,13 @@ impl ContextActivity {
     }
 }
 
-/// The deprecated [`Tool`] that [`ToolActivity::MalformedArguments`] still
-/// names until its field becomes a `String`.
-#[expect(deprecated, reason = "names the deprecated `Tool` in one place")]
-type LegacyTool = Tool;
-
 /// Sanitized details about one tool call: a built-in tool operation, or a
 /// call to a tool the turn does not make available.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ToolActivity {
     /// Content-free shell activity. Command text and output are never reported.
+    #[non_exhaustive]
     Bash {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
@@ -774,11 +740,13 @@ pub enum ToolActivity {
     /// trigger: never rerun a command outside the sandbox automatically,
     /// and show the user the exact command when offering it. Command text
     /// and output are never reported.
+    #[non_exhaustive]
     BashLikelySandboxDenial {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
     },
     /// A bounded repository file read.
+    #[non_exhaustive]
     Read {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -792,6 +760,7 @@ pub enum ToolActivity {
         truncated: bool,
     },
     /// A read-only repository inspection other than a worktree file read.
+    #[non_exhaustive]
     ReadInspection {
         /// Selected inspection action.
         action: ReadAction,
@@ -808,6 +777,7 @@ pub enum ToolActivity {
     },
     /// A model-correctable repository inspection rejection returned to the
     /// model.
+    #[non_exhaustive]
     ReadInspectionRejected {
         /// Selected inspection action.
         action: ReadAction,
@@ -817,6 +787,7 @@ pub enum ToolActivity {
         summary: String,
     },
     /// A model-correctable repository read rejection returned to the model.
+    #[non_exhaustive]
     ReadRejected {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -827,6 +798,7 @@ pub enum ToolActivity {
     /// without running it by a short result naming that earlier call. Only
     /// a read whose earlier result the request still carries whole, with no
     /// `write` or `bash` call run since, is answered this way.
+    #[non_exhaustive]
     ReadRepeated {
         /// Selected inspection action.
         action: ReadAction,
@@ -839,6 +811,7 @@ pub enum ToolActivity {
     /// share of the context budget one round may take, answered with the
     /// exact call that fetches its result in a later response instead of
     /// its result. A read that ran past that share reports this too.
+    #[non_exhaustive]
     ReadDeferred {
         /// Selected inspection action.
         action: ReadAction,
@@ -849,20 +822,20 @@ pub enum ToolActivity {
     },
     /// A call whose arguments its tool could not decode, answered with an
     /// error result naming the problem instead of running.
+    #[non_exhaustive]
     MalformedArguments {
         /// Elapsed tool-handling time.
         duration: Duration,
         /// Bounded decoding failure.
         reason: String,
-        /// Tool the model called. Its type is the deprecated [`Tool`]: read
-        /// the name with [`ToolActivity::name`] instead of matching this
-        /// field. A later release makes it a `String` with the same
-        /// `snake_case` serialized value, so the wire format stays stable.
-        tool: LegacyTool,
+        /// Name of the built-in tool the model called; a deserialized value
+        /// may hold any text, which [`fmt::Display`] still sanitizes.
+        tool: String,
     },
     /// A call to a tool the turn does not make available, such as a
     /// built-in its tool set leaves out or one the model invented, answered
     /// with an error result listing the available tools instead of running.
+    #[non_exhaustive]
     Unavailable {
         /// Elapsed tool-handling time.
         duration: Duration,
@@ -874,6 +847,7 @@ pub enum ToolActivity {
         tool: String,
     },
     /// A repository file write.
+    #[non_exhaustive]
     Write {
         /// Number of bytes in the resulting file.
         bytes_written: usize,
@@ -883,6 +857,7 @@ pub enum ToolActivity {
         path: String,
     },
     /// A model-correctable repository write rejection returned to the model.
+    #[non_exhaustive]
     WriteRejected {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -972,8 +947,9 @@ impl ToolActivity {
             | Self::ReadDeferred { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } | Self::BashLikelySandboxDenial { .. } => "bash",
-            Self::MalformedArguments { tool, .. } => tool.name(),
-            Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
+            Self::MalformedArguments { tool, .. }
+            | Self::Unavailable { tool, .. }
+            | Self::Host { tool, .. } => tool,
         }
     }
 
@@ -1078,7 +1054,7 @@ impl fmt::Display for ToolActivity {
             } => write!(
                 formatter,
                 "{} (malformed arguments: {}; {})",
-                tool.name(),
+                sanitize_report_text(tool),
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
@@ -1135,6 +1111,7 @@ pub enum TurnError {
     /// Sandbox preparation, execution, or cleanup failed. Retains all observed
     /// diagnostics, including simultaneous execution and cleanup failures.
     #[error("sandbox command failed")]
+    #[non_exhaustive]
     CommandFailed {
         /// Normalized observed outcome; command content is never telemetry.
         outcome: Box<crate::bash::CommandOutcome>,
@@ -1142,6 +1119,7 @@ pub enum TurnError {
     /// Command persistence failed; the observed execution result is retained
     /// separately when available, including cleanup and main-exit diagnostics.
     #[error("command journal failed: {source}")]
+    #[non_exhaustive]
     CommandJournal {
         /// Observed result; absent when intent persistence prevented execution.
         outcome: Option<Box<crate::bash::CommandOutcome>>,
@@ -1155,6 +1133,7 @@ pub enum TurnError {
     /// Persisting a finished model response or tool result failed; the turn
     /// stops before any further model or tool call.
     #[error("message journal failed: {source}")]
+    #[non_exhaustive]
     MessageJournal {
         /// Underlying transactional store error.
         #[source]
@@ -1164,6 +1143,7 @@ pub enum TurnError {
     /// completes, failed; the turn stops before any further model or tool
     /// call, so a session's usage totals never miss a completed request.
     #[error("usage journal failed: {source}")]
+    #[non_exhaustive]
     UsageJournal {
         /// Underlying transactional store error.
         #[source]
@@ -1191,6 +1171,7 @@ pub enum TurnError {
     /// A host [`crate::ToolHandler`] failed the turn with
     /// [`crate::tool::ToolError::failed`], or panicked.
     #[error("tool `{tool}` failed: {source}")]
+    #[non_exhaustive]
     ToolFailed {
         /// The handler's failure.
         #[source]
@@ -1201,6 +1182,7 @@ pub enum TurnError {
     /// The [`crate::approval::ApprovalHandler`] did not decide on a call to
     /// `tool` within the harness's approval timeout; the call did not run.
     #[error("approval of tool `{tool}` timed out after {} ms", timeout.as_millis())]
+    #[non_exhaustive]
     ApprovalTimeout {
         /// The approval timeout the handler exceeded.
         timeout: Duration,
@@ -1212,6 +1194,7 @@ pub enum TurnError {
     /// grown in-turn request that still does not fit after every allowed
     /// reduction.
     #[error("request content weighs {required} but the model context budget is {budget}")]
+    #[non_exhaustive]
     ContextBudgetExceeded {
         /// Total declared budget in approximate weight units.
         budget: u64,
@@ -1226,6 +1209,7 @@ pub enum TurnError {
     /// arguments, after a nudge to stop; the turn stops instead of spending
     /// further requests on it.
     #[error("tool calls repeated {repeats} times without progress, most recently `{tool}`")]
+    #[non_exhaustive]
     RepeatedToolCalls {
         /// Identical calls within the recent-call window that stopped the turn.
         repeats: usize,
@@ -1235,6 +1219,7 @@ pub enum TurnError {
     /// The turn reached one of the [`RunLimits`] set for it; completed
     /// requests keep their usage, and the session accepts the next turn.
     #[error("run stopped at its {limit} limit")]
+    #[non_exhaustive]
     LimitReached {
         /// The limit the turn reached.
         limit: LimitKind,
@@ -1243,6 +1228,7 @@ pub enum TurnError {
     /// at this cap; completed requests keep their usage, and the session
     /// accepts the next turn.
     #[error("run stopped at its budget ledger's {limit} cap")]
+    #[non_exhaustive]
     BudgetRefused {
         /// The ledger cap the next request would pass.
         limit: LimitKind,
@@ -1292,13 +1278,11 @@ impl TurnError {
 }
 
 pub(crate) fn sanitized_completion_metadata(metadata: &CompletionMetadata) -> CompletionMetadata {
-    CompletionMetadata::new(
-        sanitize_report_text(metadata.finish_reason()),
-        metadata.response_id().map(sanitize_report_text),
-        metadata.response_model().map(sanitize_report_text),
-        metadata.system_fingerprint().map(sanitize_report_text),
-        metadata.usage().copied(),
-    )
+    CompletionMetadata::new(sanitize_report_text(metadata.finish_reason()))
+        .with_response_id(metadata.response_id().map(sanitize_report_text))
+        .with_response_model(metadata.response_model().map(sanitize_report_text))
+        .with_system_fingerprint(metadata.system_fingerprint().map(sanitize_report_text))
+        .with_usage(metadata.usage().copied())
 }
 
 pub(crate) fn sanitize_report_text(text: &str) -> String {

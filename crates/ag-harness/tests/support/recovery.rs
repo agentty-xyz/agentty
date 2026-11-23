@@ -2,27 +2,24 @@
 
 use std::future::pending;
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use ag_harness::model::{ContextBudget, ModelCompletion, ModelRequest, ModelResponse};
-use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnStatus};
+use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
-use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, WriteStatus};
-use ag_harness::{
-    Harness, Model, ModelError, SessionError, ToolSet, TurnError, TurnInput, TurnOptions,
-};
+use ag_harness::store::{SessionStore, WriteStatus};
+use ag_harness::{Harness, Model, ModelError, SessionError, ToolSet, TurnError, TurnOptions};
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::context_budget_fixture::unbounded_context_budget;
-use crate::store_fixture::{options, schema, stores};
+use crate::public_store::{options, schema, stores};
 
 #[derive(Clone, Default)]
 struct EventRecorder(Arc<Mutex<Vec<LifecycleEvent>>>);
@@ -251,97 +248,6 @@ async fn active_retries_classify_before_local_busy_and_cancelled_retries_stay_st
                 .expect("record")
                 .status,
             HostTurnStatus::Completed(_)
-        ));
-    }
-}
-
-#[tokio::test]
-async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() {
-    // Arrange
-    for store in stores().await {
-        let probe = Arc::new(Probe::default());
-        let harness = harness(Arc::clone(&store), &probe);
-        let mut seed = harness
-            .session("seed", schema())
-            .create()
-            .await
-            .expect("seed");
-        seed.turn("hello")
-            .options(options())
-            .host_id("id")
-            .await
-            .expect("seed result");
-        let request = seed
-            .recover("id")
-            .await
-            .expect("lookup")
-            .expect("record")
-            .request;
-        store
-            .create_session(&NewSession::new("race", schema()), None, 1000)
-            .await
-            .expect("session");
-        let options = options();
-
-        // Act
-        let input = TurnInput::from("hello");
-        let (left, right) = tokio::join!(
-            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0),
-            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0)
-        );
-        let ((HostTurnAcquisition::Acquired(acquired), HostTurnAcquisition::Recorded(duplicate))
-        | (HostTurnAcquisition::Recorded(duplicate), HostTurnAcquisition::Acquired(acquired))) =
-            (left.expect("left"), right.expect("right"))
-        else {
-            std::panic::resume_unwind(Box::new("exactly one reservation"));
-        };
-        let owner = acquired.owner();
-        let write_id = store
-            .write_intent(owner, "call", Path::new("workspace"), "file", None, b"new")
-            .await
-            .expect("intent");
-        store.interrupt(owner).await.expect("interrupt");
-        let recovered = store
-            .load_request("race", "id")
-            .await
-            .expect("lookup")
-            .expect("record");
-        store
-            .finish_write(owner, write_id, true)
-            .await
-            .expect("late outcome");
-        let settled = store
-            .load_request("race", "id")
-            .await
-            .expect("lookup")
-            .expect("record");
-
-        // Assert
-        assert!(matches!(duplicate.status, HostTurnStatus::InProgress));
-        assert!(matches!(
-            recovered.status,
-            HostTurnStatus::Interrupted { .. }
-        ));
-        assert_eq!(recovered.writes[0].status, WriteStatus::Pending);
-        assert_eq!(settled.writes[0].status, WriteStatus::Applied);
-        let mut changed = serde_json::to_value(&request).expect("request encoding");
-        changed["fingerprint"] = json!("changed");
-        let changed: HostRequest = serde_json::from_value(changed).expect("request");
-        assert!(matches!(
-            AcquiredTurn::begin_request(
-                Arc::clone(&store),
-                "race",
-                &TurnInput::from("changed"),
-                &options,
-                &changed,
-                0
-            )
-            .await,
-            Err(SessionError::HostTurnConflict)
-        ));
-        assert!(matches!(
-            store.load_request("missing", "id").await,
-            Err(SessionError::NotFound { .. })
         ));
     }
 }

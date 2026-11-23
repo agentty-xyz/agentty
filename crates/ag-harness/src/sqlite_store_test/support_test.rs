@@ -16,13 +16,14 @@ use crate::effect::Effects;
 use crate::input::TurnInput;
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::reservation;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::schema_contract::OutputSchema;
 use crate::session::{NewSession, SessionError, StoreIdentity, TurnOwner};
 use crate::sqlite_store::{
     Database, DbResultExt as _, EncodedMessage, ReservationObserver, TimestampSource,
     connect_options, next_turn_position, system_timestamp_source,
 };
-use crate::store::{AcquiredTurn, HistoryProjection, SessionStore};
+use crate::store::{AcquiredTurn, HistoryProjection, SessionStore, StoreBackend};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 
 pub(super) struct SessionTimestampsRow {
@@ -256,13 +257,7 @@ impl Database {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         let owner = active_turn_owner(self, session_id, turn_position).await;
-        crate::store::SessionStore::complete_turn(
-            self,
-            &owner,
-            messages,
-            HistoryProjection::default(),
-        )
-        .await
+        StoreBackend::complete_turn(self, &owner, messages, HistoryProjection::default()).await
     }
 
     pub(crate) async fn fail_turn(
@@ -272,7 +267,7 @@ impl Database {
         error: &crate::TurnError,
     ) -> Result<(), SessionError> {
         let owner = active_turn_owner(self, session_id, turn_position).await;
-        crate::store::SessionStore::fail_turn(self, &owner, error).await
+        StoreBackend::fail_turn(self, &owner, error).await
     }
 
     pub(crate) fn pool(&self) -> &SqlitePool {
@@ -305,7 +300,13 @@ impl Database {
             .await
             .session_context("open in-memory persistent session database")?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|source| SessionError::Store {
+                operation: "migrate in-memory persistent session database",
+                source: Box::new(source),
+            })?;
 
         Ok(Self {
             identity: StoreIdentity::unique(),

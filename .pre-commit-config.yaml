@@ -529,6 +529,36 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: public-api
+        name: public API snapshots
+        description: Compare the `ag-router` and `ag-harness` public APIs, with all features and without blanket or auto-trait impls, against their committed `cargo public-api` snapshots, and require every `ag_router` type in the `ag-harness` API to be re-exported by it. A tool or build failure exits 2 without touching the snapshots. After reviewing an intended change, set AGENTTY_PUBLIC_API_UPDATE=1 to rewrite the snapshots.
+        entry: >-
+          bash -eu -o pipefail -c 'status=0;
+          api=$(mktemp); trap "rm -f \"$api\"" EXIT;
+          for crate in ag-router ag-harness; do
+          snapshot="crates/$crate/public-api.txt";
+          if ! cargo public-api --color never -ss --all-features -p "$crate" > "$api"; then
+          echo "cargo public-api failed for $crate; check the tool version pinned in .github/actions/setup-rust-prek/action.yml and the build output above" >&2;
+          exit 2;
+          fi;
+          if [ "${AGENTTY_PUBLIC_API_UPDATE:-}" = 1 ]; then
+          cp "$api" "$snapshot";
+          else
+          diff -u "$snapshot" "$api" || status=1;
+          fi;
+          done;
+          for name in $(grep -Eo "ag_router::([a-z_]+::)*[A-Z][A-Za-z0-9]*" crates/ag-harness/public-api.txt | sed "s/.*:://" | sort -u); do
+          grep -Eq "^pub use ag_harness::([a-z_]+::)*$name\$" crates/ag-harness/public-api.txt
+          || { echo "ag-harness exposes ag_router type $name without re-exporting it" >&2; status=1; };
+          done;
+          if [ "$status" != 0 ]; then
+          echo "Review the API change, then rerun with AGENTTY_PUBLIC_API_UPDATE=1 to update the snapshots." >&2;
+          fi;
+          exit "$status"'
+        language: system
+        files: ^(Cargo\.(toml|lock)|rust-toolchain\.toml|crates/(ag-harness|ag-router)/(Cargo\.toml|public-api\.txt|src/.*\.rs))$
+        pass_filenames: false
+        stages: [manual]
       - id: zola-check
         name: zola check
         description: Verify the Zola docs site builds without broken links.

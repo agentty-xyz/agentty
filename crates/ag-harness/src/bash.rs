@@ -422,7 +422,7 @@ impl BashConfig {
     /// explicitly approves each one with
     /// [`crate::approval::Decision::AllowUnsandboxed`], like Claude Code's
     /// `excludedCommands`, which still ask for permission. Such calls are
-    /// marked [`crate::ToolEffects::ExecutesUnsandboxed`] and carry the
+    /// marked [`crate::tool::ToolEffects::ExecutesUnsandboxed`] and carry the
     /// exact argument vector in [`crate::approval::ApprovalRequest::command`].
     /// Without an approval handler, or with a plain
     /// [`crate::approval::Decision::Allow`], the commands run inside the
@@ -917,6 +917,7 @@ impl TryFrom<RawArguments> for BashArguments {
 /// Shell execution or policy failure without command content or secrets.
 #[derive(Clone, Copy, Debug, Deserialize, Error, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum BashError {
     /// Invalid host policy.
     #[error("invalid Bash sandbox policy")]

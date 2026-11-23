@@ -268,7 +268,6 @@ fn permissions_list_the_built_ins_a_set_holds_and_restrict_it() {
             .allow(Builtin::Bash)
             .allow(Builtin::Read)
     );
-    assert!(!permissions.deny(Builtin::Bash).allows(Builtin::Bash));
     assert_eq!(restricted.names().collect::<Vec<_>>(), ["echo", "read"]);
     assert_eq!(
         serde_json::to_value(permissions).expect("permissions"),
@@ -281,7 +280,7 @@ fn permissions_list_the_built_ins_a_set_holds_and_restrict_it() {
 }
 
 #[test]
-fn a_selection_offers_its_set_or_else_the_built_ins_a_legacy_policy_allows() {
+fn a_selection_offers_its_set_or_else_no_tools() {
     // Arrange
     let echo: Arc<dyn ToolHandler> = Arc::new(Echo("echo"));
     let hosted = ToolSet::builder()
@@ -289,21 +288,17 @@ fn a_selection_offers_its_set_or_else_the_built_ins_a_legacy_policy_allows() {
         .write()
         .build()
         .expect("tool set");
-    let mut legacy = ToolSelection::default();
-    legacy.allow(Builtin::Read);
-    let mut both = legacy.clone();
-    both.tools = Some(hosted.clone());
+    let selected = ToolSelection {
+        tools: Some(hosted.clone()),
+    };
 
     // Act
     let nothing = ToolSelection::default().resolve();
-    let legacy_builtins = legacy.resolve();
-    let set_wins = both.resolve();
+    let offered = selected.resolve();
 
     // Assert
     assert!(nothing.is_empty());
-    assert_eq!(legacy_builtins.names().collect::<Vec<_>>(), ["read"]);
-    // The deprecated policy never filters a set: `write` stays offered.
-    assert_eq!(set_wins, hosted);
+    assert_eq!(offered, hosted);
 }
 
 #[test]

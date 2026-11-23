@@ -29,7 +29,7 @@ use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
 use crate::session::{
     LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner, invalid_json,
 };
-use crate::store::{SessionStore, StoredTurn};
+use crate::store::{StoreBackend, StoredTurn};
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn_options_snapshot::StoredTurnOptions;
@@ -79,10 +79,7 @@ ORDER BY w.turn_position, w.id
         )
         .fetch_all(pool)
         .await
-        .map_err(|source| SessionError::QueryContext {
-            operation: "load persistent writes",
-            source,
-        })?;
+        .session_context("load persistent writes")?;
 
         rows.into_iter().map(Self::into_record).collect()
     }
@@ -636,10 +633,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
                 id: session_id.to_string(),
             }
         } else {
-            SessionError::QueryContext {
-                operation: "begin persistent session turn",
-                source: error,
-            }
+            store_error("begin persistent session turn", error)
         }
     }
 
@@ -697,7 +691,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
 }
 
 #[async_trait]
-impl SessionStore for Database {
+impl StoreBackend for Database {
     async fn load_commands(
         &self,
         session_id: &str,
@@ -1331,10 +1325,7 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
-            .map_err(|source| SessionError::QueryContext {
-                operation: "begin write intent",
-                source,
-            })?;
+            .session_context("begin write intent")?;
         let now = self.timestamp_source.now_timestamp_seconds();
         let row = sqlx::query!(
             r#"
@@ -1360,10 +1351,7 @@ RETURNING id AS "id!"
         )
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(|source| SessionError::QueryContext {
-            operation: "persist write intent",
-            source,
-        })?
+        .session_context("persist write intent")?
         .ok_or_else(|| SessionError::OwnershipLost {
             id: owner.session_id.clone(),
             turn_position: owner.turn_position,
@@ -1373,10 +1361,7 @@ RETURNING id AS "id!"
         transaction
             .commit()
             .await
-            .map_err(|source| SessionError::QueryContext {
-                operation: "commit write intent",
-                source,
-            })?;
+            .session_context("commit write intent")?;
 
         Ok(row.id)
     }
@@ -1742,9 +1727,21 @@ trait DbResultExt<T> {
     fn session_context(self, operation: &'static str) -> Result<T, SessionError>;
 }
 
-impl<T> DbResultExt<T> for Result<T, sqlx::Error> {
+impl<T, E: std::error::Error + Send + Sync + 'static> DbResultExt<T> for Result<T, E> {
     fn session_context(self, operation: &'static str) -> Result<T, SessionError> {
-        self.map_err(|source| SessionError::QueryContext { operation, source })
+        self.map_err(|source| store_error(operation, source))
+    }
+}
+
+/// Wraps a `SQLx` failure of the named operation, keeping it as the source
+/// so contention stays recognizable.
+fn store_error(
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> SessionError {
+    SessionError::Store {
+        operation,
+        source: Box::new(source),
     }
 }
 
@@ -1801,24 +1798,27 @@ async fn create_wal_database(path: &Path) -> Result<(), SessionError> {
 /// up-to-date database is checked with reads alone, so opening it never waits
 /// behind another writer.
 async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), SessionError> {
+    const MIGRATE_OPERATION: &str = "migrate persistent session database";
+
     // A migration opting out of transactions would silently run inside the
     // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
     if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
-        return Err(SessionError::Migration(MigrateError::Source(
-            format!(
-                "migration {} opts out of transactions, which the locked migration path cannot \
-                 apply",
-                migration.version
-            )
-            .into(),
-        )));
+        return Err(store_error(
+            MIGRATE_OPERATION,
+            MigrateError::Source(
+                format!(
+                    "migration {} opts out of transactions, which the locked migration path \
+                     cannot apply",
+                    migration.version
+                )
+                .into(),
+            ),
+        ));
     }
     if !has_pending_migration(pool, migrator).await? {
-        migrator.run(pool).await?;
-
-        return Ok(());
+        return migrator.run(pool).await.session_context(MIGRATE_OPERATION);
     }
-    let operation = "migrate persistent session database";
+    let operation = MIGRATE_OPERATION;
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
@@ -1831,7 +1831,10 @@ async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), SessionEr
     // both assumptions, and whether `Migrate::lock` still does nothing for
     // SQLite, when upgrading `SQLx`; the contention tests fail if either
     // breaks.
-    migrator.run_direct(None, &mut *transaction, false).await?;
+    migrator
+        .run_direct(None, &mut *transaction, false)
+        .await
+        .session_context(operation)?;
 
     transaction.commit().await.session_context(operation)
 }
@@ -2025,7 +2028,7 @@ ORDER BY turn_position, message_position
 
 /// Copies session `source`'s configuration and its turns through position
 /// `through`, with their messages, write and command records, into the new
-/// session `target`, as [`SessionStore::fork_session`] describes.
+/// session `target`, as [`StoreBackend::fork_session`] describes.
 async fn fork_session_in(
     transaction: &mut Transaction<'_, sqlx::Sqlite>,
     source: &str,

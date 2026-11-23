@@ -70,7 +70,7 @@ provider-wide cap is an `ag-harness` follow-up, listed under open decisions.
 | Node protocol schema               | Per-run `OutputMode` (JSON schema); output read with `parse`       |
 | Node instructions and objective    | Per-run `instructions` after the cached prefix                     |
 | Node generation/execution limits   | `RunLimits` (model requests, tool calls, tokens, wall time)        |
-| Node permission ceiling            | Per-run `ToolSet`, `ToolPolicy`, and sandbox enforcement           |
+| Node permission ceiling            | Per-run `ToolSet` and sandbox enforcement                          |
 | Shared budget ID                   | One `BudgetLedger` shared by every run that names that budget      |
 
 Rules:
@@ -278,7 +278,7 @@ through the `prompt-evaluation` hook (`--hook-stage manual`).
   - Event mapping: each `RunEventKind` to its `TurnEvent`, including the terminal event
     and ignored kinds.
   - Each `HarnessError` kind and retry class to its node failure reason.
-  - Permission ceiling to `ToolSet`, `ToolPolicy`, and sandbox enforcement.
+  - Permission ceiling to `ToolSet` and sandbox enforcement.
   - Node limits to `RunLimits`; role to catalog selector, including unsatisfiable roles,
     missing capabilities, and the same-provider compaction model.
   - Ledger bridge: reserve charges one call; a refusal is reported as a shared budget,

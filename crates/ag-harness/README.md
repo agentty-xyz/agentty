@@ -244,10 +244,6 @@ fn clock_harness(model: Arc<dyn Model>) -> Result<Harness, Box<dyn std::error::E
 - Harness defaults carry no `BashConfig`, so a default set holding `bash`, such as
   `ToolSet::builtins()`, needs `RunRequest::bash` or `TurnOptions::with_bash` on every
   run or turn; for plain defaults, use `ToolSet::empty().with_read().with_write()`.
-- `Tool`, `ToolPolicy`, `Harness::allow`, `HarnessBuilder::allow`, `TurnOptions::new`,
-  `TurnOptions::tool_policy`, `RunRequest::tool_policy`, and `MalformedArguments::tool`
-  are deprecated. They still work: a policy offers the built-ins it allows only when no
-  set is given at any level; a set always wins and is offered exactly.
 - `ToolError::rejected` sends feedback to the model and the turn continues, as do
   arguments that are not a JSON object, which also count toward the malformed-response
   limit. A result over 64 KiB is dropped and the model is told the call ran.
@@ -1069,11 +1065,9 @@ fn review_harness() -> Result<Harness, Box<dyn std::error::Error>> {
         ExecutionIdentity::new("review-model", "config-v1")?,
         ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
             .client_from_environment(|name| std::env::var(name))?,
-        ModelCapabilities {
-            image_input: true,
-            tool_calls: true,
-            ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
-        },
+        ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
+            .with_image_input(true)
+            .with_tool_calls(true),
     )?;
 
     Ok(Harness::from_registry(&models, "review-model")?)
@@ -1150,17 +1144,10 @@ Custom models report the same classes with `ModelError::provider` and
 ## Stores
 
 SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
-`store::MemoryStore` gives resumable sessions within one process. Custom backends
-implement `store::SessionStore` and are injected with `Harness::store`. A store supplies
-atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionState` and
-record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
-harness owns the admission rules and every lease. `complete_turn` also hands the store
-the session's `store::HistoryProjection`, which later loads apply and a model switch
-resets. `load_transcript` and `fork_session` back transcripts and forks, and
-`record_usage` backs per-turn usage; a store that does not implement them fails
-transcripts and forks closed, and records no usage, so its turns' usage comes only from
-outcomes it stores. `load_usage` defaults to reading transcripts. The shared conformance
-suite is in `tests/support/store_conformance.rs`.
+`store::MemoryStore` gives resumable sessions within one process. Share one store
+between harnesses as an `Arc<dyn store::SessionStore>` passed to `HarnessBuilder::store`
+or `Harness::store`. `SessionStore` is sealed: its lease, journal, and record operations
+are internal, so these two are the only implementations.
 
 ## Observability
 
@@ -1178,8 +1165,8 @@ calibrated capacity it was fitted into (`budget_weight`) and its weight before
 ## Features
 
 The default features build every backend. Turn them off with `default-features = false`
-to keep only the core: `MemoryStore` and custom stores, host-implemented `Model`s, and
-host-selected Bash executors such as `UnsandboxedExecutor`.
+to keep only the core: `MemoryStore`, host-implemented `Model`s, and host-selected Bash
+executors such as `UnsandboxedExecutor`.
 
 | Feature               | Default | Enables                                                                                   |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------- |
@@ -1189,7 +1176,6 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
 | `providers-anthropic` | yes     | `ModelClient::anthropic` and the `ProviderSpec::anthropic` preset for Claude models       |
-| `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
 with `ModelClient::from_spec` for every wire protocol, and
@@ -1228,3 +1214,29 @@ grouped by topic:
 The API docs on each type carry the detailed contracts. The
 [design page](https://agentty.xyz/docs/architecture/ag-harness-design/) covers runtime
 and persistence boundaries.
+
+## API stability
+
+Public enums are `#[non_exhaustive]`, and so are the struct variants of events, reports,
+and errors the crate builds (`RunEventKind`, `LifecycleEventKind`, `ToolActivity`,
+`TurnError`), so match them with a wildcard arm and `..`. Records the crate builds, such
+as `CommandRecord`, `WriteRecord`, and `CompletionUsage`, gain fields through `with_`
+setters or accessors; `ModelError` variants stay open for custom models to construct,
+and provider `XxxConfig` structs stay open for hosts to fill in.
+
+### Upgrading from 0.20
+
+The release that removes the deprecated items below is a minor version bump.
+
+| Removed                                                         | Use instead                                                                                   |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `Tool`, `ToolPolicy`, `Harness::allow`                          | `ToolSet::empty().with_read()` (and so on) passed to `Harness::tools`                         |
+| `HarnessBuilder::allow`                                         | `HarnessBuilder::tools` with a `ToolSet`                                                      |
+| `TurnOptions::new(output, policy)`                              | `TurnOptions::from_output(output).with_tools(set)`                                            |
+| `TurnOptions::tool_policy`                                      | `TurnOptions::tools`                                                                          |
+| `RunRequest::tool_policy`                                       | `RunRequest::tools`                                                                           |
+| `MalformedArguments::tool`                                      | `MalformedArguments::name`                                                                    |
+| `SessionError::{Migration, QueryContext}`                       | `SessionError::Store`: match `HarnessError::kind`, or downcast its source                     |
+| Positional `CompletionUsage::new` and `CompletionMetadata::new` | `CompletionUsage::default()` or `CompletionMetadata::new(finish_reason)` with `with_` setters |
+| `ModelCapabilities { .. }` literals                             | `ModelCapabilities::new(profile)` with `with_image_input`, `with_tool_calls`                  |
+| Implementing `store::SessionStore`                              | No replacement yet: use `MemoryStore` or `SqliteStore`                                        |

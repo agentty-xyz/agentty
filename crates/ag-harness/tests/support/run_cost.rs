@@ -1,7 +1,7 @@
 //! Run cost in micro-USD and per-turn usage: request costs that sum to the
 //! run's cost, catalog list prices and host overrides, unpriced and switched
 //! models, session totals that survive a SQLite resume, older turns read from
-//! their stored outcome, and stores that cannot record usage.
+//! their stored outcome.
 
 use std::error::Error;
 use std::future::poll_fn;
@@ -9,7 +9,6 @@ use std::future::poll_fn;
 use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use ag_harness::catalog::{ModelSpec, Pricing, PricingSource};
 use ag_harness::model::{
@@ -19,16 +18,16 @@ use ag_harness::model::{
 #[cfg(feature = "providers-openai")]
 use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{MemoryStore, SessionStore};
+use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolCall;
+#[cfg(feature = "sqlite")]
 use ag_harness::transcript::TurnStatus;
 use ag_harness::{
-    Cost, ErrorKind, EventStream, Harness, HarnessError, Model, ModelCatalog, ModelError,
-    OutputSchema, Role, Run, RunEvent, RunEventKind, RunOutcome, RunRequest, SessionError,
-    TurnError, TurnRange,
+    Cost, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role, Run, RunEvent,
+    RunEventKind, RunOutcome, RunRequest, TurnRange,
 };
 #[cfg(feature = "sqlite")]
-use ag_harness::{LimitKind, RunLimits};
+use ag_harness::{ErrorKind, LimitKind, RunLimits};
 use async_trait::async_trait;
 use futures_core::Stream;
 use serde_json::json;
@@ -37,7 +36,6 @@ use tempfile::tempdir;
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_gate::Gate;
 
 /// Cost of one [`PricedModel`] request under [`host_pricing`]: 800 uncached
 /// input tokens at $3, 200 cached at $0.30, and 100 output tokens at $15 per
@@ -69,10 +67,14 @@ impl Model for PricedModel {
         } else {
             ModelResponse::Output(json!({"answer": request.prompt()}))
         };
-        let usage = CompletionUsage::new(Some(200), None, Some(1_000), Some(100), Some(40), None);
+        let usage = CompletionUsage::default()
+            .with_cache_hit_tokens(Some(200))
+            .with_input_tokens(Some(1_000))
+            .with_output_tokens(Some(100))
+            .with_reasoning_tokens(Some(40));
 
         Ok(ModelCompletion::new(
-            CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+            CompletionMetadata::new("stop").with_usage(Some(usage)),
             response,
         ))
     }
@@ -275,11 +277,7 @@ async fn switching_to_a_registered_model_stops_pricing_later_runs() -> Result<()
     registry.register(
         ExecutionIdentity::new("registered", "1")?,
         PricedModel,
-        ModelCapabilities {
-            image_input: false,
-            profile: unbounded_model_profile(),
-            tool_calls: true,
-        },
+        ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true),
     )?;
     let harness = priced_harness()?.store(Arc::new(MemoryStore::new()));
     let mut session = harness
@@ -407,51 +405,6 @@ async fn sqlite_turns_without_recorded_usage_read_their_stored_outcome()
     );
     assert_eq!(totals.usage.input, 1_000);
     assert_eq!(totals.cost, None);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn store_that_cannot_record_usage_fails_the_turn_at_admission_or_after_a_request()
--> Result<(), Box<dyn Error>> {
-    for records in [0, 1] {
-        // Arrange
-        let memory: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
-        let gate = Gate::new(Arc::clone(&memory), false);
-        gate.usage_records.store(records, Ordering::SeqCst);
-        let harness = priced_harness()?
-            .execution_identity(ExecutionIdentity::new("priced", "1")?)
-            .store(Arc::new(gate));
-        let mut session = harness
-            .session("failing", answer_schema()?)
-            .create()
-            .await?;
-
-        // Act
-        let error = session
-            .turn("plain")
-            .host_id("request")
-            .await
-            .err()
-            .ok_or("the turn must fail")?;
-        let stored = memory.load_transcript("failing", &TurnRange::All).await?;
-        let totals = session.usage().await?;
-
-        // Assert
-        assert!(matches!(
-            &error,
-            SessionError::Turn(TurnError::UsageJournal { .. })
-        ));
-        assert_eq!(HarnessError::from(error).kind(), ErrorKind::Store);
-        assert_eq!(stored[0].status, TurnStatus::Failed);
-        let recorded_zero = (records == 1).then_some(0);
-        assert_eq!(
-            stored[0].usage.map(|usage| usage.usage.input),
-            recorded_zero,
-            "only the admission record succeeded"
-        );
-        assert_eq!(totals.unknown_turns, u64::from(records == 0));
-    }
 
     Ok(())
 }

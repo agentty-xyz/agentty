@@ -988,6 +988,7 @@ impl ReasoningFamily {
 
 /// Invalid identity attributes supplied by a model provider.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ModelMetadataError {
     /// The provider identifier is empty or contains only whitespace.
     #[error("model provider must not be empty")]
@@ -1528,6 +1529,7 @@ impl Deref for ModelCompletion {
 
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ModelResponse {
     /// Terminal structured model output answering a request in
     /// [`OutputMode::Json`].
@@ -1593,6 +1595,7 @@ impl ModelResponse {
 
 ag_router::define_model_response_error! {
     /// Failure returned while completing a model request.
+    #[non_exhaustive]
     pub enum ModelError {
         /// The provider returned more than the single supported call.
         #[error("model returned multiple tool calls")]
@@ -1817,8 +1820,10 @@ pub(crate) fn ensure_unique_tool_call_ids(calls: &[tool::ToolCall]) -> Result<()
     Ok(())
 }
 
-impl From<OutputValidationError> for ModelError {
-    fn from(error: OutputValidationError) -> Self {
+impl ModelError {
+    /// Returns the error for a final response that failed local output
+    /// validation.
+    pub(crate) fn from_validation(error: OutputValidationError) -> Self {
         match error {
             OutputValidationError::InvalidJson(reason) => Self::InvalidJson { reason },
             OutputValidationError::SchemaViolation { path, reason } => {

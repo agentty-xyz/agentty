@@ -20,11 +20,6 @@ use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::sqlite_store::Database;
 use crate::{ComparisonBase, OutputSchema, ToolSet, TurnError, TurnOptions};
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage of the deprecated policy API"
-)]
-use crate::{Tool, ToolPolicy};
 
 fn readable_file_system() -> MockFileSystem {
     let mut file_system = MockFileSystem::new();
@@ -378,19 +373,13 @@ async fn empty_explicit_tool_set_answers_calls_as_unavailable_despite_harness_de
 }
 
 #[tokio::test]
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage: an empty deprecated policy replaces allowed harness \
-              defaults"
-)]
-async fn empty_deprecated_policy_answers_calls_as_unavailable_despite_allowed_harness_defaults() {
+async fn empty_turn_set_answers_calls_as_unavailable_despite_harness_default_tools() {
     // Arrange
     let directory = tempdir().expect("temporary directory");
     let harness = Harness::new(denied_read_model(), unbounded_context_budget())
-        .allow(Tool::Read)
-        .allow(Tool::Write)
+        .tools(ToolSet::empty().with_read().with_write())
         .database(directory.path().join("history.db"));
-    let denied = TurnOptions::new(object_schema(), ToolPolicy::default());
+    let denied = TurnOptions::from_output(object_schema());
 
     // Act
     let outputs = denied_turn_outputs(&harness, denied).await;
@@ -478,7 +467,7 @@ async fn options_persistence_failure_prevents_execution_and_reports_session_fail
         .expect("message count");
 
     // Assert
-    assert!(matches!(result, Err(SessionError::QueryContext { .. })));
+    assert!(matches!(result, Err(SessionError::Store { .. })));
     assert_eq!(messages, 0);
     let events = events.lock().expect("events lock");
     assert!(events.iter().any(|event| matches!(

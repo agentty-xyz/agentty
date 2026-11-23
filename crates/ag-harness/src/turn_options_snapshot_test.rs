@@ -429,37 +429,18 @@ fn a_tool_set_other_than_the_built_ins_is_recorded_and_fingerprinted() {
 }
 
 #[test]
-#[expect(
-    deprecated,
-    reason = "compares against the deprecated policy's snapshots"
-)]
-fn a_built_in_selection_records_the_snapshot_its_deprecated_policy_did() {
+fn a_built_in_selection_records_the_snapshot_its_policy_did() {
     // Arrange
-    let policies = [
-        crate::ToolPolicy::default(),
-        crate::ToolPolicy::default().allow(crate::Tool::Read),
-        crate::ToolPolicy::default()
-            .allow(crate::Tool::Read)
-            .allow(crate::Tool::Write)
-            .allow(crate::Tool::Bash),
-    ];
-    let tool_sets = [
-        ToolSet::empty(),
-        ToolSet::empty().with_read(),
-        ToolSet::builtins(),
-    ];
+    let tool_sets = [ToolSet::empty().with_read(), ToolSet::builtins()];
 
     // Act
-    let legacy =
-        policies.map(|policy| StoredTurnOptions::encode(&TurnOptions::new(schema(), policy)));
     let selected =
         tool_sets.map(|tools| StoredTurnOptions::encode(&turn_options().with_tools(tools)));
 
     // Assert
-    assert_eq!(selected, legacy);
-    // Snapshots `TurnOptions::new` encoded before tool sets replaced the
-    // policy, recorded on the base this change started from.
-    assert_eq!(selected[1..], RECORDED_SNAPSHOTS);
+    // Snapshots the built-in tool policies encoded before tool sets
+    // replaced them.
+    assert_eq!(selected, RECORDED_SNAPSHOTS);
 }
 
 /// Snapshots of the `read`-only and all-built-ins policies as recorded

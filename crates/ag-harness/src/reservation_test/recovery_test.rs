@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use super::fixture::AcquiredTurnFixture as _;
 use crate::effect::Effects;
 use crate::reservation::{self, abandon, recover_session, retained_store};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore};

@@ -218,9 +218,10 @@ fn framed_text_indents_continuation_lines_to_its_label() {
 #[test]
 fn usage_format_marks_missing_counts() {
     // Arrange
-    let usage = ag_harness::model::CompletionUsage::new(None, None, None, Some(4), None, None);
-    let missing_output_usage =
-        ag_harness::model::CompletionUsage::new(None, None, Some(3), None, None, Some(7));
+    let usage = ag_harness::model::CompletionUsage::default().with_output_tokens(Some(4));
+    let missing_output_usage = ag_harness::model::CompletionUsage::default()
+        .with_input_tokens(Some(3))
+        .with_total_tokens(Some(7));
 
     // Act
     let formatted = format_request_usage(&usage);

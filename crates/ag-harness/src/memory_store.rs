@@ -14,7 +14,7 @@ use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
     Admission, AdmissionState, CompactionSource, LoadedSession, ModelSwitch, NewSession,
-    Reservation, ReservedTurn, SessionStore, StoreIdentity, StoredTurn, StoredTurnOptions,
+    Reservation, ReservedTurn, StoreBackend, StoreIdentity, StoredTurn, StoredTurnOptions,
     TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use crate::transcript::{TurnRange, TurnStatus};
@@ -91,7 +91,7 @@ impl Default for MemoryStore {
 }
 
 #[async_trait]
-impl SessionStore for MemoryStore {
+impl StoreBackend for MemoryStore {
     async fn load_commands(
         &self,
         session_id: &str,

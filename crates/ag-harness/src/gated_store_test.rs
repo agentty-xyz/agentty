@@ -14,14 +14,15 @@ use tokio::time::Instant;
 use crate::TurnError;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 #[cfg(not(feature = "sqlite"))]
 use crate::store::MemoryStore;
 use crate::store::{
-    AcquiredTurn, HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission,
-    WriteRecord,
+    AcquiredTurn, HistoryProjection, ModelSwitch, Reservation, SessionStore, StoreBackend,
+    TurnAdmission, WriteRecord,
 };
 use crate::store_fixture::{options, schema};
 
@@ -105,7 +106,7 @@ impl GatedStore {
 }
 
 #[async_trait]
-impl SessionStore for GatedStore {
+impl StoreBackend for GatedStore {
     fn identity(&self) -> &StoreIdentity {
         self.database.identity()
     }
@@ -189,7 +190,7 @@ impl SessionStore for GatedStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
-        SessionStore::append_messages(&self.database, owner, messages).await
+        StoreBackend::append_messages(&self.database, owner, messages).await
     }
 
     async fn complete_turn(
@@ -199,7 +200,7 @@ impl SessionStore for GatedStore {
         projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.pause(PauseAt::Completion).await;
-        SessionStore::complete_turn(&self.database, owner, messages, projection).await?;
+        StoreBackend::complete_turn(&self.database, owner, messages, projection).await?;
         self.pause(PauseAt::CompletionAcknowledgement).await;
 
         Ok(())
@@ -207,7 +208,7 @@ impl SessionStore for GatedStore {
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
         self.pause(PauseAt::Failure).await;
-        SessionStore::fail_turn(&self.database, owner, error).await
+        StoreBackend::fail_turn(&self.database, owner, error).await
     }
 
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {

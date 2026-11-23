@@ -1212,13 +1212,10 @@ struct MessagesResponse {
 
 impl MessagesResponse {
     fn metadata(&self, finish_reason: String) -> model::CompletionMetadata {
-        model::CompletionMetadata::new(
-            finish_reason,
-            self.id.clone(),
-            self.model.clone(),
-            None,
-            self.usage.as_ref().map(model::CompletionUsage::from),
-        )
+        model::CompletionMetadata::new(finish_reason)
+            .with_response_id(self.id.clone())
+            .with_response_model(self.model.clone())
+            .with_usage(self.usage.as_ref().map(model::CompletionUsage::from))
     }
 
     /// Names a refusal by its category and explanation, when reported.
@@ -1295,15 +1292,13 @@ impl From<&MessagesUsage> for model::CompletionUsage {
             .zip(usage.output)
             .map(|(input, output)| input.saturating_add(output));
 
-        Self::new(
-            usage.cache_read,
-            cache_miss,
-            input,
-            usage.output,
-            None,
-            total,
-        )
-        .with_cache_write_tokens(usage.cache_creation)
+        Self::default()
+            .with_cache_hit_tokens(usage.cache_read)
+            .with_cache_miss_tokens(cache_miss)
+            .with_input_tokens(input)
+            .with_output_tokens(usage.output)
+            .with_total_tokens(total)
+            .with_cache_write_tokens(usage.cache_creation)
     }
 }
 

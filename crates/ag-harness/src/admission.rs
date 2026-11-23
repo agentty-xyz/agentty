@@ -19,7 +19,7 @@ use crate::{SessionError, TurnOptions};
 /// Session facts a store reads in the same atomic section that records the
 /// admission decision, after recovering turns whose lease expired.
 #[derive(Clone, Debug, Default)]
-pub struct AdmissionState {
+pub(crate) struct AdmissionState {
     /// Whether a turn still holds an unexpired reservation.
     pub active_turn: bool,
     /// Options snapshot recorded by the latest completed turn, checked only
@@ -38,7 +38,7 @@ pub struct AdmissionState {
 
 /// One turn reservation evaluated by
 /// [`crate::store::SessionStore::reserve_turn`].
-pub struct TurnAdmission {
+pub(crate) struct TurnAdmission {
     generation: i64,
     input: TurnInput,
     options: TurnOptions,
@@ -61,7 +61,7 @@ impl TurnAdmission {
     }
 
     /// Host ID whose recorded request belongs in [`AdmissionState::request`].
-    pub fn host_id(&self) -> Option<&str> {
+    pub(crate) fn host_id(&self) -> Option<&str> {
         self.request.as_ref().map(HostRequest::id)
     }
 
@@ -75,7 +75,7 @@ impl TurnAdmission {
     /// different request, [`SessionError::StaleModel`] for a switched model,
     /// [`SessionError::Busy`] for an active turn or unresolved command, and
     /// [`SessionError::InvalidData`] for an undecodable options snapshot.
-    pub fn admit(
+    pub(crate) fn admit(
         &self,
         session_id: &str,
         state: AdmissionState,
@@ -101,7 +101,7 @@ impl TurnAdmission {
 }
 
 /// Decision returned by [`TurnAdmission::admit`].
-pub enum Admission {
+pub(crate) enum Admission {
     /// Record this turn as running.
     Reserve(NewTurn),
     /// Return this request unchanged; it must never execute again.
@@ -109,7 +109,7 @@ pub enum Admission {
 }
 
 /// Running-turn record admitted by [`TurnAdmission::admit`].
-pub struct NewTurn {
+pub(crate) struct NewTurn {
     message: ModelMessage,
     options: String,
     request: Option<HostRequest>,
@@ -117,23 +117,23 @@ pub struct NewTurn {
 
 impl NewTurn {
     /// User message persisted as the turn's first message.
-    pub fn message(&self) -> &ModelMessage {
+    pub(crate) fn message(&self) -> &ModelMessage {
         &self.message
     }
 
     /// Encoded options snapshot recorded with the turn.
-    pub fn options(&self) -> &str {
+    pub(crate) fn options(&self) -> &str {
         &self.options
     }
 
     /// Host request bound to the turn, retained unchanged.
-    pub fn request(&self) -> Option<&HostRequest> {
+    pub(crate) fn request(&self) -> Option<&HostRequest> {
         self.request.as_ref()
     }
 }
 
 /// Outcome of [`crate::store::SessionStore::reserve_turn`].
-pub enum Reservation {
+pub(crate) enum Reservation {
     /// A new running turn.
     Reserved(ReservedTurn),
     /// The recorded request returned by [`Admission::Recorded`].
@@ -141,7 +141,7 @@ pub enum Reservation {
 }
 
 /// Acknowledged reservation of a [`NewTurn`]; the harness owns its lease.
-pub struct ReservedTurn {
+pub(crate) struct ReservedTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) deadline: Instant,
     pub(crate) owner: TurnOwner,
@@ -154,7 +154,7 @@ impl ReservedTurn {
     /// stored lease expiry; `turns` holds finished history bounded by the
     /// stored budget, oldest first with each turn's position, as
     /// [`crate::store::LoadedSession::turns`] describes.
-    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<(i64, HistoryTurn)>) -> Self {
+    pub(crate) fn new(owner: TurnOwner, deadline: Instant, turns: Vec<(i64, HistoryTurn)>) -> Self {
         Self {
             checkpoint: None,
             deadline,
@@ -167,7 +167,7 @@ impl ReservedTurn {
     /// Attaches the projection `turns` follow, as
     /// [`crate::store::LoadedSession::projection`] describes.
     #[must_use]
-    pub fn with_projection(mut self, projection: HistoryProjection) -> Self {
+    pub(crate) fn with_projection(mut self, projection: HistoryProjection) -> Self {
         self.projection = projection;
 
         self
@@ -176,7 +176,7 @@ impl ReservedTurn {
     /// Attaches the session's current compaction checkpoint; `turns` must
     /// then contain only turns after its boundary.
     #[must_use]
-    pub fn with_checkpoint(mut self, checkpoint: Option<SessionCheckpoint>) -> Self {
+    pub(crate) fn with_checkpoint(mut self, checkpoint: Option<SessionCheckpoint>) -> Self {
         self.checkpoint = checkpoint;
 
         self
@@ -184,7 +184,7 @@ impl ReservedTurn {
 }
 
 /// Model selection evaluated by [`crate::store::SessionStore::switch_model`].
-pub struct ModelSwitch {
+pub(crate) struct ModelSwitch {
     capabilities: ModelCapabilities,
     generation: i64,
     identity: ExecutionIdentity,
@@ -194,7 +194,7 @@ pub struct ModelSwitch {
 impl ModelSwitch {
     /// Selects `identity` for a session currently at `generation`, whose
     /// canonical history must suit `capabilities`.
-    pub fn new(
+    pub(crate) fn new(
         identity: ExecutionIdentity,
         metadata: Option<ModelMetadata>,
         capabilities: ModelCapabilities,
@@ -209,12 +209,12 @@ impl ModelSwitch {
     }
 
     /// Registration recorded as the session's selection.
-    pub fn identity(&self) -> &ExecutionIdentity {
+    pub(crate) fn identity(&self) -> &ExecutionIdentity {
         &self.identity
     }
 
     /// Provider and model names recorded with the selection.
-    pub fn metadata(&self) -> Option<&ModelMetadata> {
+    pub(crate) fn metadata(&self) -> Option<&ModelMetadata> {
         self.metadata.as_ref()
     }
 
@@ -224,7 +224,11 @@ impl ModelSwitch {
     /// # Errors
     /// Returns [`SessionError::StaleModel`] for a switched model and
     /// [`SessionError::Busy`] for an active turn or unresolved command.
-    pub fn admit(&self, session_id: &str, state: &AdmissionState) -> Result<i64, SessionError> {
+    pub(crate) fn admit(
+        &self,
+        session_id: &str,
+        state: &AdmissionState,
+    ) -> Result<i64, SessionError> {
         check_idle(session_id, state, self.generation)?;
 
         crate::session_model::next_generation(self.generation)
@@ -237,7 +241,7 @@ impl ModelSwitch {
     /// # Errors
     /// Returns [`SessionError::UnsupportedModelHistory`] for content the
     /// target cannot replay.
-    pub fn check_history<'a>(
+    pub(crate) fn check_history<'a>(
         &self,
         messages: impl IntoIterator<Item = &'a ModelMessage>,
     ) -> Result<(), SessionError> {

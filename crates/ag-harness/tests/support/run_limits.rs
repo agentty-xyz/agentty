@@ -79,10 +79,12 @@ impl Model for ScriptedModel {
             "invalid" => ModelResponse::Output(json!({"age": 1})),
             _ => ModelResponse::ToolCall(read_call(index, 0)?),
         };
-        let usage = CompletionUsage::new(None, None, Some(10), Some(5), None, None);
+        let usage = CompletionUsage::default()
+            .with_input_tokens(Some(10))
+            .with_output_tokens(Some(5));
 
         Ok(ModelCompletion::new(
-            CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+            CompletionMetadata::new("stop").with_usage(Some(usage)),
             response,
         ))
     }

@@ -260,13 +260,7 @@ async fn keeps_the_retry_after_of_an_unsuccessful_response() {
     let error = result
         .expect_err("HTTP error should fail")
         .into_model_error("Provider", &[]);
-    let wrapped = error.with_metadata(model::CompletionMetadata::new(
-        "stop".to_string(),
-        None,
-        None,
-        None,
-        None,
-    ));
+    let wrapped = error.with_metadata(model::CompletionMetadata::new("stop"));
 
     // Assert
     assert_eq!(wrapped.http_status(), Some(503));

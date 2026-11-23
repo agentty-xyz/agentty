@@ -121,13 +121,8 @@ fn a_refused_sandbox_names_its_own_error_type_and_fix() {
 #[test]
 fn outcome_exposes_output_and_report() {
     // Arrange
-    let completion = CompletionMetadata::new(
-        "stop".to_string(),
-        None,
-        None,
-        None,
-        Some(CompletionUsage::new(None, None, None, None, None, Some(1))),
-    );
+    let completion = CompletionMetadata::new("stop")
+        .with_usage(Some(CompletionUsage::default().with_total_tokens(Some(1))));
     let model_request = ModelRequestActivity::new(
         Some(completion.clone()),
         Duration::from_millis(2),

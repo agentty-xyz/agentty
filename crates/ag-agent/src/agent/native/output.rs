@@ -45,9 +45,9 @@ impl OutputProjector {
     /// Returns the output changes `event` makes, in order.
     pub(crate) fn project(&mut self, event: RunEventKind) -> Vec<OutputEvent> {
         match event {
-            RunEventKind::ItemStarted { id, item_kind } => self.start(id.get(), item_kind),
-            RunEventKind::ItemDelta { delta, id } => self.delta(id.get(), delta),
-            RunEventKind::ItemCompleted { id, item } => {
+            RunEventKind::ItemStarted { id, item_kind, .. } => self.start(id.get(), item_kind),
+            RunEventKind::ItemDelta { delta, id, .. } => self.delta(id.get(), delta),
+            RunEventKind::ItemCompleted { id, item, .. } => {
                 self.complete(id.get(), item).into_iter().collect()
             }
             RunEventKind::ModelRequestCompleted { .. } => self.commit(),

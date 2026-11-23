@@ -26,8 +26,6 @@ use crate::event::{EventSink, EventStream, RunId};
 use crate::input::TurnInput;
 use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
-#[expect(deprecated, reason = "maps the deprecated `RunRequest::tool_policy`")]
-use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
@@ -132,17 +130,6 @@ impl RunRequest {
     /// Sets provider generation parameters for this run's model requests.
     pub fn generation(mut self, generation: GenerationParams) -> Self {
         self.generation = generation;
-
-        self
-    }
-
-    /// Offers the built-ins `policy` allows in this run, unless
-    /// [`Self::tools`] gives the run a set, which always wins.
-    #[deprecated(since = "0.20.0", note = "use `RunRequest::tools` with a `ToolSet`")]
-    #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
-    pub fn tool_policy(mut self, policy: ToolPolicy) -> Self {
-        self.tools
-            .get_or_insert_with(|| ToolSet::builtins().restricted_to(policy.into()));
 
         self
     }

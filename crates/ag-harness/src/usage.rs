@@ -129,7 +129,7 @@ impl Cost {
 /// [`Usage`] and [`Cost`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[non_exhaustive]
-pub struct TurnUsage {
+pub(crate) struct TurnUsage {
     /// Cost of [`Self::usage`], or `None` when the turn's model had no
     /// [`Pricing`].
     pub cost: Option<Cost>,

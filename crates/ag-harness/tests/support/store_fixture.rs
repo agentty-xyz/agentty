@@ -7,29 +7,20 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
-#[cfg(feature = "sqlite")]
-use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, RecordedModel,
-    SessionStore, WriteStatus,
+    AcquiredTurn, HistoryProjection, NewSession, RecordedModel, SessionStore, WriteStatus,
 };
 use ag_harness::{
-    Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
-    SessionError, TurnError, TurnInput, TurnOptions,
+    Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, SessionError, TurnError,
+    TurnInput,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
 use serde_json::json;
 
+use crate::context::{HistoryTurn, TurnStop};
 use crate::context_budget_fixture::unbounded_context_budget;
-
-pub(crate) fn schema() -> OutputSchema {
-    OutputSchema::new(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})).expect("schema")
-}
-
-pub(crate) fn options() -> TurnOptions {
-    TurnOptions::from_output(schema())
-}
+pub(crate) use crate::public_store::{options, schema};
 
 pub(crate) fn png_image(payload: &[u8]) -> ImageContent {
     let mut bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -46,6 +37,7 @@ pub(crate) fn image_input(before: &str, payload: &[u8], after: &str) -> TurnInpu
     ])
     .expect("image input")
 }
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 
 /// Returns the model snapshot a store records for a turn of a session
 /// created without a model selection.
@@ -64,27 +56,51 @@ pub(crate) fn loaded_turn(messages: Vec<ModelMessage>) -> HistoryTurn {
     HistoryTurn::new(messages).with_model(unselected_model())
 }
 
-/// Returns one empty store of each backend this build includes.
-#[cfg(feature = "sqlite")]
-pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
-    vec![
-        Arc::new(ExternalStore::new()),
-        Arc::new(MemoryStore::new()),
-        Arc::new(
-            SqliteStore::open(Path::new(":memory:"))
-                .await
-                .expect("sqlite"),
-        ),
-    ]
+/// Builds loaded turns the way a store records them.
+pub(crate) trait HistoryTurnFixture {
+    /// Returns this turn with `model`, the selection recorded when the turn
+    /// was reserved.
+    #[must_use]
+    fn with_model(self, model: RecordedModel) -> Self;
+
+    /// Returns this turn stopped for `stop`.
+    #[must_use]
+    fn with_stop(self, stop: TurnStop) -> Self;
 }
 
-/// Returns one empty store of each backend this build includes.
+impl HistoryTurnFixture for HistoryTurn {
+    fn with_model(mut self, model: RecordedModel) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    fn with_stop(mut self, stop: TurnStop) -> Self {
+        self.stop = Some(stop);
+        self
+    }
+}
+
+/// Returns one empty store of each backend this build includes, the
+/// crate-test [`ExternalStore`] first.
+#[cfg(feature = "sqlite")]
+pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
+    with_external_store(crate::public_store::stores().await)
+}
+
+/// Returns one empty store of each backend this build includes, the
+/// crate-test [`ExternalStore`] first.
 #[cfg(not(feature = "sqlite"))]
 pub(crate) fn stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
-    std::future::ready(vec![
-        Arc::new(ExternalStore::new()),
-        Arc::new(MemoryStore::new()),
-    ])
+    std::future::ready(with_external_store(
+        crate::public_store::stores().into_inner(),
+    ))
+}
+
+/// Returns `stores` after an empty [`ExternalStore`].
+fn with_external_store(stores: Vec<Arc<dyn SessionStore>>) -> Vec<Arc<dyn SessionStore>> {
+    let external: Arc<dyn SessionStore> = Arc::new(ExternalStore::new());
+
+    std::iter::once(external).chain(stores).collect()
 }
 
 pub(crate) struct Echo {

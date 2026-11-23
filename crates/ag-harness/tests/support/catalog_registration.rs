@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_fixture::{options, schema, stores};
+use crate::public_store::{options, schema, stores};
 
 /// Registry key in the `provider/model` format hosts such as Agentty record.
 const KEY: &str = "kimi/kimi-k3";
@@ -44,10 +44,12 @@ impl Model for ProviderModel {
 
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let usage = CompletionUsage::new(None, None, Some(1_000), Some(0), None, None);
+        let usage = CompletionUsage::default()
+            .with_input_tokens(Some(1_000))
+            .with_output_tokens(Some(0));
 
         Ok(ModelCompletion::new(
-            CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+            CompletionMetadata::new("stop").with_usage(Some(usage)),
             ModelResponse::Output(json!({"answer": self.model})),
         ))
     }
@@ -62,10 +64,7 @@ fn model(calls: &Arc<AtomicUsize>, model: &'static str) -> Arc<dyn Model> {
 
 /// Returns the capabilities a host declares for [`KEY`] by hand.
 fn manual_capabilities() -> ModelCapabilities {
-    ModelCapabilities {
-        tool_calls: true,
-        ..ModelCapabilities::new(unbounded_model_profile())
-    }
+    ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true)
 }
 
 /// Returns a catalog spec of `id` declaring what [`manual_capabilities`]

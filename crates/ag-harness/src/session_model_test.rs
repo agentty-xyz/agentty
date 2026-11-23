@@ -15,6 +15,7 @@ use crate::provider::{ModelConfiguration, ModelProvider};
 use crate::session_model::{
     RecordedModel, ReplayTarget, cleared_note_text, clears_reasoning, next_generation, project_turn,
 };
+use crate::store_fixture::HistoryTurnFixture as _;
 use crate::telemetry;
 use crate::tool::ToolCall;
 

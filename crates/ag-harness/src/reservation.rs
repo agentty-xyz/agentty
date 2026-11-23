@@ -28,7 +28,7 @@ use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
-use crate::store::{SessionStore, WriteRecord};
+use crate::store::{SessionStore, StoreBackend, WriteRecord};
 use crate::usage::TurnUsage;
 use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
@@ -155,7 +155,7 @@ pub(crate) fn lease_deadline() -> Instant {
 /// A reserved turn whose lease the harness owns. Dropping it interrupts only
 /// its owner. The Tokio runtime must remain driven until cleanup completes;
 /// persistence settlement does not settle filesystem effects.
-pub struct AcquiredTurn {
+pub(crate) struct AcquiredTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) guard: TurnGuard,
     pub(crate) projection: HistoryProjection,
@@ -163,72 +163,6 @@ pub struct AcquiredTurn {
 }
 
 impl AcquiredTurn {
-    /// Reserves a turn through `store` under the harness admission rules and
-    /// starts lease renewal. Reservation finishes even when this future is
-    /// dropped; the abandoned turn is then interrupted without running a
-    /// model.
-    ///
-    /// # Errors
-    /// Returns the store's admission or persistence error,
-    /// [`SessionError::OwnershipLost`] when the lease expired before
-    /// acknowledgment, or [`SessionError::InvalidData`] when the store returns
-    /// an owner for another store or session.
-    pub async fn begin(
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<Self, SessionError> {
-        let admission = TurnAdmission::new(input.clone(), options.clone(), None, generation);
-
-        reserve(
-            store,
-            session_id.to_string(),
-            admission,
-            None,
-            "acquire session turn",
-        )
-        .await?
-        .into_acquired()
-    }
-
-    /// Returns the request recorded under `request`'s host ID, or reserves a
-    /// turn bound to it like [`Self::begin`].
-    ///
-    /// # Errors
-    /// Returns [`SessionError::HostTurnConflict`] when the host ID records a
-    /// different request, and otherwise the errors of [`Self::begin`].
-    pub async fn begin_request(
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        let admission = TurnAdmission::new(
-            input.clone(),
-            options.clone(),
-            Some(request.clone()),
-            generation,
-        );
-
-        reserve(
-            store,
-            session_id.to_string(),
-            admission,
-            None,
-            "acquire host request",
-        )
-        .await
-    }
-
-    /// Returns the reservation identity used for backend lifecycle operations.
-    pub fn owner(&self) -> &TurnOwner {
-        self.guard.owner()
-    }
-
     /// Arms owner-scoped cleanup, then starts renewal; an expired
     /// acknowledgment is interrupted rather than made executable. An owner
     /// bound to another store or session is rejected unarmed, since its
@@ -752,7 +686,7 @@ impl AdmittedStore {
 }
 
 #[async_trait]
-impl SessionStore for AdmittedStore {
+impl StoreBackend for AdmittedStore {
     async fn load_commands(
         &self,
         session: &str,
@@ -923,4 +857,4 @@ impl SessionStore for AdmittedStore {
 
 #[cfg(test)]
 #[path = "reservation_test.rs"]
-mod tests;
+pub(crate) mod tests;

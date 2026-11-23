@@ -117,9 +117,14 @@ fn store_failure() -> SessionError {
 
 #[cfg(feature = "sqlite")]
 fn database_failure(code: Option<&'static str>) -> SessionError {
-    SessionError::QueryContext {
+    sqlite_failure(sqlx::Error::Database(Box::new(CodedDatabaseError { code })))
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_failure(source: impl std::error::Error + Send + Sync + 'static) -> SessionError {
+    SessionError::Store {
         operation: "fixture",
-        source: sqlx::Error::Database(Box::new(CodedDatabaseError { code })),
+        source: Box::new(source),
     }
 }
 
@@ -381,16 +386,10 @@ fn classifies_sqlite_failures_as_store_failures() {
     // Arrange
     let cases = vec![
         (
-            SessionError::Migration(sqlx::migrate::MigrateError::VersionMissing(1)),
+            sqlite_failure(sqlx::migrate::MigrateError::VersionMissing(1)),
             ErrorKind::Store,
         ),
-        (
-            SessionError::QueryContext {
-                operation: "fixture",
-                source: sqlx::Error::PoolClosed,
-            },
-            ErrorKind::Store,
-        ),
+        (sqlite_failure(sqlx::Error::PoolClosed), ErrorKind::Store),
     ];
 
     // Act and Assert
@@ -402,13 +401,7 @@ fn classifies_sqlite_failures_as_store_failures() {
 fn classifies_store_contention_as_busy() {
     // Arrange
     let cases = vec![
-        (
-            SessionError::QueryContext {
-                operation: "fixture",
-                source: sqlx::Error::PoolTimedOut,
-            },
-            ErrorKind::Busy,
-        ),
+        (sqlite_failure(sqlx::Error::PoolTimedOut), ErrorKind::Busy),
         (database_failure(Some("5")), ErrorKind::Busy),
         (database_failure(Some("517")), ErrorKind::Busy),
         (database_failure(Some("6")), ErrorKind::Busy),

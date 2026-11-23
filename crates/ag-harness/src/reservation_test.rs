@@ -2,6 +2,8 @@
 
 #[path = "reservation_test/admission_test.rs"]
 mod admission;
+#[path = "reservation_test/fixture_test.rs"]
+pub(crate) mod fixture;
 #[cfg(feature = "sqlite")]
 #[path = "reservation_test/journal_test.rs"]
 mod journal;

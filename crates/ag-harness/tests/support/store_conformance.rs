@@ -12,9 +12,9 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
-    NewSession, SessionCheckpoint, SessionStore, StoreIdentity, StoredTurnOptions, TurnOwner,
-    TurnStop, TurnUsage, WriteStatus,
+    AcquiredTurn, CompactionSource, HistoryProjection, MemoryStore, ModelSwitch, NewSession,
+    SessionCheckpoint, SessionStore, StoreBackend, StoreIdentity, StoredTurnOptions, TurnOwner,
+    TurnUsage, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::TurnStatus;
@@ -25,10 +25,14 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
 
+use crate::context::{HistoryTurn, TurnStop};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::store_fixture::{
-    Echo, ExternalStore, harness, image_input, lifecycle, loaded_turn, options, schema, stores,
+    Echo, ExternalStore, HistoryTurnFixture as _, harness, image_input, lifecycle, loaded_turn,
+    options, schema, stores,
 };
 use crate::store_gate::Gate;
 
@@ -1766,10 +1770,6 @@ async fn expired_reservation_acknowledgment_is_interrupted_before_execution() {
     // Assert
     assert!(matches!(expired, Err(SessionError::OwnershipLost { .. })));
     assert_eq!(successor.owner().turn_position(), 1);
-    assert_eq!(
-        StoreIdentity::new("backend", "key"),
-        StoreIdentity::new("backend", "key")
-    );
     assert_ne!(StoreIdentity::unique(), StoreIdentity::unique());
     assert!(StoredTurnOptions::decode(&StoredTurnOptions::encode(&options())).is_ok());
 }
@@ -2460,5 +2460,471 @@ fn completed_command() -> CommandOutcome {
         stdout_tail: String::new(),
         termination: CommandTermination::Completed,
         truncated: false,
+    }
+}
+
+#[tokio::test]
+async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() {
+    // Arrange
+    for store in stores().await {
+        let harness = harness(Arc::clone(&store)).execution_identity(
+            ag_harness::recovery::ExecutionIdentity::new("echo", "1").expect("identity"),
+        );
+        let mut seed = harness
+            .session("seed", schema())
+            .create()
+            .await
+            .expect("seed");
+        seed.turn("hello")
+            .options(options())
+            .host_id("id")
+            .await
+            .expect("seed result");
+        let request = seed
+            .recover("id")
+            .await
+            .expect("lookup")
+            .expect("record")
+            .request;
+        store
+            .create_session(&NewSession::new("race", schema()), None, 1000)
+            .await
+            .expect("session");
+        let options = options();
+
+        // Act
+        let input = TurnInput::from("hello");
+        let (left, right) = tokio::join!(
+            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0),
+            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0)
+        );
+        let ((HostTurnAcquisition::Acquired(acquired), HostTurnAcquisition::Recorded(duplicate))
+        | (HostTurnAcquisition::Recorded(duplicate), HostTurnAcquisition::Acquired(acquired))) =
+            (left.expect("left"), right.expect("right"))
+        else {
+            std::panic::resume_unwind(Box::new("exactly one reservation"));
+        };
+        let owner = acquired.owner();
+        let write_id = store
+            .write_intent(owner, "call", Path::new("workspace"), "file", None, b"new")
+            .await
+            .expect("intent");
+        store.interrupt(owner).await.expect("interrupt");
+        let recovered = store
+            .load_request("race", "id")
+            .await
+            .expect("lookup")
+            .expect("record");
+        store
+            .finish_write(owner, write_id, true)
+            .await
+            .expect("late outcome");
+        let settled = store
+            .load_request("race", "id")
+            .await
+            .expect("lookup")
+            .expect("record");
+
+        // Assert
+        assert!(matches!(duplicate.status, HostTurnStatus::InProgress));
+        assert!(matches!(
+            recovered.status,
+            HostTurnStatus::Interrupted { .. }
+        ));
+        assert_eq!(recovered.writes[0].status, WriteStatus::Pending);
+        assert_eq!(settled.writes[0].status, WriteStatus::Applied);
+        let mut changed = serde_json::to_value(&request).expect("request encoding");
+        changed["fingerprint"] = json!("changed");
+        let changed: HostRequest = serde_json::from_value(changed).expect("request");
+        assert!(matches!(
+            AcquiredTurn::begin_request(
+                Arc::clone(&store),
+                "race",
+                &TurnInput::from("changed"),
+                &options,
+                &changed,
+                0
+            )
+            .await,
+            Err(SessionError::HostTurnConflict)
+        ));
+        assert!(matches!(
+            store.load_request("missing", "id").await,
+            Err(SessionError::NotFound { .. })
+        ));
+    }
+}
+
+/// Never answers a request.
+struct HangingModel;
+
+#[async_trait]
+impl Model for HangingModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        std::future::pending().await
+    }
+}
+
+/// Reads `stream` through the first event whose kind `last` accepts,
+/// without waiting for the run's outcome, and returns the kinds read.
+async fn kinds_until(
+    stream: &mut ag_harness::EventStream,
+    last: impl Fn(&ag_harness::RunEventKind) -> bool,
+) -> Vec<ag_harness::RunEventKind> {
+    let mut kinds = Vec::new();
+    while let Some(event) = std::future::poll_fn(|context| {
+        futures_core::Stream::poll_next(std::pin::Pin::new(&mut *stream), context)
+    })
+    .await
+    {
+        let done = last(&event.kind);
+        kinds.push(event.kind);
+        if done {
+            break;
+        }
+    }
+
+    kinds
+}
+
+fn is_completed(kind: &ag_harness::RunEventKind) -> bool {
+    matches!(kind, ag_harness::RunEventKind::Completed(_))
+}
+
+#[tokio::test]
+async fn completed_events_follow_the_settled_status_of_cancelled_turns() {
+    for store in journaled_stores().await {
+        // Arrange
+        let gate = Arc::new(Gate::new(store, true));
+        gate.pause_interrupt.store(true, Ordering::SeqCst);
+        let session = Harness::new(HangingModel, unbounded_context_budget())
+            .execution_identity(
+                ag_harness::recovery::ExecutionIdentity::new("hanging", "1").expect("identity"),
+            )
+            .store(Arc::clone(&gate) as Arc<dyn SessionStore>)
+            .session("settled", schema())
+            .create()
+            .await
+            .expect("session");
+        let (mut unadmitted, handle) = session
+            .run(ag_harness::RunRequest::new("hang"))
+            .into_parts();
+        handle.cancel();
+        let unadmitted_outcome = tokio::spawn(handle.outcome());
+        let unadmitted_kinds = kinds_until(&mut unadmitted, is_completed).await;
+        let before_admission = session
+            .transcript(TurnRange::All)
+            .await
+            .expect("transcript");
+        let unadmitted_outcome = unadmitted_outcome.await.expect("outcome");
+        let (mut admitted, handle) = session
+            .run(ag_harness::RunRequest::new("hang"))
+            .into_parts();
+        let cancel = handle.cancel_token();
+        let admitted_outcome = tokio::spawn(handle.outcome());
+        gate.entered.notified().await;
+        gate.release.notify_one();
+        let started = kinds_until(&mut admitted, |kind| {
+            matches!(kind, ag_harness::RunEventKind::Started { .. })
+        })
+        .await;
+
+        // Act
+        cancel.cancel();
+        gate.entered.notified().await;
+        let while_interrupting = std::future::poll_fn(|context| {
+            std::task::Poll::Ready(
+                futures_core::Stream::poll_next(std::pin::Pin::new(&mut admitted), context)
+                    .is_pending(),
+            )
+        })
+        .await;
+        let before_settlement = session
+            .transcript(TurnRange::All)
+            .await
+            .expect("transcript");
+        gate.release.notify_one();
+        let admitted_kinds = kinds_until(&mut admitted, is_completed).await;
+        let after_admission = session
+            .transcript(TurnRange::All)
+            .await
+            .expect("transcript");
+
+        // Assert
+        assert!(matches!(
+            unadmitted_kinds.as_slice(),
+            [ag_harness::RunEventKind::Completed(_)]
+        ));
+        assert!(
+            before_admission.is_empty(),
+            "a run cancelled before admission records no turn"
+        );
+        assert_eq!(
+            unadmitted_outcome.result.err().map(|error| error.kind()),
+            Some(ErrorKind::Cancelled)
+        );
+        assert!(matches!(
+            started.as_slice(),
+            [ag_harness::RunEventKind::Started { .. }]
+        ));
+        assert!(
+            while_interrupting,
+            "`completed` waits for the interrupted status"
+        );
+        assert_eq!(before_settlement, Vec::<ag_harness::TurnRecord>::new());
+        assert!(matches!(
+            admitted_kinds.as_slice(),
+            [ag_harness::RunEventKind::Completed(_)]
+        ));
+        let statuses: Vec<_> = after_admission.iter().map(|record| record.status).collect();
+        assert_eq!(
+            statuses,
+            [TurnStatus::Interrupted],
+            "the turn is settled once `completed` arrives"
+        );
+        assert_eq!(
+            admitted_outcome
+                .await
+                .expect("outcome")
+                .result
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::Cancelled)
+        );
+    }
+}
+
+/// Answers `{"answer": <prompt>}`, reporting 1,000 input tokens.
+struct UsageModel;
+
+#[async_trait]
+impl Model for UsageModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let usage = ag_harness::model::CompletionUsage::default().with_input_tokens(Some(1_000));
+
+        Ok(ModelCompletion::new(
+            ag_harness::model::CompletionMetadata::new("stop").with_usage(Some(usage)),
+            ModelResponse::Output(json!({"answer": request.prompt()})),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn store_that_cannot_record_usage_fails_the_turn_at_admission_or_after_a_request() {
+    for records in [0, 1] {
+        // Arrange
+        let memory: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+        let gate = Gate::new(Arc::clone(&memory), false);
+        gate.usage_records.store(records, Ordering::SeqCst);
+        let harness = Harness::new(UsageModel, unbounded_context_budget())
+            .execution_identity(
+                ag_harness::recovery::ExecutionIdentity::new("usage", "1").expect("identity"),
+            )
+            .store(Arc::new(gate));
+        let mut session = harness
+            .session("failing", schema())
+            .create()
+            .await
+            .expect("session");
+
+        // Act
+        let error = session
+            .turn("plain")
+            .host_id("request")
+            .await
+            .expect_err("the turn must fail");
+        let stored = memory
+            .load_transcript("failing", &TurnRange::All)
+            .await
+            .expect("transcript");
+        let totals = session.usage().await.expect("usage");
+
+        // Assert
+        assert!(matches!(
+            &error,
+            SessionError::Turn(TurnError::UsageJournal { .. })
+        ));
+        assert_eq!(
+            ag_harness::HarnessError::from(error).kind(),
+            ErrorKind::Store
+        );
+        assert_eq!(stored[0].status, TurnStatus::Failed);
+        let recorded_zero = (records == 1).then_some(0);
+        assert_eq!(
+            stored[0].usage.map(|usage| usage.usage.input),
+            recorded_zero,
+            "only the admission record succeeded"
+        );
+        assert_eq!(totals.unknown_turns, u64::from(records == 0));
+    }
+}
+
+/// Answers every prompt with its name, reported as its provider and model,
+/// and records each request.
+struct NamedModel {
+    name: &'static str,
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
+}
+
+#[async_trait]
+impl Model for NamedModel {
+    fn metadata(&self) -> Option<ag_harness::model::ModelMetadata> {
+        Some(ag_harness::model::ModelMetadata::new(self.name, self.name).expect("metadata"))
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        self.requests.lock().expect("requests").push(request);
+
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({"answer": self.name}),
+        )))
+    }
+}
+
+/// Returns a registry holding a [`NamedModel`] under its name with `profile`.
+fn named_registry(
+    name: &'static str,
+    requests: &Arc<Mutex<Vec<ModelRequest>>>,
+    profile: ag_harness::model::ModelProfile,
+) -> ag_harness::model::ModelRegistry {
+    let mut registry = ag_harness::model::ModelRegistry::new();
+    registry
+        .register(
+            ag_harness::recovery::ExecutionIdentity::new(name, "1").expect("identity"),
+            NamedModel {
+                name,
+                requests: Arc::clone(requests),
+            },
+            ag_harness::model::ModelCapabilities::new(profile).with_tool_calls(true),
+        )
+        .expect("register");
+
+    registry
+}
+
+#[tokio::test]
+async fn stale_publication_is_rejected_after_a_concurrent_turn() {
+    for store in stores().await {
+        // Arrange
+        let requests = Arc::default();
+        let registry = named_registry("stale", &requests, unbounded_model_profile());
+        let harness = Harness::from_registry(&registry, "stale")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness
+            .session("stale", schema())
+            .create()
+            .await
+            .expect("session");
+        session.send("only").await.expect("only");
+        let summary = json!({"context": "c", "decisions": [], "state": "s"});
+        let checkpoint = SessionCheckpoint::new(
+            0,
+            0,
+            Some("stale".into()),
+            Some("stale".into()),
+            summary.clone(),
+        )
+        .expect("checkpoint");
+
+        // Act: publish a checkpoint whose generation no longer matches after a
+        // switch, and one whose boundary exceeds the completed turns.
+        session
+            .switch_model(&registry, "stale")
+            .await
+            .expect("switch back is a no-op key");
+        let stale_generation = store.publish_checkpoint("stale", &checkpoint).await;
+        let generation = store
+            .load_session("stale")
+            .await
+            .expect("load")
+            .model_generation;
+        let beyond_completed = SessionCheckpoint::new(
+            5,
+            generation,
+            Some("stale".into()),
+            Some("stale".into()),
+            summary,
+        )
+        .expect("checkpoint");
+        let beyond = store.publish_checkpoint("stale", &beyond_completed).await;
+
+        // Assert
+        assert!(matches!(
+            stale_generation,
+            Err(SessionError::CheckpointStale { .. })
+        ));
+        assert!(matches!(beyond, Err(SessionError::CheckpointStale { .. })));
+        assert!(
+            store
+                .load_session("stale")
+                .await
+                .expect("load")
+                .checkpoint
+                .is_none(),
+            "a rejected publication changes nothing"
+        );
+    }
+}
+
+#[tokio::test]
+async fn heavy_summary_is_dropped_from_projection_and_rejected_as_a_source() {
+    for store in stores().await {
+        // Arrange: a published summary heavier than the whole request budget.
+        let requests = Arc::default();
+        let registry = named_registry(
+            "heavy",
+            &requests,
+            ag_harness::model::ModelProfile::new(500),
+        );
+        let harness = Harness::from_registry(&registry, "heavy")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness
+            .session("heavy", schema())
+            .create()
+            .await
+            .expect("session");
+        session.send("one").await.expect("one");
+        let decisions: Vec<String> = (0..8).map(|_| "d".repeat(400)).collect();
+        let oversized_summary = json!({
+            "context": "c".repeat(4000),
+            "decisions": decisions,
+            "state": "s".repeat(2000)
+        });
+        let heavy = SessionCheckpoint::new(0, 0, None, None, oversized_summary).expect("record");
+        store
+            .publish_checkpoint("heavy", &heavy)
+            .await
+            .expect("publish");
+
+        // Act: projection admits recent turns without the summary, while
+        // generation cannot admit the summary-bearing source at all.
+        let two = session.send("two").await.expect("post-checkpoint turn");
+        let rejected = session.compact().await;
+
+        // Assert
+        let requests = requests.lock().expect("requests");
+        assert!(
+            !requests
+                .last()
+                .expect("request")
+                .messages()
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    ModelMessage::User(text) if text.contains("Compaction checkpoint summarizing")
+                )),
+            "a summary beyond the budget falls back to recent history"
+        );
+        // The checkpoint covers the only completed turn, so nothing is
+        // replayed and the dropped summary is visible in the report.
+        assert!(!two.report().history().checkpoint_replayed());
+        assert_eq!(two.report().history().replayed_turns(), 0);
+        assert_eq!(two.report().history().evicted_turns(), 0);
+        assert!(matches!(
+            rejected,
+            Err(SessionError::Turn(TurnError::ContextBudgetExceeded { .. }))
+        ));
     }
 }

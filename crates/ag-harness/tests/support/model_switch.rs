@@ -7,17 +7,18 @@ use ag_harness::model::{
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-#[cfg(feature = "sqlite")]
-use ag_harness::store::SqliteStore;
 use ag_harness::store::{
     AcquiredTurn, HistoryProjection, MemoryStore, ModelSwitch, NewSession, SessionStore,
 };
+#[cfg(feature = "sqlite")]
+use ag_harness::store::{SqliteStore, StoreBackend as _};
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
 use crate::model_profile_fixture::unbounded_model_profile;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::store_fixture::{image_input, options, schema, stores};
 use crate::store_gate::Gate;
 

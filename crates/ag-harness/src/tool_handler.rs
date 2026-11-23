@@ -471,8 +471,7 @@ impl ToolSet {
         )
     }
 
-    /// Returns this set without the built-ins `allowed` denies, mapping a
-    /// deprecated [`crate::ToolPolicy`] onto the set.
+    /// Returns this set without the built-ins `allowed` denies.
     pub(crate) fn restricted_to(&self, allowed: BuiltinPermissions) -> Self {
         Self {
             entries: self
@@ -488,7 +487,7 @@ impl ToolSet {
     }
 
     /// Returns whether the set holds only built-ins, in their advertised
-    /// order: the sets a [`crate::ToolPolicy`] selected before tool sets
+    /// order: the sets a built-in tool policy selected before tool sets
     /// existed, which durable records describe by their permissions alone.
     fn is_builtin_selection(&self) -> bool {
         *self == Self::builtins().restricted_to(self.permissions())
@@ -625,37 +624,22 @@ impl ToolSetBuilder {
     }
 }
 
-/// The tools a harness offers by default: a set, or, without one, the
-/// built-ins a deprecated [`crate::ToolPolicy`] allows.
+/// The tools a harness offers by default: a set, or none.
 #[derive(Clone, Default)]
 pub(crate) struct ToolSelection {
-    /// Built-ins a deprecated policy allows.
-    pub(crate) legacy_permissions: Option<BuiltinPermissions>,
     pub(crate) tools: Option<ToolSet>,
 }
 
 impl ToolSelection {
-    /// Allows `builtin` in the deprecated policy, which starts denying
-    /// every built-in.
-    pub(crate) fn allow(&mut self, builtin: Builtin) {
-        self.legacy_permissions = Some(self.legacy_permissions.unwrap_or_default().allow(builtin));
-    }
-
     /// Returns the set a turn offers: the selected set whenever there is
-    /// one, otherwise the built-ins a deprecated policy allows, otherwise no
-    /// tools.
+    /// one, otherwise no tools.
     pub(crate) fn resolve(&self) -> ToolSet {
-        match (&self.tools, self.legacy_permissions) {
-            (Some(tools), _) => tools.clone(),
-            (None, Some(allowed)) => ToolSet::builtins().restricted_to(allowed),
-            (None, None) => ToolSet::empty(),
-        }
+        self.tools.clone().unwrap_or_else(ToolSet::empty)
     }
 }
 
-/// Which built-in tools a set holds, or a deprecated [`crate::ToolPolicy`]
-/// allows, in the shape durable turn options and request fingerprints have
-/// always stored.
+/// Which built-in tools a set holds, in the shape durable turn options and
+/// request fingerprints have always stored.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BuiltinPermissions {
@@ -670,14 +654,6 @@ impl BuiltinPermissions {
     #[must_use]
     pub(crate) fn allow(mut self, builtin: Builtin) -> Self {
         *self.flag(builtin) = true;
-
-        self
-    }
-
-    /// Returns these permissions with `builtin` denied.
-    #[must_use]
-    pub(crate) fn deny(mut self, builtin: Builtin) -> Self {
-        *self.flag(builtin) = false;
 
         self
     }

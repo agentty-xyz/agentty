@@ -15,7 +15,7 @@ use super::{
 use crate::model::{CompletionMetadata, ModelErrorType};
 
 fn completion_metadata() -> CompletionMetadata {
-    CompletionMetadata::new("stop".to_string(), None, None, None, None)
+    CompletionMetadata::new("stop")
 }
 
 fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {

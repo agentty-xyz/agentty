@@ -12,17 +12,17 @@ use ag_harness::model::{
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{CheckpointError, SessionCheckpoint, SessionStore};
+use ag_harness::store::{CheckpointError, SessionCheckpoint};
 use ag_harness::{
     ErrorKind, Harness, HarnessError, Model, ModelCatalog, ModelError, ModelSelectionError,
-    ModelSelector, OutputSchema, Role, SessionError, TurnError, TurnRange,
+    ModelSelector, OutputSchema, Role, SessionError, TurnError, TurnRange, TurnRecord,
 };
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::Notify;
 
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_fixture::{schema, stores};
+use crate::public_store::{schema, stores};
 
 /// Model that answers ordinary turns and, when it sees the compaction system
 /// instruction, returns a configurable structured summary. Generation can be
@@ -151,11 +151,7 @@ fn registry(model: Arc<CompactingModel>, profile: ModelProfile) -> ModelRegistry
         .register_shared(
             ExecutionIdentity::new(name, "1").expect("identity"),
             model,
-            ModelCapabilities {
-                image_input: false,
-                profile,
-                tool_calls: true,
-            },
+            ModelCapabilities::new(profile).with_tool_calls(true),
         )
         .expect("register");
 
@@ -218,15 +214,6 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
             reopened.checkpoint().expect("checkpoint").summary(),
             published.summary()
         );
-        let loaded = store.load_session("reopen").await.expect("canonical");
-        assert_eq!(
-            loaded.turns.len(),
-            1,
-            "checkpoint bounds replay to uncovered turns"
-        );
-        assert!(
-            matches!(&loaded.turns[0].1.messages[0], ModelMessage::User(text) if text == "third")
-        );
         assert_eq!(
             reopened.replayed_range(),
             TurnRange::Span(TurnIndex::new(2)..TurnIndex::new(3)),
@@ -278,73 +265,39 @@ async fn repeated_compaction_extends_coverage_without_gaps() {
         assert_eq!(second.covered_through(), 1);
         assert!(noop.is_none(), "no uncovered completed turn remains");
         assert_eq!(model.generations.load(Ordering::SeqCst), 2);
-        let loaded = store.load_session("repeat").await.expect("canonical");
-        assert!(loaded.turns.is_empty(), "every completed turn is covered");
-        assert_eq!(loaded.checkpoint.expect("checkpoint").covered_through(), 1);
-    }
-}
-
-#[tokio::test]
-async fn stale_publication_is_rejected_after_a_concurrent_turn() {
-    for store in stores().await {
-        // Arrange
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let model = CompactingModel::shared("stale", &requests);
-        let registry = registry(Arc::clone(&model), unbounded_model_profile());
-        let harness = Harness::from_registry(&registry, "stale")
-            .expect("harness")
-            .store(Arc::clone(&store));
-        let mut session = harness
-            .session("stale", schema())
-            .create()
-            .await
-            .expect("session");
-        session.send("only").await.expect("only");
-        let checkpoint =
-            SessionCheckpoint::new(0, 0, Some("stale".into()), Some("stale".into()), summary())
-                .expect("checkpoint");
-
-        // Act: publish a checkpoint whose generation no longer matches after a
-        // switch, and one whose boundary exceeds the completed turns.
-        session
-            .switch_model(&registry, "stale")
-            .await
-            .expect("switch back is a no-op key");
-        let stale_generation = store.publish_checkpoint("stale", &checkpoint).await;
-        let beyond_completed = SessionCheckpoint::new(
-            5,
-            session_generation(&store, "stale").await,
-            Some("stale".into()),
-            Some("stale".into()),
-            summary(),
-        )
-        .expect("checkpoint");
-        let beyond = store.publish_checkpoint("stale", &beyond_completed).await;
-
-        // Assert
-        assert!(matches!(
-            stale_generation,
-            Err(SessionError::CheckpointStale { .. })
-        ));
-        assert!(matches!(beyond, Err(SessionError::CheckpointStale { .. })));
         assert!(
-            store
-                .load_session("stale")
+            replayed_turns(&harness, "repeat").await.is_empty(),
+            "every completed turn is covered"
+        );
+        assert_eq!(
+            stored_checkpoint(&harness, "repeat")
                 .await
-                .expect("load")
-                .checkpoint
-                .is_none(),
-            "a rejected publication changes nothing"
+                .expect("checkpoint")
+                .covered_through(),
+            1
         );
     }
 }
 
-async fn session_generation(store: &Arc<dyn SessionStore>, id: &str) -> i64 {
-    store.load_session(id).await.expect("load").model_generation
+/// Returns the checkpoint a handle reopened on `id` reads.
+async fn stored_checkpoint(harness: &Harness, id: &str) -> Option<SessionCheckpoint> {
+    harness
+        .resume(id)
+        .await
+        .expect("resume")
+        .checkpoint()
+        .cloned()
 }
 
-fn summary() -> Value {
-    json!({"context": "c", "decisions": [], "state": "s"})
+/// Returns the settled turns the next turn of a handle reopened on `id`
+/// replays.
+async fn replayed_turns(harness: &Harness, id: &str) -> Vec<TurnRecord> {
+    let session = harness.resume(id).await.expect("resume");
+
+    session
+        .transcript(session.replayed_range())
+        .await
+        .expect("replayed turns")
 }
 
 #[tokio::test]
@@ -393,9 +346,11 @@ async fn generation_failure_preserves_a_usable_prior_checkpoint() {
                 CheckpointError::SummaryTooLarge { .. }
             ))
         ));
-        let loaded = store.load_session("resilient").await.expect("load");
         assert_eq!(
-            loaded.checkpoint.expect("prior checkpoint").summary(),
+            stored_checkpoint(&harness, "resilient")
+                .await
+                .expect("prior checkpoint")
+                .summary(),
             first.summary(),
             "failed generation leaves the earlier checkpoint intact"
         );
@@ -438,12 +393,7 @@ async fn cancelled_generation_publishes_nothing() {
 
         // Assert
         assert!(
-            store
-                .load_session("cancel")
-                .await
-                .expect("load")
-                .checkpoint
-                .is_none(),
+            stored_checkpoint(&harness, "cancel").await.is_none(),
             "cancelling before publication leaves no checkpoint"
         );
     }
@@ -504,20 +454,12 @@ async fn model_switch_keeps_checkpoints_and_journals_intact() {
             checkpoint.summary(),
             "switching models preserves the existing checkpoint and its provenance"
         );
-        let loaded = store.load_session("switch").await.expect("load");
-        assert_eq!(loaded.turns.len(), 1);
-        assert!(
-            matches!(&loaded.turns[0].1.messages[0], ModelMessage::User(text) if text == "two")
-        );
+        assert_eq!(replayed_turns(&target_harness, "switch").await.len(), 1);
     }
 }
 
 fn capabilities() -> ModelCapabilities {
-    ModelCapabilities {
-        image_input: false,
-        profile: unbounded_model_profile(),
-        tool_calls: true,
-    }
+    ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true)
 }
 
 #[tokio::test]
@@ -550,9 +492,8 @@ async fn bounded_generation_falls_back_to_recent_turns_under_budget() {
         // Assert
         assert_eq!(checkpoint.covered_through(), 3);
         assert_eq!(model.generations.load(Ordering::SeqCst), 1);
-        let loaded = store.load_session("bounded").await.expect("load");
         assert!(
-            loaded.turns.is_empty(),
+            replayed_turns(&harness, "bounded").await.is_empty(),
             "generation covers every completed turn"
         );
         // The projected post-compaction request stays within the model budget.
@@ -678,7 +619,7 @@ async fn generation_covers_turns_beyond_the_replayed_history_oldest_first() {
                 .await
                 .expect("turn");
         }
-        let replayed = store.load_session("history").await.expect("load").turns;
+        let replayed = replayed_turns(&harness, "history").await;
         assert!(
             replayed.len() < 4,
             "older turns fall outside replayed history"
@@ -749,59 +690,15 @@ async fn generation_rejects_a_summary_no_smaller_than_its_source() {
                 CheckpointError::SummaryNotSmaller { .. }
             ))
         ));
-        let loaded = store.load_session("inflated").await.expect("load");
-        assert!(loaded.checkpoint.is_none(), "nothing is published");
-        assert_eq!(loaded.turns.len(), 1, "the turn stays uncovered");
-    }
-}
-
-#[tokio::test]
-async fn heavy_summary_is_dropped_from_projection_and_rejected_as_a_source() {
-    for store in stores().await {
-        // Arrange: a published summary heavier than the whole request budget.
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let model = CompactingModel::shared("heavy", &requests);
-        let registry = registry(Arc::clone(&model), ModelProfile::new(500));
-        let harness = Harness::from_registry(&registry, "heavy")
-            .expect("harness")
-            .store(Arc::clone(&store));
-        let mut session = harness
-            .session("heavy", schema())
-            .create()
-            .await
-            .expect("session");
-        session.send("one").await.expect("one");
-        let decisions: Vec<String> = (0..8).map(|_| "d".repeat(400)).collect();
-        let oversized_summary = json!({
-            "context": "c".repeat(4000),
-            "decisions": decisions,
-            "state": "s".repeat(2000)
-        });
-        let heavy = SessionCheckpoint::new(0, 0, None, None, oversized_summary).expect("record");
-        store
-            .publish_checkpoint("heavy", &heavy)
-            .await
-            .expect("publish");
-
-        // Act: projection admits recent turns without the summary, while
-        // generation cannot admit the summary-bearing source at all.
-        let two = session.send("two").await.expect("post-checkpoint turn");
-        let rejected = session.compact().await;
-
-        // Assert
         assert!(
-            summary_message(requests.lock().expect("requests").last().expect("request")).is_none(),
-            "a summary beyond the budget falls back to recent history"
+            stored_checkpoint(&harness, "inflated").await.is_none(),
+            "nothing is published"
         );
-        // The checkpoint covers the only completed turn, so nothing is
-        // replayed and the dropped summary is visible in the report.
-        assert!(!two.report().history().checkpoint_replayed());
-        assert_eq!(two.report().history().replayed_turns(), 0);
-        assert_eq!(two.report().history().evicted_turns(), 0);
-        assert!(matches!(
-            rejected,
-            Err(SessionError::Turn(TurnError::ContextBudgetExceeded { .. }))
-        ));
+        assert_eq!(
+            replayed_turns(&harness, "inflated").await.len(),
+            1,
+            "the turn stays uncovered"
+        );
     }
 }
 
@@ -886,12 +783,7 @@ async fn compaction_requires_a_current_handle() {
         // Assert
         assert!(matches!(rejected, Err(SessionError::StaleModel { .. })));
         assert!(
-            store
-                .load_session("fenced")
-                .await
-                .expect("load")
-                .checkpoint
-                .is_none(),
+            stored_checkpoint(&harness, "fenced").await.is_none(),
             "a fenced handle publishes nothing"
         );
     }
@@ -1011,11 +903,8 @@ async fn compaction_runs_on_the_cheap_role_and_attributes_generation_to_it() {
         // Assert
         assert_eq!(checkpoint.provider(), Some(HOST_PROVIDER));
         assert_eq!(checkpoint.model(), Some("cheap"));
-        let stored = store
-            .load_session("cheap")
+        let stored = stored_checkpoint(&harness, "cheap")
             .await
-            .expect("load")
-            .checkpoint
             .expect("stored checkpoint");
         assert_eq!(
             (stored.provider(), stored.model()),
@@ -1282,11 +1171,8 @@ async fn summary_models_without_metadata_leave_provenance_unknown() {
             .expect("checkpoint");
 
         // Assert
-        let stored = store
-            .load_session("opaque")
+        let stored = stored_checkpoint(&harness, "opaque")
             .await
-            .expect("load")
-            .checkpoint
             .expect("stored checkpoint");
         assert_eq!((checkpoint.provider(), checkpoint.model()), (None, None));
         assert_eq!((stored.provider(), stored.model()), (None, None));

@@ -14,6 +14,7 @@ use ag_harness::{Harness, Model, ModelError, OutputSchema, SessionError, TurnErr
 use async_trait::async_trait;
 use serde_json::json;
 
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::store_fixture::{image_input, options, schema, stores};
 
 /// Deterministic flat weights so budget arithmetic stays readable in tests.

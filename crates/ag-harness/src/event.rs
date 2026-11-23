@@ -179,6 +179,7 @@ pub enum RunEventKind {
     /// first model request, or the compaction requests that precede it (see
     /// [`Self::Compacted`]). A run that fails before admission, such as
     /// one whose session is busy, emits only [`Self::Completed`].
+    #[non_exhaustive]
     Started {
         /// Catalog identifier of the model, when the harness selected it
         /// from a [`crate::ModelCatalog`]; `None` for a model the host
@@ -198,6 +199,7 @@ pub enum RunEventKind {
     /// that failed or an invalid final answer that was requested again; the
     /// discarded response's reasoning and message items complete with the
     /// text it streamed.
+    #[non_exhaustive]
     ItemStarted {
         /// Identifier of the item.
         id: ItemId,
@@ -215,6 +217,7 @@ pub enum RunEventKind {
     /// [`ItemKind::ToolCall`] item, each started at its first fragment.
     /// Fragments of one item concatenate to its streamed content; the
     /// completed item stays authoritative.
+    #[non_exhaustive]
     ItemDelta {
         /// The fragment.
         delta: Delta,
@@ -222,6 +225,7 @@ pub enum RunEventKind {
         id: ItemId,
     },
     /// An item finished with its content.
+    #[non_exhaustive]
     ItemCompleted {
         /// Identifier of the item, as [`Self::ItemStarted`] reported it.
         id: ItemId,
@@ -233,6 +237,7 @@ pub enum RunEventKind {
     /// after this event. It falls between the call's [`Self::ItemStarted`]
     /// and [`Self::ItemCompleted`]; a call the handler did not decide on in
     /// time fails the run with [`ErrorKind::ApprovalTimeout`].
+    #[non_exhaustive]
     ApprovalRequested {
         /// Identifier of the call's [`ItemKind::ToolCall`] item.
         id: ItemId,

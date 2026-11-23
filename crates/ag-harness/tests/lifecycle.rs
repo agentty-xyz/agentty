@@ -154,7 +154,7 @@ fn assert_durable_terminal(events: &[LifecycleEvent], cancel: bool, persistence_
     assert_sequence(events);
     assert_eq!(events.len(), 4);
     let turn_id = match events[0].kind() {
-        LifecycleEventKind::TurnStarted { turn_id } => Some(turn_id),
+        LifecycleEventKind::TurnStarted { turn_id, .. } => Some(turn_id),
         _ => None,
     }
     .expect("first event should start the turn");
@@ -173,6 +173,7 @@ fn assert_durable_terminal(events: &[LifecycleEvent], cancel: bool, persistence_
             LifecycleEventKind::TurnCompleted {
                 duration,
                 turn_id: completed_id,
+                ..
             } if completed_id == turn_id && *duration >= persistence_wait
         ));
     }

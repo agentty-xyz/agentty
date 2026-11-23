@@ -83,7 +83,7 @@ impl HostRequest {
 }
 
 /// Result of atomically classifying a request or acquiring its first attempt.
-pub enum HostTurnAcquisition {
+pub(crate) enum HostTurnAcquisition {
     /// New execution, with retained ownership and bounded history.
     Acquired(AcquiredTurn),
     /// An existing request. It must never be executed again.
@@ -103,6 +103,7 @@ impl HostTurnAcquisition {
 /// Snapshot of a host request and its known write and command effects.
 /// Pending records remain unknown; this is not proof that effects have stopped.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct HostTurnRecord {
     /// Command intents and observed results belonging only to this turn.
     pub commands: Vec<crate::bash::CommandRecord>,
@@ -144,6 +145,7 @@ impl HostTurnRecord {
 
 /// Recorded host request state. A new execution always requires a new ID.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum HostTurnStatus {
     /// Reservation remains live; no second execution was started.
     InProgress,

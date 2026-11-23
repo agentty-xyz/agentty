@@ -16,7 +16,7 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::HostTurnRecord;
 use crate::store::{
     CompactionSource, HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession,
-    Reservation, SessionCheckpoint, SessionStore, StoreIdentity, StoredTurn, TurnAdmission,
+    Reservation, SessionCheckpoint, StoreBackend, StoreIdentity, StoredTurn, TurnAdmission,
     TurnOwner, TurnUsage, WriteRecord,
 };
 use crate::transcript::TurnRange;
@@ -92,7 +92,7 @@ impl FaultStore {
 }
 
 #[async_trait]
-impl SessionStore for FaultStore {
+impl StoreBackend for FaultStore {
     async fn load_commands(&self, session_id: &str) -> Result<Vec<CommandRecord>, SessionError> {
         self.inner.load_commands(session_id).await
     }

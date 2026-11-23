@@ -52,4 +52,5 @@ tools, independent of Agentty UI and orchestration.
 Keep `crates/ag-harness/README.md` aligned with the public integration contract and
 `docs/site/content/docs/architecture/ag-harness-design.md` aligned with runtime and
 persistence boundaries. Preserve the public surface exercised by
-`crates/ag-harness/tests/public_api.rs` when changing exports.
+`crates/ag-harness/tests/public_api.rs` when changing exports, and review every change
+to `crates/ag-harness/public-api.txt` as an embedder-facing API change.

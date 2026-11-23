@@ -18,8 +18,8 @@ fn new_sessions_expose_their_default_schema_only_for_json_output() {
     let text = NewSession::new("text", OutputMode::Text);
 
     // Assert
-    assert_eq!(json.schema(), Some(&schema));
-    assert_eq!(text.schema(), None);
+    assert_eq!(json.output.schema(), Some(&schema));
+    assert_eq!(text.output.schema(), None);
 }
 
 #[test]

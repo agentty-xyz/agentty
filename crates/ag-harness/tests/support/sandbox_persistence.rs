@@ -113,12 +113,14 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
 
 async fn assert_reopened_effects(selected: Selected, workspace: &Workspace, path: &Path) {
     let reopened = SqliteStore::open(path).await.expect("reopen");
+    let session = workspace
+        .harness()
+        .store(Arc::new(reopened))
+        .resume("session")
+        .await
+        .expect("reopened session");
     assert_eq!(
-        reopened
-            .load_commands("session")
-            .await
-            .expect("reopened commands")
-            .len(),
+        session.commands().await.expect("reopened commands").len(),
         2,
         "{selected:?}"
     );

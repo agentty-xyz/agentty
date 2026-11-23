@@ -17,9 +17,10 @@ use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, TimestampSource, connect_options, interrupt_owned_turn};
-use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
+use crate::store::{AcquiredTurn, StoreBackend as _, TurnAdmission};
 use crate::store_fixture::{loaded_turn, unselected_model};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::TurnError;
@@ -134,7 +135,7 @@ END
     .expect("database failure should be preserved");
 
     // Assert
-    assert!(matches!(error, SessionError::QueryContext { .. }));
+    assert!(matches!(error, SessionError::Store { .. }));
 }
 
 #[tokio::test]

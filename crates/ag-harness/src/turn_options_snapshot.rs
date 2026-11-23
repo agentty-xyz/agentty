@@ -15,7 +15,7 @@ use crate::{OutputSchema, OutputSchemaError, TurnOptions};
 /// Versioned durable metadata, independent of live repository validation.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredTurnOptions {
+pub(crate) struct StoredTurnOptions {
     #[serde(default)]
     bash: Option<crate::bash::BashPolicySnapshot>,
     #[serde(default)]
@@ -46,7 +46,7 @@ pub struct StoredTurnOptions {
 
 impl StoredTurnOptions {
     /// Encodes effective options with the current version and fingerprint.
-    pub fn encode(options: &TurnOptions) -> String {
+    pub(crate) fn encode(options: &TurnOptions) -> String {
         let stored = Self {
             bash: options.bash().map(|config| config.snapshot.clone()),
             comparison_base: options
@@ -74,7 +74,7 @@ impl StoredTurnOptions {
     /// # Errors
     /// Returns an error for unsupported versions, malformed data, or invalid
     /// schemas, comparison identities, or fingerprints.
-    pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
+    pub(crate) fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
         let text_output = stored.output_schema.is_null();
         if !matches!(stored.version, 1..=6)
@@ -114,7 +114,7 @@ impl StoredTurnOptions {
 
     /// Returns whether the turn answered in text output mode rather than
     /// against an output schema.
-    pub fn text_output(&self) -> bool {
+    pub(crate) fn text_output(&self) -> bool {
         self.output_schema.is_null()
     }
 

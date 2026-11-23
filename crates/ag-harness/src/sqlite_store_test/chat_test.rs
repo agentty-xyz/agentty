@@ -15,7 +15,7 @@ use crate::model::{ModelCompletion, ModelError, ModelMessage, ModelMetadata, Mod
 use crate::recovery::ExecutionIdentity;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, SessionInfo};
-use crate::store::SessionStore as _;
+use crate::store::StoreBackend as _;
 
 #[tokio::test]
 async fn session_info_loads_model_identity_and_reports_missing_sessions() {

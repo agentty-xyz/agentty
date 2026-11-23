@@ -26,7 +26,7 @@ use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS};
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, TimestampSource};
-use crate::store::SessionStore as _;
+use crate::store::StoreBackend as _;
 use crate::tool::ToolSet;
 
 #[tokio::test(flavor = "current_thread")]
@@ -409,7 +409,7 @@ END
     // Assert
     assert!(matches!(
         result,
-        Err(SessionError::QueryContext {
+        Err(SessionError::Store {
             operation: "renew persistent session turn lease",
             ..
         })

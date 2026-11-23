@@ -159,15 +159,10 @@ impl Model for CompactingModel {
             .expect("compactions lock")
             .pop_front();
         let response = scripted.unwrap_or_else(|| Ok(ModelResponse::Output(valid_summary())))?;
-        let usage = CompletionUsage::new(
-            None,
-            None,
-            Some(COMPACTION_INPUT_TOKENS),
-            Some(20),
-            None,
-            None,
-        );
-        let metadata = CompletionMetadata::new("stop".to_string(), None, None, None, Some(usage));
+        let usage = CompletionUsage::default()
+            .with_input_tokens(Some(COMPACTION_INPUT_TOKENS))
+            .with_output_tokens(Some(20));
+        let metadata = CompletionMetadata::new("stop").with_usage(Some(usage));
 
         Ok(ModelCompletion::new(metadata, response))
     }

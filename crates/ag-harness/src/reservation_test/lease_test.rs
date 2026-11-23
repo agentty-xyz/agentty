@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
+use super::fixture::AcquiredTurnFixture as _;
 use crate::TurnError;
 use crate::context::HistoryProjection;
 use crate::gated_store_test::{GatedStore, PauseAt};
@@ -17,7 +18,7 @@ use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::Database;
 #[cfg(not(feature = "sqlite"))]
 use crate::store::MemoryStore;
-use crate::store::{AcquiredTurn, SessionStore};
+use crate::store::{AcquiredTurn, StoreBackend};
 use crate::store_fixture::{options, schema};
 
 #[tokio::test]

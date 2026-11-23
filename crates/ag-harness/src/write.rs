@@ -65,6 +65,7 @@ impl WriteOutput {
 
 /// Failure returned while validating or applying one repository write.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WriteError {
     /// The existing file is not valid UTF-8 text.
     #[error("write target `{path}` is not UTF-8 text")]
