@@ -1072,13 +1072,14 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         "stateless",
         "commit-failure",
         "canceled",
+        "moved-base",
     ] {
         // Arrange
         let (mut context, pool) = execution_context().await;
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = event_tx;
         let mut planner = request("plan");
-        if scenario == "stateless" {
+        if ["stateless", "moved-base"].contains(&scenario) {
             planner.assignment.agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
         }
         let request = accepted_implementation(&context, planner).await;
@@ -1105,7 +1106,13 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         .await;
 
         // Assert
-        let should_fail = ["persist-failure", "stale-plan", "commit-failure"].contains(&scenario);
+        let should_fail = [
+            "persist-failure",
+            "stale-plan",
+            "commit-failure",
+            "moved-base",
+        ]
+        .contains(&scenario);
         let canceled = scenario == "canceled";
         assert_eq!(
             result.is_err(),
@@ -1166,7 +1173,8 @@ async fn assert_implementation_records(
         .await
         .expect("history")
         .expect("context");
-    let response_saved = !["persist-failure", "stale-plan", "canceled"].contains(&scenario);
+    let response_saved =
+        !["persist-failure", "stale-plan", "canceled", "moved-base"].contains(&scenario);
     assert_eq!(
         history.turns.len(),
         usize::from(response_saved),
@@ -1295,6 +1303,9 @@ async fn prepare_implementation_scenario(
 ) {
     if scenario == "commit-failure" {
         context.git_client = Arc::new(execution_git_client(true));
+    }
+    if scenario == "moved-base" {
+        context.git_client = Arc::new(moved_base_git_client());
     }
     if scenario == "persist-failure" {
         sqlx::query(
@@ -1437,6 +1448,32 @@ async fn execution_context() -> (SessionWorkerContext, SqlitePool) {
 }
 
 fn execution_git_client(commit_failure: bool) -> MockGitClient {
+    let mut git = execution_git_client_without_base(commit_failure);
+    git.expect_ref_hash()
+        .withf(|_, reference| reference == "main")
+        .returning(|_, _| Box::pin(async { Ok("base-1".to_string()) }));
+
+    git
+}
+
+/// Returns an execution Git client whose base branch moves after the first
+/// time it is resolved, as when a turn's commands move it.
+fn moved_base_git_client() -> MockGitClient {
+    let mut git = execution_git_client_without_base(false);
+    let mut resolved = 0;
+    git.expect_ref_hash()
+        .withf(|_, reference| reference == "main")
+        .returning(move |_, _| {
+            resolved += 1;
+            let commit = if resolved == 1 { "base-1" } else { "moved" };
+
+            Box::pin(async move { Ok(commit.to_string()) })
+        });
+
+    git
+}
+
+fn execution_git_client_without_base(commit_failure: bool) -> MockGitClient {
     let mut git = MockGitClient::new();
     git.expect_detect_git_info()
         .returning(|_| Box::pin(async { Some("wt/sess".to_string()) }));

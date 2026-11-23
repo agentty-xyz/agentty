@@ -10,6 +10,7 @@ pub(super) use super::core::{
 
 pub(super) mod access;
 pub(super) mod activity;
+mod base_branch;
 mod commit_context;
 pub(super) mod draft;
 mod graph_turn;
@@ -24,6 +25,7 @@ mod prompt_context;
 pub(super) mod published_branch;
 pub(super) mod refresh;
 pub(super) mod review;
+mod sandbox;
 mod steering;
 pub(super) mod task;
 mod task_turn;

@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -1772,4 +1773,116 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
     assert_eq!(compactions, 1, "the session should compact once");
 
     Ok(())
+}
+
+/// Answer the scripted provider returns to every sandbox scenario turn.
+const SANDBOX_ANSWER: &str = "Answered without the sandbox.";
+
+/// Journey step that removes the running `agentty` copy at `binary`, the
+/// sandbox helper it registered at startup, as an upgrade that deletes the
+/// old executable would.
+fn remove_sandbox_helper(binary: PathBuf) -> Journey {
+    Journey::new("remove_sandbox_helper")
+        .with_description("Delete the running executable, which is the sandbox helper")
+        .step(Step::eventually(
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            move |frame| match std::fs::remove_file(&binary) {
+                // Retries on the next poll; on timeout the failure names the
+                // I/O error.
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    assertion::match_text_in_region(
+                        frame,
+                        &format!("E2E sandbox helper removed ({error})"),
+                        &Region::full(frame.cols(), frame.rows()),
+                    )
+                }
+                _ => Ok(()),
+            },
+        ))
+}
+
+/// The session shows once that commands run without the sandbox when it
+/// cannot start, here because the running executable, its helper, is gone.
+#[tokio::test]
+async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E2eResult {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("List the files"))
+        .respond_with(answer(SANDBOX_ANSWER))
+        .mount(&server)
+        .await;
+    let binary_directory = tempfile::tempdir()?;
+    let binary = binary_directory.path().join("agentty");
+    std::fs::copy(assert_cmd::cargo::cargo_bin("agentty"), &binary)?;
+
+    // Act, Assert
+    FeatureTest::new("harness_sandbox_warning")
+        .with_git()
+        .binary(binary.clone())
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
+                    .compose(&remove_sandbox_helper(binary))
+                    .write_text("List the files")
+                    .wait_for_text("List the files", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, SANDBOX_ANSWER, &full)
+                        },
+                    )
+                    .wait_for_stable_frame(500, 10000)
+                    .capture_labeled(
+                        "harness_sandbox_warning",
+                        "The session warns that commands run without the sandbox",
+                    )
+                    // The follow-up turn offers commands again; the session
+                    // already shows the unchanged warning.
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Again")
+                    .wait_for_text("Again", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| assertion::match_match_count(frame, SANDBOX_ANSWER, 2),
+                    )
+                    .wait_for_stable_frame(500, 10000)
+                    .capture_labeled(
+                        "harness_sandbox_warning_once",
+                        "The follow-up turn adds no second warning",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_match_count(frame, "[Sandbox Warning]", 1);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Sandbox Warning] Commands run without the sandbox.",
+                        &full,
+                    );
+                })
+            },
+        )
+        .await
 }

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, ContextCompaction, ReasoningLevel, SessionRef,
-    StartSessionRequest, TurnEvent, TurnRequest, TurnResult,
+    StartSessionRequest, TurnEvent, TurnNotice, TurnRequest, TurnResult,
 };
 use ag_harness::provider::chatgpt_is_signed_in;
 use ag_harness::transcript::TranscriptInput;
@@ -34,9 +34,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, OutputProjector, RunOptions, cleanup_failure, failure, output_schema,
-    parse_output, reject_attachments, repository, running_context_window, system_prompt,
-    turn_notice,
+    NativeTurnError, OutputProjector, RunOptions, SESSION_SANDBOX, cleanup_failure, failure,
+    output_schema, parse_output, reject_attachments, repository, running_context_window,
+    sandbox_notice, system_prompt, turn_notice,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -139,9 +139,12 @@ async fn run_session_turn(
         ),
     };
     let profile = req.request_kind.protocol_profile();
-    let options = RunOptions::new(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
+    let sandbox = config
+        .session_sandbox(&session_id, &req.folder, &environment)
+        .await?;
+    let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
         .map_err(failure("Failed to apply the response style"))?
         .agent_text();
@@ -191,6 +194,7 @@ async fn run_session_turn(
     }
     .render()?;
     let input_digest = input_digest(&input);
+    let offers_bash = options.offers_bash();
     let (run, stream) = ActiveRun::start(session.run(options.request(input)));
     // Dropping this turn cancels the run, which keeps settling on its task.
     let _cancel_on_drop = CancelOnDrop(run.cancel.clone());
@@ -202,6 +206,11 @@ async fn run_session_turn(
     // Only a concurrent shutdown, which cancelled the run, observes its
     // outcome first.
     let outcome = outcome.ok_or(NativeTurnError::Stopped)?;
+    // The harness checks the sandbox before admitting a turn offering
+    // `bash`, so a successful turn without a warning ran in it.
+    if offers_bash && outcome.result.is_ok() && outcome.report.sandbox_warning().is_none() {
+        let _ = events.send(TurnEvent::Notice(TurnNotice::SandboxAvailable));
+    }
     let output = outcome.result.map_err(NativeTurnError::from_run)?;
     let assistant_message = parse_output(&output, profile)?;
     // An unversioned id makes the next session turn re-send the session
@@ -230,12 +239,12 @@ async fn run_session_turn(
 }
 
 /// Forwards the output a run streams as [`TurnEvent::Output`] events, and
-/// its compaction attempts worth noting as [`TurnEvent::Notice`] events,
-/// until the run's stream ends.
+/// its compaction attempts and what it reports about the sandbox as
+/// [`TurnEvent::Notice`] events, until the run's stream ends.
 async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
     let mut projector = OutputProjector::default();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
-        if let Some(notice) = turn_notice(&event.kind) {
+        if let Some(notice) = turn_notice(&event.kind).or_else(|| sandbox_notice(&event.kind)) {
             let _ = events.send(TurnEvent::Notice(notice));
         }
         for output in projector.project(event.kind) {
@@ -537,6 +546,7 @@ impl SessionOpener<'_> {
             reasoning_level: self.reasoning_level,
             repository: self.repository,
             running_context_window: self.running_context_window,
+            sandbox: SESSION_SANDBOX,
             summary_model: self.summary_model,
         }
     }

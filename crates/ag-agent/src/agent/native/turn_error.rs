@@ -30,6 +30,15 @@ impl NativeTurnError {
         if error.kind() == ErrorKind::Cancelled {
             return Self::Stopped;
         }
+        // Only utility prompts refuse to run commands without the sandbox;
+        // the harness words the remedy for "the application".
+        if error.kind() == ErrorKind::SandboxUnavailable {
+            return Self::Failed(format!(
+                "Agentty did not run this prompt's commands, because they would run without the \
+                 sandbox: {}",
+                error.to_string().replace("the application", "Agentty")
+            ));
+        }
 
         Self::Failed(Self::diagnostic(
             "Harness turn failed",

@@ -245,8 +245,53 @@ starts even when no backend CLI is installed, and new sessions then start on the
 model.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
-  unsandboxed `bash`, which can reach the network and paths outside the worktree.
-  Provider keys and endpoints are removed from the `bash` environment.
+  `bash`. Provider keys and endpoints are removed from the `bash` environment.
+- <a id="backends-harness-sandbox"></a> `bash` runs in the operating system's sandbox
+  where it is available: Seatbelt on macOS, Bubblewrap on Linux. Commands can read the
+  disk but write only the session worktree, its Git metadata, and the session's own
+  temporary directory. Credential stores such as `~/.ssh`, `~/.aws`, `~/.config/gh`, the
+  keychains, and browser profiles stay hidden, and so do Agentty's database, pasted
+  images, harness history, and ChatGPT sign-in. Agentty never reruns a blocked command
+  outside the sandbox; it shows a `[Sandbox]` hint when a command may have been blocked.
+- Commands keep network access, including to services listening on `localhost` such as
+  local databases or a Docker TCP socket, but cannot reach Unix sockets: not Docker's,
+  and not the SSH agent's, so Git over SSH with agent keys fails inside a session.
+  Agentty pushes outside the sandbox itself.
+- Environment variables that look like credentials (names containing `TOKEN`, `SECRET`,
+  `PASSWORD`, or `CREDENTIAL`, ending in `_KEY`, connection strings such as
+  `DATABASE_URL`, and every `AWS_`, `GH_`, `GITHUB_`, and `GITLAB_` variable) never
+  reach commands, besides the model providers' keys. The GitHub CLI is therefore
+  unauthenticated inside a session.
+- Git writes stay limited: commands can commit on the session branch, but cannot write
+  Git configuration, hooks, replacement refs, grafts, or object alternates, and
+  Agentty's own Git ignores replacement refs and grafts. A turn, task, or graph node
+  that moves or deletes the session's base branch fails before Agentty commits or
+  publishes anything, with the commit to restore, and no turn starts while the base does
+  not resolve.
+- The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
+  (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
+  removed with the session; host tools and other sessions never read it. Each new
+  session therefore downloads dependencies again.
+- Your Cargo configuration still applies: Cargo finds `~/.cargo/config.toml` above a
+  worktree in the home directory, and otherwise Agentty links your `CARGO_HOME`'s
+  configuration into the sandbox before each turn, replacing whatever configuration or
+  credential files commands left there. Other settings kept in `~/.cargo` do not reach
+  sandboxed commands.
+- Commands cannot install toolchains or tools into the home directory: `rustup`
+  toolchain installs (including those a `rust-toolchain.toml` triggers), `go install`
+  into `~/go/bin`, and Gradle, Maven, or pnpm homes in `~/.gradle`, `~/.m2`, or the pnpm
+  store fail. Install them in a terminal outside the session, then run the session's
+  commands again.
+- Where the sandbox cannot run, commands run without it, and the session shows a
+  `[Sandbox Warning]` as soon as the turn starts, naming what is missing and how to fix
+  it. It appears once, and again when the reason changes or after the sandbox worked in
+  between, which a `[Sandbox]` note confirms. On Linux, install Bubblewrap (for example
+  `sudo apt install bubblewrap`), allow unprivileged user namespaces, and run kernel 6.2
+  or later; on macOS, start Agentty outside other sandboxes. Restart Agentty after
+  upgrading it, since the running process uses its own executable as the sandbox helper.
+  Sync conflict assistance and execution-graph task turns in a session warn the same
+  way. Merge conflict assistance, commit assistance, and other utility prompts never run
+  commands without the sandbox: where it cannot run they fail with the same fix.
 - Answers and reasoning stream into the session view as the model writes them, with a
   short "Preparing a tool call" line while tool arguments arrive; the activity footer
   shows tool calls while a turn runs. Streamed text is replaced by the saved answer when

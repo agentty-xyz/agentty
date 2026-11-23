@@ -1,18 +1,22 @@
 name: Native Harness Sandbox
 
 # Linux sandbox qualification runs in the coverage job, which installs the same
-# Bubblewrap setup and runs every `ag-harness` sandbox suite, so this workflow
-# only qualifies the macOS launcher. It also checks the `ag-harness` build
-# without default features, which shares the same path filter.
+# Bubblewrap setup and runs every `ag-harness` sandbox suite and `ag-agent`'s
+# session sandbox suite, so this workflow only qualifies the macOS launcher and,
+# in the same coverage run, Agentty's grants under it. It also checks the
+# `ag-harness` build without default features, which shares the same path
+# filter.
 on:
   # Runs on `main` so its Rust caches exist for pull requests to restore.
   push:
     branches:
       - main
   # Pull requests skip qualification unless they touch `ag-harness`, a crate it
-  # depends on, or shared build and CI configuration. The
-  # `harness_sandbox_filter` test in `ag-xtask` fails when the crate list drifts
-  # from Cargo's dependency graph; `main` still runs on every push.
+  # depends on, `ag-agent`, which owns Agentty's grants, or shared build and CI
+  # configuration. The `harness_sandbox_filter` test in `ag-xtask` fails when
+  # the crate list drifts from Cargo's dependency graph. Other `ag-agent`
+  # dependencies rarely change the grants, so the merge queue and `main`
+  # pushes, which run without a path filter, cover them.
   pull_request:
     paths:
       - .cargo/**
@@ -24,6 +28,7 @@ on:
       - .pre-commit-config.yaml
       - Cargo.lock
       - Cargo.toml
+      - crates/ag-agent/**
       - crates/ag-harness/**
       - crates/ag-router/**
       - crates/ag-telemetry/**

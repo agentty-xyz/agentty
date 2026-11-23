@@ -328,8 +328,8 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
         writeln!(
             profile,
             "(deny file-write* (regex \
-             #\"^{}/((config|hooks|modules|{GIT_WORKTREE_PROTECTED})|worktrees/[^/]+/\
-             ({GIT_WORKTREE_PROTECTED}))(/|$)\"))",
+             #\"^{}/((config|hooks|modules|{GIT_HISTORY_PROTECTED}|{GIT_WORKTREE_PROTECTED})|\
+             worktrees/[^/]+/({GIT_WORKTREE_PROTECTED}))(/|$)\"))",
             pattern(&git.common)?
         )
         .map_err(io::Error::other)?;
@@ -379,6 +379,27 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
 #[cfg(target_os = "macos")]
 const GIT_WORKTREE_PROTECTED: &str =
     "config[.]worktree|commondir|gitdir|rebase-merge|rebase-apply|sequencer";
+
+/// Entries inside the common Git directory's writable stores that stay
+/// read-only under the Git-writes grant on Linux, and whether each is a
+/// directory: replacement refs and object alternates change the history Git
+/// run later outside the sandbox shows without changing the objects it
+/// pushes. A missing one is created empty as the mount point, which Git
+/// treats as absent.
+#[cfg(target_os = "linux")]
+const GIT_HISTORY_PROTECTED: [(&str, bool); 3] = [
+    ("refs/replace", true),
+    ("objects/info/alternates", false),
+    ("objects/info/http-alternates", false),
+];
+
+/// Entries of the common Git directory that stay read-only under the
+/// Git-writes grant, as a Seatbelt pattern, because they change the history
+/// Git run later outside the sandbox shows without changing the objects it
+/// pushes: replacement refs, grafts and other `info` files, the shallow
+/// boundary, and object alternates.
+#[cfg(target_os = "macos")]
+const GIT_HISTORY_PROTECTED: &str = "info|shallow|refs/replace|objects/info/(http-)?alternates";
 
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
@@ -507,6 +528,7 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         // and log stores and to files at the top of the worktree's own
         // administration directory, whose links stay mounted read-only.
         command.arg("--bind").arg(&git.common).arg(&git.common);
+        protect_git_history(&mut command, &git.common);
         if let Some(admin) = &git.admin {
             command.arg("--bind").arg(admin).arg(admin);
             for name in super::landlock::GIT_ADMIN_PROTECTED {
@@ -533,6 +555,30 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .args([HELPER_ARGUMENT, "--namespace-init"]);
 
     Err(command.exec())
+}
+
+/// Mounts the entries of `common` that [`GIT_HISTORY_PROTECTED`] lists
+/// read-only over the writable Git mount: replacement refs and object
+/// alternates lie inside the writable stores but change the history Git run
+/// outside the sandbox shows. Existing ones are mounted over themselves,
+/// missing ones covered by an empty read-only directory or file. Grafts and
+/// the shallow boundary lie outside the stores already.
+#[cfg(target_os = "linux")]
+fn protect_git_history(command: &mut Command, common: &std::path::Path) {
+    for (relative, is_directory) in GIT_HISTORY_PROTECTED {
+        let path = common.join(relative);
+        if path.exists() {
+            command.arg("--ro-bind").arg(&path).arg(&path);
+        } else if is_directory {
+            command
+                .arg("--tmpfs")
+                .arg(&path)
+                .arg("--remount-ro")
+                .arg(&path);
+        } else {
+            command.arg("--ro-bind").arg("/dev/null").arg(&path);
+        }
+    }
 }
 
 #[cfg(test)]

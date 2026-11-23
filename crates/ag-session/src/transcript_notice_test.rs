@@ -46,6 +46,8 @@ fn test_transcript_notice_prefixes_match_canonical_labels() {
             "[Review Request Sync Warning]",
         ),
         (TranscriptNotice::ReviewWatch, "[Review Watch]"),
+        (TranscriptNotice::Sandbox, "[Sandbox]"),
+        (TranscriptNotice::SandboxWarning, "[Sandbox Warning]"),
         (TranscriptNotice::StartError, "[Start Error]"),
         (TranscriptNotice::TurnMetadataError, "[Turn Metadata Error]"),
     ];

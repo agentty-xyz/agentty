@@ -14,8 +14,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
+use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::service::HarnessModels;
@@ -228,7 +230,8 @@ pub(super) async fn run_channel_turn(
         &workspace.env,
     )
     .await;
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let consumer = spawn::spawn_traced(consume_turn_events(
         event_rx,
         context.app_event_tx.clone(),
@@ -247,8 +250,11 @@ pub(super) async fn run_channel_turn(
     )
     .await;
 
-    let turn_result =
-        run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx).await;
+    let sandbox_notices = sandbox_notice_target(context);
+    let (turn_result, ()) = tokio::join!(
+        run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx),
+        sandbox_notices.relay(relayed_rx, relay_tx),
+    );
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
         prompt.local_image_paths().cloned().collect(),
@@ -263,6 +269,12 @@ pub(super) async fn run_channel_turn(
 
     let turn_result =
         add_main_checkout_warning(context, workspace.snapshot.as_ref(), turn_result).await;
+    let turn_result = BaseBranchSnapshot::verify(
+        workspace.base_branch.as_ref(),
+        &base_branch_scope(context),
+        turn_result,
+    )
+    .await;
     let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
@@ -283,6 +295,8 @@ pub(super) async fn run_channel_turn(
 
 /// Validated execution location plus the existing main-checkout warning state.
 struct PreparedTurnWorkspace {
+    /// Base branch commit a Harness turn must leave in place.
+    base_branch: Option<BaseBranchSnapshot>,
     env: ResolvedEnv,
     snapshot: Option<MainCheckoutSnapshot>,
 }
@@ -311,8 +325,13 @@ async fn prepare_turn_workspace(
                         &context.session_id,
                     ).await?;
                     let snapshot = MainCheckoutSnapshot::capture(context, &env).await?;
+                    let base_branch = BaseBranchSnapshot::capture(
+                        &base_branch_scope(context),
+                        context.session_agent.kind(),
+                    )
+                    .await?;
 
-                    Ok(PreparedTurnWorkspace { env, snapshot })
+                    Ok(PreparedTurnWorkspace { base_branch, env, snapshot })
                 }, |_: &SessionError| Outcome::Failed)
                 .await?;
             SessionWorkerService::prepare_review_comment_turn(context, turn_metadata, prompt).await?;
@@ -583,7 +602,8 @@ pub(super) async fn load_session_speed_mode(
 /// - [`TurnEvent::Output`]: accumulates streamed model output, published at
 ///   most once per frame.
 /// - [`TurnEvent::Notice`]: keeps a transcript notice the caller appends once
-///   the turn ends.
+///   the turn ends; sandbox notices are deduplicated against the session's
+///   earlier warnings then.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -741,6 +761,27 @@ pub(super) fn fresh_turn_cancel_token(
     *guard = CancellationToken::new();
 
     Ok(guard.clone())
+}
+
+/// Returns the session whose base branch a turn must leave in place.
+pub(super) fn base_branch_scope(context: &SessionWorkerContext) -> BaseBranchScope<'_> {
+    BaseBranchScope {
+        db: &context.db,
+        folder: &context.folder,
+        git_client: context.git_client.as_ref(),
+        session_id: &context.session_id,
+    }
+}
+
+/// Returns the session transcript that receives a turn's sandbox notices.
+pub(super) fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
+    SandboxNoticeTarget {
+        app_event_tx: &context.app_event_tx,
+        db: &context.db,
+        session_id: &context.session_id,
+        session_update_versions: &context.session_update_versions,
+        transcript: &context.transcript,
+    }
 }
 
 /// Appends one turn notice, such as a main-checkout warning, to the live and

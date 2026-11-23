@@ -1091,6 +1091,44 @@ fn render_rebase_step(step: Result<RebaseStepResult, GitError>) -> String {
     }
 }
 
+/// A session's commands can write `refs/replace` and grafts, so the review
+/// diff reads the objects as recorded: replacing the changed blob with the
+/// original, or a graft that drops the commit's parent, would otherwise
+/// hide the change while a push still sends it.
+#[tokio::test]
+async fn committed_diff_ignores_replacements_and_grafts() -> TestResult<()> {
+    // Arrange
+    let directory = tempdir()?;
+    let repository = ContractRepository::create(directory.path())?;
+    repository.git(&["checkout", "--quiet", "-b", "session"])?;
+    repository.commit_file("README.md", "evil\n", "Tweak")?;
+    let changed = repository.git(&["rev-parse", "session:README.md"])?;
+    let original = repository.git(&["rev-parse", "main:README.md"])?;
+    repository.git(&["replace", &changed, &original])?;
+    let hidden = repository.git(&["diff", "--stat", "main...session"])?;
+    let session = repository.git(&["rev-parse", "session"])?;
+    fs::write(
+        repository.local.join(".git/info/grafts"),
+        format!("{session}\n"),
+    )?;
+    let client = RealGitClient;
+
+    // Act
+    let diff = client
+        .committed_diff(
+            repository.local.clone(),
+            "main".to_string(),
+            "session".to_string(),
+        )
+        .await?;
+
+    // Assert
+    assert_eq!(hidden, "", "Git honors the replacement by default");
+    assert!(diff.contains("-base\n+evil"), "{diff}");
+
+    Ok(())
+}
+
 /// Renders a fixture Git result for an observation string.
 fn render_git_observation(result: TestResult<String>) -> String {
     result.unwrap_or_else(|error| format!("<git failed: {error}>"))

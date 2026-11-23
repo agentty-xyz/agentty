@@ -32,6 +32,7 @@ use super::{
     running_context_window, unicode_environment,
 };
 use crate::agent::model_profile;
+use crate::agent::native::sandbox::{CommandSandbox, SESSION_SANDBOX};
 
 #[test]
 /// Asks for the base URL of a keyed provider without a default endpoint,
@@ -217,6 +218,7 @@ fn harness_summarizes_on_a_usable_summary_model() {
         reasoning_level: ReasoningLevel::Medium,
         repository: &repository,
         running_context_window: None,
+        sandbox: SESSION_SANDBOX,
         summary_model: Some(&summary),
     };
 
@@ -821,6 +823,7 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
         ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("plan model");
     let context = HarnessContext {
         compacts: false,
+        sandbox: SESSION_SANDBOX,
         summary_model: None,
         environment: &environment,
         provider_call_budget: None,
@@ -1013,6 +1016,207 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
     assert_eq!(granted.len(), 102);
 }
 
+#[tokio::test]
+/// Gives each session one stable temporary directory beside its harness
+/// database, and rejects invalid session ids.
+async fn session_sandbox_keeps_one_temporary_directory_per_session() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let environment = BTreeMap::new();
+
+    // Act
+    let first = config
+        .session_sandbox("session-1", workspace.path(), &environment)
+        .await;
+    let second = config
+        .session_sandbox("session-1", workspace.path(), &environment)
+        .await;
+    let other = config
+        .session_sandbox("session-2", workspace.path(), &environment)
+        .await;
+    let invalid = config
+        .session_sandbox("a/b", workspace.path(), &environment)
+        .await;
+
+    // Assert
+    let policy = |sandbox: CommandSandbox| {
+        RunOptions::new(
+            ProtocolRequestProfile::SessionTurn,
+            PermissionMode::AutoEdit,
+            &environment,
+            &sandbox,
+        )
+        .expect("options")
+        .bash
+    };
+    let first = policy(first.expect("first sandbox"));
+    assert_eq!(first, policy(second.expect("second sandbox")));
+    assert_ne!(first, policy(other.expect("other session sandbox")));
+    assert!(data_root.path().join("session-1/tmp/cargo").is_dir());
+    assert!(invalid.is_err());
+}
+
+#[tokio::test]
+/// Gives each utility prompt a fresh temporary directory, removed when the
+/// prompt ends; the first prompt of a process removes those an earlier
+/// process left behind; a data root that cannot hold one is reported.
+async fn utility_sandbox_creates_a_temporary_directory_per_prompt() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let stale = data_root.path().join(".utility/run-stale");
+    std::fs::create_dir_all(&stale).expect("stale directory");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let file_root = tempfile::NamedTempFile::new().expect("file in place of a directory");
+    let unusable = NativeHarnessConfig::new(file_root.path().to_path_buf());
+    let environment = BTreeMap::new();
+
+    // Act
+    let (_sandbox, first) = config
+        .utility_sandbox(workspace.path(), &environment)
+        .await
+        .expect("first utility sandbox");
+    std::fs::create_dir_all(&stale).expect("directory of a running prompt");
+    let (_sandbox, second) = config
+        .utility_sandbox(workspace.path(), &environment)
+        .await
+        .expect("second utility sandbox");
+    let failure = unusable
+        .utility_sandbox(workspace.path(), &environment)
+        .await;
+
+    // Assert
+    let first_path = first.path().to_path_buf();
+    assert_eq!(
+        first_path.parent(),
+        Some(data_root.path().join(".utility").as_path())
+    );
+    assert_ne!(first_path, second.path());
+    assert!(stale.is_dir(), "only the first prompt of a process sweeps");
+    drop(first);
+    assert!(!first_path.exists());
+    assert!(
+        failure
+            .err()
+            .expect("a file root should fail")
+            .contains("Failed to create the harness temporary directory")
+    );
+}
+
+#[tokio::test]
+/// Reports a session temporary directory that cannot be created.
+async fn session_sandbox_reports_temporary_directory_failures() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::create_dir_all(data_root.path().join("session-1")).expect("session directory");
+    std::fs::write(data_root.path().join("session-1/tmp"), "").expect("file in place");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+
+    // Act
+    let failure = config
+        .session_sandbox("session-1", workspace.path(), &BTreeMap::new())
+        .await;
+
+    // Assert
+    assert!(
+        failure
+            .err()
+            .expect("a file in place of the directory should fail")
+            .contains("Failed to create the harness temporary directory")
+    );
+}
+
+#[test]
+/// Withholds credential-like variables from commands, whatever their case,
+/// and keeps ordinary ones.
+fn bash_environment_drops_credentials() {
+    // Arrange
+    let credentials = [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_PROFILE",
+        "CARGO_REGISTRY_TOKEN",
+        "DATABASE_URL",
+        "GEMINI_API_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITLAB_TOKEN",
+        "GOOGLE_API_KEY",
+        "HF_TOKEN",
+        "NPM_TOKEN",
+        "SENTRY_DSN",
+        "app_secret",
+        "DB_PASSWORD",
+        "SMTP_PASSWD",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ];
+    let kept = [
+        "CARGO_TARGET_DIR",
+        "EDITOR",
+        "KEYBOARD_LAYOUT",
+        "SSH_AUTH_SOCK",
+    ];
+    let environment = credentials
+        .iter()
+        .chain(&kept)
+        .map(|name| (name.to_string(), "value".to_string()))
+        .collect::<BTreeMap<_, _>>();
+
+    // Act
+    let granted = bash_environment(&environment)
+        .into_iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        granted,
+        [
+            "SSH_AUTH_SOCK",
+            "CARGO_TARGET_DIR",
+            "EDITOR",
+            "KEYBOARD_LAYOUT"
+        ]
+    );
+}
+
+#[test]
+/// Grants the sandbox's own `TMPDIR` and tool caches in place of the host's.
+fn bash_policies_replace_host_temporary_and_cache_directories() {
+    // Arrange
+    let sandbox = CommandSandbox::new(
+        Path::new("/data-root"),
+        PathBuf::from("/data-root/session-1/tmp"),
+        &BTreeMap::new(),
+    );
+    let host = environment(&[
+        ("CARGO_HOME", "/home/test/.cargo"),
+        ("PATH", "/usr/bin"),
+        ("TMPDIR", "/tmp/host"),
+        ("XDG_CACHE_HOME", "/home/test/.cache"),
+    ]);
+    let without_host_values = environment(&[("PATH", "/usr/bin")]);
+    let policy = |environment: &BTreeMap<String, String>| {
+        RunOptions::new(
+            ProtocolRequestProfile::SessionTurn,
+            PermissionMode::AutoEdit,
+            environment,
+            &sandbox,
+        )
+        .expect("options")
+        .bash
+    };
+
+    // Act
+    let with_host = policy(&host);
+    let without_host = policy(&without_host_values);
+
+    // Assert
+    assert_eq!(with_host, without_host);
+}
+
 #[test]
 /// Skips variables beyond the harness grant limit instead of failing.
 fn run_options_tolerate_oversized_environments() {
@@ -1020,17 +1224,24 @@ fn run_options_tolerate_oversized_environments() {
     let environment = (0..100)
         .map(|index| (format!("VAR_{index:03}"), "value".to_string()))
         .collect::<BTreeMap<_, _>>();
+    let sandbox = CommandSandbox::new(
+        Path::new("/data-root"),
+        PathBuf::from("/data-root/session-1/tmp"),
+        &environment,
+    );
 
     // Act
     let edit = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::AutoEdit,
         &environment,
+        &sandbox,
     );
     let read_only = RunOptions::new(
         ProtocolRequestProfile::SessionTurn,
         PermissionMode::ReadOnly,
         &environment,
+        &sandbox,
     );
 
     // Assert
@@ -1168,6 +1379,7 @@ fn claude_models_register_on_the_anthropic_provider() {
     };
     let context = HarnessContext {
         compacts: false,
+        sandbox: SESSION_SANDBOX,
         summary_model: None,
         environment: &unkeyed,
         provider_call_budget: None,

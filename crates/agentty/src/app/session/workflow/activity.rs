@@ -77,8 +77,13 @@ impl TurnActivity {
 
     /// Keeps the transcript notice for one thing the turn reported about how
     /// it ran, such as a compaction of the session's earlier context.
+    /// Sandbox notices depend on the session's earlier ones, so a session
+    /// turn relays them to its transcript as they arrive instead.
     pub(super) fn observe_notice(&mut self, notice: &TurnNotice) {
         let text = match notice {
+            TurnNotice::SandboxUnavailable { .. }
+            | TurnNotice::SandboxAvailable
+            | TurnNotice::LikelySandboxDenial => return,
             TurnNotice::ContextCompacted { model: Some(model) } => TranscriptNotice::Context
                 .format(format_args!(
                     "Summarized earlier turns with `{model}` to fit the context window."

@@ -74,10 +74,17 @@ struct ExperimentalFeatures {
     remote: bool,
 }
 
+/// Runs the native sandbox helper when a Harness turn started this
+/// executable as one, before any runtime or thread exists; otherwise runs
+/// the `agentty` application.
+fn main() -> ExitCode {
+    ag_worker::dispatch_sandbox_helper().unwrap_or_else(application)
+}
+
 /// Runs the `agentty` application runtime using the configured workspace and
 /// database.
 #[tokio::main]
-async fn main() -> ExitCode {
+async fn application() -> ExitCode {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
 

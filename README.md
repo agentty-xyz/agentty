@@ -193,7 +193,8 @@ agentty --version    # Show the installed Agentty version
   provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
 - **Harness**: `--experimental-harness` adds a preview `ag-harness` agent to `/model`
   that runs Agentty's built-in agent loop against local or hosted models. Its edit mode
-  runs unsandboxed shell commands. See
+  runs shell commands in the operating system's sandbox where available (Seatbelt on
+  macOS, Bubblewrap on Linux), and warns when they run without it. See
   [Harness agent](https://agentty.xyz/docs/agents/backends/#backends-harness).
 - **Tracing**: disabled unless `--otlp-endpoint` supplies a complete OTLP HTTP/protobuf
   traces URL. A URL ending in `/v1/traces` also sends usage events as OTLP log records

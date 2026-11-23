@@ -1,6 +1,7 @@
 //! The Native Harness Sandbox pull request path filter must name exactly the
-//! workspace crates that `ag-harness` builds from, so a pull request that
-//! changes one of them still qualifies the macOS launcher.
+//! workspace crates that `ag-harness` builds from, plus `ag-agent`, which
+//! owns Agentty's sandbox grants, so a pull request that changes one of them
+//! still qualifies the macOS launcher and those grants.
 
 use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
@@ -11,6 +12,9 @@ use serde_json::Value as Json;
 use serde_yaml_ng::Value as Yaml;
 
 const ROOT_PACKAGE: &str = "ag-harness";
+/// Crate whose sandbox grant suite the workflow also runs; its other
+/// dependencies are left to the unfiltered merge queue and `main` runs.
+const GRANT_CRATE: &str = "crates/ag-agent";
 
 #[test]
 fn pull_request_filter_names_every_ag_harness_workspace_crate() -> Result<(), Box<dyn Error>> {
@@ -36,13 +40,14 @@ fn pull_request_filter_names_every_ag_harness_workspace_crate() -> Result<(), Bo
     let built_crates = ag_harness_workspace_crates(&root)?
         .into_iter()
         .map(|directory| format!("{}/**", directory.display()))
+        .chain(std::iter::once(format!("{GRANT_CRATE}/**")))
         .collect::<BTreeSet<_>>();
 
     // Assert
     assert_eq!(
         filtered_crates, built_crates,
         "`.github/workflows/harness-sandbox.yml` must filter on every workspace crate \
-         `ag-harness` builds from, and no others"
+         `ag-harness` builds from and on `ag-agent`, and no others"
     );
 
     Ok(())

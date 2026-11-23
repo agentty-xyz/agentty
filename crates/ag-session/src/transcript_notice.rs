@@ -67,6 +67,10 @@ pub enum TranscriptNotice {
     ReviewRequestSyncWarning,
     /// Review-request watch enablement and automatic follow-up.
     ReviewWatch,
+    /// Hint that the native sandbox may have blocked a command.
+    Sandbox,
+    /// Commands running without the native sandbox, with the fix.
+    SandboxWarning,
     /// Draft session start failure.
     StartError,
     /// Completed-turn metadata persistence failure.
@@ -105,6 +109,8 @@ impl TranscriptNotice {
             Self::ReviewCommentsWarning => "[Review Comments Warning]",
             Self::ReviewRequestSyncWarning => "[Review Request Sync Warning]",
             Self::ReviewWatch => "[Review Watch]",
+            Self::Sandbox => "[Sandbox]",
+            Self::SandboxWarning => "[Sandbox Warning]",
             Self::StartError => "[Start Error]",
             Self::TurnMetadataError => "[Turn Metadata Error]",
         }

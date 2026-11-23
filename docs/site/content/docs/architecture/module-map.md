@@ -41,7 +41,10 @@ the module docstrings directly.
 
 All crates live under `crates/`. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for its component
-contracts.
+contracts. `ag-worker` also re-exports `dispatch_sandbox_helper`, which a host enabling
+harness sessions calls first in `main` so its executable serves as the native sandbox
+helper; see the
+[Execution Boundary](@/docs/core-components/execution-components/execution-boundary.md).
 
 ## Application Layers (`crates/agentty/src/`)
 

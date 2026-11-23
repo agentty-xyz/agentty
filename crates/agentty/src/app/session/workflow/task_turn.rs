@@ -10,6 +10,7 @@ use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::base_branch::BaseBranchSnapshot;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
@@ -84,7 +85,8 @@ async fn execute(
     let client = factory
         .create_task(&history.context.context)
         .map_err(turn::session_error_from_agent_error)?;
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (event_tx, relayed_rx) = mpsc::unbounded_channel();
+    let (relay_tx, event_rx) = mpsc::unbounded_channel();
     let consumer = spawn::spawn_detached(turn::consume_turn_events(
         event_rx,
         context.app_event_tx.clone(),
@@ -92,13 +94,23 @@ async fn execute(
         Arc::clone(&context.child_pid),
     ));
     let permission_mode = prepared.permission_mode;
-    let result = client
-        .submit(prepared, event_tx, cancellation.clone())
-        .await;
+    let base_branch_scope = turn::base_branch_scope(context);
+    let base_branch = BaseBranchSnapshot::capture(
+        &base_branch_scope,
+        history.context.context.assignment.agent.kind(),
+    )
+    .await?;
+    let sandbox_notices = turn::sandbox_notice_target(context);
+    let (result, ()) = tokio::join!(
+        client.submit(prepared, event_tx, cancellation.clone()),
+        sandbox_notices.relay(relayed_rx, relay_tx),
+    );
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);
-    let result = result.map_err(turn::session_error_from_agent_error)?;
+    let result = BaseBranchSnapshot::verify(base_branch.as_ref(), &base_branch_scope, result)
+        .await
+        .map_err(turn::session_error_from_agent_error)?;
     cleanup.map_err(turn::session_error_from_agent_error)?;
     check_cancellation(&cancellation)?;
     let assignment = &history.context.context.assignment;

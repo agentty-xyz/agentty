@@ -7,9 +7,12 @@
 //! errors, and timeouts fail the run; none is silently counted as a pass.
 //! Ordinary CI runs deterministic graders and a worker/runtime transport test
 //! without live providers. Set `AGENTTY_EVAL_PROVIDER=harness` to evaluate the
-//! Agentty-owned `bash` description and unavailable-tool result; the
-//! deterministic `bash` and unavailable-tool tests replay them through the
-//! in-process harness against a scripted provider. The deterministic
+//! Agentty-owned unavailable-tool result; the deterministic unavailable-tool
+//! test replays it through the in-process harness against a scripted
+//! provider. The `bash` case is graded but not run live: utility prompts
+//! refuse to run commands without the native sandbox, and this test binary
+//! is no sandbox helper, as the deterministic `bash` test checks. The
+//! deterministic
 //! model-switch test checks the note that carries another provider's
 //! reasoning after a switch, which no live case covers yet.
 
@@ -931,7 +934,8 @@ fn cases() -> Vec<Case> {
     cases.extend(graph_output_reply_cases());
     cases.extend(description_cases());
     cases.extend(graph_cases());
-    cases.extend(bash_cases());
+    // The `bash` case runs as a utility prompt, which refuses to run commands
+    // without the native sandbox; this test binary is no sandbox helper.
     cases.extend(unavailable_tool_cases());
 
     cases
@@ -962,9 +966,6 @@ fn unavailable_tool_cases() -> Vec<Case> {
         review_expectations: Vec::new(),
     }]
 }
-
-/// Phrase every Harness `bash` description without isolation carries.
-const UNSANDBOXED_BASH_CLAUSE: &str = "Run Bash directly on the host without a sandbox.";
 
 /// Auto Edit cases for the `bash` tool description. Only Harness runs
 /// advertise Agentty's description; other providers describe their own shell.
@@ -2357,48 +2358,6 @@ fn bash_grader_rejects_the_former_sandbox_claim_and_missing_command_output() {
     assert_eq!(grades[2]["missing_expectations"], 1);
 }
 
-/// Scripts a Chat Completions provider for the `bash` case: it calls `bash`
-/// only when the request advertises the unsandboxed description, then answers
-/// once the command result arrives. Any other request gets no response.
-async fn scripted_bash_provider() -> MockServer {
-    let server = MockServer::start().await;
-    let completion = |message: Value| {
-        ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [message],
-            "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
-        }))
-    };
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(body_string_contains(r#""tool_call_id":"call-bash""#))
-        .respond_with(completion(json!({
-            "finish_reason": "stop",
-            "message": {"content": json!({"answer": "bash-ok\nCommands run directly on the \
-                host without a sandbox, and network access is not restricted."}).to_string()}
-        })))
-        .with_priority(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(body_string_contains(
-            UNSANDBOXED_BASH_CLAUSE,
-        ))
-        .respond_with(completion(json!({
-            "finish_reason": "tool_calls",
-            "message": {"content": null, "tool_calls": [{
-                "id": "call-bash",
-                "type": "function",
-                "function": {"name": "bash", "arguments": json!({"command": "printf bash-ok"}).to_string()}
-            }]}
-        })))
-        .with_priority(2)
-        .mount(&server)
-        .await;
-
-    server
-}
-
 /// Returns the native harness environment for a scripted provider at
 /// `server`, with no local model server and the host `PATH` for Git.
 fn scripted_harness_environment(server: &MockServer) -> BTreeMap<String, String> {
@@ -2417,10 +2376,13 @@ fn scripted_harness_environment(server: &MockServer) -> BTreeMap<String, String>
     ])
 }
 
+/// The `bash` case runs as a utility prompt, which refuses to run commands
+/// without the native sandbox before any provider call; this test binary
+/// never dispatches the sandbox helper.
 #[tokio::test]
-async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() {
+async fn bash_evaluation_refuses_to_run_commands_without_the_sandbox() {
     // Arrange
-    let server = scripted_bash_provider().await;
+    let server = MockServer::start().await;
     let data_root = tempfile::tempdir().expect("harness data root");
     let worktree = tempfile::tempdir().expect("worktree");
     let environment = scripted_harness_environment(&server);
@@ -2447,15 +2409,17 @@ async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() 
     worker.shutdown().await;
 
     // Assert
-    let submission = submission.expect("bash evaluation submission");
-    assert_eq!(case.grade(&submission.response)["success"], true);
-    let requests = server.received_requests().await.unwrap_or_default();
-    let bash_result = requests
-        .iter()
-        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
-        .find(|body| body.contains(r#""tool_call_id":"call-bash""#))
-        .expect("the bash result reaches the model");
-    assert!(bash_result.contains("bash-ok"));
+    let error = submission
+        .expect_err("the utility prompt must refuse")
+        .to_string();
+    assert!(
+        error.contains("Agentty did not run this prompt's commands"),
+        "{error}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        0
+    );
 }
 
 #[test]

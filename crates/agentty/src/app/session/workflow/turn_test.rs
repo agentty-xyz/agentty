@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnResult,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice,
+    TurnResult,
 };
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -16,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    MainCheckoutSnapshot, add_main_checkout_warning, fresh_turn_cancel_token,
+    MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events, fresh_turn_cancel_token,
     live_transcript_source, load_session_response_style, load_title_reasoning_level,
-    prepare_turn_request,
+    prepare_turn_request, sandbox_notice_target,
 };
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
@@ -354,6 +355,91 @@ async fn main_checkout_status_failure_after_the_turn_fails_the_turn() {
     assert!(
         matches!(&error, AgentError::Backend(message) if message.contains("status unavailable")),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pass_on() {
+    // Arrange
+    let (context, _) = persisted_turn_test_context().await;
+    let unavailable = || {
+        TurnEvent::Notice(TurnNotice::SandboxUnavailable {
+            message: "Commands run without the sandbox. Bubblewrap (`bwrap`) is not installed."
+                .to_string(),
+            remedy: "Install bubblewrap.".to_string(),
+        })
+    };
+    let compacted = TurnEvent::Notice(TurnNotice::ContextCompacted { model: None });
+    let turns = [
+        vec![
+            TurnEvent::Notice(TurnNotice::LikelySandboxDenial),
+            TurnEvent::ThoughtDelta("Running a command".to_string()),
+            unavailable(),
+            unavailable(),
+            compacted.clone(),
+        ],
+        vec![unavailable()],
+    ];
+
+    // Act
+    let mut forwarded = Vec::new();
+    for events in turns {
+        let (event_tx, relayed_rx) = mpsc::unbounded_channel();
+        let (relay_tx, mut event_rx) = mpsc::unbounded_channel();
+        for event in events {
+            event_tx.send(event).expect("queued event");
+        }
+        drop(event_tx);
+        sandbox_notice_target(&context)
+            .relay(relayed_rx, relay_tx)
+            .await;
+        while let Ok(event) = event_rx.try_recv() {
+            forwarded.push(event);
+        }
+    }
+    // A consumer that receives sandbox notices directly keeps none of them.
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    event_tx
+        .send(TurnEvent::Notice(TurnNotice::LikelySandboxDenial))
+        .expect("queued event");
+    drop(event_tx);
+    let activity = consume_turn_events(
+        event_rx,
+        context.app_event_tx.clone(),
+        context.session_id.clone(),
+        Arc::clone(&context.child_pid),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        forwarded,
+        [
+            TurnEvent::ThoughtDelta("Running a command".to_string()),
+            compacted
+        ]
+    );
+    assert_eq!(activity.notices(), [] as [String; 0]);
+    let notices = context
+        .transcript
+        .lock()
+        .expect("transcript")
+        .messages()
+        .iter()
+        .map(|message| message.content.trim().to_string())
+        .collect::<Vec<_>>();
+    let warning = "[Sandbox Warning] Commands run without the sandbox. Bubblewrap (`bwrap`) is \
+                   not installed. Install bubblewrap.";
+    assert_eq!(
+        notices.iter().filter(|notice| *notice == warning).count(),
+        1
+    );
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|notice| notice.starts_with("[Sandbox] A command may have been blocked"))
+            .count(),
+        1
     );
 }
 

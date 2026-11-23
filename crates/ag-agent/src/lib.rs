@@ -22,8 +22,8 @@ pub use agent::{
     AgentAvailabilityProbe, AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest,
     NativeHarnessConfig, RealAgentAvailabilityProbe, RealOneShotClient,
     StaticAgentAvailabilityProbe, cleanup_session_worktree_artifacts, create_app_server_client,
-    create_backend, executable_name, instruction_bootstrap_key, supports_turn_steering,
-    transport_mode,
+    create_backend, dispatch_sandbox_helper, executable_name, instruction_bootstrap_key,
+    supports_turn_steering, transport_mode,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use app_server::MockAppServerClient;
