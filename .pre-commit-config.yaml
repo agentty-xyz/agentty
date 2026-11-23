@@ -531,15 +531,20 @@ repos:
         stages: [manual]
       - id: public-api
         name: public API snapshots
-        description: Compare the `ag-router` and `ag-harness` public APIs, with all features, against their committed `cargo public-api` snapshots, and require every `ag_router` type in the `ag-harness` API to be re-exported by it. After reviewing an intended change, set AGENTTY_PUBLIC_API_UPDATE=1 to rewrite the snapshots.
+        description: Compare the `ag-router` and `ag-harness` public APIs, with all features and without blanket or auto-trait impls, against their committed `cargo public-api` snapshots, and require every `ag_router` type in the `ag-harness` API to be re-exported by it. A tool or build failure exits 2 without touching the snapshots. After reviewing an intended change, set AGENTTY_PUBLIC_API_UPDATE=1 to rewrite the snapshots.
         entry: >-
           bash -eu -o pipefail -c 'status=0;
+          api=$(mktemp); trap "rm -f \"$api\"" EXIT;
           for crate in ag-router ag-harness; do
           snapshot="crates/$crate/public-api.txt";
+          if ! cargo public-api --color never -ss --all-features -p "$crate" > "$api"; then
+          echo "cargo public-api failed for $crate; check the tool version pinned in .github/actions/setup-rust-prek/action.yml and the build output above" >&2;
+          exit 2;
+          fi;
           if [ "${AGENTTY_PUBLIC_API_UPDATE:-}" = 1 ]; then
-          cargo public-api --color never -s --all-features -p "$crate" > "$snapshot";
+          cp "$api" "$snapshot";
           else
-          cargo public-api --color never -s --all-features -p "$crate" | diff -u "$snapshot" - || status=1;
+          diff -u "$snapshot" "$api" || status=1;
           fi;
           done;
           for name in $(grep -Eo "ag_router::([a-z_]+::)*[A-Z][A-Za-z0-9]*" crates/ag-harness/public-api.txt | sed "s/.*:://" | sort -u); do

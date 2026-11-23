@@ -1474,11 +1474,9 @@ async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registratio
         .declared_profile("kimi-k3", |_| Err(std::env::VarError::NotPresent))
         .expect("hosted catalog profiles read no environment")
         .expect("Kimi K3 declares a profile");
-    let capabilities = ModelCapabilities {
-        image_input: true,
-        tool_calls: true,
-        ..ModelCapabilities::new(recorded_profile)
-    };
+    let capabilities = ModelCapabilities::new(recorded_profile)
+        .with_image_input(true)
+        .with_tool_calls(true);
     let mut recorded = ModelRegistry::new();
     recorded
         .register(

@@ -129,13 +129,16 @@ async fn drain(mut stream: EventStream) -> Vec<Seen> {
     let mut seen = Vec::new();
     while let Some(event) = next_event(&mut stream).await {
         seen.extend(match event.kind {
-            RunEventKind::ItemStarted { id, item_kind } => Some(Seen::Started(id.get(), item_kind)),
-            RunEventKind::ItemDelta { delta, id } => Some(Seen::Delta(id.get(), delta)),
+            RunEventKind::ItemStarted { id, item_kind, .. } => {
+                Some(Seen::Started(id.get(), item_kind))
+            }
+            RunEventKind::ItemDelta { delta, id, .. } => Some(Seen::Delta(id.get(), delta)),
             RunEventKind::ItemCompleted {
                 id,
                 item: Item::ToolCall(_),
+                ..
             } => Some(Seen::CallCompleted(id.get())),
-            RunEventKind::ItemCompleted { id, item } => Some(Seen::Completed(id.get(), item)),
+            RunEventKind::ItemCompleted { id, item, .. } => Some(Seen::Completed(id.get(), item)),
             RunEventKind::ModelRequestCompleted { .. } => Some(Seen::Request),
             _ => None,
         });

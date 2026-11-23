@@ -118,20 +118,19 @@ fn find_span<'a>(spans: &'a [SpanData], name: &str, error_type: Option<&str>) ->
 }
 
 fn full_completion() -> CompletionMetadata {
-    CompletionMetadata::new(
-        "stop".to_string(),
-        Some("response-id".to_string()),
-        Some("response-model".to_string()),
-        Some("unexported-fingerprint".to_string()),
-        Some(CompletionUsage::new(
-            Some(2),
-            Some(3),
-            Some(5),
-            Some(8),
-            Some(1),
-            Some(13),
-        )),
-    )
+    CompletionMetadata::new("stop")
+        .with_response_id(Some("response-id".to_string()))
+        .with_response_model(Some("response-model".to_string()))
+        .with_system_fingerprint(Some("unexported-fingerprint".to_string()))
+        .with_usage(Some(
+            CompletionUsage::default()
+                .with_cache_hit_tokens(Some(2))
+                .with_cache_miss_tokens(Some(3))
+                .with_input_tokens(Some(5))
+                .with_output_tokens(Some(8))
+                .with_reasoning_tokens(Some(1))
+                .with_total_tokens(Some(13)),
+        ))
 }
 
 fn project_successes(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
@@ -291,33 +290,19 @@ fn project_optional_metadata(emitter: &LifecycleEmitter, metadata: ModelMetadata
         .start_model_request(Some(metadata.clone()), 0, None)
         .expect("observer should enable standalone calls")
         .completed(
-            Some(CompletionMetadata::new(
-                "stop".to_string(),
-                None,
-                Some("usage-free-model".to_string()),
-                None,
-                None,
-            )),
+            Some(
+                CompletionMetadata::new("stop")
+                    .with_response_model(Some("usage-free-model".to_string())),
+            ),
             ModelResponseType::Output,
         );
     emitter
         .start_model_request(Some(metadata), 0, None)
         .expect("observer should enable standalone calls")
         .completed(
-            Some(CompletionMetadata::new(
-                "stop".to_string(),
-                None,
-                None,
-                None,
-                Some(CompletionUsage::new(
-                    None,
-                    None,
-                    Some(u64::MAX),
-                    None,
-                    None,
-                    None,
-                )),
-            )),
+            Some(CompletionMetadata::new("stop").with_usage(Some(
+                CompletionUsage::default().with_input_tokens(Some(u64::MAX)),
+            ))),
             ModelResponseType::Output,
         );
 }

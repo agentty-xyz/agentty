@@ -1,6 +1,34 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 #[cfg(test)]
+#[path = "support/public_store.rs"]
+mod public_store;
+
+#[cfg(test)]
+#[path = "support/catalog_registration.rs"]
+mod catalog_registration_test;
+
+#[cfg(test)]
+#[path = "support/compaction.rs"]
+mod compaction_test;
+
+#[cfg(test)]
+#[path = "support/model_registry.rs"]
+mod model_registry_test;
+
+#[cfg(test)]
+#[path = "support/recovery.rs"]
+mod recovery_test;
+
+#[cfg(test)]
+#[path = "support/run_cost.rs"]
+mod run_cost_test;
+
+#[cfg(test)]
+#[path = "support/transcript.rs"]
+mod transcript_test;
+
+#[cfg(test)]
 #[path = "support/repository.rs"]
 mod repository_fixture;
 
@@ -109,7 +137,7 @@ use ag_harness::provider::{
     ChatGptCredentials, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{MemoryStore, SessionStore};
+use ag_harness::store::MemoryStore;
 #[cfg(feature = "sqlite")]
 use ag_harness::store::{SessionInfo, WriteStatus};
 #[cfg(feature = "sqlite")]
@@ -129,27 +157,6 @@ use tokio::io::AsyncRead;
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
-
-/// Returns one empty store of each public backend this build includes.
-#[cfg(test)]
-#[cfg(feature = "sqlite")]
-async fn public_stores() -> Vec<Arc<dyn SessionStore>> {
-    vec![
-        Arc::new(MemoryStore::new()),
-        Arc::new(
-            ag_harness::store::SqliteStore::open(Path::new(":memory:"))
-                .await
-                .expect("sqlite"),
-        ),
-    ]
-}
-
-/// Returns one empty store of each public backend this build includes.
-#[cfg(test)]
-#[cfg(not(feature = "sqlite"))]
-fn public_stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
-    std::future::ready(vec![Arc::new(MemoryStore::new())])
-}
 
 struct ExternalToolModel {
     batched: bool,
@@ -276,7 +283,7 @@ fn external_repository_configuration_rejects_relative_git_executable() -> Result
 async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<(), Box<dyn Error>>
 {
     for batched in [false, true] {
-        for store in public_stores().await {
+        for store in public_store::stores().await {
             // Arrange
             let requests = Arc::new(Mutex::new(Vec::new()));
             let model = ExternalToolModel {
@@ -954,20 +961,16 @@ fn external_consumer_reads_built_in_specs_by_role_defaults() {
 #[test]
 fn completion_metadata_shares_router_type_and_storage_format() {
     // Arrange
-    let metadata = CompletionMetadata::new(
-        "stop".to_string(),
-        Some("response-1".to_string()),
-        Some("provider-model".to_string()),
-        None,
-        Some(CompletionUsage::new(
-            Some(3),
-            None,
-            Some(5),
-            Some(2),
-            None,
-            Some(7),
-        )),
-    );
+    let metadata = CompletionMetadata::new("stop")
+        .with_response_id(Some("response-1".to_string()))
+        .with_response_model(Some("provider-model".to_string()))
+        .with_usage(Some(
+            CompletionUsage::default()
+                .with_cache_hit_tokens(Some(3))
+                .with_input_tokens(Some(5))
+                .with_output_tokens(Some(2))
+                .with_total_tokens(Some(7)),
+        ));
     let router_metadata: ag_router::CompletionMetadata = metadata.clone();
 
     // Act
@@ -1003,14 +1006,14 @@ impl Model for ExternalMetadataModel {
     }
 
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        let usage = CompletionUsage::new(None, None, Some(4), Some(2), None, Some(6));
-        let metadata = CompletionMetadata::new(
-            "stop".to_string(),
-            Some("external-response".to_string()),
-            Some("external-model".to_string()),
-            None,
-            Some(usage),
-        );
+        let usage = CompletionUsage::default()
+            .with_input_tokens(Some(4))
+            .with_output_tokens(Some(2))
+            .with_total_tokens(Some(6));
+        let metadata = CompletionMetadata::new("stop")
+            .with_response_id(Some("external-response".to_string()))
+            .with_response_model(Some("external-model".to_string()))
+            .with_usage(Some(usage));
 
         Ok(ModelCompletion::new(
             metadata,
@@ -1519,7 +1522,7 @@ async fn external_consumer_observes_a_repeated_call_nudge_then_stop() -> Result<
     // Assert
     assert!(matches!(
         result,
-        Err(TurnError::RepeatedToolCalls { repeats: 5, ref tool }) if tool == "read"
+        Err(TurnError::RepeatedToolCalls { repeats: 5, ref tool, .. }) if tool == "read"
     ));
     assert_eq!(
         *events
@@ -1736,11 +1739,13 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     );
     assert!(first_request.estimated_weight() > 0);
     assert_eq!(first_request.calibrated_weight(), None);
-    let repeated = ag_harness::turn::ToolActivity::ReadRepeated {
-        action: ag_harness::tool::ReadAction::File,
-        duration: std::time::Duration::ZERO,
-        summary: "name.txt".to_string(),
-    };
+    let repeated: ag_harness::turn::ToolActivity = serde_json::from_value(json!({
+        "ReadRepeated": {
+            "action": "file",
+            "duration": {"secs": 0, "nanos": 0},
+            "summary": "name.txt",
+        }
+    }))?;
     assert_eq!((repeated.name(), repeated.path()), ("read", "name.txt"));
     assert_eq!(options.schema(), Some(&schema));
     assert_eq!(options.tools().names().collect::<Vec<_>>(), ["read"]);
@@ -2044,11 +2049,7 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
                     calls: Arc::default(),
                     messages: Arc::default(),
                 },
-                ModelCapabilities {
-                    image_input,
-                    profile: unbounded_model_profile(),
-                    tool_calls: false,
-                },
+                ModelCapabilities::new(unbounded_model_profile()).with_image_input(image_input),
             )
             .expect("register");
 
@@ -2106,11 +2107,7 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
     registry.register(
         ExecutionIdentity::new("text", "1")?,
         ExternalModel,
-        ModelCapabilities {
-            image_input: true,
-            profile: unbounded_model_profile(),
-            tool_calls: false,
-        },
+        ModelCapabilities::new(unbounded_model_profile()).with_image_input(true),
     )?;
     let registered = Harness::from_registry(&registry, "text")?;
 

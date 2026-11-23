@@ -1065,11 +1065,9 @@ fn review_harness() -> Result<Harness, Box<dyn std::error::Error>> {
         ExecutionIdentity::new("review-model", "config-v1")?,
         ModelConfiguration::new(ModelProvider::Muse, MUSE_SPARK_1_3)
             .client_from_environment(|name| std::env::var(name))?,
-        ModelCapabilities {
-            image_input: true,
-            tool_calls: true,
-            ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
-        },
+        ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
+            .with_image_input(true)
+            .with_tool_calls(true),
     )?;
 
     Ok(Harness::from_registry(&models, "review-model")?)
@@ -1216,3 +1214,29 @@ grouped by topic:
 The API docs on each type carry the detailed contracts. The
 [design page](https://agentty.xyz/docs/architecture/ag-harness-design/) covers runtime
 and persistence boundaries.
+
+## API stability
+
+Public enums are `#[non_exhaustive]`, and so are the struct variants of events, reports,
+and errors the crate builds (`RunEventKind`, `LifecycleEventKind`, `ToolActivity`,
+`TurnError`), so match them with a wildcard arm and `..`. Records the crate builds, such
+as `CommandRecord`, `WriteRecord`, and `CompletionUsage`, gain fields through `with_`
+setters or accessors; `ModelError` variants stay open for custom models to construct,
+and provider `XxxConfig` structs stay open for hosts to fill in.
+
+### Upgrading from 0.20
+
+The release that removes the deprecated items below is a minor version bump.
+
+| Removed                                                         | Use instead                                                                                   |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `Tool`, `ToolPolicy`, `Harness::allow`                          | `ToolSet::empty().with_read()` (and so on) passed to `Harness::tools`                         |
+| `HarnessBuilder::allow`                                         | `HarnessBuilder::tools` with a `ToolSet`                                                      |
+| `TurnOptions::new(output, policy)`                              | `TurnOptions::from_output(output).with_tools(set)`                                            |
+| `TurnOptions::tool_policy`                                      | `TurnOptions::tools`                                                                          |
+| `RunRequest::tool_policy`                                       | `RunRequest::tools`                                                                           |
+| `MalformedArguments::tool`                                      | `MalformedArguments::name`                                                                    |
+| `SessionError::{Migration, QueryContext}`                       | `SessionError::Store`: match `HarnessError::kind`, or downcast its source                     |
+| Positional `CompletionUsage::new` and `CompletionMetadata::new` | `CompletionUsage::default()` or `CompletionMetadata::new(finish_reason)` with `with_` setters |
+| `ModelCapabilities { .. }` literals                             | `ModelCapabilities::new(profile)` with `with_image_input`, `with_tool_calls`                  |
+| Implementing `store::SessionStore`                              | No replacement yet: use `MemoryStore` or `SqliteStore`                                        |

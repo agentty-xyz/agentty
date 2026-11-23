@@ -14,7 +14,7 @@ use crate::schema_contract::{OutputSchema, OutputSchemaError};
 use crate::tool::ToolCall;
 
 /// Maximum serialized summary payload accepted by checkpoint construction.
-pub const MAX_SUMMARY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 
 /// Versioned compaction record covering a session's oldest finished turns.
 ///
@@ -140,7 +140,8 @@ pub enum CheckpointError {
         /// Bounded validator diagnostic.
         reason: String,
     },
-    /// The serialized summary exceeds the bounded checkpoint payload.
+    /// The serialized summary exceeds the bounded checkpoint payload, 16 KiB
+    /// for a session's checkpoint.
     #[error("checkpoint summary retains {summary_bytes} bytes but at most {max_bytes} fit")]
     SummaryTooLarge {
         /// Bounded payload limit.

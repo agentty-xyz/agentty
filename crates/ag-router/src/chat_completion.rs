@@ -610,13 +610,11 @@ impl ChunkStream {
         let finish_reason = self
             .finish_reason
             .ok_or_else(|| TransportError::transport(StreamClosed))?;
-        let metadata = model::CompletionMetadata::new(
-            finish_reason,
-            self.id,
-            self.model,
-            self.system_fingerprint,
-            self.usage.map(model::CompletionUsage::from),
-        );
+        let metadata = model::CompletionMetadata::new(finish_reason)
+            .with_response_id(self.id)
+            .with_response_model(self.model)
+            .with_system_fingerprint(self.system_fingerprint)
+            .with_usage(self.usage.map(model::CompletionUsage::from));
 
         Ok(ChatCompletion {
             content: self.content,
@@ -952,13 +950,11 @@ impl ChatCompletionResponse {
             usage,
         } = self;
         let choice = choices.into_iter().next()?;
-        let metadata = model::CompletionMetadata::new(
-            choice.finish_reason,
-            id,
-            response_model,
-            system_fingerprint,
-            usage.map(model::CompletionUsage::from),
-        );
+        let metadata = model::CompletionMetadata::new(choice.finish_reason)
+            .with_response_id(id)
+            .with_response_model(response_model)
+            .with_system_fingerprint(system_fingerprint)
+            .with_usage(usage.map(model::CompletionUsage::from));
 
         Some(ChatCompletion {
             content: choice.message.content,
@@ -1072,21 +1068,22 @@ struct ChatCompletionUsage {
 
 impl From<ChatCompletionUsage> for model::CompletionUsage {
     fn from(usage: ChatCompletionUsage) -> Self {
-        Self::new(
-            usage.prompt_cache_hit_tokens.or_else(|| {
+        Self::default()
+            .with_cache_hit_tokens(usage.prompt_cache_hit_tokens.or_else(|| {
                 usage
                     .prompt_tokens_details
                     .as_ref()
                     .and_then(|details| details.cached_tokens)
-            }),
-            usage.prompt_cache_miss_tokens,
-            usage.prompt_tokens,
-            usage.completion_tokens,
-            usage
-                .completion_tokens_details
-                .and_then(|details| details.reasoning_tokens),
-            usage.total_tokens,
-        )
+            }))
+            .with_cache_miss_tokens(usage.prompt_cache_miss_tokens)
+            .with_input_tokens(usage.prompt_tokens)
+            .with_output_tokens(usage.completion_tokens)
+            .with_reasoning_tokens(
+                usage
+                    .completion_tokens_details
+                    .and_then(|details| details.reasoning_tokens),
+            )
+            .with_total_tokens(usage.total_tokens)
     }
 }
 

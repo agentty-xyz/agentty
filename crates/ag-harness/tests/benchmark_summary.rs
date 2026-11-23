@@ -7,6 +7,7 @@ mod fixture;
 mod fixture_test;
 #[path = "benchmark/context/metric.rs"]
 mod metric;
+#[cfg(test)]
 #[path = "benchmark/context/metric_test.rs"]
 mod metric_test;
 #[path = "benchmark/context/probe.rs"]

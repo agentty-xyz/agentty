@@ -17,7 +17,7 @@ pub(crate) use crate::admission::{
     Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
 pub(crate) use crate::compaction::CompactionSource;
-pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
+pub use crate::compaction::{CheckpointError, SessionCheckpoint};
 pub(crate) use crate::context::HistoryProjection;
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};

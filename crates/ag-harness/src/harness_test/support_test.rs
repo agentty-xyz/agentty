@@ -98,20 +98,16 @@ pub(super) fn response_without_metadata(response: ModelResponse) -> ModelComplet
 
 pub(super) fn response_with_metadata(response: ModelResponse) -> ModelCompletion {
     ModelCompletion::new(
-        CompletionMetadata::new(
-            "stop\nforged".to_string(),
-            Some("response\u{1b}-1".to_string()),
-            Some("reported\nmodel".to_string()),
-            Some("finger\tprint".to_string()),
-            Some(CompletionUsage::new(
-                None,
-                None,
-                Some(12),
-                Some(4),
-                None,
-                Some(16),
+        CompletionMetadata::new("stop\nforged")
+            .with_response_id(Some("response\u{1b}-1".to_string()))
+            .with_response_model(Some("reported\nmodel".to_string()))
+            .with_system_fingerprint(Some("finger\tprint".to_string()))
+            .with_usage(Some(
+                CompletionUsage::default()
+                    .with_input_tokens(Some(12))
+                    .with_output_tokens(Some(4))
+                    .with_total_tokens(Some(16)),
             )),
-        ),
         response,
     )
 }

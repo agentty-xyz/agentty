@@ -154,10 +154,8 @@ impl Model for SummarizingModel {
 
             return Ok(match self.summary_input_tokens {
                 Some(input_tokens) => {
-                    let usage =
-                        CompletionUsage::new(None, None, Some(input_tokens), None, None, None);
-                    let metadata =
-                        CompletionMetadata::new("stop".to_string(), None, None, None, Some(usage));
+                    let usage = CompletionUsage::default().with_input_tokens(Some(input_tokens));
+                    let metadata = CompletionMetadata::new("stop").with_usage(Some(usage));
 
                     ModelCompletion::new(metadata, response)
                 }

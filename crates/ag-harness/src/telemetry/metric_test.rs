@@ -310,13 +310,7 @@ fn ignores_untracked_turns_tools_and_absent_token_counts() {
     global::set_meter_provider(meter_provider.clone());
     let metadata = ModelMetadata::new("test_provider", "usage-unit-test")
         .expect("fixture metadata should be valid");
-    let completion = CompletionMetadata::new(
-        "stop".to_string(),
-        None,
-        None,
-        None,
-        Some(CompletionUsage::new(None, None, None, None, None, None)),
-    );
+    let completion = CompletionMetadata::new("stop").with_usage(Some(CompletionUsage::default()));
     let lifecycle = LifecycleEmitter::new(LifecycleMetrics::default());
 
     // Act

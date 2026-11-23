@@ -32,6 +32,7 @@ const CONTEXT_LENGTH_SUFFIX: &str = ".context_length";
 
 /// Software serving a local OpenAI-compatible endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum LocalServerKind {
     /// Ollama, recognized by its native `/api` endpoints.
     Ollama,
@@ -51,6 +52,7 @@ impl LocalServerKind {
 
 /// One model a local server serves.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct LocalModel {
     /// Context window in tokens the model supports, when reported.
     pub context_window: Option<u64>,
@@ -66,6 +68,7 @@ pub struct LocalModel {
 
 /// Models one local server serves.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct LocalInventory {
     /// Software serving the endpoint.
     pub kind: LocalServerKind,
@@ -75,6 +78,7 @@ pub struct LocalInventory {
 
 /// Failure while querying a local server.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LocalServerError {
     /// The server could not be reached or its response body was invalid.
     #[error("request to {url} failed: {source}")]
@@ -82,7 +86,7 @@ pub enum LocalServerError {
         /// Requested URL.
         url: String,
         /// Transport or decoding failure.
-        source: reqwest::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// The server answered with a non-success status.
     #[error("{url} returned HTTP {status}")]
@@ -316,7 +320,10 @@ async fn decode<T: DeserializeOwned>(
 fn request_error(url: &str) -> impl FnOnce(reqwest::Error) -> LocalServerError {
     let url = url.to_string();
 
-    move |source| LocalServerError::Request { source, url }
+    move |source| LocalServerError::Request {
+        source: Box::new(source),
+        url,
+    }
 }
 
 /// Ollama `/api/tags` response.

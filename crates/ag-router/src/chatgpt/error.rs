@@ -7,6 +7,7 @@ use thiserror::Error;
 
 /// Failure to sign in with `ChatGPT` or to keep its credentials valid.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ChatGptAuthError {
     /// The authorization server reported that the user denied access or
     /// the request was invalid.

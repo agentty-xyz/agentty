@@ -12,7 +12,7 @@ use ag_harness::provider::{ChatGptCredentials, ModelConfiguration, ModelProvider
 use ag_harness::recovery::ExecutionIdentity;
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
-use ag_harness::{Harness, Model, ModelError, SessionError};
+use ag_harness::{Harness, Model, ModelError, SessionError, TurnRange};
 use async_trait::async_trait;
 use serde_json::json;
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
@@ -22,7 +22,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_fixture::{options, schema, stores};
+use crate::public_store::{options, schema, stores};
 
 struct CountingModel {
     calls: Arc<AtomicUsize>,
@@ -74,11 +74,7 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
     // Arrange
     let calls = Arc::new(AtomicUsize::new(0));
     let mut registry = registry("primary", "1", &calls);
-    let capabilities = ModelCapabilities {
-        image_input: false,
-        profile: unbounded_model_profile(),
-        tool_calls: true,
-    };
+    let capabilities = ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true);
     registry
         .register(
             ExecutionIdentity::new("secondary", "2").expect("identity"),
@@ -241,11 +237,7 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
                     calls: Arc::clone(&calls),
                     name: "first",
                 },
-                ModelCapabilities {
-                    image_input: false,
-                    profile: unbounded_model_profile(),
-                    tool_calls: true,
-                },
+                ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true),
             )
             .expect("registration");
         let result = Harness::from_registry(&changed, "primary")
@@ -393,11 +385,7 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
             .expect("client");
         let metadata = client.metadata().clone();
         let mut registry = ModelRegistry::new();
-        let capabilities = ModelCapabilities {
-            image_input: false,
-            profile: unbounded_model_profile(),
-            tool_calls: true,
-        };
+        let capabilities = ModelCapabilities::new(unbounded_model_profile()).with_tool_calls(true);
         registry
             .register(
                 ExecutionIdentity::new("configured", "1").expect("identity"),
@@ -583,10 +571,10 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 .await
                 .expect("session");
             session.send("first").await.expect("first turn");
-            let before = store
-                .load_session(id)
+            let before = session
+                .transcript(TurnRange::All)
                 .await
-                .expect("original configuration");
+                .expect("original transcript");
 
             // Act
             let other = Harness::from_registry(&registry, "other")
@@ -620,14 +608,16 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 assert!(matches!(error, SessionError::RegistrationMismatch { .. }));
                 assert!(error.to_string().contains("different model registration"));
             }
-            let after = store
-                .load_session(id)
+            let after = harness
+                .resume(id)
                 .await
-                .expect("unchanged configuration");
+                .expect("unchanged registration")
+                .transcript(TurnRange::All)
+                .await
+                .expect("unchanged transcript");
 
             // Assert
-            assert_eq!(after.registration_identity, before.registration_identity);
-            assert_eq!(after.turns, before.turns);
+            assert_eq!(after, before);
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             harness
                 .resume(id)

@@ -17,20 +17,11 @@ fn budget() -> ContextBudget {
 }
 
 fn completion(input_tokens: Option<u64>) -> CompletionMetadata {
-    CompletionMetadata::new(
-        "stop".to_string(),
-        None,
-        None,
-        None,
-        Some(CompletionUsage::new(
-            None,
-            None,
-            input_tokens,
-            Some(1),
-            None,
-            None,
-        )),
-    )
+    CompletionMetadata::new("stop").with_usage(Some(
+        CompletionUsage::default()
+            .with_input_tokens(input_tokens)
+            .with_output_tokens(Some(1)),
+    ))
 }
 
 /// Returns a calibration that observed each `(estimated weight, input
@@ -204,7 +195,7 @@ fn reports_beyond_the_capacity_leave_one_unit() {
 fn responses_without_reported_input_tokens_leave_the_estimate_uncalibrated() {
     // Arrange
     let calibration = ContextCalibration::default();
-    let without_usage = CompletionMetadata::new("stop".to_string(), None, None, None, None);
+    let without_usage = CompletionMetadata::new("stop");
 
     // Act
     calibration.observe(budget(), 400, None);

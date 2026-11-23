@@ -242,21 +242,48 @@ pub struct CompletionMetadata {
 }
 
 impl CompletionMetadata {
-    /// Creates metadata from a provider completion.
-    pub fn new(
-        finish_reason: String,
-        response_id: Option<String>,
-        response_model: Option<String>,
-        system_fingerprint: Option<String>,
-        usage: Option<CompletionUsage>,
-    ) -> Self {
+    /// Creates metadata for a completion that finished for `finish_reason`,
+    /// without identifiers or usage; the `with_` setters add them.
+    pub fn new(finish_reason: impl Into<String>) -> Self {
         Self {
-            finish_reason,
-            response_id,
-            response_model,
-            system_fingerprint,
-            usage,
+            finish_reason: finish_reason.into(),
+            response_id: None,
+            response_model: None,
+            system_fingerprint: None,
+            usage: None,
         }
+    }
+
+    /// Returns this metadata with the provider response identifier.
+    #[must_use]
+    pub fn with_response_id(mut self, response_id: Option<String>) -> Self {
+        self.response_id = response_id;
+
+        self
+    }
+
+    /// Returns this metadata with the resolved response model.
+    #[must_use]
+    pub fn with_response_model(mut self, response_model: Option<String>) -> Self {
+        self.response_model = response_model;
+
+        self
+    }
+
+    /// Returns this metadata with the provider fingerprint.
+    #[must_use]
+    pub fn with_system_fingerprint(mut self, system_fingerprint: Option<String>) -> Self {
+        self.system_fingerprint = system_fingerprint;
+
+        self
+    }
+
+    /// Returns this metadata with token usage.
+    #[must_use]
+    pub fn with_usage(mut self, usage: Option<CompletionUsage>) -> Self {
+        self.usage = usage;
+
+        self
     }
 
     /// Returns the normalized finish reason.
@@ -286,7 +313,9 @@ impl CompletionMetadata {
 }
 
 /// Provider-reported token counts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+///
+/// [`Self::default`] reports no counts; the `with_` setters add each one.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CompletionUsage {
     cache_hit: Option<u64>,
     cache_miss: Option<u64>,
@@ -300,24 +329,53 @@ pub struct CompletionUsage {
 }
 
 impl CompletionUsage {
-    /// Creates normalized token counts.
-    pub fn new(
-        cache_hit: Option<u64>,
-        cache_miss: Option<u64>,
-        input: Option<u64>,
-        output: Option<u64>,
-        reasoning: Option<u64>,
-        total: Option<u64>,
-    ) -> Self {
-        Self {
-            cache_hit,
-            cache_miss,
-            cache_write: None,
-            input,
-            output,
-            reasoning,
-            total,
-        }
+    /// Returns these counts with `cache_hit` cached input tokens.
+    #[must_use]
+    pub fn with_cache_hit_tokens(mut self, cache_hit: Option<u64>) -> Self {
+        self.cache_hit = cache_hit;
+
+        self
+    }
+
+    /// Returns these counts with `cache_miss` non-cached input tokens.
+    #[must_use]
+    pub fn with_cache_miss_tokens(mut self, cache_miss: Option<u64>) -> Self {
+        self.cache_miss = cache_miss;
+
+        self
+    }
+
+    /// Returns these counts with `input` input tokens in all.
+    #[must_use]
+    pub fn with_input_tokens(mut self, input: Option<u64>) -> Self {
+        self.input = input;
+
+        self
+    }
+
+    /// Returns these counts with `output` output tokens.
+    #[must_use]
+    pub fn with_output_tokens(mut self, output: Option<u64>) -> Self {
+        self.output = output;
+
+        self
+    }
+
+    /// Returns these counts with `reasoning` reasoning tokens, which are
+    /// part of the output.
+    #[must_use]
+    pub fn with_reasoning_tokens(mut self, reasoning: Option<u64>) -> Self {
+        self.reasoning = reasoning;
+
+        self
+    }
+
+    /// Returns these counts with `total` tokens in all.
+    #[must_use]
+    pub fn with_total_tokens(mut self, total: Option<u64>) -> Self {
+        self.total = total;
+
+        self
     }
 
     /// Returns these counts with `cache_write` input tokens written to the

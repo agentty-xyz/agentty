@@ -70,13 +70,7 @@ struct MetadataModel;
 impl Model for MetadataModel {
     async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         Ok(ModelCompletion::new(
-            CompletionMetadata::new(
-                "stop".to_string(),
-                Some("response-id".to_string()),
-                None,
-                None,
-                None,
-            ),
+            CompletionMetadata::new("stop").with_response_id(Some("response-id".to_string())),
             ModelResponse::Output(json!({ "name": "Ada" })),
         ))
     }
@@ -246,7 +240,7 @@ fn text_requests_route_without_a_format_with_instructions_and_bound() {
         .expect("text request routes");
     let completion = ModelClient::from_router_completion(ag_router::Completion::Text {
         text: "Ada wrote it.".to_string(),
-        metadata: CompletionMetadata::new("stop".to_string(), None, None, None, None),
+        metadata: CompletionMetadata::new("stop"),
         reasoning_content: None,
     })
     .expect("text completion maps");
@@ -889,14 +883,18 @@ fn batched_tool_message_retained_bytes_sums_each_call() {
 #[test]
 fn completion_exposes_normalized_metadata_and_response() {
     // Arrange
-    let usage = CompletionUsage::new(Some(5), Some(8), Some(13), Some(21), Some(3), Some(34));
-    let metadata = CompletionMetadata::new(
-        "stop".to_string(),
-        Some("response-1".to_string()),
-        Some("provider-model".to_string()),
-        Some("fingerprint-1".to_string()),
-        Some(usage),
-    );
+    let usage = CompletionUsage::default()
+        .with_cache_hit_tokens(Some(5))
+        .with_cache_miss_tokens(Some(8))
+        .with_input_tokens(Some(13))
+        .with_output_tokens(Some(21))
+        .with_reasoning_tokens(Some(3))
+        .with_total_tokens(Some(34));
+    let metadata = CompletionMetadata::new("stop")
+        .with_response_id(Some("response-1".to_string()))
+        .with_response_model(Some("provider-model".to_string()))
+        .with_system_fingerprint(Some("fingerprint-1".to_string()))
+        .with_usage(Some(usage));
     let response = ModelResponse::Output(json!({ "name": "Ada" }));
     let completion = ModelCompletion::new(metadata, response.clone());
 
@@ -928,7 +926,7 @@ fn completion_exposes_normalized_metadata_and_response() {
 #[test]
 fn completion_metadata_preserves_absent_provider_fields() {
     // Arrange
-    let metadata = CompletionMetadata::new("stop".to_string(), None, None, None, None);
+    let metadata = CompletionMetadata::new("stop");
 
     // Act and Assert
     assert_eq!(metadata.response_id(), None);

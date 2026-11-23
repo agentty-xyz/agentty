@@ -16,8 +16,10 @@ use crate::{Model, TurnInput};
 ///
 /// These describe the configured implementation; they do not enable features or
 /// replace provider request validation. Text and locally validated structured
-/// output are required by the model contract.
+/// output are required by the model contract. Start from [`Self::new`] and
+/// add capabilities with the `with_` setters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ModelCapabilities {
     /// Whether the adapter accepts image-bearing user input and history.
     pub image_input: bool,
@@ -38,6 +40,22 @@ impl ModelCapabilities {
             profile,
             tool_calls: false,
         }
+    }
+
+    /// Returns these capabilities with image input accepted or not.
+    #[must_use]
+    pub fn with_image_input(mut self, image_input: bool) -> Self {
+        self.image_input = image_input;
+
+        self
+    }
+
+    /// Returns these capabilities with native tool calls supported or not.
+    #[must_use]
+    pub fn with_tool_calls(mut self, tool_calls: bool) -> Self {
+        self.tool_calls = tool_calls;
+
+        self
     }
 }
 

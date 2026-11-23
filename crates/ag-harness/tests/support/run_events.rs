@@ -153,10 +153,12 @@ impl FileSystem for StalledRead {
 }
 
 fn completion(response: ModelResponse, output_tokens: u64) -> ModelCompletion {
-    let usage = CompletionUsage::new(None, None, Some(10), Some(output_tokens), None, None);
+    let usage = CompletionUsage::default()
+        .with_input_tokens(Some(10))
+        .with_output_tokens(Some(output_tokens));
 
     ModelCompletion::new(
-        CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+        CompletionMetadata::new("stop").with_usage(Some(usage)),
         response,
     )
 }
@@ -277,6 +279,7 @@ async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error
         model,
         session,
         turn,
+        ..
     } = &events[0].kind
     else {
         return Err("the first event must be `Started`".into());

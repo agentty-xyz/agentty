@@ -1,39 +1,50 @@
 //! Deterministic context-benchmark metric checks.
 
-use std::time::Duration;
-
-use ag_harness::tool::ReadAction;
 use ag_harness::turn::ToolActivity;
 use serde_json::{Value, json};
 
 use crate::metric::{deferred_reads, duplicate_reads, record_cache_reuse};
 
+/// Returns the reported tool call `variant` with `fields` and no elapsed
+/// time, as a turn report records it.
+fn activity(variant: &str, mut fields: Value) -> ToolActivity {
+    fields["duration"] = json!({"secs": 0, "nanos": 0});
+
+    serde_json::from_value(json!({ variant: fields })).expect("recorded tool activity")
+}
+
 fn file_read(path: &str, start_line: u64) -> ToolActivity {
-    ToolActivity::Read {
-        duration: Duration::ZERO,
-        end_line: Some(start_line + 10),
-        path: path.to_string(),
-        start_line,
-        truncated: false,
-    }
+    activity(
+        "Read",
+        json!({
+            "end_line": start_line + 10,
+            "path": path,
+            "start_line": start_line,
+            "truncated": false,
+        }),
+    )
 }
 
 fn search(path: &str) -> ToolActivity {
-    ToolActivity::ReadInspection {
-        action: ReadAction::Search,
-        arguments: json!({ "action": "search", "path": path, "query": "pub fn" }).to_string(),
-        duration: Duration::ZERO,
-        summary: "pub fn".to_string(),
-    }
+    activity(
+        "ReadInspection",
+        json!({
+            "action": "search",
+            "arguments": json!({ "action": "search", "path": path, "query": "pub fn" }).to_string(),
+            "summary": "pub fn",
+        }),
+    )
 }
 
 fn legacy_search(path: &str) -> ToolActivity {
-    ToolActivity::ReadInspection {
-        action: ReadAction::Search,
-        arguments: String::new(),
-        duration: Duration::ZERO,
-        summary: format!("pub fn in {path}"),
-    }
+    activity(
+        "ReadInspection",
+        json!({
+            "action": "search",
+            "arguments": "",
+            "summary": format!("pub fn in {path}"),
+        }),
+    )
 }
 
 fn turn_request(input: u64, hit: u64, reductions: &Value) -> Value {
@@ -82,22 +93,20 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
             "a repeat answered without running",
             vec![
                 file_read("src/a.rs", 1),
-                ToolActivity::ReadRepeated {
-                    action: ReadAction::File,
-                    duration: Duration::ZERO,
-                    summary: "src/a.rs".to_string(),
-                },
+                activity(
+                    "ReadRepeated",
+                    json!({"action": "file", "summary": "src/a.rs"}),
+                ),
             ],
             1,
         ),
         (
             "a deferred read is not a read, so fetching it later is no repeat",
             vec![
-                ToolActivity::ReadDeferred {
-                    action: ReadAction::File,
-                    duration: Duration::ZERO,
-                    summary: "src/a.rs".to_string(),
-                },
+                activity(
+                    "ReadDeferred",
+                    json!({"action": "file", "summary": "src/a.rs"}),
+                ),
                 file_read("src/a.rs", 1),
             ],
             0,
@@ -105,19 +114,9 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
         (
             "writes and rejected reads are not reads",
             vec![
-                ToolActivity::Write {
-                    bytes_written: 1,
-                    duration: Duration::ZERO,
-                    path: "src/a.rs".to_string(),
-                },
-                ToolActivity::ReadRejected {
-                    duration: Duration::ZERO,
-                    path: "src/a.rs".to_string(),
-                },
-                ToolActivity::ReadRejected {
-                    duration: Duration::ZERO,
-                    path: "src/a.rs".to_string(),
-                },
+                activity("Write", json!({"bytes_written": 1, "path": "src/a.rs"})),
+                activity("ReadRejected", json!({"path": "src/a.rs"})),
+                activity("ReadRejected", json!({"path": "src/a.rs"})),
             ],
             0,
         ),
@@ -135,11 +134,10 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
 #[test]
 fn deferred_reads_count_only_reads_answered_with_their_call() {
     // Arrange
-    let deferred = ToolActivity::ReadDeferred {
-        action: ReadAction::Search,
-        duration: Duration::ZERO,
-        summary: "pub fn".to_string(),
-    };
+    let deferred = activity(
+        "ReadDeferred",
+        json!({"action": "search", "summary": "pub fn"}),
+    );
     let tool_calls = vec![file_read("src/a.rs", 1), deferred.clone(), deferred];
 
     // Act

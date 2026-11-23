@@ -168,6 +168,7 @@ impl Eq for OutputSchema {}
 
 /// Failure returned while constructing a structured-output schema.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum OutputSchemaError {
     /// The serialized schema exceeds the router safety limit.
     #[error("output schema exceeds the size limit")]

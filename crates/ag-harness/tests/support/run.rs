@@ -90,7 +90,7 @@ impl Model for ToolRoundModel {
 
             return Ok(completion(
                 ModelResponse::ToolCall(call),
-                CompletionUsage::new(None, None, None, Some(10), None, None),
+                CompletionUsage::default().with_output_tokens(Some(10)),
             ));
         }
         if request.prompt() == "fail" {
@@ -103,7 +103,13 @@ impl Model for ToolRoundModel {
 
         Ok(completion(
             ModelResponse::Output(json!({"name": "Ada"})),
-            CompletionUsage::new(Some(90), Some(60), Some(150), Some(20), Some(6), Some(170)),
+            CompletionUsage::default()
+                .with_cache_hit_tokens(Some(90))
+                .with_cache_miss_tokens(Some(60))
+                .with_input_tokens(Some(150))
+                .with_output_tokens(Some(20))
+                .with_reasoning_tokens(Some(6))
+                .with_total_tokens(Some(170)),
         ))
     }
 }
@@ -135,7 +141,7 @@ impl Model for PromptModel {
 
 fn completion(response: ModelResponse, usage: CompletionUsage) -> ModelCompletion {
     ModelCompletion::new(
-        CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+        CompletionMetadata::new("stop").with_usage(Some(usage)),
         response,
     )
 }

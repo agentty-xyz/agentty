@@ -25,16 +25,12 @@ fn usage(input: u64, cache_read: u64, output: u64) -> Usage {
 
 /// Returns a request whose provider reported `input` and `output` tokens.
 fn request(input: u64, output: u64) -> ModelRequestActivity {
-    let usage = CompletionUsage::new(None, None, Some(input), Some(output), None, None);
+    let usage = CompletionUsage::default()
+        .with_input_tokens(Some(input))
+        .with_output_tokens(Some(output));
 
     ModelRequestActivity::new(
-        Some(CompletionMetadata::new(
-            "stop".into(),
-            None,
-            None,
-            None,
-            Some(usage),
-        )),
+        Some(CompletionMetadata::new("stop").with_usage(Some(usage))),
         Duration::ZERO,
         ModelResponseType::Output,
     )
@@ -256,7 +252,12 @@ fn request_usage_sums_every_request_and_is_zero_without_one() {
 fn request_usage_keeps_cache_writes_only_when_every_request_reports_them() {
     // Arrange
     let written = |cache_write| {
-        CompletionUsage::new(Some(5), Some(5), Some(10), Some(1), None, Some(11))
+        CompletionUsage::default()
+            .with_cache_hit_tokens(Some(5))
+            .with_cache_miss_tokens(Some(5))
+            .with_input_tokens(Some(10))
+            .with_output_tokens(Some(1))
+            .with_total_tokens(Some(11))
             .with_cache_write_tokens(cache_write)
     };
 

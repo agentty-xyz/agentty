@@ -728,6 +728,7 @@ impl ContextActivity {
 #[non_exhaustive]
 pub enum ToolActivity {
     /// Content-free shell activity. Command text and output are never reported.
+    #[non_exhaustive]
     Bash {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
@@ -739,11 +740,13 @@ pub enum ToolActivity {
     /// trigger: never rerun a command outside the sandbox automatically,
     /// and show the user the exact command when offering it. Command text
     /// and output are never reported.
+    #[non_exhaustive]
     BashLikelySandboxDenial {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
     },
     /// A bounded repository file read.
+    #[non_exhaustive]
     Read {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -757,6 +760,7 @@ pub enum ToolActivity {
         truncated: bool,
     },
     /// A read-only repository inspection other than a worktree file read.
+    #[non_exhaustive]
     ReadInspection {
         /// Selected inspection action.
         action: ReadAction,
@@ -773,6 +777,7 @@ pub enum ToolActivity {
     },
     /// A model-correctable repository inspection rejection returned to the
     /// model.
+    #[non_exhaustive]
     ReadInspectionRejected {
         /// Selected inspection action.
         action: ReadAction,
@@ -782,6 +787,7 @@ pub enum ToolActivity {
         summary: String,
     },
     /// A model-correctable repository read rejection returned to the model.
+    #[non_exhaustive]
     ReadRejected {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -792,6 +798,7 @@ pub enum ToolActivity {
     /// without running it by a short result naming that earlier call. Only
     /// a read whose earlier result the request still carries whole, with no
     /// `write` or `bash` call run since, is answered this way.
+    #[non_exhaustive]
     ReadRepeated {
         /// Selected inspection action.
         action: ReadAction,
@@ -804,6 +811,7 @@ pub enum ToolActivity {
     /// share of the context budget one round may take, answered with the
     /// exact call that fetches its result in a later response instead of
     /// its result. A read that ran past that share reports this too.
+    #[non_exhaustive]
     ReadDeferred {
         /// Selected inspection action.
         action: ReadAction,
@@ -814,6 +822,7 @@ pub enum ToolActivity {
     },
     /// A call whose arguments its tool could not decode, answered with an
     /// error result naming the problem instead of running.
+    #[non_exhaustive]
     MalformedArguments {
         /// Elapsed tool-handling time.
         duration: Duration,
@@ -826,6 +835,7 @@ pub enum ToolActivity {
     /// A call to a tool the turn does not make available, such as a
     /// built-in its tool set leaves out or one the model invented, answered
     /// with an error result listing the available tools instead of running.
+    #[non_exhaustive]
     Unavailable {
         /// Elapsed tool-handling time.
         duration: Duration,
@@ -837,6 +847,7 @@ pub enum ToolActivity {
         tool: String,
     },
     /// A repository file write.
+    #[non_exhaustive]
     Write {
         /// Number of bytes in the resulting file.
         bytes_written: usize,
@@ -846,6 +857,7 @@ pub enum ToolActivity {
         path: String,
     },
     /// A model-correctable repository write rejection returned to the model.
+    #[non_exhaustive]
     WriteRejected {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -1099,6 +1111,7 @@ pub enum TurnError {
     /// Sandbox preparation, execution, or cleanup failed. Retains all observed
     /// diagnostics, including simultaneous execution and cleanup failures.
     #[error("sandbox command failed")]
+    #[non_exhaustive]
     CommandFailed {
         /// Normalized observed outcome; command content is never telemetry.
         outcome: Box<crate::bash::CommandOutcome>,
@@ -1106,6 +1119,7 @@ pub enum TurnError {
     /// Command persistence failed; the observed execution result is retained
     /// separately when available, including cleanup and main-exit diagnostics.
     #[error("command journal failed: {source}")]
+    #[non_exhaustive]
     CommandJournal {
         /// Observed result; absent when intent persistence prevented execution.
         outcome: Option<Box<crate::bash::CommandOutcome>>,
@@ -1119,6 +1133,7 @@ pub enum TurnError {
     /// Persisting a finished model response or tool result failed; the turn
     /// stops before any further model or tool call.
     #[error("message journal failed: {source}")]
+    #[non_exhaustive]
     MessageJournal {
         /// Underlying transactional store error.
         #[source]
@@ -1128,6 +1143,7 @@ pub enum TurnError {
     /// completes, failed; the turn stops before any further model or tool
     /// call, so a session's usage totals never miss a completed request.
     #[error("usage journal failed: {source}")]
+    #[non_exhaustive]
     UsageJournal {
         /// Underlying transactional store error.
         #[source]
@@ -1155,6 +1171,7 @@ pub enum TurnError {
     /// A host [`crate::ToolHandler`] failed the turn with
     /// [`crate::tool::ToolError::failed`], or panicked.
     #[error("tool `{tool}` failed: {source}")]
+    #[non_exhaustive]
     ToolFailed {
         /// The handler's failure.
         #[source]
@@ -1165,6 +1182,7 @@ pub enum TurnError {
     /// The [`crate::approval::ApprovalHandler`] did not decide on a call to
     /// `tool` within the harness's approval timeout; the call did not run.
     #[error("approval of tool `{tool}` timed out after {} ms", timeout.as_millis())]
+    #[non_exhaustive]
     ApprovalTimeout {
         /// The approval timeout the handler exceeded.
         timeout: Duration,
@@ -1176,6 +1194,7 @@ pub enum TurnError {
     /// grown in-turn request that still does not fit after every allowed
     /// reduction.
     #[error("request content weighs {required} but the model context budget is {budget}")]
+    #[non_exhaustive]
     ContextBudgetExceeded {
         /// Total declared budget in approximate weight units.
         budget: u64,
@@ -1190,6 +1209,7 @@ pub enum TurnError {
     /// arguments, after a nudge to stop; the turn stops instead of spending
     /// further requests on it.
     #[error("tool calls repeated {repeats} times without progress, most recently `{tool}`")]
+    #[non_exhaustive]
     RepeatedToolCalls {
         /// Identical calls within the recent-call window that stopped the turn.
         repeats: usize,
@@ -1199,6 +1219,7 @@ pub enum TurnError {
     /// The turn reached one of the [`RunLimits`] set for it; completed
     /// requests keep their usage, and the session accepts the next turn.
     #[error("run stopped at its {limit} limit")]
+    #[non_exhaustive]
     LimitReached {
         /// The limit the turn reached.
         limit: LimitKind,
@@ -1207,6 +1228,7 @@ pub enum TurnError {
     /// at this cap; completed requests keep their usage, and the session
     /// accepts the next turn.
     #[error("run stopped at its budget ledger's {limit} cap")]
+    #[non_exhaustive]
     BudgetRefused {
         /// The ledger cap the next request would pass.
         limit: LimitKind,
@@ -1256,13 +1278,11 @@ impl TurnError {
 }
 
 pub(crate) fn sanitized_completion_metadata(metadata: &CompletionMetadata) -> CompletionMetadata {
-    CompletionMetadata::new(
-        sanitize_report_text(metadata.finish_reason()),
-        metadata.response_id().map(sanitize_report_text),
-        metadata.response_model().map(sanitize_report_text),
-        metadata.system_fingerprint().map(sanitize_report_text),
-        metadata.usage().copied(),
-    )
+    CompletionMetadata::new(sanitize_report_text(metadata.finish_reason()))
+        .with_response_id(metadata.response_id().map(sanitize_report_text))
+        .with_response_model(metadata.response_model().map(sanitize_report_text))
+        .with_system_fingerprint(metadata.system_fingerprint().map(sanitize_report_text))
+        .with_usage(metadata.usage().copied())
 }
 
 pub(crate) fn sanitize_report_text(text: &str) -> String {

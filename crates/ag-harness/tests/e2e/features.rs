@@ -165,11 +165,9 @@ pub(crate) fn rounds() -> usize {
 }
 
 fn capabilities(profile: ModelProfile) -> ModelCapabilities {
-    ModelCapabilities {
-        image_input: true,
-        profile,
-        tool_calls: true,
-    }
+    ModelCapabilities::new(profile)
+        .with_image_input(true)
+        .with_tool_calls(true)
 }
 
 pub(crate) fn answer_schema() -> Result<OutputSchema, DynError> {

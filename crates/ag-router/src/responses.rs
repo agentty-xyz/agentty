@@ -734,13 +734,10 @@ struct ResponsesResponse {
 
 impl ResponsesResponse {
     fn metadata(&self, finish_reason: String) -> model::CompletionMetadata {
-        model::CompletionMetadata::new(
-            finish_reason,
-            self.id.clone(),
-            self.model.clone(),
-            None,
-            self.usage.as_ref().map(model::CompletionUsage::from),
-        )
+        model::CompletionMetadata::new(finish_reason)
+            .with_response_id(self.id.clone())
+            .with_response_model(self.model.clone())
+            .with_usage(self.usage.as_ref().map(model::CompletionUsage::from))
     }
 }
 
@@ -774,20 +771,22 @@ struct ResponsesUsage {
 
 impl From<&ResponsesUsage> for model::CompletionUsage {
     fn from(usage: &ResponsesUsage) -> Self {
-        Self::new(
-            usage
-                .input_tokens_details
-                .as_ref()
-                .and_then(|details| details.cached_tokens),
-            None,
-            usage.input_tokens,
-            usage.output_tokens,
-            usage
-                .output_tokens_details
-                .as_ref()
-                .and_then(|details| details.reasoning_tokens),
-            usage.total_tokens,
-        )
+        Self::default()
+            .with_cache_hit_tokens(
+                usage
+                    .input_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.cached_tokens),
+            )
+            .with_input_tokens(usage.input_tokens)
+            .with_output_tokens(usage.output_tokens)
+            .with_reasoning_tokens(
+                usage
+                    .output_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.reasoning_tokens),
+            )
+            .with_total_tokens(usage.total_tokens)
     }
 }
 

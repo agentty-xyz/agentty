@@ -117,10 +117,12 @@ impl Model for BudgetModel {
             "over" => OVER_OUTPUT_TOKENS,
             _ => u64::from(OUTPUT_TOKENS),
         };
-        let usage = CompletionUsage::new(None, None, Some(50), Some(output), None, None);
+        let usage = CompletionUsage::default()
+            .with_input_tokens(Some(50))
+            .with_output_tokens(Some(output));
 
         Ok(ModelCompletion::new(
-            CompletionMetadata::new("stop".into(), None, None, None, Some(usage)),
+            CompletionMetadata::new("stop").with_usage(Some(usage)),
             response,
         ))
     }

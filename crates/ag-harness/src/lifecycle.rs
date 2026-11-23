@@ -62,11 +62,13 @@ impl LifecycleEvent {
 #[non_exhaustive]
 pub enum LifecycleEventKind {
     /// A complete harness turn started.
+    #[non_exhaustive]
     TurnStarted {
         /// Identifier shared by all events in the turn.
         turn_id: LifecycleId,
     },
     /// A complete harness turn finished successfully.
+    #[non_exhaustive]
     TurnCompleted {
         /// Elapsed turn time.
         duration: Duration,
@@ -74,6 +76,7 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// A complete harness turn failed or was cancelled.
+    #[non_exhaustive]
     TurnFailed {
         /// Elapsed turn time.
         duration: Duration,
@@ -86,6 +89,7 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// One provider-neutral model request started.
+    #[non_exhaustive]
     ModelRequestStarted {
         /// Identifier shared by this request's lifecycle events.
         model_call_id: LifecycleId,
@@ -97,6 +101,7 @@ pub enum LifecycleEventKind {
         turn_id: Option<LifecycleId>,
     },
     /// One provider-neutral model request completed successfully.
+    #[non_exhaustive]
     ModelRequestCompleted {
         /// Normalized provider completion metadata, when available.
         completion: Option<CompletionMetadata>,
@@ -110,6 +115,7 @@ pub enum LifecycleEventKind {
         turn_id: Option<LifecycleId>,
     },
     /// One provider-neutral model request failed.
+    #[non_exhaustive]
     ModelRequestFailed {
         /// Elapsed model-request time.
         duration: Duration,
@@ -126,6 +132,7 @@ pub enum LifecycleEventKind {
     /// re-sent reduced. The rejected request was reported as
     /// [`Self::ModelRequestFailed`] with [`ModelErrorType::ContextOverflow`];
     /// this event follows the re-sent request's own outcome event.
+    #[non_exhaustive]
     ContextOverflowRetried {
         /// One-based recovery within the turn.
         attempt: u64,
@@ -138,6 +145,7 @@ pub enum LifecycleEventKind {
         turn_id: Option<LifecycleId>,
     },
     /// One in-flight provider-neutral model request was cancelled.
+    #[non_exhaustive]
     ModelRequestCancelled {
         /// Elapsed model-request time before cancellation.
         duration: Duration,
@@ -147,6 +155,7 @@ pub enum LifecycleEventKind {
         turn_id: Option<LifecycleId>,
     },
     /// The model requested one tool operation.
+    #[non_exhaustive]
     ToolRequested {
         /// Provider-assigned identifier for this tool call.
         provider_call_id: String,
@@ -161,6 +170,7 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// One allowed tool operation started execution.
+    #[non_exhaustive]
     ToolStarted {
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
@@ -168,6 +178,7 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// One allowed tool operation completed successfully.
+    #[non_exhaustive]
     ToolCompleted {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -179,6 +190,7 @@ pub enum LifecycleEventKind {
     /// One requested tool was unavailable to the turn, because its tool set
     /// leaves it out or no such tool exists; the model receives an error
     /// result and the turn continues.
+    #[non_exhaustive]
     ToolDenied {
         /// Elapsed time before denial.
         duration: Duration,
@@ -190,6 +202,7 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// One requested tool failed or was cancelled.
+    #[non_exhaustive]
     ToolFailed {
         /// Elapsed tool-execution time.
         duration: Duration,
@@ -203,6 +216,7 @@ pub enum LifecycleEventKind {
     /// The model repeated one tool call, with the same arguments and the
     /// same result, or called unavailable tools under any names and arguments,
     /// often enough that the turn nudged it to stop or, when `stopped`, failed.
+    #[non_exhaustive]
     ToolCallsRepeated {
         /// Identical calls within the recent-call window.
         repeats: usize,
@@ -216,6 +230,7 @@ pub enum LifecycleEventKind {
     /// The harness started summarizing earlier tool rounds of a turn to fit
     /// its context budget. The summary's model requests follow with the same
     /// turn identifier.
+    #[non_exhaustive]
     ContextSummaryStarted {
         /// Identifier shared by this summary's lifecycle events.
         summary_id: LifecycleId,
@@ -225,6 +240,7 @@ pub enum LifecycleEventKind {
         turn_id: Option<LifecycleId>,
     },
     /// A summary replaced earlier tool rounds in the turn's later requests.
+    #[non_exhaustive]
     ContextSummaryCompleted {
         /// Elapsed summary time, including its model requests.
         duration: Duration,
@@ -237,6 +253,7 @@ pub enum LifecycleEventKind {
     },
     /// A summary failed or was cancelled; the turn falls back to removing
     /// earlier tool rounds behind a deterministic note.
+    #[non_exhaustive]
     ContextSummaryFailed {
         /// Elapsed summary time, including its model requests.
         duration: Duration,
