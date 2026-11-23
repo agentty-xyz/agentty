@@ -421,6 +421,11 @@
                             <p id="graph-error" class="error" role="alert"></p>
                             <div id="graph-hints" class="graph-hints"></div>
                             <p id="graph-note" class="graph-note" hidden></p>
+                            <fieldset id="graph-actions"
+                                      class="graph-actions"
+                                      aria-label="Graph actions"
+                                      hidden>
+                            </fieldset>
                             <section id="graph-preview"
                                      class="graph-preview"
                                      aria-label="Graph proposal"
@@ -648,6 +653,20 @@
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Keep session</button>
                         <button value="confirm" class="btn btn--lg btn--danger">Cancel session</button>
+                    </div>
+                </form>
+            </dialog>
+            <dialog id="graph-cancel-dialog"
+                    class="dialog"
+                    aria-labelledby="graph-cancel-dialog-title">
+                <form method="dialog">
+                    <h2 id="graph-cancel-dialog-title">Cancel this graph?</h2>
+                    <p>
+                        Agentty stops the graph's running nodes and closes it for good, as <code>x</code> does in the terminal's graph inspector. A cancelled graph cannot be resumed or retried. The session and its other work stay.
+                    </p>
+                    <div class="dialog-actions">
+                        <button value="keep" class="btn btn--lg" autofocus>Keep graph</button>
+                        <button value="confirm" class="btn btn--lg btn--danger">Cancel graph</button>
                     </div>
                 </form>
             </dialog>

@@ -16,10 +16,11 @@ use ag_session::{
     ExecutionGraphStatus, ForgeKind, HostContext, HostProjectStatus, HostProjectSync,
     HostProjectSyncPhase, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
     ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
-    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraphApproval,
-    SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId,
-    SessionListEntry, SessionListStats, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
+    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraphActionRequest,
+    SessionGraphApproval, SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs,
+    SessionGraphsRequest, SessionId, SessionListEntry, SessionListStats, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -516,6 +517,25 @@ impl SessionBackend for RecordingBackend {
         Ok(ag_session::test_support::session_graphs(
             request.session_id.as_str(),
         ))
+    }
+
+    // Every graph action on a snapshot other than `5eed`, the snapshot of
+    // `session_graphs`, finds the graph changed.
+    async fn act_on_session_graph(
+        &self,
+        request: SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        self.record(format!(
+            "graph_action:{}:{}:{}:{:?}",
+            request.session_id, request.graph_id, request.snapshot, request.action
+        ));
+        if request.snapshot != "5eed" {
+            return Err(SessionError::Operation(
+                "Graph changed; refresh the view and inspect it before acting again.".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     // Every worktree holds the directory `src` and the file `src/lib.rs`.

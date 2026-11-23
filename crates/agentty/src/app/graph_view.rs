@@ -11,7 +11,9 @@ use uuid::Uuid;
 use super::App;
 use super::command_gateway::{CommandDelivery, CommandInitiator, SessionCommand, SessionMutation};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode};
-use crate::presentation::execution_graph::{GraphEditKind, GraphView, GraphViewOutput};
+use crate::presentation::execution_graph::{
+    GraphActionTarget, GraphEditKind, GraphView, GraphViewOutput,
+};
 
 impl App {
     pub(crate) async fn open_graph_view(&mut self, restore: ConfirmationViewMode) {
@@ -166,65 +168,9 @@ impl App {
             || current.nodes != snapshot.nodes
             || current.status != snapshot.status
         {
-            return Err(
-                "Graph changed; refresh the view and inspect it before acting again.".into(),
-            );
+            return Err(GRAPH_CHANGED.into());
         }
-        let control = GraphControlRequest {
-            graph_id: graph.id.clone(),
-            revision: graph.revision,
-        };
-        let request = match action {
-            GraphViewAction::Accept if view.can_accept() => {
-                SessionMutation::AcceptExecutionGraphResult {
-                    reference: Box::new(
-                        view.outputs[view.selected_output].result.reference.clone(),
-                    ),
-                }
-            }
-            GraphViewAction::Cancel if view.can_cancel() => {
-                SessionMutation::CancelExecutionGraph { request: control }
-            }
-            GraphViewAction::Resume if view.can_resume() => SessionMutation::ResumeExecutionGraph {
-                request: ResumeExecutionGraphRequest { graph: control },
-            },
-            GraphViewAction::ExtendBudget(additional_calls)
-                if let Some(budget_id) =
-                    view.exhausted_budget().filter(|_| view.can_extend_budget()) =>
-            {
-                SessionMutation::ExtendExecutionGraphBudget {
-                    request: ExtendGraphBudgetRequest {
-                        action_id: Uuid::new_v4().to_string(),
-                        additional_calls,
-                        budget_id: budget_id.to_string(),
-                        graph: control,
-                    },
-                }
-            }
-            GraphViewAction::Continue(kind)
-                if match &kind {
-                    GraphNodeContinuation::Retry => view.can_retry(),
-                    _ => view.can_continue(),
-                } =>
-            {
-                let node = view.node().ok_or("No node selected")?;
-                SessionMutation::ContinueExecutionGraphNode {
-                    request: Box::new(ContinueGraphNodeRequest {
-                        action_id: Uuid::new_v4().to_string(),
-                        execution: node
-                            .executions
-                            .last()
-                            .ok_or("No execution selected")?
-                            .clone(),
-                        graph_id: graph.id.clone(),
-                        kind,
-                        node_id: node.node_id.clone(),
-                        revision: graph.revision,
-                    }),
-                }
-            }
-            _ => return Err("Action unavailable for this snapshot".into()),
-        };
+        let request = action.mutation(view.action_target())?;
         self.admit_session_command(SessionCommand::new(
             CommandInitiator::SessionView,
             CommandDelivery::Admission {
@@ -244,27 +190,19 @@ impl App {
             GraphEditKind::Cancel => Err("Type cancel to confirm graph cancellation".into()),
             GraphEditKind::ExtendBudget => text
                 .parse::<usize>()
-                .ok()
-                .filter(|calls| {
-                    (1..=ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS).contains(calls)
-                })
-                .map(GraphViewAction::ExtendBudget)
-                .ok_or_else(|| {
-                    format!(
-                        "Enter a whole number of provider calls from 1 to {}",
-                        ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS
-                    )
-                }),
-            GraphEditKind::Reply if !text.is_empty() => {
-                Ok(GraphViewAction::Continue(GraphNodeContinuation::Reply {
-                    attachments: Vec::new(),
-                    message: text.to_string(),
-                }))
-            }
-            GraphEditKind::Reply => Err("Enter a reply".into()),
+                .map_err(|_| GraphViewAction::budget_range_error())
+                .and_then(GraphViewAction::extend_budget),
+            GraphEditKind::Reply => GraphViewAction::reply(text),
         }
     }
 }
+
+/// Refusal of an action chosen from a graph snapshot that no longer holds.
+pub(crate) const GRAPH_CHANGED: &str =
+    "Graph changed; refresh the view and inspect it before acting again.";
+
+/// Refusal of an action its target does not take.
+pub(crate) const ACTION_UNAVAILABLE: &str = "Action unavailable for this snapshot";
 
 pub(crate) enum GraphViewAction {
     Accept,
@@ -273,6 +211,100 @@ pub(crate) enum GraphViewAction {
     /// Adds this many provider calls to the exhausted budget.
     ExtendBudget(usize),
     Resume,
+}
+
+impl GraphViewAction {
+    /// Adds `additional_calls` provider calls, refusing a number outside
+    /// `1..=`[`ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS`].
+    pub(crate) fn extend_budget(additional_calls: usize) -> Result<Self, String> {
+        if (1..=ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS).contains(&additional_calls) {
+            return Ok(Self::ExtendBudget(additional_calls));
+        }
+
+        Err(Self::budget_range_error())
+    }
+
+    /// Replies with `text` as revision guidance, refusing a blank reply.
+    pub(crate) fn reply(text: &str) -> Result<Self, String> {
+        let message = text.trim();
+        if message.is_empty() {
+            return Err("Enter a reply".into());
+        }
+
+        Ok(Self::Continue(GraphNodeContinuation::Reply {
+            attachments: Vec::new(),
+            message: message.to_string(),
+        }))
+    }
+
+    /// Builds the mutation that applies this action to `target`, refusing
+    /// an action `target` does not take. Every frontend admits the same
+    /// mutation for the same action.
+    pub(crate) fn mutation(self, target: GraphActionTarget<'_>) -> Result<SessionMutation, String> {
+        let graph = target.graph.ok_or("No graph selected")?;
+        let control = GraphControlRequest {
+            graph_id: graph.id.clone(),
+            revision: graph.revision,
+        };
+
+        Ok(match self {
+            Self::Accept if let Some(output) = target.output.filter(|_| target.can_accept()) => {
+                SessionMutation::AcceptExecutionGraphResult {
+                    reference: Box::new(output.result.reference.clone()),
+                }
+            }
+            Self::Cancel if target.can_cancel() => {
+                SessionMutation::CancelExecutionGraph { request: control }
+            }
+            Self::Resume if target.can_resume() => SessionMutation::ResumeExecutionGraph {
+                request: ResumeExecutionGraphRequest { graph: control },
+            },
+            Self::ExtendBudget(additional_calls)
+                if let Some(budget_id) = target
+                    .exhausted_budget()
+                    .filter(|_| target.can_extend_budget()) =>
+            {
+                SessionMutation::ExtendExecutionGraphBudget {
+                    request: ExtendGraphBudgetRequest {
+                        action_id: Uuid::new_v4().to_string(),
+                        additional_calls,
+                        budget_id: budget_id.to_string(),
+                        graph: control,
+                    },
+                }
+            }
+            Self::Continue(kind)
+                if match &kind {
+                    GraphNodeContinuation::Retry => target.can_retry(),
+                    _ => target.can_continue(),
+                } =>
+            {
+                let node = target.node_progress().ok_or("No node selected")?;
+                SessionMutation::ContinueExecutionGraphNode {
+                    request: Box::new(ContinueGraphNodeRequest {
+                        action_id: Uuid::new_v4().to_string(),
+                        execution: node
+                            .executions
+                            .last()
+                            .ok_or("No execution selected")?
+                            .clone(),
+                        graph_id: graph.id.clone(),
+                        kind,
+                        node_id: node.node_id.clone(),
+                        revision: graph.revision,
+                    }),
+                }
+            }
+            _ => return Err(ACTION_UNAVAILABLE.into()),
+        })
+    }
+
+    fn budget_range_error() -> String {
+        format!(
+            "Enter a whole number of provider calls from 1 to {}",
+            ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS
+        )
+    }
 }
 
 /// Which graph and node [`App::load_graph_snapshot`] selects.

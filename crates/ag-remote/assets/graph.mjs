@@ -1,12 +1,16 @@
-// Execution graphs of the open session, read only, as the terminal shows
-// them: a summary bar beside the chat and a panel with the latest graph
-// proposal and each graph's nodes, their details and their outputs, like
-// the terminal's `w` inspector. Acting on a graph still happens by
-// replying in chat. Agentty sends every label; ids, objectives, errors and
-// outputs are untrusted and only ever become text nodes, directly or
-// through markdown.mjs. Functions take `document` as a parameter, so the
-// Node tests in crates/ag-remote/tests/web/graph.test.mjs pass the fake
-// DOM.
+// Execution graphs of the open session as the terminal shows them: a
+// summary bar beside the chat and a panel with the latest graph proposal
+// and each graph's nodes, their details and their outputs, like the
+// terminal's `w` inspector. With the `graph_actions` capability the panel
+// also offers the inspector's actions where Agentty lists them: accepting
+// the selected output, retrying or replying to the selected node, and
+// resuming, adding provider calls to, or cancelling the graph. Each action
+// names the snapshot the panel last showed, so Agentty refuses it once the
+// graph changed. Proposals stay read only; chat replies act on them.
+// Agentty sends every label; ids, objectives, errors and outputs are
+// untrusted and only ever become text nodes, directly or through
+// markdown.mjs. Functions take `document` as a parameter, so the Node tests
+// in crates/ag-remote/tests/web/graph.test.mjs pass the fake DOM.
 
 import { keepSourceView, renderAnswer } from "./markdown.mjs";
 
@@ -48,6 +52,18 @@ const PREVIEW_CUT_NOTE = "The rest of this proposal is too large to show here.";
 const OUTPUT_CUT_NOTE = "The rest of this output is too large to show here.";
 const OUTPUT_OMITTED_NOTE = "This output is too large to show here.";
 const NODE_CUT_NOTE = "Part of this node's text is too large to show here.";
+// The button of each action, by the name Agentty lists it under, and the
+// order the graph's and a node's rows show them in.
+const ACTION_LABELS = {
+  accept: "Accept",
+  resume: "Resume",
+  extend_budget: "Add provider calls",
+  cancel: "Cancel graph",
+  retry: "Retry",
+  reply: "Reply",
+};
+const GRAPH_ACTIONS = ["resume", "extend_budget", "cancel"];
+const NODE_ACTIONS = ["retry", "reply"];
 
 function glyphOf(table, key) {
   return Object.hasOwn(table, key) ? table[key] : UNKNOWN;
@@ -140,6 +156,25 @@ export function graphTitle(graph) {
   return graph.id + " | revision " + graph.revision + " | " + graph.status_label;
 }
 
+// Whether `item`, a graph, node or output of a `graphs` response, offers
+// `action`, given the server's `capabilities`.
+export function offers(capabilities, item, action) {
+  return (
+    capabilities.includes("graph_actions") &&
+    Array.isArray(item?.actions) &&
+    item.actions.includes(action)
+  );
+}
+
+// The number of provider calls `text` asks to add, or `null` unless it is
+// a whole number from 1 to `max`.
+export function providerCalls(text, max) {
+  const trimmed = String(text).trim();
+  const calls = Number(trimmed);
+
+  return /^\d+$/.test(trimmed) && calls >= 1 && calls <= max ? calls : null;
+}
+
 // How the selector names the output at `index` of `outputs`.
 export function outputLabel(outputs, index) {
   const output = outputs[index];
@@ -200,23 +235,39 @@ export function renderGraphSummary(document, node, summary) {
 
 // Wires the panel. `elements` holds `view` (the section that replaces the
 // transcript), `prev`, `next` and `position` (the selector), `refresh`,
-// `title`, `error`, `hints`, `note`, `preview`, `nodes` (the node list)
-// and `detail` (the selected node). `request(body)` sends one request and
-// resolves with its result; `window` supplies the clipboard for code
-// blocks.
+// `title`, `error`, `hints`, `note`, `actions` (the graph's actions),
+// `preview`, `nodes` (the node list), `detail` (the selected node) and
+// `cancelDialog` (the confirmation before cancelling a graph).
+// `request(body)` sends one request and resolves with its result; `window`
+// supplies the clipboard for code blocks.
 //
 // Returns `open(sessionId)`, `refresh()`, which reads the graphs again
-// keeping the selection, `close()`, and `isOpen()`. A refresh changes only
-// what changed, so the reader keeps their place and the source view of an
-// output.
+// keeping the selection, `close()`, `isOpen()`, and
+// `setCapabilities(list)`. A refresh changes only what changed, so the
+// reader keeps their place, the source view of an output, and a reply or
+// number being typed while the panel still shows the node or spent budget
+// it is for.
 export function createGraph({ document, elements, request, window = null }) {
   const state = {
+    capabilities: [],
     choice: null,
+    // Open text boxes by the `areaKey` of the part of the graph they act
+    // on, each kept until it is sent or discarded, or the panel no longer
+    // shows that part.
+    editors: new Map(),
+    // The last refused action: the `areaKey` of the part it acted on and
+    // why.
+    failure: null,
+    // Counts the panel's opens and closes, so an action that finishes
+    // after one changes nothing.
+    generation: 0,
     // The selection the shown response answers and its `version`.
     held: null,
     loads: 0,
     nodeId: null,
     outputId: null,
+    // Whether an action is on its way to Agentty.
+    pending: false,
     response: null,
     sessionId: null,
   };
@@ -276,14 +327,252 @@ export function createGraph({ document, elements, request, window = null }) {
 
   function render() {
     const view = shownView();
+    dropStale(view.graph);
     renderSelector();
     renderTitle(view);
     renderHints(view);
     renderPreview(view.proposal);
     elements.note.textContent = view.graph?.note ?? "";
     elements.note.hidden = !view.graph?.note;
+    renderGraphActions(view.graph);
     renderNodes(view.graph);
     renderDetail(view.graph);
+  }
+
+  // Closes each text box, and drops a refusal, that is not about the
+  // shown `graph`, or, for the number box, about the spent budget it
+  // shows, so neither carries over to another graph and no box to another
+  // budget.
+  function dropStale(graph) {
+    const shownBudget = graph ? budgetArea(graph) : null;
+    for (const area of state.editors.keys()) {
+      if (!isShownArea(area, graph, shownBudget)) {
+        state.editors.delete(area);
+      }
+    }
+    const refused = state.failure?.area;
+    if (refused && !isShownArea(refused, graph, shownBudget)) {
+      state.failure = null;
+    }
+  }
+
+  // The graph's own actions, an open number box, and a refusal of either.
+  function renderGraphActions(graph) {
+    const parts = graph ? graphParts(graph) : [];
+    placeChildren(elements.actions, parts);
+    elements.actions.hidden = parts.length === 0;
+  }
+
+  function graphParts(graph) {
+    const area = graphRowArea(graph);
+    const box = budgetArea(graph);
+    const row = actionRow(area, graph, GRAPH_ACTIONS, (action) => graphAction(area, graph, action));
+
+    return [row, editorFor(box), failureFor(box), failureFor(area)].filter(Boolean);
+  }
+
+  function graphAction(area, graph, action) {
+    if (action === "resume") {
+      void act(area, "resume");
+    } else if (action === "extend_budget") {
+      const box = budgetArea(graph);
+      openEditor(box, () => budgetEditor(box, area, graph.budget));
+    } else {
+      elements.cancelDialog.dataset.graphId = String(graph.id);
+      elements.cancelDialog.returnValue = "";
+      elements.cancelDialog.showModal();
+    }
+  }
+
+  // A row of buttons for the `actions` of `item` that Agentty offers, or
+  // `null` when it offers none.
+  function actionRow(area, item, actions, onAction) {
+    const offered = actions.filter((action) => offers(state.capabilities, item, action));
+    if (offered.length === 0) {
+      return null;
+    }
+    const row = element(document, "div", "graph-action-row");
+    row.append(...offered.map((action) => actionButton(area, action, onAction)));
+
+    return row;
+  }
+
+  function actionButton(area, action, onAction) {
+    const tone = action === "cancel" ? " btn--danger" : "";
+    const button = element(document, "button", "btn graph-action" + tone, ACTION_LABELS[action]);
+    button.type = "button";
+    button.dataset.action = action;
+    button.disabled = state.pending;
+    button.addEventListener("click", () => onAction(action));
+
+    return button;
+  }
+
+  // The refusal of the last action on `area`, if there was one.
+  function failureFor(area) {
+    return state.failure?.area === area
+      ? element(document, "p", "error graph-action-error", state.failure.message)
+      : null;
+  }
+
+  // The open text box of `area`, if any.
+  function editorFor(area) {
+    const editor = state.editors.get(area);
+    if (!editor) {
+      return null;
+    }
+    syncEditor(editor);
+
+    return editor.form;
+  }
+
+  // A text box takes no edits while an action is on its way, so what was
+  // sent is what it shows, and sends unless it is empty.
+  function syncEditor(editor) {
+    editor.input.disabled = state.pending;
+    editor.discard.disabled = state.pending;
+    editor.send.disabled = state.pending || !editor.input.value.trim();
+  }
+
+  // Opens the text box `create()` builds for `area`, or keeps the one
+  // already open there, and puts the cursor in it.
+  function openEditor(area, create) {
+    if (!state.editors.has(area)) {
+      state.editors.set(area, create());
+    }
+    state.failure = null;
+    render();
+    state.editors.get(area)?.input.focus();
+  }
+
+  function closeEditor(area) {
+    state.editors.delete(area);
+    state.failure = null;
+    render();
+  }
+
+  // The number box `area` that adds provider calls to the spent `budget`,
+  // the one it names. A count out of range is refused beside the box;
+  // Agentty's refusal shows on the graph's row `rowArea`, so it stays when
+  // the reload closes the box because the budget changed.
+  function budgetEditor(area, rowArea, budget) {
+    const max = Number(budget?.max_additional_calls) || 1;
+    const editor = editorForm(area, "extend_budget", "Add", () => {
+      const calls = providerCalls(editor.input.value, max);
+      if (calls === null) {
+        refuse(area, "Enter a whole number of provider calls from 1 to " + max);
+      } else {
+        const fields = { additional_calls: calls, budget_id: budget?.id };
+        void act(area, "extend_budget", fields, rowArea);
+      }
+    });
+    const input = element(document, "input", "field graph-editor-input");
+    input.type = "number";
+    for (const [name, value] of [["min", "1"], ["max", String(max)], ["step", "1"], ["inputmode", "numeric"]]) {
+      input.setAttribute(name, value);
+    }
+    const label = element(document, "label", "graph-editor-label");
+    const name = budget?.id ? String(budget.id) : "the spent budget";
+    label.append(
+      element(document, "span", "", "Provider calls to add to " + name + ", from 1 to " + max),
+      input,
+    );
+
+    return withInput(editor, label, input);
+  }
+
+  // The reply box that sends guidance to `nodeId`. An empty reply is not
+  // sent.
+  function replyEditor(area, nodeId) {
+    const editor = editorForm(area, "reply", "Send", () => {
+      if (editor.input.value.trim()) {
+        void act(area, "reply", { message: editor.input.value, node_id: nodeId });
+      }
+    });
+    const input = element(document, "textarea", "field graph-editor-input");
+    input.rows = 3;
+    input.setAttribute("placeholder", "Guidance that revises " + nodeId + "'s output");
+    input.setAttribute("aria-label", "Reply to " + nodeId);
+
+    return withInput(editor, input, input);
+  }
+
+  // A form for `action` on `area` with Discard and a `sendLabel` button
+  // that runs `onSend`; `withInput` adds its field.
+  function editorForm(area, action, sendLabel, onSend) {
+    const form = element(document, "form", "graph-editor");
+    const discard = element(document, "button", "btn btn--ghost", "Discard");
+    discard.type = "button";
+    discard.addEventListener("click", () => closeEditor(area));
+    const send = element(document, "button", "btn btn--primary", sendLabel);
+    send.type = "submit";
+    const buttons = element(document, "div", "graph-editor-actions");
+    buttons.append(discard, send);
+    form.append(buttons);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      onSend();
+    });
+
+    return { action, area, discard, form, input: null, send };
+  }
+
+  function withInput(editor, field, input) {
+    editor.input = input;
+    editor.form.prepend(field);
+    input.addEventListener("input", () => syncEditor(editor));
+
+    return editor;
+  }
+
+  function refuse(area, message) {
+    state.failure = { area, message };
+    render();
+  }
+
+  // Sends `action` on the shown graph with `fields`, bound to the snapshot
+  // the panel last showed, then reads the graphs again either way, so the
+  // reader sees what changed. A refusal shows by `refusedArea`, `area`
+  // unless the caller names another, and keeps the text box of `area`;
+  // success closes it. Once the panel closed or opened again meanwhile,
+  // the answer changes nothing.
+  async function act(area, action, fields = {}, refusedArea = area) {
+    const graph = state.response?.graph;
+    if (state.pending || !graph) {
+      return;
+    }
+    const generation = state.generation;
+    state.pending = true;
+    state.failure = null;
+    render();
+    let refusal = null;
+    try {
+      await request({
+        method: "act_on_session_graph",
+        action: action,
+        graph_id: graph.id,
+        session_id: state.sessionId,
+        snapshot: graph.snapshot,
+        ...fields,
+      });
+    } catch (error) {
+      refusal = { area: refusedArea, message: error.message };
+    }
+    if (generation !== state.generation) {
+      return;
+    }
+    if (refusal) {
+      state.failure = refusal;
+    } else if (state.editors.get(area)?.action === action) {
+      state.editors.delete(area);
+    }
+    state.pending = false;
+    render();
+    // A refused text box takes edits again; the cursor returns to it.
+    if (refusal) {
+      state.editors.get(area)?.input.focus();
+    }
+    await load();
   }
 
   // What the current choice shows: the proposal, or the graph.
@@ -442,8 +731,28 @@ export function createGraph({ document, elements, request, window = null }) {
       info = renderInfo(node);
       info.dataset.key = infoKey;
     }
-    const outputs = renderOutputs(Array.isArray(graph.outputs) ? graph.outputs : []);
-    elements.detail.replaceChildren(info, ...outputs);
+    const outputs = renderOutputs(
+      graph.id,
+      String(node.id),
+      Array.isArray(graph.outputs) ? graph.outputs : [],
+    );
+    placeChildren(elements.detail, [info, ...nodeActions(graph.id, node), ...outputs]);
+  }
+
+  // The actions of `node`, the selected node of graph `graphId`, its open
+  // reply box, and a refusal.
+  function nodeActions(graphId, node) {
+    const nodeId = String(node.id);
+    const area = areaKey("node", graphId, nodeId);
+    const row = actionRow(area, node, NODE_ACTIONS, (action) => {
+      if (action === "retry") {
+        void act(area, "retry", { node_id: nodeId });
+      } else {
+        openEditor(area, () => replyEditor(area, nodeId));
+      }
+    });
+
+    return [row, editorFor(area), failureFor(area)].filter(Boolean);
   }
 
   function renderInfo(node) {
@@ -478,15 +787,19 @@ export function createGraph({ document, elements, request, window = null }) {
     return row;
   }
 
-  // The output selector and the selected output as an answer. The same
-  // output keeps its node, and with it the reader's source view.
-  function renderOutputs(outputs) {
+  // The output selector, the selected output's action and its refusal,
+  // and the selected output as an answer, for `nodeId` of graph
+  // `graphId`. The same output keeps its node, and with it the reader's
+  // source view.
+  function renderOutputs(graphId, nodeId, outputs) {
     if (outputs.length === 0) {
       return [];
     }
     const found = outputs.findIndex((output) => output.id === state.outputId);
     const index = Math.max(found, 0);
-    state.outputId = outputs[index].id;
+    const output = outputs[index];
+    state.outputId = output.id;
+    const area = areaKey("output", graphId, output.id);
     const bar = element(document, "div", "graph-output-bar");
     bar.append(
       stepButton("‹", "Previous output", index > 0, () => selectOutput(outputs, index - 1)),
@@ -495,8 +808,15 @@ export function createGraph({ document, elements, request, window = null }) {
         selectOutput(outputs, index + 1),
       ),
     );
+    if (offers(state.capabilities, output, "accept")) {
+      bar.append(
+        actionButton(area, "accept", () =>
+          act(area, "accept", { node_id: nodeId, output_id: output.id }),
+        ),
+      );
+    }
 
-    return [bar, outputBody(outputs[index])];
+    return [bar, failureFor(area), outputBody(output)].filter(Boolean);
   }
 
   // The output as an answer, and what Agentty cut of it. An output that
@@ -538,7 +858,8 @@ export function createGraph({ document, elements, request, window = null }) {
     return button;
   }
 
-  // Steps `delta` views through the proposal and the graphs.
+  // Steps `delta` views through the proposal and the graphs. The view it
+  // steps to is not on screen yet, so its next read is a full one.
   function move(delta) {
     const choices = graphChoices(state.response);
     const next = choices[choiceIndex(choices, state.choice) + delta];
@@ -546,6 +867,7 @@ export function createGraph({ document, elements, request, window = null }) {
       return;
     }
     state.choice = next;
+    state.held = null;
     state.nodeId = null;
     state.outputId = null;
     if (next.kind === "proposal") {
@@ -557,16 +879,27 @@ export function createGraph({ document, elements, request, window = null }) {
 
   function reset() {
     state.choice = null;
+    state.editors.clear();
+    state.failure = null;
+    state.generation += 1;
     state.held = null;
     state.loads += 1;
     state.nodeId = null;
     state.outputId = null;
+    state.pending = false;
     state.response = null;
-    for (const node of [elements.hints, elements.nodes, elements.detail, elements.preview]) {
+    for (const node of [
+      elements.hints,
+      elements.actions,
+      elements.nodes,
+      elements.detail,
+      elements.preview,
+    ]) {
       node.replaceChildren();
     }
     delete elements.preview.dataset.preview;
     elements.preview.hidden = true;
+    elements.actions.hidden = true;
     elements.detail.hidden = true;
     elements.note.hidden = true;
     elements.error.textContent = "";
@@ -578,6 +911,16 @@ export function createGraph({ document, elements, request, window = null }) {
   elements.refresh.addEventListener("click", () => {
     if (state.sessionId) {
       void load();
+    }
+  });
+  // Cancelling is permanent, so it waits for the reader to confirm, and
+  // only on the graph they confirmed it for.
+  elements.cancelDialog.addEventListener("close", () => {
+    const graphId = elements.cancelDialog.dataset.graphId;
+    delete elements.cancelDialog.dataset.graphId;
+    const shown = state.choice?.kind === "graph" ? state.response?.graph : null;
+    if (elements.cancelDialog.returnValue === "confirm" && shown && String(shown.id) === graphId) {
+      void act(graphRowArea(shown), "cancel");
     }
   });
 
@@ -597,7 +940,61 @@ export function createGraph({ document, elements, request, window = null }) {
       return load();
     },
     refresh: () => (state.sessionId ? load() : Promise.resolve()),
+    // Offers the actions only once the server lists `graph_actions`.
+    setCapabilities: (capabilities) => {
+      state.capabilities = Array.isArray(capabilities) ? capabilities : [];
+      if (state.response) {
+        render();
+      }
+    },
   };
+}
+
+// Names the part of graph `graphId` a text box or a refusal is about: the
+// graph's own row, the number box for its spent budget, a node, or an
+// output, by `kind` and the id of that `part`.
+function areaKey(kind, graphId, part) {
+  return JSON.stringify([kind, String(graphId), part ?? null]);
+}
+
+// The graph's own row of `graph`.
+function graphRowArea(graph) {
+  return areaKey("graph", graph.id);
+}
+
+// The number box of `graph` for the spent budget it shows.
+function budgetArea(graph) {
+  return areaKey("budget", graph.id, graph.budget?.id);
+}
+
+// Whether `area` is about the shown `graph`, whose number box would be
+// `shownBudget`.
+function isShownArea(area, graph, shownBudget) {
+  const [kind, graphId] = JSON.parse(area);
+
+  return kind === "budget" ? area === shownBudget : Boolean(graph) && graphId === String(graph.id);
+}
+
+// Makes `wanted` the children of `parent` in order, moving, adding, or
+// removing only what differs, so a field being typed in keeps its focus.
+function placeChildren(parent, wanted) {
+  const kept = new Set(wanted);
+  // `children` is live, so the stale ones are removed once found.
+  const stale = [];
+  for (const child of parent.children) {
+    if (!kept.has(child)) {
+      stale.push(child);
+    }
+  }
+  for (const child of stale) {
+    child.remove();
+  }
+  wanted.forEach((child, index) => {
+    const current = parent.children[index];
+    if (current !== child) {
+      parent.insertBefore(child, current ?? null);
+    }
+  });
 }
 
 // A status glyph and its label, in the glyph's tone.

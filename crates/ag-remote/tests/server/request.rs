@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteFocusedReview,
-    RemoteFocusedReviewState, RemoteGraphApproval, RemoteGraphProposalPhase, RemoteGraphStatus,
-    RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteProject,
-    RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionGraph,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteFocusedReviewState, RemoteGraphAction, RemoteGraphActionRequest, RemoteGraphApproval,
+    RemoteGraphProposalPhase, RemoteGraphStatus, RemoteMessage, RemoteMessageKind, RemoteModeModel,
+    RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion,
+    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest,
+    RemoteSession, RemoteSessionGraph, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -332,6 +332,94 @@ async fn session_graphs_answer_unchanged_for_the_version_the_device_shows() -> T
         })
     );
     assert_eq!(stale, first);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_its_snapshot()
+-> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let accept = |session_id: &str, snapshot: &str| {
+        RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
+            action: RemoteGraphAction::Accept,
+            additional_calls: None,
+            budget_id: None,
+            graph_id: "graph".to_string(),
+            message: None,
+            node_id: Some("inspect".to_string()),
+            output_id: Some("result".to_string()),
+            session_id: session_id.to_string(),
+            snapshot: snapshot.to_string(),
+        })
+    };
+    let unknown = r#"{"type":"request","id":5,"request":{"method":"act_on_session_graph","action":"rewrite_history","graph_id":"graph","session_id":"session-2","snapshot":"5eed"}}"#;
+
+    // Act
+    let shown = call(
+        &mut client,
+        1,
+        RemoteRequest::GetSessionGraphs {
+            graph_id: None,
+            known: None,
+            node_id: None,
+            session_id: "session-2".to_string(),
+        },
+    )
+    .await?;
+    let accepted = call(&mut client, 2, accept("session-2", "5eed")).await?;
+    let stale = call(&mut client, 3, accept("session-2", "old")).await?;
+    let unlisted = call(&mut client, 4, accept("other-project-session", "5eed")).await?;
+    client.send(Message::Text(unknown.into())).await?;
+    let refused = next_frame(&mut client).await?;
+    let listed = call(&mut client, 6, RemoteRequest::ListSessions).await?;
+
+    // Assert
+    let RemoteResult::Ok(RemoteResponse::Graphs {
+        graph: Some(graph), ..
+    }) = shown
+    else {
+        return Err(format!("expected graphs, got {shown:?}").into());
+    };
+    assert_eq!(graph.actions, [RemoteGraphAction::Cancel]);
+    assert_eq!(graph.outputs[0].actions, [RemoteGraphAction::Accept]);
+    assert_eq!(accepted, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        stale,
+        RemoteResult::Error(
+            "Graph changed; refresh the view and inspect it before acting again.".to_string()
+        )
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        refused,
+        ServerFrame::Response {
+            id: 5,
+            result: RemoteResult::Error("Unsupported graph action".to_string()),
+        }
+    );
+    assert!(matches!(listed, RemoteResult::Ok(_)));
+    let accept_call =
+        "graph_action:session-2:graph:{}:Accept { node_id: \"inspect\", output_id: \"result\" }";
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "list".to_string(),
+            "graphs:session-2:-:-".to_string(),
+            "list".to_string(),
+            accept_call.replace("{}", "5eed"),
+            "list".to_string(),
+            accept_call.replace("{}", "old"),
+            "list".to_string(),
+            "list".to_string(),
+            "list".to_string(),
+        ]
+    );
 
     Ok(())
 }

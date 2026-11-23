@@ -57,10 +57,10 @@ pub use execution_graph::{
     GraphProposalAction, GraphProposalApproval, GraphProposalLimits, GraphProposalReplyOutcome,
     GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
     GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
-    GraphWorkspaceAccess, ResumeExecutionGraphRequest, SessionGraph, SessionGraphApproval,
-    SessionGraphEntry, SessionGraphNode, SessionGraphOutput, SessionGraphProposal,
-    SessionGraphProposalPhase, SessionGraphRequirement, SessionGraphSummary, SessionGraphs,
-    SessionGraphsRequest,
+    GraphWorkspaceAccess, ResumeExecutionGraphRequest, SessionGraph, SessionGraphAction,
+    SessionGraphActionKind, SessionGraphActionRequest, SessionGraphApproval, SessionGraphEntry,
+    SessionGraphNode, SessionGraphOutput, SessionGraphProposal, SessionGraphProposalPhase,
+    SessionGraphRequirement, SessionGraphSummary, SessionGraphs, SessionGraphsRequest,
 };
 pub use harness_model::{
     HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost,

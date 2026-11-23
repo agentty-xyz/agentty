@@ -8,10 +8,10 @@ use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
     DurableMessageRequest, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
     HostSessionMode, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
-    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionGraphs,
-    SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
-    SpeedMode,
+    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionGraphActionRequest,
+    SessionGraphs, SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind,
+    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
+    SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -325,6 +325,20 @@ impl SessionBackend for RecordingBackend {
         let graphs = self.record(call, self.graphs.clone())?;
 
         graphs.ok_or(SessionError::NotFound)
+    }
+
+    // Records the action as
+    // `graph_action:<session>:<graph>:<snapshot>:<action>`.
+    async fn act_on_session_graph(
+        &self,
+        request: SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        let call = format!(
+            "graph_action:{}:{}:{}:{:?}",
+            request.session_id, request.graph_id, request.snapshot, request.action
+        );
+
+        self.record(call, ())
     }
 
     async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {

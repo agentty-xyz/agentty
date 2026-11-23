@@ -36,7 +36,8 @@ pub use result::{
     GraphResultState,
 };
 pub use session_graph::{
-    SessionGraph, SessionGraphApproval, SessionGraphEntry, SessionGraphNode, SessionGraphOutput,
+    SessionGraph, SessionGraphAction, SessionGraphActionKind, SessionGraphActionRequest,
+    SessionGraphApproval, SessionGraphEntry, SessionGraphNode, SessionGraphOutput,
     SessionGraphProposal, SessionGraphProposalPhase, SessionGraphRequirement, SessionGraphSummary,
     SessionGraphs, SessionGraphsRequest,
 };

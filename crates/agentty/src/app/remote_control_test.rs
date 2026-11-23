@@ -13,6 +13,9 @@ use mockall::predicate::eq;
 use tokio::sync::watch;
 
 use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
+use crate::app::command_gateway::{
+    CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
+};
 use crate::app::{App, AppEvent, AppRuntimeEvent, Tab};
 use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
@@ -783,6 +786,61 @@ async fn graph_actions_admitted_in_the_terminal_advance_the_remote_revision() {
     // Assert
     // Cancelling writes the graph without a session event; the revision
     // still tells devices to refetch it.
+    assert_eq!(cancelled, Ok(()));
+    assert_eq!(*revisions.borrow_and_update(), initial_revision + 1);
+}
+
+#[tokio::test]
+async fn graph_actions_admitted_from_devices_advance_the_remote_revision() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let mut view = crate::presentation::execution_graph::tests::graph_view();
+    view.graphs[0].nodes.truncate(1);
+    view.progress.as_mut().expect("progress").nodes.truncate(1);
+    let graph = view.graphs[0].clone();
+    let progress = view.progress.clone();
+    let mut repository = ag_store::MockGraphRepository::new();
+    repository
+        .expect_list_graphs()
+        .returning(move |_| Ok(vec![graph.clone()]));
+    repository
+        .expect_progress()
+        .returning(move |_| Ok(progress.clone()));
+    repository.expect_load_result().returning(|_| Ok(None));
+    repository.expect_cancel().once().returning(|_| Ok(()));
+    app.services.set_graph_repository(Arc::new(repository));
+    let snapshot = app
+        .api_session_graphs(ag_session::SessionGraphsRequest {
+            graph_id: Some("graph".into()),
+            node_id: None,
+            session_id: "sess".into(),
+        })
+        .await
+        .expect("graphs should load")
+        .graph
+        .expect("selected graph")
+        .snapshot;
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+    let command = SessionCommand::new(
+        CommandInitiator::Remote,
+        CommandDelivery::Admission {
+            request: SessionMutation::ActOnSessionGraph {
+                request: Box::new(ag_session::SessionGraphActionRequest {
+                    action: ag_session::SessionGraphAction::Cancel,
+                    graph_id: "graph".into(),
+                    session_id: "sess".into(),
+                    snapshot,
+                }),
+            },
+            response_tx: None,
+        },
+    );
+
+    // Act
+    let cancelled = app.admit_session_command(command).await;
+
+    // Assert
     assert_eq!(cancelled, Ok(()));
     assert_eq!(*revisions.borrow_and_update(), initial_revision + 1);
 }

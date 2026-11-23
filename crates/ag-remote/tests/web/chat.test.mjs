@@ -104,6 +104,8 @@ const ELEMENT_IDS = {
 
 // Element names `createGraph` takes, by the id each has in index.html.
 const GRAPH_IDS = {
+  actions: "graph-actions",
+  cancelDialog: "graph-cancel-dialog",
   detail: "graph-detail",
   error: "graph-error",
   hints: "graph-hints",

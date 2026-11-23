@@ -53,6 +53,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
+                | SessionOperation::GraphActions
         )
     }
 
@@ -91,6 +92,13 @@ impl SessionBackend for SessionRuntimeHandle {
         request: ag_session::SessionGraphsRequest,
     ) -> Result<ag_session::SessionGraphs, ApiSessionError> {
         SessionRuntimeHandle::session_graphs(self, request).await
+    }
+
+    async fn act_on_session_graph(
+        &self,
+        request: ag_session::SessionGraphActionRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::act_on_session_graph(self, request).await
     }
 
     async fn cancel_execution_graph(

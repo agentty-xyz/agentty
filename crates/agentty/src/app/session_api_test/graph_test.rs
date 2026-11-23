@@ -1,6 +1,6 @@
 //! Session API graph tests: the graph summary a session snapshot carries and
-//! the read-only graph inspector read, with its selection rules, outputs,
-//! and snapshot token.
+//! the graph inspector read, with its selection rules, outputs, and snapshot
+//! token; the child suite covers its offered actions and graph actions.
 
 use std::sync::{Arc, Mutex};
 
@@ -18,6 +18,9 @@ use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
 use crate::presentation::execution_graph::tests::acceptance_gated_view;
 use crate::test_support::new_test_app;
+
+#[path = "graph_action_test.rs"]
+mod action;
 
 /// Reads the graphs of `sess` through the session API with this selection.
 async fn request_graphs(
@@ -87,6 +90,16 @@ fn serve_graphs(
     graphs: Vec<ExecutionGraph>,
     progress: impl Fn(&str) -> Option<ExecutionGraphProgress> + Send + Sync + 'static,
 ) {
+    let repository = graph_repository(graphs, progress);
+    app.services.set_graph_repository(Arc::new(repository));
+}
+
+/// The repository [`serve_graphs`] serves, for tests that expect more of
+/// it.
+fn graph_repository(
+    graphs: Vec<ExecutionGraph>,
+    progress: impl Fn(&str) -> Option<ExecutionGraphProgress> + Send + Sync + 'static,
+) -> MockGraphRepository {
     let mut repository = MockGraphRepository::new();
     repository
         .expect_list_graphs()
@@ -109,7 +122,8 @@ fn serve_graphs(
             validation: None,
         }))
     });
-    app.services.set_graph_repository(Arc::new(repository));
+
+    repository
 }
 
 #[tokio::test]

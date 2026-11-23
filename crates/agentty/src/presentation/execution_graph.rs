@@ -118,18 +118,102 @@ impl GraphView {
         }
     }
 
+    /// The selected graph, node, and output, which every action rule reads.
+    pub(crate) fn action_target(&self) -> GraphActionTarget<'_> {
+        GraphActionTarget {
+            graph: self.graph(),
+            node: self.selected_node,
+            output: self.outputs.get(self.selected_output),
+            progress: self.progress.as_ref(),
+        }
+    }
+
+    /// See [`GraphActionTarget::exhausted_budget`].
+    pub(crate) fn exhausted_budget(&self) -> Option<&str> {
+        self.action_target().exhausted_budget()
+    }
+
+    /// See [`GraphActionTarget::can_extend_budget`].
+    pub(crate) fn can_extend_budget(&self) -> bool {
+        self.action_target().can_extend_budget()
+    }
+
+    /// See [`GraphActionTarget::is_focused_review`].
+    pub(crate) fn is_focused_review(&self) -> bool {
+        self.action_target().is_focused_review()
+    }
+
+    /// See [`GraphActionTarget::can_resume`].
+    pub(crate) fn can_resume(&self) -> bool {
+        self.action_target().can_resume()
+    }
+
+    /// See [`GraphActionTarget::can_cancel`].
+    pub(crate) fn can_cancel(&self) -> bool {
+        self.action_target().can_cancel()
+    }
+
+    /// See [`GraphActionTarget::can_continue`].
+    pub(crate) fn can_continue(&self) -> bool {
+        self.action_target().can_continue()
+    }
+
+    /// See [`GraphActionTarget::can_retry`].
+    pub(crate) fn can_retry(&self) -> bool {
+        self.action_target().can_retry()
+    }
+
+    /// See [`GraphActionTarget::can_accept`].
+    pub(crate) fn can_accept(&self) -> bool {
+        self.action_target().can_accept()
+    }
+}
+
+/// The graph, node, and output an inspector action applies to, with the
+/// rules for which actions apply. The terminal inspector and the session
+/// API share these rules, so both offer the same actions.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GraphActionTarget<'a> {
+    /// The selected graph, or `None` while a proposal is selected.
+    pub(crate) graph: Option<&'a ExecutionGraph>,
+    /// Position of the selected node in declaration order.
+    pub(crate) node: usize,
+    /// The selected output of the selected node.
+    pub(crate) output: Option<&'a GraphViewOutput>,
+    /// Live progress of the selected graph.
+    pub(crate) progress: Option<&'a ExecutionGraphProgress>,
+}
+
+impl<'a> GraphActionTarget<'a> {
+    /// The selected node's live progress.
+    pub(crate) fn node_progress(&self) -> Option<&'a GraphNodeProgress> {
+        self.progress?.nodes.get(self.node)
+    }
+
     /// The spent budget an extension adds calls to: the selected node's, or
     /// else the first one a pending node waits for.
-    pub(crate) fn exhausted_budget(&self) -> Option<&str> {
-        self.node()
+    pub(crate) fn exhausted_budget(&self) -> Option<&'a str> {
+        self.node_progress()
             .and_then(Self::node_exhausted_budget)
             .or_else(|| {
-                self.progress
-                    .as_ref()?
+                self.progress?
                     .nodes
                     .iter()
                     .find_map(Self::node_exhausted_budget)
             })
+    }
+
+    /// This target with the first node that waits for the spent
+    /// `budget_id` selected, so [`Self::exhausted_budget`] names exactly
+    /// that budget, or `None` when no node waits for it.
+    pub(crate) fn with_exhausted_budget(self, budget_id: &str) -> Option<Self> {
+        let node = self
+            .progress?
+            .nodes
+            .iter()
+            .position(|node| Self::node_exhausted_budget(node) == Some(budget_id))?;
+
+        Some(Self { node, ..self })
     }
 
     /// Whether the user can add provider calls: a pending node waits for a
@@ -140,19 +224,18 @@ impl GraphView {
 
     /// Focused reviews have a host coordinator and must start a new generation.
     pub(crate) fn is_focused_review(&self) -> bool {
-        self.graph().is_some_and(is_focused_review_graph)
+        self.graph.is_some_and(is_focused_review_graph)
     }
 
     pub(crate) fn can_resume(&self) -> bool {
         !self.is_focused_review()
             && self
                 .progress
-                .as_ref()
                 .is_some_and(|progress| matches!(progress.status, ExecutionGraphStatus::Paused))
     }
 
     pub(crate) fn can_cancel(&self) -> bool {
-        self.progress.as_ref().is_some_and(|progress| {
+        self.progress.is_some_and(|progress| {
             !matches!(
                 progress.status,
                 ExecutionGraphStatus::Cancelled | ExecutionGraphStatus::Completed
@@ -163,16 +246,16 @@ impl GraphView {
     /// Whether the selected node accepts reply or revision guidance here. A
     /// node awaiting answers asked in session chat; the chat reply answers it.
     pub(crate) fn can_continue(&self) -> bool {
-        let Some(graph) = self.graph() else {
+        let Some(graph) = self.graph else {
             return false;
         };
-        let Some(node) = graph.nodes.get(self.selected_node) else {
+        let Some(node) = graph.nodes.get(self.node) else {
             return false;
         };
-        let Some(progress) = self.progress.as_ref() else {
+        let Some(progress) = self.progress else {
             return false;
         };
-        let Some(current) = self.node() else {
+        let Some(current) = self.node_progress() else {
             return false;
         };
 
@@ -190,9 +273,8 @@ impl GraphView {
         !self.is_focused_review()
             && self
                 .progress
-                .as_ref()
                 .is_some_and(|progress| progress.status != ExecutionGraphStatus::Cancelled)
-            && self.node().is_some_and(|node| {
+            && self.node_progress().is_some_and(|node| {
                 matches!(
                     node.status,
                     GraphNodeStatus::Failed | GraphNodeStatus::Cancelled
@@ -202,14 +284,12 @@ impl GraphView {
 
     pub(crate) fn can_accept(&self) -> bool {
         self.progress
-            .as_ref()
             .is_some_and(|progress| progress.status != ExecutionGraphStatus::Cancelled)
             && self
-                .node()
+                .node_progress()
                 .is_some_and(|node| node.status == GraphNodeStatus::Succeeded)
             && self
-                .outputs
-                .get(self.selected_output)
+                .output
                 .is_some_and(|output| output.result.state == GraphResultState::Validated)
     }
 

@@ -179,6 +179,12 @@ impl App {
             SessionMutation::AcceptExecutionGraphResult { reference } => {
                 self.accept_api_execution_graph_result(*reference).await
             }
+            SessionMutation::ActOnSessionGraph { request } => {
+                match self.api_graph_action_mutation(*request).await {
+                    Ok(mutation) => Box::pin(self.execute_session_mutation(mutation)).await,
+                    Err(error) => Err(SessionError::Operation(error)),
+                }
+            }
             SessionMutation::SubmitAgentTask {
                 request,
                 session_id,

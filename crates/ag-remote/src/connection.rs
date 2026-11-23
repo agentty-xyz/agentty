@@ -21,8 +21,9 @@ use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{
-    ClientFrame, RemoteProject, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteGraphActionRequest, RemoteProject, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 use crate::transport::{CloseCause, FrameTransport, Incoming};
@@ -72,6 +73,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::PublishSession, "publish"),
     (SessionOperation::SyncProject, "sync_project"),
     (SessionOperation::Graphs, "graphs"),
+    (SessionOperation::GraphActions, "graph_actions"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -612,6 +614,7 @@ impl RequestTasks {
 /// itself.
 fn mutated_session(request: &RemoteRequest) -> Option<&str> {
     match request {
+        RemoteRequest::ActOnSessionGraph(request) => Some(&request.session_id),
         RemoteRequest::AnswerQuestions { session_id, .. }
         | RemoteRequest::CancelSession { session_id }
         | RemoteRequest::MergeSession { session_id }
@@ -683,6 +686,9 @@ async fn respond(
     request: RemoteRequest,
 ) -> Result<RemoteResponse, SessionError> {
     match request {
+        RemoteRequest::ActOnSessionGraph(request) => {
+            act_on_listed_session_graph(sessions, request).await
+        }
         RemoteRequest::AnswerQuestions {
             answers,
             session_id,
@@ -785,6 +791,22 @@ async fn respond(
         }
         RemoteRequest::Unsupported => Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string())),
     }
+}
+
+/// Applies one graph inspector action only when the host lists the session
+/// that owns the graph; the host checks the graph's ownership, snapshot, and
+/// the action's availability.
+async fn act_on_listed_session_graph(
+    sessions: &SessionService,
+    request: RemoteGraphActionRequest,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::GraphActions)?;
+    let session_id = listed_session_id(sessions, request.session_id.clone()).await?;
+    sessions
+        .act_on_session_graph(request.into_session_request(session_id)?)
+        .await?;
+
+    Ok(RemoteResponse::Accepted)
 }
 
 /// Answers the current question set of one session only when the host lists

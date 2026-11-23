@@ -13,7 +13,10 @@ use crate::service::{
     DurableMessageVisibility, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
     QuestionAnswer, SessionBackend, SessionOperation, SessionService, SessionSettingsChange,
 };
-use crate::{ReasoningLevel, SessionGraphs, SessionGraphsRequest};
+use crate::{
+    ReasoningLevel, SessionGraphAction, SessionGraphActionRequest, SessionGraphs,
+    SessionGraphsRequest,
+};
 
 #[tokio::test]
 async fn service_delegates_create_and_get() {
@@ -360,6 +363,8 @@ async fn service_delegates_settings_changes_to_supporting_hosts() {
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
+    /// Graph actions asked for, in order.
+    graph_actions: Mutex<Vec<SessionGraphActionRequest>>,
     /// Graph reads asked for, in order.
     graph_reads: Mutex<Vec<SessionGraphsRequest>>,
     inner: FakeBackend,
@@ -381,7 +386,20 @@ impl SessionBackend for OptionalBackend {
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
+                | SessionOperation::GraphActions
         )
+    }
+
+    async fn act_on_session_graph(
+        &self,
+        request: SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        self.graph_actions
+            .lock()
+            .expect("graph actions")
+            .push(request);
+
+        Ok(())
     }
 
     // Every session has no graph and no proposal.
@@ -638,5 +656,72 @@ async fn service_delegates_session_graphs_to_supporting_hosts() {
     assert_eq!(
         backend.graph_reads.lock().expect("graph reads").as_slice(),
         [request]
+    );
+}
+
+/// An action on `graph` of `session-1` bound to the snapshot `5eed`.
+fn graph_action_request(action: SessionGraphAction) -> SessionGraphActionRequest {
+    SessionGraphActionRequest {
+        action,
+        graph_id: "graph".to_string(),
+        session_id: SessionId::from("session-1"),
+        snapshot: "5eed".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_graph_actions() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let supported = service.supports(SessionOperation::GraphActions);
+    let result = service
+        .act_on_session_graph(graph_action_request(SessionGraphAction::Cancel))
+        .await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        result,
+        Err(SessionError::Operation(
+            "Host does not support execution graph actions".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn service_delegates_graph_actions_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+    let requests = [
+        graph_action_request(SessionGraphAction::Retry {
+            node_id: "inspect".to_string(),
+        }),
+        graph_action_request(SessionGraphAction::ExtendBudget {
+            additional_calls: 3,
+            budget_id: "calls".to_string(),
+        }),
+    ];
+
+    // Act
+    let supported = service.supports(SessionOperation::GraphActions);
+    for request in requests.clone() {
+        service
+            .act_on_session_graph(request)
+            .await
+            .expect("action should reach the host");
+    }
+
+    // Assert
+    assert!(supported);
+    assert_eq!(
+        backend
+            .graph_actions
+            .lock()
+            .expect("graph actions")
+            .as_slice(),
+        requests
     );
 }

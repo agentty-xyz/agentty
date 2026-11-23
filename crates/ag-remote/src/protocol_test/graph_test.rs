@@ -1,18 +1,20 @@
 //! Graph frames: the summary a session snapshot carries and the
-//! `get_session_graphs` read, with their conversion, encoding, budgets, and
-//! parsing from older servers.
+//! `get_session_graphs` read, with their conversion, encoding, budgets,
+//! offered actions, and parsing from older servers, and the
+//! `act_on_session_graph` request.
 
 use ag_session::{
-    ExecutionGraphStatus, GraphNodeStatus, QuestionItem, SessionGraphApproval,
+    ExecutionGraphStatus, ExtendGraphBudgetRequest, GraphNodeStatus, QuestionItem, SessionError,
+    SessionGraphAction, SessionGraphActionKind, SessionGraphActionRequest, SessionGraphApproval,
     SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionId,
 };
 use serde_json::json;
 
 use crate::protocol::{
-    MAX_FILE_RESPONSE_BYTES, RemoteGraph, RemoteGraphApproval, RemoteGraphEntry, RemoteGraphNode,
-    RemoteGraphNodeStatus, RemoteGraphOutput, RemoteGraphOutputState, RemoteGraphProposal,
-    RemoteGraphProposalPhase, RemoteGraphRequirement, RemoteGraphStatus, RemoteQuestion,
-    RemoteRequest, RemoteResponse, RemoteSession, RemoteSessionGraph,
+    MAX_FILE_RESPONSE_BYTES, RemoteGraph, RemoteGraphAction, RemoteGraphApproval, RemoteGraphEntry,
+    RemoteGraphNode, RemoteGraphNodeStatus, RemoteGraphOutput, RemoteGraphOutputState,
+    RemoteGraphProposal, RemoteGraphProposalPhase, RemoteGraphRequirement, RemoteGraphStatus,
+    RemoteQuestion, RemoteRequest, RemoteResponse, RemoteSession, RemoteSessionGraph,
 };
 use crate::test_support::session_fixture;
 
@@ -264,10 +266,13 @@ fn graph_frames_carry_the_selected_graph_its_nodes_and_outputs() {
     assert_eq!(graph.status, Some(RemoteGraphStatus::Blocked));
     assert_eq!(graph.status_label, "Blocked");
     assert_eq!(graph.snapshot, "5eed");
+    assert_eq!(graph.actions, [RemoteGraphAction::Cancel]);
+    assert_eq!(graph.budget, None);
     assert_eq!(
         graph.nodes,
         [
             RemoteGraphNode {
+                actions: Vec::new(),
                 agent: "inspector".to_string(),
                 agent_kind: "codex".to_string(),
                 attempts: 1,
@@ -286,6 +291,7 @@ fn graph_frames_carry_the_selected_graph_its_nodes_and_outputs() {
                 truncated: false,
             },
             RemoteGraphNode {
+                actions: Vec::new(),
                 agent: "inspector".to_string(),
                 agent_kind: "codex".to_string(),
                 attempts: 0,
@@ -313,6 +319,7 @@ fn graph_frames_carry_the_selected_graph_its_nodes_and_outputs() {
     assert_eq!(
         graph.outputs,
         [RemoteGraphOutput {
+            actions: vec![RemoteGraphAction::Accept],
             id: "result".to_string(),
             name: "report".to_string(),
             state: RemoteGraphOutputState::Validated,
@@ -343,6 +350,10 @@ fn graph_frames_encode_states_in_snake_case_and_omit_what_is_empty() {
             .get("awaits_approval")
             .is_none()
     );
+    assert_eq!(encoded["graph"]["actions"], json!(["cancel"]));
+    assert_eq!(encoded["graph"]["outputs"][0]["actions"], json!(["accept"]));
+    assert!(encoded["graph"].get("budget").is_none());
+    assert!(encoded["graph"]["nodes"][0].get("actions").is_none());
     assert!(encoded["proposal"].get("truncated").is_none());
     assert!(encoded["graph"]["outputs"][0].get("truncated").is_none());
     assert!(encoded["graph"]["nodes"][0].get("truncated").is_none());
@@ -612,4 +623,175 @@ fn graph_frames_from_an_older_or_empty_host_parse_without_details() {
     assert_eq!(encoded.as_object().map(serde_json::Map::len), Some(2));
     assert_eq!(encoded["kind"], json!("graphs"));
     assert!(encoded["version"].is_string());
+}
+
+#[test]
+fn graph_frames_list_every_action_where_it_applies_and_the_spent_budget() {
+    // Arrange
+    let mut graphs = ag_session::test_support::session_graphs("session-1");
+    let graph = graphs.graph.as_mut().expect("graph");
+    graph.actions = vec![
+        SessionGraphActionKind::Cancel,
+        SessionGraphActionKind::ExtendBudget,
+        SessionGraphActionKind::Resume,
+    ];
+    graph.exhausted_budget = Some("calls".to_string());
+    graph.nodes[0].actions = vec![SessionGraphActionKind::Reply, SessionGraphActionKind::Retry];
+
+    // Act
+    let response = RemoteResponse::from_graphs(graphs);
+    let encoded = serde_json::to_value(&response).expect("response should encode");
+
+    // Assert
+    assert_eq!(
+        serde_json::from_value::<RemoteResponse>(encoded.clone()).expect("response should decode"),
+        response
+    );
+    assert_eq!(
+        encoded["graph"]["actions"],
+        json!(["cancel", "extend_budget", "resume"])
+    );
+    assert_eq!(
+        encoded["graph"]["budget"],
+        json!({
+            "id": "calls",
+            "max_additional_calls": ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS
+        })
+    );
+    assert_eq!(
+        encoded["graph"]["nodes"][0]["actions"],
+        json!(["reply", "retry"])
+    );
+}
+
+/// An `act_on_session_graph` frame of `graph` in session `s` bound to the
+/// snapshot `5eed`, with `fields` added.
+fn graph_action_frame(fields: &serde_json::Value) -> serde_json::Value {
+    let mut frame = json!({
+        "method": "act_on_session_graph",
+        "graph_id": "graph",
+        "session_id": "s",
+        "snapshot": "5eed"
+    });
+    for (name, value) in fields.as_object().expect("fields should be an object") {
+        frame[name] = value.clone();
+    }
+
+    frame
+}
+
+/// Parses `frame` and converts it to the session API request.
+fn parse_graph_action(frame: serde_json::Value) -> Result<SessionGraphActionRequest, SessionError> {
+    let RemoteRequest::ActOnSessionGraph(request) =
+        serde_json::from_value(frame).expect("request should parse")
+    else {
+        return Err(SessionError::NotFound);
+    };
+
+    request.into_session_request(SessionId::from("s"))
+}
+
+#[test]
+fn graph_action_requests_carry_the_fields_each_action_needs() {
+    // Arrange
+    let cases = [
+        (
+            json!({"action": "accept", "node_id": "inspect", "output_id": "result"}),
+            SessionGraphAction::Accept {
+                node_id: "inspect".to_string(),
+                output_id: "result".to_string(),
+            },
+        ),
+        (json!({"action": "cancel"}), SessionGraphAction::Cancel),
+        (
+            json!({"action": "extend_budget", "additional_calls": 5, "budget_id": "calls"}),
+            SessionGraphAction::ExtendBudget {
+                additional_calls: 5,
+                budget_id: "calls".to_string(),
+            },
+        ),
+        (
+            json!({"action": "reply", "message": "Shorter", "node_id": "fix"}),
+            SessionGraphAction::Reply {
+                message: "Shorter".to_string(),
+                node_id: "fix".to_string(),
+            },
+        ),
+        (json!({"action": "resume"}), SessionGraphAction::Resume),
+        (
+            json!({"action": "retry", "node_id": "fix"}),
+            SessionGraphAction::Retry {
+                node_id: "fix".to_string(),
+            },
+        ),
+    ];
+
+    for (fields, expected) in cases {
+        // Act
+        let frame = graph_action_frame(&fields);
+        let request = parse_graph_action(frame.clone());
+        let reencoded = serde_json::to_value(
+            serde_json::from_value::<RemoteRequest>(frame.clone()).expect("request should parse"),
+        )
+        .expect("request should encode");
+
+        // Assert
+        assert_eq!(
+            request,
+            Ok(SessionGraphActionRequest {
+                action: expected,
+                graph_id: "graph".to_string(),
+                session_id: SessionId::from("s"),
+                snapshot: "5eed".to_string(),
+            }),
+            "{fields}"
+        );
+        assert_eq!(reencoded, frame, "{fields}");
+    }
+}
+
+#[test]
+fn graph_action_requests_without_a_needed_field_or_with_an_unknown_action_are_refused() {
+    // Arrange
+    let cases = [
+        (
+            json!({"action": "accept", "output_id": "result"}),
+            "node_id",
+        ),
+        (
+            json!({"action": "accept", "node_id": "inspect"}),
+            "output_id",
+        ),
+        (
+            json!({"action": "extend_budget", "budget_id": "calls"}),
+            "additional_calls",
+        ),
+        (
+            json!({"action": "extend_budget", "additional_calls": 5}),
+            "budget_id",
+        ),
+        (json!({"action": "reply", "node_id": "fix"}), "message"),
+        (json!({"action": "reply", "message": "Shorter"}), "node_id"),
+        (json!({"action": "retry"}), "node_id"),
+    ];
+
+    for (fields, field) in cases {
+        // Act
+        let request = parse_graph_action(graph_action_frame(&fields));
+
+        // Assert
+        assert_eq!(
+            request,
+            Err(SessionError::Operation(format!(
+                "Graph action needs `{field}`"
+            ))),
+            "{fields}"
+        );
+    }
+    assert_eq!(
+        parse_graph_action(graph_action_frame(&json!({"action": "rewrite_history"}))),
+        Err(SessionError::Operation(
+            "Unsupported graph action".to_string()
+        ))
+    );
 }
