@@ -1012,10 +1012,42 @@ export class MemoryStorage {
   }
 }
 
+// Returns custom property `name` of `element` as `stylesheet`, such as the
+// generated tokens.css, sets it: only rules on the root element count, as
+// `:root` or `:root.<class>...`, a rule applies when the root has every
+// class it names, and a later rule wins. Without a value it is empty, as
+// in a browser.
+function customProperty(stylesheet, element, name) {
+  let value = "";
+  if (element !== element.ownerDocument.documentElement) {
+    return value;
+  }
+  const rules = stylesheet.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^}]*)\}/g);
+  for (const [, selector, body] of rules) {
+    const [base, ...classes] = selector.trim().split(".");
+    if (base !== ":root" || !classes.every((name) => element.classList.contains(name))) {
+      continue;
+    }
+    for (const [, property, declared] of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      if (property === name) {
+        value = declared.trim();
+      }
+    }
+  }
+
+  return value;
+}
+
 // Builds the window of `document` at `url`. History entries change the
 // location; `history.back()` fires `popstate`, and a fragment change
 // through `location.hash` fires `hashchange`. Timers are real.
-export function createWindow(document, url = "http://127.0.0.1/", { matches = () => false } = {}) {
+// `getComputedStyle` resolves only the root's custom properties, from
+// `stylesheet`.
+export function createWindow(
+  document,
+  url = "http://127.0.0.1/",
+  { matches = () => false, stylesheet = "" } = {},
+) {
   const window = new FakeEventTarget();
   let current = new URL(url);
   const entries = [{ state: null, url: current.href }];
@@ -1099,6 +1131,9 @@ export function createWindow(document, url = "http://127.0.0.1/", { matches = ()
     clearInterval: clearInterval,
     clearTimeout: clearTimeout,
     document: document,
+    getComputedStyle: (element) => ({
+      getPropertyValue: (name) => customProperty(stylesheet, element, name),
+    }),
     history: history,
     innerHeight: 800,
     innerWidth: 1280,

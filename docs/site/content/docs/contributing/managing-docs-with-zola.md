@@ -49,10 +49,14 @@ documentation maintainable as it grows.
 
 - Treat `design/tokens.json` at the repository root as the source of truth for color,
   typography, radius, shadow, and motion tokens.
-  `cargo run -p ag-xtask -- design-tokens` generates `sass/_tokens.scss` from it; never
-  edit that file by hand. Keep layout sizes in `sass/site.scss`. Extend an existing
-  token before adding a raw visual value: the `check-design-tokens` hook rejects raw
-  colors in stylesheets.
+  `cargo run -p ag-xtask -- design-tokens` generates `sass/_tokens.scss` from it, and
+  the `theme-color` value in `templates/partials/seo.html`; never edit either by hand.
+  Keep layout sizes in `sass/site.scss`. Extend an existing token before adding a raw
+  visual value: the `check-design-tokens` hook rejects raw colors in stylesheets and in
+  the scripts and templates under `templates/` and `static/`. Scripts read token values
+  at runtime with `getComputedStyle`.
+- The brand mark and favicon live in `design/`. The same command copies them to
+  `static/mark.svg`, which `templates/base.html` inlines, and `static/favicon.ico`.
 - Follow `design/DESIGN.md` for color roles, typography, both themes, accessibility, and
   components. The shared foundations and components it describes live in
   `design/base.css`, which reaches the site as the generated `sass/_base.scss`.

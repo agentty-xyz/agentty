@@ -197,7 +197,7 @@ var renderCounter = 0;
       || codeClassName.includes('language-mermaid');
   }
 
-  /** Read the current docs theme colors from CSS custom properties. */
+  /** Read the current docs theme colors and font from CSS custom properties. */
   function currentMermaidThemeVariables() {
     var rootStyles = getComputedStyle(document.documentElement);
     var background = rootStyles.getPropertyValue('--color-bg').trim();
@@ -206,13 +206,14 @@ var renderCounter = 0;
     var accentDim = rootStyles.getPropertyValue('--color-accent-dim').trim();
     var border = rootStyles.getPropertyValue('--color-border').trim();
     var muted = rootStyles.getPropertyValue('--color-muted').trim();
+    var fontMono = rootStyles.getPropertyValue('--font-mono').trim();
 
     return {
       background: background,
       clusterBkg: surface,
       clusterBorder: border,
       edgeLabelBackground: background,
-      fontFamily: '"Share Tech Mono", "Courier New", monospace',
+      fontFamily: fontMono,
       lineColor: accentDim,
       mainBkg: surface,
       primaryBorderColor: border,

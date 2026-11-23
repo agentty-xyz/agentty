@@ -7,7 +7,7 @@
 
 /// Colour functions that take literal channels. `color-mix()` is not one:
 /// it mixes colours that are themselves checked.
-const COLOR_FUNCTIONS: [&str; 10] = [
+pub(super) const COLOR_FUNCTIONS: [&str; 10] = [
     "color", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "rgb", "rgba",
 ];
 

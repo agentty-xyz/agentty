@@ -7,7 +7,9 @@
 // smaller, darker glyphs so the picture keeps its tone. Cells arrive top to
 // bottom as scrambled noise and scramble again under the pointer. Scenes with
 // `poses` pre-render one grid per pose and periodically play a `wag` through
-// them; the nerpa uses this to flick its hind flippers.
+// them; the nerpa uses this to flick its hind flippers. The grayscale is
+// brightness, not colour, so scenes paint with `gray()` levels; the visible
+// characters take their colours from the `--glyph-*` design tokens.
 (function (root) {
   'use strict';
 
@@ -159,10 +161,15 @@
     return Math.max(scene.minCols, Math.min(scene.maxCols, Math.round(boxWidth / scene.cellPx)));
   }
 
-  function gray(value) {
+  /**
+   * Brightness `value` (`0..1`) as a canvas paint for the offscreen scene,
+   * optionally with `alpha` (`0..1`) to blend it over what is already painted.
+   */
+  function gray(value, alpha) {
     var channel = Math.round(value * 255);
+    var channels = channel + ',' + channel + ',' + channel;
 
-    return 'rgb(' + channel + ',' + channel + ',' + channel + ')';
+    return alpha === undefined ? 'rgb(' + channels + ')' : 'rgba(' + channels + ',' + alpha + ')';
   }
 
   /** Paint `AGENTTY` in the display face; the scene box hugs the letters. */
@@ -189,7 +196,7 @@
     paint: function (ctx, bounds) {
       ctx.font = WORDMARK_FONT;
       ctx.textBaseline = 'alphabetic';
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = gray(1);
       ctx.fillText('AGENTTY', bounds.originX, bounds.baseline);
     },
   };
@@ -263,18 +270,18 @@
       ctx.save();
       ctx.clip(body);
       var sheen = ctx.createRadialGradient(330, 190, 10, 330, 190, 260);
-      sheen.addColorStop(0, 'rgba(255,255,255,0.3)');
-      sheen.addColorStop(1, 'rgba(255,255,255,0)');
+      sheen.addColorStop(0, gray(1, 0.3));
+      sheen.addColorStop(1, gray(1, 0));
       ctx.fillStyle = sheen;
       ctx.fillRect(0, 0, 1000, 600);
       // Neck crease and a few faint coat spots.
-      ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+      ctx.strokeStyle = gray(0, 0.28);
       ctx.lineWidth = 16;
       ctx.beginPath();
       ctx.moveTo(352, 150);
       ctx.quadraticCurveTo(300, 290, 330, 470);
       ctx.stroke();
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillStyle = gray(0, 0.2);
       [[470, 230, 16], [560, 262, 12], [640, 318, 14], [520, 330, 10], [720, 360, 11], [600, 400, 9]].forEach(function (spot) {
         ctx.beginPath();
         ctx.ellipse(spot[0], spot[1], spot[2] * 1.4, spot[2], 0.3, 0, Math.PI * 2);
@@ -346,7 +353,7 @@
     canvas.width = cols * SAMPLES_PER_CELL;
     canvas.height = Math.round(rows * SAMPLES_PER_CELL * CELL_RATIO);
     var ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = gray(0);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.scale(canvas.width / bounds.width, canvas.height / bounds.height);
     scene.paint(ctx, bounds, pose);

@@ -1,13 +1,18 @@
 //! Design tokens: `design/tokens.json` is the only place the web surfaces'
-//! design values are written, and `design/base.css` the only place their
-//! shared foundations and components are. This task generates the token
-//! stylesheets and the surfaces' copies of the base stylesheet, and checks
-//! that those are current, that hand-written stylesheets name no raw colour,
-//! and that the declared colour pairs keep their contrast.
+//! design values are written, `design/base.css` the only place their shared
+//! foundations and components are, and `design/` the only place the brand
+//! assets are. This task generates the token stylesheets, the surfaces'
+//! copies of the base stylesheet and the brand assets, and the value of
+//! every `theme-color` meta in their templates, and checks that those are
+//! current, that hand-written stylesheets and the surfaces' scripts and
+//! templates name no raw colour, and that the declared colour pairs keep
+//! their contrast.
 
 mod contrast;
+mod script;
 mod stylesheet;
 mod task;
+mod template;
 mod token;
 
 pub(crate) use task::{Options, run};

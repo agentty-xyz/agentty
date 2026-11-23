@@ -54,6 +54,7 @@
 <title>{{ seo_title }}</title>
 <meta name="description" content="{{ seo_description }}">
 <meta name="robots" content="{{ seo_robots }}">
+{# `cargo run -p ag-xtask -- design-tokens` writes the default theme's `color.bg` here. #}
 <meta name="theme-color" content="#070b08">
 {% if seo_url %}<link rel="canonical" href="{{ seo_url }}">{% endif %}
 <link rel="alternate"

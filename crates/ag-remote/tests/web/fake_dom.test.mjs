@@ -331,3 +331,30 @@ test("FakeEvent carries keyboard fields and honours cancelable", () => {
   assert.equal(event.defaultPrevented, true);
   assert.equal(fixed.defaultPrevented, false);
 });
+
+test("getComputedStyle resolves the root's custom properties from the stylesheet", () => {
+  // Arrange
+  const document = createDocument('<html><body><p id="p"></p></body></html>');
+  const stylesheet =
+    "/* :root { --a: comment; } */\n:root {\n  --a: one;\n  --b: two;\n}\n" +
+    ".other { --a: other; }\n:root.dark.wide { --a: three; }\n";
+  const window = createWindow(document, "http://127.0.0.1/", { stylesheet: stylesheet });
+  const root = document.documentElement;
+  const read = (element, name) => window.getComputedStyle(element).getPropertyValue(name);
+
+  // Act
+  const light = [read(root, "--a"), read(root, "--b"), read(root, "--c")];
+  root.classList.add("dark");
+  const partial = read(root, "--a");
+  root.classList.add("wide");
+  const themed = read(root, "--a");
+  const paragraph = read(document.getElementById("p"), "--a");
+  const unstyled = createWindow(document).getComputedStyle(root).getPropertyValue("--a");
+
+  // Assert
+  assert.deepEqual(light, ["one", "two", ""]);
+  assert.equal(partial, "one");
+  assert.equal(themed, "three");
+  assert.equal(paragraph, "");
+  assert.equal(unstyled, "");
+});

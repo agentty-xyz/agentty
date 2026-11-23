@@ -14,6 +14,12 @@ const ROOT: &str = "repo";
 /// Hand-written base stylesheet that each surface receives a copy of.
 const BASE: &str = "a {\n  color: var(--color-text);\n}\n";
 
+/// Brand mark that the docs site receives a copy of.
+const MARK: &str = "<svg viewBox=\"0 0 24 24\" stroke=\"currentColor\"></svg>\n";
+
+/// Favicon bytes, which are not UTF-8.
+const ICON: [u8; 4] = [0, 0, 1, 0xff];
+
 /// Token file with one shared colour, one value for each generated surface,
 /// and a contrast pair that passes.
 fn tokens() -> String {
@@ -45,7 +51,7 @@ fn tokens() -> String {
 /// In-memory repository whose inventory lists every file and listed path.
 struct Fixture {
     failures: BTreeMap<PathBuf, io::ErrorKind>,
-    files: Arc<Mutex<BTreeMap<PathBuf, String>>>,
+    files: Arc<Mutex<BTreeMap<PathBuf, Vec<u8>>>>,
     inventory_error: bool,
     listed: Vec<PathBuf>,
     write_error: bool,
@@ -70,19 +76,46 @@ impl Fixture {
             "crates/ag-remote/assets/app.css",
             "a { color: var(--color-text); }\n",
         );
-        fixture.write("crates/ag-remote/assets/app.js", "const red = '#ff0000';\n");
+        fixture.write("design/mark.svg", MARK);
+        fixture.write_bytes("design/favicon.ico", &ICON);
+        fixture.write(
+            "crates/ag-remote/assets/app.js",
+            "const bg = getComputedStyle(root).getPropertyValue('--color-bg');\n",
+        );
+        fixture.write(
+            "crates/ag-remote/assets/index.html",
+            "<meta name=\"theme-color\" content=\"#000000\">\n<script>const a = \
+             'green';</script>\n",
+        );
+        fixture.write(
+            "docs/site/templates/seo.html",
+            "<title>{{ title }}</title>\n<meta name=\"theme-color\" content=\"#123456\">\n<meta \
+             content=\"#654321\" name=\"theme-color\">\n",
+        );
+        // Scripts and templates outside the surfaces' pages may name colours.
+        fixture.write("docs/site/tests/card.test.mjs", "const bg = '#070b08';\n");
+        fixture.write("docs/site/README.html", "<p style=\"color: red\"></p>\n");
 
         fixture
     }
 
     fn write(&self, path: &str, text: &str) {
+        self.write_bytes(path, text.as_bytes());
+    }
+
+    fn write_bytes(&self, path: &str, bytes: &[u8]) {
         self.files
             .lock()
             .expect("files")
-            .insert(PathBuf::from(path), text.to_owned());
+            .insert(PathBuf::from(path), bytes.to_vec());
     }
 
     fn file(&self, path: &str) -> Option<String> {
+        self.bytes(path)
+            .map(|bytes| String::from_utf8(bytes).expect("text file"))
+    }
+
+    fn bytes(&self, path: &str) -> Option<Vec<u8>> {
         self.files
             .lock()
             .expect("files")
@@ -106,7 +139,7 @@ impl Fixture {
             });
         let files = Arc::clone(&self.files);
         let failures = self.failures.clone();
-        host.expect_read().returning(move |path| {
+        let read = move |path: &Path| -> io::Result<Vec<u8>> {
             let relative = path.strip_prefix(ROOT).unwrap_or(path);
             if let Some(kind) = failures.get(relative) {
                 return Err(io::Error::new(*kind, "denied"));
@@ -118,10 +151,16 @@ impl Fixture {
                 .get(relative)
                 .cloned()
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        };
+        let read_text = read.clone();
+        host.expect_read().returning(move |path| {
+            String::from_utf8(read_text(path)?)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         });
+        host.expect_read_bytes().returning(read);
         let files = Arc::clone(&self.files);
         let write_error = self.write_error;
-        host.expect_write().returning(move |path, text| {
+        host.expect_write().returning(move |path, contents| {
             if write_error {
                 return Err(io::Error::from(io::ErrorKind::PermissionDenied));
             }
@@ -129,7 +168,7 @@ impl Fixture {
             files
                 .lock()
                 .expect("files")
-                .insert(relative, text.to_owned());
+                .insert(relative, contents.to_vec());
 
             Ok(())
         });
@@ -159,16 +198,31 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
     assert_eq!(
         generated.as_deref(),
         Ok(
-            "Design token stylesheets generated (4 tokens; 3 hand-written stylesheets use no raw \
-             colour)."
+            "Design token stylesheets generated (4 tokens; 6 hand-written stylesheets, scripts, \
+             and templates use no raw colour)."
         )
     );
     assert_eq!(
         checked.as_deref(),
         Ok(
-            "Design token stylesheets are current (4 tokens; 3 hand-written stylesheets use no \
-             raw colour)."
+            "Design token stylesheets are current (4 tokens; 6 hand-written stylesheets, scripts, \
+             and templates use no raw colour)."
         )
+    );
+    assert_eq!(
+        fixture.file("docs/site/templates/seo.html").as_deref(),
+        Some(
+            "<title>{{ title }}</title>\n<meta name=\"theme-color\" content=\"#000000\">\n<meta \
+             content=\"#000000\" name=\"theme-color\">\n"
+        )
+    );
+    assert_eq!(
+        fixture.bytes("docs/site/static/favicon.ico"),
+        Some(ICON.to_vec())
+    );
+    assert_eq!(
+        fixture.file("docs/site/static/mark.svg").as_deref(),
+        Some(MARK)
     );
     let copy = format!(
         "/* Generated from design/base.css by `cargo run -p ag-xtask -- design-tokens`. Do not \
@@ -210,6 +264,11 @@ fn check_reports_stale_and_missing_stylesheets() {
         .expect("files")
         .remove(Path::new("docs/site/sass/_tokens.scss"));
     fixture.write("design/base.css", "b {\n  color: var(--color-bg);\n}\n");
+    fixture.write_bytes("design/favicon.ico", &[1]);
+    fixture.write(
+        "crates/ag-remote/assets/index.html",
+        "<p>\n<meta name=\"theme-color\" content=\"#ffffff\">\n",
+    );
 
     // Act
     let errors = fixture.errors(true);
@@ -221,8 +280,11 @@ fn check_reports_stale_and_missing_stylesheets() {
             "design/tokens.css is stale; run `cargo run -p ag-xtask -- design-tokens`",
             "docs/site/sass/_tokens.scss is missing; run `cargo run -p ag-xtask -- design-tokens`",
             "docs/site/sass/_base.scss is stale; run `cargo run -p ag-xtask -- design-tokens`",
+            "docs/site/static/favicon.ico is stale; run `cargo run -p ag-xtask -- design-tokens`",
             "crates/ag-remote/assets/base.css is stale; run `cargo run -p ag-xtask -- \
              design-tokens`",
+            "crates/ag-remote/assets/index.html:2: theme-color #ffffff is stale; run `cargo run \
+             -p ag-xtask -- design-tokens`",
         ]
     );
 }
@@ -237,6 +299,15 @@ fn raw_colours_contrast_failures_and_unknown_surfaces_fail_both_modes() {
     fixture.write("design/tokens.json", &tokens);
     fixture.write("docs/site/sass/site.scss", "a {\n  color: red;\n}\n");
     fixture.write("crates/ag-remote/assets/app.css", "a { color: #fff; }\n");
+    fixture.write(
+        "crates/ag-remote/assets/app.js",
+        "// '#000' in a comment\nconst red = '#ff0000';\n",
+    );
+    fixture.write(
+        "docs/site/templates/page.html",
+        "<svg>\n  <path fill=\"#fff\" />\n</svg>\n<script>\n  ctx.fillStyle = 'rgba(0, 0, 0, \
+         0.2)';\n</script>\n",
+    );
     fixture
         .listed
         .push(PathBuf::from("docs/site/sass/deleted.scss"));
@@ -254,11 +325,74 @@ fn raw_colours_contrast_failures_and_unknown_surfaces_fail_both_modes() {
          record a shortfall with its reason",
         "crates/ag-remote/assets/app.css:1: raw colour #fff; add it to design/tokens.json and use \
          its custom property",
+        "crates/ag-remote/assets/app.js:2: raw colour #ff0000; add it to design/tokens.json and \
+         use its custom property",
         "docs/site/sass/site.scss:2: raw colour red; add it to design/tokens.json and use its \
          custom property",
+        "docs/site/templates/page.html:2: raw colour #fff; add it to design/tokens.json and use \
+         its custom property",
+        "docs/site/templates/page.html:5: raw colour rgba(); add it to design/tokens.json and use \
+         its custom property",
     ];
     assert_eq!(generated, expected);
     assert_eq!(checked, expected);
+}
+
+#[test]
+fn theme_color_metas_need_the_page_background_token() {
+    // Arrange
+    let fixture = Fixture::new();
+    fixture.write("design/tokens.json", &tokens().replace("bg", "page"));
+
+    // Act
+    let generated = fixture.errors(false);
+    let checked = fixture.errors(true);
+
+    // Assert
+    let expected = [
+        "crates/ag-remote/assets/index.html: a theme-color meta takes --color-bg from \
+         design/tokens.json, which has none",
+        "docs/site/templates/seo.html: a theme-color meta takes --color-bg from \
+         design/tokens.json, which has none",
+    ];
+    assert_eq!(generated, expected);
+    assert_eq!(checked, expected);
+}
+
+#[test]
+fn a_surface_that_replaces_the_page_background_gets_it_in_its_own_metas() {
+    // Arrange
+    let fixture = Fixture::new();
+    let white = r##"{"colorSpace":"srgb","components":[1,1,1],"hex":"#ffffff"}"##;
+    fixture.write(
+        "design/tokens.json",
+        &tokens().replace(
+            "\"docs-site\":{",
+            &format!(
+                "\"docs-site\":{{\"color\":{{\"bg\":{{\"$type\":\"color\",\"$value\":{white}}}}},"
+            ),
+        ),
+    );
+
+    // Act
+    let generated = fixture.run(false);
+
+    // Assert
+    assert!(generated.is_ok(), "{generated:?}");
+    assert!(
+        fixture
+            .file("docs/site/templates/seo.html")
+            .is_some_and(|text| text.contains("content=\"#ffffff\"") && !text.contains("#000000"))
+    );
+    assert_eq!(
+        fixture
+            .file("crates/ag-remote/assets/index.html")
+            .as_deref(),
+        Some(
+            "<meta name=\"theme-color\" content=\"#000000\">\n<script>const a = \
+             'green';</script>\n"
+        )
+    );
 }
 
 #[test]
@@ -343,13 +477,15 @@ fn real_adapter_reads_writes_and_lists_the_git_checkout() {
     let path = directory.path().join("tokens.css");
 
     // Act
-    let written = host.write(&path, ":root {}\n");
+    let written = host.write(&path, b":root {}\n");
     let read = host.read(&path);
+    let bytes = host.read_bytes(&path);
     let listing = host.inventory(crate_root);
 
     // Assert
     assert!(written.is_ok());
     assert_eq!(read.expect("written stylesheet"), ":root {}\n");
+    assert_eq!(bytes.expect("written bytes"), b":root {}\n");
     assert!(
         listing
             .expect("real Git inventory")

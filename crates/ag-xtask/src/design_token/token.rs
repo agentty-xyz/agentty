@@ -78,6 +78,24 @@ impl TokenSet {
         self.tokens.iter().find(|token| token.path == path)
     }
 
+    /// Returns the token behind custom property `--{name}` on `surface`: the
+    /// surface's own when it replaces the shared one, as in its stylesheet,
+    /// or else the shared one.
+    pub(super) fn for_surface(&self, name: &str, surface: Option<&str>) -> Option<&Token> {
+        let named = |token: &&Token| token.name == name;
+
+        self.tokens
+            .iter()
+            .filter(named)
+            .find(|token| token.surface.is_some() && token.surface.as_deref() == surface)
+            .or_else(|| {
+                self.tokens
+                    .iter()
+                    .filter(named)
+                    .find(|token| token.surface.is_none())
+            })
+    }
+
     /// Returns the names of the surfaces that hold their own values.
     pub(super) fn surfaces(&self) -> BTreeSet<&str> {
         self.tokens
