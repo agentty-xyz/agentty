@@ -390,10 +390,13 @@ async function embedFlow() {
   });
 
   paste(firstLink);
+  // The code is filled in, so the device name comes next.
+  const focused = document.activeElement?.id ?? null;
   await pairThroughPage();
   const card = byId("pair-view");
   report({
     step: "awaiting",
+    focused: focused,
     badge: card.querySelector(".brand .badge").textContent,
     directory: texts(byId("pair-directory-list"), ".directory-name"),
     sections: texts(card, ".sections a"),

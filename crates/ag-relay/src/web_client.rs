@@ -339,11 +339,7 @@ fn is_authority(authority: &str) -> bool {
         let Some((address, rest)) = bracketed.split_once(']') else {
             return false;
         };
-        let is_address = address.contains(':')
-            && address
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.'));
-        (is_address, rest)
+        (address.parse::<std::net::Ipv6Addr>().is_ok(), rest)
     } else {
         let (name, rest) = authority.split_at(authority.find(':').unwrap_or(authority.len()));
         let is_name = !name.is_empty()

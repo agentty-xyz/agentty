@@ -926,11 +926,13 @@ async fn start_embedder(
         }
     };
     let html = page.html().to_string();
-    let page_headers: Vec<(String, String)> = page
-        .headers()
-        .iter()
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
+    let mut page_headers = axum::http::HeaderMap::new();
+    for (name, value) in page.headers() {
+        page_headers.insert(
+            axum::http::HeaderName::try_from(name)?,
+            axum::http::HeaderValue::try_from(value)?,
+        );
+    }
     let mut router = Router::new().route(
         "/sessions/",
         get({
@@ -963,26 +965,21 @@ async fn start_embedder(
 }
 
 /// `body` with its content type and the page's headers.
-fn served(content_type: &str, body: String, page_headers: &[(String, String)]) -> Response {
+fn served(content_type: &str, body: String, page_headers: &axum::http::HeaderMap) -> Response {
     let mut response = ([(header::CONTENT_TYPE, content_type.to_string())], body).into_response();
-    for (name, value) in page_headers {
-        if let (Ok(name), Ok(value)) = (
-            axum::http::HeaderName::try_from(name.as_str()),
-            axum::http::HeaderValue::try_from(value.as_str()),
-        ) {
-            response.headers_mut().insert(name, value);
-        }
-    }
+    response.headers_mut().extend(page_headers.clone());
 
     response
 }
 
 /// Checks that the page another web application serves loads every file
-/// the client needs with a policy that reaches `relay`, and that a first
-/// link whose code does not work leaves the card ready for another link.
-fn assert_page_served_and_first_link_refused(
+/// the client needs with a policy that reaches `relay`, that a first link
+/// whose code does not work leaves the card ready for another link, and
+/// that the pasted real link moves on to the device name.
+fn assert_first_pairing_by_paste(
     served: &Value,
     wrong_code: &Value,
+    awaiting: &Value,
     relay: &ag_relay::RelayHandle,
 ) {
     assert_eq!(
@@ -1001,6 +998,16 @@ fn assert_page_served_and_first_link_refused(
             "card": {"hintHidden": false, "linkHidden": false, "submitHidden": true},
             "error": "Invalid or expired pairing code",
             "linkHidden": false,
+        })
+    );
+    assert_eq!(
+        awaiting,
+        &json!({
+            "step": "awaiting",
+            "badge": "cloud",
+            "directory": ["laptop", "server"],
+            "focused": "pair-name",
+            "sections": ["Dashboard", "Sessions2"],
         })
     );
 }
@@ -1063,8 +1070,8 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
     let second_link = link_of(&relay, &second_key, &second)?;
     let page = WebClientPage::new(&embedder_options(&relay))?;
     let signed_in = Arc::new(AtomicBool::new(true));
-    let instances = directory_listing(&first_key, &second_key);
-    let embedder = start_embedder(&page, instances, Arc::clone(&signed_in)).await?;
+    let listing = directory_listing(&first_key, &second_key);
+    let embedder = start_embedder(&page, listing, Arc::clone(&signed_in)).await?;
     let page_url = format!("http://{embedder}/sessions/");
 
     // Act
@@ -1087,16 +1094,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
     let succeeded = app.succeeded().await?;
 
     // Assert
-    assert_page_served_and_first_link_refused(&served, &wrong_code, &relay);
-    assert_eq!(
-        awaiting,
-        json!({
-            "step": "awaiting",
-            "badge": "cloud",
-            "directory": ["laptop", "server"],
-            "sections": ["Dashboard", "Sessions2"],
-        })
-    );
+    assert_first_pairing_by_paste(&served, &wrong_code, &awaiting, &relay);
     assert_eq!(
         paired,
         json!({
