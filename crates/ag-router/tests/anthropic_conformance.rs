@@ -1,7 +1,8 @@
 //! Conformance of [`WireProtocol::AnthropicMessages`] provider
 //! specifications against an in-process server and recorded fixtures:
 //! request shape, byte-identical preset requests, response parsing, signed
-//! thinking replay, structured-output modes, images, stop reasons, error
+//! thinking replay, structured-output modes and the schema subset they send,
+//! images, stop reasons, error
 //! mapping, streamed responses and their deltas, prompt-cache breakpoints,
 //! and specification validation.
 
@@ -15,10 +16,11 @@ use std::time::Duration;
 
 use ag_router::ReasoningEffort::{High, Low, Max, XHigh};
 use ag_router::{
-    Completion, DeltaObserver, ErrorClass, ImageContent, ImageMediaType, InputBlock, ModelError,
-    ModelMessage, ModelRequest, ProviderSpec, ReasoningMapping, ReasoningView, ResponseDelta,
-    RetryKind, RetryNotice, RetryObserver, RetryPolicy, Router, StructuredOutputMode,
-    ThinkingOptions, ToolDefinition, TurnInput, WireProtocol, preset, reasoning_view,
+    Completion, DeltaObserver, ErrorClass, ImageContent, ImageMediaType, InputBlock,
+    JsonSchemaFormat, ModelError, ModelMessage, ModelRequest, OutputSchema, ProviderSpec,
+    ReasoningMapping, ReasoningView, ResponseDelta, RetryKind, RetryNotice, RetryObserver,
+    RetryPolicy, Router, StructuredOutputMode, ThinkingOptions, ToolDefinition, TurnInput,
+    WireProtocol, preset, reasoning_view,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -634,6 +636,74 @@ async fn forced_tool_output_rejects_a_tool_using_its_reserved_name() -> Result<(
             if reason.contains("reserves the tool name `structured_output`")
     ));
     conformance::assert_no_request(&server).await
+}
+
+#[tokio::test]
+async fn sends_only_supported_schema_keywords_and_still_enforces_the_rest_locally()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let native = server(200, MESSAGE).await;
+    let forced = server(200, FORCED_TOOL).await;
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "maxLength": 2},
+            "aliases": {"type": "array", "maxItems": 3, "items": {"type": "string"}}
+        },
+        "required": ["name"]
+    });
+    let request = || -> Result<ModelRequest, Box<dyn Error>> {
+        Ok(ModelRequest::chat(
+            "anthropic/claude-haiku-5-5",
+            vec![ModelMessage::User("Find the name".to_string())],
+            Vec::new(),
+            JsonSchemaFormat::new("person", OutputSchema::new(schema.clone())?)?,
+        ))
+    };
+    let forced_spec = anthropic(&forced, "claude-haiku-5-5")
+        .with_reasoning(ReasoningMapping::None)
+        .with_structured_output(StructuredOutputMode::ForcedTool);
+
+    // Act
+    let native_error = Router::new([anthropic(&native, "claude-haiku-5-5")])
+        .execute(request()?)
+        .await
+        .err();
+    let forced_error = Router::new([forced_spec]).execute(request()?).await.err();
+
+    // Assert
+    assert_eq!(
+        received_body(&native).await?["output_config"]["format"]["schema"].to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "{maxLength: 2}"},
+                "aliases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "{maxItems: 3}"
+                }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        })
+        .to_string()
+    );
+    assert_eq!(
+        received_body(&forced).await?["tools"][0]["input_schema"],
+        schema
+    );
+    for error in [native_error, forced_error] {
+        assert!(
+            matches!(
+                error.as_ref().map(ModelError::root_cause),
+                Some(ModelError::SchemaViolation { path, .. }) if path == "/name"
+            ),
+            "{error:?}"
+        );
+    }
+
+    Ok(())
 }
 
 #[tokio::test]

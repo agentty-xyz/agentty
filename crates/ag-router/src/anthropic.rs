@@ -9,6 +9,12 @@
 //! signed thinking carry a `cache_control` breakpoint, so a request that
 //! repeats an earlier request's prefix reads it from the prompt cache.
 //!
+//! The `output_config.format` schema travels as [`anthropic_schema`]
+//! projects it onto the subset the API compiles, while the response is still
+//! validated against the original schema. Tool input schemas, including the
+//! forced output tool's, are not strict, so the API applies no such limits and
+//! they travel unchanged.
+//!
 //! Text, thinking, and tool-argument deltas reach an observer as they
 //! arrive, and the events accumulate into the same message an unstreamed
 //! response carries, which is then decoded exactly as one. A server that
@@ -45,7 +51,7 @@ use crate::provider_spec::{
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
 use crate::stream::{self, DeltaObserver, EventReader, ResponseDelta, SseDecoder, StreamClosed};
-use crate::{input, model, schema as schema_contract, tool};
+use crate::{anthropic_schema, input, model, schema as schema_contract, tool};
 
 /// Path of the Messages endpoint under a provider base URL.
 pub(crate) const ENDPOINT_PATH: &str = "messages";
@@ -161,7 +167,7 @@ impl<'spec> AnthropicBackend<'spec> {
             .filter(|_| output_tool.is_none())
             .map(|format| OutputFormat {
                 kind: "json_schema",
-                schema: format.schema().value(),
+                schema: anthropic_schema::wire_schema(format.schema().value()),
             });
         let mut tools: Vec<_> = request.tools().iter().map(ToolPayload::from).collect();
         // A model with a reasoning mapping may think without an effort, and
@@ -1129,14 +1135,14 @@ struct OutputConfig<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<OutputFormat<'a>>,
+    format: Option<OutputFormat>,
 }
 
 #[derive(Serialize)]
-struct OutputFormat<'a> {
+struct OutputFormat {
     #[serde(rename = "type")]
     kind: &'static str,
-    schema: &'a Value,
+    schema: Value,
 }
 
 #[derive(Serialize)]

@@ -11,9 +11,10 @@ use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{
-    ModelCapabilities, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest, ReasoningEffort,
+    ModelCapabilities, ModelClient, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
+    ReasoningEffort,
 };
-use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
+use ag_harness::provider::{AnthropicConfig, CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionStore};
 use ag_harness::{
@@ -21,7 +22,7 @@ use ag_harness::{
 };
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1517,4 +1518,132 @@ async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registratio
     );
     assert_eq!(current.capabilities(), capabilities);
     resumed.expect("the catalog registration resumes the recorded session");
+}
+
+#[tokio::test]
+/// Sends every protocol schema to Claude using only the JSON Schema keywords
+/// its structured outputs accept, which the API otherwise answers with a
+/// `400`.
+async fn protocol_schemas_send_only_keywords_claude_accepts() {
+    for profile in [
+        ProtocolRequestProfile::FocusedReview,
+        ProtocolRequestProfile::GraphProposal,
+        ProtocolRequestProfile::ReviewMetadata,
+        ProtocolRequestProfile::SessionTurn,
+        ProtocolRequestProfile::UtilityPrompt,
+    ] {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        let client = ModelClient::anthropic(AnthropicConfig {
+            api_key: "claude-key".to_string(),
+            base_url: format!("{}/v1", server.uri()),
+            model: "claude-haiku-5-5".to_string(),
+        })
+        .expect("client");
+        let schema = output_schema(profile).expect("schema");
+
+        // Act
+        let _rejected = client.complete(ModelRequest::new("Answer", schema)).await;
+
+        // Assert
+        let requests = server.received_requests().await.expect("recording");
+        let body: Value = requests[0].body_json().expect("JSON request body");
+        assert_claude_accepts(
+            &body["output_config"]["format"]["schema"],
+            &format!("{profile:?}"),
+        );
+    }
+}
+
+/// Asserts that `schema`, found at `at`, uses only the keywords, values, and
+/// combinator shapes Anthropic documents as supported for structured
+/// outputs: an `anyOf` only beside annotations, and no `allOf` of two or
+/// more schemas where one directly holds `$ref`, `anyOf`, or `allOf`.
+fn assert_claude_accepts(schema: &Value, at: &str) {
+    const ANY_OF_SIBLINGS: [&str; 6] = [
+        "$defs",
+        "anyOf",
+        "default",
+        "definitions",
+        "description",
+        "title",
+    ];
+    const FORMATS: [&str; 10] = [
+        "date",
+        "date-time",
+        "duration",
+        "email",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "time",
+        "uri",
+        "uuid",
+    ];
+    let Some(object) = schema.as_object() else {
+        return;
+    };
+    if object.contains_key("anyOf") {
+        let siblings: Vec<_> = object
+            .keys()
+            .filter(|keyword| !ANY_OF_SIBLINGS.contains(&keyword.as_str()))
+            .collect();
+        assert!(siblings.is_empty(), "{at}: `anyOf` beside {siblings:?}");
+    }
+    if let Some(branches) = object
+        .get("allOf")
+        .and_then(Value::as_array)
+        .filter(|branches| branches.len() > 1)
+    {
+        assert!(
+            branches.iter().all(|branch| ["$ref", "anyOf", "allOf"]
+                .iter()
+                .all(|keyword| branch.get(keyword).is_none())),
+            "{at}: `allOf` of several schemas holds `$ref`, `anyOf`, or `allOf`"
+        );
+    }
+    for (keyword, value) in object {
+        let at = format!("{at}/{keyword}");
+        match keyword.as_str() {
+            "$defs" | "definitions" | "properties" => {
+                for (name, nested) in value.as_object().expect("schema map") {
+                    assert_claude_accepts(nested, &format!("{at}/{name}"));
+                }
+            }
+            "allOf" | "anyOf" => {
+                for (index, nested) in value.as_array().expect("schema list").iter().enumerate() {
+                    assert_claude_accepts(nested, &format!("{at}/{index}"));
+                }
+            }
+            "items" => assert_claude_accepts(value, &at),
+            "additionalProperties" => assert_eq!(value, &json!(false), "{at}"),
+            "format" => assert!(
+                value
+                    .as_str()
+                    .is_some_and(|format| FORMATS.contains(&format)),
+                "{at}: {value}"
+            ),
+            "minItems" => assert!(value.as_u64().is_some_and(|items| items <= 1), "{at}"),
+            other => assert!(
+                [
+                    "$ref",
+                    "const",
+                    "default",
+                    "description",
+                    "enum",
+                    "pattern",
+                    "required",
+                    "title",
+                    "type"
+                ]
+                .contains(&other),
+                "Claude structured outputs reject `{at}`"
+            ),
+        }
+    }
 }

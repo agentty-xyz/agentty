@@ -160,24 +160,29 @@ A request without an output bound sends `max_tokens` 16,000
 (`ProviderSpec::with_fallback_max_tokens`), since the API requires one. The schema is
 the native `output_config.format`, or with `StructuredOutputMode::ForcedTool` a
 `structured_output` tool whose input is the answer, forced only for a specification
-without a reasoning mapping, since thinking forbids a forced tool. A reasoning effort is
-sent as `output_config.effort` with summarized adaptive thinking. A response's signed
-`thinking` and `redacted_thinking` blocks are returned as one JSON array in the
-reasoning content of its first call or output, with markers where its text and calls
-went, and replayed verbatim in that order; other reasoning content is omitted. Signed
-thinking survives only history that grows, so `Router::replays_turn_instructions` tells
-callers to replay earlier turns' instructions as first sent. Text, thinking, and
-tool-argument deltas reach a `DeltaObserver`, thinking blocks separated by a blank line,
-and a forced-tool answer streams as text, after any text the model wrote before the
-call, which the completion leaves out of the answer. Unless
-`with_cache_breakpoints(false)` turns it off, the last tool definition, the last
-`system` block, and the last message's last block that is not signed thinking carry a
-`cache_control: {"type": "ephemeral"}` breakpoint, so a request repeating an earlier
-prefix reads it from the prompt cache. Usage counts cache reads and writes as input and
-reports the writes. A `max_tokens`, `pause_turn`, or `refusal` stop is an incomplete
-response, a `model_context_window_exceeded` stop or a "prompt is too long" `400` is a
-context overflow, and an HTTP `529` keeps its status for the caller's overload handling.
-A stream `error` event fails as the HTTP status its type stands for, such as `529` for
+without a reasoning mapping, since thinking forbids a forced tool. The native schema
+keeps only the JSON Schema keywords Anthropic structured outputs support: constraints
+such as `maxItems`, `minimum`, or `maxLength` move into the field's `description`,
+`oneOf` becomes `anyOf`, every object sets `additionalProperties: false`, and `anyOf` or
+`allOf` shapes the API rejects are merged into accepted ones where that is safe, while
+the response is still validated against the full schema. A reasoning effort is sent as
+`output_config.effort` with summarized adaptive thinking. A response's signed `thinking`
+and `redacted_thinking` blocks are returned as one JSON array in the reasoning content
+of its first call or output, with markers where its text and calls went, and replayed
+verbatim in that order; other reasoning content is omitted. Signed thinking survives
+only history that grows, so `Router::replays_turn_instructions` tells callers to replay
+earlier turns' instructions as first sent. Text, thinking, and tool-argument deltas
+reach a `DeltaObserver`, thinking blocks separated by a blank line, and a forced-tool
+answer streams as text, after any text the model wrote before the call, which the
+completion leaves out of the answer. Unless `with_cache_breakpoints(false)` turns it
+off, the last tool definition, the last `system` block, and the last message's last
+block that is not signed thinking carry a `cache_control: {"type": "ephemeral"}`
+breakpoint, so a request repeating an earlier prefix reads it from the prompt cache.
+Usage counts cache reads and writes as input and reports the writes. A `max_tokens`,
+`pause_turn`, or `refusal` stop is an incomplete response, a
+`model_context_window_exceeded` stop or a "prompt is too long" `400` is a context
+overflow, and an HTTP `529` keeps its status for the caller's overload handling. A
+stream `error` event fails as the HTTP status its type stands for, such as `529` for
 `overloaded_error`. One that arrives before any content is retried as the policy retries
 that status, reported to the `RetryObserver`; one after content began is not, since its
 deltas were already reported.
