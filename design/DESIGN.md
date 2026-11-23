@@ -209,7 +209,9 @@ it through a translucent `--color-bg` and an 18px blur.
 | `--radius-lg` | Panels, dialogs, and composers (0.9rem)       |
 
 Small badges and keycaps use 0.25rem, inline code 0.3rem, and status dots and window
-dots are circles. Borders are 1px; focus rings are 2px.
+dots are circles. Borders are 1px; focus rings are 2px. A layout that wants a stricter
+terminal look, such as a landing page, may set the three radius tokens to 0 on its
+container so every panel inside turns square.
 
 ## Components
 
@@ -247,7 +249,7 @@ Pages build these from the same tokens when they need them:
 - Do build every color, font, radius, shadow, and transition from the custom properties;
   don't write a hex value, `rgb()`, or a named color in a stylesheet.
 - Do change a value only at its token source and regenerate `tokens.css`; don't edit
-  `tokens.css` or override a token in page rules.
+  `tokens.css`.
 - Do keep one primary action per view; don't fill several buttons with the accent.
 - Do pair every status color with a label; don't signal state by color alone.
 - Do use `--color-muted` for text people must read in raised panels; don't use
