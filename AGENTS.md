@@ -165,11 +165,14 @@ or review steps directly in a checkout.
   fully usable on its own and depending on the one below it. Stack only those slices,
   and link them as a GitHub stack with the `gh stack` extension (`github/gh-stack`)
   instead of leaving separate pull requests with hand-set bases. Open each layer with
-  its own filled template (`gh pr create --base <parent branch>`), then run
-  `gh stack link` with the pull request numbers from bottom to top. `link` records no
-  local stack, so run `gh stack checkout <pull request>` before any other `gh stack`
-  command. If the extension is missing, say so and ask for it; do not leave the stack
-  unlinked silently.
+  its own filled template (`gh pr create --base <parent branch>`). Link in the same step
+  that opens a layer, never at the end: once the second layer is open, run
+  `gh stack link` with the pull request numbers from bottom to top, and append each
+  later layer right after opening it with `gh stack link <stack number> <pull request>`.
+  A pull request whose base is not `main` never stays open outside a stack, also while
+  later layers are still being written. `link` records no local stack, so run
+  `gh stack checkout <pull request>` before any other `gh stack` command. If the
+  extension is missing, say so and ask for it; do not leave the stack unlinked silently.
 - Merge a stack from the top so the whole stack enters the merge queue at once:
   `gh stack merge <top pull request> --yes`. A bare number resolves to a stack number
   before a pull request number, so check that it names the intended pull request. Stacks
