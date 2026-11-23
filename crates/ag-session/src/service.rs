@@ -129,6 +129,10 @@ pub enum SessionOperation {
     /// [`SessionBackend::session_graphs`], and summarizing them in
     /// [`Session::graph`].
     Graphs,
+    /// Acting on a session's execution graph as its inspector does, bound
+    /// to the snapshot a [`SessionBackend::session_graphs`] read returned,
+    /// through [`SessionBackend::act_on_session_graph`].
+    GraphActions,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
@@ -352,6 +356,20 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Applies one inspector action to a session's graph, as the host's own
+    /// inspector would with the same node or output selected, only while the
+    /// graph still matches the snapshot the action was chosen from.
+    async fn act_on_session_graph(
+        &self,
+        request: crate::SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graph actions".into(),
         ))
     }
 
@@ -800,6 +818,23 @@ impl SessionService {
         request: crate::SessionGraphsRequest,
     ) -> Result<crate::SessionGraphs, SessionError> {
         self.backend.session_graphs(request).await
+    }
+
+    /// Accepts an output, cancels, resumes, or retries a graph, replies to
+    /// one of its nodes, or adds provider calls to its spent budget, as the
+    /// graph's inspector does.
+    ///
+    /// # Errors
+    /// Rejects a graph of another session, a graph that changed since
+    /// `request.snapshot` was read, an action that snapshot does not offer,
+    /// an empty reply, and a budget increase outside
+    /// `1..=`[`crate::ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS`], and
+    /// returns failed admission or delivery errors.
+    pub async fn act_on_session_graph(
+        &self,
+        request: crate::SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.act_on_session_graph(request).await
     }
 
     /// Permanently cancels this graph without canceling unrelated session work.

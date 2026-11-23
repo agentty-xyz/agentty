@@ -109,7 +109,9 @@ pub fn graph_node(id: &str, session_id: &str) -> crate::GraphNode {
 
 /// Builds what a host reports for `session_id` while its approved graph
 /// `graph` waits for the user: `inspect` succeeded and its validated
-/// `report` waits for acceptance, which `fix` needs before it can run.
+/// `report` waits for acceptance, which `fix` needs before it can run. The
+/// graph offers cancellation and the output acceptance, as a host's
+/// inspector would.
 #[must_use]
 pub fn session_graphs(session_id: &str) -> crate::SessionGraphs {
     let revision = std::num::NonZeroU64::MIN;
@@ -138,11 +140,14 @@ pub fn session_graphs(session_id: &str) -> crate::SessionGraphs {
 
     crate::SessionGraphs {
         graph: Some(crate::SessionGraph {
+            actions: vec![crate::SessionGraphActionKind::Cancel],
+            exhausted_budget: None,
             id: "graph".into(),
             is_focused_review: false,
             node_id: Some("inspect".into()),
             nodes: vec![
                 crate::SessionGraphNode {
+                    actions: Vec::new(),
                     awaits_approval: true,
                     blocked: Vec::new(),
                     hint: None,
@@ -164,6 +169,7 @@ pub fn session_graphs(session_id: &str) -> crate::SessionGraphs {
             ],
             note: None,
             outputs: vec![crate::SessionGraphOutput {
+                actions: vec![crate::SessionGraphActionKind::Accept],
                 body: "{\"answer\":\"### Findings\"}".into(),
                 display: "### Findings\n- One issue".into(),
                 result: report,
@@ -201,6 +207,7 @@ fn waiting_fix_node(session_id: &str) -> crate::SessionGraphNode {
     });
 
     crate::SessionGraphNode {
+        actions: Vec::new(),
         awaits_approval: false,
         blocked: vec!["inspect: accepted report".into()],
         hint: None,

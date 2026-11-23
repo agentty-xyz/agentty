@@ -176,6 +176,18 @@ impl SessionRuntimeHandle {
         .await
     }
 
+    /// Admits one snapshot-bound inspector action, which the foreground
+    /// owner checks against the graph's current snapshot.
+    pub(crate) async fn act_on_session_graph(
+        &self,
+        request: ag_session::SessionGraphActionRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::ActOnSessionGraph {
+            request: Box::new(request),
+        })
+        .await
+    }
+
     pub(crate) async fn cancel_execution_graph(
         &self,
         request: ag_session::GraphControlRequest,

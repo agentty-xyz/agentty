@@ -1629,6 +1629,55 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* The inspector's actions: the graph's above its nodes, the selected
+   node's under its details, and the selected output's in its bar. */
+.graph-actions {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.graph-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.graph-output-bar .graph-action {
+  flex: none;
+  margin-left: 0.25rem;
+}
+
+/* A reply or a number of provider calls being typed */
+.graph-editor {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.graph-editor-label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+input.graph-editor-input {
+  max-width: 9rem;
+}
+
+.graph-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
 /* The bar beside the chat, above the composer */
 .graph-summary {
   display: grid;

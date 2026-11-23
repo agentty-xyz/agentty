@@ -1,26 +1,30 @@
 //! Session API reads of graph proposals and execution graphs, built from the
-//! snapshot the terminal inspector loads and with the wording of the
-//! terminal's graph sidebar and inspector.
+//! snapshot the terminal inspector loads and with the wording and action
+//! rules of the terminal's graph sidebar and inspector, and the session API's
+//! snapshot-bound graph actions, which admit the terminal's own mutations.
 
 use std::collections::BTreeSet;
 
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse};
 use ag_session::{
-    ExecutionGraph, GraphNodeStatus, GraphProposalState, GraphProposalVersionOutcome, SessionError,
-    SessionGraph, SessionGraphEntry, SessionGraphNode, SessionGraphOutput, SessionGraphProposal,
-    SessionGraphProposalPhase, SessionGraphRequirement, SessionGraphSummary, SessionGraphs,
-    SessionGraphsRequest,
+    ExecutionGraph, GraphNodeContinuation, GraphNodeStatus, GraphProposalState,
+    GraphProposalVersionOutcome, SessionError, SessionGraph, SessionGraphAction,
+    SessionGraphActionKind, SessionGraphActionRequest, SessionGraphEntry, SessionGraphNode,
+    SessionGraphOutput, SessionGraphProposal, SessionGraphProposalPhase, SessionGraphRequirement,
+    SessionGraphSummary, SessionGraphs, SessionGraphsRequest,
 };
 
 use crate::app::App;
+use crate::app::command_gateway::SessionMutation;
 use crate::app::graph_view::{
-    GraphNodeChoice, GraphSelection, GraphSnapshot, graph_snapshot_token,
+    ACTION_UNAVAILABLE, GRAPH_CHANGED, GraphNodeChoice, GraphSelection, GraphSnapshot,
+    GraphViewAction, graph_snapshot_token,
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::Session;
 use crate::presentation::execution_graph::{
-    FOCUSED_REVIEW_NOTE, PROPOSAL_REPLY_HINT, QUESTION_REPLY_HINT, UNAVAILABLE_STATUS_LABEL,
-    blocked_reason_label, is_focused_review_graph, node_reasoning_level,
+    FOCUSED_REVIEW_NOTE, GraphActionTarget, PROPOSAL_REPLY_HINT, QUESTION_REPLY_HINT,
+    UNAVAILABLE_STATUS_LABEL, blocked_reason_label, is_focused_review_graph, node_reasoning_level,
     outputs_awaiting_acceptance,
 };
 use crate::presentation::graph_chat::{
@@ -123,6 +127,146 @@ impl App {
             proposal: snapshot.proposal.map(api_graph_proposal),
         })
     }
+
+    /// Builds the mutation a session API graph action admits: the one the
+    /// terminal inspector admits for the same action with the same node and
+    /// output selected. The graph must belong to the session and still match
+    /// the snapshot the action was chosen from, and the action must be one
+    /// that snapshot offers.
+    pub(super) async fn api_graph_action_mutation(
+        &self,
+        request: SessionGraphActionRequest,
+    ) -> Result<SessionMutation, String> {
+        let SessionGraphActionRequest {
+            action,
+            graph_id,
+            session_id,
+            snapshot: token,
+        } = request;
+        // The node, output, and spent budget the action names, if any.
+        let (node_id, output_id, budget_id, action) = match action {
+            SessionGraphAction::Accept { node_id, output_id } => (
+                Some(node_id),
+                Some(output_id),
+                None,
+                Ok(GraphViewAction::Accept),
+            ),
+            SessionGraphAction::Cancel => (None, None, None, Ok(GraphViewAction::Cancel)),
+            SessionGraphAction::ExtendBudget {
+                additional_calls,
+                budget_id,
+            } => (
+                None,
+                None,
+                Some(budget_id),
+                GraphViewAction::extend_budget(additional_calls),
+            ),
+            SessionGraphAction::Reply { message, node_id } => {
+                (Some(node_id), None, None, GraphViewAction::reply(&message))
+            }
+            SessionGraphAction::Resume => (None, None, None, Ok(GraphViewAction::Resume)),
+            SessionGraphAction::Retry { node_id } => (
+                Some(node_id),
+                None,
+                None,
+                Ok(GraphViewAction::Continue(GraphNodeContinuation::Retry)),
+            ),
+        };
+        let snapshot = self
+            .load_graph_snapshot(
+                session_id.as_str(),
+                GraphSelection {
+                    follows_approval: false,
+                    graph_id: Some(&graph_id),
+                    keeps_proposal: false,
+                    node: node_id
+                        .as_deref()
+                        .map_or(GraphNodeChoice::Index(0), GraphNodeChoice::Id),
+                },
+            )
+            .await?;
+        let graph = snapshot
+            .graphs
+            .get(snapshot.selected_graph)
+            .filter(|graph| graph.id == graph_id)
+            .ok_or(FOREIGN_GRAPH)?;
+        let progress = snapshot.progress.as_ref();
+        if graph_snapshot_token(graph, progress) != token {
+            return Err(GRAPH_CHANGED.into());
+        }
+        let action = action?;
+        let output = match output_id {
+            Some(output_id) => Some(
+                snapshot
+                    .outputs
+                    .iter()
+                    .find(|output| output.result.reference.id == output_id)
+                    .ok_or(ACTION_UNAVAILABLE)?,
+            ),
+            None => None,
+        };
+        let target = GraphActionTarget {
+            graph: Some(graph),
+            node: snapshot.selected_node,
+            output,
+            progress,
+        };
+        // An unknown node selects the first one, which the action must not
+        // reach instead.
+        let names_target_node = node_id.is_none_or(|node_id| {
+            target
+                .node_progress()
+                .is_some_and(|node| node.node_id == node_id)
+        });
+        if !names_target_node {
+            return Err(ACTION_UNAVAILABLE.into());
+        }
+        // An extension adds calls to the budget it names, which the
+        // terminal offers with a node that waits for it selected.
+        let target = match budget_id {
+            Some(budget_id) => target
+                .with_exhausted_budget(&budget_id)
+                .ok_or(ACTION_UNAVAILABLE)?,
+            None => target,
+        };
+
+        action.mutation(target)
+    }
+}
+
+/// What the graph of `target` takes as a whole, and the spent budget an
+/// extension adds calls to while it takes one.
+fn graph_actions(target: GraphActionTarget<'_>) -> (Vec<SessionGraphActionKind>, Option<String>) {
+    let can_extend_budget = target.can_extend_budget();
+    let actions = offered_actions([
+        (SessionGraphActionKind::Cancel, target.can_cancel()),
+        (SessionGraphActionKind::ExtendBudget, can_extend_budget),
+        (SessionGraphActionKind::Resume, target.can_resume()),
+    ]);
+    let exhausted_budget = target
+        .exhausted_budget()
+        .filter(|_| can_extend_budget)
+        .map(str::to_string);
+
+    (actions, exhausted_budget)
+}
+
+/// What the node of `target` takes.
+fn node_actions(target: GraphActionTarget<'_>) -> Vec<SessionGraphActionKind> {
+    offered_actions([
+        (SessionGraphActionKind::Reply, target.can_continue()),
+        (SessionGraphActionKind::Retry, target.can_retry()),
+    ])
+}
+
+/// The actions whose flag is set, in the given order.
+fn offered_actions<const COUNT: usize>(
+    actions: [(SessionGraphActionKind, bool); COUNT],
+) -> Vec<SessionGraphActionKind> {
+    actions
+        .into_iter()
+        .filter_map(|(action, is_offered)| is_offered.then_some(action))
+        .collect()
 }
 
 /// The selected `graph` of `snapshot` with what the inspector shows about
@@ -159,6 +303,12 @@ fn api_graph(
                 .map(|previous| graph.nodes[previous].id.as_str());
 
             SessionGraphNode {
+                actions: node_actions(GraphActionTarget {
+                    graph: Some(graph),
+                    node: index,
+                    output: None,
+                    progress,
+                }),
                 awaits_approval,
                 blocked: state.map_or_default(|state| {
                     state.blocked.iter().map(blocked_reason_label).collect()
@@ -183,8 +333,18 @@ fn api_graph(
         })
         .collect();
     let is_focused_review = is_focused_review_graph(graph);
+    // Which graph actions apply does not depend on the selected node, but
+    // the spent budget does, as the terminal's inspector shows it.
+    let (actions, exhausted_budget) = graph_actions(GraphActionTarget {
+        graph: Some(graph),
+        node: snapshot.selected_node,
+        output: None,
+        progress,
+    });
 
     SessionGraph {
+        actions,
+        exhausted_budget,
         id: graph.id.clone(),
         is_focused_review,
         node_id: progress
@@ -196,6 +356,16 @@ fn api_graph(
             .outputs
             .iter()
             .map(|output| SessionGraphOutput {
+                actions: offered_actions([(
+                    SessionGraphActionKind::Accept,
+                    GraphActionTarget {
+                        graph: Some(graph),
+                        node: snapshot.selected_node,
+                        output: Some(output),
+                        progress,
+                    }
+                    .can_accept(),
+                )]),
                 body: output.body.clone(),
                 display: output.display().to_string(),
                 result: output.result.clone(),

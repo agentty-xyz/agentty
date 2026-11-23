@@ -12,10 +12,10 @@ use super::{
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
 use crate::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteModeModel,
-    RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase,
-    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteGraphAction,
+    RemoteGraphActionRequest, RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync,
+    RemoteProjectSyncPhase, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
 use crate::test_support::{
@@ -800,6 +800,114 @@ async fn session_graphs_are_read_for_listed_sessions_with_the_selection_asked_fo
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }
 
+/// `action` on node `fix` of `graph` in `session_id`, bound to the snapshot
+/// `5eed`.
+fn graph_action(session_id: &str, action: RemoteGraphAction) -> RemoteRequest {
+    RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
+        action,
+        additional_calls: None,
+        budget_id: None,
+        graph_id: "graph".to_string(),
+        message: None,
+        node_id: Some("fix".to_string()),
+        output_id: None,
+        session_id: session_id.to_string(),
+        snapshot: "5eed".to_string(),
+    })
+}
+
+#[tokio::test]
+async fn graph_actions_reach_only_listed_sessions_of_hosts_that_serve_them() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::GraphActions],
+    );
+    let reading_only =
+        supporting_fixture(MemoryDeviceStore::default(), &[SessionOperation::Graphs]);
+    let retry = |session_id: &str| graph_action(session_id, RemoteGraphAction::Retry);
+    let extend = |budget_id: Option<&str>| {
+        RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
+            action: RemoteGraphAction::ExtendBudget,
+            additional_calls: Some(5),
+            budget_id: budget_id.map(str::to_string),
+            graph_id: "graph".to_string(),
+            message: None,
+            node_id: None,
+            output_id: None,
+            session_id: "session-1".to_string(),
+            snapshot: "5eed".to_string(),
+        })
+    };
+
+    // Act
+    let retried = reply_result(&serving.state, retry("session-1")).await;
+    let unlisted = reply_result(&serving.state, retry("other-project")).await;
+    let unknown = reply_result(
+        &serving.state,
+        graph_action("session-1", RemoteGraphAction::Unsupported),
+    )
+    .await;
+    let extended = reply_result(&serving.state, extend(Some("calls"))).await;
+    let unnamed = reply_result(&serving.state, extend(None)).await;
+    let unsupported = reply_result(&reading_only.state, retry("session-1")).await;
+
+    // Assert
+    assert_eq!(retried, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(extended, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unnamed,
+        RemoteResult::Error("Graph action needs `budget_id`".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unknown,
+        RemoteResult::Error("Unsupported graph action".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list",
+            "graph_action:session-1:graph:5eed:Retry { node_id: \"fix\" }",
+            "list",
+            "list",
+            "list",
+            "graph_action:session-1:graph:5eed:ExtendBudget { additional_calls: 5, budget_id: \
+             \"calls\" }",
+            "list"
+        ]
+    );
+    assert_eq!(reading_only.backend.calls(), Vec::<String>::new());
+}
+
+#[test]
+fn an_unknown_graph_action_keeps_the_connection() {
+    // Arrange
+    let text = r#"{"type":"request","id":4,"request":{"method":"act_on_session_graph","action":"rewrite_history","graph_id":"graph","session_id":"session-1","snapshot":"5eed"}}"#;
+
+    // Act
+    let outcome = handle_incoming(Incoming::Text(text.to_string()));
+
+    // Assert
+    assert!(matches!(
+        outcome,
+        MessageOutcome::Request {
+            id: 4,
+            request: RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
+                action: RemoteGraphAction::Unsupported,
+                ..
+            }),
+        }
+    ));
+}
+
 #[tokio::test]
 async fn session_graphs_answer_unchanged_only_for_the_version_the_device_shows() {
     // Arrange
@@ -1189,8 +1297,10 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
     let fixture = supporting_fixture(
         MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
         &[
+            SessionOperation::GraphActions,
             SessionOperation::RebaseSession,
             SessionOperation::StopTurn,
+            SessionOperation::Graphs,
             SessionOperation::MergeSession,
         ],
     );
@@ -1212,7 +1322,9 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
         Some(vec![
             "merge".to_string(),
             "stop_turn".to_string(),
-            "sync".to_string()
+            "sync".to_string(),
+            "graphs".to_string(),
+            "graph_actions".to_string()
         ])
     );
 }

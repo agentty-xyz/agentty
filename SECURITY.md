@@ -64,9 +64,13 @@ and in the active project's checkout, seeing the project's branch and sync state
 sending prompts, answering questions, stopping a turn, syncing a session branch,
 changing session settings, canceling a session, merging a session into its base branch,
 creating sessions, publishing a session branch and opening its pull request with the
-user's forge credentials, and syncing the active project's branch with its Git remote.
-With those, anyone holding a paired device can have code written, land it on the base
-branch, and push it to the Git remote, so remove a device you no longer control.
+user's forge credentials, syncing the active project's branch with its Git remote, and
+acting on an execution graph as the terminal's graph inspector does: accepting an
+output, retrying a node or replying to it with guidance, resuming a paused graph, adding
+provider calls to its spent budget, and cancelling a graph, which is permanent and which
+the device's page asks to confirm first. With those, anyone holding a paired device can
+have code written, land it on the base branch, and push it to the Git remote, so remove
+a device you no longer control.
 
 Report these as vulnerabilities:
 

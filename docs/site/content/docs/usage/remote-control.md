@@ -13,8 +13,9 @@ for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
 change a session's settings, create sessions in the active project, merge a session into
-its base branch, publish its branch, and sync the active project's branch with its
-remote; the web page offers each of these.
+its base branch, publish its branch, sync the active project's branch with its remote,
+and act on an execution graph as the terminal's graph inspector does; the web page
+offers each of these.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to add
 the `Remote` tab to the right of `Settings`.
@@ -172,9 +173,19 @@ lists its nodes with their status, model, objective, and dependencies. Tap a nod
 its details and outputs, which render like an answer; a very large preview or output
 shows only its beginning and says so. The panel follows new progress, moving from the
 proposal to its graph once you approve it, and `Refresh` reads it again; the back
-gesture or `Graphs` returns to the chat. Acting on a graph stays a chat reply: approve,
-revise, or cancel a proposal, accept or revise an output, and answer a node's questions
-by replying in chat.
+gesture or `Graphs` returns to the chat.
+
+When this Agentty also lets devices act on graphs, the panel offers the inspector's
+actions where they apply, as its keys do in the terminal: `Accept` on the selected
+output, `Retry` and `Reply` on the selected node, and `Resume`, `Add provider calls`,
+and `Cancel graph` on the graph. `Reply` opens a box for guidance that revises the
+node's output, and `Add provider calls` asks for a whole number of calls to add to the
+spent budget it names: the selected node's, or else the first one. Cancelling a graph is
+permanent, so the page asks first. Each action applies to the graph as the panel last
+showed it; if the graph changed meanwhile, Agentty refuses the action, the panel shows
+why and reloads, and a typed reply or number stays while the panel still shows the node
+or budget it was typed for. A proposal stays a chat reply: approve, revise, or cancel
+it, and answer a node's questions, by replying in chat.
 
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
@@ -327,9 +338,14 @@ device can:
 - merge a session, which lands its changes on the base branch;
 - create a session in the active project, which adds a worktree and branch;
 - publish a session, which pushes its branch and opens or refreshes its pull request
-  with this computer's Git and forge credentials; and
+  with this computer's Git and forge credentials;
 - sync the active project, which pulls its branch with a rebase and pushes it with this
-  computer's Git credentials, and starts an agent to resolve any conflicts.
+  computer's Git credentials, and starts an agent to resolve any conflicts; and
+- act on a session's execution graph wherever the terminal's graph inspector could:
+  accept an output, which releases the nodes waiting for it; retry a node, or reply to
+  it with guidance, which runs it again with the session's permissions; resume a paused
+  graph; add provider calls to its spent budget, which lets it spend more; and cancel a
+  graph, which is permanent and which the page asks to confirm first.
 
 Anyone holding a paired device can do the same, so remove a device you no longer
 control.

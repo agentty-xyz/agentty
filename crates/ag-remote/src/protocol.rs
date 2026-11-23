@@ -12,11 +12,13 @@
 
 use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, ExecutionGraphStatus,
-    GraphNodeProgress, GraphNodeStatus, GraphResultState, HostContext, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, QuestionItem, ReviewRequestSummary, Session,
-    SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionGraph,
-    SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase, SessionGraphSummary,
-    SessionGraphs, SessionListEntry, SessionMessage, SessionMessageKind, session_branch,
+    ExtendGraphBudgetRequest, GraphNodeProgress, GraphNodeStatus, GraphResultState, HostContext,
+    HostProjectStatus, HostProjectSync, HostProjectSyncPhase, QuestionItem, ReviewRequestSummary,
+    Session, SessionDiffFile, SessionDiffFileStatus, SessionError, SessionFileEntry,
+    SessionFocusedReview, SessionGraph, SessionGraphAction, SessionGraphActionKind,
+    SessionGraphActionRequest, SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase,
+    SessionGraphSummary, SessionGraphs, SessionId, SessionListEntry, SessionMessage,
+    SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -62,6 +64,13 @@ pub enum ClientFrame {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum RemoteRequest {
+    /// Acts on a session's execution graph as the terminal's inspector
+    /// does: accepts an output, retries or replies to a node, resumes or
+    /// cancels the graph, or adds provider calls to its spent budget.
+    /// Cancelling is permanent. Agentty refuses an action the graph's
+    /// `snapshot` no longer matches or does not offer. Offered through the
+    /// `graph_actions` capability.
+    ActOnSessionGraph(RemoteGraphActionRequest),
     /// Answers the session's complete current question set.
     AnswerQuestions {
         /// Answers paired with the exact question text.
@@ -304,6 +313,142 @@ pub struct RemoteQuestionAnswer {
     pub answer: String,
     /// Exact question text being answered.
     pub question: String,
+}
+
+/// One execution graph action, sent as an `act_on_session_graph` request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphActionRequest {
+    /// What to do, one of the actions the `graphs` response lists on the
+    /// graph, the node, or the output it applies to.
+    pub action: RemoteGraphAction,
+    /// Provider calls `extend_budget` adds, from one to the graph's
+    /// `budget.max_additional_calls`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_calls: Option<usize>,
+    /// The spent budget `extend_budget` adds provider calls to: the graph's
+    /// `budget.id` in the `graphs` response the action was chosen from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_id: Option<String>,
+    /// Graph to act on, as the `graphs` response names it.
+    pub graph_id: String,
+    /// Guidance `reply` sends; it must not be blank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Node `accept`, `reply`, and `retry` apply to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    /// Output of `node_id` that `accept` accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_id: Option<String>,
+    /// Session that owns the graph.
+    pub session_id: String,
+    /// The graph's `snapshot` in the `graphs` response the action was
+    /// chosen from.
+    pub snapshot: String,
+}
+
+impl RemoteGraphActionRequest {
+    /// Returns the session API request for this action on `session_id`,
+    /// the request's session once the host listed it.
+    ///
+    /// # Errors
+    /// Rejects an action this server does not know and one without a field
+    /// it needs.
+    pub(crate) fn into_session_request(
+        self,
+        session_id: SessionId,
+    ) -> Result<SessionGraphActionRequest, SessionError> {
+        let Self {
+            action,
+            additional_calls,
+            budget_id,
+            graph_id,
+            message,
+            node_id,
+            output_id,
+            session_id: _,
+            snapshot,
+        } = self;
+        let action = match action {
+            RemoteGraphAction::Accept => SessionGraphAction::Accept {
+                node_id: required_field(node_id, "node_id")?,
+                output_id: required_field(output_id, "output_id")?,
+            },
+            RemoteGraphAction::Cancel => SessionGraphAction::Cancel,
+            RemoteGraphAction::ExtendBudget => SessionGraphAction::ExtendBudget {
+                additional_calls: required_field(additional_calls, "additional_calls")?,
+                budget_id: required_field(budget_id, "budget_id")?,
+            },
+            RemoteGraphAction::Reply => SessionGraphAction::Reply {
+                message: required_field(message, "message")?,
+                node_id: required_field(node_id, "node_id")?,
+            },
+            RemoteGraphAction::Resume => SessionGraphAction::Resume,
+            RemoteGraphAction::Retry => SessionGraphAction::Retry {
+                node_id: required_field(node_id, "node_id")?,
+            },
+            RemoteGraphAction::Unsupported => {
+                return Err(SessionError::Operation(
+                    UNSUPPORTED_GRAPH_ACTION.to_string(),
+                ));
+            }
+        };
+
+        Ok(SessionGraphActionRequest {
+            action,
+            graph_id,
+            session_id,
+            snapshot,
+        })
+    }
+}
+
+/// Error returned for a graph action this server does not know.
+const UNSUPPORTED_GRAPH_ACTION: &str = "Unsupported graph action";
+
+/// Returns `value`, or an error naming the missing `field`.
+fn required_field<Value>(value: Option<Value>, field: &str) -> Result<Value, SessionError> {
+    value.ok_or_else(|| SessionError::Operation(format!("Graph action needs `{field}`")))
+}
+
+/// An action of the terminal's graph inspector.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteGraphAction {
+    /// Accept a validated output, releasing the nodes that wait for it.
+    Accept,
+    /// Cancel the graph for good.
+    Cancel,
+    /// Add provider calls to the graph's spent budget.
+    ExtendBudget,
+    /// Send guidance that revises a settled node's output.
+    Reply,
+    /// Restart a paused graph.
+    Resume,
+    /// Run a failed or cancelled node again.
+    Retry,
+    /// Any action this server does not know, such as one a newer client
+    /// sends. The server answers it with an error.
+    #[serde(other)]
+    Unsupported,
+}
+
+impl From<SessionGraphActionKind> for RemoteGraphAction {
+    fn from(action: SessionGraphActionKind) -> Self {
+        match action {
+            SessionGraphActionKind::Accept => Self::Accept,
+            SessionGraphActionKind::Cancel => Self::Cancel,
+            SessionGraphActionKind::ExtendBudget => Self::ExtendBudget,
+            SessionGraphActionKind::Reply => Self::Reply,
+            SessionGraphActionKind::Resume => Self::Resume,
+            SessionGraphActionKind::Retry => Self::Retry,
+        }
+    }
+}
+
+/// The wire form of `actions`.
+fn remote_actions(actions: Vec<SessionGraphActionKind>) -> Vec<RemoteGraphAction> {
+    actions.into_iter().map(RemoteGraphAction::from).collect()
 }
 
 /// A frame sent by the server.
@@ -761,6 +906,16 @@ impl From<SessionGraphProposalPhase> for RemoteGraphProposalPhase {
 /// The selected graph of a `graphs` response.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteGraph {
+    /// What `act_on_session_graph` can do to the graph as a whole now:
+    /// `cancel`, `extend_budget`, or `resume`, as the terminal's inspector
+    /// offers them. Absent when it can do none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<RemoteGraphAction>,
+    /// The spent budget `extend_budget` adds provider calls to, present
+    /// while `actions` offers it: the selected node's, or else the first
+    /// one a pending node waits for, as the terminal's inspector shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<RemoteGraphBudget>,
     /// Graph identity.
     pub id: String,
     /// Whether the graph is a focused review that Agentty drives.
@@ -806,6 +961,7 @@ impl From<SessionGraph> for RemoteGraph {
                 let reference = &output.result.reference;
 
                 RemoteGraphOutput {
+                    actions: remote_actions(output.actions.clone()),
                     id: reference.id.clone(),
                     name: reference.output_name.clone(),
                     state: RemoteGraphOutputState::from(output.result.state),
@@ -817,6 +973,11 @@ impl From<SessionGraph> for RemoteGraph {
             .collect();
 
         Self {
+            actions: remote_actions(graph.actions),
+            budget: graph.exhausted_budget.map(|id| RemoteGraphBudget {
+                id,
+                max_additional_calls: ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS,
+            }),
             id: graph.id,
             is_focused_review: graph.is_focused_review,
             node: graph.node_id,
@@ -833,6 +994,15 @@ impl From<SessionGraph> for RemoteGraph {
             status_label: graph.status_label,
         }
     }
+}
+
+/// A graph's spent provider-call budget.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphBudget {
+    /// Budget name.
+    pub id: String,
+    /// Most provider calls one `extend_budget` action adds.
+    pub max_additional_calls: usize,
 }
 
 /// Live status of a graph.
@@ -869,6 +1039,11 @@ impl From<ExecutionGraphStatus> for RemoteGraphStatus {
 /// One node of a graph.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteGraphNode {
+    /// What `act_on_session_graph` can do to the node now: `reply` or
+    /// `retry`, as the terminal's inspector offers them with the node
+    /// selected. Absent when it can do neither.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<RemoteGraphAction>,
     /// Name of the agent definition the node runs.
     pub agent: String,
     /// Agent provider, such as `codex`.
@@ -943,6 +1118,7 @@ impl RemoteGraphNode {
             .collect();
 
         Self {
+            actions: remote_actions(node.actions),
             agent: node.node.definition.name,
             agent_kind: node.node.agent.kind().name().to_string(),
             attempts: progress.executions.len(),
@@ -1023,6 +1199,11 @@ pub struct RemoteGraphRequirement {
 /// One output of the selected graph node.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteGraphOutput {
+    /// What `act_on_session_graph` can do to the output now: `accept`, as
+    /// the terminal's inspector offers it with the output selected. Absent
+    /// when it can do nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<RemoteGraphAction>,
     /// Output identity.
     pub id: String,
     /// Output name the node declares.

@@ -128,6 +128,11 @@ pub(crate) enum SessionMutation {
     AcceptExecutionGraphResult {
         reference: Box<ag_session::GraphResultRef>,
     },
+    /// Applies one snapshot-bound inspector action from the session API
+    /// through the mutation the terminal inspector admits for it.
+    ActOnSessionGraph {
+        request: Box<ag_session::SessionGraphActionRequest>,
+    },
     /// Admits one role-bound attempt with an isolated conversation.
     SubmitAgentTask {
         request: Box<ag_session::SubmitAgentTaskRequest>,
@@ -219,6 +224,9 @@ impl SessionMutation {
             Self::ExtendExecutionGraphBudget { .. } => ("extend_execution_graph_budget", None),
             Self::ContinueExecutionGraphNode { .. } => ("continue_execution_graph_node", None),
             Self::AcceptExecutionGraphResult { .. } => ("accept_execution_graph_result", None),
+            Self::ActOnSessionGraph { request } => {
+                ("act_on_session_graph", Some(&request.session_id))
+            }
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
             Self::AcceptAgentPlan { session_id, .. } => ("accept_agent_plan", Some(session_id)),
             Self::Prompt { session_id, .. } => ("prompt", Some(session_id)),
@@ -252,6 +260,7 @@ impl SessionMutation {
                 | Self::ContinueExecutionGraphNode { .. }
                 | Self::StartExecutionGraph { .. }
                 | Self::AcceptExecutionGraphResult { .. }
+                | Self::ActOnSessionGraph { .. }
         )
     }
 }

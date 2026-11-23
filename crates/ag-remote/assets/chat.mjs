@@ -1579,6 +1579,7 @@ export function createChat({
     render,
     setCapabilities: (capabilities) => {
       state.capabilities = capabilities;
+      graph?.setCapabilities(capabilities);
       renderActions();
       renderDock();
     },

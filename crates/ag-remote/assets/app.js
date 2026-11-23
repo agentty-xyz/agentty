@@ -187,6 +187,8 @@ const elements = {
   "graph-preview": document.getElementById("graph-preview"),
   "graph-nodes": document.getElementById("graph-nodes"),
   "graph-detail": document.getElementById("graph-detail"),
+  "graph-actions": document.getElementById("graph-actions"),
+  "graph-cancel-dialog": document.getElementById("graph-cancel-dialog"),
   "graph-summary": document.getElementById("graph-summary"),
   dock: document.getElementById("dock"),
   "draft-preview": document.getElementById("draft-preview"),
@@ -806,6 +808,8 @@ const chat = createChat({
   graph: createGraph({
     document: document,
     elements: {
+      actions: elements["graph-actions"],
+      cancelDialog: elements["graph-cancel-dialog"],
       detail: elements["graph-detail"],
       error: elements["graph-error"],
       hints: elements["graph-hints"],

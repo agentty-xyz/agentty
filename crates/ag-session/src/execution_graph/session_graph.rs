@@ -1,7 +1,8 @@
 //! Read models a frontend shows for a session's graph proposals and execution
-//! graphs: a compact summary beside the chat and a read-only inspector
-//! snapshot. Hosts fill every label with the wording their own views use, so
-//! frontends show it without restating it.
+//! graphs: a compact summary beside the chat and an inspector snapshot with
+//! the actions it offers, plus the snapshot-bound action request. Hosts fill
+//! every label and offered action with the wording and rules their own views
+//! use, so frontends show them without restating them.
 
 use std::num::NonZeroU64;
 
@@ -117,6 +118,17 @@ pub struct SessionGraphProposal {
 /// The selected graph of a [`SessionGraphs`] read with its live progress.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionGraph {
+    /// Actions the graph takes as a whole now, among
+    /// [`SessionGraphActionKind::Cancel`],
+    /// [`SessionGraphActionKind::ExtendBudget`], and
+    /// [`SessionGraphActionKind::Resume`], as the host's inspector offers
+    /// them.
+    pub actions: Vec<SessionGraphActionKind>,
+    /// The spent budget [`SessionGraphActionKind::ExtendBudget`] adds
+    /// provider calls to, while `actions` offers it: the selected node's,
+    /// or else the first one a pending node waits for, as the host's
+    /// inspector shows it.
+    pub exhausted_budget: Option<String>,
     /// Graph identity.
     pub id: String,
     /// Whether the graph is a focused review that the host drives.
@@ -146,6 +158,10 @@ pub struct SessionGraph {
 /// One node of a [`SessionGraph`] with what a frontend shows about it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionGraphNode {
+    /// Actions the node takes now, among [`SessionGraphActionKind::Reply`]
+    /// and [`SessionGraphActionKind::Retry`], as the host's inspector offers
+    /// them with the node selected.
+    pub actions: Vec<SessionGraphActionKind>,
     /// Whether a dependent waits for the user to accept this node's output.
     pub awaits_approval: bool,
     /// Why the pending node cannot dispatch, each as the host shows it.
@@ -181,10 +197,83 @@ pub struct SessionGraphRequirement {
 /// One output of the selected node with its stored body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionGraphOutput {
+    /// Actions the output takes now, [`SessionGraphActionKind::Accept`] or
+    /// none, as the host's inspector offers them with the output selected.
+    pub actions: Vec<SessionGraphActionKind>,
     /// The stored output body, unchanged.
     pub body: String,
     /// The body as Markdown a frontend shows.
     pub display: String,
     /// The output's exact reference and evidence state.
     pub result: GraphResult,
+}
+
+/// An action a graph inspector offers on a graph, one of its nodes, or one
+/// of the selected node's outputs.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SessionGraphActionKind {
+    /// Accept a validated output, releasing the dependents that wait for it.
+    Accept,
+    /// Cancel the graph for good.
+    Cancel,
+    /// Add provider calls to the graph's spent budget.
+    ExtendBudget,
+    /// Send guidance that revises a settled node's output.
+    Reply,
+    /// Restart dispatch of a paused graph.
+    Resume,
+    /// Run a failed or cancelled node again.
+    Retry,
+}
+
+/// One inspector action on a session's graph, bound to the snapshot it was
+/// chosen from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionGraphActionRequest {
+    /// What to do.
+    pub action: SessionGraphAction,
+    /// Graph to act on; it must belong to `session_id`.
+    pub graph_id: String,
+    /// Session that owns the graph.
+    pub session_id: SessionId,
+    /// [`SessionGraph::snapshot`] of the read the action was chosen from.
+    /// The host refuses the action once the graph no longer matches it.
+    pub snapshot: String,
+}
+
+/// What a [`SessionGraphActionRequest`] does.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionGraphAction {
+    /// Accepts `output_id`, one output of `node_id`'s latest execution.
+    Accept {
+        /// Node that produced the output.
+        node_id: String,
+        /// [`crate::GraphResultRef::id`] of the output.
+        output_id: String,
+    },
+    /// Cancels the graph permanently, without cancelling other session work.
+    Cancel,
+    /// Adds provider calls to `budget_id`, a spent budget of the graph.
+    ExtendBudget {
+        /// Calls to add, from one to
+        /// [`crate::ExtendGraphBudgetRequest::MAX_ADDITIONAL_CALLS`].
+        additional_calls: usize,
+        /// The spent budget to extend, as [`SessionGraph::exhausted_budget`]
+        /// named it; a pending node of the snapshot must wait for it.
+        budget_id: String,
+    },
+    /// Sends `message` as guidance that revises `node_id`'s output.
+    Reply {
+        /// Guidance text; it must not be blank.
+        message: String,
+        /// Node to revise.
+        node_id: String,
+    },
+    /// Restarts dispatch of a paused graph.
+    Resume,
+    /// Runs `node_id` again after it failed or was cancelled.
+    Retry {
+        /// Node to run again.
+        node_id: String,
+    },
 }
