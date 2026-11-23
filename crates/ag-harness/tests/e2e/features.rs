@@ -17,7 +17,10 @@ use ag_harness::model::{
     ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
     ModelResponse,
 };
-use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
+use ag_harness::provider::{
+    CLAUDE_HAIKU_5_5, GPT_6_LUNA, KimiConfig, MUSE_SPARK_1_3, ModelConfiguration, ModelProvider,
+    MuseConfig, QWEN_PLUS, QwenConfig,
+};
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::tool::ToolCall;
 use ag_harness::turn::ToolActivity;
@@ -38,42 +41,65 @@ const LAUNCHER: &str = env!("CARGO_BIN_EXE_ag-harness-sandbox");
 static LAST_KIMI_TURN: Mutex<Option<Instant>> = Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Provider {
+pub(crate) enum Provider {
     Kimi,
     Muse,
     Qwen,
+    Anthropic,
+    OpenAi,
 }
 
 impl Provider {
-    const ALL: [Self; 3] = [Self::Kimi, Self::Muse, Self::Qwen];
+    /// Every provider `AG_LIVE_PROVIDERS` can name.
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Kimi,
+        Self::Muse,
+        Self::Qwen,
+        Self::Anthropic,
+        Self::OpenAi,
+    ];
+    /// Providers a run selects when `AG_LIVE_PROVIDERS` is unset; hosted
+    /// Anthropic and `OpenAI` models run only when named.
+    const DEFAULT: [Self; 3] = [Self::Kimi, Self::Muse, Self::Qwen];
 
     fn selected() -> Vec<Self> {
         let filter = std::env::var("AG_LIVE_PROVIDERS").unwrap_or_default();
+        if filter.is_empty() {
+            return Self::DEFAULT.to_vec();
+        }
         let selected: Vec<Self> = Self::ALL
             .into_iter()
-            .filter(|provider| filter.is_empty() || filter.split(',').any(|f| f == provider.name()))
+            .filter(|provider| filter.split(',').any(|name| name == provider.name()))
             .collect();
 
         selected
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Kimi => "kimi",
             Self::Muse => "muse",
             Self::Qwen => "qwen",
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
         }
     }
 
-    fn model(self) -> String {
+    /// Model the provider's checks run on: `ANTHROPIC_MODEL` and
+    /// `OPENAI_MODEL` replace the cheap hosted defaults.
+    pub(crate) fn model(self) -> String {
         match self {
             Self::Kimi => std::env::var("KIMI_MODEL").unwrap_or_else(|_| "kimi-k2.6".into()),
             Self::Muse => MUSE_SPARK_1_3.to_string(),
             Self::Qwen => std::env::var("QWEN_MODEL").unwrap_or_else(|_| QWEN_PLUS.into()),
+            Self::Anthropic => {
+                std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| CLAUDE_HAIKU_5_5.into())
+            }
+            Self::OpenAi => std::env::var("OPENAI_MODEL").unwrap_or_else(|_| GPT_6_LUNA.into()),
         }
     }
 
-    fn client(self) -> Result<ModelClient, DynError> {
+    pub(crate) fn client(self) -> Result<ModelClient, DynError> {
         let model = self.model();
         let client = match self {
             Self::Kimi => ModelClient::kimi(KimiConfig {
@@ -92,6 +118,10 @@ impl Provider {
                 base_url: std::env::var("DASHSCOPE_BASE_URL")?,
                 model,
             })?,
+            Self::Anthropic => ModelConfiguration::new(ModelProvider::Anthropic, model)
+                .client_from_environment(|name| std::env::var(name))?,
+            Self::OpenAi => ModelConfiguration::new(ModelProvider::OpenAi, model)
+                .client_from_environment(|name| std::env::var(name))?,
         };
 
         Ok(client)
@@ -101,7 +131,7 @@ impl Provider {
     /// counts toward history, so a budget still holds the intended turns.
     fn reasoning_allowance(self) -> u64 {
         match self {
-            Self::Kimi => 1000,
+            Self::Kimi | Self::Anthropic | Self::OpenAi => 1000,
             Self::Muse | Self::Qwen => 0,
         }
     }
@@ -127,7 +157,7 @@ impl Provider {
     }
 }
 
-fn rounds() -> usize {
+pub(crate) fn rounds() -> usize {
     std::env::var("AG_LIVE_ROUNDS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -142,7 +172,7 @@ fn capabilities(profile: ModelProfile) -> ModelCapabilities {
     }
 }
 
-fn answer_schema() -> Result<OutputSchema, DynError> {
+pub(crate) fn answer_schema() -> Result<OutputSchema, DynError> {
     Ok(OutputSchema::new(json!({
         "type": "object",
         "properties": {"answer": {"type": "string"}},
@@ -160,7 +190,7 @@ fn stdout_schema() -> Result<OutputSchema, DynError> {
     }))?)
 }
 
-fn answer(value: &Value) -> String {
+pub(crate) fn answer(value: &Value) -> String {
     value["answer"]
         .as_str()
         .unwrap_or_default()
@@ -168,20 +198,20 @@ fn answer(value: &Value) -> String {
         .to_lowercase()
 }
 
-struct Report {
+pub(crate) struct Report {
     case: &'static str,
     failures: Vec<String>,
 }
 
 impl Report {
-    fn new(case: &'static str) -> Self {
+    pub(crate) fn new(case: &'static str) -> Self {
         Self {
             case,
             failures: Vec::new(),
         }
     }
 
-    fn record(
+    pub(crate) fn record(
         &mut self,
         label: &str,
         round: usize,
@@ -205,7 +235,7 @@ impl Report {
         }
     }
 
-    fn finish(self) -> Result<(), DynError> {
+    pub(crate) fn finish(self) -> Result<(), DynError> {
         if self.failures.is_empty() {
             return Ok(());
         }
@@ -331,7 +361,7 @@ async fn test_model_switch_roundtrip() -> Result<(), DynError> {
 // Context budget projection (#669)
 // ---------------------------------------------------------------------------
 
-fn filler(seed: u8, bytes: usize) -> String {
+pub(crate) fn filler(seed: u8, bytes: usize) -> String {
     let words = [
         "ledger", "harbor", "signal", "meadow", "copper", "lantern", "orbit", "quartz",
     ];
@@ -346,7 +376,7 @@ fn filler(seed: u8, bytes: usize) -> String {
     text
 }
 
-fn fact_turn(name: &str, value: &str, seed: u8) -> String {
+pub(crate) fn fact_turn(name: &str, value: &str, seed: u8) -> String {
     format!(
         "Background notes (ignore their content): {}\nRemember fact {name} = {value}. Do not \
          repeat it now: set answer to exactly the word stored.",
@@ -970,10 +1000,12 @@ impl Provider {
     /// Input size whose random words exceed the model's window: Kimi's
     /// 262,144 tokens stay below its two-million tokens-per-minute limit,
     /// which a larger input meets as `429` before the window check, while
-    /// Muse and Qwen need over a million tokens.
+    /// Muse and Qwen need over a million tokens, and Claude and `OpenAI`
+    /// models over a million and about 922,000 input tokens.
     fn overflow_input_bytes(self) -> usize {
         match self {
             Self::Kimi => 1024 * 1024,
+            Self::Anthropic | Self::OpenAi => 4 * 1024 * 1024,
             Self::Muse | Self::Qwen => 6 * 1024 * 1024,
         }
     }
@@ -1085,7 +1117,7 @@ impl Model for RepeatingFirstCalls {
 }
 
 /// Creates a Git repository whose `notes.txt` names a code word.
-fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynError> {
+pub(crate) fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynError> {
     let workspace = tempfile::tempdir()?;
     let root = workspace.path().canonicalize()?;
     let init = std::process::Command::new(GIT_EXECUTABLE)
@@ -1213,12 +1245,14 @@ const OVERFLOW_PART_BYTES: usize = 48 * 1024;
 impl Provider {
     /// Input tokens the provider accepts, from the overflow bodies captured
     /// live: Kimi names 262,144, Qwen-Plus a range up to 1,000,000, and Muse
-    /// accepted 1,024,291 tokens but not about 1.08 million.
+    /// accepted 1,024,291 tokens but not about 1.08 million. Claude and
+    /// `OpenAI` take their documented 1,000,000 and 922,000 input tokens.
     fn window_tokens(self) -> usize {
         match self {
             Self::Kimi => 262_144,
             Self::Muse => 1_048_576,
-            Self::Qwen => 1_000_000,
+            Self::Qwen | Self::Anthropic => 1_000_000,
+            Self::OpenAi => 922_000,
         }
     }
 

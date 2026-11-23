@@ -80,7 +80,14 @@ name = "e2e"
 path = "tests/e2e/main.rs"
 test = false
 bench = false
-required-features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"]
+required-features = [
+  "native-sandbox",
+  "otel",
+  "providers-anthropic",
+  "providers-compat",
+  "providers-openai",
+  "sqlite",
+]
 
 [[test]]
 name = "benchmark"

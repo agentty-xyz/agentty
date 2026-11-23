@@ -51,7 +51,7 @@ another Qwen model.
 call and its error result, the model must re-issue a valid read, and a second durable
 turn must replay the stored malformed call. Like the other feature checks, it runs Git
 from `/opt/homebrew/bin/git` and uses the provider variables above; `AG_LIVE_PROVIDERS`
-selects providers:
+selects providers, by default Kimi, Muse, and Qwen:
 
 ```sh
 AG_LIVE_PROVIDERS=muse,qwen \
@@ -110,6 +110,42 @@ variables above; run the Kimi checks one at a time when the account rate limit i
 ```sh
 cargo test --locked -p ag-harness --test e2e image:: -- --test-threads=1 --ignored --nocapture
 ```
+
+## Anthropic and OpenAI
+
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` select the hosted providers, with optional
+`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL`. Checks run on `claude-haiku-5-5` and
+`gpt-6-luna` unless `ANTHROPIC_MODEL` or `OPENAI_MODEL` names another model.
+
+The `hosted` checks take their models from the environment catalog, so every run is
+priced, and cap every run and session turn at eight model requests and 200,000 tokens,
+compaction included. They cover a streamed text turn (text deltas spread over at least a
+quarter of the request), a nested structured output, reasoning replayed across three
+turns after a tool loop (Claude's signed thinking), a prompt-cache read on a repeated 16
+KB prefix, reasoning turns under a budget that evicts the oldest until two more turns
+and a recall follow the first eviction (Claude must accept the trimmed history ahead of
+bound thinking), automatic compaction of a `claude-sonnet-5-5` or `gpt-6.1-sol` session
+on the cheap summary model, usage and its catalog cost, and an invalid key failing at
+once as a non-retryable `Auth` error. Without `AG_LIVE_PROVIDERS`, each provider runs
+when its key is set; naming providers runs only those, and the invalid-key check needs
+no real key. Every provider left out prints a `LIVE ... result=skipped` line:
+
+```sh
+AG_LIVE_ROUNDS=1 \
+cargo test --locked -p ag-harness --test e2e hosted:: -- --test-threads=1 --ignored --nocapture
+```
+
+The feature checks above, such as `features::test_bash_native_sandbox` and
+`features::test_context_overflow_classification`, run the hosted providers only when
+`AG_LIVE_PROVIDERS` names them. A Claude overflow sends about 4 MB of random words:
+
+```sh
+AG_LIVE_PROVIDERS=anthropic AG_LIVE_ROUNDS=1 \
+cargo test --locked -p ag-harness --test e2e features::test_bash_native_sandbox -- --exact --ignored --nocapture
+```
+
+`image::test_anthropic_images` and `image::test_openai_images` run the image checks on
+the selected models.
 
 Run all live-provider checks together only when every provider credential is configured:
 

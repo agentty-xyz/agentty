@@ -11,6 +11,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::{Harness, SessionError};
 
+use crate::features::Provider;
 use crate::model_profile_fixture::unbounded_model_profile;
 use crate::{DynError, vision};
 
@@ -110,6 +111,20 @@ async fn test_qwen_images() -> Result<(), DynError> {
     }
 
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires live Anthropic credentials"]
+async fn test_anthropic_images() -> Result<(), DynError> {
+    // Act & Assert
+    vision::describes_images(Provider::Anthropic.client()?, &Provider::Anthropic.model()).await
+}
+
+#[tokio::test]
+#[ignore = "requires live OpenAI credentials"]
+async fn test_openai_images() -> Result<(), DynError> {
+    // Act & Assert
+    vision::describes_images(Provider::OpenAi.client()?, &Provider::OpenAi.model()).await
 }
 
 /// `qwen3-max` accepts image parts over the wire but invents their content,

@@ -7,6 +7,7 @@ mod context_budget_fixture;
 mod features;
 #[path = "support/greeting.rs"]
 mod greeting;
+mod hosted;
 mod image;
 mod kimi;
 #[path = "../support/model_profile.rs"]
