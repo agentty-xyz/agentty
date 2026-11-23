@@ -3,6 +3,7 @@
 // crates/ag-remote/tests/server/web_client.rs.
 //
 // Usage: node relay_app_flow.mjs multi <pairing link of A> <pairing link of B>
+//        node relay_app_flow.mjs revoke <pairing link of A> <pairing link of B>
 //        node relay_app_flow.mjs migrate <pairing link of A>
 //
 // In `multi` mode the page opens the link of Agentty A and pairs; after
@@ -56,7 +57,7 @@ for (const [link, label] of [
 installFakeIndexedDb();
 const document = createDocument(PAGE);
 const pageUrl = new URL(firstLink);
-const window = createWindow(document, mode === "multi" ? firstLink : pageUrl.origin + "/");
+const window = createWindow(document, mode === "migrate" ? pageUrl.origin + "/" : firstLink);
 globalThis.document = document;
 globalThis.window = window;
 
@@ -247,6 +248,33 @@ async function multiFlow() {
   });
 }
 
+// Pairs A, then opens B's link. While B waits for approval the Rust test
+// revokes this device on A, which leaves the pairing with B as it was;
+// then it approves B.
+async function revokeFlow() {
+  await pairThroughPage();
+  report({ step: "awaiting" });
+  await waitFor("A's sessions", () => visibleView() === "home-view" && rows().length > 0);
+  window.location.hash = new URL(secondLink).hash;
+  await waitFor("B's pairing form", () => visibleView() === "pair-view");
+  await pairThroughPage();
+  report({ step: "awaitingB" });
+
+  await waitFor("A to go", () => storedIds().length === 0 && byId("pair-back").hidden);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  report({
+    step: "revokedA",
+    cancelHidden: byId("pair-cancel").hidden,
+    confirmation: byId("pair-confirmation").textContent !== "",
+    error: byId("pair-error").textContent,
+    submitHidden: byId("pair-submit").hidden,
+    view: visibleView(),
+  });
+
+  await waitFor("B's sessions", () => visibleView() === "home-view" && rows().length > 0);
+  report({ step: "pairedB", rows: rows(), sections: sections().length, stored: storedIds() });
+}
+
 // Pairs a device key with A through the relay modules, as an earlier
 // version of the page would have, and saves the pairing its way.
 async function pairAsEarlierVersion() {
@@ -293,6 +321,9 @@ async function migrateFlow() {
 if (mode === "multi") {
   await import(APP_URL.href);
   await multiFlow();
+} else if (mode === "revoke") {
+  await import(APP_URL.href);
+  await revokeFlow();
 } else {
   await migrateFlow();
 }

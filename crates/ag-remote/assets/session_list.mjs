@@ -98,7 +98,8 @@ export function createSessionList({
 
   // Records what this browser has seen. The stored map is read again first,
   // so two tabs keep each other's later times. A source the map knows none
-  // of, as after pairing with another Agentty, counts as seen.
+  // of, as after pairing with another Agentty, counts as seen, except for
+  // the times a page that showed one Agentty kept under bare session ids.
   function reconcile() {
     let known = mergeSeen(state.seen, readStored());
     const keyed = state.sources.flatMap((source) => keyedSessions(source));
@@ -107,9 +108,11 @@ export function createSessionList({
         const entries = keyedSessions(source);
         if (entries.length > 0 && !entries.some((entry) => Object.hasOwn(known, entry.id))) {
           known = { ...known };
-          for (const entry of entries) {
-            known[entry.id] = entry.updated_at;
-          }
+          source.sessions.forEach((session, index) => {
+            known[entries[index].id] = Object.hasOwn(known, session.id)
+              ? known[session.id]
+              : session.updated_at;
+          });
         }
       }
     }
@@ -268,16 +271,10 @@ export function createSessionList({
   }
 
   function renderChips() {
-    const counts = {};
-    for (const filter of FILTERS) {
-      counts[filter.id] = 0;
-    }
-    for (const source of state.sources) {
-      const sourceCounts = filterCounts(source.sessions, state.query);
-      for (const filter of FILTERS) {
-        counts[filter.id] += sourceCounts[filter.id];
-      }
-    }
+    const counts = filterCounts(
+      state.sources.flatMap((source) => source.sessions),
+      state.query,
+    );
     elements.chips.replaceChildren(
       ...FILTERS.map((filter) => {
         const button = element(document, "button");

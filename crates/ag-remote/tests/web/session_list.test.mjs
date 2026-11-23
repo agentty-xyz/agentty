@@ -731,6 +731,27 @@ test("with several Agenttys the open row, unread dots and seen times belong to o
   assert.equal(page.byId("sessions").querySelectorAll(".row.is-unread").length, 0);
 });
 
+test("seen times a single-Agentty page kept by session id carry over to its Agentty", () => {
+  // Arrange: an earlier page saw `review` before its latest change.
+  const storage = new MemoryStorage();
+  storage.setItem(SEEN_KEY, JSON.stringify({ review: NOW - 180, done: NOW - 2 * 86400 }));
+  const page = mountList({ storage: storage });
+  const later = SESSIONS.map((session) => (session.id === "review" ? { ...session, updated_at: NOW } : session));
+  const [source] = twoSources(page, later, []);
+
+  // Act
+  page.list.setSources([source]);
+  const stored = JSON.parse(storage.getItem(SEEN_KEY));
+
+  // Assert
+  assert.deepEqual(
+    Array.from(source.list.querySelectorAll(".row.is-unread"), (row) => row.dataset.instanceId + "/" + row.dataset.sessionId),
+    ["aa/review"],
+  );
+  assert.equal(stored["aa:review"], NOW - 180);
+  assert.equal(stored["aa:running"], NOW - 5);
+});
+
 test("an Agentty not listed yet shows no empty line", () => {
   // Arrange
   const page = mountList();

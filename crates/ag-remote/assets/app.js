@@ -486,7 +486,8 @@ function onConnectionState(instance) {
 // The device footer: one Agentty's state, or how many of several are
 // connected.
 function renderFooter() {
-  const shown = state.instances.length > 0 ? state.instances : state.pairing ? [state.pairing.instance] : [];
+  const pairing = state.pairing?.instance;
+  const shown = state.instances.length > 0 ? state.instances : pairing ? [pairing] : [];
   const kinds = shown.map((instance) => instance.connection.kind());
   let label;
   if (kinds.length <= 1) {
@@ -813,12 +814,17 @@ function routedInstance(route) {
 }
 
 // The Agentty home describes: the one the user chose with its `New
-// session`, otherwise the first connected one that offers new sessions,
-// otherwise the first one.
+// session`; otherwise the one home already describes a host for, so a
+// draft never moves to another Agentty when connections come and go;
+// otherwise the first connected one that offers new sessions, otherwise
+// the first one.
 function homeInstance() {
   const chosen = state.homeId === null ? null : findInstance(state.homeId);
   if (chosen) {
     return chosen;
+  }
+  if (state.homeTarget && state.instances.includes(state.homeTarget) && home.host()) {
+    return state.homeTarget;
   }
 
   return (
@@ -930,15 +936,19 @@ function onRejected(instance, reason, wasPairing) {
       if (usesRelay) {
         removeInstance(instance);
       }
-      elements["pair-error"].textContent = reason;
-      showPairing();
+      // A pairing with another Agentty keeps its card as it is.
+      if (!state.pairing) {
+        elements["pair-error"].textContent = reason;
+        showPairing();
+      }
 
       return;
     }
     instance.sessions = [];
   }
   instance.rejection = reason;
-  instance.view.error.textContent = reason;
+  // With one Agentty, the banner alone says why, as on a single page.
+  instance.view.error.textContent = isMany() ? reason : "";
   renderSessions();
   renderOffline();
 }
@@ -1236,11 +1246,18 @@ elements["pair-form"].addEventListener("submit", (event) => {
   elements["pair-error"].textContent = "";
   // Cancel shows at once, so a connection that hangs can be abandoned.
   setPairingPhase("connecting");
+  // The pairing counts from here, so Cancel works before its Agentty is
+  // known.
+  const pairing = { deviceName: deviceName, instance: null };
+  state.pairing = pairing;
   void pairingInstance(link).then((instance) => {
+    if (state.pairing !== pairing) {
+      return;
+    }
     // A pairing with an Agentty this browser already knows replaces it
     // once Agentty approves; until then the earlier one is not used to
     // reconnect.
-    state.pairing = { deviceName: deviceName, instance: instance };
+    pairing.instance = instance;
     instance.rejection = null;
     instance.connection.pair({
       type: "pair",

@@ -836,6 +836,63 @@ async fn web_client_app_shows_two_agenttys_through_one_relay_and_keeps_them_apar
 }
 
 #[tokio::test]
+async fn web_client_app_keeps_pairing_another_agentty_while_one_revokes_it_through_the_relay()
+-> TestResult {
+    // Arrange
+    let relay = start_relay().await?;
+    let first_key = StaticKeypair::generate()?;
+    let second_key = StaticKeypair::generate()?;
+    let first = start_linked_server(&relay, &first_key).await?;
+    let second = start_linked_server(&relay, &second_key).await?;
+    let first_link = link_of(&relay, &first_key, &first)?;
+    let second_link = link_of(&relay, &second_key, &second)?;
+
+    // Act
+    let mut app = WebDevice::run(RELAY_APP_SCRIPT, &["revoke", &first_link, &second_link])?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&first).await?;
+    let awaiting_second = app.next_step().await?;
+    let device_id = first
+        .devices
+        .device_ids()
+        .pop()
+        .ok_or("A paired no device")?;
+    first.handle.revoke_device(&device_id).await?;
+    let revoked = app.next_step().await?;
+    approve_first_request(&second).await?;
+    let paired_second = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(awaiting["step"], "awaiting");
+    assert_eq!(awaiting_second["step"], "awaitingB");
+    // B's pairing card still waits for approval, with its code and Cancel.
+    assert_eq!(
+        revoked,
+        json!({
+            "step": "revokedA",
+            "cancelHidden": false,
+            "confirmation": true,
+            "error": "",
+            "submitHidden": true,
+            "view": "pair-view",
+        })
+    );
+    assert_eq!(
+        paired_second,
+        json!({
+            "step": "pairedB",
+            "rows": ["B/session-1", "B/session-2"],
+            "sections": 0,
+            "stored": ["B"],
+        })
+    );
+    assert!(succeeded);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn web_client_app_keeps_a_pairing_saved_by_an_earlier_version_through_the_relay() -> TestResult
 {
     // Arrange
