@@ -50,8 +50,8 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
         assert!(response.contains(&format!("content-type: {content_type}")));
         assert!(response.contains(
             "content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; \
-             connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; \
-             frame-ancestors 'none'"
+             font-src data:; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action \
+             'none'; frame-ancestors 'none'"
         ));
         assert!(response.contains("x-content-type-options: nosniff"));
         assert!(response.contains("referrer-policy: no-referrer"));
@@ -60,13 +60,15 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
     assert!(page.contains(r#"<meta name="agentty-transport" content="relay">"#));
     assert!(!page.contains(r#"content="local""#));
     assert!(page.contains(r#"<script type="module" src="app.js">"#));
-    // The generated design tokens, then the shared base styles, come ahead
-    // of the client's own rules.
+    // The generated design tokens, the self-hosted font face as the `data:`
+    // URI the policy's `font-src` allows, then the shared base styles, come
+    // ahead of the client's own rules.
     let tokens = stylesheet.find("--color-bg: #070b08;");
+    let fonts = stylesheet.find("src: url(\"data:font/woff2;base64,");
     let base = stylesheet.find(".skip-link {");
     let rules = stylesheet.find("--tone-ready:");
     assert!(
-        tokens.is_some() && tokens < base && base < rules,
+        tokens.is_some() && tokens < fonts && fonts < base && base < rules,
         "{stylesheet}"
     );
     assert!(script.contains(r#"from "./device_key.mjs""#));

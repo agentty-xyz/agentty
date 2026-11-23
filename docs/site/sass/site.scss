@@ -1,8 +1,10 @@
-/* Design values come from the generated _tokens.scss, and shared foundations
-   and components from the generated _base.scss; change design/tokens.json or
+/* Design values come from the generated _tokens.scss, the self-hosted
+   monospace face from the generated _fonts.scss, and shared foundations and
+   components from the generated _base.scss; change design/tokens.json or
    design/base.css instead. The tokens below derive from them or size this
    site's layout. */
 @use "tokens";
+@use "fonts";
 @use "base";
 
 :root {
@@ -1189,7 +1191,7 @@ svg {
 
 .docs-search__input {
     width: 100%;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: 0.35rem;
     background: var(--color-surface);
     color: var(--color-accent);

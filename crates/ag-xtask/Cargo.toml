@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 percent-encoding.workspace = true
 pulldown-cmark.workspace = true

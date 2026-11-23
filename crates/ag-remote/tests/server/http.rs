@@ -88,8 +88,8 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         assert!(response.contains(&format!("content-type: {content_type}")));
         assert!(response.contains(
             "content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; \
-             connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; \
-             frame-ancestors 'none'"
+             font-src data:; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action \
+             'none'; frame-ancestors 'none'"
         ));
         assert!(response.contains("x-content-type-options: nosniff"));
         assert!(response.contains("referrer-policy: no-referrer"));
@@ -111,13 +111,15 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         )),
         "{background}"
     );
-    // The generated design tokens, then the shared base styles, come ahead
-    // of the client's own rules.
+    // The generated design tokens, the self-hosted font face as the `data:`
+    // URI the policy's `font-src` allows, then the shared base styles, come
+    // ahead of the client's own rules.
     let tokens = stylesheet.find("--color-bg: ");
+    let fonts = stylesheet.find("src: url(\"data:font/woff2;base64,");
     let base = stylesheet.find(".skip-link {");
     let rules = stylesheet.find("--tone-ready:");
     assert!(
-        tokens.is_some() && tokens < base && base < rules,
+        tokens.is_some() && tokens < fonts && fonts < base && base < rules,
         "{stylesheet}"
     );
     assert!(script.contains("from \"./chat.mjs\""));

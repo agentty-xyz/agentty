@@ -1,15 +1,12 @@
 //! WCAG 2 contrast ratios for the colour pairs the token file declares.
 //!
-//! Every pair must reach its group's minimum in every theme, unless the group
-//! records it as a shortfall with the measured ratio and a reason. A recorded
-//! ratio must stay exact, so a colour change that moves it, or that fixes the
-//! pair, fails until the record is updated or removed.
+//! Every pair must reach its group's minimum in every theme; there is no way
+//! to record an exception.
 
 use crate::design_token::token::{ContrastGroup, THEMES, TokenSet, Value};
 
-/// Reports every pair that misses its minimum without a matching shortfall,
-/// every shortfall whose ratio moved or that no longer falls short, and every
-/// reference that names no opaque colour.
+/// Reports every pair that misses its minimum and every reference that names
+/// no opaque colour.
 pub(super) fn check(set: &TokenSet, errors: &mut Vec<String>) {
     for group in &set.contrast {
         check_group(set, group, errors);
@@ -25,7 +22,6 @@ pub(super) fn ratio(first: [u8; 3], second: [u8; 3]) -> f64 {
 
 fn check_group(set: &TokenSet, group: &ContrastGroup, errors: &mut Vec<String>) {
     let usage = &group.usage;
-    let mut matched = vec![false; group.shortfalls.len()];
     let foregrounds = resolve(set, usage, &group.foregrounds, errors);
     let backgrounds = resolve(set, usage, &group.backgrounds, errors);
     for (foreground, foreground_colors) in &foregrounds {
@@ -35,49 +31,14 @@ fn check_group(set: &TokenSet, group: &ContrastGroup, errors: &mut Vec<String>) 
                     foreground_colors[theme_index],
                     background_colors[theme_index],
                 );
-                let shortfall = group.shortfalls.iter().position(|shortfall| {
-                    shortfall.theme == *theme
-                        && shortfall.foreground == foreground.as_str()
-                        && shortfall.background == background.as_str()
-                });
-                let pair = format!("{theme}: {foreground} on {background} ({usage})");
-                match shortfall {
-                    None if measured < group.minimum => errors.push(format!(
-                        "{pair} is {measured:.2}:1, below {}:1; change a colour or record a \
-                         shortfall with its reason",
+                if measured < group.minimum {
+                    errors.push(format!(
+                        "{theme}: {foreground} on {background} ({usage}) is {measured:.2}:1, \
+                         below {}:1; change a colour",
                         group.minimum
-                    )),
-                    None => {}
-                    Some(index) => {
-                        matched[index] = true;
-                        let recorded = group.shortfalls[index].ratio;
-                        if measured >= group.minimum {
-                            errors.push(format!(
-                                "{pair} now reaches {measured:.2}:1; remove its shortfall"
-                            ));
-                        } else if format!("{measured:.2}") != format!("{recorded:.2}") {
-                            errors.push(format!(
-                                "{pair} is {measured:.2}:1, but its shortfall records \
-                                 {recorded:.2}; update the record"
-                            ));
-                        }
-                    }
+                    ));
                 }
             }
-        }
-    }
-    for (shortfall, matched) in group.shortfalls.iter().zip(matched) {
-        if !matched {
-            errors.push(format!(
-                "{}: shortfall {} on {} ({usage}) matches no pair of the group",
-                shortfall.theme, shortfall.foreground, shortfall.background
-            ));
-        }
-        if shortfall.reason.trim().is_empty() {
-            errors.push(format!(
-                "{}: shortfall {} on {} ({usage}) needs a reason",
-                shortfall.theme, shortfall.foreground, shortfall.background
-            ));
         }
     }
 }

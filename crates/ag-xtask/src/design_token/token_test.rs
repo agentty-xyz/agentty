@@ -2,7 +2,7 @@
 
 use serde_json::{Value as Json, json};
 
-use super::{DARK_THEME, DEFAULT_THEME, TokenSet, Value};
+use super::{DARK_THEME, DEFAULT_THEME, FontFace, FontStyle, TokenSet, Value};
 
 /// Returns an opaque sRGB colour value for `hex`.
 fn color(hex: &str, components: [f64; 3]) -> Json {
@@ -72,6 +72,46 @@ fn stylesheet_sets_shared_tokens_with_surface_values_in_each_theme() {
     );
     assert!(set.find("glyph.0").is_none());
     assert!(set.contrast.is_empty());
+    assert_eq!(set.font_faces, Vec::<FontFace>::new());
+}
+
+#[test]
+fn font_faces_are_read_from_the_root_extension() {
+    // Arrange
+    let source = json!({
+        "$extensions": { "xyz.agentty.fontFaces": [
+            { "family": "Mono", "style": "italic", "weight": 700, "source": "fonts/Mono.woff2", "license": "fonts/OFL.txt", "notice": "Copyright." }
+        ] }
+    })
+    .to_string();
+    let unknown = json!({
+        "$extensions": { "xyz.agentty.fontFaces": [
+            { "family": "Mono", "style": "oblique", "weight": 700, "source": "a.woff2", "license": "a.txt", "notice": "Copyright." }
+        ] }
+    })
+    .to_string();
+
+    // Act
+    let set = TokenSet::parse(&source).expect("valid font faces");
+    let report = errors(&unknown);
+
+    // Assert
+    assert_eq!(
+        set.font_faces,
+        [FontFace {
+            family: "Mono".to_owned(),
+            license: "fonts/OFL.txt".to_owned(),
+            notice: "Copyright.".to_owned(),
+            source: "fonts/Mono.woff2".to_owned(),
+            style: FontStyle::Italic,
+            weight: 700,
+        }]
+    );
+    assert_eq!(report.len(), 1);
+    assert!(
+        report[0].starts_with("xyz.agentty.fontFaces: unknown variant `oblique`"),
+        "{report:?}"
+    );
 }
 
 #[test]

@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 
 /// Theme whose values `$value` holds.
@@ -22,6 +23,9 @@ const THEME_EXTENSION: &str = "xyz.agentty.theme";
 /// Root extension that lists the colour pairs whose contrast is checked.
 const CONTRAST_EXTENSION: &str = "xyz.agentty.contrast";
 
+/// Root extension that lists the self-hosted font faces.
+const FONT_FACE_EXTENSION: &str = "xyz.agentty.fontFaces";
+
 /// Root group whose child groups hold the values only one surface uses.
 const SURFACES: &str = "surfaces";
 
@@ -37,12 +41,13 @@ const TIMING_KEYWORDS: [([f64; 4], &str); 5] = [
 /// Parsed token file.
 pub(super) struct TokenSet {
     pub(super) contrast: Vec<ContrastGroup>,
+    pub(super) font_faces: Vec<FontFace>,
     pub(super) tokens: Vec<Token>,
 }
 
 impl TokenSet {
-    /// Parses a token file, reporting every invalid token and duplicate
-    /// custom property name.
+    /// Parses a token file, reporting every invalid token, duplicate custom
+    /// property name, and invalid root extension.
     pub(super) fn parse(source: &str) -> Result<Self, Vec<String>> {
         let root = match serde_json::from_str::<Json>(source) {
             Ok(Json::Object(root)) => root,
@@ -51,17 +56,8 @@ impl TokenSet {
         };
         let mut parser = Parser::default();
         parser.group(&root, &Scope::default());
-        let contrast = root
-            .get("$extensions")
-            .and_then(|extensions| extensions.get(CONTRAST_EXTENSION))
-            .map_or(Ok(Vec::new()), |groups| {
-                Vec::<ContrastGroup>::deserialize(groups)
-            })
-            .unwrap_or_else(|error| {
-                parser.errors.push(format!("{CONTRAST_EXTENSION}: {error}"));
-
-                Vec::new()
-            });
+        let contrast = Self::extension(&root, CONTRAST_EXTENSION, &mut parser.errors);
+        let font_faces = Self::extension(&root, FONT_FACE_EXTENSION, &mut parser.errors);
         parser.check_names();
         if !parser.errors.is_empty() {
             return Err(parser.errors);
@@ -69,8 +65,25 @@ impl TokenSet {
 
         Ok(Self {
             contrast,
+            font_faces,
             tokens: parser.tokens,
         })
+    }
+
+    /// Reads the list a root extension holds, empty when the file has none.
+    fn extension<T: DeserializeOwned>(
+        root: &Map<String, Json>,
+        name: &str,
+        errors: &mut Vec<String>,
+    ) -> Vec<T> {
+        root.get("$extensions")
+            .and_then(|extensions| extensions.get(name))
+            .map_or(Ok(Vec::new()), Vec::<T>::deserialize)
+            .unwrap_or_else(|error| {
+                errors.push(format!("{name}: {error}"));
+
+                Vec::new()
+            })
     }
 
     /// Returns the token at a dotted `path`, such as `color.bg`.
@@ -393,29 +406,47 @@ impl Color {
     }
 }
 
-/// Colour pairs that must keep a contrast ratio in every theme.
+/// Colour pairs that must reach a contrast ratio in every theme.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ContrastGroup {
     pub(super) backgrounds: Vec<String>,
     pub(super) foregrounds: Vec<String>,
     pub(super) minimum: f64,
-    #[serde(default)]
-    pub(super) shortfalls: Vec<Shortfall>,
     #[serde(rename = "use")]
     pub(super) usage: String,
 }
 
-/// A pair known to miss its group's minimum, with the measured ratio and why
-/// it stays.
-#[derive(Deserialize)]
+/// A self-hosted font face: a WOFF2 file and its licence text, both relative
+/// to the token file, and the copyright and licence notice that the
+/// stylesheet repeats.
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Shortfall {
-    pub(super) background: String,
-    pub(super) foreground: String,
-    pub(super) ratio: f64,
-    pub(super) reason: String,
-    pub(super) theme: String,
+pub(super) struct FontFace {
+    pub(super) family: String,
+    pub(super) license: String,
+    pub(super) notice: String,
+    pub(super) source: String,
+    pub(super) style: FontStyle,
+    pub(super) weight: u16,
+}
+
+/// The `font-style` of a font face.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum FontStyle {
+    Italic,
+    Normal,
+}
+
+impl FontStyle {
+    /// Returns the CSS keyword.
+    pub(super) fn css(self) -> &'static str {
+        match self {
+            Self::Italic => "italic",
+            Self::Normal => "normal",
+        }
+    }
 }
 
 /// Where the walk is in the token tree.

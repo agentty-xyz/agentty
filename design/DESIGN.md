@@ -2,10 +2,11 @@
 
 This guide describes how Agentty's web pages look and why. The values it names reach
 pages as CSS custom properties through `tokens.css`, which is generated from a token
-source in the W3C Design Tokens format. `base.css` holds the foundations and components
-that the pages share. Load `tokens.css` first, then `base.css`, then a page's own rules,
-and build every color, font, radius, shadow, and transition from the custom properties
-instead of writing values by hand.
+source in the W3C Design Tokens format. `fonts.css`, generated from the same source,
+embeds the self-hosted monospace face, and `base.css` holds the foundations and
+components that the pages share. Load `tokens.css` first, then `fonts.css`, then
+`base.css`, then a page's own rules, and build every color, font, radius, shadow, and
+transition from the custom properties instead of writing values by hand.
 
 ## Overview
 
@@ -49,7 +50,7 @@ the theme supplies the value.
 | `--color-accent`              | Links, the brand mark, primary actions                    |
 | `--color-accent-dim`          | Quieter accent: hover outlines, secondary links           |
 | `--color-on-accent`           | Text and icons on an accent fill                          |
-| `--color-border`              | Dividers and the outlines of panels                       |
+| `--color-border`              | Dividers and the outlines of panels, cards, and badges    |
 | `--color-border-strong`       | Outlines that must stand out: buttons, dialogs, fields    |
 | `--color-focus`               | Keyboard focus ring; also the hovered primary button fill |
 | `--color-error`               | Errors, destructive actions                               |
@@ -100,20 +101,23 @@ Never let color alone carry a state: always pair the dot with its label.
 
 ### Accessibility
 
-Text meets WCAG 2 AA contrast, 4.5:1, and focus rings, status dots, and outlines that
-identify a control meet 3:1, for every foreground and background pair the pages use, in
-both themes. These pairs fall short today:
+Every foreground and background pair the pages use meets WCAG 2 AA in both themes, with
+no exceptions:
 
-- In the green theme, `--color-dim` text on `--color-surface-raised` reaches only
-  4.41:1, and on `--color-surface-interactive` 4.01:1. Inside raised panels and on
-  selected rows, use `--color-muted` for anything people must read.
-- `--color-border` outlines fields at 1.4:1 to 2.0:1, and `--color-border-strong`
-  outlines them below 3:1 on `--color-surface` and `--color-surface-raised` in the dark
-  theme. Give a new field `--color-border-strong` on `--color-bg`, which passes in both
-  themes.
+- Text, including `--color-dim`, reaches 4.5:1 on `--color-bg`, `--color-surface`,
+  `--color-surface-raised`, and `--color-surface-interactive`. Labels on a primary
+  button reach 4.5:1 on both its fills.
+- Focus rings, status dots, and primary button fills reach 3:1 on every surface.
+- A form field's boundary is what identifies it, so outline every field in
+  `--color-border-strong`, which reaches 3:1 against `--color-bg`, `--color-surface`,
+  and `--color-surface-raised`, whichever is its fill or surrounds it. `--color-border`
+  is for dividers and the outlines of panels, cards, and badges, which WCAG does not
+  require to stand out; never outline a field with it.
 
-Keep the shared focus ring on every focusable element, follow the system's reduced
-motion setting, and give every page a skip link to its main content.
+The token source lists these pairs, and its check fails when any of them falls below its
+minimum, so a new color or a new pairing must pass before it lands. Keep the shared
+focus ring on every focusable element, follow the system's reduced motion setting, and
+give every page a skip link to its main content.
 
 ### Terminal Palette
 
@@ -154,19 +158,24 @@ green, review states info blue, and syncing and merging the full accent.
 
 ## Typography
 
-| Token         | Stack                                                                               |
-| ------------- | ----------------------------------------------------------------------------------- |
-| `--font-sans` | Inter, `ui-sans-serif`, `-apple-system`, BlinkMacSystemFont, Segoe UI, `sans-serif` |
-| `--font-mono` | Share Tech Mono, Courier New, `monospace`                                           |
+| Token         | Stack                                                                                               |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `--font-sans` | Inter, `ui-sans-serif`, `-apple-system`, BlinkMacSystemFont, Segoe UI, `sans-serif`                 |
+| `--font-mono` | Share Tech Mono, `ui-monospace`, SF Mono, SFMono-Regular, Menlo, Consolas, Courier New, `monospace` |
 
-- Share Tech Mono is a web font. Load it from Google Fonts
-  (`https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap`) with
-  `display=swap`, and preconnect to `fonts.googleapis.com` and `fonts.gstatic.com`.
-  Inter is not loaded: pages use it where it is installed and fall back to the system
+- Every page uses the same two stacks. Share Tech Mono is self-hosted: `fonts.css`
+  embeds its one face, weight 400, as a WOFF2 `data:` URI with `font-display: swap`,
+  after a comment with its copyright and SIL Open Font License notice, so it loads from
+  no other origin and works wherever the stylesheet is copied. System monospace faces
+  stand in until it loads. A page with a content security policy allows it with
+  `font-src data:`. The font file the token source names,
+  `fonts/ShareTechMono-Regular.woff2`, and its full licence, `fonts/OFL.txt`, are
+  exported beside this guide.
+- Inter is not loaded: pages use it where it is installed and fall back to the system
   sans-serif face.
-- A page that must load nothing from the network, such as one with a strict content
-  security policy, keeps the same token name but puts system monospace faces
-  (`ui-monospace`, SF Mono, Menlo, Consolas) before Courier New.
+- The documentation home page alone also uses Martian Mono, a display face for its hero
+  and glyph art, loaded from Google Fonts on that page only. No other page or component
+  uses it.
 - Body text is 1rem at line height 1.6 with `text-rendering: optimizeLegibility`. Lead
   paragraphs use `--color-muted` at about 1.1rem and line height 1.7, kept to 60ch.
 - Headings use the sans-serif stack at weight 600 to 700 with negative letter spacing,
@@ -257,11 +266,11 @@ Pages build these from the same tokens when they need them:
   `tokens.css`.
 - Do keep one primary action per view; don't fill several buttons with the accent.
 - Do pair every status color with a label; don't signal state by color alone.
-- Do use `--color-muted` for text people must read in raised panels; don't use
-  `--color-dim` there, which falls short of AA contrast in the green theme.
+- Do outline form fields with `--color-border-strong`; don't outline them with
+  `--color-border`, which is too faint to identify a control.
 - Do test both themes and keyboard focus; don't add a light theme without a design for
   every token.
 - Do keep motion short, `--transition-fast` for color and small movements, and honor
   reduced motion; don't animate layout or loop decoration other than live status.
-- Don't load images or scripts from other origins. Web fonts are the one exception, and
-  pages whose content security policy forbids them use the system stacks instead.
+- Don't load images, scripts, or fonts from other origins. Fonts come from `fonts.css`;
+  the home page's display face is the one exception.

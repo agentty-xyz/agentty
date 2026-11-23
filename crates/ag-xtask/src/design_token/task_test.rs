@@ -20,8 +20,14 @@ const MARK: &str = "<svg viewBox=\"0 0 24 24\" stroke=\"currentColor\"></svg>\n"
 /// Favicon bytes, which are not UTF-8.
 const ICON: [u8; 4] = [0, 0, 1, 0xff];
 
+/// WOFF2 file the fixture's font face names.
+const FONT: &str = "wOF2font";
+
+/// Licence of the fixture's font face.
+const LICENSE: &str = "Licence text.\n";
+
 /// Token file with one shared colour, one value for each generated surface,
-/// and a contrast pair that passes.
+/// a font face, and a contrast pair that passes.
 fn tokens() -> String {
     let white = json!({ "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" });
     let black = json!({ "colorSpace": "srgb", "components": [0, 0, 0], "hex": "#000000" });
@@ -37,6 +43,14 @@ fn tokens() -> String {
             "remote-client": { "font": { "mono": { "$type": "fontFamily", "$value": "monospace" } } }
         },
         "$extensions": {
+            "xyz.agentty.fontFaces": [{
+                "family": "Mono",
+                "style": "normal",
+                "weight": 400,
+                "source": "fonts/Mono.woff2",
+                "license": "fonts/OFL.txt",
+                "notice": "Copyright Mono."
+            }],
             "xyz.agentty.contrast": [{
                 "use": "Text",
                 "minimum": 4.5,
@@ -68,6 +82,8 @@ impl Fixture {
         };
         fixture.write("design/tokens.json", &tokens());
         fixture.write("design/base.css", BASE);
+        fixture.write("design/fonts/Mono.woff2", FONT);
+        fixture.write("design/fonts/OFL.txt", LICENSE);
         fixture.write(
             "docs/site/sass/site.scss",
             "a { color: var(--color-text); }\n",
@@ -198,15 +214,15 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
     assert_eq!(
         generated.as_deref(),
         Ok(
-            "Design token stylesheets generated (4 tokens; 6 hand-written stylesheets, scripts, \
-             and templates use no raw colour)."
+            "Design token stylesheets generated (tokens: 4, font faces: 1; 6 hand-written \
+             stylesheets, scripts, and templates use no raw colour)."
         )
     );
     assert_eq!(
         checked.as_deref(),
         Ok(
-            "Design token stylesheets are current (4 tokens; 6 hand-written stylesheets, scripts, \
-             and templates use no raw colour)."
+            "Design token stylesheets are current (tokens: 4, font faces: 1; 6 hand-written \
+             stylesheets, scripts, and templates use no raw colour)."
         )
     );
     assert_eq!(
@@ -224,6 +240,30 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
         fixture.file("docs/site/static/mark.svg").as_deref(),
         Some(MARK)
     );
+    let fonts = fixture
+        .file("design/fonts.css")
+        .expect("shared font stylesheet");
+    assert!(fonts.starts_with(
+        "/* Generated from tokens.json. Do not edit. */\n\n/*! Mono: Copyright Mono. \
+         */\n@font-face {\n  font-family: \"Mono\";\n"
+    ));
+    assert!(
+        fonts.contains("  src: url(\"data:font/woff2;base64,d09GMmZvbnQ=\") format(\"woff2\");\n")
+    );
+    for surface in [
+        "docs/site/sass/_fonts.scss",
+        "crates/ag-remote/assets/fonts.css",
+    ] {
+        assert_eq!(
+            fixture.file(surface),
+            Some(fonts.replacen(
+                "/* Generated from tokens.json. Do not edit. */",
+                "/* Generated from design/tokens.json by `cargo run -p ag-xtask -- \
+                 design-tokens`. Do not edit. */",
+                1
+            ))
+        );
+    }
     let copy = format!(
         "/* Generated from design/base.css by `cargo run -p ag-xtask -- design-tokens`. Do not \
          edit. */\n{BASE}"
@@ -319,10 +359,8 @@ fn raw_colours_contrast_failures_and_unknown_surfaces_fail_both_modes() {
     // Assert
     let expected = [
         "design/tokens.json: surface print has no generated stylesheet",
-        "green: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour or \
-         record a shortfall with its reason",
-        "dark: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour or \
-         record a shortfall with its reason",
+        "green: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour",
+        "dark: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour",
         "crates/ag-remote/assets/app.css:1: raw colour #fff; add it to design/tokens.json and use \
          its custom property",
         "crates/ag-remote/assets/app.js:2: raw colour #ff0000; add it to design/tokens.json and \
@@ -357,6 +395,60 @@ fn theme_color_metas_need_the_page_background_token() {
     ];
     assert_eq!(generated, expected);
     assert_eq!(checked, expected);
+}
+
+#[test]
+fn font_faces_that_cannot_be_embedded_fail_both_modes() {
+    // Arrange
+    let fixture = Fixture::new();
+    let mut tokens: serde_json::Value = serde_json::from_str(&tokens()).expect("fixture JSON");
+    tokens["$extensions"]["xyz.agentty.fontFaces"] = json!([
+        { "family": "Escape", "style": "italic", "weight": 400, "source": "../Mono.woff2", "license": "/OFL.txt", "notice": "Copyright." },
+        { "family": "Mono", "style": "normal", "weight": 400, "source": "fonts/OFL.txt", "license": "fonts/OFL.txt", "notice": "Copyright." }
+    ]);
+    fixture.write("design/tokens.json", &tokens.to_string());
+
+    // Act
+    let generated = fixture.errors(false);
+    let checked = fixture.errors(true);
+
+    // Assert
+    let expected = [
+        "design/tokens.json: font face Escape: ../Mono.woff2 must be a relative path inside the \
+         token file's directory",
+        "design/tokens.json: font face Escape: /OFL.txt must be a relative path inside the token \
+         file's directory",
+        "design/tokens.json: font face Mono: fonts/OFL.txt is not a WOFF2 file",
+    ];
+    assert_eq!(generated, expected);
+    assert_eq!(checked, expected);
+}
+
+#[test]
+fn unreadable_font_files_stop_generation() {
+    // Arrange
+    let mut font = Fixture::new();
+    font.failures.insert(
+        PathBuf::from("design/fonts/Mono.woff2"),
+        io::ErrorKind::PermissionDenied,
+    );
+    let mut license = Fixture::new();
+    license.failures.insert(
+        PathBuf::from("design/fonts/OFL.txt"),
+        io::ErrorKind::PermissionDenied,
+    );
+
+    // Act
+    let results = [font.run(false), license.run(true)];
+
+    // Assert
+    assert_eq!(
+        results.map(Result::err),
+        [
+            Some("Failed to read repo/design/fonts/Mono.woff2: denied".to_owned()),
+            Some("Failed to read repo/design/fonts/OFL.txt: denied".to_owned()),
+        ]
+    );
 }
 
 #[test]

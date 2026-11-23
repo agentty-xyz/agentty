@@ -137,8 +137,8 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
     assert!(current.status.success(), "{current:?}");
     assert!(
         String::from_utf8_lossy(&current.stdout).contains(
-            "Design token stylesheets are current (1 tokens; 5 hand-written stylesheets, scripts, \
-             and templates use no raw colour)."
+            "Design token stylesheets are current (tokens: 1, font faces: 0; 5 hand-written \
+             stylesheets, scripts, and templates use no raw colour)."
         ),
         "{current:?}"
     );

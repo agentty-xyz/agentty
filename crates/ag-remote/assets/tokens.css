@@ -8,7 +8,7 @@
   --color-accent: #4ae477;
   --color-accent-dim: #78b486;
   --color-muted: #6ca579;
-  --color-dim: #5b8c67;
+  --color-dim: #61966e;
   --color-border: #294b31;
   --color-border-strong: #447a4f;
   --color-focus: #9af4b3;
@@ -37,6 +37,6 @@
   --color-muted: #adadad;
   --color-dim: #919191;
   --color-border: #333333;
-  --color-border-strong: #5d5d5d;
+  --color-border-strong: #646464;
   --color-focus: #ffffff;
 }
