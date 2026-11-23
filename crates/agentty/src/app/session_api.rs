@@ -857,10 +857,10 @@ impl App {
                     .to_string(),
             ));
         }
-        if request.mode != CreateSessionMode::Harness && !self.services.has_agent_cli() {
+        // Without agent CLIs, regular and draft sessions start on the harness.
+        if !self.services.has_agent_cli() && !self.services.harness_availability().is_available() {
             return Err(ApiSessionError::Operation(
-                "No supported backend CLI found on `PATH`; only Harness sessions are available."
-                    .to_string(),
+                "No supported backend CLI found on `PATH`.".to_string(),
             ));
         }
         Ok(())

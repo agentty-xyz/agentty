@@ -28,7 +28,8 @@ use super::support::{
 use crate::app::AppEvent;
 use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate, PromptSessionMode};
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ReasoningLevel,
+    ResponseStyle, SpeedMode,
 };
 use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
@@ -793,16 +794,29 @@ fn test_handle_paste_inserts_multiline_content_with_normalized_newlines() {
 }
 
 #[tokio::test]
-async fn test_model_command_in_harness_session_opens_refreshed_harness_models() {
+async fn test_model_command_choosing_ag_harness_opens_refreshed_harness_models() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
     crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        *slash_state = PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness]);
+        *slash_state = PromptSlashState::with_available_agent_kinds(vec![
+            AgentKind::Codex,
+            AgentKind::Harness,
+        ]);
     }
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
+    let opened_stage = match &mut app.mode {
+        AppMode::Prompt { slash_state, .. } => {
+            let stage = slash_state.stage;
+            slash_state.selected_index = 1;
+
+            Some(stage)
+        }
+        _ => None,
+    };
     run_prompt_slash_submit(&mut app, &prompt_context).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -816,6 +830,7 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
     }).await.expect("harness model refresh should finish");
 
     // Assert
+    assert_eq!(opened_stage, Some(PromptSlashStage::Agent));
     let AppMode::Prompt { slash_state, .. } = &app.mode else {
         unreachable!("expected AppMode::Prompt");
     };
@@ -829,6 +844,63 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
             .collect::<Vec<_>>(),
         vec![AgentModel::KimiK3]
     );
+}
+
+#[tokio::test]
+async fn test_report_unavailable_model_effect_appends_error_notice() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let notice = "`kimi-k3` needs `KIMI_API_KEY`. Set it before starting Agentty.";
+
+    // Act
+    apply_prompt_effects(
+        &mut app,
+        &prompt_context,
+        vec![PromptEffect::ReportUnavailableModel(notice.to_string())],
+    )
+    .await;
+
+    // Assert
+    app.sessions.sync_from_handles();
+    assert!(session_replay_text(&app.sessions.sessions()[0]).contains(notice));
+}
+
+#[test]
+fn test_model_slash_submit_on_unavailable_row_reports_what_it_needs() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("/model");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
+        *slash_state = PromptSlashState {
+            harness_models: vec![HarnessModelOption {
+                status: HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+                ..crate::test_support::ready_harness_model(AgentModel::KimiK3)
+            }],
+            selected_agent: Some(AgentKind::Harness),
+            selected_index: 1,
+            stage: PromptSlashStage::Model,
+            ..PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness])
+        };
+    }
+
+    // Act
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Enter);
+
+    // Assert — the slash menu closes so the notice shows, and no model
+    // change is requested.
+    let AppMode::Prompt {
+        input, slash_state, ..
+    } = &mode
+    else {
+        unreachable!("expected AppMode::Prompt");
+    };
+    assert_eq!(input.text(), "");
+    assert_eq!(slash_state.stage, PromptSlashStage::Command);
+    assert!(matches!(
+        effects.as_slice(),
+        [PromptEffect::ReportUnavailableModel(notice)]
+            if notice == "`kimi-k3` needs `KIMI_API_KEY`. Set it before starting Agentty."
+    ));
 }
 
 #[test]

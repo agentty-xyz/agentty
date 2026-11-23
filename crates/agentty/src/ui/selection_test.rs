@@ -11,7 +11,6 @@ use ratatui::widgets::TableState;
 
 use crate::app::Tab;
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{Project, ProjectListItem};
 use crate::domain::session::Status;
 use crate::domain::theme::ColorTheme;
@@ -56,8 +55,7 @@ fn option_highlights_follow_selection_across_themes_and_widths() {
                 let confirmation = ConfirmationOverlay::new("Choose", "Select an option")
                     .option_labels("Alpha", "Beta")
                     .selected_first(selected_index == 0);
-                let creation =
-                    SessionCreationOverlay::new(selected_index, HarnessAvailability::Hidden, true);
+                let creation = SessionCreationOverlay::new(selected_index, true);
                 let info = InfoOverlay::new("Notice", "Ready");
                 let suggestions = SuggestionList {
                     items: commands

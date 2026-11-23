@@ -270,7 +270,7 @@ work; it does not submit an empty reply.
 | Project status and forge refresh    | Startup, project switch, periodic refresh |
 | Agentty update                      | Startup and hourly                        |
 | Agent CLI discovery and update      | Startup                                   |
-| Harness model listing               | Session picker or Harness `/model`        |
+| Harness model listing               | Session picker or `ag-harness` `/model`   |
 | `ChatGPT` plan sign-in              | Composer sign-in popup                    |
 | Project discovery                   | Accepted discovery suggestion             |
 | Worktree preparation and cleanup    | Session lifecycle                         |

@@ -185,8 +185,9 @@ finished sessions keep their historical model.
 
 ### Harness Models
 
-Available only in [Harness sessions](@/docs/agents/backends.md#backends-harness),
-alongside local models stored as `openai-compatible/<model>`:
+Listed under `ag-harness` in `/model` when the
+[preview harness](@/docs/agents/backends.md#backends-harness) is enabled, alongside
+local models stored as `openai-compatible/<model>`:
 
 - Muse: `muse-spark-1.3` and the discounted `muse-spark-1.3-contributor`.
 - Kimi: `kimi-k3` (latest) and `kimi-k2.6`.
@@ -220,10 +221,10 @@ control. See the provider guides for
 <a id="backends-switching-default-model"></a> Session changes do not alter project
 defaults; change those in [Settings](@/docs/usage/workflow.md#settings-scope).
 
-## Harness Sessions (Preview)
+## Harness Agent (Preview)
 
 <a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
-a **Harness** session type that runs Agentty's built-in agent loop instead of an
+an **ag-harness** agent to `/model`. It runs Agentty's built-in agent loop instead of an
 external CLI, against a free local model server or a paid hosted provider:
 
 | Provider     | Cost | Key                                  | Endpoint                              |
@@ -239,9 +240,9 @@ external CLI, against a free local model server or a paid hosted provider:
 Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
 `KIMI_BASE_URL` to use another, such as `https://api.moonshot.cn/v1`.
 
-Without the flag the session type is hidden; with it but no runnable model, it is shown
-disabled. With a runnable model, Agentty starts even when no backend CLI is installed,
-disabling the other session types.
+Without the flag `ag-harness` is hidden. With the flag and a runnable model, Agentty
+starts even when no backend CLI is installed, and new sessions then start on the harness
+model.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
   unsandboxed `bash`, which can reach the network and paths outside the worktree.
@@ -277,24 +278,29 @@ disabling the other session types.
 <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
 Model** also lists every ready harness model with its price class, such as
 `harness/qwen3.8-flash · cheap`, to run commit messages and titles for every session
-type, and to summarize long Harness sessions when it has structured output, which this
+type, and to summarize long harness sessions when it has structured output, which this
 Qwen example lacks. Agentty never picks a harness model for this itself; while the
 chosen model is not ready, or without the flag, the Fast default falls back as if unset.
 
 ### Choosing a Model
 
-<a id="backends-harness-model"></a> In a Harness session, `/model` lists only harness
-models: local models first, marked `[local]`, then hosted models marked `[paid]` with
-their price class, with OpenAI and Claude models last:
+<a id="backends-harness-model"></a> In any session, `/model` lists `ag-harness` after
+the installed agent CLIs. Choosing it lists every harness model: local models first,
+marked `[local]` with their server and context window, then hosted models marked
+`[paid]` with the same descriptions as the other agents' models, with OpenAI and Claude
+models last:
 
 ```text
-[local] qwen3:latest              free · Ollama · runs 32k ctx
-[local] gemma:latest              free · Ollama · no tool calls
-[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
-[paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
-[paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
-[paid] claude-opus-5-5            premium · Anthropic · needs ANTHROPIC_API_KEY
+[local] qwen3:latest              Ollama · runs 32k ctx
+[local] gemma:latest              Ollama · no tool calls
+[paid] muse-spark-1.3-contributor Cheap Muse Spark tier; Meta may train on its prompts…
+[paid] kimi-k3                    Latest Kimi model served through the native harness.
+[paid] gpt-6.1-sol                Near-Astra Codex model for complex work at a lower cost.
+[paid] claude-opus-5-5            Latest Claude Opus model for complex agentic tasks.
 ```
+
+Switching a session between `ag-harness` and a CLI agent keeps the conversation: the
+next turn replays the session transcript to the new agent.
 
 Price classes follow each provider's list price per million output tokens: `cheap` is at
 most $2.50, `premium` at least $15, and `standard` in between. The cheap models,
@@ -303,16 +309,18 @@ most $2.50, `premium` at least $15, and `standard` in between. The cheap models,
 messages. Meta may train on prompts and completions sent to
 `muse-spark-1.3-contributor`.
 
-Rows that cannot run a turn, such as a model without tool calls or a provider without
-its key, say what is missing and cannot be selected. The list refreshes each time you
-open it, so newly pulled models and started servers appear without a restart.
+Pressing `Enter` on a row that cannot run a turn, such as a model without tool calls or
+a provider without its key, keeps the current model and shows what is missing, such as
+`` `kimi-k3` needs `KIMI_API_KEY` ``. The list refreshes each time you open it, so newly
+pulled models and started servers appear without a restart.
 
-The model you pick becomes the default for new Harness sessions; it never changes the
-project default for other session types. Until you pick one, new sessions prefer a ready
-local model, then the first ready paid model in list order, so an exported API key, such
-as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other tools, never makes a paid
-provider the default. A remembered local model stays the default while its server is
-stopped; a remembered paid model whose key is gone gives way to the next ready model.
+The harness model you pick never changes the project default model. It becomes the model
+new sessions start on when no backend CLI is installed. Until you pick one, those
+sessions prefer a ready local model, then the first ready paid model in list order, so
+an exported API key, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other
+tools, never makes a paid provider the default. A remembered local model stays the
+default while its server is stopped; a remembered paid model whose key is gone gives way
+to the next ready model.
 
 ### OpenAI Models
 
@@ -322,7 +330,7 @@ Platform API key:
 
 ```sh
 export OPENAI_API_KEY=sk-...
-agentty --experimental-harness   # then choose a gpt-* model in the Harness /model list
+agentty --experimental-harness   # then choose a gpt-* model under ag-harness in /model
 ```
 
 - Usage is billed to the key's organization. To use a ChatGPT subscription instead, pick
@@ -345,12 +353,10 @@ API credits. Sign in once; the harness stores and refreshes the sign-in in
 
 ```sh
 ag-harness login chatgpt
-agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /model list
+agentty --experimental-harness   # then choose a chatgpt/ model under ag-harness in /model
 ```
 
-- The rows show `plan` instead of a price class, and `needs ag-harness login chatgpt`
-  until you sign in or after OpenAI revokes the sign-in. Usage counts against your
-  plan's limits.
+- Usage counts against your plan's limits.
 - Pressing `Enter` on such a row, or sending a prompt on a signed-out `chatgpt/` model,
   opens a sign-in popup that opens your browser and then switches the session to the
   model.
@@ -365,14 +371,14 @@ Messages API with a Claude Console API key:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-agentty --experimental-harness   # then choose a claude-* model in the Harness /model list
+agentty --experimental-harness   # then choose a claude-* model under ag-harness in /model
 ```
 
 - Usage is billed to the key's Console organization at API rates, never to a Claude
   subscription.
-- A Harness session and a **Claude** session share these model names but not their
-  backend: the Harness session always uses `ANTHROPIC_API_KEY` and the Claude session
-  always uses the `claude` CLI; neither falls back to the other.
+- `ag-harness` and the **claude** agent share these model names and descriptions but not
+  their backend: `ag-harness` rows, badged `[paid]`, always use `ANTHROPIC_API_KEY`, and
+  `claude` rows always use the `claude` CLI; neither falls back to the other.
 - `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com/v1`) selects another Messages
   API endpoint.
 - Each request resends the session history, billed at Anthropic's cache-read rate where

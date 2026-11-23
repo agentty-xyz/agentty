@@ -72,7 +72,7 @@ async fn prompt_slash_state_offers_graph_by_default() {
     let (app, _base_dir) = crate::test_support::new_test_app().await;
 
     // Act
-    let slash_state = app.prompt_slash_state("session");
+    let slash_state = app.prompt_slash_state();
 
     // Assert
     assert_eq!(slash_state.graph, PromptGraphState::Available);

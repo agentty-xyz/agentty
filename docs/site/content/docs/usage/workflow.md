@@ -298,9 +298,10 @@ Unavailable types are shown muted.
 - **Regular**: The first `Enter` starts work.
 - **Draft**: Each `Enter` stages a message; `s` starts them together and creates the
   worktree from the current base branch.
-- **Harness** `[Preview]`: A regular session run by Agentty's built-in agent loop,
-  offered only with `--experimental-harness`; see
-  [Harness Sessions](@/docs/agents/backends.md#backends-harness).
+
+With `--experimental-harness`, any session can switch to Agentty's built-in agent loop
+by choosing `ag-harness` in `/model`; see
+[Harness Agent](@/docs/agents/backends.md#backends-harness).
 
 The orchestrator session type is retired. Former controllers and their children remain
 independent sessions with transcripts and workspaces intact; pending campaign work is
@@ -468,14 +469,14 @@ this activity. Provider failures show a short error and captured output where av
 command picker. From session view, `/` opens a fresh composer, replacing any saved
 draft.
 
-| Command      | Action                                                       |
-| ------------ | ------------------------------------------------------------ |
-| `/apply`     | Verify and apply valid focused-review suggestions.           |
-| `/graph`     | Request a graph proposal.                                    |
-| `/model`     | Choose a backend and model; local or paid models in Harness. |
-| `/reasoning` | Set reasoning effort for this session.                       |
-| `/style`     | Choose concise, balanced, or detailed answers.               |
-| `/fast`      | Toggle normal or fast responses for Claude or Codex.         |
+| Command      | Action                                                     |
+| ------------ | ---------------------------------------------------------- |
+| `/apply`     | Verify and apply valid focused-review suggestions.         |
+| `/graph`     | Request a graph proposal.                                  |
+| `/model`     | Choose a backend and model, including `ag-harness` models. |
+| `/reasoning` | Set reasoning effort for this session.                     |
+| `/style`     | Choose concise, balanced, or detailed answers.             |
+| `/fast`      | Toggle normal or fast responses for Claude or Codex.       |
 
 `/apply` requires a completed focused review. Chat turns always run with editing
 permissions; see [Permissions](@/docs/agents/backends.md#permissions).

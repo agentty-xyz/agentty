@@ -170,7 +170,7 @@ async fn open_session_creation_flow(app: &mut App) {
         return;
     }
 
-    app.mode = key_handler::session_creation_mode(app);
+    app.mode = key_handler::session_creation_mode();
 }
 
 /// Handles `Enter` in list mode and triggers the selected tab primary action.

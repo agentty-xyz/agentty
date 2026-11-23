@@ -31,27 +31,20 @@ impl App {
 
     /// Builds prompt slash-menu state for one session.
     ///
-    /// Harness sessions offer only the cached Harness models; other sessions
-    /// use the cached machine-scoped agent availability snapshot.
-    pub(crate) fn prompt_slash_state(
-        &self,
-        session_id: &str,
-    ) -> crate::presentation::prompt::PromptSlashState {
-        let is_harness_session = self
-            .sessions
-            .session_for_id(session_id)
-            .is_some_and(|session| session.agent.kind() == AgentKind::Harness);
-        let available_agent_kinds = if is_harness_session {
-            vec![AgentKind::Harness]
-        } else {
-            self.services.available_agent_kinds()
-        };
+    /// `/model` offers the cached machine-scoped agent CLIs, followed by the
+    /// in-process harness and its cached models when the launch offers it.
+    pub(crate) fn prompt_slash_state(&self) -> crate::presentation::prompt::PromptSlashState {
+        let mut available_agent_kinds = self.services.available_agent_kinds();
+        let offers_harness = self.services.harness_availability().is_visible();
+        if offers_harness {
+            available_agent_kinds.push(AgentKind::Harness);
+        }
 
         let mut slash_state =
             crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
                 available_agent_kinds,
             );
-        if is_harness_session {
+        if offers_harness {
             slash_state.harness_models = self.services.harness_model_options();
         }
 

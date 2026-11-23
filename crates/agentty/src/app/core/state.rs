@@ -726,7 +726,7 @@ impl App {
             attachment_state: crate::presentation::prompt::PromptAttachmentState::default(),
             focus: ChatFocus::Input,
             history_state: crate::presentation::prompt::PromptHistoryState::new(Vec::new()),
-            slash_state: self.prompt_slash_state(&session_id),
+            slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
             input: InputState::default(),
             scroll_offset: None,

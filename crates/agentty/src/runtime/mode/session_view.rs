@@ -778,7 +778,7 @@ async fn switch_view_to_prompt(
         attachment_state: PromptAttachmentState::default(),
         focus: ChatFocus::Input,
         history_state,
-        slash_state: app.prompt_slash_state(&view_context.session_id),
+        slash_state: app.prompt_slash_state(),
         session_id: view_context.session_id.clone(),
         input,
         scroll_offset,

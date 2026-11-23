@@ -65,8 +65,8 @@ dispatch through the public API.
    `crates/ag-router/tests/`.
 1. Expose it through `ag-harness` configuration only if the harness supports its
    capabilities.
-1. To offer it in Agentty Harness sessions, add it to the `Harness` entries of the
-   `ag-session` model catalog. `ag-agent` registers it from its `ag-harness`
+1. To offer it under `ag-harness` in Agentty's `/model`, add it to the `Harness` entries
+   of the `ag-session` model catalog. `ag-agent` registers it from its `ag-harness`
    `ModelSpec`; declare a `ModelProfile` in `ag-agent` only when that specification has
    none.
 

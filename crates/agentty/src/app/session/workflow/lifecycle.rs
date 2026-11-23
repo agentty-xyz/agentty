@@ -3308,7 +3308,10 @@ impl SessionManager {
             .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
             .await?;
         let speed_mode = setting::normalized_speed_mode(agent, speed_mode);
-        self.default_session_model = agent.model();
+        // Harness models never become CLI defaults for later sessions.
+        if agent.kind() != AgentKind::Harness {
+            self.default_session_model = agent.model();
+        }
 
         Ok(SessionCreationSettings {
             agent,
@@ -3319,11 +3322,20 @@ impl SessionManager {
     }
 
     /// Resolves the default agent/model selection for a new session.
+    ///
+    /// A launch without agent CLIs starts sessions on the harness model
+    /// [`AppServices::harness_availability`] names, when it offers one.
     async fn resolve_default_session_agent(
         &self,
         services: &AppServices,
         project_id: i64,
     ) -> AgentSelection {
+        if !services.has_agent_cli()
+            && let Some(harness_model) = services.harness_availability().default_model()
+        {
+            return AgentSelection::new(AgentKind::Harness, harness_model);
+        }
+
         let available_agent_kinds = services.available_agent_kinds();
         let fallback_agent_kind = available_agent_kinds
             .first()

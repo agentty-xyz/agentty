@@ -1,4 +1,4 @@
-//! Preview Harness sessions behind `--experimental-harness`.
+//! Preview `ag-harness` models in `/model` behind `--experimental-harness`.
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use serde_json::json;
 use testty::assertion;
-use testty::frame::CellColor;
 use testty::journey::Journey;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
@@ -140,12 +139,10 @@ async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("[Preview] Built-in agent", 5000)
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
                     .write_text("Create notes")
                     .wait_for_text("Create notes", 3000)
                     .press_key("Enter")
@@ -272,12 +269,10 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("[Preview] Built-in agent", 5000)
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
                     .write_text("Inspect the notes")
                     .wait_for_text("Inspect the notes", 3000)
                     .press_key("Enter")
@@ -338,12 +333,10 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("[Preview] Built-in agent", 5000)
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
                     .write_text("Create notes")
                     .wait_for_text("Create notes", 3000)
                     .press_key("Enter")
@@ -375,7 +368,7 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
 }
 
 #[tokio::test]
-async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
+async fn test_ag_harness_is_hidden_from_model_picker_without_flag() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("harness_hidden")
         .with_git()
@@ -387,13 +380,23 @@ async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
                     .wait_for_text("Stage locally first", 5000)
-                    .capture_labeled("session_types", "Session types without Harness")
+                    .capture_labeled("session_types", "Session types")
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .capture_labeled("model_agents", "Model agents without ag-harness")
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Draft", &full);
-                    assertion::assert_not_visible(frame, "Harness");
+                    assertion::assert_not_visible(frame, "ag-harness");
+                    let session_types = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_text_in_region(&session_types, "Draft", &full);
+                    assertion::assert_not_visible(&session_types, "Harness");
                 })
             },
         )
@@ -417,7 +420,7 @@ fn git_only_path() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
+async fn test_harness_only_launch_starts_regular_sessions_on_harness() -> E2eResult {
     // Arrange
     let server = scripted_provider().await;
     let git_directory = git_only_path()?;
@@ -437,8 +440,8 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
-                    .capture_labeled("harness_only_types", "Only Harness is selectable")
+                    .wait_for_text("Start immediately", 5000)
+                    .capture_labeled("harness_only_types", "Session types run on the harness")
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text("Create notes")
@@ -476,45 +479,6 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
         .await
 }
 
-/// Verify that creation options disabled without an agent CLI use readable
-/// gray in the default theme.
-#[tokio::test]
-async fn session_creation_default_theme_disabled_options() -> E2eResult {
-    // Arrange
-    let git_directory = git_only_path()?;
-
-    // Act, Assert
-    FeatureTest::new("session_creation_default_theme_disabled_options")
-        .env("NO_COLOR", "")
-        .with_git()
-        .with_stub_only_path()
-        .env("PATH", git_directory.path().to_string_lossy())
-        .args(["--experimental-harness".to_string()])
-        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
-        .env("MODEL_API_KEY", "test-key")
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
-                    .wait_for_stable_frame(300, 5000)
-            },
-            |frame, _report| {
-                Box::pin(async move {
-                    let disabled_color = CellColor::new(192, 192, 192);
-                    for text in ["Regular", "Install an agent CLI"] {
-                        assertion::assert_text_has_fg_color(frame, text, &disabled_color);
-                        assertion::assert_text_has_bg_color(frame, text, &CellColor::black());
-                    }
-                    assertion::assert_span_is_highlighted(frame, "Harness");
-                })
-            },
-        )
-        .await
-}
-
 #[tokio::test]
 async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eResult {
     // Arrange
@@ -540,7 +504,7 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text("Create notes")
@@ -687,7 +651,7 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text("Create notes")
@@ -881,7 +845,7 @@ async fn test_harness_session_runs_on_claude_with_an_api_key() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     // The only ready model is the first Claude one.
                     .wait_for_text("harness/claude-fable-5-2", 5000)
@@ -916,15 +880,18 @@ async fn test_harness_session_runs_on_claude_with_an_api_key() -> E2eResult {
                         .split_whitespace()
                         .collect::<Vec<_>>()
                         .join(" ");
+                    // Claude rows read like the `claude` agent's, without
+                    // the key an unconfigured provider needs.
                     for row in [
-                        "[paid] gpt-6.1-sol standard · OpenAI · needs OPENAI_API_KEY",
-                        "[paid] claude-fable-5-2 premium · Anthropic · 976k ctx",
-                        "[paid] claude-opus-5-5 premium · Anthropic · 976k ctx",
-                        "[paid] claude-sonnet-5-5 standard · Anthropic · 976k ctx",
-                        "[paid] claude-haiku-5-5 cheap · Anthropic · 976k ctx",
+                        "[paid] gpt-6.1-sol Near-Astra Codex model",
+                        "[paid] claude-fable-5-2 Claude Fable model",
+                        "[paid] claude-opus-5-5 Latest Claude Opus model",
+                        "[paid] claude-sonnet-5-5 Balanced Claude model",
+                        "[paid] claude-haiku-5-5 Fast Claude model",
                     ] {
                         assert!(picker_text.contains(row), "{row} in {picker_text}");
                     }
+                    assert!(!picker_text.contains("OPENAI_API_KEY"), "{picker_text}");
                 })
             },
         )
@@ -984,20 +951,38 @@ async fn local_ollama() -> MockServer {
     server
 }
 
-/// Opens the in-chat `/model` picker of a Harness session.
+/// Opens the in-chat `/model` picker on the `ag-harness` model list.
 fn open_model_picker() -> Journey {
     Journey::new("open_harness_model_picker")
-        .with_description("Type /model and open the harness model list")
+        .with_description("Type /model, choose ag-harness, and open its model list")
         .step(Step::press_key("/"))
         .step(Step::write_text("model"))
         .step(Step::wait_for_text("Slash Command", 3000))
         .step(Step::press_key("Enter"))
-        .step(Step::wait_for_text("/model Harness model", 3000))
+        .step(Step::wait_for_text("ag-harness", 3000))
+        // `ag-harness` closes the agent list, so step back from its top.
+        .step(Step::press_key("k"))
+        .step(Step::press_key("Enter"))
+        .step(Step::wait_for_text("/model Model", 3000))
 }
 
-/// Asserts the picker labels local rows free, paid rows with their price
-/// class, and ChatGPT-plan rows `plan` with the sign-in they need, and that
-/// `Enter` on a model without tool calls keeps the picker open.
+/// Switches a new session from its agent CLI to the harness Muse model, the
+/// second row after the no-local-models hint.
+fn switch_to_harness_muse_model() -> Journey {
+    let mut journey = open_model_picker();
+    journey.name = "switch_to_harness_muse_model".to_string();
+
+    journey
+        .with_description("Switch the session to ag-harness muse-spark-1.3 through /model")
+        .step(Step::wait_for_text("muse-spark-1.3", 3000))
+        .step(Step::press_key("j"))
+        .step(Step::press_key("Enter"))
+        .step(Step::wait_for_text("harness/muse-spark-1.3", 3000))
+}
+
+/// Asserts the picker badges local and paid rows, describes paid rows like
+/// every other agent's models without what they still need, and that `Enter`
+/// on a model without tool calls explains why it cannot run.
 fn assert_picker_captures(report: &ProofReport, full: Region) {
     // Rows pad labels into a column, so compare words.
     let picker_text = common::frame_from_capture(&report.captures[0])
@@ -1006,18 +991,19 @@ fn assert_picker_captures(report: &ProofReport, full: Region) {
         .collect::<Vec<_>>()
         .join(" ");
     for row in [
-        "[local] qwen3:latest free · Ollama · runs 32k ctx",
-        "[local] gemma:latest free · Ollama · no tool calls",
-        "[paid] muse-spark-1.3 standard · Muse",
-        "[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts",
-        "[paid] kimi-k3 premium · Kimi · needs KIMI_API_KEY",
-        "[paid] qwen3.8-flash cheap · Qwen · needs DASHSCOPE_API_KEY",
-        "[paid] chatgpt/gpt-6.1-sol plan · ChatGPT plan · needs",
+        "[local] qwen3:latest Ollama · runs 32k ctx",
+        "[local] gemma:latest Ollama · no tool calls",
+        "[paid] muse-spark-1.3 Muse Spark model",
+        "[paid] muse-spark-1.3-contributor Cheap Muse Spark tier",
+        "[paid] kimi-k3 Latest Kimi model",
+        "[paid] qwen3.8-flash Cheap Qwen model",
+        "[paid] chatgpt/gpt-6.1-sol GPT-6.1 Sol billed",
     ] {
         assert!(picker_text.contains(row), "{row} in {picker_text}");
     }
+    assert!(!picker_text.contains("needs"), "{picker_text}");
     let gemma = common::frame_from_capture(&report.captures[1]);
-    assertion::assert_text_in_region(&gemma, "/model Harness model", &full);
+    assertion::assert_text_in_region(&gemma, "does not support tool calls", &full);
 }
 
 #[tokio::test]
@@ -1048,7 +1034,7 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     // A paid key is set, yet new sessions start on the free
                     // local model.
@@ -1059,8 +1045,10 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
                     // Rows: qwen3, gemma, muse-spark-1.3, kimi-k3, ...
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 3000)
-                    .capture_labeled("gemma_not_selectable", "A model without tools stays")
+                    .wait_for_text("does not support tool calls", 3000)
+                    .capture_labeled("gemma_not_selectable", "A model without tools explains why")
+                    .compose(&open_model_picker())
+                    .press_key("j")
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("harness/muse-spark-1.3", 3000)
@@ -1151,27 +1139,34 @@ async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .wait_for_text("harness/openai-compatible/qwen3:latest", 5000)
                     .compose(&open_model_picker())
                     .wait_for_text("kimi-k3", 3000)
-                    .wait_for_stable_frame(300, 3000)
-                    .capture_labeled("kimi_ready", "Kimi ready with only its API key")
+                    .capture_labeled("kimi_row", "Kimi listed with the harness models")
+                    // Rows: qwen3, gemma, two Muse models, then kimi-k3.
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("harness/kimi-k3", 3000)
             },
-            |_frame, report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/kimi-k3", &full);
+                    assertion::assert_not_visible(frame, "KIMI_BASE_URL");
                     let picker_text = common::frame_from_capture(&report.captures[0])
                         .all_text()
                         .split_whitespace()
                         .collect::<Vec<_>>()
                         .join(" ");
                     assert!(
-                        picker_text.contains("[paid] kimi-k3 premium · Kimi"),
+                        picker_text.contains("[paid] kimi-k3 Latest Kimi model"),
                         "{picker_text}"
                     );
-                    assert!(!picker_text.contains("KIMI_BASE_URL"), "{picker_text}");
-                    assert!(!picker_text.contains("needs KIMI_API_KEY"), "{picker_text}");
                 })
             },
         )
@@ -1264,7 +1259,7 @@ async fn test_harness_fast_model_writes_commit_messages_on_a_cheap_model() -> E2
                     .wait_for_text("harness/qwen3.8-flash [", 3000)
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .wait_for_text("harness/muse-spark-1.3", 5000)
                     .write_text("Create notes")
@@ -1398,7 +1393,7 @@ async fn test_harness_model_picker_signs_in_with_chatgpt() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .wait_for_text("harness/muse-spark-1.3", 5000)
                     .compose(&open_model_picker())
@@ -1572,12 +1567,10 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("[Preview] Built-in agent", 5000)
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
                     .write_text(STREAM_PROMPT)
                     .wait_for_text(STREAM_PROMPT, 3000)
                     .press_key("Enter")
@@ -1722,7 +1715,7 @@ async fn test_harness_session_notes_when_it_compacts_its_context() -> E2eResult 
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Install an agent CLI", 5000)
+                    .wait_for_text("Start immediately", 5000)
                     .press_key("Enter");
                 for number in 1..=COMPACTION_TURNS {
                     let question = format!("Question {number}");
