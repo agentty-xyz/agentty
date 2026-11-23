@@ -40,6 +40,7 @@ fn session() -> Session {
     Session {
         created_at: 1,
         draft_prompt: None,
+        focused_review: None,
         id: "12345678-owner".into(),
         messages: Vec::new(),
         progress: None,

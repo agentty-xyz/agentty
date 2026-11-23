@@ -16,9 +16,9 @@ use ag_session::{
     ForgeKind, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
     HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError,
-    SessionFileEntry, SessionId, SessionListEntry, SessionListStats, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, SessionSummary,
+    SessionFileEntry, SessionFocusedReview, SessionId, SessionListEntry, SessionListStats,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionSettingsChange, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -700,7 +700,8 @@ impl SessionBackend for RecordingBackend {
 
 /// Builds a session with `queued_messages` waiting behind its turn.
 /// `session-2` runs a turn after an activity summary and a notice; any
-/// other session has a hidden prompt, an answer, and one question.
+/// other session has a hidden prompt, an answer, one question, and a
+/// finished focused review.
 fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
     let is_running = session_id.as_str() == "session-2";
     let (messages, questions, status, title) = if is_running {
@@ -741,6 +742,9 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
     Session {
         created_at: 10,
         draft_prompt: None,
+        focused_review: (!is_running).then(|| SessionFocusedReview::Ready {
+            text: "### Suggestions\n- Add a test".to_string(),
+        }),
         id: session_id.clone(),
         messages,
         progress: None,

@@ -69,8 +69,9 @@ pub use message::{
 };
 pub use model::{
     ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
-    ReviewRequestSummary, Session, SessionId, SessionListEntry, SessionListStats, SessionSettings,
-    SessionStatus, SessionSummary, SpeedMode, activity_day_key_with_offset, session_branch,
+    ReviewRequestSummary, Session, SessionFocusedReview, SessionId, SessionListEntry,
+    SessionListStats, SessionSettings, SessionStatus, SessionSummary, SpeedMode,
+    activity_day_key_with_offset, session_branch,
 };
 pub use project::{
     Project, ProjectListItem, mru_project_order, ordered_project_items, project_name_from_path,

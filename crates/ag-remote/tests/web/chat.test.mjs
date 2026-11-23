@@ -50,6 +50,7 @@ const ELEMENT_IDS = {
   diff: "diff",
   dock: "dock",
   draftPreview: "draft-preview",
+  focusedReview: "focused-review",
   gone: "session-gone",
   goneHome: "session-gone-home",
   heading: "heading",
@@ -2646,6 +2647,102 @@ test("a draft session previews its staged messages as text, and a started one do
   chat.render(session({ ...draft, draft_prompt: hostile }));
   chat.close();
   assert.equal(preview.hidden, true);
+});
+
+test("a finished focused review renders under the transcript as an answer does", () => {
+  const { byId, chat } = mountChat();
+  const text = "### Suggestions\n- Add a `test` <img src=x onerror=alert(1)>";
+
+  chat.render(session({ focused_review: { state: "ready", text: text } }));
+
+  const block = byId("focused-review");
+  assert.equal(block.hidden, false);
+  assert.equal(block.className, "focused-review");
+  const column = Array.from(byId("chat-scroll").querySelector(".chat-column").children);
+  assert.deepEqual(
+    column.slice(column.indexOf(byId("transcript")), column.indexOf(byId("status-line")) + 1),
+    [byId("transcript"), block, byId("status-line")],
+  );
+  assert.equal(block.querySelector(".eyebrow").textContent, "Focused review");
+  const body = block.querySelector(".focused-review-body");
+  assert.equal(body.querySelector(".md h3").textContent, "Suggestions");
+  assert.equal(body.querySelector(".md code").textContent, "test");
+  assert.equal(body.querySelector("img"), null);
+  assert.equal(body.querySelector(".md-source").textContent, text);
+  assert.equal(body.querySelector(".md-source").hidden, true);
+  const toggle = body.querySelector(".source-toggle");
+  toggle.click();
+  assert.deepEqual(
+    [body.querySelector(".md").hidden, body.querySelector(".md-source").hidden, toggle.textContent],
+    [true, false, "View rendered"],
+  );
+});
+
+test("a focused review keeps its node and source view until it changes, then hides", () => {
+  const { byId, chat } = mountChat();
+  chat.render(session({ focused_review: { state: "ready", text: "**First**" } }));
+  const block = byId("focused-review");
+  const body = block.querySelector(".focused-review-body");
+  body.querySelector(".source-toggle").click();
+
+  chat.render(session({ focused_review: { state: "ready", text: "**First**" }, updated_at: 11 }));
+  assert.equal(block.querySelector(".focused-review-body"), body);
+
+  chat.render(session({ focused_review: { state: "ready", text: "**Second**" } }));
+  const changed = block.querySelector(".focused-review-body");
+  assert.notEqual(changed, body);
+  assert.equal(changed.querySelector(".md-source").hidden, false);
+  assert.equal(changed.querySelector(".md-source").textContent, "**Second**");
+
+  // A cleared review, an older host, and an unknown state show nothing.
+  for (const focusedReview of [undefined, null, { state: "running", text: "x" }]) {
+    chat.render(session({ focused_review: { state: "ready", text: "**Third**" } }));
+    chat.render(session({ focused_review: focusedReview }));
+    assert.equal(block.hidden, true);
+    assert.equal(block.children.length, 0);
+  }
+  // Leaving the session clears it.
+  chat.render(session({ focused_review: { state: "ready", text: "**Third**" } }));
+  chat.close();
+  assert.equal(block.hidden, true);
+  assert.equal(block.children.length, 0);
+});
+
+test("a failed focused review shows its message as plain text", () => {
+  const { byId, chat } = mountChat();
+  const message = "Review assist unavailable: **timeout** <img src=x>";
+
+  chat.render(session({ focused_review: { state: "failed", text: message } }));
+
+  const block = byId("focused-review");
+  assert.equal(block.hidden, false);
+  assert.equal(block.className, "focused-review is-failed");
+  assert.equal(block.querySelector(".eyebrow").textContent, "Focused review");
+  const failure = block.querySelector(".focused-review-failure");
+  assert.equal(failure.textContent, message);
+  assert.equal(failure.children.length, 0);
+  assert.equal(block.querySelector(".source-toggle"), null);
+
+  chat.render(session({ focused_review: { state: "ready", text: "Fixed" } }));
+  assert.equal(block.className, "focused-review");
+});
+
+test("a new focused review follows a reader at the end and offers the jump otherwise", () => {
+  const { byId, chat } = mountChat();
+  const scroller = byId("chat-scroll");
+  chat.render(session());
+  scroller.scrollHeight = 2000;
+  scroller.clientHeight = 500;
+  scroller.scrollTop = 1500;
+
+  chat.render(session({ focused_review: { state: "ready", text: "Looks good" } }));
+  assert.equal(scroller.scrollTop, 2000);
+  assert.equal(byId("jump").hidden, true);
+
+  scroller.scrollTop = 100;
+  chat.render(session({ focused_review: { state: "ready", text: "Looks better" } }));
+  assert.equal(scroller.scrollTop, 100);
+  assert.equal(byId("jump").hidden, false);
 });
 
 test("a review request links only through the Markdown link filter", () => {

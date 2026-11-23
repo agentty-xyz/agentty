@@ -12,7 +12,7 @@ use super::{
     hydrate_review_transient, hydrate_review_transients, normalize_review_agent,
     prune_review_cache, review_agent_kind_label, review_cache_from_rows, review_loading_message,
     review_progress_message, review_reasoning_label, review_view_text, session_review_agent,
-    text_hash,
+    shown_focused_review, shown_focused_review_id, text_hash,
 };
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -926,4 +926,106 @@ fn test_session_review_agent_falls_back_to_session_without_review_cli() {
         harness_only,
         (harness, ReasoningLevel::High, SpeedMode::Normal)
     );
+}
+
+/// Builds a review cache holding `entry` for `session-1`.
+fn review_cache_with(entry: ReviewCacheEntry) -> HashMap<SessionId, ReviewCacheEntry> {
+    HashMap::from([(SessionId::from("session-1"), entry)])
+}
+
+#[test]
+fn shown_focused_review_reports_the_raw_ready_text_and_its_request() {
+    // Arrange
+    let request_id = uuid::Uuid::new_v4();
+    let review_cache = review_cache_with(ReviewCacheEntry::Ready {
+        request_id,
+        diff_hash: 42,
+        text: "### Suggestions\n- Add a test".to_string(),
+    });
+    let session = SessionFixtureBuilder::new()
+        .id("session-1")
+        .status(Status::Watching)
+        .build();
+
+    // Act
+    let review = shown_focused_review(&review_cache, &session);
+    let review_id = shown_focused_review_id(&review_cache, &session);
+
+    // Assert
+    assert_eq!(
+        review,
+        Some(ag_session::SessionFocusedReview::Ready {
+            text: "### Suggestions\n- Add a test".to_string(),
+        })
+    );
+    assert_eq!(review_id, Some(request_id));
+}
+
+#[test]
+fn shown_focused_review_reports_a_failure_as_the_terminal_message() {
+    // Arrange
+    let request_id = uuid::Uuid::new_v4();
+    let review_cache = review_cache_with(ReviewCacheEntry::Failed {
+        request_id,
+        diff_hash: 42,
+        error: " timeout ".to_string(),
+    });
+    let session = SessionFixtureBuilder::new()
+        .id("session-1")
+        .status(Status::Question)
+        .build();
+
+    // Act
+    let review = shown_focused_review(&review_cache, &session);
+    let review_id = shown_focused_review_id(&review_cache, &session);
+
+    // Assert
+    assert_eq!(
+        review,
+        Some(ag_session::SessionFocusedReview::Failed {
+            message: "Review assist unavailable: timeout".to_string(),
+        })
+    );
+    assert_eq!(review_id, Some(request_id));
+}
+
+#[test]
+fn shown_focused_review_is_absent_while_loading_suppressed_or_outside_review() {
+    // Arrange
+    let loading = review_cache_with(ReviewCacheEntry::Loading {
+        request_id: uuid::Uuid::new_v4(),
+        progress: None,
+        diff_hash: 42,
+        review_agent: test_review_agent(),
+    });
+    let suppressed = review_cache_with(ReviewCacheEntry::Suppressed);
+    let ready = review_cache_with(ReviewCacheEntry::Ready {
+        request_id: uuid::Uuid::new_v4(),
+        diff_hash: 42,
+        text: "review".to_string(),
+    });
+    let reviewing = SessionFixtureBuilder::new()
+        .id("session-1")
+        .status(Status::AgentReview)
+        .build();
+    let done = SessionFixtureBuilder::new()
+        .id("session-1")
+        .status(Status::Done)
+        .build();
+
+    // Act
+    let shown = [
+        shown_focused_review(&loading, &reviewing),
+        shown_focused_review(&suppressed, &reviewing),
+        shown_focused_review(&ready, &done),
+    ];
+    let shown_ids = [
+        shown_focused_review_id(&loading, &reviewing),
+        shown_focused_review_id(&suppressed, &reviewing),
+        shown_focused_review_id(&ready, &done),
+    ];
+
+    // Assert
+    assert_eq!(shown, [None, None, None]);
+    assert_eq!(shown_ids, [None, None, None]);
 }

@@ -1384,6 +1384,36 @@ body {
   font-size: var(--font-size-md);
 }
 
+/* The latest focused review, after the transcript, as in the terminal */
+.focused-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 1.1rem 0 0;
+  padding: 0.85rem 1rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--tone-ready);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.focused-review.is-failed {
+  padding-bottom: 0.85rem;
+  border-left-color: var(--tone-failed);
+}
+
+.focused-review-failure {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 /* What the session is doing, after the last message, as in the terminal: a
    shared .status--line. */
 .status-line {
@@ -2415,8 +2445,13 @@ body {
     max-width: 92%;
   }
 
-  .msg--assistant {
+  .msg--assistant,
+  .focused-review {
     font-size: 0.95rem;
+  }
+
+  .focused-review {
+    padding-inline: 0.8rem;
   }
 
   .sheet {

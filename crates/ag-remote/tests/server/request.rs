@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use ag_remote::protocol::{
-    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteMessage,
-    RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync,
-    RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
-    ServerFrame,
+    ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteFocusedReview,
+    RemoteFocusedReviewState, RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption,
+    RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -70,6 +70,10 @@ fn expected_session() -> RemoteSession {
         branch: Some("wt/session-".to_string()),
         created_at: Some(10),
         draft_prompt: None,
+        focused_review: Some(RemoteFocusedReview {
+            state: RemoteFocusedReviewState::Ready,
+            text: "### Suggestions\n- Add a test".to_string(),
+        }),
         id: "session-1".to_string(),
         is_draft: false,
         messages: vec![

@@ -39,6 +39,9 @@ const QUEUEING_STATUSES = new Set(["InProgress", "Rebasing"]);
 // What a read-only status says instead of the composer, when its label
 // alone would not.
 const READ_ONLY_LABELS = { Queued: "Queued to merge" };
+// The focused-review states the page shows: `ready` carries Markdown and
+// `failed` a plain message.
+const FOCUSED_REVIEW_STATES = new Set(["failed", "ready"]);
 // Why Merge is off for a session with a linked review request: the
 // header button's tooltip, and the short note that fits the phone sheet.
 const MERGE_OFF_TITLE = "Merge is off: merge the session's pull request instead";
@@ -722,6 +725,40 @@ export function createChat({
     return changes.append.length + changes.replace.length + changes.remove > 0;
   }
 
+  // Shows the session's latest focused review under the transcript, as the
+  // terminal's session view does: a finished review as Markdown with its
+  // source a toggle away, like an answer, and a failed one as its message.
+  // Both are untrusted text. Older hosts send none, and a state this client
+  // does not know shows nothing. An unchanged review keeps its node, and
+  // with it the reader's choice of source or rendered view. Returns whether
+  // the block changed.
+  function renderFocusedReview(review) {
+    const node = elements.focusedReview;
+    const isShown = FOCUSED_REVIEW_STATES.has(review?.state) && typeof review.text === "string";
+    const key = isShown ? JSON.stringify([review.state, review.text]) : "";
+    if ((node.dataset.review ?? "") === key) {
+      return false;
+    }
+    node.dataset.review = key;
+    node.hidden = !isShown;
+    node.classList.toggle("is-failed", isShown && review.state === "failed");
+    if (!isShown) {
+      node.replaceChildren();
+
+      return true;
+    }
+    const body = element(document, "div", "focused-review-body");
+    if (review.state === "ready") {
+      renderAnswer(body, review.text);
+      keepSourceView(node.querySelector(".focused-review-body"), body);
+    } else {
+      body.append(element(document, "p", "focused-review-failure", review.text));
+    }
+    node.replaceChildren(element(document, "p", "eyebrow", "Focused review"), body);
+
+    return true;
+  }
+
   // Ends the transcript with what the session is doing, as the terminal
   // does, such as `Working... Reading files`. Returns whether the line
   // changed. The marker node stays while the line shows, so its loader
@@ -1066,6 +1103,7 @@ export function createChat({
     forgetAnswerLookups();
     elements.transcript.replaceChildren();
     renderDraft(null);
+    renderFocusedReview(null);
     renderStatusLine(null);
     elements.queued.replaceChildren();
     elements.queuedBox.hidden = true;
@@ -1164,7 +1202,9 @@ export function createChat({
     const wasNearEnd = isNearEnd();
     elements.scroller.hidden = isDiffOpen;
     const draftChanged = renderDraft(session);
-    const transcriptChanged = renderTranscript(session.messages || []) || draftChanged;
+    const messagesChanged = renderTranscript(session.messages || []);
+    const reviewChanged = renderFocusedReview(session.focused_review);
+    const transcriptChanged = messagesChanged || reviewChanged || draftChanged;
     const statusLineChanged = renderStatusLine(session.status, session.progress);
     const questionsChanged = renderQuestions(session.questions || []);
     renderQueued(session.queued_messages || [], session.queued_actions || []);
