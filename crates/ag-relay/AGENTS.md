@@ -20,8 +20,11 @@ dials out, so the instance needs no open port.
   meant to run behind a reverse proxy that terminates TLS. Say so wherever deployment is
   documented.
 - Keep the crate independent of Agentty application crates. It embeds the web client
-  files from `crates/ag-remote/assets/` by path and only marks the page for the relay
-  transport; change the client there.
+  files from `crates/ag-remote/assets/` by path and only renders the page: it marks it
+  for the relay transport and fills in the options another web application passes to
+  serve it, escaping their text and refusing links to other origins. Change the client
+  there. Page options never grant a device anything, and the content security policy
+  names every origin the page connects to.
 
 ## Integration
 

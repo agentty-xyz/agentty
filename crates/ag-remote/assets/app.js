@@ -7,6 +7,7 @@ import { createChat, createRefreshGate } from "./chat.mjs";
 import { CREDENTIAL_REJECTIONS, PROTOCOL_VERSION, createConnection } from "./connection.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
+import { directoryError, loadDirectory, renderDirectory } from "./directory.mjs";
 import { parseProject } from "./format.mjs";
 import { createGraph } from "./graph.mjs";
 import { createHome, offersCreation } from "./home.mjs";
@@ -39,6 +40,14 @@ const DEVICE_NAME_KEY = "agentty.remote.device_name";
 // end to end, and its key replaces the token.
 const usesRelay =
   document.querySelector('meta[name="agentty-transport"]')?.content === "relay";
+// A web application that serves this page on its own origin names the
+// relay, which pairing links may then leave out, and may name a directory
+// of the account's Agenttys on its own origin.
+const configuredRelay =
+  document.querySelector('meta[name="agentty-relay"]')?.content || null;
+const directoryPath = document.querySelector('meta[name="agentty-directory"]')?.content || null;
+// How often, at most, the directory is read again when the page shows.
+const DIRECTORY_REFRESH_MS = 60000;
 // What the device footer says in each connection state.
 const CONNECTION_LABELS = {
   connected: usesRelay ? "Connected · relay, encrypted" : "Connected · local listener",
@@ -211,6 +220,12 @@ const elements = {
   "answer-send": document.getElementById("answer-send"),
   "answer-error": document.getElementById("answer-error"),
   "read-only": document.getElementById("read-only"),
+  directory: document.getElementById("directory"),
+  "directory-error": document.getElementById("directory-error"),
+  "directory-list": document.getElementById("directory-list"),
+  "pair-directory": document.getElementById("pair-directory"),
+  "pair-directory-error": document.getElementById("pair-directory-error"),
+  "pair-directory-list": document.getElementById("pair-directory-list"),
 };
 
 const state = {
@@ -218,6 +233,9 @@ const state = {
   current: null,
   // This browser's key pair for relay streams.
   deviceKey: null,
+  // What the directory last said: its `status` (null until it answers),
+  // its `entries`, and when it was last read, in milliseconds.
+  directory: { entries: [], readAt: 0, status: null },
   // The Agentty `Forget this device` asks about.
   forgetTarget: null,
   // The Agentty the user chose for new sessions, by id, if any.
@@ -361,6 +379,73 @@ function findInstance(id) {
   return state.instances.find((instance) => instance.id === id) ?? null;
 }
 
+// The name of the Agentty with `id`: the directory's, or the start of its
+// id.
+function instanceName(id) {
+  if (!id) {
+    return "";
+  }
+  const listed = state.directory.entries.find((entry) => entry.instanceId === id);
+
+  return listed?.name ?? fallbackName(id);
+}
+
+// Reads the directory again, at most once a minute unless `force` says so.
+async function refreshDirectory(force = false) {
+  if (!directoryPath || (!force && Date.now() - state.directory.readAt < DIRECTORY_REFRESH_MS)) {
+    return;
+  }
+  state.directory.readAt = Date.now();
+  const result = await loadDirectory(globalThis.fetch, new URL(directoryPath, window.location.href));
+  state.directory.status = result.status;
+  if (result.status === "listed") {
+    state.directory.entries = result.entries;
+  }
+  renderDirectoryState();
+}
+
+// Names the paired Agenttys as the directory does, and lists the ones this
+// browser has not paired in the sidebar and on the pairing card. Without
+// an answer yet, nothing shows.
+function renderDirectoryState() {
+  let isRenamed = false;
+  for (const instance of state.instances) {
+    const name = instanceName(instance.id);
+    if (name !== instance.name) {
+      instance.name = name;
+      instance.view.setName(name);
+      isRenamed = true;
+    }
+  }
+  if (isRenamed) {
+    renderForgetItems();
+    renderSessions();
+  }
+  const { entries, status } = state.directory;
+  const unpaired = entries.filter((entry) => !findInstance(entry.instanceId));
+  const now = Date.now() / 1000;
+  for (const [section, error, list] of [
+    [elements.directory, elements["directory-error"], elements["directory-list"]],
+    [elements["pair-directory"], elements["pair-directory-error"], elements["pair-directory-list"]],
+  ]) {
+    section.hidden = status === null || (status === "listed" && unpaired.length === 0);
+    error.textContent = directoryError(status);
+    renderDirectory(document, list, status === "listed" ? unpaired : [], now);
+  }
+}
+
+// The pairing link in the address, read for this page's relay.
+function parseLink(hash) {
+  return parsePairingLink(hash, configuredRelay);
+}
+
+// Whether `link` names this page's relay; a page without one takes any.
+function isOwnRelay(link) {
+  const strip = (url) => url.replace(/\/+$/, "");
+
+  return !configuredRelay || strip(link.relayUrl) === strip(configuredRelay);
+}
+
 // Builds the Agentty with `id`; `pairing` holds its relay pairing.
 function createInstance(id, pairing) {
   const view = createInstanceView({ document: document, prototype: elements["instance-prototype"] });
@@ -371,7 +456,7 @@ function createInstance(id, pairing) {
     isListed: false,
     // The connection state the announcer last read out.
     lastKind: null,
-    name: id ? fallbackName(id) : "",
+    name: instanceName(id),
     pairing: pairing,
     project: null,
     // Name of the project the last listing named, if any did.
@@ -463,6 +548,7 @@ function placeInstances() {
   renderForgetItems();
   renderSessions();
   renderFooter();
+  renderDirectoryState();
 }
 
 // Shows each Agentty's state in its heading and the device footer,
@@ -620,7 +706,7 @@ function setPairingPhase(phase, confirmation = null) {
 
 // Removes a session route from the address without a new history entry.
 function clearSessionRoute() {
-  if (parseRoute(window.location.hash, parsePairingLink).kind === "session") {
+  if (parseRoute(window.location.hash, parseLink).kind === "session") {
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
 }
@@ -1164,7 +1250,7 @@ const shell = createShell({
       leaveSession();
     }
   },
-  parsePairingLink: parsePairingLink,
+  parsePairingLink: parseLink,
   window: window,
 });
 
@@ -1206,6 +1292,7 @@ window.setInterval(chat.tick, 1000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     sessionList.markSeen();
+    void refreshDirectory();
   }
 });
 
@@ -1421,19 +1508,23 @@ elements.reload.addEventListener("click", () => window.location.reload());
 // Takes a pairing link from the address bar, if one is there, and removes
 // it so the one-time code stays out of the address bar and the history.
 function adoptPairingLink() {
-  const route = parseRoute(window.location.hash, parsePairingLink);
+  const route = parseRoute(window.location.hash, parseLink);
   if (route.kind !== "pairing") {
     return false;
   }
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  state.pairingLink = route.link;
+  // A page that names its relay pairs only through it.
+  state.pairingLink = isOwnRelay(route.link) ? route.link : null;
+  elements["pair-error"].textContent = state.pairingLink
+    ? ""
+    : "This pairing link is for another relay. Open it from the address it names.";
 
   return true;
 }
 
 // Opens the session the address names, if any, once the app connects.
 function adoptSessionRoute() {
-  const route = parseRoute(window.location.hash, parsePairingLink);
+  const route = parseRoute(window.location.hash, parseLink);
   const instance = route.kind === "session" ? routedInstance(route) : null;
   if (instance) {
     state.current = { instance: instance, sessionId: route.sessionId };
@@ -1468,6 +1559,9 @@ async function startThroughRelay() {
   const deviceKey = await loadDeviceKey();
   state.deviceKey = deviceKey.keyPair;
   state.pairings = await loadPairings(storage);
+  // The directory lists the account's Agenttys whether or not any is
+  // paired here yet.
+  void refreshDirectory(true);
   // A link opened in a tab that already shows this page only changes the
   // fragment. It replaces whatever this tab was doing; the Agenttys already
   // paired stay connected behind the pairing card.
@@ -1479,7 +1573,6 @@ async function startThroughRelay() {
       if (instance && state.instances.includes(instance) && hasCredential(instance)) {
         instance.connection.connect();
       }
-      elements["pair-error"].textContent = "";
       showPairing();
     }
   });

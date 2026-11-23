@@ -4,12 +4,43 @@ use std::time::Duration;
 
 use ag_relay::{ACCEPT_PATH_PREFIX, CONNECT_PATH_PREFIX, RelayLimits};
 use futures_util::SinkExt;
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 use crate::support::{
     TestResult, accept_next_stream, connect_device, joined_stream, keypair, next_binary,
     next_close, next_ping, next_stream_id, open, refused_status, register, send_binary, start,
 };
+
+#[tokio::test]
+async fn device_streams_opened_by_a_page_on_another_origin_are_joined() -> TestResult {
+    // Arrange: a web application on its own origin serves the page, which
+    // reaches its instances through this relay.
+    let relay = start(RelayLimits::default()).await?;
+    let instance_key = keypair()?;
+    let mut control = register(&relay, &instance_key).await?;
+    let path = format!(
+        "{CONNECT_PATH_PREFIX}{}",
+        instance_key.public().fingerprint()
+    );
+    let mut request = format!("ws://{}{path}", relay.local_addr()).into_client_request()?;
+    request
+        .headers_mut()
+        .insert("origin", HeaderValue::from_static("https://app.example"));
+
+    // Act
+    let (mut device, _) = connect_async(request).await?;
+    send_binary(&mut device, b"from another origin".to_vec()).await?;
+    let mut instance = accept_next_stream(&relay, &mut control).await?;
+    let received = next_binary(&mut instance).await?;
+
+    // Assert
+    assert_eq!(received, b"from another origin");
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn peer_that_stops_reading_ends_the_stream() -> TestResult {

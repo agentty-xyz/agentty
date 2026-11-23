@@ -90,7 +90,7 @@ repos:
           --surface "remote-client=$assets/tokens.css,$assets/fonts.css,$assets/base.css,$assets/app.css"
           --markup "remote-client=$assets"'
         language: system
-        files: ^(design/|docs/site/(config\.toml|sass/|templates/|static/.*\.js$)|crates/ag-remote/assets/|crates/ag-remote/src/server\.rs$|crates/ag-relay/src/page\.rs$|\.pre-commit-config\.yaml$)
+        files: ^(design/|docs/site/(config\.toml|sass/|templates/|static/.*\.js$)|crates/ag-remote/assets/|crates/ag-remote/src/server\.rs$|crates/ag-relay/src/web_client\.rs$|\.pre-commit-config\.yaml$)
         pass_filenames: false
       - id: clippy-fix
         name: clippy fix

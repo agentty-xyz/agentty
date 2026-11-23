@@ -5,6 +5,7 @@
 // Usage: node relay_app_flow.mjs multi <pairing link of A> <pairing link of B>
 //        node relay_app_flow.mjs revoke <pairing link of A> <pairing link of B>
 //        node relay_app_flow.mjs migrate <pairing link of A>
+//        node relay_app_flow.mjs embed <pairing link of A> <pairing link of B> <page address>
 //
 // In `multi` mode the page opens the link of Agentty A and pairs; after
 // `awaiting` the Rust test approves. Then the link of Agentty B opens in
@@ -47,7 +48,7 @@ if (typeof WebSocket === "undefined") {
   throw new Error("Node.js 22 or newer is required: this one has no WebSocket");
 }
 
-const [mode, firstLink, secondLink] = process.argv.slice(2);
+const [mode, firstLink, secondLink, embedderPage] = process.argv.slice(2);
 // Instance ids are random, so steps name the Agenttys `A` and `B`.
 const labels = new Map();
 for (const [link, label] of [
@@ -58,10 +59,31 @@ for (const [link, label] of [
     labels.set(await instanceIdOf(parsePairingLink(new URL(link).hash).instanceKey), label);
   }
 }
+
+// The fragment of `link` without its relay, as a link to a page that
+// names its relay may leave it out.
+function withoutRelay(link) {
+  const parameters = new URLSearchParams(new URL(link).hash.slice(1));
+  parameters.delete("relay");
+
+  return "#" + parameters.toString();
+}
+
+// In `embed` mode the page is the one another web application serves, at
+// its own address.
+async function startUrl() {
+  if (mode === "embed") {
+    return [await (await fetch(embedderPage)).text(), embedderPage + withoutRelay(firstLink)];
+  }
+
+  return [PAGE, mode === "migrate" ? new URL(firstLink).origin + "/" : firstLink];
+}
+
 installFakeIndexedDb();
-const document = createDocument(PAGE);
+const [html, url] = await startUrl();
+const document = createDocument(html);
 const pageUrl = new URL(firstLink);
-const window = createWindow(document, mode === "migrate" ? pageUrl.origin + "/" : firstLink);
+const window = createWindow(document, url);
 globalThis.document = document;
 globalThis.window = window;
 
@@ -283,6 +305,87 @@ async function revokeFlow() {
   report({ step: "pairedB", rows: rows(), sections: sections().length, stored: storedIds() });
 }
 
+// The texts of `selector`'s matches under `root`.
+function texts(root, selector) {
+  return Array.from(root.querySelectorAll(selector), (node) => node.textContent);
+}
+
+// The page another web application serves on its own origin: the relay is
+// another origin, the links leave it out, and the directory names the
+// account's Agenttys. After `awaiting` and `awaitingB` the Rust test
+// approves; after `pairedB` it signs the page out of the directory.
+async function embedFlow() {
+  await waitFor("the directory on the pairing card", () => !byId("pair-directory").hidden);
+  await pairThroughPage();
+  const card = byId("pair-view");
+  report({
+    step: "awaiting",
+    badge: card.querySelector(".brand .badge").textContent,
+    directory: texts(byId("pair-directory-list"), ".directory-name"),
+    sections: texts(card, ".sections a"),
+  });
+
+  await waitFor("A's sessions", () => visibleView() === "home-view" && rows().length > 0);
+  await waitFor("the sidebar's directory", () => byId("directory-list").children.length === 1);
+  const sidebar = byId("sidebar");
+  const account = sidebar.querySelector(".account");
+  report({
+    step: "paired",
+    account: [account.getAttribute("href"), texts(account, "span")],
+    badge: sidebar.querySelector(".brand .badge").textContent,
+    directory: Array.from(byId("directory-list").children, (item) =>
+      texts(item, "span").map((text) => text.replace(/\d+[smhd] ago$/, "N ago")),
+    ),
+    rows: rows(),
+    sections: Array.from(sidebar.querySelectorAll(".sections a"), (link) => [
+      link.textContent,
+      link.getAttribute("href"),
+      link.getAttribute("aria-current"),
+    ]),
+    stored: storedIds(),
+  });
+
+  // A link that names another relay is refused; this page pairs only
+  // through its own.
+  const other = new URLSearchParams(new URL(secondLink).hash.slice(1));
+  other.set("relay", "ws://127.0.0.1:9");
+  window.location.hash = "#" + other.toString();
+  await waitFor("the refusal", () => visibleView() === "pair-view" && byId("pair-error").textContent !== "");
+  report({
+    step: "otherRelay",
+    error: byId("pair-error").textContent,
+    fieldsHidden: byId("pair-fields").hidden,
+    submitHidden: byId("pair-submit").hidden,
+  });
+
+  window.location.hash = withoutRelay(secondLink);
+  await pairThroughPage();
+  report({ step: "awaitingB" });
+
+  await waitFor("both Agenttys", () => sections().length === 2 && heads().every((head) => head.state === "Connected"));
+  await waitFor("the directory to empty", () => byId("directory").hidden);
+  report({
+    step: "pairedB",
+    directoryHidden: byId("directory").hidden,
+    forgetItems: texts(byId("forget-each"), "button"),
+    heads: heads(),
+  });
+
+  // The page shows again a while later, and the directory says the page
+  // is signed out; the Agenttys stay connected.
+  const now = Date.now;
+  Date.now = () => now() + 120000;
+  document.dispatchEvent(new FakeEvent("visibilitychange"));
+  await waitFor("the sign-out", () => byId("directory-error").textContent !== "");
+  report({
+    step: "signedOut",
+    directoryHidden: byId("directory").hidden,
+    error: byId("directory-error").textContent,
+    heads: heads(),
+    listed: byId("directory-list").children.length,
+  });
+}
+
 // Pairs a device key with A through the relay modules, as an earlier
 // version of the page would have, and saves the pairing its way.
 async function pairAsEarlierVersion() {
@@ -332,6 +435,9 @@ if (mode === "multi") {
 } else if (mode === "revoke") {
   await import(APP_URL.href);
   await revokeFlow();
+} else if (mode === "embed") {
+  await import(APP_URL.href);
+  await embedFlow();
 } else {
   await migrateFlow();
 }

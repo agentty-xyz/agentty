@@ -99,6 +99,8 @@
                 </svg>
                 agentty <span class="badge">remote</span>
             </span>
+            <nav class="sections" aria-label="Sections" hidden>
+            </nav>
             <form id="pair-form" class="pair" autocomplete="off">
                 <p class="eyebrow">Remote control</p>
                 <h1>Pair this device</h1>
@@ -108,6 +110,15 @@
                 <p id="pair-hint-relay" hidden>
                     Open the pairing link or scan the QR code that Agentty's <code class="code">Remote</code> tab shows.
                 </p>
+                <section id="pair-directory"
+                         class="directory"
+                         aria-labelledby="pair-directory-title"
+                         hidden>
+                    <h2 id="pair-directory-title" class="group-label">Your Agenttys</h2>
+                    <p id="pair-directory-error" class="error" role="alert"></p>
+                    <ul id="pair-directory-list" class="directory-list">
+                    </ul>
+                </section>
                 <div id="pair-fields" class="pair-fields">
                     <label>
                         Pairing code
@@ -168,6 +179,8 @@
                         </svg>
                     </button>
                 </div>
+                <nav class="sections" aria-label="Sections" hidden>
+                </nav>
                 <div class="sidebar-actions">
                     <div id="instance-slot" class="instance-slot" hidden></div>
                     <label class="filter">
@@ -188,12 +201,22 @@
                 <nav class="session-list" aria-label="Session list">
                     <div id="sessions" class="sessions"></div>
                     <output id="filter-summary" class="list-summary" hidden></output>
+                    <section id="directory"
+                             class="directory"
+                             aria-labelledby="directory-title"
+                             hidden>
+                        <h2 id="directory-title" class="group-label">Not paired here</h2>
+                        <p id="directory-error" class="error" role="alert"></p>
+                        <ul id="directory-list" class="directory-list">
+                        </ul>
+                    </section>
                 </nav>
                 <footer class="sidebar-foot">
                     <fieldset class="segmented" aria-label="Color theme">
                         <button type="button" data-theme="green" aria-pressed="true">green</button>
                         <button type="button" data-theme="dark" aria-pressed="false">dark</button>
                     </fieldset>
+                    <a class="account" hidden></a>
                     <div class="device">
                         <span class="device-glyph">
                             <svg class="icon" aria-hidden="true">

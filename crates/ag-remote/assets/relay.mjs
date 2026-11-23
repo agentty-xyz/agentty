@@ -12,13 +12,14 @@ const encoder = new TextEncoder();
 /**
  * Reads the fragment of a pairing link, `#relay=…&key=…&code=…`. Returns
  * the relay address, the instance key as hexadecimal, and the one-time
- * code, or null when the fragment is not a pairing link.
+ * code, or null when the fragment is not a pairing link. A link without a
+ * relay names `defaultRelay`, the relay of a page that names one.
  */
-export function parsePairingLink(fragment) {
+export function parsePairingLink(fragment, defaultRelay = null) {
   const parameters = new URLSearchParams(fragment.replace(/^#/, ""));
   const code = parameters.get("code") || "";
   const instanceKey = (parameters.get("key") || "").toLowerCase();
-  const relayUrl = parameters.get("relay") || "";
+  const relayUrl = parameters.get("relay") || defaultRelay || "";
   if (!code || !keyFromHex(instanceKey) || !/^wss?:\/\/\S+$/.test(relayUrl)) {
     return null;
   }
