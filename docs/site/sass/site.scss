@@ -9,9 +9,6 @@
 
 :root {
     --color-roadmap-grid: color-mix(in srgb, var(--color-border) 32%, transparent);
-    --content-width: 800px;
-    --content-width-wide: 960px;
-    --content-width-docs: 1240px;
     --docs-sidebar-width: 230px;
 }
 
@@ -40,7 +37,7 @@ svg {
     display: flex;
     align-items: center;
     flex-wrap: nowrap;
-    gap: clamp(1rem, 2vw, 1.75rem);
+    gap: clamp(var(--space-lg), 2vw, 1.75rem);
     min-width: 0;
 }
 
@@ -48,19 +45,19 @@ svg {
     display: flex;
     align-items: center;
     white-space: nowrap;
-    gap: 0.75rem;
+    gap: var(--space-md);
 }
 
 .site-container {
-    width: min(100%, var(--content-width));
+    width: min(100%, var(--width-prose));
 }
 
 .site-container-wide {
-    width: min(100%, var(--content-width-wide));
+    width: min(100%, var(--width-wide));
 }
 
 .site-container-docs {
-    width: min(100%, var(--content-width-docs));
+    width: min(100%, var(--width-docs));
 }
 
 .site-container-full {
@@ -71,7 +68,7 @@ svg {
     display: flex;
     align-items: center;
     white-space: nowrap;
-    gap: 0.35rem;
+    gap: var(--space-xs);
     min-width: 0;
 }
 
@@ -91,13 +88,13 @@ svg {
 .github-link,
 .site-nav-link:visited {
     font-family: var(--font-mono);
-    font-size: 0.84rem;
+    font-size: var(--font-size-md);
     color: var(--color-muted);
     text-decoration: none;
 }
 
 .site-nav-link {
-    padding: 0.35rem 0.5rem;
+    padding: var(--space-xs) var(--space-sm);
     border-radius: var(--radius-sm);
 }
 
@@ -117,15 +114,15 @@ svg {
 .site-search-trigger {
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    min-height: 2.15rem;
-    padding: 0.3rem 0.45rem;
+    gap: var(--space-sm);
+    min-height: var(--control-height-md);
+    padding: var(--space-xs) var(--space-sm);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-muted);
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--font-size-xs);
     cursor: pointer;
 }
 
@@ -136,22 +133,22 @@ svg {
 
 .site-search-trigger kbd {
     min-width: 1.25rem;
-    padding: 0.05rem 0.25rem;
+    padding: 0.05rem var(--space-2xs);
     border: 1px solid var(--color-border);
     border-radius: 0.25rem;
     background: var(--color-bg);
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.68rem;
+    font-size: var(--font-size-3xs);
     text-align: center;
 }
 
 .github-link-rich {
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    min-height: 2.15rem;
-    padding: 0.2rem;
+    gap: var(--space-sm);
+    min-height: var(--control-height-md);
+    padding: var(--space-2xs);
     border-radius: var(--radius-sm);
 }
 
@@ -164,13 +161,13 @@ svg {
 .github-link-badges {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: var(--space-xs);
 }
 
 .github-badge {
     display: inline-flex;
     align-items: center;
-    line-height: 1;
+    line-height: var(--line-height-none);
     border: 1px solid var(--color-border);
     border-radius: 0.25rem;
     background: var(--color-surface);
@@ -182,8 +179,8 @@ svg {
     display: inline-flex;
     align-items: center;
     min-height: 20px;
-    padding: 0 0.38rem;
-    font-size: 0.66rem;
+    padding: 0 var(--space-xs);
+    font-size: var(--font-size-3xs);
 }
 
 .github-badge-label {
@@ -216,10 +213,10 @@ svg {
 .site-theme-switch {
     display: flex;
     align-items: center;
-    gap: 0.15rem;
+    gap: var(--space-3xs);
     min-width: 0;
     margin: 0;
-    padding: 0.18rem;
+    padding: var(--space-3xs);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     font: inherit;
@@ -231,8 +228,8 @@ svg {
 .site-theme-btn {
     background: transparent;
     border: 0;
-    min-height: 1.75rem;
-    padding: 0.15rem 0.4rem;
+    min-height: var(--control-height-xs);
+    padding: var(--space-3xs) var(--space-xs);
     border-radius: 0.25rem;
     font-family: var(--font-mono);
     font-size: 0.75rem;
@@ -245,28 +242,28 @@ svg {
 }
 
 .site-theme-separator {
-    font-size: 0.7rem;
+    font-size: var(--font-size-2xs);
     color: var(--color-dim);
 }
 
 /* Keep page spacing proportional across phone, tablet, and desktop breakpoints. */
 .site-main {
     margin: 0 auto;
-    padding: clamp(3rem, 8vw, 5.5rem) clamp(1rem, 3vw, 1.5rem) clamp(4rem, 10vw, 6rem);
+    padding: clamp(var(--space-4xl), 8vw, 5.5rem) clamp(var(--space-lg), 3vw, var(--space-2xl)) clamp(var(--space-5xl), 10vw, 6rem);
 }
 
 .site-main.site-container,
 .site-main.site-container-wide,
 .site-main.site-container-docs {
-    width: min(100%, var(--content-width));
+    width: min(100%, var(--width-prose));
 }
 
 .site-main.site-container-wide {
-    width: min(100%, var(--content-width-wide));
+    width: min(100%, var(--width-wide));
 }
 
 .site-main.site-container-docs {
-    width: min(100%, var(--content-width-docs));
+    width: min(100%, var(--width-docs));
 }
 
 .site-main.site-container-full {
@@ -274,7 +271,7 @@ svg {
 }
 
 .site-section {
-    margin-bottom: clamp(4rem, 9vw, 6.5rem);
+    margin-bottom: clamp(var(--space-5xl), 9vw, 6.5rem);
 }
 
 .site-section:last-child {
@@ -299,18 +296,18 @@ svg {
 }
 
 .home-layout .hero-section {
-    margin-bottom: clamp(2.5rem, 6vw, 3rem);
+    margin-bottom: clamp(2.5rem, 6vw, var(--space-4xl));
 }
 
 .home-layout .site-section:not(:last-child) {
-    margin-bottom: clamp(3rem, 7vw, 4rem);
+    margin-bottom: clamp(var(--space-4xl), 7vw, var(--space-5xl));
 }
 
 .home-note {
-    margin: 1.25rem 0 0;
+    margin: var(--space-xl) 0 0;
     color: var(--color-muted);
-    font-size: 0.875rem;
-    line-height: 1.6;
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-body);
 }
 
 /* Allow the ASCII logo to scale down enough to avoid horizontal scrolling on phones. */
@@ -318,7 +315,7 @@ svg {
     color: var(--color-accent);
     text-shadow: var(--shadow-logo);
     font-size: clamp(0.48rem, 1.6vw, 0.85rem);
-    line-height: 1.25;
+    line-height: var(--line-height-snug);
     margin: 0 0 1.7rem;
     display: inline-block;
     text-align: left;
@@ -329,15 +326,15 @@ svg {
 
 .hero-description {
     color: var(--color-muted);
-    font-size: clamp(1rem, 2vw, 1.1rem);
-    line-height: 1.7;
+    font-size: clamp(var(--font-size-body), 2vw, var(--font-size-xl));
+    line-height: var(--line-height-relaxed);
     max-width: 60ch;
     margin: 0 auto 1.7rem;
 }
 
 .hero-description strong {
     color: var(--color-text);
-    font-weight: 620;
+    font-weight: var(--font-weight-semibold);
 }
 
 .hero-eyebrow,
@@ -346,8 +343,8 @@ svg {
     margin: 0 0 0.65rem;
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
+    font-size: var(--font-size-xs);
+    letter-spacing: var(--tracking-widest);
     text-transform: uppercase;
 }
 
@@ -356,9 +353,9 @@ svg {
     margin: 0 auto 1.1rem;
     color: var(--color-text);
     font-size: clamp(2.35rem, 7vw, 4.5rem);
-    font-weight: 680;
-    letter-spacing: -0.055em;
-    line-height: 0.98;
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--tracking-tightest);
+    line-height: var(--line-height-none);
     text-wrap: balance;
 }
 
@@ -366,11 +363,11 @@ svg {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 0.75rem;
+    gap: var(--space-md);
 }
 
 .home-layout .site-section {
-    padding-top: clamp(2rem, 5vw, 3rem);
+    padding-top: clamp(var(--space-3xl), 5vw, var(--space-4xl));
     border-top: 1px solid var(--color-border);
 }
 
@@ -386,10 +383,10 @@ svg {
 .home-hero-grid {
     display: grid;
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    gap: clamp(1.5rem, 4vw, 3rem);
+    gap: clamp(var(--space-2xl), 4vw, var(--space-4xl));
     align-items: center;
     margin-top: var(--home-wordmark-gap);
-    padding-top: clamp(1.5rem, 4vw, 2.5rem);
+    padding-top: clamp(var(--space-2xl), 4vw, 2.5rem);
     border-top: 1px solid var(--color-border);
 }
 
@@ -398,9 +395,9 @@ svg {
     margin: 0 0 1.1rem;
     font-family: "Martian Mono", var(--font-mono);
     font-size: clamp(1.8rem, 3.2vw, 2.6rem);
-    font-weight: 700;
-    letter-spacing: -0.04em;
-    line-height: 1.08;
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--tracking-tighter);
+    line-height: var(--line-height-tight);
 }
 
 .home-hero .hero-description {
@@ -457,19 +454,19 @@ svg {
 }
 
 .section-heading {
-    margin: 0 0 1.25rem;
+    margin: 0 0 var(--space-xl);
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 1rem;
-    letter-spacing: 0.03em;
+    font-size: var(--font-size-body);
+    letter-spacing: var(--tracking-wider);
 }
 
 .section-heading-group {
     display: flex;
     align-items: end;
     justify-content: space-between;
-    gap: 1.5rem;
-    margin-bottom: 1.5rem;
+    gap: var(--space-2xl);
+    margin-bottom: var(--space-2xl);
 }
 
 .section-title {
@@ -477,9 +474,9 @@ svg {
     margin: 0;
     color: var(--color-text);
     font-size: clamp(1.65rem, 4vw, 2.4rem);
-    font-weight: 650;
-    letter-spacing: -0.035em;
-    line-height: 1.12;
+    font-weight: var(--font-weight-heading);
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--line-height-tight);
     text-wrap: balance;
 }
 
@@ -487,7 +484,7 @@ svg {
     flex-shrink: 0;
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 0.84rem;
+    font-size: var(--font-size-md);
     text-decoration: none;
 }
 
@@ -502,7 +499,7 @@ svg {
 
 .install-tabs {
     display: flex;
-    gap: 0.15rem;
+    gap: var(--space-3xs);
     margin-bottom: -1px;
 }
 
@@ -511,12 +508,12 @@ svg {
     border-bottom-color: var(--color-border);
     min-height: 2.25rem;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-    padding: 0.4rem 0.8rem;
+    padding: var(--space-xs) var(--space-md);
     background: transparent;
     color: var(--color-muted);
     font-family: var(--font-mono);
-    font-size: 0.8rem;
-    font-weight: 600;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
     cursor: pointer;
 }
 
@@ -538,17 +535,17 @@ svg {
 .install-command {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-sm);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
-    padding: 0.8rem 0.9rem;
+    padding: var(--space-md) 0.9rem;
     overflow-x: auto;
 }
 
 .install-prompt {
     color: var(--color-accent);
-    font-weight: 700;
+    font-weight: var(--font-weight-bold);
     flex-shrink: 0;
 }
 
@@ -556,7 +553,7 @@ svg {
     flex: 1;
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -566,12 +563,12 @@ svg {
     flex-shrink: 0;
     background: transparent;
     border: 1px solid var(--color-border);
-    min-height: 2rem;
+    min-height: var(--control-height-sm);
     border-radius: var(--radius-sm);
-    padding: 0.3rem 0.65rem;
+    padding: var(--space-xs) 0.65rem;
     font-family: var(--font-mono);
     font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     color: var(--color-muted);
     cursor: pointer;
 }
@@ -609,22 +606,22 @@ svg {
     display: block;
     font-family: var(--font-mono);
     font-size: 1.4rem;
-    font-weight: 700;
+    font-weight: var(--font-weight-bold);
     line-height: 1.4rem;
 }
 
 .feature-title {
-    margin: 0 0 0.5rem;
+    margin: 0 0 var(--space-sm);
     color: var(--color-text);
-    font-size: 1rem;
-    font-weight: 650;
+    font-size: var(--font-size-body);
+    font-weight: var(--font-weight-heading);
 }
 
 .feature-text {
     margin: 0;
     color: var(--color-muted);
-    font-size: 0.9rem;
-    line-height: 1.6;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
 }
 
 .roadmap-section {
@@ -639,13 +636,13 @@ svg {
     max-width: 32ch;
     margin: 0;
     color: var(--color-muted);
-    font-size: 0.9rem;
-    line-height: 1.6;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
     text-wrap: balance;
 }
 
 .roadmap-map {
-    padding: clamp(1rem, 3vw, 1.5rem);
+    padding: clamp(var(--space-lg), 3vw, var(--space-2xl));
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
     background-color: var(--color-surface);
@@ -675,7 +672,7 @@ svg {
 .roadmap-node-kicker,
 .roadmap-caption {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: var(--font-size-2xs);
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -687,7 +684,7 @@ svg {
 .roadmap-node-date {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--space-xs);
 }
 
 .roadmap-node-date i {
@@ -712,29 +709,29 @@ svg {
 }
 
 .roadmap-node-title {
-    margin: 0.55rem 0 0.45rem;
+    margin: var(--space-sm) 0 var(--space-sm);
     color: var(--color-text);
-    font-size: 1rem;
-    font-weight: 650;
-    line-height: 1.25;
+    font-size: var(--font-size-body);
+    font-weight: var(--font-weight-heading);
+    line-height: var(--line-height-snug);
 }
 
 .roadmap-node-text {
     margin: 0;
     color: var(--color-muted);
-    font-size: 0.84rem;
-    line-height: 1.55;
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-body);
 }
 
 .roadmap-node-harness {
-    margin: 0 0.4rem;
+    margin: 0 var(--space-xs);
     border-color: color-mix(in srgb, var(--color-roadmap-future) 55%, var(--color-border));
 }
 
 .roadmap-primary-row,
 .roadmap-future-row {
     display: grid;
-    margin-top: clamp(2rem, 4vw, 3rem);
+    margin-top: clamp(var(--space-3xl), 4vw, var(--space-4xl));
 }
 
 .roadmap-primary-row {
@@ -746,7 +743,7 @@ svg {
 }
 
 .roadmap-node-direction {
-    margin: 0 0.4rem;
+    margin: 0 var(--space-xs);
     transition: border-color var(--transition-fast), transform var(--transition-fast);
 }
 
@@ -757,7 +754,7 @@ svg {
 
 .roadmap-node-orchestrator,
 .roadmap-node-reviewer {
-    margin: 0 0.4rem;
+    margin: 0 var(--space-xs);
     border-color: color-mix(in srgb, var(--color-roadmap-future) 42%, var(--color-border));
 }
 
@@ -784,14 +781,14 @@ svg {
 .feature-demo-stack {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
-    margin-top: 2rem;
+    gap: var(--space-3xl);
+    margin-top: var(--space-3xl);
 }
 
 .feature-demo-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
+    gap: var(--space-lg);
 }
 
 .feature-demo-grid .feature-demo-card {
@@ -802,14 +799,14 @@ svg {
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
-    padding: 1.25rem;
+    padding: var(--space-xl);
 }
 
 .feature-demo-title {
-    margin: 0 0 0.4rem;
+    margin: 0 0 var(--space-xs);
     color: var(--color-text);
     font-size: 1.05rem;
-    font-weight: 650;
+    font-weight: var(--font-weight-heading);
 }
 
 .feature-demo-title a {
@@ -822,10 +819,10 @@ svg {
 }
 
 .feature-demo-text {
-    margin: 0 0 1rem;
+    margin: 0 0 var(--space-lg);
     color: var(--color-muted);
-    font-size: 0.92rem;
-    line-height: 1.6;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
 }
 
 .feature-demo-frame {
@@ -859,14 +856,14 @@ svg {
     position: absolute;
     right: 0.65rem;
     bottom: 0.65rem;
-    padding: 0.3rem 0.5rem;
+    padding: var(--space-xs) var(--space-sm);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--color-bg) 88%, transparent);
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.68rem;
-    line-height: 1.2;
+    font-size: var(--font-size-3xs);
+    line-height: var(--line-height-snug);
     pointer-events: none;
 }
 
@@ -886,9 +883,9 @@ svg {
 
 .feature-demo-more-link {
     display: inline-block;
-    margin-top: 1.25rem;
+    margin-top: var(--space-xl);
     color: var(--color-accent);
-    font-size: 0.85rem;
+    font-size: var(--font-size-md);
     text-decoration: none;
 
     &:hover {
@@ -897,35 +894,35 @@ svg {
 }
 
 .feature-demo-header {
-    margin-bottom: 2rem;
+    margin-bottom: var(--space-3xl);
 }
 
 .feature-demo-page-title {
-    margin: 0 0 0.5rem;
+    margin: 0 0 var(--space-sm);
     color: var(--color-text);
-    font-size: clamp(2rem, 5vw, 3rem);
-    font-weight: 680;
-    letter-spacing: -0.045em;
-    line-height: 1.08;
+    font-size: clamp(var(--font-size-3xl), 5vw, 3rem);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--tracking-tighter);
+    line-height: var(--line-height-tight);
 }
 
 .feature-demo-page-intro {
     margin: 0;
     color: var(--color-muted);
-    font-size: 1rem;
-    line-height: 1.6;
+    font-size: var(--font-size-body);
+    line-height: var(--line-height-body);
 }
 
 .site-footer-text {
     margin: 0;
     color: var(--color-dim);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     text-align: center;
 }
 
 .site-footer {
     margin: 0 auto;
-    padding: 2rem clamp(1rem, 3vw, 1.5rem) 3rem;
+    padding: var(--space-3xl) clamp(var(--space-lg), 3vw, var(--space-2xl)) var(--space-4xl);
     border-top: 1px solid var(--color-border);
     text-align: center;
 }
@@ -935,15 +932,15 @@ svg {
     flex-wrap: wrap;
     justify-content: center;
     align-items: center;
-    gap: 0.4rem 0;
+    gap: var(--space-xs) 0;
     margin-top: 0.9rem;
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--font-size-xs);
 }
 
 .site-footer-links > * + *::before {
     content: "·";
-    margin: 0 0.75rem;
+    margin: 0 var(--space-md);
     color: var(--color-border-strong);
 }
 
@@ -972,32 +969,32 @@ svg {
     left: 1rem;
     max-width: 480px;
     margin: 0 auto;
-    padding: 1.25rem;
+    padding: var(--space-xl);
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg);
     background: var(--color-surface-raised);
     box-shadow: var(--shadow-panel);
-    font-size: 0.9rem;
+    font-size: var(--font-size-lg);
 }
 
 .analytics-notice p {
-    margin: 0 0 1rem;
+    margin: 0 0 var(--space-lg);
     color: var(--color-muted);
 }
 
 .analytics-notice .analytics-notice-title {
-    margin-bottom: 0.4rem;
+    margin-bottom: var(--space-xs);
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 1rem;
-    font-weight: 700;
+    font-size: var(--font-size-body);
+    font-weight: var(--font-weight-bold);
 }
 
 .analytics-notice-actions {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: var(--space-sm);
 }
 
 .analytics-notice-actions .button {
@@ -1006,21 +1003,21 @@ svg {
 }
 
 .website-analytics-page {
-    margin: 3rem auto;
+    margin: var(--space-4xl) auto;
 }
 
 .docs-section-title {
-    margin: 2rem 0 1rem;
+    margin: var(--space-3xl) 0 var(--space-lg);
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 0.88rem;
-    letter-spacing: 0.02em;
+    font-size: var(--font-size-md);
+    letter-spacing: var(--tracking-wide);
 }
 
 .docs-cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 1rem;
+    gap: var(--space-lg);
 }
 
 .docs-card {
@@ -1052,35 +1049,35 @@ svg {
 }
 
 .docs-card-description {
-    margin: 0.5rem 0 0;
+    margin: var(--space-sm) 0 0;
     color: var(--color-muted);
-    font-size: 0.94rem;
-    line-height: 1.6;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
 }
 
 .docs-section-header {
-    margin-bottom: 2rem;
+    margin-bottom: var(--space-3xl);
 }
 
 .docs-page-title {
     margin: 0;
     color: var(--color-text);
-    font-size: clamp(2rem, 4vw, 3.2rem);
-    font-weight: 680;
-    letter-spacing: -0.045em;
-    line-height: 1.06;
+    font-size: clamp(var(--font-size-3xl), 4vw, 3.2rem);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: var(--tracking-tighter);
+    line-height: var(--line-height-tight);
 }
 
 .docs-section-intro {
-    margin: 0.75rem 0 0;
+    margin: var(--space-md) 0 0;
     color: var(--color-muted);
-    line-height: 1.65;
+    line-height: var(--line-height-relaxed);
 }
 
 .blog-listing {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-lg);
 }
 
 .blog-preview {
@@ -1092,15 +1089,15 @@ svg {
 }
 
 .blog-preview-header {
-    margin-bottom: 0.8rem;
+    margin-bottom: var(--space-md);
 }
 
 .blog-preview-date {
-    margin: 0 0 0.4rem;
+    margin: 0 0 var(--space-xs);
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.04em;
+    font-size: var(--font-size-xs);
+    letter-spacing: var(--tracking-wider);
     text-transform: uppercase;
 }
 
@@ -1121,7 +1118,7 @@ svg {
 .blog-preview-summary {
     margin: 0;
     color: var(--color-muted);
-    line-height: 1.7;
+    line-height: var(--line-height-relaxed);
 }
 
 .blog-preview-summary > :first-child {
@@ -1135,7 +1132,7 @@ svg {
 .docs-layout {
     display: grid;
     grid-template-areas: "global content page";
-    gap: clamp(1.5rem, 3vw, 3rem);
+    gap: clamp(var(--space-2xl), 3vw, var(--space-4xl));
     grid-template-columns: var(--docs-sidebar-width) minmax(0, 1fr) var(--docs-sidebar-width);
     align-items: start;
 }
@@ -1172,21 +1169,21 @@ svg {
     margin: 0 0 0.9rem;
     color: var(--color-accent-dim);
     font-family: var(--font-mono);
-    font-size: 0.8rem;
-    letter-spacing: 0.05em;
-    font-weight: 700;
+    font-size: var(--font-size-sm);
+    letter-spacing: var(--tracking-wider);
+    font-weight: var(--font-weight-bold);
     text-transform: uppercase;
 }
 
 .docs-search {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-lg);
 }
 
 .docs-search__label {
     display: block;
-    margin-bottom: 0.35rem;
+    margin-bottom: var(--space-xs);
     color: var(--color-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
 }
 
 .docs-search__input {
@@ -1196,8 +1193,8 @@ svg {
     background: var(--color-surface);
     color: var(--color-accent);
     font: inherit;
-    font-size: 0.82rem;
-    padding: 0.5rem 0.6rem;
+    font-size: var(--font-size-sm);
+    padding: var(--space-sm) 0.6rem;
 }
 
 .docs-search__input:focus-visible {
@@ -1208,13 +1205,13 @@ svg {
 
 .docs-search__status {
     min-height: 1.2rem;
-    margin: 0.3rem 0 0;
+    margin: var(--space-xs) 0 0;
     color: var(--color-dim);
-    font-size: 0.72rem;
+    font-size: var(--font-size-2xs);
 }
 
 .docs-search__results {
-    margin: 0.4rem 0 0;
+    margin: var(--space-xs) 0 0;
     padding: 0;
     list-style: none;
 }
@@ -1225,7 +1222,7 @@ svg {
 
 .docs-search-result__link {
     display: block;
-    padding: 0.55rem 0;
+    padding: var(--space-sm) 0;
     text-decoration: none;
 }
 
@@ -1237,15 +1234,15 @@ svg {
 
 .docs-search-result__title {
     color: var(--color-accent);
-    font-size: 0.82rem;
-    line-height: 1.3;
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-snug);
 }
 
 .docs-search-result__description {
-    margin-top: 0.2rem;
+    margin-top: var(--space-2xs);
     color: var(--color-dim);
-    font-size: 0.72rem;
-    line-height: 1.35;
+    font-size: var(--font-size-2xs);
+    line-height: var(--line-height-compact);
 }
 
 .docs-nav-list {
@@ -1254,16 +1251,16 @@ svg {
     list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-sm);
 }
 
 .docs-nav-heading {
-    margin: 1.1rem 0 0.45rem;
+    margin: 1.1rem 0 var(--space-sm);
     color: var(--color-accent-dim);
     font-family: var(--font-mono);
-    font-size: 0.8rem;
-    letter-spacing: 0.04em;
-    line-height: 1.25;
+    font-size: var(--font-size-sm);
+    letter-spacing: var(--tracking-wider);
+    line-height: var(--line-height-snug);
     text-transform: uppercase;
 }
 
@@ -1278,12 +1275,12 @@ svg {
     color: var(--color-muted);
     display: block;
     margin-left: -0.45rem;
-    padding: 0.28rem 0.45rem;
+    padding: var(--space-2xs) var(--space-sm);
     border-left: 2px solid transparent;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    font-size: 0.88rem;
+    font-size: var(--font-size-md);
     text-decoration: none;
-    line-height: 1.25;
+    line-height: var(--line-height-snug);
 }
 
 .docs-nav-link.is-active,
@@ -1294,13 +1291,13 @@ svg {
 
 .docs-nav-link.is-active {
     border-left-color: var(--color-accent);
-    font-weight: 650;
+    font-weight: var(--font-weight-heading);
 }
 
 .docs-content-wrapper {
     grid-area: content;
     margin: 0 auto;
-    max-width: 760px;
+    max-width: var(--width-reading);
     /* Ensure the center column shrinks with the grid track instead of overflowing into sidebars. */
     width: 100%;
     min-width: 0;
@@ -1310,11 +1307,11 @@ svg {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.45rem;
-    margin-bottom: 1rem;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-lg);
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--font-size-xs);
 }
 
 .docs-breadcrumbs a {
@@ -1328,10 +1325,10 @@ svg {
 
 .docs-page-lead {
     max-width: 65ch;
-    margin: 0.9rem 0 1.5rem;
+    margin: 0.9rem 0 var(--space-2xl);
     color: var(--color-muted);
     font-size: 1.05rem;
-    line-height: 1.65;
+    line-height: var(--line-height-relaxed);
 }
 
 .docs-outline-list {
@@ -1340,13 +1337,13 @@ svg {
     list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--space-xs);
 }
 
 .docs-outline-list--nested {
-    margin-top: 0.4rem;
+    margin-top: var(--space-xs);
     margin-left: 0.6rem;
-    padding-left: 0.75rem;
+    padding-left: var(--space-md);
     border-left: 1px solid var(--color-border);
 }
 
@@ -1358,8 +1355,8 @@ svg {
     color: var(--color-muted);
     text-decoration: none;
     display: block;
-    font-size: 0.82rem;
-    line-height: 1.35;
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-compact);
     /* Keep long heading tokens inside the TOC column. */
     overflow-wrap: anywhere;
     word-break: normal;
@@ -1372,15 +1369,15 @@ svg {
 .docs-outline-empty {
     margin: 0;
     color: var(--color-dim);
-    font-size: 0.82rem;
-    line-height: 1.45;
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-normal);
 }
 
 .docs-content {
-    margin-top: 1.5rem;
+    margin-top: var(--space-2xl);
     color: var(--color-muted);
     line-height: 1.78;
-    font-size: 1rem;
+    font-size: var(--font-size-body);
     /* Keep prose readable while still allowing long tokens to break when required. */
     overflow-wrap: break-word;
     word-break: normal;
@@ -1404,8 +1401,8 @@ svg {
     border-radius: 0.3rem;
     background: var(--color-surface);
     color: var(--color-accent);
-    padding: 0 0.35rem;
-    line-height: 1.4;
+    padding: 0 var(--space-xs);
+    line-height: var(--line-height-compact);
     font-size: 0.92em;
     overflow-wrap: anywhere;
     white-space: normal;
@@ -1413,11 +1410,11 @@ svg {
 }
 
 .docs-content pre {
-    margin: 1rem 0;
+    margin: var(--space-lg) 0;
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     background: var(--color-surface);
-    padding: 0.85rem 1rem;
+    padding: 0.85rem var(--space-lg);
     padding-right: 4.5rem;
     overflow-x: auto;
     white-space: pre-wrap;
@@ -1431,8 +1428,8 @@ svg {
     background: transparent;
     color: inherit;
     padding: 0;
-    font-size: 0.92rem;
-    line-height: 1.6;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-body);
     overflow-wrap: anywhere;
     word-break: normal;
 }
@@ -1444,14 +1441,14 @@ svg {
     background: transparent;
     border: 1px solid var(--color-border);
     border-radius: 0.25rem;
-    padding: 0.15rem 0.45rem;
+    padding: var(--space-3xs) var(--space-sm);
     font-family: var(--font-mono);
-    font-size: 0.72rem;
-    font-weight: 600;
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-muted);
     cursor: pointer;
     transition: color var(--transition-fast), border-color var(--transition-fast);
-    line-height: 1.5;
+    line-height: var(--line-height-normal);
 }
 
 .docs-copy-btn:hover {
@@ -1460,32 +1457,32 @@ svg {
 }
 
 .docs-mermaid {
-    margin: 1rem 0;
+    margin: var(--space-lg) 0;
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     background: var(--color-surface);
-    padding: 0.85rem 1rem 1rem;
+    padding: 0.85rem var(--space-lg) var(--space-lg);
 }
 
 .docs-mermaid__toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--space-md);
     flex-wrap: wrap;
-    margin-bottom: 0.8rem;
+    margin-bottom: var(--space-md);
 }
 
 .docs-mermaid__hint {
     margin: 0;
     color: var(--color-muted);
-    font-size: 0.78rem;
-    line-height: 1.5;
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-normal);
 }
 
 .docs-mermaid__actions {
     display: inline-flex;
-    gap: 0.45rem;
+    gap: var(--space-sm);
     align-items: center;
     flex-wrap: wrap;
 }
@@ -1497,9 +1494,9 @@ svg {
     color: var(--color-muted);
     cursor: pointer;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
-    font-weight: 600;
-    line-height: 1;
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--line-height-none);
     min-width: 2.4rem;
     padding: 0.42rem 0.65rem;
     transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
@@ -1515,7 +1512,7 @@ svg {
 .docs-mermaid__diagram {
     overflow: auto;
     max-height: min(42rem, 70vh);
-    padding: 0.4rem;
+    padding: var(--space-xs);
     border-radius: 0.4rem;
     background: var(--color-bg);
     cursor: grab;
@@ -1565,9 +1562,9 @@ svg {
 .docs-content h3,
 .docs-content h4 {
     color: var(--color-text);
-    font-weight: 650;
-    letter-spacing: -0.025em;
-    line-height: 1.3;
+    font-weight: var(--font-weight-heading);
+    letter-spacing: var(--tracking-snug);
+    line-height: var(--line-height-snug);
     margin-bottom: 0.6rem;
 }
 
@@ -1578,22 +1575,22 @@ svg {
 
 .docs-content h3 {
     font-size: 1.25rem;
-    margin-top: 2rem;
+    margin-top: var(--space-3xl);
 }
 
 .docs-content h4 {
-    font-size: 1.08rem;
+    font-size: var(--font-size-xl);
     margin-top: 1.6rem;
 }
 
 .docs-content p,
 .docs-content ul,
 .docs-content ol {
-    margin: 0.5rem 0 0.9rem;
+    margin: var(--space-sm) 0 0.9rem;
 }
 
 .docs-content li + li {
-    margin-top: 0.28rem;
+    margin-top: var(--space-2xs);
 }
 
 /* Docs tables should wrap in place instead of forcing horizontal scrolling. */
@@ -1606,8 +1603,8 @@ svg {
     border: 0;
     border-radius: 0;
     display: table;
-    font-size: 0.88rem;
-    line-height: 1.5;
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-normal);
 }
 
 .docs-content thead {
@@ -1616,9 +1613,9 @@ svg {
 
 .docs-content thead th {
     color: var(--color-accent);
-    font-weight: 600;
-    font-size: 0.82rem;
-    letter-spacing: 0.03em;
+    font-weight: var(--font-weight-semibold);
+    font-size: var(--font-size-sm);
+    letter-spacing: var(--tracking-wider);
     text-transform: uppercase;
     text-align: left;
     padding: 0.65rem 0.9rem;
@@ -1635,7 +1632,7 @@ svg {
 }
 
 .docs-content tbody td {
-    padding: 0.55rem 0.9rem;
+    padding: var(--space-sm) 0.9rem;
     border-bottom: 1px solid var(--color-border);
     color: var(--color-muted);
     vertical-align: top;
@@ -1661,12 +1658,12 @@ svg {
 
 .docs-content tbody td:first-child {
     color: var(--color-accent-dim);
-    font-weight: 500;
+    font-weight: var(--font-weight-medium);
 }
 
 .docs-content .zola-anchor {
     font-size: 0.72em;
-    margin-left: 0.45rem;
+    margin-left: var(--space-sm);
     opacity: 0.72;
     text-decoration: none;
     vertical-align: middle;
@@ -1682,7 +1679,7 @@ svg {
     z-index: 80;
     display: grid;
     place-items: start center;
-    padding: min(12vh, 7rem) 1rem 1rem;
+    padding: min(12vh, 7rem) var(--space-lg) var(--space-lg);
 }
 
 .search-dialog-backdrop {
@@ -1712,24 +1709,24 @@ svg {
     display: flex;
     align-items: start;
     justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
+    gap: var(--space-lg);
+    margin-bottom: var(--space-lg);
 }
 
 .search-dialog-eyebrow {
-    margin-bottom: 0.2rem;
+    margin-bottom: var(--space-2xs);
 }
 
 .search-dialog-title {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.35rem;
-    letter-spacing: -0.025em;
+    font-size: var(--font-size-2xl);
+    letter-spacing: var(--tracking-snug);
 }
 
 .search-dialog-close {
-    min-height: 2rem;
-    padding: 0.25rem 0.55rem;
+    min-height: var(--control-height-sm);
+    padding: var(--space-2xs) var(--space-sm);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-bg);
@@ -1747,7 +1744,7 @@ svg {
     display: flex;
     align-items: center;
     gap: 0.65rem;
-    min-height: 3.25rem;
+    min-height: var(--control-height-xl);
     padding: 0 0.9rem;
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
@@ -1762,7 +1759,7 @@ svg {
 .search-field-prompt {
     color: var(--color-accent);
     font-family: var(--font-mono);
-    font-size: 1.1rem;
+    font-size: var(--font-size-xl);
 }
 
 .search-field input {
@@ -1771,7 +1768,7 @@ svg {
     outline: 0;
     background: transparent;
     color: var(--color-text);
-    font-size: 1rem;
+    font-size: var(--font-size-body);
 }
 
 .search-field input::placeholder {
@@ -1779,23 +1776,23 @@ svg {
 }
 
 .search-status {
-    margin: 0.7rem 0;
+    margin: var(--space-md) 0;
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.76rem;
+    font-size: var(--font-size-xs);
 }
 
 .search-results {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--space-xs);
 }
 
 .search-result {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 0.25rem 1rem;
-    padding: 0.75rem 0.85rem;
+    gap: var(--space-2xs) var(--space-lg);
+    padding: var(--space-md) 0.85rem;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
     color: var(--color-muted);
@@ -1815,14 +1812,14 @@ svg {
 
 .search-result-description {
     grid-column: 1 / -1;
-    font-size: 0.84rem;
-    line-height: 1.45;
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-normal);
 }
 
 .search-result-path {
     color: var(--color-dim);
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: var(--font-size-2xs);
 }
 
 /* Paragraph anchors expose a lightweight `#` affordance for deep links. */
@@ -1832,12 +1829,12 @@ svg {
     color: var(--color-dim);
     display: inline-block;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
-    font-weight: 600;
-    line-height: 1;
-    margin-left: 0.4rem;
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--line-height-none);
+    margin-left: var(--space-xs);
     opacity: 0;
-    padding: 0.15rem 0.3rem;
+    padding: var(--space-3xs) var(--space-xs);
     text-decoration: none;
     transition: color var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
     vertical-align: middle;
@@ -1914,7 +1911,7 @@ svg {
 @media (max-width: 860px) {
     /* Keep docs sidebars compact on phones so content is reachable without long scrolling. */
     .docs-layout {
-        gap: 1.25rem;
+        gap: var(--space-xl);
         grid-template-areas:
             "global"
             "content"
@@ -1939,11 +1936,11 @@ svg {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 1rem;
-        padding: 0.85rem 1rem;
+        gap: var(--space-lg);
+        padding: 0.85rem var(--space-lg);
         color: var(--color-text);
         font-family: var(--font-mono);
-        font-size: 0.86rem;
+        font-size: var(--font-size-md);
         cursor: pointer;
         list-style: none;
     }
@@ -1964,7 +1961,7 @@ svg {
     .docs-nav-disclosure-content {
         max-height: min(45vh, 24rem);
         overflow-y: auto;
-        padding: 0 1rem 1rem;
+        padding: 0 var(--space-lg) var(--space-lg);
         -webkit-overflow-scrolling: touch;
         overscroll-behavior: contain;
     }
@@ -1978,24 +1975,24 @@ svg {
     }
 
     .docs-content {
-        font-size: 0.92rem;
-        line-height: 1.7;
+        font-size: var(--font-size-lg);
+        line-height: var(--line-height-relaxed);
     }
 
     .docs-content pre {
-        padding-right: 1rem;
+        padding-right: var(--space-lg);
     }
 
     .docs-copy-btn {
         position: static;
         display: block;
         width: fit-content;
-        margin-top: 0.55rem;
+        margin-top: var(--space-sm);
         margin-left: auto;
     }
 
     .docs-mermaid {
-        padding: 0.8rem;
+        padding: var(--space-md);
     }
 
     .docs-mermaid__diagram {
@@ -2013,14 +2010,14 @@ svg {
 
     .docs-sidebar--global {
         border-right: 1px solid var(--color-border);
-        padding-right: 1rem;
+        padding-right: var(--space-lg);
     }
 
     .docs-sidebar--page {
         border-left: none;
         border-right: 1px solid var(--color-border);
         padding-left: 0;
-        padding-right: 1rem;
+        padding-right: var(--space-lg);
     }
 }
 
@@ -2080,7 +2077,7 @@ svg {
     /* Convert command tabs into touch-friendly rows and prevent command text truncation. */
     .install-tabs {
         flex-wrap: wrap;
-        gap: 0.4rem;
+        gap: var(--space-xs);
         margin-bottom: 0.6rem;
     }
 
@@ -2126,13 +2123,13 @@ svg {
         width: 100%;
         flex: 1 1 auto;
         flex-wrap: wrap;
-        row-gap: 0.35rem;
+        row-gap: var(--space-xs);
     }
 
     .site-nav-links {
         width: 100%;
         flex-wrap: wrap;
-        row-gap: 0.35rem;
+        row-gap: var(--space-xs);
     }
 
     .site-nav-actions {

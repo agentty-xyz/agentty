@@ -48,14 +48,15 @@ documentation maintainable as it grows.
 ## Preserve the Site Design System
 
 - Treat `design/tokens.json` at the repository root as the source of truth for color,
-  typography, radius, shadow, and motion tokens and for the self-hosted monospace face.
+  typography and its type scale, spacing, column width, control height, radius, shadow,
+  and motion tokens and for the self-hosted monospace face.
   `cargo run -p ag-xtask -- design-tokens` generates `sass/_tokens.scss`,
   `sass/_fonts.scss`, and the `theme-color` value in `templates/partials/seo.html` from
-  it; never edit those by hand. Keep layout sizes in `sass/site.scss`. Extend an
-  existing token before adding a raw visual value: the `check-design-tokens` hook
-  rejects raw colors in stylesheets and in the scripts and templates under `templates/`
-  and `static/`, and any color pair below its contrast minimum. Scripts read token
-  values at runtime with `getComputedStyle`.
+  it; never edit those by hand. Keep only site-specific layout sizes, such as the
+  sidebar width, in `sass/site.scss`. Extend an existing token before adding a raw
+  visual value: the `check-design-tokens` hook rejects raw colors in stylesheets and in
+  the scripts and templates under `templates/` and `static/`, and any color pair below
+  its contrast minimum. Scripts read token values at runtime with `getComputedStyle`.
 - The brand mark and favicon live in `design/`. The same command copies them to
   `static/mark.svg`, which `templates/base.html` inlines, and `static/favicon.ico`.
 - Follow `design/DESIGN.md` for color roles, typography, both themes, accessibility, and

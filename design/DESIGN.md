@@ -5,8 +5,9 @@ pages as CSS custom properties through `tokens.css`, which is generated from a t
 source in the W3C Design Tokens format. `fonts.css`, generated from the same source,
 embeds the self-hosted monospace face, and `base.css` holds the foundations and
 components that the pages share. Load `tokens.css` first, then `fonts.css`, then
-`base.css`, then a page's own rules, and build every color, font, radius, shadow, and
-transition from the custom properties instead of writing values by hand.
+`base.css`, then a page's own rules, and build every color, font, type size, spacing,
+width, control height, radius, shadow, and transition from the custom properties instead
+of writing values by hand.
 
 ## Overview
 
@@ -176,29 +177,104 @@ green, review states info blue, and syncing and merging the full accent.
 - The documentation home page alone also uses Martian Mono, a display face for its hero
   and glyph art, loaded from Google Fonts on that page only. No other page or component
   uses it.
-- Body text is 1rem at line height 1.6 with `text-rendering: optimizeLegibility`. Lead
-  paragraphs use `--color-muted` at about 1.1rem and line height 1.7, kept to 60ch.
-- Headings use the sans-serif stack at weight 600 to 700 with negative letter spacing,
-  from about -0.025em on small headings to -0.055em on the largest, and line heights
-  from 1.25 down to about 1 as the size grows.
+
+### Type Scale
+
+Take every size, weight, line height, and letter spacing from these tokens. A display
+heading may grow fluidly with `clamp()` between two of them, and the few sizes that
+belong to one figure, such as a hero title, stay where that figure is styled.
+
+| Size token         | Value   | Use                                           |
+| ------------------ | ------- | --------------------------------------------- |
+| `--font-size-3xs`  | 0.68rem | Keycaps, badges, the smallest metadata        |
+| `--font-size-2xs`  | 0.72rem | Eyebrows, window bars, status labels          |
+| `--font-size-xs`   | 0.78rem | Navigation, small labels, search hints        |
+| `--font-size-sm`   | 0.82rem | Field labels, table text, compact controls    |
+| `--font-size-md`   | 0.86rem | Buttons, secondary text in lists              |
+| `--font-size-lg`   | 0.92rem | Descriptions and supporting prose in panels   |
+| `--font-size-body` | 1rem    | Body text and form input                      |
+| `--font-size-xl`   | 1.1rem  | Lead paragraphs and the brand name            |
+| `--font-size-2xl`  | 1.35rem | Dialog and panel titles                       |
+| `--font-size-3xl`  | 2rem    | Large display figures, such as a pairing code |
+
+| Weight token             | Value | Use                                    |
+| ------------------------ | ----- | -------------------------------------- |
+| `--font-weight-regular`  | 400   | Body text                              |
+| `--font-weight-medium`   | 500   | Emphasis inside tables                 |
+| `--font-weight-semibold` | 600   | Buttons, the brand name, strong labels |
+| `--font-weight-heading`  | 650   | Section and content headings           |
+| `--font-weight-bold`     | 700   | Page titles and the strongest emphasis |
+
+| Line height token       | Value | Use                                    |
+| ----------------------- | ----- | -------------------------------------- |
+| `--line-height-none`    | 1     | Single-line controls, display headings |
+| `--line-height-tight`   | 1.1   | Large headings                         |
+| `--line-height-snug`    | 1.25  | Small headings, labels that may wrap   |
+| `--line-height-compact` | 1.4   | Metadata, cards, inline code           |
+| `--line-height-normal`  | 1.5   | Tables, notices, buttons with text     |
+| `--line-height-body`    | 1.6   | Body text and code blocks              |
+| `--line-height-relaxed` | 1.7   | Lead paragraphs and long answers       |
+
+| Tracking token        | Value    | Use                                   |
+| --------------------- | -------- | ------------------------------------- |
+| `--tracking-tightest` | -0.055em | The largest display heading           |
+| `--tracking-tighter`  | -0.045em | Page titles                           |
+| `--tracking-tight`    | -0.035em | Section titles                        |
+| `--tracking-snug`     | -0.025em | Small headings and dialog titles      |
+| `--tracking-wide`     | 0.02em   | The brand name and monospace headings |
+| `--tracking-wider`    | 0.04em   | Uppercase group and table labels      |
+| `--tracking-widest`   | 0.08em   | Eyebrows and other uppercase captions |
+
+- Body text is `--font-size-body` at `--line-height-body` with
+  `text-rendering: optimizeLegibility`. Lead paragraphs use `--color-muted` at
+  `--font-size-xl` and `--line-height-relaxed`, kept to 60ch.
+- Headings use the sans-serif stack at `--font-weight-heading` or `--font-weight-bold`,
+  and tighten as they grow: `--tracking-snug` and `--line-height-snug` on small
+  headings, down to `--tracking-tightest` and `--line-height-none` on the largest.
 - Eyebrows, the small labels above headings, use the monospace stack in `--color-accent`
-  at 0.72rem to 0.78rem, uppercase, with 0.08em letter spacing.
-- The brand name uses the monospace stack at 1.1rem, weight 600, with 0.02em letter
-  spacing.
+  at `--font-size-2xs` or `--font-size-xs`, uppercase, with `--tracking-widest`.
+- The brand name uses the monospace stack at `--font-size-xl`, `--font-weight-semibold`,
+  and `--tracking-wide`.
 
 ## Layout
 
-- Pages are a sticky header over one centered column. Prose columns are about 800px
-  wide, wide sections 960px, and documentation with a sidebar 1240px; a chat column is
-  about 760px.
-- Horizontal padding is fluid, such as `clamp(1rem, 3vw, 1.5rem)`, so pages hold up from
-  phones to desktops without separate layouts. On narrow screens, header groups wrap
-  onto their own rows instead of shrinking.
-- Spacing follows a loose rem scale: 0.35rem and 0.5rem inside controls, 0.75rem to 1rem
-  between related items, and 1.25rem to 2rem between groups. Section padding grows with
-  the viewport, from about 3rem to 5.5rem.
-- Controls are at least 2.15rem tall, and primary actions 2.75rem, so they stay easy to
-  hit.
+| Token             | Value  | Use                                      |
+| ----------------- | ------ | ---------------------------------------- |
+| `--width-reading` | 760px  | A documentation article or a chat column |
+| `--width-prose`   | 800px  | A prose page                             |
+| `--width-wide`    | 960px  | Wide sections, such as feature grids     |
+| `--width-docs`    | 1240px | Documentation with its sidebars          |
+
+| Token         | Value   | Token         | Value   |
+| ------------- | ------- | ------------- | ------- |
+| `--space-3xs` | 0.15rem | `--space-xl`  | 1.25rem |
+| `--space-2xs` | 0.25rem | `--space-2xl` | 1.5rem  |
+| `--space-xs`  | 0.35rem | `--space-3xl` | 2rem    |
+| `--space-sm`  | 0.5rem  | `--space-4xl` | 3rem    |
+| `--space-md`  | 0.75rem | `--space-5xl` | 4rem    |
+| `--space-lg`  | 1rem    |               |         |
+
+| Token                 | Value   | Use                                             |
+| --------------------- | ------- | ----------------------------------------------- |
+| `--control-height-xs` | 1.75rem | Options inside a segmented control or a toolbar |
+| `--control-height-sm` | 2rem    | Compact buttons beside content, such as copy    |
+| `--control-height-md` | 2.15rem | The minimum for every other control             |
+| `--control-height-lg` | 2.75rem | Primary actions, fields, every control on touch |
+| `--control-height-xl` | 3.25rem | Search and code entry fields                    |
+
+- Pages are a sticky header over one centered column, `--width-prose` wide, or
+  `--width-wide` and `--width-docs` for wider sections; an article or a chat column is
+  `--width-reading`. Sidebars and other surface-specific sizes stay in the surface's own
+  stylesheet.
+- Horizontal padding is fluid, such as `clamp(var(--space-lg), 3vw, var(--space-2xl))`,
+  so pages hold up from phones to desktops without separate layouts. On narrow screens,
+  header groups wrap onto their own rows instead of shrinking.
+- Spacing comes from the `--space-*` scale: `--space-xs` and `--space-sm` inside
+  controls, `--space-md` and `--space-lg` between related items, and `--space-xl` to
+  `--space-3xl` between groups. Section padding grows with the viewport, from
+  `--space-4xl` to about 5.5rem.
+- Controls are at least `--control-height-md` tall, and primary actions and every
+  control on a touch layout `--control-height-lg`, so they stay easy to hit.
 
 ## Elevation & Depth
 
@@ -262,6 +338,9 @@ Pages build these from the same tokens when they need them:
 
 - Do build every color, font, radius, shadow, and transition from the custom properties;
   don't write a hex value, `rgb()`, or a named color in a stylesheet.
+- Do take sizes, weights, line heights, letter spacing, spacing, column widths, and
+  control heights from their scales; don't add a value a hair off a step. A dimension
+  that belongs to one element, such as an icon or a sidebar, may stay literal.
 - Do change a value only at its token source and regenerate `tokens.css`; don't edit
   `tokens.css`.
 - Do keep one primary action per view; don't fill several buttons with the accent.

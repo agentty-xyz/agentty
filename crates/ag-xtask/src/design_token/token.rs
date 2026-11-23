@@ -26,6 +26,27 @@ const CONTRAST_EXTENSION: &str = "xyz.agentty.contrast";
 /// Root extension that lists the self-hosted font faces.
 const FONT_FACE_EXTENSION: &str = "xyz.agentty.fontFaces";
 
+/// Token extension that names the CSS unit a `number` token is rendered in,
+/// for values such as letter spacing in `em` that DTCG dimensions cannot hold.
+const UNIT_EXTENSION: &str = "xyz.agentty.unit";
+
+/// CSS units a `number` token may name.
+const NUMBER_UNITS: [&str; 1] = ["em"];
+
+/// DTCG font weight aliases and the weight each names.
+const FONT_WEIGHT_ALIASES: [(u64, &[&str]); 10] = [
+    (100, &["thin", "hairline"]),
+    (200, &["extra-light", "ultra-light"]),
+    (300, &["light"]),
+    (400, &["normal", "regular", "book"]),
+    (500, &["medium"]),
+    (600, &["semi-bold", "demi-bold"]),
+    (700, &["bold"]),
+    (800, &["extra-bold", "ultra-bold"]),
+    (900, &["black", "heavy"]),
+    (950, &["extra-black", "ultra-black"]),
+];
+
 /// Root group whose child groups hold the values only one surface uses.
 const SURFACES: &str = "surfaces";
 
@@ -199,6 +220,12 @@ impl Value {
             "color" => Color::parse(json).map(Self::Color),
             "dimension" => Self::dimension(json).map(Self::Css),
             "fontFamily" => Self::font_family(json).map(Self::Css),
+            "fontWeight" => Self::font_weight(json).map(Self::Css),
+            "number" => json
+                .as_number()
+                .map(ToString::to_string)
+                .map(Self::Css)
+                .ok_or_else(|| "expected a number".to_owned()),
             "shadow" => Self::shadow(json).map(Self::Css),
             "transition" => Self::transition(json).map(Self::Css),
             _ => Err(format!("unsupported $type {kind}")),
@@ -210,6 +237,14 @@ impl Value {
         match self {
             Self::Color(color) => color.css(),
             Self::Css(text) => text.clone(),
+        }
+    }
+
+    /// Appends `unit` to a rendered number.
+    fn in_unit(self, unit: Option<&str>) -> Self {
+        match (self, unit) {
+            (Self::Css(text), Some(unit)) => Self::Css(format!("{text}{unit}")),
+            (value, _) => value,
         }
     }
 
@@ -259,6 +294,23 @@ impl Value {
             })
             .collect::<Vec<_>>()
             .join(", "))
+    }
+
+    /// Renders a weight from 1 to 1000, or one of its DTCG aliases, as a
+    /// number.
+    fn font_weight(json: &Json) -> Result<String, String> {
+        let weight = match json {
+            Json::Number(number) => number.as_u64().filter(|weight| (1..=1000).contains(weight)),
+            Json::String(alias) => FONT_WEIGHT_ALIASES
+                .iter()
+                .find(|(_, names)| names.contains(&alias.as_str()))
+                .map(|(weight, _)| *weight),
+            _ => None,
+        };
+
+        weight
+            .map(|weight| weight.to_string())
+            .ok_or_else(|| "expected a weight from 1 to 1000 or a weight alias".to_owned())
     }
 
     fn shadow(json: &Json) -> Result<String, String> {
@@ -523,20 +575,44 @@ impl Parser {
         };
         let value = Value::parse(kind, &token["$value"]);
         let dark = Self::dark(kind, token);
-        match (value, dark) {
-            (Ok(value), Ok(dark)) => self.tokens.push(Token {
-                dark,
+        let unit = Self::unit(kind, token);
+        match (value, dark, unit) {
+            (Ok(value), Ok(dark), Ok(unit)) => self.tokens.push(Token {
+                dark: dark.map(|dark| dark.in_unit(unit)),
                 name: scope.name.join("-"),
                 path: scope.path.join("."),
                 surface: scope.surface.clone(),
-                value,
+                value: value.in_unit(unit),
             }),
-            (value, dark) => {
-                for error in [value.err(), dark.err()].into_iter().flatten() {
+            (value, dark, unit) => {
+                for error in [value.err(), dark.err(), unit.err()].into_iter().flatten() {
                     self.error(scope, &error);
                 }
             }
         }
+    }
+
+    /// Reads the CSS unit a `number` token names in the unit extension.
+    fn unit<'token>(
+        kind: &str,
+        token: &'token Map<String, Json>,
+    ) -> Result<Option<&'token str>, String> {
+        let Some(unit) = token
+            .get("$extensions")
+            .and_then(|extensions| extensions.get(UNIT_EXTENSION))
+        else {
+            return Ok(None);
+        };
+
+        unit.as_str()
+            .filter(|unit| kind == "number" && NUMBER_UNITS.contains(unit))
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "the unit extension gives a number token one of the units {}",
+                    NUMBER_UNITS.join(", ")
+                )
+            })
     }
 
     /// Reads the dark theme's value from the theme extension.

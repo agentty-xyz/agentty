@@ -13,8 +13,9 @@ Applies to site configuration, templates, content, and static assets.
 
 - Design values and the self-hosted monospace face live in `design/tokens.json`.
   `docs/site/sass/_tokens.scss` and `docs/site/sass/_fonts.scss` are generated from it,
-  and `docs/site/sass/site.scss` loads them with `@use`; keep only layout sizes and
-  tokens derived from other tokens in `site.scss`. Load no font from another origin
+  and `docs/site/sass/site.scss` loads them with `@use`; keep only site-specific layout
+  sizes and tokens derived from other tokens in `site.scss`, and take type, spacing,
+  widths, and control heights from the token scales. Load no font from another origin
   except the home page's display face.
 - Shared foundations and components live in `design/base.css`, which
   `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens and
