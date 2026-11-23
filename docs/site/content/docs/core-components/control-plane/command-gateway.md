@@ -38,10 +38,15 @@ task, and graph reads remain separate queries.
 Each request carries a fresh command ID and an initiator: terminal, session API, or
 remote control. Durable messages, task attempts, and review publication also carry an
 operation correlation. The command ID identifies one admission attempt; the durable
-operation ID retains its existing deduplication semantics. Initiator metadata records
-provenance rather than granting permissions; the
-[remote-control](@/docs/usage/remote-control.md) server limits paired devices to its own
-subset of session API calls before they reach the gateway.
+operation ID retains its existing deduplication semantics. For terminal and session API
+requests, the initiator records provenance. For
+[remote-control](@/docs/usage/remote-control.md) requests it also sets the scope: in the
+foreground turn that serves them, the gateway refuses a mutation outside the set remote
+control serves, and answers a request that names a session the host does not list as if
+the session did not exist. Reads that name a session or another object carry the
+initiator too, so the same checks apply to them; reads of the active project as a whole
+serve every caller. The remote-control server checks the same limits before it asks the
+host.
 
 ## Delivery and Acknowledgement
 

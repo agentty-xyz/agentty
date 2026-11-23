@@ -4,7 +4,8 @@ use ag_session::{CreateSessionRequest, ReviewRequest, SessionError, SessionId};
 use tokio::sync::oneshot;
 
 use super::{
-    CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+    CommandDelivery, CommandInitiator, RemoteScope, ReviewRequestCommand, SessionCommand,
+    SessionMutation,
 };
 use crate::app::message_admission::{MessageIntent, MessagePlan};
 use crate::app::session_api::api_error_from_app;
@@ -12,10 +13,18 @@ use crate::app::{App, AppError};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 
+/// Refusal of a request from a paired device that remote control does not
+/// serve.
+const REMOTE_NOT_SERVED: &str = "Remote control does not serve this operation";
+
 impl App {
     /// Admits a typed mutation on the foreground owner. Response senders retain
     /// their existing lifetime: immediate admission, prepared creation, or
     /// worker-owned publication completion.
+    ///
+    /// A paired device's mutation is refused first, in this same turn, when
+    /// remote control does not serve it or it names a session the host does
+    /// not list; see [`Self::remote_refusal`].
     pub(crate) async fn admit_session_command(
         &mut self,
         command: SessionCommand,
@@ -35,6 +44,9 @@ impl App {
             initiator = ?initiator,
             "admitting session command"
         );
+        if let Some(refusal) = self.remote_refusal(initiator, delivery.remote_scope()) {
+            return delivery.refuse(refusal);
+        }
         match delivery {
             CommandDelivery::Create {
                 request,
@@ -68,6 +80,32 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Returns the error that turns away a request from `initiator` that
+    /// reaches `scope`, checked in the foreground turn that serves it.
+    ///
+    /// Only a paired device is limited: it reaches the operations remote
+    /// control serves, and a session only while the host lists it for the
+    /// active project, which it otherwise answers as missing.
+    pub(crate) fn remote_refusal(
+        &self,
+        initiator: CommandInitiator,
+        scope: RemoteScope<'_>,
+    ) -> Option<SessionError> {
+        if initiator != CommandInitiator::Remote {
+            return None;
+        }
+
+        match scope {
+            RemoteScope::NotServed => Some(SessionError::Operation(REMOTE_NOT_SERVED.to_string())),
+            RemoteScope::Project => None,
+            RemoteScope::Session(session_id) => self
+                .sessions
+                .session_for_id(session_id)
+                .is_none()
+                .then_some(SessionError::NotFound),
+        }
     }
 
     /// Admits terminal creation directly, retaining staged workspace setup.

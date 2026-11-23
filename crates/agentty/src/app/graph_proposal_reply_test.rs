@@ -14,7 +14,6 @@ use ag_protocol::{
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
     GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersionOutcome, SessionError,
-    SessionService,
 };
 use ag_store::{DbError, MockGraphProposalRepository};
 use ag_worker::MockRunClient;
@@ -22,7 +21,6 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::{DECISION_PENDING, clarification_questions};
-use crate::app::command_gateway::CommandInitiator;
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
 use crate::app::graph_reply::GraphReplyOutcome;
@@ -177,7 +175,7 @@ async fn remote_message_replies_to_the_pending_proposal_instead_of_starting_a_tu
     // Arrange
     let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
     let _consumer = app.sessions.foreground_consumer();
-    let remote = remote_service(&app);
+    let remote = app.remote_session_service();
 
     // Act
     let result = app
@@ -529,15 +527,6 @@ fn submission(text: &str) -> PromptSubmission {
         session_id: "sess".into(),
         session_mode: PromptSessionMode::Existing,
     }
-}
-
-/// Session service a paired remote-control device sends commands through.
-pub(in crate::app) fn remote_service(app: &App) -> SessionService {
-    SessionService::new(Arc::new(
-        app.sessions
-            .handle()
-            .with_initiator(CommandInitiator::Remote),
-    ))
 }
 
 /// Admits the action the background decision sent through the gateway.

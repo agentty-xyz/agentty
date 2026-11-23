@@ -80,23 +80,26 @@ not execution ownership.
 <a id="architecture-runtime-flow-remote-control"></a> The
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
 runtime's Tokio executor but owns no application state. It calls the session API through
-the mailbox like any programmatic caller. The reducer advances the session-change
-revision after it applies session updates, reloads, admitted mutations (including graph
-mutations the terminal admits, which write graph state without a session event), a
-change to a session's live status line, queued actions, or shown focused review, a step
-of a project sync, or new Git status of the project or its sessions. A graph driver
-reports a session update each time a node settles, not only after its dispatch pass, so
-remote views follow a pass that runs wave after wave. That also covers the graph
-questions a session snapshot reports: they change only when a proposal version or a node
-settles, a reply is recorded or decided, or a graph mutation is admitted, each of which
-already advances the revision, so devices need no poll of their own. The foreground loop
-makes the same live-detail check after terminal input, because a key can clear or
-replace a review without any app event. Connected clients then fetch the list and the
-open session again, so remote views converge on durable state instead of replaying
-events. A session diff query captures its diff source in the mailbox and runs Git in a
-detached task that answers the caller directly, so it adds no reducer event. A session
-file listing works the same way: the mailbox captures the worktree folder, or answers
-from the `@`-mention index cache, and a blocking worker walks the worktree.
+the mailbox like any programmatic caller, under the remote initiator: the foreground
+turn that serves each of its requests answers a session the host does not list as
+missing and refuses any operation remote control does not serve. The reducer advances
+the session-change revision after it applies session updates, reloads, admitted
+mutations (including graph mutations the terminal admits, which write graph state
+without a session event), a change to a session's live status line, queued actions, or
+shown focused review, a step of a project sync, or new Git status of the project or its
+sessions. A graph driver reports a session update each time a node settles, not only
+after its dispatch pass, so remote views follow a pass that runs wave after wave. That
+also covers the graph questions a session snapshot reports: they change only when a
+proposal version or a node settles, a reply is recorded or decided, or a graph mutation
+is admitted, each of which already advances the revision, so devices need no poll of
+their own. The foreground loop makes the same live-detail check after terminal input,
+because a key can clear or replace a review without any app event. Connected clients
+then fetch the list and the open session again, so remote views converge on durable
+state instead of replaying events. A session diff query captures its diff source in the
+mailbox and runs Git in a detached task that answers the caller directly, so it adds no
+reducer event. A session file listing works the same way: the mailbox captures the
+worktree folder, or answers from the `@`-mention index cache, and a blocking worker
+walks the worktree.
 
 ## App Event Reducer
 

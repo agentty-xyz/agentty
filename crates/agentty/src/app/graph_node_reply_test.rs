@@ -13,7 +13,6 @@ use tempfile::TempDir;
 
 use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
-use crate::app::graph_proposal_reply::tests::remote_service;
 use crate::app::graph_reply::GraphReplyOutcome;
 use crate::domain::session::SessionId;
 use crate::presentation::execution_graph::tests::graph_view;
@@ -100,7 +99,7 @@ async fn remote_message_answers_the_awaiting_node_instead_of_starting_a_turn() {
         })
         .returning(|_| Ok(true));
     let (mut app, _directory) = app_with(repository).await;
-    let remote = remote_service(&app);
+    let remote = app.remote_session_service();
 
     // Act
     let result = app

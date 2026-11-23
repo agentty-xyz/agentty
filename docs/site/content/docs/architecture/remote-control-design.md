@@ -211,6 +211,33 @@ out of reach.
 - The capability list leaves room for per-device permissions or a terminal approval
   later without a protocol change.
 
+### The host enforces the remote scope itself
+
+**Context.** `ag-remote` checks that the host lists a session before each request that
+names it and calls only the approved operations. The host trusted those checks, and the
+listed check and the operation ran in separate turns of the foreground loop, so a
+project switch between them could let one request reach a session the device no longer
+sees.
+
+**Decision.** The remote server's session service tags as remote every mutation and
+every read that names a session or another object; reads of the active project as a
+whole serve every caller. In the foreground turn that serves a remote request, the host
+answers a session it does not list for the active project as missing and refuses any
+operation outside the approved set with `Remote control does not serve this operation`.
+One exhaustive classification of the host's mutations names that set, payloads included:
+a question answer or proposal request that carries attachments, which name files on the
+host, and a publication that names its branch are not served. The reads remote control
+never makes, of graphs, proposals, and tasks by their own identity and of a session's
+tasks, are refused as a group. `ag-remote` keeps its own checks.
+
+**Consequences.**
+
+- Both limits hold even if `ag-remote` gains a call by mistake, and a project switch
+  between its check and the host's turn no longer reaches the old session.
+- A new host mutation is unavailable to devices until it is classified, so extending
+  remote control changes both the host and `ag-remote`.
+- Terminal and in-process callers are not affected.
+
 ### The relay is stateless and joins one connection per device
 
 The relay keeps only open connections in memory, and a restart only makes clients

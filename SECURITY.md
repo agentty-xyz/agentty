@@ -75,6 +75,12 @@ the device's page asks to confirm first. With those, anyone holding a paired dev
 have code written, land it on the base branch, and push it to the Git remote, so remove
 a device you no longer control.
 
+Agentty enforces both limits on the host, not only in the remote-control server. In the
+same step that serves a device's request, the host answers a session it does not list
+for the active project at that moment as if the session did not exist, and refuses any
+operation outside the list above. The remote-control server checks the same limits
+before it asks the host.
+
 Report these as vulnerabilities:
 
 - pairing a device without the one-time code or without approval in the terminal;

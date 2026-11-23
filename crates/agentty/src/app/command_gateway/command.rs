@@ -60,8 +60,9 @@ impl SessionCommand {
 }
 
 /// Transport-owned replies, grouped by their result type and lifetime.
-/// Payloads contain only application inputs; provenance does not select a
-/// reply.
+/// Payloads contain only application inputs. Provenance does not select the
+/// reply's kind, but a paired device's command can be answered with a
+/// refusal instead of being admitted; see [`Self::remote_scope`].
 pub(crate) enum CommandDelivery {
     /// Creation may retain its reply until workspace preparation completes.
     Create {
@@ -89,6 +90,48 @@ impl CommandDelivery {
             Self::Admission { request, .. } => request.target(),
             Self::Review { request, .. } => ("create_review_request", Some(&request.session_id)),
         }
+    }
+
+    /// Classifies the delivery for a paired device: creation reaches the
+    /// active project and the session it inherits from, if any;
+    /// publication reaches its session under the branch name the host
+    /// chooses, and a device may not name one.
+    pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
+        match self {
+            Self::Create { request, .. } => request
+                .inherit_from_session_id
+                .as_ref()
+                .map_or(RemoteScope::Project, RemoteScope::Session),
+            Self::Admission { request, .. } => request.remote_scope(),
+            Self::Review { request, .. } if request.remote_branch_name.is_some() => {
+                RemoteScope::NotServed
+            }
+            Self::Review { request, .. } => RemoteScope::Session(&request.session_id),
+        }
+    }
+
+    /// Answers the delivery with `refusal` instead of admitting it: on its
+    /// reply when it has one, or as the returned error.
+    pub(super) fn refuse(self, refusal: SessionError) -> Result<(), SessionError> {
+        match self {
+            Self::Create { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
+            Self::Admission { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
+            Self::Review { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
+        }
+    }
+
+    /// Sends `refusal` on `response_tx`, or returns it to a caller without a
+    /// reply.
+    fn reply_with_refusal<ResultValue>(
+        response_tx: Option<oneshot::Sender<Result<ResultValue, SessionError>>>,
+        refusal: SessionError,
+    ) -> Result<(), SessionError> {
+        let Some(response_tx) = response_tx else {
+            return Err(refusal);
+        };
+        let _ = response_tx.send(Err(refusal));
+
+        Ok(())
     }
 }
 
@@ -248,6 +291,53 @@ impl SessionMutation {
         }
     }
 
+    /// Classifies the mutation for a paired device: the operations the
+    /// project owner approved for remote control, each with the session it
+    /// must name. A new mutation is not served until it is listed here.
+    ///
+    /// Payloads count too: a device sends no attachments, which name files
+    /// on this computer, so a question answer or graph proposal request that
+    /// carries any is not served.
+    pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
+        match self {
+            Self::GraphProposal {
+                command: GraphProposalCommand::Generate(request),
+            } if request.request.attachments.is_empty() => {
+                RemoteScope::Session(&request.session_id)
+            }
+            Self::AnswerQuestions {
+                request,
+                session_id,
+            } if request.attachments.is_empty() => RemoteScope::Session(session_id),
+            Self::ActOnSessionGraph { request } => RemoteScope::Session(&request.session_id),
+            Self::SendMessage { session_id, .. }
+            | Self::Cancel { session_id }
+            | Self::StopTurn { session_id }
+            | Self::Rebase { session_id }
+            | Self::UpdateSettings { session_id, .. }
+            | Self::Merge { session_id } => RemoteScope::Session(session_id),
+            Self::SyncProject => RemoteScope::Project,
+            Self::GraphProposal {
+                command: GraphProposalCommand::Generate(_) | GraphProposalCommand::Act { .. },
+            }
+            | Self::AnswerQuestions { .. }
+            | Self::CancelExecutionGraph { .. }
+            | Self::ResumeExecutionGraph { .. }
+            | Self::ExtendExecutionGraphBudget { .. }
+            | Self::ContinueExecutionGraphNode { .. }
+            | Self::StartExecutionGraph { .. }
+            | Self::AcceptExecutionGraphResult { .. }
+            | Self::SubmitAgentTask { .. }
+            | Self::AcceptAgentPlan { .. }
+            | Self::Prompt { .. }
+            | Self::StartStaged { .. }
+            | Self::SubmitDurableMessage { .. }
+            | Self::CreateTask { .. }
+            | Self::SubmitTask { .. }
+            | Self::CompleteTask { .. } => RemoteScope::NotServed,
+        }
+    }
+
     /// Whether the mutation changes a stored graph proposal or execution
     /// graph, which no session event announces when it is written.
     pub(super) fn changes_graph(&self) -> bool {
@@ -264,3 +354,19 @@ impl SessionMutation {
         )
     }
 }
+
+/// What a request from a paired device reaches, which decides whether the
+/// host serves it to remote control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteScope<'a> {
+    /// Remote control does not serve the request.
+    NotServed,
+    /// The request reaches the active project, not a named session.
+    Project,
+    /// The request reaches this session, only while the host lists it.
+    Session(&'a SessionId),
+}
+
+#[cfg(test)]
+#[path = "command_test.rs"]
+mod tests;
