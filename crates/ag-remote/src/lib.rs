@@ -26,6 +26,7 @@ mod entropy;
 mod pairing;
 pub mod protocol;
 mod relay;
+mod request;
 mod server;
 mod transport;
 

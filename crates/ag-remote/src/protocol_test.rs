@@ -68,14 +68,14 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             ClientFrame::Request {
                 id: 2,
                 request: RemoteRequest::GetSession {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 3,
                 request: RemoteRequest::SendMessage {
                     message: "hi".to_string(),
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
@@ -86,37 +86,37 @@ fn client_frames_use_snake_case_type_and_method_tags() {
                         question: "Which?".to_string(),
                     }],
                     graph_question_target: None,
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 5,
                 request: RemoteRequest::CancelSession {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 6,
                 request: RemoteRequest::MergeSession {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 7,
                 request: RemoteRequest::StopTurn {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 8,
                 request: RemoteRequest::SyncSession {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
                 id: 9,
                 request: RemoteRequest::PublishSession {
-                    session_id: "s".to_string(),
+                    session_id: "s".into(),
                 },
             },
             ClientFrame::Request {
@@ -833,7 +833,7 @@ fn diff_frames_encode_the_file_list_and_one_patch() {
         request,
         RemoteRequest::GetSessionDiff {
             path: Some("a.rs".to_string()),
-            session_id: "s".to_string(),
+            session_id: "s".into(),
         }
     );
     assert_eq!(
@@ -977,14 +977,14 @@ fn settings_requests_name_only_the_settings_that_change() {
                 model: None,
                 reasoning: Some("low".to_string()),
                 response_style: None,
-                session_id: "s".to_string(),
+                session_id: "s".into(),
                 speed_mode: None,
             },
             RemoteRequest::SetSessionSettings {
                 model: Some("gpt-6.1-sol".to_string()),
                 reasoning: None,
                 response_style: Some("concise".to_string()),
-                session_id: "s".to_string(),
+                session_id: "s".into(),
                 speed_mode: Some("fast".to_string()),
             },
         ]
@@ -1037,7 +1037,7 @@ fn session_file_frames_encode_entries_in_host_order() {
     assert_eq!(
         request,
         RemoteRequest::ListSessionFiles {
-            session_id: "s".to_string(),
+            session_id: "s".into(),
         }
     );
     assert_eq!(project_request, RemoteRequest::ListProjectFiles);

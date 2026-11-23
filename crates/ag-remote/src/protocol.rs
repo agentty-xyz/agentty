@@ -18,7 +18,7 @@ use ag_session::{
     SessionFocusedReview, SessionGraph, SessionGraphAction, SessionGraphActionKind,
     SessionGraphActionRequest, SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase,
     SessionGraphSummary, SessionGraphs, SessionId, SessionListEntry, SessionMessage,
-    SessionMessageKind, session_branch,
+    SessionMessageKind, SessionService, session_branch,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -88,7 +88,7 @@ pub enum RemoteRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         graph_question_target: Option<String>,
         /// Session that asked the questions.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Cancels the whole session, not only its current turn.
     ///
@@ -97,7 +97,7 @@ pub enum RemoteRequest {
     /// unmerged and unpublished changes.
     CancelSession {
         /// Session to cancel.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Creates a session in the host's active project, with its worktree
     /// and branch. Offered through the `create_session` capability.
@@ -116,7 +116,7 @@ pub enum RemoteRequest {
         /// Task the graph should carry out.
         message: String,
         /// Session that owns the proposal.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Describes the host's active project. Offered through the `host`
     /// capability.
@@ -129,12 +129,12 @@ pub enum RemoteRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
         /// Session to read.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Loads one session snapshot.
     GetSession {
         /// Session to load.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Reads a session's graph proposal and execution graphs as the
     /// terminal's inspector shows them, without acting on any. Offered
@@ -155,7 +155,7 @@ pub enum RemoteRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node_id: Option<String>,
         /// Session to read.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Lists the names of the files and directories in the host's active
     /// project checkout, directories first, without their contents, for
@@ -167,7 +167,7 @@ pub enum RemoteRequest {
     /// worktree lists nothing. Offered through the `files` capability.
     ListSessionFiles {
         /// Session whose worktree to list.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Lists the host's loaded sessions.
     ListSessions,
@@ -175,7 +175,7 @@ pub enum RemoteRequest {
     /// checkout. Offered through the `merge` capability.
     MergeSession {
         /// Session to merge.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Pushes a session to the branch it was published to before, or under
     /// its default name the first time, and opens or refreshes its review
@@ -183,21 +183,21 @@ pub enum RemoteRequest {
     /// `publish` capability.
     PublishSession {
         /// Session to publish.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Sends one chat message, starting, resuming, or queueing a turn.
     SendMessage {
         /// Message text.
         message: String,
         /// Session that receives the message.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Stops the session's running turn and returns the session to review,
     /// keeping its worktree and changes. It also discards the session's
     /// queued messages. Offered through the `stop_turn` capability.
     StopTurn {
         /// Session whose turn stops.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Syncs the branch of the host's active project with its upstream: a
     /// pull with rebase, then a push, in the host's checkout with the
@@ -211,7 +211,7 @@ pub enum RemoteRequest {
     /// turn. Offered through the `sync` capability.
     SyncSession {
         /// Session whose branch is synced.
-        session_id: String,
+        session_id: RequestedSessionId,
     },
     /// Changes the session's settings for later turns; an omitted setting
     /// stays as it is. The fields carry the values a session snapshot
@@ -231,7 +231,7 @@ pub enum RemoteRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_style: Option<String>,
         /// Session whose settings change.
-        session_id: String,
+        session_id: RequestedSessionId,
         /// Speed preference, `normal` or `fast`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         speed_mode: Option<String>,
@@ -240,6 +240,48 @@ pub enum RemoteRequest {
     /// sends. The server answers it with an error and keeps the connection.
     #[serde(other)]
     Unsupported,
+}
+
+/// A session id as a device sent it.
+///
+/// A request reaches the host only with a [`SessionId`], and
+/// [`Self::listed`] is the only way to one, so a request cannot act on a
+/// session the host does not list. The id inside stays private to this
+/// module; elsewhere the value only compares and hashes, which is how the
+/// requests that change one session queue behind each other. It travels
+/// as a plain string.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RequestedSessionId(String);
+
+impl RequestedSessionId {
+    /// Returns the session when the host lists it, and
+    /// [`SessionError::NotFound`] otherwise.
+    ///
+    /// Remote clients see only the listed sessions, so every request that
+    /// names a session goes through this check before it reaches the host.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::NotFound`] for a session the host does not
+    /// list, and the host's error when listing fails.
+    pub(crate) async fn listed(self, sessions: &SessionService) -> Result<SessionId, SessionError> {
+        let is_listed = sessions
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|summary| summary.id.as_str() == self.0);
+        if !is_listed {
+            return Err(SessionError::NotFound);
+        }
+
+        Ok(SessionId::from(self.0))
+    }
+}
+
+impl From<&str> for RequestedSessionId {
+    fn from(session_id: &str) -> Self {
+        Self(session_id.to_string())
+    }
 }
 
 /// How a session created remotely runs.
@@ -365,7 +407,7 @@ pub struct RemoteGraphActionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_id: Option<String>,
     /// Session that owns the graph.
-    pub session_id: String,
+    pub session_id: RequestedSessionId,
     /// The graph's `snapshot` in the `graphs` response the action was
     /// chosen from.
     pub snapshot: String,

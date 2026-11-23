@@ -1,17 +1,12 @@
 //! One client connection over a frame transport: authentication, pairing
-//! approval, requests, and change pushes.
+//! approval, the tasks that run its requests, and change pushes. What each
+//! request may reach and how it is answered lives in `crate::request`.
 
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_noise::PublicKey;
-use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, GenerateGraphProposalRequest, QuestionAnswer,
-    SessionError, SessionGraphsRequest, SessionId, SessionOperation, SessionService,
-    SessionSettingsChange,
-};
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
 use tokio::task::{self, JoinSet};
@@ -19,13 +14,10 @@ use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
 use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
-use crate::entropy::{Entropy, random_hex};
+use crate::entropy::random_hex;
 use crate::pairing::random_code;
-use crate::protocol::{
-    ClientFrame, RemoteGraphActionRequest, RemoteProject, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
-};
+use crate::protocol::{ClientFrame, RemoteRequest, RemoteResult, RequestedSessionId, ServerFrame};
+use crate::request::{RequestOrder, RequestPolicy, capabilities, execute};
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
 use crate::transport::{CloseCause, FrameTransport, Incoming};
 
@@ -51,43 +43,12 @@ const PAIRING_TIMED_OUT: &str = "Pairing was not approved in time";
 const PAIRING_PENDING: &str = "Wait for pairing approval";
 /// Close reason sent to every connection when the server stops.
 const SERVER_STOPPED: &str = "Server stopped";
-/// Error returned for a request method this server does not know.
-const UNSUPPORTED_REQUEST: &str = "Unsupported request";
 /// Requests one connection may have running at once.
 pub(crate) const MAX_REQUESTS_IN_PROGRESS: usize = 8;
 /// Error returned for a request beyond [`MAX_REQUESTS_IN_PROGRESS`].
 pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
 /// Error returned for a request whose task failed before it could reply.
 const REQUEST_FAILED: &str = "Request failed";
-/// Optional requests, each named by the capability that offers it and served
-/// only when the host supports its operation.
-const CAPABILITIES: &[(SessionOperation, &str)] = &[
-    (SessionOperation::HostContext, "host"),
-    (SessionOperation::CreateSession, "create_session"),
-    (SessionOperation::MergeSession, "merge"),
-    (SessionOperation::SessionDiff, "diff"),
-    (SessionOperation::SessionFiles, "files"),
-    (SessionOperation::ProjectFiles, "project_files"),
-    (SessionOperation::StopTurn, "stop_turn"),
-    (SessionOperation::RebaseSession, "sync"),
-    (SessionOperation::SessionSettings, "settings"),
-    (SessionOperation::PublishSession, "publish"),
-    (SessionOperation::SyncProject, "sync_project"),
-    (SessionOperation::Graphs, "graphs"),
-    (SessionOperation::GraphActions, "graph_actions"),
-    (SessionOperation::GenerateGraphProposal, "graph_proposal"),
-];
-/// Random bytes in the delivery identity of a graph proposal a device asks
-/// for.
-const PROPOSAL_ID_BYTES: usize = 16;
-/// Error returned when secure randomness for a proposal identity fails.
-const PROPOSAL_ID_UNAVAILABLE: &str = "Cannot generate a graph proposal identity";
-/// Error returned when a device asks for a creation mode the host does not
-/// serve now.
-const UNAVAILABLE_SESSION_MODE: &str = "Session mode is not available";
-/// Error returned when a device asks for the patch of a file the session's
-/// diff does not change.
-const FILE_NOT_IN_DIFF: &str = "File is not in the session diff";
 
 /// Runs one connection until the client leaves, the device is revoked, or
 /// the server stops. `handshake` counts the connection as unauthenticated
@@ -304,42 +265,6 @@ async fn welcome(
     })
 }
 
-/// Returns the optional requests this server supports, sent in `Welcome`
-/// and `Paired`.
-///
-/// Requests added after the first protocol version are offered only through
-/// this list, so a client never sends one to a server that lacks it. Each
-/// is listed only when the host serves its operation.
-fn capabilities(sessions: &SessionService) -> Vec<String> {
-    CAPABILITIES
-        .iter()
-        .filter(|(operation, _)| sessions.supports(*operation))
-        .map(|(_, capability)| (*capability).to_string())
-        .collect()
-}
-
-/// Refuses an optional request whose operation the host does not serve, so
-/// a client that skips the capability list still reaches nothing more.
-fn require_operation(
-    sessions: &SessionService,
-    operation: SessionOperation,
-) -> Result<(), SessionError> {
-    if sessions.supports(operation) {
-        return Ok(());
-    }
-
-    Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string()))
-}
-
-/// Parses one optional setting sent as its persisted name, such as `high`.
-fn parse_setting<Setting: FromStr<Err = String>>(
-    value: Option<String>,
-) -> Result<Option<Setting>, SessionError> {
-    value
-        .map(|value| value.parse().map_err(SessionError::Operation))
-        .transpose()
-}
-
 /// Lists the pairing request, tells the device to wait, and returns the
 /// authentication once the host approves.
 ///
@@ -519,8 +444,9 @@ struct RequestTasks {
     /// Request `id` of each task, for replying when a task panics.
     request_ids: HashMap<task::Id, u64>,
     /// For each session with a mutation running, a receiver that closes
-    /// once the latest of those mutations finishes.
-    session_queues: HashMap<String, oneshot::Receiver<()>>,
+    /// once the latest of those mutations finishes, keyed by the session id
+    /// as the device sent it.
+    session_queues: HashMap<RequestedSessionId, oneshot::Receiver<()>>,
     /// Running tasks and finished ones whose reply is not yet sent.
     tasks: JoinSet<ServerFrame>,
 }
@@ -534,13 +460,16 @@ impl RequestTasks {
     /// Starts `request` and returns `true`, or returns `false` when
     /// [`MAX_REQUESTS_IN_PROGRESS`] requests are already in progress.
     ///
-    /// A request that changes a session waits for the earlier ones that
+    /// A request whose policy queues it waits for the earlier ones that
     /// change the same session, so they reach the host in arrival order.
     fn start(&mut self, state: &ServerState, id: u64, request: RemoteRequest) -> bool {
         if self.tasks.len() >= MAX_REQUESTS_IN_PROGRESS {
             return false;
         }
-        let queue = mutated_session(&request).map(|session_id| self.enqueue(session_id));
+        let queue = match RequestPolicy::of(&request).order {
+            RequestOrder::Queued(session_id) => Some(self.enqueue(session_id)),
+            RequestOrder::Read | RequestOrder::Unqueued => None,
+        };
         let sessions = state.sessions().clone();
         let entropy = Arc::clone(&state.entropy);
         let handle = self.tasks.spawn(async move {
@@ -572,14 +501,14 @@ impl RequestTasks {
     /// releases the next one.
     fn enqueue(
         &mut self,
-        session_id: &str,
+        session_id: &RequestedSessionId,
     ) -> (Option<oneshot::Receiver<()>>, oneshot::Sender<()>) {
         // Forget sessions whose last mutation already finished, so the map
         // never outgrows the requests in progress.
         self.session_queues
             .retain(|_, previous| matches!(previous.try_recv(), Err(TryRecvError::Empty)));
         let (done, next) = oneshot::channel();
-        let previous = self.session_queues.insert(session_id.to_string(), next);
+        let previous = self.session_queues.insert(session_id.clone(), next);
 
         (previous, done)
     }
@@ -614,37 +543,6 @@ impl RequestTasks {
     }
 }
 
-/// Returns the session a request changes, or `None` for reads, for creation
-/// and a project sync, which change no existing session, and for a publish.
-/// A publish can wait
-/// behind a running turn, so queueing it would hold a later stop, cancel,
-/// answer, or message until the turn ends; the host serializes the push
-/// itself.
-fn mutated_session(request: &RemoteRequest) -> Option<&str> {
-    match request {
-        RemoteRequest::ActOnSessionGraph(request) => Some(&request.session_id),
-        RemoteRequest::AnswerQuestions { session_id, .. }
-        | RemoteRequest::CancelSession { session_id }
-        | RemoteRequest::GenerateGraphProposal { session_id, .. }
-        | RemoteRequest::MergeSession { session_id }
-        | RemoteRequest::SendMessage { session_id, .. }
-        | RemoteRequest::StopTurn { session_id }
-        | RemoteRequest::SyncSession { session_id }
-        | RemoteRequest::SetSessionSettings { session_id, .. } => Some(session_id),
-        RemoteRequest::CreateSession { .. }
-        | RemoteRequest::GetHost
-        | RemoteRequest::GetSession { .. }
-        | RemoteRequest::GetSessionDiff { .. }
-        | RemoteRequest::GetSessionGraphs { .. }
-        | RemoteRequest::ListProjectFiles
-        | RemoteRequest::ListSessionFiles { .. }
-        | RemoteRequest::ListSessions
-        | RemoteRequest::PublishSession { .. }
-        | RemoteRequest::SyncProject
-        | RemoteRequest::Unsupported => None,
-    }
-}
-
 /// What the connection does after one authenticated client message.
 pub(crate) enum MessageOutcome {
     /// The client left or the transport failed.
@@ -676,371 +574,6 @@ pub(crate) fn handle_incoming(incoming: Incoming) -> MessageOutcome {
         Incoming::Closed => MessageOutcome::Closed,
         Incoming::Control => MessageOutcome::Ignored,
     }
-}
-
-/// Runs one request against the session service, drawing the identities it
-/// mints from `entropy`.
-pub(crate) async fn execute(
-    sessions: &SessionService,
-    entropy: &dyn Entropy,
-    request: RemoteRequest,
-) -> RemoteResult {
-    match respond(sessions, entropy, request).await {
-        Ok(response) => RemoteResult::Ok(response),
-        Err(error) => RemoteResult::Error(error.to_string()),
-    }
-}
-
-/// Answers one request.
-///
-/// Every request that names a session first checks that the host lists it,
-/// so a remote client reaches only the sessions it can see.
-async fn respond(
-    sessions: &SessionService,
-    entropy: &dyn Entropy,
-    request: RemoteRequest,
-) -> Result<RemoteResponse, SessionError> {
-    match request {
-        RemoteRequest::ActOnSessionGraph(request) => {
-            act_on_listed_session_graph(sessions, request).await
-        }
-        RemoteRequest::AnswerQuestions {
-            answers,
-            graph_question_target,
-            session_id,
-        } => answer_listed_questions(sessions, session_id, answers, graph_question_target).await,
-        RemoteRequest::CancelSession { session_id } => {
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions.cancel_session(&session_id).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::CreateSession { mode } => create_session(sessions, mode).await,
-        RemoteRequest::GenerateGraphProposal {
-            message,
-            session_id,
-        } => generate_listed_graph_proposal(sessions, entropy, session_id, message).await,
-        RemoteRequest::GetHost => {
-            require_operation(sessions, SessionOperation::HostContext)?;
-
-            Ok(RemoteResponse::from(sessions.host_context().await?))
-        }
-        RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
-        RemoteRequest::GetSessionDiff { path, session_id } => {
-            get_listed_session_diff(sessions, session_id, path.as_deref()).await
-        }
-        RemoteRequest::GetSessionGraphs {
-            graph_id,
-            known,
-            node_id,
-            session_id,
-        } => {
-            get_listed_session_graphs(sessions, session_id, graph_id, node_id, known.as_deref())
-                .await
-        }
-        RemoteRequest::ListProjectFiles => list_project_files(sessions).await,
-        RemoteRequest::ListSessionFiles { session_id } => {
-            list_listed_session_files(sessions, session_id).await
-        }
-        RemoteRequest::ListSessions => list_sessions(sessions).await,
-        RemoteRequest::MergeSession { session_id } => {
-            require_operation(sessions, SessionOperation::MergeSession)?;
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions.merge_session(&session_id).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::PublishSession { session_id } => {
-            publish_listed_session(sessions, session_id).await
-        }
-        RemoteRequest::SendMessage {
-            message,
-            session_id,
-        } => {
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions.send_message(&session_id, message).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::StopTurn { session_id } => {
-            require_operation(sessions, SessionOperation::StopTurn)?;
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions.stop_turn(&session_id).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::SyncProject => {
-            require_operation(sessions, SessionOperation::SyncProject)?;
-            sessions.sync_project().await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::SyncSession { session_id } => {
-            require_operation(sessions, SessionOperation::RebaseSession)?;
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions.rebase_session(&session_id).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::SetSessionSettings {
-            model,
-            reasoning,
-            response_style,
-            session_id,
-            speed_mode,
-        } => {
-            require_operation(sessions, SessionOperation::SessionSettings)?;
-            let change = SessionSettingsChange {
-                model: parse_setting(model)?,
-                reasoning_level: parse_setting(reasoning)?,
-                response_style: parse_setting(response_style)?,
-                speed_mode: parse_setting(speed_mode)?,
-            };
-            let session_id = listed_session_id(sessions, session_id).await?;
-            sessions
-                .update_session_settings(&session_id, change)
-                .await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
-        RemoteRequest::Unsupported => Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string())),
-    }
-}
-
-/// Applies one graph inspector action only when the host lists the session
-/// that owns the graph; the host checks the graph's ownership, snapshot, and
-/// the action's availability.
-async fn act_on_listed_session_graph(
-    sessions: &SessionService,
-    request: RemoteGraphActionRequest,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::GraphActions)?;
-    let session_id = listed_session_id(sessions, request.session_id.clone()).await?;
-    sessions
-        .act_on_session_graph(request.into_session_request(session_id)?)
-        .await?;
-
-    Ok(RemoteResponse::Accepted)
-}
-
-/// Publishes one session and opens or refreshes its review request only
-/// when the host lists that session.
-async fn publish_listed_session(
-    sessions: &SessionService,
-    session_id: String,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::PublishSession)?;
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let review_request = sessions.create_review_request(&session_id).await?;
-
-    Ok(RemoteResponse::ReviewRequest {
-        review_request: RemoteReviewRequest::from(review_request.summary),
-    })
-}
-
-/// Asks for a graph proposal for the task `message` only when the host
-/// lists the session, under a fresh delivery identity; the host checks the
-/// session's readiness and the task's size.
-async fn generate_listed_graph_proposal(
-    sessions: &SessionService,
-    entropy: &dyn Entropy,
-    session_id: String,
-    message: String,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::GenerateGraphProposal)?;
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let id = random_hex(entropy, PROPOSAL_ID_BYTES)
-        .ok_or_else(|| SessionError::Operation(PROPOSAL_ID_UNAVAILABLE.to_string()))?;
-    sessions
-        .generate_graph_proposal(GenerateGraphProposalRequest::from_text(
-            format!("remote-{id}"),
-            session_id,
-            message,
-        ))
-        .await?;
-
-    Ok(RemoteResponse::Accepted)
-}
-
-/// Answers the current question set of one session only when the host lists
-/// that session: its turn's, or with `graph_question_target` the graph
-/// questions of the graph work that key names.
-async fn answer_listed_questions(
-    sessions: &SessionService,
-    session_id: String,
-    answers: Vec<RemoteQuestionAnswer>,
-    graph_question_target: Option<String>,
-) -> Result<RemoteResponse, SessionError> {
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let request = AnswerQuestionsRequest {
-        answers: answers
-            .into_iter()
-            .map(|answer| QuestionAnswer {
-                answer: answer.answer,
-                question: answer.question,
-            })
-            .collect(),
-        attachments: Vec::new(),
-        graph_question_target,
-    };
-    sessions.answer_questions(&session_id, request).await?;
-
-    Ok(RemoteResponse::Accepted)
-}
-
-/// Creates a session in the host's active project, the only project the
-/// host accepts, and only in a mode the host serves now.
-async fn create_session(
-    sessions: &SessionService,
-    mode: RemoteSessionMode,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::CreateSession)?;
-    let host = sessions.host_context().await?;
-    let mode = mode.session_mode();
-    if !host
-        .session_modes
-        .iter()
-        .any(|session_mode| session_mode.mode == mode)
-    {
-        return Err(SessionError::Operation(
-            UNAVAILABLE_SESSION_MODE.to_string(),
-        ));
-    }
-    let session_id = sessions
-        .create_session(CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode,
-            project_id: host.project_id,
-        })
-        .await?;
-
-    Ok(RemoteResponse::Created {
-        session_id: session_id.to_string(),
-    })
-}
-
-/// Lists the host's sessions and, when the host reports it, the active
-/// project they belong to.
-async fn list_sessions(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
-    let summaries = sessions.list_session_entries().await?;
-    let project = if sessions.supports(SessionOperation::ProjectStatus) {
-        Some(RemoteProject::from(sessions.project_status().await?))
-    } else {
-        None
-    };
-
-    Ok(RemoteResponse::Sessions {
-        project,
-        sessions: summaries
-            .into_iter()
-            .map(RemoteSessionSummary::from)
-            .collect(),
-    })
-}
-
-/// Loads one session only when the host lists it, so remote clients read
-/// nothing beyond the sessions they can see.
-async fn get_listed_session(
-    sessions: &SessionService,
-    session_id: String,
-) -> Result<RemoteResponse, SessionError> {
-    let session_id = match listed_session_id(sessions, session_id).await {
-        Ok(session_id) => session_id,
-        Err(SessionError::NotFound) => return Ok(RemoteResponse::Session { session: None }),
-        Err(error) => return Err(error),
-    };
-    let session = sessions.get_session(&session_id).await?;
-
-    Ok(RemoteResponse::Session {
-        session: session.map(|session| Box::new(RemoteSession::from(session))),
-    })
-}
-
-/// Reads the diff of one session only when the host lists it: the file
-/// list, or with `path` that file's patch.
-async fn get_listed_session_diff(
-    sessions: &SessionService,
-    session_id: String,
-    path: Option<&str>,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::SessionDiff)?;
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let files = sessions
-        .get_session_diff(&session_id)
-        .await?
-        .ok_or(SessionError::NotFound)?;
-
-    RemoteResponse::from_diff(&files, path)
-        .ok_or_else(|| SessionError::Operation(FILE_NOT_IN_DIFF.to_string()))
-}
-
-/// Reads the graphs of one session only when the host lists it, selecting
-/// `graph_id` and `node_id` when given, and answers `unchanged` when the
-/// device already shows that response as version `known`.
-async fn get_listed_session_graphs(
-    sessions: &SessionService,
-    session_id: String,
-    graph_id: Option<String>,
-    node_id: Option<String>,
-    known: Option<&str>,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::Graphs)?;
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let graphs = sessions
-        .session_graphs(SessionGraphsRequest {
-            graph_id,
-            node_id,
-            session_id,
-        })
-        .await?;
-
-    Ok(RemoteResponse::from_graphs(graphs).unchanged_since(known))
-}
-
-/// Lists the files and directories in the host's active project checkout.
-async fn list_project_files(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::ProjectFiles)?;
-
-    Ok(RemoteResponse::from_session_files(
-        &sessions.list_project_files().await?,
-    ))
-}
-
-/// Lists the files and directories in one session's worktree only when the
-/// host lists that session.
-async fn list_listed_session_files(
-    sessions: &SessionService,
-    session_id: String,
-) -> Result<RemoteResponse, SessionError> {
-    require_operation(sessions, SessionOperation::SessionFiles)?;
-    let session_id = listed_session_id(sessions, session_id).await?;
-    let entries = sessions
-        .list_session_files(&session_id)
-        .await?
-        .ok_or(SessionError::NotFound)?;
-
-    Ok(RemoteResponse::from_session_files(&entries))
-}
-
-/// Returns `session_id` when the host lists that session, and
-/// [`SessionError::NotFound`] otherwise.
-///
-/// Remote clients see only the listed sessions, so every request that names
-/// a session goes through this check before it reaches the host.
-async fn listed_session_id(
-    sessions: &SessionService,
-    session_id: String,
-) -> Result<SessionId, SessionError> {
-    let is_listed = sessions
-        .list_sessions()
-        .await?
-        .iter()
-        .any(|summary| summary.id.as_str() == session_id);
-    if !is_listed {
-        return Err(SessionError::NotFound);
-    }
-
-    Ok(SessionId::from(session_id))
 }
 
 /// Resolves once the server starts stopping or its handle is gone.
