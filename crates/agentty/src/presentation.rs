@@ -14,6 +14,8 @@ pub(crate) mod frame_time;
 pub(crate) mod graph_chat;
 /// Context-sensitive help actions and keybinding projections.
 pub mod help_action;
+/// Platform sign-in and account projection.
+pub mod platform;
 /// Explicit project registration and discovery dialogs.
 pub mod project_catalog;
 /// Prompt composer history, attachment, and suggestion state.

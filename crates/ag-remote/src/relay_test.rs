@@ -3,7 +3,30 @@ use std::time::Duration;
 use ag_noise::PublicKey;
 
 use super::{INITIAL_RETRY_DELAY, retry_delay_after};
-use crate::relay::pairing_link;
+use crate::relay::{pairing_link, pairing_link_on_page};
+
+#[test]
+fn pairing_link_on_another_page_keeps_the_page_and_the_fragment_format() {
+    // Arrange
+    let key = PublicKey::from_bytes(&[0xAB; 32]).expect("key should load");
+
+    // Act
+    let link = pairing_link_on_page(
+        "https://platform.example/sessions/",
+        "wss://relay.platform.example/",
+        &key,
+        "ABCD-EFGH",
+    );
+
+    // Assert
+    assert_eq!(
+        link,
+        format!(
+            "https://platform.example/sessions/#relay=wss%3A%2F%2Frelay%2Eplatform%2Eexample&key={}&code=ABCD%2DEFGH",
+            "ab".repeat(32)
+        )
+    );
+}
 
 #[test]
 fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {

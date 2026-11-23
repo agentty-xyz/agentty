@@ -10,6 +10,7 @@ use std::{env, fs};
 use agentty::analytics::Analytics;
 use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
+use agentty::infra::platform::DEFAULT_PLATFORM_URL;
 use clap::Parser;
 use clap::error::ErrorKind;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -19,7 +20,7 @@ use prost::Message as _;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::{Cli, ExperimentalFeatures, run, run_with_analytics};
+use super::{Cli, ExperimentalFeatures, host_name, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
 const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
@@ -67,6 +68,50 @@ fn cli_defaults_to_automatic_updates() {
     assert!(!cli.no_update);
     assert!(!cli.otlp_capture_content);
     assert!(!cli.experimental.remote);
+    assert!(!cli.experimental.platform);
+}
+
+#[test]
+fn cli_gates_the_platform_behind_experimental_platform_independently_of_remote() {
+    // Arrange / Act
+    let disabled = Cli::try_parse_from(["agentty"]).expect("default arguments");
+    let enabled = Cli::try_parse_from(["agentty", "--experimental-platform"])
+        .expect("--experimental-platform should parse");
+    let local = Cli::try_parse_from([
+        "agentty",
+        "--experimental-platform",
+        "--platform-url",
+        "http://127.0.0.1:8080/",
+    ])
+    .expect("a loopback platform should parse");
+    let url_without_flag =
+        Cli::try_parse_from(["agentty", "--platform-url", "https://platform.example"])
+            .expect_err("a platform URL needs --experimental-platform");
+    let plain_remote = Cli::try_parse_from([
+        "agentty",
+        "--experimental-platform",
+        "--platform-url",
+        "http://platform.example",
+    ])
+    .expect_err("plain http needs a loopback host");
+
+    // Assert
+    assert!(!disabled.experimental.platform);
+    assert!(enabled.experimental.platform);
+    assert!(!enabled.experimental.remote);
+    assert_eq!(enabled.platform_url, "https://platform.agentty.xyz");
+    assert_eq!(local.platform_url, "http://127.0.0.1:8080");
+    assert_eq!(url_without_flag.kind(), ErrorKind::MissingRequiredArgument);
+    assert_eq!(plain_remote.kind(), ErrorKind::ValueValidation);
+}
+
+#[test]
+fn host_name_reads_this_computer_name_as_text() {
+    // Arrange / Act
+    let name = host_name();
+
+    // Assert
+    assert!(!name.contains('\0'));
 }
 
 #[test]
@@ -270,6 +315,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: None,
+            platform_url: DEFAULT_PLATFORM_URL.to_string(),
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             remote_control_host: Vec::new(),
             remote_relay: None,
@@ -322,6 +368,7 @@ async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
         no_update: false,
         otlp_capture_content: false,
         otlp_endpoint: Some("http://localhost:4318".to_string()),
+        platform_url: DEFAULT_PLATFORM_URL.to_string(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
         remote_relay: None,
@@ -347,6 +394,7 @@ async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
+            platform_url: DEFAULT_PLATFORM_URL.to_string(),
             remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
             remote_control_host: Vec::new(),
             remote_relay: None,
@@ -412,6 +460,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                platform_url: DEFAULT_PLATFORM_URL.to_string(),
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
                 remote_relay: None,
@@ -468,6 +517,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                platform_url: DEFAULT_PLATFORM_URL.to_string(),
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
                 remote_relay: None,
@@ -522,6 +572,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
+                platform_url: DEFAULT_PLATFORM_URL.to_string(),
                 remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
                 remote_control_host: Vec::new(),
                 remote_relay: None,
@@ -572,10 +623,14 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
 fn telemetry_child_cli() -> Cli {
     Cli {
         disable_telemetry: true,
-        experimental: ExperimentalFeatures { remote: true },
+        experimental: ExperimentalFeatures {
+            platform: true,
+            remote: true,
+        },
         no_update: true,
         otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
+        platform_url: DEFAULT_PLATFORM_URL.to_string(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
         remote_relay: None,

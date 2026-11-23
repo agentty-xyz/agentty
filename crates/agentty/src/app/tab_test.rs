@@ -10,7 +10,10 @@ fn test_tab_title() {
     let titles = Tab::ALL.map(Tab::title);
 
     // Assert
-    assert_eq!(titles, ["Projects", "Sessions", "Settings", "Remote"]);
+    assert_eq!(
+        titles,
+        ["Projects", "Sessions", "Settings", "Remote", "Platform"]
+    );
 }
 
 #[test]
@@ -27,6 +30,7 @@ fn test_tab_scope_marks_only_projects_as_global() {
             TabScope::Global,
             TabScope::Project,
             TabScope::Project,
+            TabScope::Project,
             TabScope::Project
         ]
     );
@@ -40,6 +44,7 @@ fn test_tab_from_str_parses_persisted_values() {
         ("Sessions", Some(Tab::Sessions)),
         ("Settings", Some(Tab::Settings)),
         ("Remote", Some(Tab::Remote)),
+        ("Platform", Some(Tab::Platform)),
         ("Invalid", None),
     ];
 
@@ -57,22 +62,38 @@ fn test_tab_as_str_matches_persisted_values() {
     let values = Tab::ALL.map(Tab::as_str);
 
     // Assert
-    assert_eq!(values, ["Projects", "Sessions", "Settings", "Remote"]);
+    assert_eq!(
+        values,
+        ["Projects", "Sessions", "Settings", "Remote", "Platform"]
+    );
 }
 
 #[test]
-fn test_tab_manager_offers_remote_only_once_enabled() {
+fn test_tab_manager_offers_remote_and_platform_only_once_each_is_enabled() {
     // Arrange
-    let mut manager = TabManager::default();
+    let mut remote_first = TabManager::default();
+    let mut platform_only = TabManager::default();
 
     // Act
-    let default_tabs = manager.available_tabs();
-    manager.enable_remote();
-    let remote_tabs = manager.available_tabs();
+    let default_tabs = remote_first.available_tabs();
+    remote_first.enable_remote();
+    let remote_tabs = remote_first.available_tabs();
+    remote_first.enable_platform();
+    let both_tabs = remote_first.available_tabs();
+    platform_only.enable_platform();
+    let platform_tabs = platform_only.available_tabs();
 
     // Assert
-    assert_eq!(default_tabs, &Tab::WITHOUT_REMOTE);
-    assert_eq!(remote_tabs, &Tab::ALL);
+    assert_eq!(default_tabs, [Tab::Projects, Tab::Sessions, Tab::Settings]);
+    assert_eq!(
+        remote_tabs,
+        [Tab::Projects, Tab::Sessions, Tab::Settings, Tab::Remote]
+    );
+    assert_eq!(both_tabs, Tab::ALL);
+    assert_eq!(
+        platform_tabs,
+        [Tab::Projects, Tab::Sessions, Tab::Settings, Tab::Platform]
+    );
 }
 
 #[test]

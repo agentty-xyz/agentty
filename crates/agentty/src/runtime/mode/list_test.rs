@@ -1,5 +1,7 @@
 //! List mode key tests for tabs, session and project selection, settings,
-//! remote control, sync, and archive pagination.
+//! remote control, the platform, sync, and archive pagination.
+
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -15,10 +17,12 @@ use crate::domain::session::Status;
 use crate::domain::session_order::ArchiveAction;
 use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
+use crate::infra::platform::{MockPlatformClient, PlatformError};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
 };
-use crate::presentation::help_action::{remote_actions, settings_actions};
+use crate::presentation::help_action::{platform_actions, remote_actions, settings_actions};
+use crate::presentation::platform::{PlatformState, PlatformTabView};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::{
     SettingsAction, SettingsInput, SettingsOperation, SettingsPresentationState, SettingsView,
@@ -1977,4 +1981,47 @@ async fn test_handle_question_mark_opens_remote_help_on_remote_tab() {
             scroll_offset: 0,
         } if *keybindings == remote_actions(app.remote_control.view())
     ));
+}
+
+#[tokio::test]
+async fn test_handle_platform_tab_keys_start_sign_in_open_help_and_move_devices() {
+    // Arrange
+    let mut client = MockPlatformClient::new();
+    client
+        .expect_start_device_authorization()
+        .returning(|_| Err(PlatformError::Unreachable));
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    pair_remote_devices(&app, &["phone", "tablet"]).await;
+    app.enable_platform(
+        Arc::new(client),
+        "https://platform.example".to_string(),
+        "Agentty on box".to_string(),
+    )
+    .await;
+    app.tabs.set(Tab::Platform);
+
+    // Act
+    press(&mut app, KeyCode::Char('?')).await;
+    let expected_help = platform_actions(PlatformTabView {
+        platform: app.platform.view(),
+        remote_control: app.remote_control.view(),
+    });
+    let shows_platform_help = matches!(
+        app.mode,
+        AppMode::Help {
+            context: HelpContext::List { ref keybindings },
+            scroll_offset: 0,
+        } if *keybindings == expected_help
+    );
+    app.mode = AppMode::List;
+    press(&mut app, KeyCode::Char('j')).await;
+    let after_down = app.remote_control.view().selected_device_index;
+    press(&mut app, KeyCode::Char('k')).await;
+    press(&mut app, KeyCode::Enter).await;
+
+    // Assert
+    assert!(shows_platform_help);
+    assert_eq!(after_down, 1);
+    assert_eq!(app.remote_control.view().selected_device_index, 0);
+    assert_eq!(app.platform.view().state, PlatformState::Requesting);
 }

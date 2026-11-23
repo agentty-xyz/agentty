@@ -190,6 +190,9 @@ agentty --version    # Show the installed Agentty version
 - **Remote control**: `--experimental-remote` adds a preview `Remote` tab that pairs a
   phone or browser to start, follow, reply to, and merge sessions through a tunnel you
   provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
+  `--experimental-platform` adds a preview `Platform` tab that signs in to the Agentty
+  Platform, so paired devices reach Agentty through its hosted relay. See
+  [Agentty Platform](https://agentty.xyz/docs/usage/platform/).
 - **Harness**: `/model` lists `ag-harness`, Agentty's built-in agent loop, with local
   models and hosted models that run once their provider key or sign-in is set. Its edit
   mode runs shell commands in the operating system's sandbox where available (Seatbelt

@@ -100,6 +100,26 @@ Appears only with `agentty --experimental-remote`. See
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                  |
 | `?`                 | Help                                           |
 
+## Platform
+
+Appears only with `agentty --experimental-platform`. See
+[Agentty Platform](@/docs/usage/platform.md).
+
+| Key                 | Action                                                 |
+| ------------------- | ------------------------------------------------------ |
+| `q`                 | Quit after confirmation                                |
+| `s`                 | Sync active project branch                             |
+| `Enter`             | Sign in, cancel a sign-in, or check the account again  |
+| `o`                 | Open the sign-in page in this browser while signing in |
+| `c`                 | Copy the sign-in page link while signing in            |
+| `l`                 | Sign out                                               |
+| `Tab` / `Shift+Tab` | Switch to next / previous tab                          |
+| `?`                 | Help                                                   |
+
+Once this Agentty is registered, `Enter` starts or stops remote control through the
+platform's relay, and the [Remote](#remote) keys `y`, `x`, `n`, `o`, `c`, `j` / `k`, and
+`d` act on its pairing link, pairing requests, and devices.
+
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.

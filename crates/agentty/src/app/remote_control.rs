@@ -1,6 +1,7 @@
 //! Remote-control lifecycle: starts the loopback listener, optionally links
-//! it to a relay, tracks paired devices, and tells connected clients when
-//! session state changes.
+//! it to a relay (`--remote-relay`, else the platform's relay while this
+//! Agentty is registered there), tracks paired devices, and tells connected
+//! clients when session state changes.
 //!
 //! Remote clients reach sessions only through [`SessionService`] over the
 //! session-runtime mailbox, so their commands share terminal admission and
@@ -11,18 +12,20 @@ use std::sync::Arc;
 
 use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
-    RemoteServerStatus, StaticKeypair, pairing_link,
+    RemoteServerStatus, StaticKeypair, pairing_link, pairing_link_on_page,
 };
 use ag_session::{SessionId, SessionService};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::command_gateway::CommandInitiator;
-use crate::app::spawn::{spawn_blocking_detached, spawn_detached};
+use crate::app::link_copy::LinkCopy;
+use crate::app::spawn::spawn_detached;
 use crate::app::{App, AppEvent, review};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
 use crate::infra::db::AppRepositories;
+use crate::infra::platform::RemoteControlService;
 use crate::infra::remote_control::{
     RemoteControlLauncher, RemoteControlServer, RepositoryDeviceStore,
 };
@@ -51,23 +54,24 @@ pub(crate) struct RemoteControl {
     allowed_hosts: Vec<String>,
     /// Opens the pairing link on this machine.
     browser: Arc<dyn BrowserClient>,
-    /// Copies the pairing link for another device.
-    clipboard: Arc<dyn TerminalClipboard>,
     /// Latest authenticated connections reported by the running listener.
     connections: Vec<RemoteConnection>,
     devices: Arc<dyn DeviceStore>,
     /// Identifies the running listener so late status from a stopped one
     /// is ignored.
     generation: u64,
-    /// Public key devices pin, while a relay-linked listener runs.
-    instance_key: Option<PublicKey>,
     launcher: Arc<dyn RemoteControlLauncher>,
-    /// Identifies the latest link copy so the result of an earlier one, or
-    /// of a link that is no longer shown, is ignored.
-    link_copy_request: u64,
+    /// Copies the pairing link for another device.
+    link_copy: LinkCopy,
+    /// Relay the running listener registers with and the key devices pin,
+    /// while it is linked to one.
+    linked_relay: Option<LinkedRelay>,
     /// Live details of each session showing any, as remote clients last
     /// learned of them.
     live_details: HashMap<SessionId, LiveSessionDetails>,
+    /// Relay of the platform this Agentty is registered with, used unless
+    /// `--remote-relay` names one.
+    platform_relay: Option<RemoteControlService>,
     /// Loopback port, or `None` until `--experimental-remote` enables
     /// remote control.
     port: Option<u16>,
@@ -93,14 +97,19 @@ impl RemoteControl {
         Self {
             allowed_hosts: Vec::new(),
             browser,
-            clipboard,
             connections: Vec::new(),
             devices: Arc::new(RepositoryDeviceStore::new(repositories.remote_devices())),
             generation: 0,
-            instance_key: None,
             launcher,
-            link_copy_request: 0,
+            link_copy: LinkCopy::new(clipboard, |request_id, is_copied| {
+                AppEvent::RemoteLinkCopied {
+                    is_copied,
+                    request_id,
+                }
+            }),
+            linked_relay: None,
             live_details: HashMap::new(),
+            platform_relay: None,
             port: None,
             relay_url: None,
             revision_tx,
@@ -112,6 +121,33 @@ impl RemoteControl {
     /// Returns whether `--experimental-remote` enabled remote control.
     pub(crate) fn is_enabled(&self) -> bool {
         self.port.is_some()
+    }
+
+    /// Returns whether `--remote-relay` names a relay, which then wins over
+    /// the platform's.
+    pub(crate) fn has_explicit_relay(&self) -> bool {
+        self.relay_url.is_some()
+    }
+
+    /// Returns the port the listener binds: the configured one with
+    /// `--experimental-remote`, otherwise a free one while the platform's
+    /// relay is available, since only devices reaching it through that
+    /// relay are expected then.
+    fn listen_port(&self) -> Option<u16> {
+        self.port
+            .or_else(|| self.platform_relay.as_ref().map(|_| 0))
+    }
+
+    /// Returns the relay a listener starting now registers with:
+    /// `--remote-relay` when set, else the platform's.
+    fn relay_to_link(&self) -> Option<(String, Option<String>)> {
+        if let Some(relay_url) = &self.relay_url {
+            return Some((relay_url.clone(), None));
+        }
+
+        self.platform_relay
+            .as_ref()
+            .map(|service| (service.relay_url.clone(), Some(service.pairing_url.clone())))
     }
 
     /// Returns the state projected into the Remote tab.
@@ -146,13 +182,32 @@ impl RemoteControl {
     }
 
     /// Clears the copy notice and disowns any copy still running, because
-    /// its result would describe a link that is no longer shown. Returns the
-    /// request a new copy reports under.
-    fn forget_link_copy(&mut self) -> u64 {
-        self.link_copy_request += 1;
+    /// its result would describe a link that is no longer shown.
+    fn forget_link_copy(&mut self) {
+        self.link_copy.forget();
         self.view.notice = None;
+    }
+}
 
-        self.link_copy_request
+/// Relay a running listener registers with.
+struct LinkedRelay {
+    /// Public key devices pin.
+    instance_key: PublicKey,
+    /// Page pairing links open in place of the relay's own, such as a
+    /// platform's pairing page.
+    pairing_page: Option<String>,
+    /// Relay base URL.
+    url: String,
+}
+
+impl LinkedRelay {
+    /// Builds the link that pairs a device through this relay with
+    /// `pairing_code`.
+    fn pairing_link(&self, pairing_code: &str) -> String {
+        match &self.pairing_page {
+            Some(page) => pairing_link_on_page(page, &self.url, &self.instance_key, pairing_code),
+            None => pairing_link(&self.url, &self.instance_key, pairing_code),
+        }
     }
 }
 
@@ -240,9 +295,18 @@ impl App {
         self.issue_remote_pairing_code();
     }
 
+    /// Stops remote control while it runs, and starts it otherwise.
+    pub(crate) async fn toggle_remote_control(&mut self) {
+        if self.remote_control.view.listener.is_some() {
+            self.stop_remote_control().await;
+        } else {
+            self.start_remote_control().await;
+        }
+    }
+
     /// Starts the listener when it is off, then issues a fresh pairing code.
     pub(crate) async fn start_remote_control(&mut self) {
-        let Some(port) = self.remote_control.port else {
+        let Some(port) = self.remote_control.listen_port() else {
             self.remote_control.view.error = Some(REMOTE_CONTROL_DISABLED.to_string());
 
             return;
@@ -257,18 +321,31 @@ impl App {
         self.refresh_remote_devices().await;
     }
 
-    /// Starts the listener, linked to the configured relay when there is one.
+    /// Starts the listener, linked to `--remote-relay` when it names a
+    /// relay, else to the platform's relay while this Agentty is
+    /// registered there.
     async fn start_remote_listener(&mut self, port: u16) {
-        let relay = match self.remote_control.relay_url.clone() {
-            Some(url) => match self.remote_instance_key().await {
-                Ok(instance_key) => Some(RemoteRelayConfig { instance_key, url }),
+        let (relay, linked_relay) = match self.remote_control.relay_to_link() {
+            Some((url, pairing_page)) => match self.remote_instance_key().await {
+                Ok(instance_key) => {
+                    let linked_relay = LinkedRelay {
+                        instance_key: *instance_key.public(),
+                        pairing_page,
+                        url: url.clone(),
+                    };
+
+                    (
+                        Some(RemoteRelayConfig { instance_key, url }),
+                        Some(linked_relay),
+                    )
+                }
                 Err(error) => {
                     self.remote_control.view.error = Some(error);
 
                     return;
                 }
             },
-            None => None,
+            None => (None, None),
         };
         let host = RemoteHost {
             devices: Arc::clone(&self.remote_control.devices),
@@ -279,7 +356,6 @@ impl App {
                     .with_initiator(CommandInitiator::Remote),
             )),
         };
-        let instance_key = relay.as_ref().map(|relay| *relay.instance_key.public());
         let started = self
             .remote_control
             .launcher
@@ -293,7 +369,7 @@ impl App {
                     server.status(),
                     self.services.event_sender(),
                 );
-                self.remote_control.instance_key = instance_key;
+                self.remote_control.linked_relay = linked_relay;
                 self.remote_control.server = Some(server);
             }
             Err(error) => self.remote_control.view.error = Some(error),
@@ -302,7 +378,7 @@ impl App {
 
     /// Loads this installation's relay key, creating and saving it on first
     /// use. Devices pin its public half, so it must survive restarts.
-    async fn remote_instance_key(&self) -> Result<StaticKeypair, String> {
+    pub(crate) async fn remote_instance_key(&self) -> Result<StaticKeypair, String> {
         let settings = self.services.db().settings();
         let stored = settings
             .get_setting(SettingName::RemoteInstanceKey)
@@ -343,17 +419,9 @@ impl App {
                     .as_ref()
                     .and_then(|listener| listener.relay.as_ref())
                     .map_or(RelayStatus::Connecting, |relay| relay.status);
-                let relay = self
-                    .remote_control
-                    .relay_url
-                    .as_deref()
-                    .zip(self.remote_control.instance_key.as_ref())
-                    .map(|(relay_url, instance_key)| {
-                        RemoteRelayView::new(
-                            pairing_link(relay_url, instance_key, &pairing_code),
-                            relay_status,
-                        )
-                    });
+                let relay = self.remote_control.linked_relay.as_ref().map(|linked| {
+                    RemoteRelayView::new(linked.pairing_link(&pairing_code), relay_status)
+                });
                 self.remote_control.view.listener = Some(RemoteListenerView {
                     pairing_code,
                     relay,
@@ -371,44 +439,26 @@ impl App {
         }
     }
 
-    /// Copies the relay pairing link through the terminal.
-    ///
-    /// The `tmux` step runs in the background, because it waits for a `tmux`
-    /// command. Its result arrives as [`AppEvent::RemoteLinkCopied`].
+    /// Copies the relay pairing link through the terminal. The `tmux` step
+    /// runs in the background, and its result arrives as
+    /// [`AppEvent::RemoteLinkCopied`].
     pub(crate) fn copy_remote_link(&mut self) {
         let Some(link) = self.remote_control.relay_link() else {
             return;
         };
-        let request_id = self.remote_control.forget_link_copy();
-        let clipboard = Arc::clone(&self.remote_control.clipboard);
-        let event_tx = self.services.event_sender();
-        spawn_blocking_detached(move || {
-            let is_copied = clipboard.copy_through_tmux(&link);
-            // The app owns the event channel, so a closed one only drops the
-            // result.
-            let _ = event_tx.send(AppEvent::RemoteLinkCopied {
-                is_copied,
-                request_id,
-            });
-        });
+        self.remote_control.view.notice = None;
+        self.remote_control
+            .link_copy
+            .start(link, self.services.event_sender());
     }
 
     /// Finishes the link copy identified by `request_id` and shows whether
     /// it reached the terminal, ignoring a copy that a later one or a new
     /// link replaced.
-    ///
-    /// When `tmux` did not copy the link, this asks the terminal from the
-    /// foreground, the only thread that may write to it.
     pub(crate) fn apply_remote_link_copied(&mut self, request_id: u64, is_copied: bool) {
-        if request_id != self.remote_control.link_copy_request {
+        let Some(is_copied) = self.remote_control.link_copy.finish(request_id, is_copied) else {
             return;
-        }
-
-        let is_copied = is_copied
-            || self
-                .remote_control
-                .relay_link()
-                .is_some_and(|link| self.remote_control.clipboard.copy_through_terminal(&link));
+        };
         let notice = if is_copied {
             LINK_COPIED
         } else {
@@ -424,12 +474,32 @@ impl App {
         }
         self.remote_control.generation += 1;
         self.remote_control.connections.clear();
-        self.remote_control.instance_key = None;
+        self.remote_control.linked_relay = None;
         self.remote_control.view.listener = None;
         self.remote_control.forget_link_copy();
         self.remote_control.view.pairing_requests.clear();
         for device in &mut self.remote_control.view.devices {
             device.is_connected = false;
+        }
+    }
+
+    /// Replaces the platform relay remote control may use. A running
+    /// listener that `--remote-relay` does not link restarts, so it
+    /// registers with the new relay, or with none: devices connected
+    /// through the old relay drop, and when only the platform's relay made
+    /// remote control available, it stays off.
+    pub(crate) async fn set_platform_relay(&mut self, relay: Option<RemoteControlService>) {
+        if self.remote_control.platform_relay == relay {
+            return;
+        }
+        self.remote_control.platform_relay = relay;
+        if self.remote_control.has_explicit_relay() || self.remote_control.server.is_none() {
+            return;
+        }
+
+        self.stop_remote_control().await;
+        if self.remote_control.listen_port().is_some() {
+            self.start_remote_control().await;
         }
     }
 
@@ -505,7 +575,7 @@ impl App {
 
     /// Reloads paired devices, marks the connected ones, and keeps the
     /// highlight on a listed device.
-    async fn refresh_remote_devices(&mut self) {
+    pub(crate) async fn refresh_remote_devices(&mut self) {
         match self.remote_control.devices.list_devices().await {
             Ok(devices) => {
                 let connections = &self.remote_control.connections;

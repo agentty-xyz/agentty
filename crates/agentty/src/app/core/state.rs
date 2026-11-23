@@ -279,6 +279,8 @@ pub struct App {
     /// Tracks background session-diff loads by request generation so stale
     /// completions cannot change the active mode or review generation.
     pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
+    /// Owns the Platform tab's sign-in, account, and access token.
+    pub(crate) platform: crate::app::platform::Platform,
     /// Latest non-modal explicit project-sync lifecycle state.
     pub(crate) project_sync_status: Option<ProjectSyncStatus>,
     /// Deadline after which the terminal project-sync result is removed.
@@ -438,7 +440,12 @@ impl App {
 
     /// Prepares the tab that was just selected for display.
     fn show_current_tab(&mut self) {
-        if self.tabs.current() == Tab::Remote {
+        let shows_remote_control = match self.tabs.current() {
+            Tab::Remote => true,
+            Tab::Platform => self.platform.view().is_registered(),
+            Tab::Projects | Tab::Sessions | Tab::Settings => false,
+        };
+        if shows_remote_control {
             self.show_remote_control();
         }
     }

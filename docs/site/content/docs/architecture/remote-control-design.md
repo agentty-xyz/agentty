@@ -39,11 +39,18 @@ Whoever runs a relay decides which instances may register with it. After an inst
 proves its key, the relay asks an admission policy about its identifier: the `ag-relay`
 binary can admit a fixed list, and a program that embeds the crate can supply its own
 policy. Refusing an instance is the only power this adds; the operator still cannot read
-or change a stream.
+or change a stream. Agentty tells a refusal apart from other failures by the relay's
+close frame and shows it, without changing the relay protocol.
 
 Whoever serves the web client is trusted with the page's code. The relay serves it, so a
 malicious relay operator could serve an altered page. Running your own relay removes
 that party.
+
+A [platform](@/docs/usage/platform.md) adds an account, not a new path to sessions.
+Agentty signs in with a device code, registers the instance's identifier under the
+account, and its relay admits registered instances. The access token goes only to that
+platform; relays see the same handshake and streams as before. The platform serves the
+pairing page its links open, so it holds the same trust as a relay's page.
 
 ## Keys and handshakes
 
@@ -211,10 +218,12 @@ reconnect. Each device gets its own connection pair instead of a shared multiple
 channel, so the relay needs no framing of its own and one slow device cannot stall
 another. Limits on what a client can hold replace accounts.
 
-### No relay is built in
+### No relay is used unless the user chooses one
 
-Agentty uses a relay only when started with `--remote-relay`. No hosted relay or default
-address exists, so nothing leaves the computer unless the user chooses a relay.
+Agentty uses a relay only when started with `--remote-relay`, or after the user signs in
+to a platform that offers one with `--experimental-platform`. The two never combine:
+`--remote-relay` wins, and Agentty then does not register with the platform. Nothing
+leaves the computer unless the user chooses a relay or a platform.
 
 ### A connection runs up to eight requests at once
 

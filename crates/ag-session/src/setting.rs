@@ -51,6 +51,9 @@ pub enum SettingName {
     /// Persists the global cap on concurrent provider-native subagents that
     /// each harness turn may run.
     MaxConcurrentSubagents,
+    /// Persists the Agentty Platform sign-in: the access token together with
+    /// the platform that issued it. Empty while signed out.
+    PlatformSignIn,
     /// Distinguishes registered projects from non-repository launch contexts.
     ProjectCatalogVisible,
     /// Records dismissal of the one-time project discovery suggestion.
@@ -89,6 +92,7 @@ impl SettingName {
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::MaxConcurrentSubagents => "MaxConcurrentSubagents",
+            Self::PlatformSignIn => "PlatformSignIn",
             Self::ProjectCatalogVisible => "ProjectCatalogVisible",
             Self::ProjectDiscoveryPromptSeen => "ProjectDiscoveryPromptSeen",
             Self::RemoteInstanceKey => "RemoteInstanceKey",

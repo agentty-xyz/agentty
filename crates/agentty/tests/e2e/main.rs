@@ -13,6 +13,7 @@ mod common;
 mod confirmation;
 mod mouse;
 mod navigation;
+mod platform;
 mod project;
 mod remote_control;
 mod resource;

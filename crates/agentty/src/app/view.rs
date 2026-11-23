@@ -15,6 +15,7 @@ use crate::infra::clock::{self, Clock};
 use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::platform::PlatformTabView;
 use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::SettingsScreenSnapshot;
 
@@ -51,6 +52,9 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) latest_available_version: Option<&'a str>,
     pub(crate) mode: &'a AppMode,
     pub(crate) mru_project_order: &'a [usize],
+    /// Platform sign-in and remote-control state, or `None` unless
+    /// `--experimental-platform` offers the Platform tab.
+    pub(crate) platform: Option<PlatformTabView<'a>>,
     /// Latest totals for the Agentty process and all of its descendants.
     pub(crate) process_resources: Option<SessionResources>,
     pub(crate) project_selected_index: Option<usize>,
@@ -109,6 +113,10 @@ impl App {
             latest_available_version: self.latest_available_version.as_deref(),
             mode: &self.mode,
             mru_project_order: project.mru_project_order,
+            platform: self.platform.is_enabled().then(|| PlatformTabView {
+                platform: self.platform.view(),
+                remote_control: self.remote_control.view(),
+            }),
             process_resources: sessions.process_resources,
             project_selected_index: project.selected_index,
             project_sync_status: self.project_sync_status.as_ref(),

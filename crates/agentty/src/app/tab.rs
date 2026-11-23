@@ -25,13 +25,20 @@ pub enum Tab {
     /// Remote control of the active project's sessions, offered only with
     /// `--experimental-remote`.
     Remote,
+    /// Sign-in to an Agentty Platform and remote control through its relay,
+    /// offered only with `--experimental-platform`.
+    Platform,
 }
 
 impl Tab {
     /// Every tab in the order they are rendered.
-    pub const ALL: [Self; 4] = [Self::Projects, Self::Sessions, Self::Settings, Self::Remote];
-    /// Tabs offered while remote control is disabled, in display order.
-    pub const WITHOUT_REMOTE: [Self; 3] = [Self::Projects, Self::Sessions, Self::Settings];
+    pub const ALL: [Self; 5] = [
+        Self::Projects,
+        Self::Sessions,
+        Self::Settings,
+        Self::Remote,
+        Self::Platform,
+    ];
 
     /// Returns the tab's name: its persisted value and its header label,
     /// which the header extends for [`Tab::Remote`] while devices connect.
@@ -41,6 +48,7 @@ impl Tab {
             Tab::Sessions => "Sessions",
             Tab::Settings => "Settings",
             Tab::Remote => "Remote",
+            Tab::Platform => "Platform",
         }
     }
 
@@ -59,7 +67,7 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Settings | Tab::Remote => TabScope::Project,
+            Tab::Sessions | Tab::Settings | Tab::Remote | Tab::Platform => TabScope::Project,
         }
     }
 }
@@ -68,21 +76,24 @@ impl Tab {
 ///
 /// The derived `Default` initializes `current` to `Tab::default()`, which
 /// selects `Tab::Projects` on a freshly constructed manager, and leaves
-/// [`Tab::Remote`] out of the cycle.
+/// [`Tab::Remote`] and [`Tab::Platform`] out of the cycle.
 #[derive(Default)]
 pub struct TabManager {
     current: Tab,
+    /// Whether `--experimental-platform` offers [`Tab::Platform`].
+    is_platform_available: bool,
     /// Whether `--experimental-remote` offers [`Tab::Remote`].
     is_remote_available: bool,
 }
 
 impl TabManager {
     /// Builds a manager with an explicit starting tab and without
-    /// [`Tab::Remote`].
+    /// [`Tab::Remote`] or [`Tab::Platform`].
     #[must_use]
     pub fn new(current: Tab) -> Self {
         Self {
             current,
+            is_platform_available: false,
             is_remote_available: false,
         }
     }
@@ -92,14 +103,22 @@ impl TabManager {
         self.is_remote_available = true;
     }
 
+    /// Adds [`Tab::Platform`] to the tabs this launch offers.
+    pub fn enable_platform(&mut self) {
+        self.is_platform_available = true;
+    }
+
     /// Returns the tabs this launch offers, in display order.
     #[must_use]
-    pub fn available_tabs(&self) -> &'static [Tab] {
-        if self.is_remote_available {
-            &Tab::ALL
-        } else {
-            &Tab::WITHOUT_REMOTE
-        }
+    pub fn available_tabs(&self) -> Vec<Tab> {
+        Tab::ALL
+            .into_iter()
+            .filter(|tab| match tab {
+                Tab::Remote => self.is_remote_available,
+                Tab::Platform => self.is_platform_available,
+                Tab::Projects | Tab::Sessions | Tab::Settings => true,
+            })
+            .collect()
     }
 
     /// Returns the currently selected tab. A selected tab this launch does

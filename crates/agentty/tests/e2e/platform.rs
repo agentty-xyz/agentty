@@ -1,0 +1,245 @@
+//! Platform tab E2E tests against a fake platform server: device sign-in,
+//! registration, remote control through the platform's relay, the
+//! waitlist, and sign-out.
+
+use serde_json::json;
+use testty::assertion;
+use testty::region::Region;
+use wiremock::matchers::{header, method, path, path_regex};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+use crate::common;
+use crate::common::FeatureTest;
+
+/// Token the fake platform issues.
+const TOKEN: &str = "agp_e2e-token";
+/// Code the fake platform asks the user to confirm.
+const USER_CODE: &str = "BCDF-GHJK";
+
+/// Starts a fake platform that issues a sign-in code, answers the first
+/// token poll as pending and the next with a token, and answers account
+/// requests with what `account` builds from the platform's address.
+async fn fake_platform(account: fn(&str) -> ResponseTemplate) -> MockServer {
+    let server = MockServer::start().await;
+    let uri = server.uri();
+    Mock::given(method("POST"))
+        .and(path("/api/v1/device/authorizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "e2e-device-code",
+            "user_code": USER_CODE,
+            "verification_uri": format!("{uri}/device"),
+            "verification_uri_complete": format!("{uri}/device?user_code={USER_CODE}"),
+            "expires_in": 600,
+            "interval": 1,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/device/token"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({ "error": "authorization_pending" })),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/device/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": TOKEN,
+            "token_type": "bearer",
+            "account": { "login": "octocat" },
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/account"))
+        .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
+        .respond_with(account(&uri))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Answers the account with the platform's relay, where nothing listens,
+/// and its pairing page.
+fn account_with_relay(uri: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "account": { "login": "octocat" },
+        "services": {
+            "remote_control": {
+                "relay_url": "ws://127.0.0.1:9",
+                "pairing_url": format!("{uri}/sessions/"),
+            },
+        },
+    }))
+}
+
+/// Launch arguments offering only the Platform tab, signed in to `server`.
+fn platform_args(server: &MockServer) -> [String; 3] {
+    [
+        "--experimental-platform".to_string(),
+        "--platform-url".to_string(),
+        server.uri(),
+    ]
+}
+
+/// Verify `--experimental-platform` alone adds the Platform tab, where
+/// `Enter` signs in with a device code, the registered Agentty starts
+/// remote control through the platform's relay with a pairing link on the
+/// platform's page, and `l` signs out and tells the platform.
+#[tokio::test]
+async fn platform_tab_sign_in() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = fake_platform(account_with_relay).await;
+    let pairing_page = format!("{}/sessions/#relay=", server.uri());
+    Mock::given(method("PUT"))
+        .and(path_regex("^/api/v1/instances/[0-9a-f]{64}$"))
+        .respond_with(|request: &Request| {
+            let instance_id = request.url.path().rsplit('/').next().unwrap_or_default();
+
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "instance_id": instance_id, "name": "Test machine" }))
+        })
+        .expect(1..)
+        .mount(&server)
+        .await;
+    for route in ["^/api/v1/instances/[0-9a-f]{64}$", "^/api/v1/token$"] {
+        Mock::given(method("DELETE"))
+            .and(path_regex(route))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    // Act, Assert
+    FeatureTest::new("platform_tab_sign_in")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .args(platform_args(&server))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Platform"))
+                    .wait_for_text("Account Signed out", 5000)
+                    .capture_labeled("signed_out", "The Platform tab offers sign-in")
+                    .press_key("Enter")
+                    .wait_for_text(USER_CODE, 5000)
+                    .capture_labeled("code", "Enter shows the code and the page")
+                    .wait_for_text("Name    Test machine", 10000)
+                    .capture_labeled("registered", "The approved sign-in registers")
+                    .press_key("Enter")
+                    .wait_for_text("Relay   Connecting", 5000)
+                    .capture_labeled("remote", "Remote control runs through the relay")
+                    .press_key("l")
+                    .wait_for_text("Signed out.", 5000)
+                    .capture_labeled("signed_out_again", "l signs out")
+            },
+            move |_frame, report| {
+                Box::pin(async move {
+                    let signed_out = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(signed_out.cols(), signed_out.rows());
+                    assertion::assert_text_in_region(&signed_out, "Settings | Platform", &full);
+                    assertion::assert_text_in_region(
+                        &signed_out,
+                        "without a tunnel or a relay of your own",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(&signed_out, "Enter: sign in", &full);
+                    assertion::assert_not_visible(&signed_out, "Remote ");
+
+                    let code = common::frame_from_capture(&report.captures[1]);
+                    assertion::assert_text_in_region(&code, "/device?user_code=BCDF-GHJK", &full);
+                    assertion::assert_text_in_region(&code, "o: open page", &full);
+                    assertion::assert_text_in_region(&code, "c: copy link", &full);
+
+                    let registered = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_text_in_region(&registered, "Account octocat", &full);
+                    assertion::assert_text_in_region(&registered, "Remote  Off", &full);
+                    assertion::assert_text_in_region(&registered, "l: sign out", &full);
+
+                    let remote = common::frame_from_capture(&report.captures[3]);
+                    assertion::assert_text_in_region(&remote, "Remote  On", &full);
+                    assertion::assert_text_in_region(&remote, &pairing_page, &full);
+                    assertion::assert_text_in_region(&remote, "Paired devices", &full);
+
+                    let signed_out_again = common::frame_from_capture(&report.captures[4]);
+                    assertion::assert_text_in_region(
+                        &signed_out_again,
+                        "Account Signed out",
+                        &full,
+                    );
+                    assertion::assert_not_visible(&signed_out_again, "Relay   Connecting");
+                })
+            },
+        )
+        .await?;
+    server.verify().await;
+
+    Ok(())
+}
+
+/// Verify a waitlisted account stays signed in without the platform's
+/// relay, says so in plain words, and checks again on `Enter`, here once
+/// the account is admitted to a platform that offers it no relay.
+#[tokio::test]
+async fn platform_tab_waitlist() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = fake_platform(|_| {
+        ResponseTemplate::new(200).set_body_json(json!({ "account": { "login": "octocat" } }))
+    })
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/account"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "error": "waitlisted",
+            "message": "This account is on the waitlist.",
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Act, Assert
+    FeatureTest::new("platform_tab_waitlist")
+        .with_git()
+        .with_terminal_size(160, 40)
+        .args(platform_args(&server))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Platform"))
+                    .press_key("Enter")
+                    .wait_for_text("waitlist", 10000)
+                    .capture_labeled("waitlisted", "The account waits for access")
+                    .press_key("Enter")
+                    .wait_for_text("offers this account no relay", 5000)
+                    .capture_labeled("checked_again", "Enter checks again")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let waitlisted = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(waitlisted.cols(), waitlisted.rows());
+                    assertion::assert_text_in_region(&waitlisted, "Account octocat", &full);
+                    assertion::assert_text_in_region(&waitlisted, "has no access yet", &full);
+                    assertion::assert_text_in_region(
+                        &waitlisted,
+                        "Enter: check again | l: sign out",
+                        &full,
+                    );
+                    assertion::assert_not_visible(&waitlisted, "Remote  ");
+
+                    let checked_again = common::frame_from_capture(&report.captures[1]);
+                    assertion::assert_text_in_region(&checked_again, "Account octocat", &full);
+                    assertion::assert_not_visible(&checked_again, "waitlist");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}

@@ -10,6 +10,7 @@ pub(crate) mod execution_graph;
 pub(crate) mod help;
 pub(crate) mod input_key;
 pub(crate) mod list;
+pub(crate) mod platform;
 pub(crate) mod project_catalog;
 pub(crate) mod prompt;
 pub(crate) mod question;

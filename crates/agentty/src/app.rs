@@ -28,8 +28,10 @@ pub(crate) mod graph_question;
 mod graph_reply;
 mod graph_reply_decision;
 pub(crate) mod graph_view;
+mod link_copy;
 mod merge_queue;
 mod message_admission;
+pub(crate) mod platform;
 mod project;
 mod project_catalog;
 pub(crate) mod prompt_intent;
@@ -63,6 +65,7 @@ pub use core::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus, agentty_h
 pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub use error::AppError;
+pub use platform::platform_instance_name;
 pub use project::ProjectManager;
 pub use remote_control::DEFAULT_REMOTE_CONTROL_PORT;
 pub(crate) use review::ReviewCacheEntry;

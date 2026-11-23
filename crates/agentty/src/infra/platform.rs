@@ -42,6 +42,7 @@ const MAX_EXPIRES_IN: Duration = Duration::from_secs(3600);
 const INSTANCE_ID_CHARS: usize = 64;
 
 /// Calls one platform on behalf of this Agentty.
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait PlatformClient: Send + Sync {
     /// Starts a device sign-in that the user approves in a browser, naming

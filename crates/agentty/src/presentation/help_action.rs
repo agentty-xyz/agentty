@@ -3,6 +3,7 @@
 
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
 use crate::domain::session_order::ArchiveAction;
+use crate::presentation::platform::{PlatformAccess, PlatformState, PlatformTabView};
 use crate::presentation::remote_control::RemoteControlView;
 
 /// Footer shortcut label for prompt image paste.
@@ -343,6 +344,60 @@ pub(crate) fn remote_control_actions(view: &RemoteControlView) -> Vec<HelpAction
     }
 
     actions
+}
+
+/// Returns help actions for the Platform tab in the state `view` shows.
+/// These entries are used by the help overlay and include all available
+/// actions.
+pub(crate) fn platform_actions(view: PlatformTabView<'_>) -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.extend(platform_tab_actions(view));
+    actions.extend(SWITCH_TAB_ACTIONS);
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns the Platform tab's own actions in the state `view` shows:
+/// sign-in actions while signed out or signing in, and, once signed in,
+/// sign-out and either the remote-control actions of a registered Agentty
+/// or another account check.
+pub(crate) fn platform_tab_actions(view: PlatformTabView<'_>) -> Vec<HelpAction> {
+    match &view.platform.state {
+        PlatformState::SignedOut { .. } => {
+            vec![HelpAction::new(
+                "sign in",
+                "Enter",
+                "Sign in to the platform",
+            )]
+        }
+        PlatformState::SigningOut { .. } => Vec::new(),
+        PlatformState::Requesting => vec![HelpAction::new("cancel", "Enter", "Cancel sign-in")],
+        PlatformState::SigningIn(_) => vec![
+            HelpAction::new("open page", "o", "Open the sign-in page"),
+            HelpAction::new("copy link", "c", "Copy the sign-in page link"),
+            HelpAction::new("cancel", "Enter", "Cancel sign-in"),
+        ],
+        PlatformState::SignedIn(account) => {
+            let mut actions = match account.access {
+                PlatformAccess::Checking => Vec::new(),
+                PlatformAccess::Registered { .. } => remote_control_actions(view.remote_control),
+                PlatformAccess::ExplicitRelay
+                | PlatformAccess::NoRelay
+                | PlatformAccess::Unavailable { .. }
+                | PlatformAccess::Waitlisted => {
+                    vec![HelpAction::new(
+                        "check again",
+                        "Enter",
+                        "Check the account again",
+                    )]
+                }
+            };
+            actions.push(HelpAction::new("sign out", "l", "Sign out of the platform"));
+
+            actions
+        }
+    }
 }
 
 /// Projects currently available view-mode actions into help entries.
