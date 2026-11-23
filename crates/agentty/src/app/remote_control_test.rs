@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ag_remote::{
     DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, RelayStatus, RemoteConnection,
     RemoteDevice, RemoteError, RemoteHost, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
-    pairing_link,
+    pairing_link, pairing_link_on_page,
 };
 use async_trait::async_trait;
 use mockall::predicate::eq;
@@ -20,6 +20,7 @@ use crate::app::{App, AppEvent, AppRuntimeEvent, Tab};
 use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
+use crate::infra::platform::RemoteControlService;
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::presentation::remote_control::{
@@ -1146,7 +1147,8 @@ async fn link_copy_result_is_dropped_once_the_link_changes() {
     // Act
     app.copy_remote_link();
     apply_events_until_link_notice(&mut app).await;
-    let replaced_request = app.remote_control.link_copy_request;
+    // The first copy reports under the first request.
+    let replaced_request = 1;
     app.issue_remote_pairing_code();
     let after_new_code = app.remote_control.view().notice.clone();
     app.apply_app_events(AppEvent::RemoteLinkCopied {
@@ -1252,4 +1254,150 @@ async fn device_selection_stays_within_the_paired_devices() {
     assert_eq!(after_last, 1);
     assert_eq!(after_removal, 0);
     assert_eq!(app.remote_control.view().selected_device_index, 0);
+}
+
+/// Returns the relay a platform offers.
+fn platform_relay() -> RemoteControlService {
+    RemoteControlService {
+        pairing_url: "https://platform.example/sessions/".to_string(),
+        relay_url: "wss://relay.platform.example".to_string(),
+    }
+}
+
+/// Builds a launcher that starts a fresh fake listener on `port` each
+/// time, recording every relay it is linked to.
+fn restartable_launcher(port: u16) -> (MockRemoteControlLauncher, Arc<Mutex<Vec<Option<String>>>>) {
+    let relays = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&relays);
+    let mut launcher = MockRemoteControlLauncher::new();
+    launcher
+        .expect_start()
+        .with(
+            eq(port),
+            mockall::predicate::always(),
+            mockall::predicate::always(),
+            mockall::predicate::always(),
+        )
+        .returning(move |_, _, relay, _| {
+            recorded
+                .lock()
+                .expect("relays lock")
+                .push(relay.map(|relay| relay.url));
+            let (status_tx, _status_rx) = watch::channel(RemoteServerStatus::default());
+
+            Ok(Box::new(FakeServer {
+                calls: CallLog::default(),
+                codes: Mutex::new(Vec::new()),
+                revoke_result: Ok(()),
+                status_tx,
+            }) as Box<dyn RemoteControlServer>)
+        });
+
+    (launcher, relays)
+}
+
+#[tokio::test]
+async fn the_platform_relay_alone_starts_remote_control_on_a_free_port_and_pairs_on_its_page() {
+    // Arrange: `--experimental-remote` is off.
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, probe) = fake_launcher(0, Vec::new(), Ok(()));
+    app.remote_control = remote_control(&app, launcher);
+    app.set_platform_relay(Some(platform_relay())).await;
+
+    // Act
+    app.start_remote_control().await;
+    let link = app
+        .remote_control
+        .view()
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.link.clone());
+    app.set_platform_relay(None).await;
+    let listener_after = app.remote_control.view().listener.clone();
+    app.start_remote_control().await;
+
+    // Assert
+    let relay = probe
+        .relay
+        .lock()
+        .expect("relay lock")
+        .clone()
+        .expect("listener should get the platform relay");
+    assert_eq!(relay.url, platform_relay().relay_url);
+    assert_eq!(
+        link,
+        Some(pairing_link_on_page(
+            &platform_relay().pairing_url,
+            &platform_relay().relay_url,
+            relay.instance_key.public(),
+            "LAST-CODE",
+        ))
+    );
+    assert_eq!(listener_after, None);
+    assert!(
+        probe
+            .calls
+            .lock()
+            .expect("calls lock")
+            .contains(&"shutdown".to_string())
+    );
+    assert_eq!(
+        app.remote_control.view().error.as_deref(),
+        Some("Remote control needs `agentty --experimental-remote`.")
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_relay_wins_over_the_platform_relay_and_keeps_running() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_relay_launcher(
+        &mut app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    )
+    .await;
+    app.start_remote_control().await;
+
+    // Act
+    app.set_platform_relay(Some(platform_relay())).await;
+
+    // Assert
+    assert!(app.remote_control.has_explicit_relay());
+    let relay = probe.relay.lock().expect("relay lock").clone();
+    assert_eq!(relay.map(|relay| relay.url), Some(RELAY_URL.to_string()));
+    assert!(probe.calls.lock().expect("calls lock").is_empty());
+    let link = app
+        .remote_control
+        .view()
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.link.clone())
+        .expect("relay link should show");
+    assert!(link.starts_with("https://relay.example/#relay="));
+}
+
+#[tokio::test]
+async fn a_running_listener_moves_to_the_platform_relay_and_back() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, relays) = restartable_launcher(DEFAULT_REMOTE_CONTROL_PORT);
+    install_launcher(&mut app, launcher).await;
+    app.start_remote_control().await;
+
+    // Act
+    app.set_platform_relay(Some(platform_relay())).await;
+    app.set_platform_relay(Some(platform_relay())).await;
+    app.set_platform_relay(None).await;
+
+    // Assert
+    assert_eq!(
+        *relays.lock().expect("relays lock"),
+        vec![None, Some(platform_relay().relay_url), None]
+    );
+    assert!(app.remote_control.view().listener.is_some());
 }

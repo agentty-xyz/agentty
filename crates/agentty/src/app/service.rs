@@ -585,6 +585,8 @@ impl AppServices {
             AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
             AppEvent::RemoteControlStatusUpdated { .. } => "RemoteControlStatusUpdated",
             AppEvent::RemoteLinkCopied { .. } => "RemoteLinkCopied",
+            AppEvent::PlatformLinkCopied { .. } => "PlatformLinkCopied",
+            AppEvent::PlatformUpdated { .. } => "PlatformUpdated",
             AppEvent::ScreenCopyDeclined { .. } => "ScreenCopyDeclined",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",

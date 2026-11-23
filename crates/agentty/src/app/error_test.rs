@@ -4,6 +4,7 @@ use ag_contracts::OneShotError;
 
 use super::AppError;
 use crate::app::session::SessionError;
+use crate::infra::platform::PlatformError;
 
 #[test]
 fn session_error_converts_via_from() {
@@ -16,6 +17,22 @@ fn session_error_converts_via_from() {
     // Assert
     assert!(matches!(error, AppError::Session(SessionError::NotFound)));
     assert_eq!(error.to_string(), "Session not found");
+}
+
+#[test]
+fn platform_error_converts_to_a_startup_workflow_failure() {
+    // Arrange
+    let platform_error = PlatformError::Unreachable;
+
+    // Act
+    let error = AppError::from(platform_error);
+
+    // Assert
+    assert!(matches!(error, AppError::Workflow(_)));
+    assert_eq!(
+        error.to_string(),
+        "Cannot start the platform client: Could not reach the platform."
+    );
 }
 
 #[test]

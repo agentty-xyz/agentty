@@ -51,6 +51,7 @@ pub(crate) fn render_app(
             update_status: snapshot.update_status,
             mode: snapshot.mode,
             mru_project_order: snapshot.mru_project_order,
+            platform: snapshot.platform,
             process_resources: snapshot.process_resources,
             remote_control: snapshot.remote_control,
             render_cache_store,

@@ -26,6 +26,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::platform::{PlatformTabView, PlatformView};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView,
@@ -101,6 +102,17 @@ fn render_list_tab_with_remote(
     settings_screen: Option<&SettingsScreenSnapshot>,
     remote_control: Option<&RemoteControlView>,
 ) -> (String, ReasoningLevel) {
+    render_list_tab_with_optional_tabs(current_tab, settings_screen, remote_control, None)
+}
+
+/// Renders one list tab, offering the Remote tab when `remote_control` is
+/// present and the Platform tab when `platform` is.
+fn render_list_tab_with_optional_tabs(
+    current_tab: Tab,
+    settings_screen: Option<&SettingsScreenSnapshot>,
+    remote_control: Option<&RemoteControlView>,
+    platform: Option<PlatformTabView<'_>>,
+) -> (String, ReasoningLevel) {
     let backend = ratatui::backend::TestBackend::new(120, 30);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let available_agent_clis = Vec::new();
@@ -120,6 +132,7 @@ fn render_list_tab_with_remote(
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
+        platform,
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &projects,
@@ -162,6 +175,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
+        platform: None,
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
@@ -514,6 +528,27 @@ fn render_list_background_renders_the_remote_tab_only_when_offered() {
 }
 
 #[test]
+fn render_list_background_renders_the_platform_tab_only_when_offered() {
+    // Arrange
+    let platform = PlatformView::new("https://platform.example".to_string());
+    let remote_control = RemoteControlView::default();
+    let view = PlatformTabView {
+        platform: &platform,
+        remote_control: &remote_control,
+    };
+
+    // Act
+    let (offered, _) = render_list_tab_with_optional_tabs(Tab::Platform, None, None, Some(view));
+    let (hidden, _) = render_list_tab(Tab::Platform, None);
+
+    // Assert
+    assert!(offered.contains(" Settings | Platform "));
+    assert!(offered.contains("Agentty Platform"));
+    assert!(offered.contains("https://platform.example"));
+    assert!(!hidden.contains("Platform"));
+}
+
+#[test]
 fn active_project_name_labels_only_the_matching_project() {
     // Arrange
     let projects = vec![
@@ -605,6 +640,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
+        platform: None,
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],

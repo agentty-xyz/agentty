@@ -6,6 +6,8 @@ pub mod diff;
 pub(crate) mod execution_graph;
 /// Graph proposal and live execution sidebar beside session chat.
 pub(crate) mod graph_chat;
+/// Platform sign-in, account, and hosted remote-control page.
+pub mod platform;
 /// Project selection and activity list page.
 pub mod project_list;
 /// Remote-control listener, pairing, and paired-device page.

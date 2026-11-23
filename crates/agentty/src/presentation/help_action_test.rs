@@ -5,11 +5,15 @@ use ag_remote::RelayStatus;
 
 use super::{
     DiffReviewCommentHelp, HelpAction, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
-    ViewHelpState, ViewSessionState, diff_actions, project_list_actions, remote_actions,
-    remote_control_actions, session_list_actions, session_view_state, settings_actions,
-    view_actions, view_actions_with_review_request,
+    ViewHelpState, ViewSessionState, diff_actions, platform_actions, platform_tab_actions,
+    project_list_actions, remote_actions, remote_control_actions, session_list_actions,
+    session_view_state, settings_actions, view_actions, view_actions_with_review_request,
 };
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
+use crate::presentation::platform::{
+    PlatformAccess, PlatformAccountView, PlatformSignInView, PlatformState, PlatformTabView,
+    PlatformView,
+};
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
     RemoteRelayView,
@@ -99,6 +103,65 @@ fn test_remote_actions_follow_the_listener_pairings_and_devices() {
         stopped_start,
         [HelpAction::new("start", "Enter", "Start remote control")]
     );
+}
+
+#[test]
+fn test_platform_actions_follow_the_sign_in_state() {
+    // Arrange
+    let remote_control = RemoteControlView::default();
+    let signed_in = |access| {
+        PlatformState::SignedIn(PlatformAccountView {
+            access,
+            login: None,
+        })
+    };
+    let cases = [
+        (PlatformState::SignedOut { notice: None }, vec!["Enter"]),
+        (PlatformState::SigningOut { notice: None }, vec![]),
+        (PlatformState::Requesting, vec!["Enter"]),
+        (
+            PlatformState::SigningIn(PlatformSignInView {
+                link: "https://platform.example/device".to_string(),
+                notice: None,
+                user_code: "BCDF-GHJK".to_string(),
+            }),
+            vec!["o", "c", "Enter"],
+        ),
+        (signed_in(PlatformAccess::Checking), vec!["l"]),
+        (signed_in(PlatformAccess::Waitlisted), vec!["Enter", "l"]),
+        (
+            signed_in(PlatformAccess::Registered {
+                name: "Agentty on box".to_string(),
+            }),
+            vec!["Enter", "l"],
+        ),
+    ];
+
+    for (state, expected) in cases {
+        let platform = PlatformView {
+            state,
+            ..PlatformView::new("https://platform.example".to_string())
+        };
+        let view = PlatformTabView {
+            platform: &platform,
+            remote_control: &remote_control,
+        };
+
+        // Act
+        let tab_keys: Vec<&str> = platform_tab_actions(view)
+            .into_iter()
+            .map(|action| action.key)
+            .collect();
+        let overlay_keys: Vec<&str> = platform_actions(view)
+            .into_iter()
+            .map(|action| action.key)
+            .collect();
+
+        // Assert
+        assert_eq!(tab_keys, expected);
+        assert_eq!(overlay_keys.last(), Some(&"?"));
+        assert!(overlay_keys.contains(&"Shift+Tab"));
+    }
 }
 
 #[test]

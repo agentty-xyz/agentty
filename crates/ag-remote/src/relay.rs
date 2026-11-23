@@ -85,10 +85,27 @@ pub enum RelayStatus {
 pub fn pairing_link(relay_url: &str, instance_key: &PublicKey, pairing_code: &str) -> String {
     let relay_url = relay_url.trim_end_matches('/');
     // `ws://` becomes `http://` and `wss://` becomes `https://`.
-    let page = format!("http{}", relay_url.get(2..).unwrap_or_default());
+    let page = format!("http{}/", relay_url.get(2..).unwrap_or_default());
+
+    pairing_link_on_page(&page, relay_url, instance_key, pairing_code)
+}
+
+/// Builds the link a device opens to pair through the relay at `relay_url`
+/// from `page`, which serves the web client in place of the relay's own
+/// page, such as a hosted service's pairing page.
+///
+/// The link is `page` with the fragment [`pairing_link`] uses, so the web
+/// client reads it alike and `page` never sees the fragment either.
+pub fn pairing_link_on_page(
+    page: &str,
+    relay_url: &str,
+    instance_key: &PublicKey,
+    pairing_code: &str,
+) -> String {
+    let relay_url = relay_url.trim_end_matches('/');
 
     format!(
-        "{page}/#relay={}&key={}&code={}",
+        "{page}#relay={}&key={}&code={}",
         utf8_percent_encode(relay_url, NON_ALPHANUMERIC),
         instance_key.to_hex(),
         utf8_percent_encode(pairing_code, NON_ALPHANUMERIC),

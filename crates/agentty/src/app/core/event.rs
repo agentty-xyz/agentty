@@ -24,6 +24,7 @@ use tracing::warn;
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
+use crate::app::platform::PlatformUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
     SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
@@ -135,6 +136,13 @@ pub(crate) enum AppEvent {
     /// `request_id` in the background. When it did not, the foreground asks
     /// the terminal to copy the link.
     RemoteLinkCopied { is_copied: bool, request_id: u64 },
+    /// Reports whether `tmux` copied the platform sign-in page identified
+    /// by `request_id` in the background.
+    PlatformLinkCopied { is_copied: bool, request_id: u64 },
+    /// Reports progress of a background platform request: a sign-in code,
+    /// a finished sign-in, a checked account, or a sign-out. Updates for a
+    /// replaced request are ignored.
+    PlatformUpdated { update: PlatformUpdate },
     /// Reports that `tmux` did not copy the screen `text` the user selected,
     /// so the foreground asks the terminal to copy it.
     ScreenCopyDeclined { text: String },
@@ -436,6 +444,11 @@ pub(super) struct AppEventBatch {
     pub(super) remote_control_status: Option<(u64, ag_remote::RemoteServerStatus)>,
     /// Latest remote pairing link copy result with its request.
     pub(super) remote_link_copy: Option<(u64, bool)>,
+    /// Latest platform sign-in page copy result with its request.
+    pub(super) platform_link_copy: Option<(u64, bool)>,
+    /// Retains platform progress in arrival order, so a sign-in code
+    /// precedes the finished sign-in.
+    pub(super) platform_updates: Vec<PlatformUpdate>,
     pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
@@ -522,6 +535,8 @@ impl AppEventBatch {
             || self.latest_available_version_update.is_some()
             || self.remote_control_status.is_some()
             || self.remote_link_copy.is_some()
+            || self.platform_link_copy.is_some()
+            || !self.platform_updates.is_empty()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
             || !self.implementer_attempt_successes.is_empty()
@@ -629,6 +644,11 @@ impl AppEventBatch {
                 is_copied,
                 request_id,
             } => self.collect_remote_link_copied(request_id, is_copied),
+            AppEvent::PlatformLinkCopied {
+                is_copied,
+                request_id,
+            } => self.collect_platform_link_copied(request_id, is_copied),
+            AppEvent::PlatformUpdated { update } => self.platform_updates.push(update),
             AppEvent::ScreenCopyDeclined { text } => self.screen_copies_declined.push(text),
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
                 self.agent_cli_updates = Some(agent_clis);
@@ -757,6 +777,8 @@ impl AppEventBatch {
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::RemoteControlStatusUpdated { .. }
             | AppEvent::RemoteLinkCopied { .. }
+            | AppEvent::PlatformLinkCopied { .. }
+            | AppEvent::PlatformUpdated { .. }
             | AppEvent::ScreenCopyDeclined { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::HarnessModelsUpdated { .. }
@@ -978,12 +1000,13 @@ impl AppEventBatch {
     /// this reducer batch. Each copy runs on its own thread, so an older
     /// result can arrive after a newer one.
     fn collect_remote_link_copied(&mut self, request_id: u64, is_copied: bool) {
-        if self
-            .remote_link_copy
-            .is_none_or(|(batched_request_id, _)| request_id >= batched_request_id)
-        {
-            self.remote_link_copy = Some((request_id, is_copied));
-        }
+        keep_newest_link_copy(&mut self.remote_link_copy, request_id, is_copied);
+    }
+
+    /// Stores the platform sign-in page copy result of the newest request
+    /// in this reducer batch.
+    fn collect_platform_link_copied(&mut self, request_id: u64, is_copied: bool) {
+        keep_newest_link_copy(&mut self.platform_link_copy, request_id, is_copied);
     }
 
     /// Stores one completed linked review-comment snapshot load.
@@ -1714,6 +1737,12 @@ impl App {
         }
         for update in std::mem::take(&mut event_batch.chatgpt_sign_in_updates) {
             self.apply_chatgpt_sign_in_update(update).await;
+        }
+        if let Some((request_id, is_copied)) = event_batch.platform_link_copy.take() {
+            self.apply_platform_link_copied(request_id, is_copied);
+        }
+        for update in std::mem::take(&mut event_batch.platform_updates) {
+            self.apply_platform_update(update).await;
         }
         if let Some(options) = event_batch.harness_model_updates.take() {
             match &mut self.mode {
@@ -2903,6 +2932,14 @@ impl App {
             detected_forge_kind_from_git_push_error(&detail_message),
             "run sync again",
         )
+    }
+}
+
+/// Keeps the link copy result of the newest request in `slot`. Each copy
+/// runs on its own thread, so an older result can arrive after a newer one.
+fn keep_newest_link_copy(slot: &mut Option<(u64, bool)>, request_id: u64, is_copied: bool) {
+    if slot.is_none_or(|(batched_request_id, _)| request_id >= batched_request_id) {
+        *slot = Some((request_id, is_copied));
     }
 }
 

@@ -26,6 +26,7 @@ use crate::presentation::chatgpt_sign_in::{
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::platform::PlatformTabView;
 use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
@@ -55,6 +56,9 @@ struct RouteSharedContext<'a> {
     is_archive_expanded: bool,
     /// Cached most-recently-opened ordering over `projects`.
     mru_project_order: &'a [usize],
+    /// Platform sign-in and remote-control state for the Platform tab,
+    /// when this launch offers it.
+    platform: Option<PlatformTabView<'a>>,
     /// Latest Agentty process-tree totals shown in the tab header.
     process_resources: Option<SessionResources>,
     project_table_state: &'a mut TableState,
@@ -226,6 +230,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         harness_availability,
         mode,
         mru_project_order,
+        platform,
         process_resources,
         remote_control,
         render_cache_store,
@@ -254,6 +259,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         has_more_archived_sessions,
         is_archive_expanded,
         mru_project_order,
+        platform,
         process_resources,
         project_table_state,
         projects,
@@ -887,6 +893,7 @@ fn render_list_background(
     component::tab::Tabs::new(shared.current_tab)
         .process_stats(shared.process_resources)
         .remote_label(shared.remote_control.map(RemoteControlView::tab_label))
+        .platform(shared.platform.is_some())
         .render(frame, chunks[0]);
 
     match shared.current_tab {
@@ -930,6 +937,14 @@ fn render_list_background(
                 active_project_name(shared.active_project_id, shared.projects);
             if let Some(remote_control) = shared.remote_control {
                 page::remote_control::RemoteControlPage::new(remote_control, active_project_name)
+                    .render(frame, chunks[1]);
+            }
+        }
+        Tab::Platform => {
+            let active_project_name =
+                active_project_name(shared.active_project_id, shared.projects);
+            if let Some(platform) = shared.platform {
+                page::platform::PlatformPage::new(platform, active_project_name)
                     .render(frame, chunks[1]);
             }
         }

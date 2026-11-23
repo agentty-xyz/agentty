@@ -106,6 +106,33 @@ These are known limits, not vulnerabilities:
 - Agentty's own listener does not encrypt. It relies on the private tunnel that reaches
   it.
 
+## Agentty Platform
+
+Signing in to an Agentty Platform, a preview feature, lets paired devices reach Agentty
+through the platform's hosted relay. See
+[Agentty Platform](https://agentty.xyz/docs/usage/platform/). The sign-in grants no
+device any access: devices still pair with the one-time code, terminal approval, and
+end-to-end encryption described above, and the platform's relay is as untrusted as any
+other. The access token is stored in Agentty's database with the platform that issued
+it, sent only to that platform, and never to a relay or logged.
+
+Report these as vulnerabilities:
+
+- a platform access token, device code, or sign-in code reaching a relay, another
+  platform, a log, or a paired device;
+- a device gaining access to a session because Agentty is signed in, without pairing;
+- Agentty dialling the platform's relay while `--remote-relay` names another relay, or
+  before it registered with the platform; and
+- an answer from a platform making the terminal run control sequences, or making Agentty
+  open anything but a web page.
+
+These are known limits, not vulnerabilities:
+
+- The platform vouches for which account an instance belongs to; it does not verify that
+  the account holds the instance's key.
+- The platform serves the pairing page its links open, so it can change that page's code
+  like a relay operator can.
+
 ## Response and Disclosure Process
 
 Maintainers will:

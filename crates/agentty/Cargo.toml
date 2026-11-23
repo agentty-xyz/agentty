@@ -70,7 +70,7 @@ reqwest.workspace = true
 rustls.workspace = true
 pulldown-cmark.workspace = true
 rustc-hash.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["system"] }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true

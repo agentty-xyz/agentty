@@ -5,18 +5,23 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ag_git::{GitClient, RealGitClient};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
-use agentty::app::{AGENTTY_WT_DIR, App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
-use agentty::domain::remote_url::parse_relay_url;
+use agentty::app::{
+    AGENTTY_WT_DIR, App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home,
+    platform_instance_name,
+};
+use agentty::domain::remote_url::{parse_platform_url, parse_relay_url};
 use agentty::infra::db::{
     AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
 };
+use agentty::infra::platform::{DEFAULT_PLATFORM_URL, HttpPlatformClient};
 use clap::Parser;
 
 /// Command-line options for launching Agentty.
@@ -40,6 +45,16 @@ struct Cli {
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
+    /// Agentty Platform the Platform tab signs in to. Plain `http://` is
+    /// accepted only for this computer.
+    #[arg(
+        long,
+        value_name = "URL",
+        default_value = DEFAULT_PLATFORM_URL,
+        requires = "platform",
+        value_parser = parse_platform_url
+    )]
+    platform_url: String,
     /// Loopback port that remote control listens on; `0` picks a free port.
     #[arg(
         long,
@@ -55,7 +70,8 @@ struct Cli {
     remote_control_host: Vec<String>,
     /// Relay that remote control registers with, such as
     /// `wss://relay.example`, so devices can pair and connect without a
-    /// tunnel. Traffic through it is encrypted end to end.
+    /// tunnel. Traffic through it is encrypted end to end. It wins over a
+    /// platform's relay, and no platform credential is ever sent to it.
     #[arg(long, value_name = "URL", requires = "remote", value_parser = parse_relay_url)]
     remote_relay: Option<String>,
 }
@@ -63,6 +79,10 @@ struct Cli {
 /// Opt-in preview features, disabled unless their launch flags are present.
 #[derive(Debug, Default, clap::Args)]
 struct ExperimentalFeatures {
+    /// Offers the Platform tab, which signs in to an Agentty Platform so
+    /// paired devices can reach this Agentty through its relay.
+    #[arg(long = "experimental-platform")]
+    platform: bool,
     /// Offers the Remote tab, which lets a paired phone or browser follow
     /// and reply to sessions through a loopback listener.
     #[arg(long = "experimental-remote")]
@@ -108,6 +128,15 @@ async fn run(
     let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
 
     run_application(cli, runtime).with_context(context).await
+}
+
+/// Returns this computer's name, which the platform shows for this
+/// Agentty, or an empty name when the system reports none.
+fn host_name() -> String {
+    rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Reports an OTLP setup failure using its bounded, credential-free message.
@@ -225,6 +254,15 @@ async fn run_application(
                     cli.remote_control_port,
                     cli.remote_control_host,
                     cli.remote_relay,
+                )
+                .await;
+            }
+            if cli.experimental.platform {
+                let client = HttpPlatformClient::new(&cli.platform_url)?;
+                app.enable_platform(
+                    Arc::new(client),
+                    cli.platform_url,
+                    platform_instance_name(&host_name()),
                 )
                 .await;
             }

@@ -19,6 +19,7 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::platform::PlatformTabView;
 use crate::presentation::remote_control::RemoteControlView;
 use crate::ui::{RenderCacheStore, component, layout, router, style};
 
@@ -83,6 +84,9 @@ pub struct RenderContext<'a> {
     /// Cached most-recently-opened ordering over `projects`, reused by the
     /// project switcher popup instead of re-sorting each frame.
     pub mru_project_order: &'a [usize],
+    /// Platform sign-in and remote-control state, or `None` when this
+    /// launch does not offer the Platform tab.
+    pub platform: Option<PlatformTabView<'a>>,
     /// Table selection state for the projects list.
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.

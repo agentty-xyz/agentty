@@ -3,6 +3,7 @@
 use std::io;
 
 use crate::app::session::SessionError;
+use crate::infra::platform::PlatformError;
 
 /// Typed error returned by top-level app orchestration operations.
 ///
@@ -48,6 +49,14 @@ pub enum AppError {
     /// A workflow-specific or startup failure with a contextual message.
     #[error("{0}")]
     Workflow(String),
+}
+
+impl From<PlatformError> for AppError {
+    /// Reports at startup that no client for the configured platform could
+    /// be started.
+    fn from(error: PlatformError) -> Self {
+        Self::Workflow(format!("Cannot start the platform client: {error}"))
+    }
 }
 
 #[cfg(test)]

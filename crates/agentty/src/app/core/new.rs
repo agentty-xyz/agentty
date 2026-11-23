@@ -11,6 +11,7 @@ use super::event::AppEvent;
 use super::state::{App, AppClients};
 use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::graph_question::GraphQuestionState;
+use crate::app::platform::Platform;
 use crate::app::remote_control::RemoteControl;
 use crate::app::review_watch::ReviewWatchState;
 use crate::app::service::{AppServiceDeps, AppServices};
@@ -147,6 +148,7 @@ impl App {
         let (sync_handle, sync_task) = sync::SyncHandle::unstarted(event_tx.clone(), sync_context);
         Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
         let remote_control = Self::remote_control(&clients, &repositories);
+        let platform = Self::platform(&clients);
         let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
@@ -171,6 +173,7 @@ impl App {
             pending_focused_review_persistence: std::collections::HashMap::new(),
             pending_session_creations: std::collections::HashMap::new(),
             pending_session_diff_requests: std::collections::HashMap::new(),
+            platform,
             projects,
             services,
             sessions: sessions.into(),
@@ -203,6 +206,15 @@ impl App {
             tmux_client: clients.tmux_client,
         };
         Ok(app.complete_startup(recoverable, sync_task, sweep).await)
+    }
+
+    /// Builds a disabled platform sign-in that shares the browser and
+    /// terminal clipboard clients with screen links and mouse selections.
+    fn platform(clients: &AppClients) -> Platform {
+        Platform::new(
+            Arc::clone(&clients.browser_client),
+            Arc::clone(&clients.terminal_clipboard),
+        )
     }
 
     /// Builds disabled remote control that shares the browser and terminal

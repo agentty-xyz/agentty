@@ -21,6 +21,8 @@ const PROCESS_STATS_GAP: usize = 2;
 /// row, and its bottom rule.
 pub struct Tabs {
     current_tab: Tab,
+    /// Whether this launch offers the Platform tab.
+    has_platform: bool,
     process_resources: Option<SessionResources>,
     /// Label of the Remote tab, or `None` when this launch does not offer
     /// it.
@@ -36,9 +38,18 @@ impl Tabs {
     pub fn new(current_tab: Tab) -> Self {
         Self {
             current_tab,
+            has_platform: false,
             process_resources: None,
             remote_label: None,
         }
+    }
+
+    /// Shows the Platform tab after the others when `has_platform` is set.
+    #[must_use]
+    pub fn platform(mut self, has_platform: bool) -> Self {
+        self.has_platform = has_platform;
+
+        self
     }
 
     /// Shows the Remote tab under `remote_label`, which reports its
@@ -64,7 +75,11 @@ impl Component for Tabs {
     /// Renders the tabs and right-aligns the process stats in the space left
     /// beside them. Tabs keep priority on narrow terminals.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let line = Line::from(tab_spans(self.current_tab, self.remote_label.as_deref()));
+        let line = Line::from(tab_spans(
+            self.current_tab,
+            self.remote_label.as_deref(),
+            self.has_platform,
+        ));
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(style::border_style())
@@ -115,19 +130,28 @@ fn process_stats_label(
 }
 
 /// Returns styled tab spans with separators between the top-level tabs. The
-/// Remote tab follows the others under `remote_label`, when it is offered.
-fn tab_spans(current_tab: Tab, remote_label: Option<&str>) -> Vec<Span<'static>> {
+/// Remote tab follows the others under `remote_label`, when it is offered,
+/// and the Platform tab comes last when `has_platform` is set.
+fn tab_spans(
+    current_tab: Tab,
+    remote_label: Option<&str>,
+    has_platform: bool,
+) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(2 * Tab::ALL.len() - 1);
 
-    for tab in Tab::WITHOUT_REMOTE {
+    for tab in Tab::ALL {
+        let label = match tab {
+            Tab::Remote => remote_label,
+            Tab::Platform => has_platform.then_some(tab.title()),
+            Tab::Projects | Tab::Sessions | Tab::Settings => Some(tab.title()),
+        };
+        let Some(label) = label else {
+            continue;
+        };
         if !spans.is_empty() {
             spans.push(tab_separator_span());
         }
-        spans.push(tab_span(tab, tab.title(), current_tab));
-    }
-    if let Some(remote_label) = remote_label {
-        spans.push(tab_separator_span());
-        spans.push(tab_span(Tab::Remote, remote_label, current_tab));
+        spans.push(tab_span(tab, label, current_tab));
     }
 
     spans

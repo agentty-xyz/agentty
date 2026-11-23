@@ -231,11 +231,12 @@ a free one.
 
 <a id="usage-remote-control-relay"></a> A relay lets devices reach Agentty without a
 tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
-with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`. No hosted
-relay is offered yet, so run your own `ag-relay` behind a reverse proxy that serves it
-over TLS. Its container image is published for `amd64` and `arm64`: each release tags it
-with the version and `latest`, and each commit to `main` tags it `main`. The relay
-listens on port `8787`:
+with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`, and run your
+own `ag-relay` behind a reverse proxy that serves it over TLS, or, as a preview, sign in
+to the [Agentty Platform](@/docs/usage/platform.md) and use its hosted relay. A relay
+named with `--remote-relay` wins over the platform's. The relay's container image is
+published for `amd64` and `arm64`: each release tags it with the version and `latest`,
+and each commit to `main` tags it `main`. The relay listens on port `8787`:
 
 ```sh
 podman run --detach --name agentty-relay --publish 127.0.0.1:8787:8787 \

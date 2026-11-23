@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
+use crate::app::platform::PlatformUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
@@ -142,6 +143,30 @@ fn app_event_label_names_remote_link_copies() {
 
     // Assert
     assert_eq!(label, "RemoteLinkCopied");
+}
+
+#[test]
+fn app_event_label_names_platform_events() {
+    // Arrange
+    let copied = AppEvent::PlatformLinkCopied {
+        is_copied: true,
+        request_id: 1,
+    };
+    let updated = AppEvent::PlatformUpdated {
+        update: PlatformUpdate::SignedOut {
+            request_id: 1,
+            result: Ok(()),
+        },
+    };
+
+    // Act
+    let labels = [
+        AppServices::app_event_label(&copied),
+        AppServices::app_event_label(&updated),
+    ];
+
+    // Assert
+    assert_eq!(labels, ["PlatformLinkCopied", "PlatformUpdated"]);
 }
 
 #[test]

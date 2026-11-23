@@ -23,6 +23,9 @@ Agentty restores the last tab on startup.
 - **Remote**: Pair a phone or browser with the project's sessions. The tab appears only
   with `agentty --experimental-remote`; see
   [Remote Control](@/docs/usage/remote-control.md).
+- **Platform**: Sign in to an Agentty Platform so paired devices reach Agentty through
+  its hosted relay. The tab appears only with `agentty --experimental-platform`; see
+  [Agentty Platform](@/docs/usage/platform.md).
 
 Press `?`, shown as `?: help` in the top bar, to list the shortcuts available on the
 current page. With `NO_COLOR`, selections use bold reverse video.
