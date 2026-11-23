@@ -83,9 +83,10 @@ test("saveTheme stores the theme and survives blocked storage", () => {
   assert.equal(loadTheme(window), "dark");
 });
 
-test("applyTheme sets the site's class, the browser colour and the switch", () => {
+test("applyTheme sets the site's class, the theme's page background for the browser and the switch", () => {
   // Arrange
-  const document = pageWindow().document;
+  const stylesheet = ":root { --color-bg: #010101; }\n:root.theme-dark { --color-bg: #020202; }\n";
+  const document = pageWindow("http://127.0.0.1/", { stylesheet: stylesheet }).document;
   const pressed = () =>
     Array.from(document.querySelectorAll("[data-theme]"), (button) => [
       button.dataset.theme,
@@ -109,14 +110,14 @@ test("applyTheme sets the site's class, the browser colour and the switch", () =
       ["green", "false"],
       ["dark", "true"],
     ],
-    themeColor: "#080808",
+    themeColor: "#020202",
   });
   assert.equal(document.documentElement.classList.contains("theme-dark"), false);
   assert.deepEqual(pressed(), [
     ["green", "true"],
     ["dark", "false"],
   ]);
-  assert.equal(themeColor(), "#070b08");
+  assert.equal(themeColor(), "#010101");
 });
 
 test("parseRoute reads home, a session, and a pairing link before a session", () => {

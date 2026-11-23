@@ -11,8 +11,21 @@ use std::{env, fs, io};
 use tempfile::{TempDir, tempdir};
 
 /// Repository files the fixture writes and its stub `git ls-files` lists.
-const FILES: [(&str, &str); 4] = [
+const FILES: [(&str, &str); 8] = [
     ("design/base.css", "body { color: var(--color-bg); }\n"),
+    (
+        "design/mark.svg",
+        "<svg viewBox=\"0 0 24 24\" stroke=\"currentColor\"></svg>\n",
+    ),
+    ("design/favicon.ico", "icon\n"),
+    (
+        "docs/site/static/site.js",
+        "const bg = style.getPropertyValue('--color-bg');\n",
+    ),
+    (
+        "crates/ag-remote/assets/index.html",
+        "<meta name=\"theme-color\" content=\"#123456\">\n",
+    ),
     (
         "design/tokens.json",
         r##"{
@@ -111,11 +124,21 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
         fs::read_to_string(fixture.root().join("design/tokens.css")).expect("shared stylesheet"),
         "/* Generated from tokens.json. Do not edit. */\n:root {\n  --color-bg: #000000;\n}\n"
     );
+    assert_eq!(
+        fs::read_to_string(fixture.root().join("crates/ag-remote/assets/index.html"))
+            .expect("client page"),
+        "<meta name=\"theme-color\" content=\"#000000\">\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root().join("docs/site/static/favicon.ico"))
+            .expect("favicon copy"),
+        "icon\n"
+    );
     assert!(current.status.success(), "{current:?}");
     assert!(
         String::from_utf8_lossy(&current.stdout).contains(
-            "Design token stylesheets are current (1 tokens; 3 hand-written stylesheets use no \
-             raw colour)."
+            "Design token stylesheets are current (1 tokens; 5 hand-written stylesheets, scripts, \
+             and templates use no raw colour)."
         ),
         "{current:?}"
     );

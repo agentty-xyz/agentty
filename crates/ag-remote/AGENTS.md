@@ -54,7 +54,9 @@ through `ag_session::SessionService`.
   `crates/ag-remote/assets/base.css` are generated from them, and this crate and
   `ag-relay` serve both, in that order, ahead of `app.css` as `/app.css`. Keep only
   layout sizes, the `--tone-*` aliases, and the client's own rules in `app.css`; every
-  rule in `base.css` also applies to the client.
+  rule in `base.css` also applies to the client. The generator also writes the
+  `theme-color` value in `crates/ag-remote/assets/index.html`; scripts read colors from
+  the custom properties at runtime.
 
 ## Documentation
 

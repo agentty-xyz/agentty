@@ -18,6 +18,10 @@ Applies to site configuration, templates, content, and static assets.
   `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens. Change
   a rule there when the remote-control client or another workspace shares it, and keep
   site-only rules in `site.scss`.
+- `docs/site/static/mark.svg`, `docs/site/static/favicon.ico`, and the `theme-color`
+  value in `docs/site/templates/partials/seo.html` are generated from `design/`; change
+  them there. Scripts and templates read colors and fonts from the custom properties at
+  runtime. The theme switch leaves the `theme-color` meta at the default theme's value.
 
 ## Search Engine Metadata
 

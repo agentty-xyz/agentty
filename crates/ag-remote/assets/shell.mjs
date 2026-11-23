@@ -7,8 +7,6 @@
 export const THEME_KEY = "agentty.remote.theme";
 // The site's two themes, both dark. The first is the default.
 export const THEMES = ["green", "dark"];
-// `--color-bg` of each theme, for the browser's own interface.
-const THEME_COLORS = { dark: "#080808", green: "#070b08" };
 // Below this width the sidebar is a drawer; app.css uses the same width.
 export const NARROW_QUERY = "(max-width: 860px)";
 
@@ -36,10 +34,13 @@ export function saveTheme(window, theme) {
 }
 
 // Applies `theme` as the site does, with the `theme-dark` class on the
-// root element, and marks the matching switch button pressed.
+// root element, gives the browser's own interface the theme's
+// `--color-bg`, and marks the matching switch button pressed.
 export function applyTheme(document, theme) {
-  document.documentElement.classList.toggle("theme-dark", theme === "dark");
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
+  const root = document.documentElement;
+  root.classList.toggle("theme-dark", theme === "dark");
+  const background = document.defaultView.getComputedStyle(root).getPropertyValue("--color-bg").trim();
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", background);
   for (const button of document.querySelectorAll("[data-theme]")) {
     button.setAttribute("aria-pressed", String(button.dataset.theme === theme));
   }

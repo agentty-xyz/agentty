@@ -72,6 +72,15 @@ Apply a saved theme before the first paint, with a small inline script in the do
 head, so the page never flashes the other theme. Offer both themes wherever a page lets
 people choose, and test every new component in both.
 
+Code outside a stylesheet takes values from the same tokens instead of copying them. A
+script running in the page reads the custom property, such as
+`getComputedStyle(document.documentElement).getPropertyValue("--color-bg")`, after the
+theme is applied. A value that must be written into static markup, such as the
+`theme-color` meta that tints the browser's own interface, comes from `tokens.json`: the
+default theme's page background is the `hex` of `color.bg`'s `$value`. A page that
+switches themes may keep that value or set the meta from `--color-bg` each time it
+applies one.
+
 ### Status Tones
 
 Session and task states use a dot and a short label in one tone. Name the tone after the

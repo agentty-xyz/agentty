@@ -97,13 +97,23 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     }
     assert!(page.contains("<script type=\"module\" src=\"app.js\""));
     assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
-    // Both themes are dark; the browser's interface starts in the green
-    // theme's background colour.
+    // Both themes are dark; the browser's interface starts in the default
+    // theme's background colour, the first `--color-bg` the tokens set.
     assert!(page.contains("<meta name=\"color-scheme\" content=\"dark\""));
-    assert!(page.contains("<meta name=\"theme-color\" content=\"#070b08\""));
+    let background = stylesheet
+        .split("--color-bg: ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .unwrap_or_default();
+    assert!(
+        page.contains(&format!(
+            "<meta name=\"theme-color\" content=\"{background}\""
+        )),
+        "{background}"
+    );
     // The generated design tokens, then the shared base styles, come ahead
     // of the client's own rules.
-    let tokens = stylesheet.find("--color-bg: #070b08;");
+    let tokens = stylesheet.find("--color-bg: ");
     let base = stylesheet.find(".skip-link {");
     let rules = stylesheet.find("--tone-ready:");
     assert!(

@@ -1,14 +1,17 @@
-//! Generation and `--check` orchestration for the design token stylesheets.
+//! Generation and `--check` orchestration for the design token stylesheets,
+//! brand asset copies, and `theme-color` metas.
 
 use std::ffi::OsStr;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
 use tracing::info;
 
+use crate::design_token::stylesheet::RawColor;
 use crate::design_token::token::TokenSet;
-use crate::design_token::{contrast, stylesheet};
+use crate::design_token::{contrast, script, stylesheet, template};
 use crate::repository;
 
 /// Token file, relative to the repository root.
@@ -28,32 +31,70 @@ const SURFACE_HEADER: &str = "/* Generated from design/tokens.json by `cargo run
 const BASE_HEADER: &str = "/* Generated from design/base.css by `cargo run -p ag-xtask -- \
                            design-tokens`. Do not edit. */";
 
-/// Generated stylesheets. The shared one names no workspace path, so another
-/// workspace can copy it unchanged.
-const OUTPUTS: [Output; 5] = [
+/// Custom property whose default theme value, as the page's surface sees
+/// it, every `theme-color` meta carries, so the browser's own interface
+/// matches the page before any script runs.
+const THEME_COLOR: &str = "color-bg";
+
+/// Directories of the surfaces' pages, whose scripts and templates must
+/// read colours from the token custom properties too, and their surfaces.
+const PAGE_DIRECTORIES: [(&str, &str); 3] = [
+    ("crates/ag-remote/assets", "remote-client"),
+    ("docs/site/static", "docs-site"),
+    ("docs/site/templates", "docs-site"),
+];
+
+/// Generated files. The shared stylesheet names no workspace path, so
+/// another workspace can copy it unchanged; the brand assets are copied
+/// byte for byte.
+const OUTPUTS: [Output; 7] = [
     Output {
-        content: Content::Tokens(None),
-        header: "/* Generated from tokens.json. Do not edit. */",
+        content: Content::Tokens {
+            header: "/* Generated from tokens.json. Do not edit. */",
+            surface: None,
+        },
         path: "design/tokens.css",
     },
     Output {
-        content: Content::Tokens(Some("docs-site")),
-        header: SURFACE_HEADER,
+        content: Content::Tokens {
+            header: SURFACE_HEADER,
+            surface: Some("docs-site"),
+        },
         path: "docs/site/sass/_tokens.scss",
     },
     Output {
-        content: Content::Copy(BASE),
-        header: BASE_HEADER,
+        content: Content::Copy {
+            header: Some(BASE_HEADER),
+            source: BASE,
+        },
         path: "docs/site/sass/_base.scss",
     },
     Output {
-        content: Content::Tokens(Some("remote-client")),
-        header: SURFACE_HEADER,
+        content: Content::Copy {
+            header: None,
+            source: "design/favicon.ico",
+        },
+        path: "docs/site/static/favicon.ico",
+    },
+    Output {
+        content: Content::Copy {
+            header: None,
+            source: "design/mark.svg",
+        },
+        path: "docs/site/static/mark.svg",
+    },
+    Output {
+        content: Content::Tokens {
+            header: SURFACE_HEADER,
+            surface: Some("remote-client"),
+        },
         path: "crates/ag-remote/assets/tokens.css",
     },
     Output {
-        content: Content::Copy(BASE),
-        header: BASE_HEADER,
+        content: Content::Copy {
+            header: Some(BASE_HEADER),
+            source: BASE,
+        },
         path: "crates/ag-remote/assets/base.css",
     },
 ];
@@ -66,13 +107,13 @@ pub(crate) struct Options {
     check: bool,
 }
 
-/// Generates or checks the design token stylesheets and checks contrast and
-/// hand-written stylesheets.
+/// Generates or checks the design token stylesheets, brand asset copies, and
+/// `theme-color` metas, and checks contrast and hand-written sources.
 ///
 /// # Errors
-/// Returns an error for unreadable or invalid inputs, a stale stylesheet
-/// under `--check`, a raw colour in a hand-written stylesheet, or a colour
-/// pair below its contrast minimum.
+/// Returns an error for unreadable or invalid inputs, a stale generated file
+/// or `theme-color` meta under `--check`, a raw colour in a hand-written
+/// stylesheet or page source, or a colour pair below its contrast minimum.
 pub(crate) fn run(options: &Options) -> Result<(), String> {
     let host = RealHost {
         git: PathBuf::from("git"),
@@ -88,23 +129,30 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
 trait Host {
     fn inventory(&self, root: &Path) -> Result<Vec<PathBuf>, String>;
     fn read(&self, path: &Path) -> io::Result<String>;
-    fn write(&self, path: &Path, text: &str) -> io::Result<()>;
+    fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>>;
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()>;
 }
 
-/// One generated stylesheet.
+/// One generated file.
 struct Output {
     content: Content,
-    header: &'static str,
     path: &'static str,
 }
 
-/// What a generated stylesheet holds.
+/// What a generated file holds.
 enum Content {
-    /// A copy of a hand-written stylesheet, so a surface that must not load
-    /// files from outside its own directory can still use it.
-    Copy(&'static str),
+    /// A copy of a hand-written file, after a header comment when it has
+    /// one, so a surface that must not load files from outside its own
+    /// directory can still use it.
+    Copy {
+        header: Option<&'static str>,
+        source: &'static str,
+    },
     /// The shared tokens, with a surface's own tokens when it names one.
-    Tokens(Option<&'static str>),
+    Tokens {
+        header: &'static str,
+        surface: Option<&'static str>,
+    },
 }
 
 /// Token policy, independent of the host filesystem and Git process.
@@ -129,9 +177,9 @@ impl DesignTokens<'_> {
         })?;
         let mut errors = Vec::new();
         for surface in set.surfaces() {
-            if !OUTPUTS.iter().any(
-                |output| matches!(output.content, Content::Tokens(Some(name)) if name == surface),
-            ) {
+            if !OUTPUTS.iter().any(|output| {
+                matches!(output.content, Content::Tokens { surface: Some(name), .. } if name == surface)
+            }) {
                 errors.push(format!(
                     "{SOURCE}: surface {surface} has no generated stylesheet"
                 ));
@@ -141,15 +189,15 @@ impl DesignTokens<'_> {
             self.generate(root, &set, output, check, &mut errors)?;
         }
         contrast::check(&set, &mut errors);
-        let sheets = self.check_stylesheets(root, &mut errors)?;
+        let sources = self.check_sources(root, &set, check, &mut errors)?;
         if !errors.is_empty() {
             return Err(errors.join("\n"));
         }
         let verb = if check { "are current" } else { "generated" };
 
         Ok(format!(
-            "Design token stylesheets {verb} ({} tokens; {sheets} hand-written stylesheets use no \
-             raw colour).",
+            "Design token stylesheets {verb} ({} tokens; {sources} hand-written stylesheets, \
+             scripts, and templates use no raw colour).",
             set.tokens.len()
         ))
     }
@@ -162,27 +210,27 @@ impl DesignTokens<'_> {
         check: bool,
         errors: &mut Vec<String>,
     ) -> Result<(), String> {
-        let text = match output.content {
-            Content::Copy(source) => {
+        let contents = match output.content {
+            Content::Copy { header, source } => {
                 let source = root.join(source);
-                let text = self
+                let bytes = self
                     .host
-                    .read(&source)
+                    .read_bytes(&source)
                     .map_err(|error| format!("Failed to read {}: {error}", source.display()))?;
+                let mut contents =
+                    header.map_or_else(Vec::new, |header| format!("{header}\n").into_bytes());
+                contents.extend(bytes);
 
-                format!("{}\n{text}", output.header)
+                contents
             }
-            Content::Tokens(surface) => set.stylesheet(output.header, surface),
+            Content::Tokens { header, surface } => set.stylesheet(header, surface).into_bytes(),
         };
         let path = root.join(output.path);
         if !check {
-            return self
-                .host
-                .write(&path, &text)
-                .map_err(|error| format!("Failed to write {}: {error}", path.display()));
+            return self.write(&path, &contents);
         }
-        match self.host.read(&path) {
-            Ok(current) if current == text => {}
+        match self.host.read_bytes(&path) {
+            Ok(current) if current == contents => {}
             Ok(_) => errors.push(format!("{} is stale; run `{REGENERATE}`", output.path)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 errors.push(format!("{} is missing; run `{REGENERATE}`", output.path));
@@ -193,15 +241,35 @@ impl DesignTokens<'_> {
         Ok(())
     }
 
-    /// Reports raw colours in every hand-written stylesheet and returns how
-    /// many were checked.
-    fn check_stylesheets(&self, root: &Path, errors: &mut Vec<String>) -> Result<usize, String> {
+    fn write(&self, path: &Path, contents: &[u8]) -> Result<(), String> {
+        self.host
+            .write(path, contents)
+            .map_err(|error| format!("Failed to write {}: {error}", path.display()))
+    }
+
+    /// Reports raw colours in every hand-written stylesheet and in the
+    /// scripts and templates of the surfaces' pages, writes or checks their
+    /// `theme-color` metas, and returns how many sources were checked.
+    fn check_sources(
+        &self,
+        root: &Path,
+        set: &TokenSet,
+        check: bool,
+        errors: &mut Vec<String>,
+    ) -> Result<usize, String> {
         let mut count = 0;
         for path in self.host.inventory(root)? {
             let extension = path.extension().and_then(OsStr::to_str);
-            let scss = match extension {
-                Some("css") => false,
-                Some("scss") => true,
+            let surface = PAGE_DIRECTORIES
+                .iter()
+                .find(|(directory, _)| path.starts_with(directory))
+                .map(|(_, surface)| *surface);
+            let is_page = surface.is_some();
+            let kind = match extension {
+                Some("css") => Source::Stylesheet { scss: false },
+                Some("scss") => Source::Stylesheet { scss: true },
+                Some("js" | "mjs") if is_page => Source::Script,
+                Some("htm" | "html") if is_page => Source::Template,
                 _ => continue,
             };
             if OUTPUTS.iter().any(|output| path == Path::new(output.path)) {
@@ -214,12 +282,33 @@ impl DesignTokens<'_> {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(format!("Failed to read {}: {error}", source.display())),
             };
-            for color in stylesheet::raw_colors(&text, scss) {
+            let colors = match kind {
+                Source::Script => script::raw_colors(&text, 1),
+                Source::Stylesheet { scss } => stylesheet::raw_colors(&text, scss),
+                Source::Template => {
+                    let scan = template::scan(&text);
+                    let theme_color = set
+                        .for_surface(THEME_COLOR, surface)
+                        .map(|token| token.value.css());
+                    let updated = Self::theme_colors(
+                        &path,
+                        &text,
+                        &scan.theme_colors,
+                        theme_color.as_deref(),
+                        check,
+                        errors,
+                    );
+                    if let Some(updated) = updated {
+                        self.write(&source, updated.as_bytes())?;
+                    }
+
+                    scan.colors
+                }
+            };
+            for RawColor { line, text } in colors {
                 errors.push(format!(
-                    "{}:{}: raw colour {}; add it to {SOURCE} and use its custom property",
+                    "{}:{line}: raw colour {text}; add it to {SOURCE} and use its custom property",
                     path.display(),
-                    color.line,
-                    color.text
                 ));
             }
             count += 1;
@@ -227,6 +316,64 @@ impl DesignTokens<'_> {
 
         Ok(count)
     }
+
+    /// Checks that each `theme-color` meta, given by the byte range of its
+    /// content in `text`, the template at `path`, carries `expected`, the
+    /// default theme's page background. Returns the updated template when
+    /// generating and a meta is stale; under `check`, reports it instead.
+    fn theme_colors(
+        path: &Path,
+        text: &str,
+        metas: &[Range<usize>],
+        expected: Option<&str>,
+        check: bool,
+        errors: &mut Vec<String>,
+    ) -> Option<String> {
+        if metas.is_empty() {
+            return None;
+        }
+        let Some(expected) = expected else {
+            errors.push(format!(
+                "{}: a theme-color meta takes --{THEME_COLOR} from {SOURCE}, which has none",
+                path.display()
+            ));
+
+            return None;
+        };
+        let stale: Vec<_> = metas
+            .iter()
+            .filter(|range| text[(*range).clone()] != *expected)
+            .collect();
+        if check {
+            for range in stale {
+                let line = template::line_at(text, range.start);
+                errors.push(format!(
+                    "{}:{line}: theme-color {} is stale; run `{REGENERATE}`",
+                    path.display(),
+                    &text[range.clone()]
+                ));
+            }
+
+            return None;
+        }
+        if stale.is_empty() {
+            return None;
+        }
+        let mut updated = text.to_owned();
+        for range in stale.into_iter().rev() {
+            updated.replace_range(range.clone(), expected);
+        }
+
+        Some(updated)
+    }
+}
+
+/// How a hand-written source is searched for raw colours.
+#[derive(Clone, Copy)]
+enum Source {
+    Script,
+    Stylesheet { scss: bool },
+    Template,
 }
 
 /// Host adapter; policy stays in `DesignTokens`.
@@ -243,8 +390,12 @@ impl Host for RealHost {
         std::fs::read_to_string(path)
     }
 
-    fn write(&self, path: &Path, text: &str) -> io::Result<()> {
-        std::fs::write(path, text)
+    fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        std::fs::write(path, contents)
     }
 }
 
