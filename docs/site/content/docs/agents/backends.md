@@ -245,7 +245,8 @@ by you. Pressing `Enter` on a hosted `/model` row whose provider has no stored k
 a popup where you paste the key; Agentty saves it and switches the session to the model.
 A key exported in the table's variable is copied into the file the first time Agentty
 finds none stored for that provider; after that the file wins and the variable is
-ignored. To replace a key, paste a new one or edit the file.
+ignored. To replace a key, edit its entry in the file, or remove the entry and select
+that provider's model in `/model` to paste a new key.
 
 `/model` lists every hosted model, but one runs only once its key, sign-in, or local
 server is available: a model without its key asks for it, and a `chatgpt/` model offers

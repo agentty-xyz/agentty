@@ -500,8 +500,10 @@ fn unicode_environment(
 }
 
 /// Returns whether a provider can serve requests now: a sign-in provider
-/// needs a usable sign-in, as `is_signed_in` reports; another needs
-/// its stored API key unless optional, then a base URL unless it has a default.
+/// needs a usable sign-in, as `is_signed_in` reports; another needs a base
+/// URL unless it has a default, then its stored API key unless optional.
+/// The base URL is checked first so that a provider asks for a key only
+/// when saving one makes it ready.
 fn configuration_status(
     provider: ModelProvider,
     environment: &BTreeMap<String, String>,
@@ -517,13 +519,13 @@ fn configuration_status(
             HarnessModelStatus::SignInRequired(CHATGPT_SIGN_IN_COMMAND)
         };
     }
-    if provider.requires_api_key() && !has_value(environment, provider.api_key_environment()) {
-        return HarnessModelStatus::ApiKeyRequired(provider.as_str());
-    }
     if provider.default_base_url().is_none()
         && !has_value(environment, provider.base_url_environment())
     {
         return HarnessModelStatus::MissingConfiguration(provider.base_url_environment());
+    }
+    if provider.requires_api_key() && !has_value(environment, provider.api_key_environment()) {
+        return HarnessModelStatus::ApiKeyRequired(provider.as_str());
     }
 
     HarnessModelStatus::Ready
