@@ -1252,11 +1252,11 @@ impl Engine<'_> {
     /// An answer in the other mode is invalid; tool calls pass.
     fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(), ModelError> {
         match (request.schema(), response) {
-            (Some(schema), ModelResponse::Output(output)) => {
-                schema.validate_value(output).map_err(ModelError::from)
-            }
+            (Some(schema), ModelResponse::Output(output)) => schema
+                .validate_value(output)
+                .map_err(ModelError::from_validation),
             (None, ModelResponse::Text(text)) if !text.trim().is_empty() => {
-                schema_contract::ensure_content_size(text).map_err(ModelError::from)
+                schema_contract::ensure_content_size(text).map_err(ModelError::from_validation)
             }
             (_, ModelResponse::ToolCall(_) | ModelResponse::ToolCalls(_)) => Ok(()),
             _ => Err(ModelError::InvalidResponse),
@@ -2038,7 +2038,7 @@ async fn execute_tool(
             ToolActivity::MalformedArguments {
                 duration: started_at.elapsed(),
                 reason: sanitize_report_text(arguments.reason()),
-                tool: arguments.builtin().into(),
+                tool: arguments.name().to_string(),
             },
         )),
         ToolExecution::RepeatedRead(arguments, earlier) => Ok((

@@ -11,10 +11,11 @@ use crate::TurnOutcome;
 use crate::input::TurnInput;
 use crate::lifecycle::ModelResponseType;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::SessionError;
 use crate::sqlite_store::Database;
 use crate::sqlite_store::tests::support::{schema, turn_options};
-use crate::store::{AcquiredTurn, HistoryProjection, NewSession, SessionStore};
+use crate::store::{AcquiredTurn, HistoryProjection, NewSession, StoreBackend};
 use crate::turn::{ModelRequestActivity, TurnReport};
 
 #[tokio::test]
@@ -84,7 +85,7 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
 
     // Act / Assert
     assert!(
-        SessionStore::complete_turn(
+        StoreBackend::complete_turn(
             database.as_ref(),
             turn.owner(),
             &[],

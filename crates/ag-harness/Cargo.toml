@@ -28,8 +28,10 @@ default = [
   "providers-openai",
   "sqlite",
 ]
-# Native macOS Seatbelt and Linux Landlock/seccomp Bash executor, its
-# `ag-harness-sandbox` launcher binary, and the default executor selection.
+# Native macOS Seatbelt and Linux Landlock/seccomp Bash executor, the
+# `sandbox::dispatch` helper entry point a host calls first in `main`, and the
+# default executor selection. It also builds `ag-harness-sandbox`, a
+# standalone helper that only calls `sandbox::dispatch`, for hosts that cannot.
 native-sandbox = ["dep:close_fds", "dep:libc", "dep:libproc"]
 # OpenTelemetry request metrics, lifecycle metric and trace observers, and
 # trace-context propagation into spawned turn work.
@@ -44,8 +46,6 @@ providers-openai = []
 # Durable `SqliteStore` sessions, `Harness::database`, and the bundled
 # migrations.
 sqlite = ["dep:sqlx"]
-# Reserved for the unstable `serve` protocol types; enables nothing yet.
-unstable-protocol = []
 
 [[bin]]
 name = "ag-harness-sandbox"

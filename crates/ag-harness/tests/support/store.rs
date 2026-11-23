@@ -9,15 +9,18 @@ use std::time::Duration;
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    Admission, AdmissionState, CompactionSource, HistoryProjection, HistoryTurn, LoadedSession,
-    ModelSwitch, NewSession, Reservation, ReservedTurn, SessionCheckpoint, SessionStore,
-    StoreIdentity, TurnAdmission, TurnOwner, TurnStop, WriteRecord, WriteStatus,
+    Admission, AdmissionState, CompactionSource, HistoryProjection, LoadedSession, ModelSwitch,
+    NewSession, Reservation, ReservedTurn, SessionCheckpoint, StoreBackend, StoreIdentity,
+    TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Notify;
 use tokio::time::Instant;
+
+use crate::context::{HistoryTurn, TurnStop};
+use crate::store_fixture::HistoryTurnFixture as _;
 
 pub(crate) struct ExternalStore {
     pub(crate) renewed: Notify,
@@ -239,7 +242,7 @@ impl ExternalStore {
 }
 
 #[async_trait]
-impl SessionStore for ExternalStore {
+impl StoreBackend for ExternalStore {
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }

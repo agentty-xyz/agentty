@@ -22,17 +22,10 @@ pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::limit::{LimitKind, RunLimits};
 use crate::model::{CompletionMetadata, ModelError};
-#[expect(deprecated, reason = "maps the deprecated `TurnOptions` policy API")]
-use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::sandbox::SandboxWarning;
 use crate::schema_contract::OutputSchema;
-#[expect(
-    deprecated,
-    reason = "`MalformedArguments` still names the deprecated `Tool`"
-)]
-use crate::tool::Tool;
 use crate::tool::{ReadAction, ToolSet};
 use crate::usage::Cost;
 use crate::write::WriteError;
@@ -69,17 +62,6 @@ impl TurnOptions {
             output: output.into(),
             tools: ToolSet::empty(),
         }
-    }
-
-    /// Resolves an output mode and explicit permissions, offering the
-    /// built-in tools the policy allows.
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `TurnOptions::from_output(output).with_tools(tools)`"
-    )]
-    #[expect(deprecated, reason = "takes the deprecated `ToolPolicy`")]
-    pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
-        Self::from_output(output).with_tools(ToolSet::builtins().restricted_to(tool_policy.into()))
     }
 
     /// Bounds this turn's model requests, tool calls, tokens, and wall-clock
@@ -167,18 +149,6 @@ impl TurnOptions {
     /// turn answers in plain text.
     pub fn schema(&self) -> Option<&OutputSchema> {
         self.output.schema()
-    }
-
-    /// Returns a policy allowing exactly the built-ins [`Self::tools`]
-    /// holds, which for options from the deprecated [`Self::new`] is the
-    /// policy given there.
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `TurnOptions::tools` for the tools this turn offers"
-    )]
-    #[expect(deprecated, reason = "returns the deprecated `ToolPolicy`")]
-    pub fn tool_policy(&self) -> ToolPolicy {
-        self.tools.permissions().into()
     }
 
     /// Sets the host-validated comparison base for this turn only.
@@ -752,11 +722,6 @@ impl ContextActivity {
     }
 }
 
-/// The deprecated [`Tool`] that [`ToolActivity::MalformedArguments`] still
-/// names until its field becomes a `String`.
-#[expect(deprecated, reason = "names the deprecated `Tool` in one place")]
-type LegacyTool = Tool;
-
 /// Sanitized details about one tool call: a built-in tool operation, or a
 /// call to a tool the turn does not make available.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -854,11 +819,9 @@ pub enum ToolActivity {
         duration: Duration,
         /// Bounded decoding failure.
         reason: String,
-        /// Tool the model called. Its type is the deprecated [`Tool`]: read
-        /// the name with [`ToolActivity::name`] instead of matching this
-        /// field. A later release makes it a `String` with the same
-        /// `snake_case` serialized value, so the wire format stays stable.
-        tool: LegacyTool,
+        /// Name of the built-in tool the model called; a deserialized value
+        /// may hold any text, which [`fmt::Display`] still sanitizes.
+        tool: String,
     },
     /// A call to a tool the turn does not make available, such as a
     /// built-in its tool set leaves out or one the model invented, answered
@@ -972,8 +935,9 @@ impl ToolActivity {
             | Self::ReadDeferred { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } | Self::BashLikelySandboxDenial { .. } => "bash",
-            Self::MalformedArguments { tool, .. } => tool.name(),
-            Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
+            Self::MalformedArguments { tool, .. }
+            | Self::Unavailable { tool, .. }
+            | Self::Host { tool, .. } => tool,
         }
     }
 
@@ -1078,7 +1042,7 @@ impl fmt::Display for ToolActivity {
             } => write!(
                 formatter,
                 "{} (malformed arguments: {}; {})",
-                tool.name(),
+                sanitize_report_text(tool),
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),

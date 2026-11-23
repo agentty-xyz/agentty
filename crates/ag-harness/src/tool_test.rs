@@ -6,27 +6,24 @@ use serde_json::{Value, json};
 
 use super::{
     Builtin, MAX_PATCH_BYTES, MAX_PATH_BYTES, MAX_QUERY_BYTES, MAX_TOOL_CALL_ID_BYTES,
-    READ_DESCRIPTION, ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments,
+    READ_DESCRIPTION, ReadAction, ReadArguments, ReadSide, ToolCall, ToolCallArguments,
     ToolDefinition, ToolDefinitionError, WriteArguments,
 };
 use crate::bash::Enforcement;
 use crate::{ComparisonBase, model};
 
 #[test]
-fn every_deprecated_tool_maps_to_the_built_in_of_its_name() {
+fn every_built_in_is_named_by_its_advertised_name() {
     // Arrange
-    let tools = [Tool::Read, Tool::Write, Tool::Bash];
+    let names = ["read", "write", "bash"];
 
     // Act
-    let builtins = tools.map(Builtin::from);
-    let restored = builtins.map(Tool::from);
+    let builtins = names.map(Builtin::named);
 
     // Assert
-    assert_eq!(builtins, Builtin::ALL);
-    assert_eq!(restored, tools);
-    for (tool, builtin) in tools.into_iter().zip(builtins) {
-        assert_eq!(tool.name(), builtin.name());
-        assert_eq!(Builtin::named(tool.name()), Some(builtin));
+    assert_eq!(builtins, Builtin::ALL.map(Some));
+    for builtin in Builtin::ALL {
+        assert_eq!(Builtin::named(builtin.name()), Some(builtin));
     }
     assert_eq!(Builtin::named("fetch"), None);
 }
@@ -139,7 +136,7 @@ fn tool_call_from_json_rejects_empty_names_and_keeps_malformed_arguments() {
         let call = result.as_ref().expect("malformed call is kept");
         let malformed = call.malformed_arguments().expect("malformed arguments");
         assert_eq!((call.name(), malformed.raw()), (*name, *raw));
-        assert_eq!(malformed.tool().name(), *name);
+        assert_eq!(malformed.name(), *name);
         assert_eq!(call.arguments_json().expect("raw"), *raw);
         assert!(call.read_arguments().is_none() && call.write_arguments().is_none());
     }
@@ -819,7 +816,7 @@ fn malformed_arguments_keep_the_decoding_failure() {
 
     // Assert
     let malformed = call.malformed_arguments().expect("malformed");
-    assert_eq!(malformed.tool(), Tool::Read);
+    assert_eq!(malformed.name(), "read");
     assert!(malformed.reason().starts_with("unknown field `path src/`"));
     assert!(matches!(call.arguments(), ToolCallArguments::Malformed(found) if found == malformed));
 }

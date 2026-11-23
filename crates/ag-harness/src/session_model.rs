@@ -45,6 +45,7 @@ const NOTE_SEPARATOR: &str = "\n\n";
 
 /// Model selected when a turn was reserved. Legacy turns have no snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct RecordedModel {
     /// Monotonic session selection generation, independent of request identity.
     pub generation: i64,

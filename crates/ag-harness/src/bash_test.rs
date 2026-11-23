@@ -14,9 +14,9 @@ use crate::bash::{
 };
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
-use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
-#[expect(deprecated, reason = "covers the legacy policy serialization")]
-use crate::{OutputSchema, Tool, ToolPolicy, ToolSet, TurnOptions};
+use crate::tool::{Builtin, ToolCall, ToolCallArguments, ToolDefinition};
+use crate::tool_handler::BuiltinPermissions;
+use crate::{OutputSchema, ToolSet, TurnOptions};
 
 /// Returns the native sandbox configuration, or a host executor's without
 /// the `native-sandbox` feature.
@@ -172,27 +172,24 @@ fn validates_arguments_and_exposes_bounded_tool_contract_without_debug_content()
 }
 
 #[test]
-#[expect(deprecated, reason = "covers the legacy policy serialization")]
-fn default_denial_and_legacy_policy_serialization_remain_stable() {
+fn default_denial_and_recorded_permission_serialization_remain_stable() {
     // Arrange
-    let policy = ToolPolicy::default();
+    let permissions = BuiltinPermissions::default();
 
     // Act
-    let allowed = policy.allow(Tool::Bash);
-    let denied = allowed.deny(Tool::Bash);
+    let allowed = permissions.allow(Builtin::Bash);
 
     // Assert
-    assert!(!policy.allows(Tool::Bash));
-    assert!(allowed.allows(Tool::Bash));
-    assert_eq!(denied, policy);
+    assert!(!permissions.allows(Builtin::Bash));
+    assert!(allowed.allows(Builtin::Bash));
     assert_eq!(
-        serde_json::to_value(policy).expect("policy"),
+        serde_json::to_value(permissions).expect("permissions"),
         json!({"read":false,"write":false})
     );
     assert!(
-        serde_json::from_value::<ToolPolicy>(json!({"read":true,"write":false}))
+        serde_json::from_value::<BuiltinPermissions>(json!({"read":true,"write":false}))
             .expect("legacy")
-            .allows(Tool::Read)
+            .allows(Builtin::Read)
     );
 }
 

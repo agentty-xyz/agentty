@@ -47,6 +47,7 @@ one validation rung covering every touched file and all affected dependents:
 | Rust                                | `rustfmt-fix`, `clippy`, `ast-grep`, and unrestricted `test-focused` for changed packages and dependents |
 | Rustdoc or crate README examples    | Add `test-doc`, since nextest runs no doctests                                                           |
 | Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                                |
+| `ag-harness` or `ag-router` API     | Add `public-api`                                                                                         |
 | ast-grep rules (`lint/`)            | `ast-grep`, `ast-grep-test`, and `check-standards`                                                       |
 
 Final Rust selection must retain public-contract integration tests; source-only hooks do
@@ -114,6 +115,11 @@ validation or creates a reusable success stamp.
   and `skills/refresh-feature-recordings/SKILL.md` for published recordings.
 - **Coverage gaps, `ag-harness` feature builds, and SonarQube issues:** follow
   `skills/validate-changes/references/coverage.md`.
+- **Public API snapshots:** `public-api` compares `crates/ag-harness/public-api.txt` and
+  `crates/ag-router/public-api.txt` with the current APIs. When the diff is an intended,
+  reviewed change, rewrite both with
+  `AGENTTY_PUBLIC_API_UPDATE=1 prek run public-api --hook-stage manual --all-files` and
+  commit them with the change.
 - **Test and build timings, or a `check-slow-tests` failure:** follow
   `skills/validate-changes/references/test-timings.md`.
 - **Changes to `check-instructions` or to the test and coverage hooks:** follow

@@ -12,6 +12,7 @@ use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
 use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::ExecutionIdentity;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::LoadedSession;
 use crate::sqlite_store::tests::support::{schema, turn_options};
 use crate::sqlite_store::{Database, ReservationObserver};

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 #[cfg(feature = "sqlite")]
 use crate::store::SqliteStore;
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, TurnOwner};

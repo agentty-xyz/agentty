@@ -9,17 +9,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
+#[cfg(feature = "sqlite")]
+use crate::OutputSchema;
 use crate::catalog::{CatalogError, ModelId};
 use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::context::{HistoryProjection, HistoryTurn};
 use crate::recovery::ExecutionIdentity;
 use crate::request_option::OutputMode;
 use crate::turn_options_snapshot::StoredTurnOptionsError;
-use crate::{OutputSchema, OutputSchemaError, TurnError};
+use crate::{OutputSchemaError, TurnError};
 
 /// Configuration stored when creating a persistent chat session.
 #[derive(Clone, Debug)]
-pub struct NewSession {
+pub(crate) struct NewSession {
     id: String,
     output: OutputMode,
     registration_identity: Option<ExecutionIdentity>,
@@ -28,8 +30,8 @@ pub struct NewSession {
 
 impl NewSession {
     /// Creates a persistent-session configuration whose default output mode
-    /// is `output`, usually a JSON [`OutputSchema`].
-    pub fn new(id: impl Into<String>, output: impl Into<OutputMode>) -> Self {
+    /// is `output`, usually a JSON [`crate::OutputSchema`].
+    pub(crate) fn new(id: impl Into<String>, output: impl Into<OutputMode>) -> Self {
         Self {
             id: id.into(),
             output: output.into(),
@@ -40,7 +42,7 @@ impl NewSession {
 
     /// Sets the system prompt retained across future resumes.
     #[must_use]
-    pub fn with_optional_system_prompt(mut self, system_prompt: Option<String>) -> Self {
+    pub(crate) fn with_optional_system_prompt(mut self, system_prompt: Option<String>) -> Self {
         self.system_prompt = system_prompt;
 
         self
@@ -50,35 +52,39 @@ impl NewSession {
     /// created. `None` denotes direct construction, including legacy
     /// sessions.
     #[must_use]
-    pub fn with_registration_identity(mut self, identity: Option<ExecutionIdentity>) -> Self {
+    pub(crate) fn with_registration_identity(
+        mut self,
+        identity: Option<ExecutionIdentity>,
+    ) -> Self {
         self.registration_identity = identity;
 
         self
     }
 
     /// Returns the stable application-provided session identifier.
-    pub fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         &self.id
     }
 
     /// Returns the registration that stores must retain unchanged across loads.
-    pub fn registration_identity(&self) -> Option<&ExecutionIdentity> {
+    pub(crate) fn registration_identity(&self) -> Option<&ExecutionIdentity> {
         self.registration_identity.as_ref()
     }
 
     /// Returns the default output mode retained by the session.
-    pub fn output(&self) -> &OutputMode {
+    pub(crate) fn output(&self) -> &OutputMode {
         &self.output
     }
 
     /// Returns the default output schema retained by the session, or `None`
     /// when it answers in plain text by default.
-    pub fn schema(&self) -> Option<&OutputSchema> {
+    #[cfg(feature = "sqlite")]
+    pub(crate) fn schema(&self) -> Option<&OutputSchema> {
         self.output.schema()
     }
 
     /// Returns the optional session system prompt.
-    pub fn system_prompt(&self) -> Option<&str> {
+    pub(crate) fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
     }
 }
@@ -86,25 +92,18 @@ impl NewSession {
 /// Stable backing-store identity for process-local admission and cleanup.
 /// Independent handles for the same backing store must use equal identities.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct StoreIdentity(StoreIdentityKind);
+pub(crate) struct StoreIdentity(StoreIdentityKind);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum StoreIdentityKind {
     #[cfg(feature = "sqlite")]
     File(PathBuf),
-    Host(String, String),
     Temporary(u64),
 }
 
 impl StoreIdentity {
-    /// Creates a host identity. Use a globally distinct backend namespace and
-    /// a stable backing-store key, never a handle address or credentials.
-    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
-        Self(StoreIdentityKind::Host(namespace.into(), key.into()))
-    }
-
     /// Creates an isolated process-local identity; clone it for shared handles.
-    pub fn unique() -> Self {
+    pub(crate) fn unique() -> Self {
         Self::temporary()
     }
 
@@ -201,7 +200,8 @@ pub enum SessionError {
     /// Failed/interrupted requests are inspectable, never automatically rerun.
     #[error("host turn has stopped; an explicit new attempt requires a new ID")]
     HostTurnStopped(Box<crate::recovery::HostTurnRecord>),
-    /// A host-provided store failed without requiring a SQLite error type.
+    /// A store operation failed, including a SQLite query or an embedded
+    /// migration; the backend error is its source.
     #[error("session store operation `{operation}` failed: {source}")]
     Store {
         /// Stable semantic operation name, excluding request contents.
@@ -248,10 +248,6 @@ pub enum SessionError {
         /// Provider stored with the session.
         stored_provider: String,
     },
-    /// An embedded migration failed.
-    #[cfg(feature = "sqlite")]
-    #[error(transparent)]
-    Migration(#[from] sqlx::migrate::MigrateError),
     /// The requested session does not exist.
     #[error("persistent session `{id}` does not exist")]
     NotFound {
@@ -273,16 +269,6 @@ pub enum SessionError {
         id: String,
         /// Position of the turn that lost ownership.
         turn_position: i64,
-    },
-    /// A named SQLite operation failed.
-    #[cfg(feature = "sqlite")]
-    #[error("persistent session operation `{operation}` failed: {source}")]
-    QueryContext {
-        /// Stable semantic operation name.
-        operation: &'static str,
-        /// Underlying `SQLx` failure.
-        #[source]
-        source: sqlx::Error,
     },
     /// A persisted output schema is no longer valid.
     #[error(transparent)]
@@ -339,7 +325,7 @@ impl From<StoredTurnOptionsError> for SessionError {
 
 /// Session configuration and bounded finished turns returned by a store.
 #[derive(Clone)]
-pub struct LoadedSession {
+pub(crate) struct LoadedSession {
     /// Current compaction checkpoint, replayed ahead of `turns`.
     pub checkpoint: Option<SessionCheckpoint>,
     /// Highest completed, failed, or interrupted turn position, used as the
@@ -378,7 +364,7 @@ pub struct LoadedSession {
 
 impl LoadedSession {
     /// Returns the current selection for immutable turn provenance.
-    pub fn recorded_model(&self) -> crate::store::RecordedModel {
+    pub(crate) fn recorded_model(&self) -> crate::store::RecordedModel {
         crate::store::RecordedModel {
             generation: self.model_generation,
             model: self.model.clone(),
@@ -392,7 +378,7 @@ impl LoadedSession {
 /// Equality and hashing use only the store, session, position, and token; the
 /// interruption diagnostic can change without changing reservation identity.
 #[derive(Clone, Debug)]
-pub struct TurnOwner {
+pub(crate) struct TurnOwner {
     pub(crate) database: StoreIdentity,
     pub(crate) interruption_error_type: &'static str,
     pub(crate) session_id: String,
@@ -403,7 +389,7 @@ pub struct TurnOwner {
 impl TurnOwner {
     /// Identifies a reservation with a backend-generated, non-reused owner
     /// token.
-    pub fn new(
+    pub(crate) fn new(
         database: StoreIdentity,
         session_id: String,
         turn_position: i64,
@@ -419,27 +405,27 @@ impl TurnOwner {
     }
 
     /// Backing store to which this reservation belongs.
-    pub fn store_identity(&self) -> &StoreIdentity {
+    pub(crate) fn store_identity(&self) -> &StoreIdentity {
         &self.database
     }
 
     /// Session whose admission and mutations are fenced by this owner.
-    pub fn session_id(&self) -> &str {
+    pub(crate) fn session_id(&self) -> &str {
         &self.session_id
     }
 
     /// Persistent turn position within the session.
-    pub fn turn_position(&self) -> i64 {
+    pub(crate) fn turn_position(&self) -> i64 {
         self.turn_position
     }
 
     /// Opaque backend token to validate atomically with each mutation.
-    pub fn token(&self) -> &[u8] {
+    pub(crate) fn token(&self) -> &[u8] {
         &self.token
     }
 
     /// Content-free diagnostic for an interrupted reservation.
-    pub fn interruption_error_type(&self) -> &'static str {
+    pub(crate) fn interruption_error_type(&self) -> &'static str {
         self.interruption_error_type
     }
 

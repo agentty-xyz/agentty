@@ -169,6 +169,7 @@ impl ComparisonIdentity {
 
 /// Failure to validate the host's explicit comparison selection.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ComparisonBaseError {
     /// A revision is empty, oversized, or contains control characters.
     #[error("comparison revision must be nonempty bounded text without control characters")]

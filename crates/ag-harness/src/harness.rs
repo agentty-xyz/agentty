@@ -64,8 +64,6 @@ use crate::store::{AcquiredTurn, SessionStore};
 use crate::summary_model::{SizingOverrides, SummaryModel};
 #[cfg(feature = "native-sandbox")]
 use crate::tool::Builtin;
-#[expect(deprecated, reason = "maps the deprecated `allow` setters")]
-use crate::tool::Tool;
 use crate::tool::ToolSet;
 use crate::tool_handler::ToolSelection;
 use crate::transcript::{TurnRange, TurnRecord};
@@ -1715,24 +1713,9 @@ impl Harness {
         self
     }
 
-    /// Allows one built-in tool by default for `run_once` and `Session::send`.
-    ///
-    /// Without a default set from [`Self::tools`], the harness offers the
-    /// built-ins allowed this way; a set, at any level, always wins.
-    #[deprecated(since = "0.20.0", note = "use `Harness::tools` with a `ToolSet`")]
-    #[expect(deprecated, reason = "takes the deprecated `Tool`")]
-    #[must_use]
-    pub fn allow(mut self, tool: Tool) -> Self {
-        self.config_mut().tools.allow(tool.into());
-
-        self
-    }
-
     /// Offers exactly `tools` by default for `run_once`, `Session::send`,
     /// and runs. A [`RunRequest::tools`] or explicit [`TurnOptions`]
-    /// replace the set; without one, the harness offers no tools, or the
-    /// built-ins a deprecated [`Self::allow`] allows, which never filters
-    /// this set.
+    /// replace the set; without one, the harness offers no tools.
     ///
     /// The defaults carry no [`crate::bash::BashConfig`], so a default set
     /// holding `bash`, such as [`ToolSet::builtins`], needs one on every run
@@ -2657,22 +2640,9 @@ impl HarnessBuilder {
         self
     }
 
-    /// Allows one built-in tool by default, like [`Harness::allow`].
-    #[deprecated(
-        since = "0.20.0",
-        note = "use `HarnessBuilder::tools` with a `ToolSet`"
-    )]
-    #[expect(deprecated, reason = "takes the deprecated `Tool`")]
-    pub fn allow(mut self, tool: Tool) -> Self {
-        self.tools.allow(tool.into());
-
-        self
-    }
-
     /// Offers exactly `tools` in every turn that uses the defaults; without
     /// a set, the harness offers no tools. A [`RunRequest::tools`] or
-    /// explicit [`TurnOptions`] replace the set. A deprecated
-    /// [`Self::allow`] applies only without a set and never filters it.
+    /// explicit [`TurnOptions`] replace the set.
     ///
     /// A default set holding `bash` needs a [`crate::bash::BashConfig`] on
     /// every run or turn, as [`Harness::tools`] describes.

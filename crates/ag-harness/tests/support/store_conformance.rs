@@ -12,9 +12,9 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
-    NewSession, SessionCheckpoint, SessionStore, StoreIdentity, StoredTurnOptions, TurnOwner,
-    TurnStop, TurnUsage, WriteStatus,
+    AcquiredTurn, CompactionSource, HistoryProjection, MemoryStore, ModelSwitch, NewSession,
+    SessionCheckpoint, SessionStore, StoreBackend, StoreIdentity, StoredTurnOptions, TurnOwner,
+    TurnUsage, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::TurnStatus;
@@ -25,10 +25,13 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
 
+use crate::context::{HistoryTurn, TurnStop};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::store_fixture::{
-    Echo, ExternalStore, harness, image_input, lifecycle, loaded_turn, options, schema, stores,
+    Echo, ExternalStore, HistoryTurnFixture as _, harness, image_input, lifecycle, loaded_turn,
+    options, schema, stores,
 };
 use crate::store_gate::Gate;
 
@@ -1766,10 +1769,6 @@ async fn expired_reservation_acknowledgment_is_interrupted_before_execution() {
     // Assert
     assert!(matches!(expired, Err(SessionError::OwnershipLost { .. })));
     assert_eq!(successor.owner().turn_position(), 1);
-    assert_eq!(
-        StoreIdentity::new("backend", "key"),
-        StoreIdentity::new("backend", "key")
-    );
     assert_ne!(StoreIdentity::unique(), StoreIdentity::unique());
     assert!(StoredTurnOptions::decode(&StoredTurnOptions::encode(&options())).is_ok());
 }

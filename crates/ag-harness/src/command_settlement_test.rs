@@ -17,6 +17,7 @@ use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
 use crate::fault_store_test::{Fault, FaultStore};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 #[cfg(feature = "sqlite")]
 use crate::store::SqliteStore;
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore};

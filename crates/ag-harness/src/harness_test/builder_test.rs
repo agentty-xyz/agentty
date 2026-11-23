@@ -33,13 +33,8 @@ use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::provider::ModelProvider;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
-use crate::store::SessionStore;
+use crate::store::{SessionStore, StoreBackend as _};
 use crate::summary_model::SummaryModel;
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage of the deprecated `Harness::allow`"
-)]
-use crate::tool::Tool;
 use crate::tool::{
     ToolContext, ToolDefinition, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet,
 };
@@ -596,21 +591,6 @@ async fn the_window_history_budget_weighs_the_default_set_definitions() {
             4 * usize::try_from(weight).expect("weight")
         );
     }
-}
-
-#[tokio::test]
-#[expect(
-    deprecated,
-    reason = "legacy-mapping coverage: a deprecated default policy weighs only its built-ins"
-)]
-async fn the_window_history_budget_weighs_the_built_ins_a_deprecated_policy_allows() {
-    // Act
-    let allowed = windowed_session_history_bytes(|harness| harness.allow(Tool::Read)).await;
-    let selected =
-        windowed_session_history_bytes(|harness| harness.tools(ToolSet::empty().with_read())).await;
-
-    // Assert
-    assert_eq!(allowed, selected);
 }
 
 /// Returns the retained history bytes of a new session on a registered

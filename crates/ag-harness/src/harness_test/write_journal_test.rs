@@ -127,7 +127,7 @@ async fn session_inspection_reports_storage_failure() {
     // Assert
     assert!(matches!(
         error,
-        SessionError::QueryContext {
+        SessionError::Store {
             operation: "load persistent writes",
             ..
         }

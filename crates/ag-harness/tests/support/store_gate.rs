@@ -8,7 +8,7 @@ use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore,
-    StoreIdentity, StoredTurn, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
+    StoreBackend, StoreIdentity, StoredTurn, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome, TurnRange};
 use async_trait::async_trait;
@@ -59,7 +59,7 @@ impl Gate {
 }
 
 #[async_trait]
-impl SessionStore for Gate {
+impl StoreBackend for Gate {
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }

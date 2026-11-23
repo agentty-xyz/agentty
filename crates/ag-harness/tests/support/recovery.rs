@@ -22,6 +22,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::store_fixture::{options, schema, stores};
 
 #[derive(Clone, Default)]

@@ -8,6 +8,7 @@ use sha2::{Digest as _, Sha256};
 
 /// A durable repository write intent and its acknowledged outcome.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct WriteRecord {
     /// Provider tool-call identifier; unique only within its model response.
     pub call_id: String,
@@ -32,6 +33,7 @@ pub struct WriteRecord {
 /// Acknowledged filesystem outcome, preserved independently of turn success.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum WriteStatus {
     /// Intent is durable, but no filesystem result was recorded.
     Pending,

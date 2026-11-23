@@ -10,8 +10,8 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, RecordedModel,
-    SessionStore, WriteStatus,
+    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, RecordedModel, SessionStore,
+    WriteStatus,
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
@@ -21,7 +21,9 @@ use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
 use serde_json::json;
 
+use crate::context::{HistoryTurn, TurnStop};
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 
 pub(crate) fn schema() -> OutputSchema {
     OutputSchema::new(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})).expect("schema")
@@ -62,6 +64,30 @@ pub(crate) fn unselected_model() -> RecordedModel {
 /// session created without a model selection.
 pub(crate) fn loaded_turn(messages: Vec<ModelMessage>) -> HistoryTurn {
     HistoryTurn::new(messages).with_model(unselected_model())
+}
+
+/// Builds loaded turns the way a store records them.
+pub(crate) trait HistoryTurnFixture {
+    /// Returns this turn with `model`, the selection recorded when the turn
+    /// was reserved.
+    #[must_use]
+    fn with_model(self, model: RecordedModel) -> Self;
+
+    /// Returns this turn stopped for `stop`.
+    #[must_use]
+    fn with_stop(self, stop: TurnStop) -> Self;
+}
+
+impl HistoryTurnFixture for HistoryTurn {
+    fn with_model(mut self, model: RecordedModel) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    fn with_stop(mut self, stop: TurnStop) -> Self {
+        self.stop = Some(stop);
+        self
+    }
 }
 
 /// Returns one empty store of each backend this build includes.

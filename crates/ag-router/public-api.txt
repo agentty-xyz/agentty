@@ -1,0 +1,1207 @@
+pub mod ag_router
+pub mod ag_router::chatgpt
+pub enum ag_router::chatgpt::ChatGptAuthError
+pub ag_router::chatgpt::ChatGptAuthError::Denied
+pub ag_router::chatgpt::ChatGptAuthError::Denied::error: alloc::string::String
+pub ag_router::chatgpt::ChatGptAuthError::InvalidCallback
+pub ag_router::chatgpt::ChatGptAuthError::InvalidCallback::reason: &'static str
+pub ag_router::chatgpt::ChatGptAuthError::InvalidCredentials
+pub ag_router::chatgpt::ChatGptAuthError::InvalidCredentials::path: std::path::PathBuf
+pub ag_router::chatgpt::ChatGptAuthError::InvalidCredentials::source: serde_json::error::Error
+pub ag_router::chatgpt::ChatGptAuthError::InvalidTokenResponse(serde_json::error::Error)
+pub ag_router::chatgpt::ChatGptAuthError::Io
+pub ag_router::chatgpt::ChatGptAuthError::Io::path: std::path::PathBuf
+pub ag_router::chatgpt::ChatGptAuthError::Io::source: core::io::error::Error
+pub ag_router::chatgpt::ChatGptAuthError::MissingPlanScope
+pub ag_router::chatgpt::ChatGptAuthError::NotSignedIn
+pub ag_router::chatgpt::ChatGptAuthError::NotSignedIn::path: std::path::PathBuf
+pub ag_router::chatgpt::ChatGptAuthError::RefreshTask(tokio::runtime::task::error::JoinError)
+pub ag_router::chatgpt::ChatGptAuthError::SignInRequired
+pub ag_router::chatgpt::ChatGptAuthError::SignInRequired::code: alloc::string::String
+pub ag_router::chatgpt::ChatGptAuthError::TokenRequest
+pub ag_router::chatgpt::ChatGptAuthError::TokenRequest::body: alloc::string::String
+pub ag_router::chatgpt::ChatGptAuthError::TokenRequest::status: u16
+pub ag_router::chatgpt::ChatGptAuthError::TokenResponseTooLarge
+pub ag_router::chatgpt::ChatGptAuthError::Transport(reqwest::error::Error)
+impl core::error::Error for ag_router::chatgpt::ChatGptAuthError
+pub fn ag_router::chatgpt::ChatGptAuthError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for ag_router::chatgpt::ChatGptAuthError
+pub fn ag_router::chatgpt::ChatGptAuthError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_router::chatgpt::ChatGptAuthError
+pub fn ag_router::chatgpt::ChatGptAuthError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::Freeze for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::Move for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::Send for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::Sync for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::Unpin for ag_router::chatgpt::ChatGptAuthError
+impl core::marker::UnsafeUnpin for ag_router::chatgpt::ChatGptAuthError
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::chatgpt::ChatGptAuthError
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::chatgpt::ChatGptAuthError
+pub struct ag_router::chatgpt::ChatGptAuth
+impl ag_router::chatgpt::ChatGptAuth
+pub async fn ag_router::chatgpt::ChatGptAuth::access_token(&self) -> core::result::Result<alloc::string::String, ag_router::chatgpt::ChatGptAuthError>
+pub fn ag_router::chatgpt::ChatGptAuth::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn ag_router::chatgpt::ChatGptAuth::path(&self) -> &std::path::Path
+pub fn ag_router::chatgpt::ChatGptAuth::with_issuer(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl ag_router::CredentialSource for ag_router::chatgpt::ChatGptAuth
+pub fn ag_router::chatgpt::ChatGptAuth::bearer_token<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::marker::Forget for ag_router::chatgpt::ChatGptAuth
+impl !core::marker::Freeze for ag_router::chatgpt::ChatGptAuth
+impl core::marker::Move for ag_router::chatgpt::ChatGptAuth
+impl core::marker::Send for ag_router::chatgpt::ChatGptAuth
+impl core::marker::Sync for ag_router::chatgpt::ChatGptAuth
+impl core::marker::Unpin for ag_router::chatgpt::ChatGptAuth
+impl core::marker::UnsafeUnpin for ag_router::chatgpt::ChatGptAuth
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::chatgpt::ChatGptAuth
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::chatgpt::ChatGptAuth
+pub struct ag_router::chatgpt::ChatGptCredentials
+pub ag_router::chatgpt::ChatGptCredentials::access_token: alloc::string::String
+pub ag_router::chatgpt::ChatGptCredentials::client_id: alloc::string::String
+pub ag_router::chatgpt::ChatGptCredentials::email: core::option::Option<alloc::string::String>
+pub ag_router::chatgpt::ChatGptCredentials::expires_at: u64
+pub ag_router::chatgpt::ChatGptCredentials::ext_agent_host_id: alloc::string::String
+pub ag_router::chatgpt::ChatGptCredentials::id_token: alloc::string::String
+pub ag_router::chatgpt::ChatGptCredentials::refresh_token: alloc::string::String
+pub ag_router::chatgpt::ChatGptCredentials::scopes: alloc::vec::Vec<alloc::string::String>
+impl ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::is_signed_in(&self) -> bool
+pub fn ag_router::chatgpt::ChatGptCredentials::load(&std::path::Path) -> core::result::Result<Self, ag_router::chatgpt::ChatGptAuthError>
+pub fn ag_router::chatgpt::ChatGptCredentials::save(&self, &std::path::Path) -> core::result::Result<(), ag_router::chatgpt::ChatGptAuthError>
+impl core::clone::Clone for ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::clone(&self) -> Self
+impl core::cmp::PartialEq for ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::chatgpt::ChatGptCredentials
+impl serde_core::ser::Serialize for ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ag_router::chatgpt::ChatGptCredentials
+pub fn ag_router::chatgpt::ChatGptCredentials::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Forget for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::Freeze for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::Move for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::Send for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::Sync for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::Unpin for ag_router::chatgpt::ChatGptCredentials
+impl core::marker::UnsafeUnpin for ag_router::chatgpt::ChatGptCredentials
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::chatgpt::ChatGptCredentials
+impl core::panic::unwind_safe::UnwindSafe for ag_router::chatgpt::ChatGptCredentials
+pub struct ag_router::chatgpt::ChatGptLogin
+impl ag_router::chatgpt::ChatGptLogin
+pub fn ag_router::chatgpt::ChatGptLogin::authorize_url(&self) -> alloc::string::String
+pub async fn ag_router::chatgpt::ChatGptLogin::finish(&self, &str) -> core::result::Result<ag_router::chatgpt::ChatGptCredentials, ag_router::chatgpt::ChatGptAuthError>
+pub fn ag_router::chatgpt::ChatGptLogin::is_own_callback(&self, &str) -> bool
+pub fn ag_router::chatgpt::ChatGptLogin::new(impl core::convert::Into<alloc::string::String>, core::option::Option<ag_router::chatgpt::ChatGptCredentials>) -> Self
+pub fn ag_router::chatgpt::ChatGptLogin::with_issuer(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::marker::Forget for ag_router::chatgpt::ChatGptLogin
+impl core::marker::Freeze for ag_router::chatgpt::ChatGptLogin
+impl core::marker::Move for ag_router::chatgpt::ChatGptLogin
+impl core::marker::Send for ag_router::chatgpt::ChatGptLogin
+impl core::marker::Sync for ag_router::chatgpt::ChatGptLogin
+impl core::marker::Unpin for ag_router::chatgpt::ChatGptLogin
+impl core::marker::UnsafeUnpin for ag_router::chatgpt::ChatGptLogin
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::chatgpt::ChatGptLogin
+impl core::panic::unwind_safe::UnwindSafe for ag_router::chatgpt::ChatGptLogin
+pub mod ag_router::preset
+pub fn ag_router::preset::anthropic(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str) -> ag_router::ProviderSpec
+pub fn ag_router::preset::chatgpt(impl core::convert::Into<alloc::string::String>, alloc::rcs::arc::Arc<dyn ag_router::CredentialSource>, &str) -> ag_router::ProviderSpec
+pub fn ag_router::preset::kimi(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str) -> ag_router::ProviderSpec
+pub fn ag_router::preset::muse(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str) -> ag_router::ProviderSpec
+pub fn ag_router::preset::openai(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str) -> ag_router::ProviderSpec
+pub fn ag_router::preset::openai_compatible(impl core::convert::Into<alloc::string::String>, core::option::Option<alloc::string::String>) -> ag_router::ProviderSpec
+pub fn ag_router::preset::qwen(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &str) -> ag_router::ProviderSpec
+#[non_exhaustive] pub enum ag_router::Auth
+pub ag_router::Auth::Bearer(alloc::string::String)
+pub ag_router::Auth::Credential(alloc::rcs::arc::Arc<dyn ag_router::CredentialSource>)
+pub ag_router::Auth::Header
+pub ag_router::Auth::Header::name: alloc::string::String
+pub ag_router::Auth::Header::value: alloc::string::String
+pub ag_router::Auth::None
+impl core::clone::Clone for ag_router::Auth
+pub fn ag_router::Auth::clone(&self) -> Self
+impl core::fmt::Debug for ag_router::Auth
+pub fn ag_router::Auth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::Auth
+impl core::marker::Freeze for ag_router::Auth
+impl core::marker::Move for ag_router::Auth
+impl core::marker::Send for ag_router::Auth
+impl core::marker::Sync for ag_router::Auth
+impl core::marker::Unpin for ag_router::Auth
+impl core::marker::UnsafeUnpin for ag_router::Auth
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::Auth
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::Auth
+pub enum ag_router::Completion
+pub ag_router::Completion::Output
+pub ag_router::Completion::Output::metadata: ag_router::CompletionMetadata
+pub ag_router::Completion::Output::reasoning_content: core::option::Option<alloc::string::String>
+pub ag_router::Completion::Output::value: serde_json::value::Value
+pub ag_router::Completion::Text
+pub ag_router::Completion::Text::metadata: ag_router::CompletionMetadata
+pub ag_router::Completion::Text::reasoning_content: core::option::Option<alloc::string::String>
+pub ag_router::Completion::Text::text: alloc::string::String
+pub ag_router::Completion::ToolCalls
+pub ag_router::Completion::ToolCalls::calls: alloc::vec::Vec<ag_router::ToolCall>
+pub ag_router::Completion::ToolCalls::metadata: ag_router::CompletionMetadata
+impl core::clone::Clone for ag_router::Completion
+pub fn ag_router::Completion::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::Completion
+impl core::cmp::PartialEq for ag_router::Completion
+pub fn ag_router::Completion::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::Completion
+pub fn ag_router::Completion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::Completion
+impl core::marker::Forget for ag_router::Completion
+impl core::marker::Freeze for ag_router::Completion
+impl core::marker::Move for ag_router::Completion
+impl core::marker::Send for ag_router::Completion
+impl core::marker::Sync for ag_router::Completion
+impl core::marker::Unpin for ag_router::Completion
+impl core::marker::UnsafeUnpin for ag_router::Completion
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::Completion
+impl core::panic::unwind_safe::UnwindSafe for ag_router::Completion
+pub enum ag_router::ErrorClass
+pub ag_router::ErrorClass::ContextOverflow
+pub ag_router::ErrorClass::InvalidOutput
+pub ag_router::ErrorClass::InvalidProviderResponse
+pub ag_router::ErrorClass::InvalidResponse
+pub ag_router::ErrorClass::InvalidToolCall
+pub ag_router::ErrorClass::Provider
+pub ag_router::ErrorClass::Request
+pub ag_router::ErrorClass::ResponseTooLarge
+pub ag_router::ErrorClass::Transport
+pub ag_router::ErrorClass::UnsupportedInput
+pub ag_router::ErrorClass::UnsupportedOutput
+impl core::clone::Clone for ag_router::ErrorClass
+pub fn ag_router::ErrorClass::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ErrorClass
+impl core::cmp::PartialEq for ag_router::ErrorClass
+pub fn ag_router::ErrorClass::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ErrorClass
+pub fn ag_router::ErrorClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::ErrorClass
+impl core::marker::StructuralPartialEq for ag_router::ErrorClass
+impl core::marker::Forget for ag_router::ErrorClass
+impl core::marker::Freeze for ag_router::ErrorClass
+impl core::marker::Move for ag_router::ErrorClass
+impl core::marker::Send for ag_router::ErrorClass
+impl core::marker::Sync for ag_router::ErrorClass
+impl core::marker::Unpin for ag_router::ErrorClass
+impl core::marker::UnsafeUnpin for ag_router::ErrorClass
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ErrorClass
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ErrorClass
+pub enum ag_router::ImageMediaType
+pub ag_router::ImageMediaType::Jpeg
+pub ag_router::ImageMediaType::Png
+impl core::clone::Clone for ag_router::ImageMediaType
+pub fn ag_router::ImageMediaType::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ImageMediaType
+impl core::cmp::PartialEq for ag_router::ImageMediaType
+pub fn ag_router::ImageMediaType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ImageMediaType
+pub fn ag_router::ImageMediaType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::ImageMediaType
+impl core::marker::StructuralPartialEq for ag_router::ImageMediaType
+impl core::marker::Forget for ag_router::ImageMediaType
+impl core::marker::Freeze for ag_router::ImageMediaType
+impl core::marker::Move for ag_router::ImageMediaType
+impl core::marker::Send for ag_router::ImageMediaType
+impl core::marker::Sync for ag_router::ImageMediaType
+impl core::marker::Unpin for ag_router::ImageMediaType
+impl core::marker::UnsafeUnpin for ag_router::ImageMediaType
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ImageMediaType
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ImageMediaType
+pub enum ag_router::InputBlock
+pub ag_router::InputBlock::Image(ag_router::ImageContent)
+pub ag_router::InputBlock::Text(alloc::string::String)
+impl core::clone::Clone for ag_router::InputBlock
+pub fn ag_router::InputBlock::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::InputBlock
+impl core::cmp::PartialEq for ag_router::InputBlock
+pub fn ag_router::InputBlock::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::InputBlock
+pub fn ag_router::InputBlock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::InputBlock
+impl core::marker::Forget for ag_router::InputBlock
+impl core::marker::Freeze for ag_router::InputBlock
+impl core::marker::Move for ag_router::InputBlock
+impl core::marker::Send for ag_router::InputBlock
+impl core::marker::Sync for ag_router::InputBlock
+impl core::marker::Unpin for ag_router::InputBlock
+impl core::marker::UnsafeUnpin for ag_router::InputBlock
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::InputBlock
+impl core::panic::unwind_safe::UnwindSafe for ag_router::InputBlock
+pub enum ag_router::InputError
+pub ag_router::InputError::EncodedInputTooLarge
+pub ag_router::InputError::ImageTooLarge
+pub ag_router::InputError::ImagesTooLarge
+pub ag_router::InputError::InvalidImage
+pub ag_router::InputError::TooManyImages
+impl core::clone::Clone for ag_router::InputError
+pub fn ag_router::InputError::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::InputError
+impl core::cmp::PartialEq for ag_router::InputError
+pub fn ag_router::InputError::eq(&self, &Self) -> bool
+impl core::error::Error for ag_router::InputError
+impl core::fmt::Debug for ag_router::InputError
+pub fn ag_router::InputError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_router::InputError
+pub fn ag_router::InputError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::InputError
+impl core::marker::StructuralPartialEq for ag_router::InputError
+impl core::marker::Forget for ag_router::InputError
+impl core::marker::Freeze for ag_router::InputError
+impl core::marker::Move for ag_router::InputError
+impl core::marker::Send for ag_router::InputError
+impl core::marker::Sync for ag_router::InputError
+impl core::marker::Unpin for ag_router::InputError
+impl core::marker::UnsafeUnpin for ag_router::InputError
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::InputError
+impl core::panic::unwind_safe::UnwindSafe for ag_router::InputError
+#[non_exhaustive] pub enum ag_router::InstructionPlacement
+pub ag_router::InstructionPlacement::JoinPreviousUser
+pub ag_router::InstructionPlacement::Separate
+impl core::clone::Clone for ag_router::InstructionPlacement
+pub fn ag_router::InstructionPlacement::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::InstructionPlacement
+impl core::cmp::PartialEq for ag_router::InstructionPlacement
+pub fn ag_router::InstructionPlacement::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::InstructionPlacement
+pub fn ag_router::InstructionPlacement::default() -> Self
+impl core::fmt::Debug for ag_router::InstructionPlacement
+pub fn ag_router::InstructionPlacement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::InstructionPlacement
+impl core::marker::StructuralPartialEq for ag_router::InstructionPlacement
+impl core::marker::Forget for ag_router::InstructionPlacement
+impl core::marker::Freeze for ag_router::InstructionPlacement
+impl core::marker::Move for ag_router::InstructionPlacement
+impl core::marker::Send for ag_router::InstructionPlacement
+impl core::marker::Sync for ag_router::InstructionPlacement
+impl core::marker::Unpin for ag_router::InstructionPlacement
+impl core::marker::UnsafeUnpin for ag_router::InstructionPlacement
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::InstructionPlacement
+impl core::panic::unwind_safe::UnwindSafe for ag_router::InstructionPlacement
+#[non_exhaustive] pub enum ag_router::Jitter
+pub ag_router::Jitter::Equal
+pub ag_router::Jitter::Full
+pub ag_router::Jitter::None
+impl core::clone::Clone for ag_router::Jitter
+pub fn ag_router::Jitter::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::Jitter
+impl core::cmp::PartialEq for ag_router::Jitter
+pub fn ag_router::Jitter::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::Jitter
+pub fn ag_router::Jitter::default() -> Self
+impl core::fmt::Debug for ag_router::Jitter
+pub fn ag_router::Jitter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::Jitter
+impl core::marker::StructuralPartialEq for ag_router::Jitter
+impl core::marker::Forget for ag_router::Jitter
+impl core::marker::Freeze for ag_router::Jitter
+impl core::marker::Move for ag_router::Jitter
+impl core::marker::Send for ag_router::Jitter
+impl core::marker::Sync for ag_router::Jitter
+impl core::marker::Unpin for ag_router::Jitter
+impl core::marker::UnsafeUnpin for ag_router::Jitter
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::Jitter
+impl core::panic::unwind_safe::UnwindSafe for ag_router::Jitter
+pub enum ag_router::LocalServerError
+pub ag_router::LocalServerError::Request
+pub ag_router::LocalServerError::Request::source: reqwest::error::Error
+pub ag_router::LocalServerError::Request::url: alloc::string::String
+pub ag_router::LocalServerError::Status
+pub ag_router::LocalServerError::Status::status: u16
+pub ag_router::LocalServerError::Status::url: alloc::string::String
+impl core::error::Error for ag_router::LocalServerError
+pub fn ag_router::LocalServerError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for ag_router::LocalServerError
+pub fn ag_router::LocalServerError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_router::LocalServerError
+pub fn ag_router::LocalServerError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::LocalServerError
+impl core::marker::Freeze for ag_router::LocalServerError
+impl core::marker::Move for ag_router::LocalServerError
+impl core::marker::Send for ag_router::LocalServerError
+impl core::marker::Sync for ag_router::LocalServerError
+impl core::marker::Unpin for ag_router::LocalServerError
+impl core::marker::UnsafeUnpin for ag_router::LocalServerError
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::LocalServerError
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::LocalServerError
+pub enum ag_router::LocalServerKind
+pub ag_router::LocalServerKind::Ollama
+pub ag_router::LocalServerKind::OpenAiCompatible
+impl ag_router::LocalServerKind
+pub const fn ag_router::LocalServerKind::display_name(self) -> &'static str
+impl core::clone::Clone for ag_router::LocalServerKind
+pub fn ag_router::LocalServerKind::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::LocalServerKind
+impl core::cmp::PartialEq for ag_router::LocalServerKind
+pub fn ag_router::LocalServerKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::LocalServerKind
+pub fn ag_router::LocalServerKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::LocalServerKind
+impl core::marker::StructuralPartialEq for ag_router::LocalServerKind
+impl core::marker::Forget for ag_router::LocalServerKind
+impl core::marker::Freeze for ag_router::LocalServerKind
+impl core::marker::Move for ag_router::LocalServerKind
+impl core::marker::Send for ag_router::LocalServerKind
+impl core::marker::Sync for ag_router::LocalServerKind
+impl core::marker::Unpin for ag_router::LocalServerKind
+impl core::marker::UnsafeUnpin for ag_router::LocalServerKind
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::LocalServerKind
+impl core::panic::unwind_safe::UnwindSafe for ag_router::LocalServerKind
+#[non_exhaustive] pub enum ag_router::MaxTokensField
+pub ag_router::MaxTokensField::MaxCompletionTokens
+pub ag_router::MaxTokensField::MaxOutputTokens
+pub ag_router::MaxTokensField::MaxTokens
+impl core::clone::Clone for ag_router::MaxTokensField
+pub fn ag_router::MaxTokensField::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::MaxTokensField
+impl core::cmp::PartialEq for ag_router::MaxTokensField
+pub fn ag_router::MaxTokensField::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::MaxTokensField
+pub fn ag_router::MaxTokensField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::MaxTokensField
+impl core::marker::StructuralPartialEq for ag_router::MaxTokensField
+impl core::marker::Forget for ag_router::MaxTokensField
+impl core::marker::Freeze for ag_router::MaxTokensField
+impl core::marker::Move for ag_router::MaxTokensField
+impl core::marker::Send for ag_router::MaxTokensField
+impl core::marker::Sync for ag_router::MaxTokensField
+impl core::marker::Unpin for ag_router::MaxTokensField
+impl core::marker::UnsafeUnpin for ag_router::MaxTokensField
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::MaxTokensField
+impl core::panic::unwind_safe::UnwindSafe for ag_router::MaxTokensField
+pub enum ag_router::ModelError
+pub ag_router::ModelError::DuplicateToolCallId
+pub ag_router::ModelError::DuplicateToolCallId::id: alloc::string::String
+pub ag_router::ModelError::IncompleteResponse
+pub ag_router::ModelError::IncompleteResponse::reason: alloc::string::String
+pub ag_router::ModelError::InvalidJson
+pub ag_router::ModelError::InvalidJson::reason: alloc::string::String
+pub ag_router::ModelError::InvalidModelId
+pub ag_router::ModelError::InvalidProviderConfig
+pub ag_router::ModelError::InvalidProviderConfig::reason: alloc::string::String
+pub ag_router::ModelError::InvalidResponse
+pub ag_router::ModelError::InvalidResponseFormatName
+pub ag_router::ModelError::InvalidToolArguments
+pub ag_router::ModelError::InvalidToolArguments::reason: alloc::string::String
+pub ag_router::ModelError::InvalidToolCallId
+pub ag_router::ModelError::MissingToolCall
+pub ag_router::ModelError::NoProviderSpec
+pub ag_router::ModelError::Request(alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>)
+pub ag_router::ModelError::ResponseBodyTooLarge
+pub ag_router::ModelError::ResponseContentTooLarge
+pub ag_router::ModelError::SchemaViolation
+pub ag_router::ModelError::SchemaViolation::path: alloc::string::String
+pub ag_router::ModelError::SchemaViolation::reason: alloc::string::String
+pub ag_router::ModelError::TerminalResponseWithToolCalls
+pub ag_router::ModelError::UnsupportedGeneration
+pub ag_router::ModelError::UnsupportedGeneration::reason: alloc::string::String
+pub ag_router::ModelError::UnsupportedImageInput
+pub ag_router::ModelError::UnsupportedImageInput::reason: alloc::string::String
+pub ag_router::ModelError::UnsupportedOutputSchema
+pub ag_router::ModelError::UnsupportedOutputSchema::reason: alloc::string::String
+pub ag_router::ModelError::UnsupportedToolName
+pub ag_router::ModelError::UnsupportedToolName::name: alloc::string::String
+pub ag_router::ModelError::UnsupportedToolType
+pub ag_router::ModelError::UnsupportedToolType::kind: alloc::string::String
+pub ag_router::ModelError::WithMetadata
+pub ag_router::ModelError::WithMetadata::metadata: alloc::boxed::Box<ag_router::CompletionMetadata>
+pub ag_router::ModelError::WithMetadata::source: alloc::boxed::Box<ag_router::ModelError>
+impl ag_router::ModelError
+pub fn ag_router::ModelError::error_class(&self) -> ag_router::ErrorClass
+pub fn ag_router::ModelError::http_status(&self) -> core::option::Option<u16>
+pub fn ag_router::ModelError::into_source(self) -> alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub fn ag_router::ModelError::is_context_overflow(&self) -> bool
+pub fn ag_router::ModelError::is_quota_exceeded(&self) -> bool
+pub fn ag_router::ModelError::metadata(&self) -> core::option::Option<&ag_router::CompletionMetadata>
+pub fn ag_router::ModelError::retry_after(&self) -> core::option::Option<core::time::Duration>
+pub fn ag_router::ModelError::root_cause(&self) -> &Self
+impl core::convert::From<ag_router::OutputValidationError> for ag_router::ModelError
+pub fn ag_router::ModelError::from(ag_router::OutputValidationError) -> Self
+impl core::error::Error for ag_router::ModelError
+pub fn ag_router::ModelError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for ag_router::ModelError
+pub fn ag_router::ModelError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_router::ModelError
+pub fn ag_router::ModelError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::ModelError
+impl core::marker::Freeze for ag_router::ModelError
+impl core::marker::Move for ag_router::ModelError
+impl core::marker::Send for ag_router::ModelError
+impl core::marker::Sync for ag_router::ModelError
+impl core::marker::Unpin for ag_router::ModelError
+impl core::marker::UnsafeUnpin for ag_router::ModelError
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::ModelError
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::ModelError
+pub enum ag_router::ModelMessage
+pub ag_router::ModelMessage::Assistant(alloc::string::String)
+pub ag_router::ModelMessage::AssistantReasoning
+pub ag_router::ModelMessage::AssistantReasoning::content: alloc::string::String
+pub ag_router::ModelMessage::AssistantReasoning::reasoning_content: alloc::string::String
+pub ag_router::ModelMessage::AssistantToolCall(ag_router::ToolCall)
+pub ag_router::ModelMessage::AssistantToolCalls(alloc::vec::Vec<ag_router::ToolCall>)
+pub ag_router::ModelMessage::Instructions(alloc::string::String)
+pub ag_router::ModelMessage::System(alloc::string::String)
+pub ag_router::ModelMessage::ToolResult
+pub ag_router::ModelMessage::ToolResult::call_id: alloc::string::String
+pub ag_router::ModelMessage::ToolResult::content: alloc::string::String
+pub ag_router::ModelMessage::ToolResult::name: alloc::string::String
+pub ag_router::ModelMessage::User(alloc::string::String)
+pub ag_router::ModelMessage::UserInput(ag_router::TurnInput)
+impl core::clone::Clone for ag_router::ModelMessage
+pub fn ag_router::ModelMessage::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ModelMessage
+impl core::cmp::PartialEq for ag_router::ModelMessage
+pub fn ag_router::ModelMessage::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ModelMessage
+pub fn ag_router::ModelMessage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ModelMessage
+impl core::marker::Forget for ag_router::ModelMessage
+impl core::marker::Freeze for ag_router::ModelMessage
+impl core::marker::Move for ag_router::ModelMessage
+impl core::marker::Send for ag_router::ModelMessage
+impl core::marker::Sync for ag_router::ModelMessage
+impl core::marker::Unpin for ag_router::ModelMessage
+impl core::marker::UnsafeUnpin for ag_router::ModelMessage
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ModelMessage
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ModelMessage
+pub enum ag_router::OutputSchemaError
+pub ag_router::OutputSchemaError::ExternalReference
+pub ag_router::OutputSchemaError::Invalid
+pub ag_router::OutputSchemaError::Invalid::reason: alloc::string::String
+pub ag_router::OutputSchemaError::TooLarge
+impl core::clone::Clone for ag_router::OutputSchemaError
+pub fn ag_router::OutputSchemaError::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::OutputSchemaError
+impl core::cmp::PartialEq for ag_router::OutputSchemaError
+pub fn ag_router::OutputSchemaError::eq(&self, &Self) -> bool
+impl core::error::Error for ag_router::OutputSchemaError
+impl core::fmt::Debug for ag_router::OutputSchemaError
+pub fn ag_router::OutputSchemaError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_router::OutputSchemaError
+pub fn ag_router::OutputSchemaError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::OutputSchemaError
+impl core::marker::Forget for ag_router::OutputSchemaError
+impl core::marker::Freeze for ag_router::OutputSchemaError
+impl core::marker::Move for ag_router::OutputSchemaError
+impl core::marker::Send for ag_router::OutputSchemaError
+impl core::marker::Sync for ag_router::OutputSchemaError
+impl core::marker::Unpin for ag_router::OutputSchemaError
+impl core::marker::UnsafeUnpin for ag_router::OutputSchemaError
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::OutputSchemaError
+impl core::panic::unwind_safe::UnwindSafe for ag_router::OutputSchemaError
+pub enum ag_router::OutputValidationError
+pub ag_router::OutputValidationError::InvalidJson(alloc::string::String)
+pub ag_router::OutputValidationError::SchemaViolation
+pub ag_router::OutputValidationError::SchemaViolation::path: alloc::string::String
+pub ag_router::OutputValidationError::SchemaViolation::reason: alloc::string::String
+pub ag_router::OutputValidationError::TooLarge
+impl core::cmp::Eq for ag_router::OutputValidationError
+impl core::cmp::PartialEq for ag_router::OutputValidationError
+pub fn ag_router::OutputValidationError::eq(&self, &Self) -> bool
+impl core::convert::From<ag_router::OutputValidationError> for ag_router::ModelError
+pub fn ag_router::ModelError::from(ag_router::OutputValidationError) -> Self
+impl core::fmt::Debug for ag_router::OutputValidationError
+pub fn ag_router::OutputValidationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::OutputValidationError
+impl core::marker::Forget for ag_router::OutputValidationError
+impl core::marker::Freeze for ag_router::OutputValidationError
+impl core::marker::Move for ag_router::OutputValidationError
+impl core::marker::Send for ag_router::OutputValidationError
+impl core::marker::Sync for ag_router::OutputValidationError
+impl core::marker::Unpin for ag_router::OutputValidationError
+impl core::marker::UnsafeUnpin for ag_router::OutputValidationError
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::OutputValidationError
+impl core::panic::unwind_safe::UnwindSafe for ag_router::OutputValidationError
+pub enum ag_router::ReasoningEffort
+pub ag_router::ReasoningEffort::High
+pub ag_router::ReasoningEffort::Low
+pub ag_router::ReasoningEffort::Max
+pub ag_router::ReasoningEffort::Medium
+pub ag_router::ReasoningEffort::XHigh
+impl ag_router::ReasoningEffort
+pub const fn ag_router::ReasoningEffort::as_str(self) -> &'static str
+impl core::clone::Clone for ag_router::ReasoningEffort
+pub fn ag_router::ReasoningEffort::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ReasoningEffort
+impl core::cmp::PartialEq for ag_router::ReasoningEffort
+pub fn ag_router::ReasoningEffort::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ReasoningEffort
+pub fn ag_router::ReasoningEffort::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::ReasoningEffort
+impl core::marker::StructuralPartialEq for ag_router::ReasoningEffort
+impl core::marker::Forget for ag_router::ReasoningEffort
+impl core::marker::Freeze for ag_router::ReasoningEffort
+impl core::marker::Move for ag_router::ReasoningEffort
+impl core::marker::Send for ag_router::ReasoningEffort
+impl core::marker::Sync for ag_router::ReasoningEffort
+impl core::marker::Unpin for ag_router::ReasoningEffort
+impl core::marker::UnsafeUnpin for ag_router::ReasoningEffort
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ReasoningEffort
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ReasoningEffort
+#[non_exhaustive] pub enum ag_router::ReasoningMapping
+pub ag_router::ReasoningMapping::Effort(ag_router::EffortNames)
+pub ag_router::ReasoningMapping::EnableThinking
+pub ag_router::ReasoningMapping::None
+pub ag_router::ReasoningMapping::Thinking(ag_router::ThinkingOptions)
+impl core::clone::Clone for ag_router::ReasoningMapping
+pub fn ag_router::ReasoningMapping::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ReasoningMapping
+impl core::cmp::PartialEq for ag_router::ReasoningMapping
+pub fn ag_router::ReasoningMapping::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ReasoningMapping
+pub fn ag_router::ReasoningMapping::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ReasoningMapping
+impl core::marker::Forget for ag_router::ReasoningMapping
+impl core::marker::Freeze for ag_router::ReasoningMapping
+impl core::marker::Move for ag_router::ReasoningMapping
+impl core::marker::Send for ag_router::ReasoningMapping
+impl core::marker::Sync for ag_router::ReasoningMapping
+impl core::marker::Unpin for ag_router::ReasoningMapping
+impl core::marker::UnsafeUnpin for ag_router::ReasoningMapping
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ReasoningMapping
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ReasoningMapping
+pub enum ag_router::ReasoningView<'a>
+pub ag_router::ReasoningView::Opaque
+pub ag_router::ReasoningView::Summary(alloc::string::String)
+pub ag_router::ReasoningView::Text(&'a str)
+impl<'a> core::clone::Clone for ag_router::ReasoningView<'a>
+pub fn ag_router::ReasoningView<'a>::clone(&self) -> Self
+impl<'a> core::cmp::Eq for ag_router::ReasoningView<'a>
+impl<'a> core::cmp::PartialEq for ag_router::ReasoningView<'a>
+pub fn ag_router::ReasoningView<'a>::eq(&self, &Self) -> bool
+impl<'a> core::fmt::Debug for ag_router::ReasoningView<'a>
+pub fn ag_router::ReasoningView<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::StructuralPartialEq for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Forget for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Freeze for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Move for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Send for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Sync for ag_router::ReasoningView<'a>
+impl<'a> core::marker::Unpin for ag_router::ReasoningView<'a>
+impl<'a> core::marker::UnsafeUnpin for ag_router::ReasoningView<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for ag_router::ReasoningView<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for ag_router::ReasoningView<'a>
+#[non_exhaustive] pub enum ag_router::ResponseDelta
+pub ag_router::ResponseDelta::Reasoning(alloc::string::String)
+pub ag_router::ResponseDelta::Text(alloc::string::String)
+pub ag_router::ResponseDelta::ToolArguments
+pub ag_router::ResponseDelta::ToolArguments::arguments: alloc::string::String
+pub ag_router::ResponseDelta::ToolArguments::index: usize
+impl core::clone::Clone for ag_router::ResponseDelta
+pub fn ag_router::ResponseDelta::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ResponseDelta
+impl core::cmp::PartialEq for ag_router::ResponseDelta
+pub fn ag_router::ResponseDelta::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ResponseDelta
+pub fn ag_router::ResponseDelta::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ResponseDelta
+impl core::marker::Forget for ag_router::ResponseDelta
+impl core::marker::Freeze for ag_router::ResponseDelta
+impl core::marker::Move for ag_router::ResponseDelta
+impl core::marker::Send for ag_router::ResponseDelta
+impl core::marker::Sync for ag_router::ResponseDelta
+impl core::marker::Unpin for ag_router::ResponseDelta
+impl core::marker::UnsafeUnpin for ag_router::ResponseDelta
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ResponseDelta
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ResponseDelta
+#[non_exhaustive] pub enum ag_router::RetryKind
+pub ag_router::RetryKind::Connection
+pub ag_router::RetryKind::Overloaded
+pub ag_router::RetryKind::RateLimited
+pub ag_router::RetryKind::ServerError
+impl core::clone::Clone for ag_router::RetryKind
+pub fn ag_router::RetryKind::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::RetryKind
+impl core::cmp::PartialEq for ag_router::RetryKind
+pub fn ag_router::RetryKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::RetryKind
+pub fn ag_router::RetryKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ag_router::RetryKind
+pub fn ag_router::RetryKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ag_router::RetryKind
+impl core::marker::StructuralPartialEq for ag_router::RetryKind
+impl core::marker::Forget for ag_router::RetryKind
+impl core::marker::Freeze for ag_router::RetryKind
+impl core::marker::Move for ag_router::RetryKind
+impl core::marker::Send for ag_router::RetryKind
+impl core::marker::Sync for ag_router::RetryKind
+impl core::marker::Unpin for ag_router::RetryKind
+impl core::marker::UnsafeUnpin for ag_router::RetryKind
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::RetryKind
+impl core::panic::unwind_safe::UnwindSafe for ag_router::RetryKind
+#[non_exhaustive] pub enum ag_router::StructuredOutputMode
+pub ag_router::StructuredOutputMode::ForcedTool
+pub ag_router::StructuredOutputMode::JsonObject
+pub ag_router::StructuredOutputMode::JsonSchema
+pub ag_router::StructuredOutputMode::SchemaPrompt
+impl core::clone::Clone for ag_router::StructuredOutputMode
+pub fn ag_router::StructuredOutputMode::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::StructuredOutputMode
+impl core::cmp::PartialEq for ag_router::StructuredOutputMode
+pub fn ag_router::StructuredOutputMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::StructuredOutputMode
+pub fn ag_router::StructuredOutputMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::StructuredOutputMode
+impl core::marker::StructuralPartialEq for ag_router::StructuredOutputMode
+impl core::marker::Forget for ag_router::StructuredOutputMode
+impl core::marker::Freeze for ag_router::StructuredOutputMode
+impl core::marker::Move for ag_router::StructuredOutputMode
+impl core::marker::Send for ag_router::StructuredOutputMode
+impl core::marker::Sync for ag_router::StructuredOutputMode
+impl core::marker::Unpin for ag_router::StructuredOutputMode
+impl core::marker::UnsafeUnpin for ag_router::StructuredOutputMode
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::StructuredOutputMode
+impl core::panic::unwind_safe::UnwindSafe for ag_router::StructuredOutputMode
+#[non_exhaustive] pub enum ag_router::Task
+pub ag_router::Task::Chat(ag_router::ChatRequest)
+impl core::clone::Clone for ag_router::Task
+pub fn ag_router::Task::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::Task
+impl core::cmp::PartialEq for ag_router::Task
+pub fn ag_router::Task::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::Task
+pub fn ag_router::Task::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::Task
+impl core::marker::Forget for ag_router::Task
+impl core::marker::Freeze for ag_router::Task
+impl core::marker::Move for ag_router::Task
+impl core::marker::Send for ag_router::Task
+impl core::marker::Sync for ag_router::Task
+impl core::marker::Unpin for ag_router::Task
+impl core::marker::UnsafeUnpin for ag_router::Task
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::Task
+impl core::panic::unwind_safe::UnwindSafe for ag_router::Task
+#[non_exhaustive] pub enum ag_router::WireProtocol
+pub ag_router::WireProtocol::AnthropicMessages
+pub ag_router::WireProtocol::ChatCompletions
+pub ag_router::WireProtocol::Responses
+impl core::clone::Clone for ag_router::WireProtocol
+pub fn ag_router::WireProtocol::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::WireProtocol
+impl core::cmp::PartialEq for ag_router::WireProtocol
+pub fn ag_router::WireProtocol::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::WireProtocol
+pub fn ag_router::WireProtocol::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::WireProtocol
+impl core::marker::StructuralPartialEq for ag_router::WireProtocol
+impl core::marker::Forget for ag_router::WireProtocol
+impl core::marker::Freeze for ag_router::WireProtocol
+impl core::marker::Move for ag_router::WireProtocol
+impl core::marker::Send for ag_router::WireProtocol
+impl core::marker::Sync for ag_router::WireProtocol
+impl core::marker::Unpin for ag_router::WireProtocol
+impl core::marker::UnsafeUnpin for ag_router::WireProtocol
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::WireProtocol
+impl core::panic::unwind_safe::UnwindSafe for ag_router::WireProtocol
+pub struct ag_router::ChatRequest
+pub ag_router::ChatRequest::messages: alloc::vec::Vec<ag_router::ModelMessage>
+pub ag_router::ChatRequest::tools: alloc::vec::Vec<ag_router::ToolDefinition>
+impl core::clone::Clone for ag_router::ChatRequest
+pub fn ag_router::ChatRequest::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ChatRequest
+impl core::cmp::PartialEq for ag_router::ChatRequest
+pub fn ag_router::ChatRequest::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ChatRequest
+pub fn ag_router::ChatRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ChatRequest
+impl core::marker::Forget for ag_router::ChatRequest
+impl core::marker::Freeze for ag_router::ChatRequest
+impl core::marker::Move for ag_router::ChatRequest
+impl core::marker::Send for ag_router::ChatRequest
+impl core::marker::Sync for ag_router::ChatRequest
+impl core::marker::Unpin for ag_router::ChatRequest
+impl core::marker::UnsafeUnpin for ag_router::ChatRequest
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ChatRequest
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ChatRequest
+pub struct ag_router::CompletionMetadata
+impl ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::finish_reason(&self) -> &str
+pub fn ag_router::CompletionMetadata::new(alloc::string::String, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, core::option::Option<ag_router::CompletionUsage>) -> Self
+pub fn ag_router::CompletionMetadata::response_id(&self) -> core::option::Option<&str>
+pub fn ag_router::CompletionMetadata::response_model(&self) -> core::option::Option<&str>
+pub fn ag_router::CompletionMetadata::system_fingerprint(&self) -> core::option::Option<&str>
+pub fn ag_router::CompletionMetadata::usage(&self) -> core::option::Option<&ag_router::CompletionUsage>
+impl core::clone::Clone for ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::CompletionMetadata
+impl core::cmp::PartialEq for ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::CompletionMetadata
+impl serde_core::ser::Serialize for ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ag_router::CompletionMetadata
+pub fn ag_router::CompletionMetadata::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Forget for ag_router::CompletionMetadata
+impl core::marker::Freeze for ag_router::CompletionMetadata
+impl core::marker::Move for ag_router::CompletionMetadata
+impl core::marker::Send for ag_router::CompletionMetadata
+impl core::marker::Sync for ag_router::CompletionMetadata
+impl core::marker::Unpin for ag_router::CompletionMetadata
+impl core::marker::UnsafeUnpin for ag_router::CompletionMetadata
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::CompletionMetadata
+impl core::panic::unwind_safe::UnwindSafe for ag_router::CompletionMetadata
+pub struct ag_router::CompletionUsage
+impl ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::cache_hit_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::cache_miss_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::cache_write_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::input_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::new(core::option::Option<u64>, core::option::Option<u64>, core::option::Option<u64>, core::option::Option<u64>, core::option::Option<u64>, core::option::Option<u64>) -> Self
+pub fn ag_router::CompletionUsage::output_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::reasoning_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::total_tokens(self) -> core::option::Option<u64>
+pub fn ag_router::CompletionUsage::with_cache_write_tokens(self, core::option::Option<u64>) -> Self
+impl core::clone::Clone for ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::CompletionUsage
+impl core::cmp::PartialEq for ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::CompletionUsage
+impl core::marker::StructuralPartialEq for ag_router::CompletionUsage
+impl serde_core::ser::Serialize for ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ag_router::CompletionUsage
+pub fn ag_router::CompletionUsage::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Forget for ag_router::CompletionUsage
+impl core::marker::Freeze for ag_router::CompletionUsage
+impl core::marker::Move for ag_router::CompletionUsage
+impl core::marker::Send for ag_router::CompletionUsage
+impl core::marker::Sync for ag_router::CompletionUsage
+impl core::marker::Unpin for ag_router::CompletionUsage
+impl core::marker::UnsafeUnpin for ag_router::CompletionUsage
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::CompletionUsage
+impl core::panic::unwind_safe::UnwindSafe for ag_router::CompletionUsage
+pub struct ag_router::EffortNames
+impl ag_router::EffortNames
+pub fn ag_router::EffortNames::with(self, ag_router::ReasoningEffort, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for ag_router::EffortNames
+pub fn ag_router::EffortNames::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::EffortNames
+impl core::cmp::PartialEq for ag_router::EffortNames
+pub fn ag_router::EffortNames::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::EffortNames
+pub fn ag_router::EffortNames::default() -> Self
+impl core::fmt::Debug for ag_router::EffortNames
+pub fn ag_router::EffortNames::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::EffortNames
+impl core::marker::Forget for ag_router::EffortNames
+impl core::marker::Freeze for ag_router::EffortNames
+impl core::marker::Move for ag_router::EffortNames
+impl core::marker::Send for ag_router::EffortNames
+impl core::marker::Sync for ag_router::EffortNames
+impl core::marker::Unpin for ag_router::EffortNames
+impl core::marker::UnsafeUnpin for ag_router::EffortNames
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::EffortNames
+impl core::panic::unwind_safe::UnwindSafe for ag_router::EffortNames
+pub struct ag_router::GenerationOptions
+pub ag_router::GenerationOptions::max_output_tokens: core::option::Option<core::num::nonzero::NonZeroU32>
+pub ag_router::GenerationOptions::prefix_schema: core::option::Option<ag_router::OutputSchema>
+pub ag_router::GenerationOptions::prompt_cache_key: core::option::Option<alloc::string::String>
+pub ag_router::GenerationOptions::reasoning_effort: core::option::Option<ag_router::ReasoningEffort>
+impl core::clone::Clone for ag_router::GenerationOptions
+pub fn ag_router::GenerationOptions::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::GenerationOptions
+impl core::cmp::PartialEq for ag_router::GenerationOptions
+pub fn ag_router::GenerationOptions::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::GenerationOptions
+pub fn ag_router::GenerationOptions::default() -> Self
+impl core::fmt::Debug for ag_router::GenerationOptions
+pub fn ag_router::GenerationOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::GenerationOptions
+impl core::marker::Forget for ag_router::GenerationOptions
+impl core::marker::Freeze for ag_router::GenerationOptions
+impl core::marker::Move for ag_router::GenerationOptions
+impl core::marker::Send for ag_router::GenerationOptions
+impl core::marker::Sync for ag_router::GenerationOptions
+impl core::marker::Unpin for ag_router::GenerationOptions
+impl core::marker::UnsafeUnpin for ag_router::GenerationOptions
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::GenerationOptions
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::GenerationOptions
+pub struct ag_router::ImageContent
+impl ag_router::ImageContent
+pub const ag_router::ImageContent::MAX_BYTES: usize
+pub fn ag_router::ImageContent::bytes(&self) -> &[u8]
+pub fn ag_router::ImageContent::from_shared(ag_router::ImageMediaType, alloc::rcs::arc::Arc<[u8]>) -> core::result::Result<Self, ag_router::InputError>
+pub fn ag_router::ImageContent::new(ag_router::ImageMediaType, alloc::vec::Vec<u8>) -> core::result::Result<Self, ag_router::InputError>
+impl core::clone::Clone for ag_router::ImageContent
+pub fn ag_router::ImageContent::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ImageContent
+impl core::cmp::PartialEq for ag_router::ImageContent
+pub fn ag_router::ImageContent::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ImageContent
+pub fn ag_router::ImageContent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ImageContent
+impl core::marker::Forget for ag_router::ImageContent
+impl core::marker::Freeze for ag_router::ImageContent
+impl core::marker::Move for ag_router::ImageContent
+impl core::marker::Send for ag_router::ImageContent
+impl core::marker::Sync for ag_router::ImageContent
+impl core::marker::Unpin for ag_router::ImageContent
+impl core::marker::UnsafeUnpin for ag_router::ImageContent
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ImageContent
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ImageContent
+pub struct ag_router::JsonSchemaFormat
+impl ag_router::JsonSchemaFormat
+pub fn ag_router::JsonSchemaFormat::name(&self) -> &str
+pub fn ag_router::JsonSchemaFormat::new(impl core::convert::Into<alloc::string::String>, ag_router::OutputSchema) -> core::result::Result<Self, ag_router::ModelError>
+pub fn ag_router::JsonSchemaFormat::schema(&self) -> &ag_router::OutputSchema
+impl core::clone::Clone for ag_router::JsonSchemaFormat
+pub fn ag_router::JsonSchemaFormat::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::JsonSchemaFormat
+impl core::cmp::PartialEq for ag_router::JsonSchemaFormat
+pub fn ag_router::JsonSchemaFormat::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::JsonSchemaFormat
+pub fn ag_router::JsonSchemaFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::JsonSchemaFormat
+impl core::marker::Forget for ag_router::JsonSchemaFormat
+impl core::marker::Freeze for ag_router::JsonSchemaFormat
+impl core::marker::Move for ag_router::JsonSchemaFormat
+impl core::marker::Send for ag_router::JsonSchemaFormat
+impl core::marker::Sync for ag_router::JsonSchemaFormat
+impl core::marker::Unpin for ag_router::JsonSchemaFormat
+impl core::marker::UnsafeUnpin for ag_router::JsonSchemaFormat
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::JsonSchemaFormat
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::JsonSchemaFormat
+pub struct ag_router::LocalInventory
+pub ag_router::LocalInventory::kind: ag_router::LocalServerKind
+pub ag_router::LocalInventory::models: alloc::vec::Vec<ag_router::LocalModel>
+impl core::clone::Clone for ag_router::LocalInventory
+pub fn ag_router::LocalInventory::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::LocalInventory
+impl core::cmp::PartialEq for ag_router::LocalInventory
+pub fn ag_router::LocalInventory::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::LocalInventory
+pub fn ag_router::LocalInventory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::LocalInventory
+impl core::marker::Forget for ag_router::LocalInventory
+impl core::marker::Freeze for ag_router::LocalInventory
+impl core::marker::Move for ag_router::LocalInventory
+impl core::marker::Send for ag_router::LocalInventory
+impl core::marker::Sync for ag_router::LocalInventory
+impl core::marker::Unpin for ag_router::LocalInventory
+impl core::marker::UnsafeUnpin for ag_router::LocalInventory
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::LocalInventory
+impl core::panic::unwind_safe::UnwindSafe for ag_router::LocalInventory
+pub struct ag_router::LocalModel
+pub ag_router::LocalModel::context_window: core::option::Option<u64>
+pub ag_router::LocalModel::id: alloc::string::String
+pub ag_router::LocalModel::loaded_context_window: core::option::Option<u64>
+pub ag_router::LocalModel::supports_tools: core::option::Option<bool>
+impl core::clone::Clone for ag_router::LocalModel
+pub fn ag_router::LocalModel::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::LocalModel
+impl core::cmp::PartialEq for ag_router::LocalModel
+pub fn ag_router::LocalModel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::LocalModel
+pub fn ag_router::LocalModel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::LocalModel
+impl core::marker::Forget for ag_router::LocalModel
+impl core::marker::Freeze for ag_router::LocalModel
+impl core::marker::Move for ag_router::LocalModel
+impl core::marker::Send for ag_router::LocalModel
+impl core::marker::Sync for ag_router::LocalModel
+impl core::marker::Unpin for ag_router::LocalModel
+impl core::marker::UnsafeUnpin for ag_router::LocalModel
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::LocalModel
+impl core::panic::unwind_safe::UnwindSafe for ag_router::LocalModel
+pub struct ag_router::LocalServer
+impl ag_router::LocalServer
+pub async fn ag_router::LocalServer::inventory(&self) -> core::result::Result<ag_router::LocalInventory, ag_router::LocalServerError>
+pub fn ag_router::LocalServer::new(impl core::convert::Into<alloc::string::String>, core::option::Option<alloc::string::String>) -> Self
+pub async fn ag_router::LocalServer::running_context_window(&self, &str) -> core::result::Result<core::option::Option<u64>, ag_router::LocalServerError>
+impl core::marker::Forget for ag_router::LocalServer
+impl core::marker::Freeze for ag_router::LocalServer
+impl core::marker::Move for ag_router::LocalServer
+impl core::marker::Send for ag_router::LocalServer
+impl core::marker::Sync for ag_router::LocalServer
+impl core::marker::Unpin for ag_router::LocalServer
+impl core::marker::UnsafeUnpin for ag_router::LocalServer
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::LocalServer
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::LocalServer
+pub struct ag_router::ModelRequest
+pub ag_router::ModelRequest::model: alloc::string::String
+pub ag_router::ModelRequest::options: ag_router::GenerationOptions
+pub ag_router::ModelRequest::response_format: core::option::Option<ag_router::JsonSchemaFormat>
+pub ag_router::ModelRequest::task: ag_router::Task
+impl ag_router::ModelRequest
+pub fn ag_router::ModelRequest::chat(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<ag_router::ModelMessage>, alloc::vec::Vec<ag_router::ToolDefinition>, ag_router::JsonSchemaFormat) -> Self
+pub fn ag_router::ModelRequest::messages(&self) -> &[ag_router::ModelMessage]
+pub fn ag_router::ModelRequest::model_reasoning_effort(&self) -> core::option::Option<ag_router::ReasoningEffort>
+pub fn ag_router::ModelRequest::schema(&self) -> core::option::Option<&ag_router::OutputSchema>
+pub fn ag_router::ModelRequest::text_chat(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<ag_router::ModelMessage>, alloc::vec::Vec<ag_router::ToolDefinition>) -> Self
+pub fn ag_router::ModelRequest::tools(&self) -> &[ag_router::ToolDefinition]
+impl core::clone::Clone for ag_router::ModelRequest
+pub fn ag_router::ModelRequest::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ModelRequest
+impl core::cmp::PartialEq for ag_router::ModelRequest
+pub fn ag_router::ModelRequest::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ModelRequest
+pub fn ag_router::ModelRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ModelRequest
+impl core::marker::Forget for ag_router::ModelRequest
+impl core::marker::Freeze for ag_router::ModelRequest
+impl core::marker::Move for ag_router::ModelRequest
+impl core::marker::Send for ag_router::ModelRequest
+impl core::marker::Sync for ag_router::ModelRequest
+impl core::marker::Unpin for ag_router::ModelRequest
+impl core::marker::UnsafeUnpin for ag_router::ModelRequest
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::ModelRequest
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::ModelRequest
+pub struct ag_router::OutputSchema
+impl ag_router::OutputSchema
+pub fn ag_router::OutputSchema::has_object_root(&self) -> bool
+pub fn ag_router::OutputSchema::new(serde_json::value::Value) -> core::result::Result<Self, ag_router::OutputSchemaError>
+pub fn ag_router::OutputSchema::parse_and_validate(&self, &str) -> core::result::Result<serde_json::value::Value, ag_router::OutputValidationError>
+pub fn ag_router::OutputSchema::validate_value(&self, &serde_json::value::Value) -> core::result::Result<(), ag_router::OutputValidationError>
+pub fn ag_router::OutputSchema::value(&self) -> &serde_json::value::Value
+impl core::clone::Clone for ag_router::OutputSchema
+pub fn ag_router::OutputSchema::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::OutputSchema
+impl core::cmp::PartialEq for ag_router::OutputSchema
+pub fn ag_router::OutputSchema::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::OutputSchema
+pub fn ag_router::OutputSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::OutputSchema
+impl core::marker::Freeze for ag_router::OutputSchema
+impl core::marker::Move for ag_router::OutputSchema
+impl core::marker::Send for ag_router::OutputSchema
+impl core::marker::Sync for ag_router::OutputSchema
+impl core::marker::Unpin for ag_router::OutputSchema
+impl core::marker::UnsafeUnpin for ag_router::OutputSchema
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::OutputSchema
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::OutputSchema
+pub struct ag_router::ProviderSpec
+impl ag_router::ProviderSpec
+pub fn ag_router::ProviderSpec::for_model(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::id(&self) -> &str
+pub fn ag_router::ProviderSpec::model(&self) -> core::option::Option<&str>
+pub fn ag_router::ProviderSpec::new(impl core::convert::Into<alloc::string::String>, ag_router::WireProtocol, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::validate(&self) -> core::result::Result<(), ag_router::ModelError>
+pub fn ag_router::ProviderSpec::with_auth(self, ag_router::Auth) -> Self
+pub fn ag_router::ProviderSpec::with_cache_breakpoints(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_display_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::with_fallback_max_tokens(self, core::num::nonzero::NonZeroU32) -> Self
+pub fn ag_router::ProviderSpec::with_header(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::with_image_input(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_instruction_placement(self, ag_router::InstructionPlacement) -> Self
+pub fn ag_router::ProviderSpec::with_max_tokens_field(self, core::option::Option<ag_router::MaxTokensField>) -> Self
+pub fn ag_router::ProviderSpec::with_overflow_marker(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::with_prompt_cache_key(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_query(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ag_router::ProviderSpec::with_reasoning(self, ag_router::ReasoningMapping) -> Self
+pub fn ag_router::ProviderSpec::with_reasoning_text_replay(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_response_format_with_tools(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_retry(self, ag_router::RetryPolicy) -> Self
+pub fn ag_router::ProviderSpec::with_stream_usage(self, bool) -> Self
+pub fn ag_router::ProviderSpec::with_structured_output(self, ag_router::StructuredOutputMode) -> Self
+pub fn ag_router::ProviderSpec::with_tool_result_name(self, bool) -> Self
+impl core::clone::Clone for ag_router::ProviderSpec
+pub fn ag_router::ProviderSpec::clone(&self) -> Self
+impl core::fmt::Debug for ag_router::ProviderSpec
+pub fn ag_router::ProviderSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Forget for ag_router::ProviderSpec
+impl core::marker::Freeze for ag_router::ProviderSpec
+impl core::marker::Move for ag_router::ProviderSpec
+impl core::marker::Send for ag_router::ProviderSpec
+impl core::marker::Sync for ag_router::ProviderSpec
+impl core::marker::Unpin for ag_router::ProviderSpec
+impl core::marker::UnsafeUnpin for ag_router::ProviderSpec
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::ProviderSpec
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::ProviderSpec
+#[non_exhaustive] pub struct ag_router::RetryNotice
+pub ag_router::RetryNotice::after: core::time::Duration
+pub ag_router::RetryNotice::attempt: u32
+pub ag_router::RetryNotice::kind: ag_router::RetryKind
+pub ag_router::RetryNotice::status: core::option::Option<u16>
+impl core::clone::Clone for ag_router::RetryNotice
+pub fn ag_router::RetryNotice::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::RetryNotice
+impl core::cmp::PartialEq for ag_router::RetryNotice
+pub fn ag_router::RetryNotice::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::RetryNotice
+pub fn ag_router::RetryNotice::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::RetryNotice
+impl core::marker::StructuralPartialEq for ag_router::RetryNotice
+impl core::marker::Forget for ag_router::RetryNotice
+impl core::marker::Freeze for ag_router::RetryNotice
+impl core::marker::Move for ag_router::RetryNotice
+impl core::marker::Send for ag_router::RetryNotice
+impl core::marker::Sync for ag_router::RetryNotice
+impl core::marker::Unpin for ag_router::RetryNotice
+impl core::marker::UnsafeUnpin for ag_router::RetryNotice
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::RetryNotice
+impl core::panic::unwind_safe::UnwindSafe for ag_router::RetryNotice
+#[non_exhaustive] pub struct ag_router::RetryPolicy
+impl ag_router::RetryPolicy
+pub fn ag_router::RetryPolicy::none() -> Self
+pub fn ag_router::RetryPolicy::with_base_delay(self, core::time::Duration) -> Self
+pub fn ag_router::RetryPolicy::with_jitter(self, ag_router::Jitter) -> Self
+pub fn ag_router::RetryPolicy::with_max_attempts(self, u32) -> Self
+pub fn ag_router::RetryPolicy::with_max_backoff(self, core::time::Duration) -> Self
+pub fn ag_router::RetryPolicy::with_max_connection_retries(self, u32) -> Self
+pub fn ag_router::RetryPolicy::with_max_retry_after(self, core::time::Duration) -> Self
+pub fn ag_router::RetryPolicy::with_retried(self, ag_router::RetryKind, bool) -> Self
+impl core::clone::Clone for ag_router::RetryPolicy
+pub fn ag_router::RetryPolicy::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::RetryPolicy
+impl core::cmp::PartialEq for ag_router::RetryPolicy
+pub fn ag_router::RetryPolicy::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::RetryPolicy
+pub fn ag_router::RetryPolicy::default() -> Self
+impl core::fmt::Debug for ag_router::RetryPolicy
+pub fn ag_router::RetryPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::RetryPolicy
+impl core::marker::StructuralPartialEq for ag_router::RetryPolicy
+impl core::marker::Forget for ag_router::RetryPolicy
+impl core::marker::Freeze for ag_router::RetryPolicy
+impl core::marker::Move for ag_router::RetryPolicy
+impl core::marker::Send for ag_router::RetryPolicy
+impl core::marker::Sync for ag_router::RetryPolicy
+impl core::marker::Unpin for ag_router::RetryPolicy
+impl core::marker::UnsafeUnpin for ag_router::RetryPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::RetryPolicy
+impl core::panic::unwind_safe::UnwindSafe for ag_router::RetryPolicy
+pub struct ag_router::Router
+impl ag_router::Router
+pub async fn ag_router::Router::execute(&self, ag_router::ModelRequest) -> core::result::Result<ag_router::Completion, ag_router::ModelError>
+pub async fn ag_router::Router::execute_observed(&self, ag_router::ModelRequest, alloc::rcs::arc::Arc<dyn ag_router::RetryObserver>) -> core::result::Result<ag_router::Completion, ag_router::ModelError>
+pub async fn ag_router::Router::execute_streamed(&self, ag_router::ModelRequest, alloc::rcs::arc::Arc<dyn ag_router::DeltaObserver>, core::option::Option<alloc::rcs::arc::Arc<dyn ag_router::RetryObserver>>) -> core::result::Result<ag_router::Completion, ag_router::ModelError>
+pub fn ag_router::Router::keeps_prefix_across_schemas(&self, &str) -> core::result::Result<bool, ag_router::ModelError>
+pub fn ag_router::Router::new(impl core::iter::traits::collect::IntoIterator<Item = ag_router::ProviderSpec>) -> Self
+pub fn ag_router::Router::replays_reasoning_text(&self, &str) -> core::result::Result<bool, ag_router::ModelError>
+pub fn ag_router::Router::replays_turn_instructions(&self, &str) -> core::result::Result<bool, ag_router::ModelError>
+pub fn ag_router::Router::validate_generation(&self, &str, &ag_router::GenerationOptions) -> core::result::Result<(), ag_router::ModelError>
+pub fn ag_router::Router::validate_input(&self, &str, &ag_router::TurnInput) -> core::result::Result<(), ag_router::ModelError>
+pub fn ag_router::Router::validate_schema(&self, &str, &ag_router::OutputSchema) -> core::result::Result<(), ag_router::ModelError>
+pub fn ag_router::Router::with_override(self, ag_router::ProviderSpec) -> Self
+impl core::marker::Forget for ag_router::Router
+impl core::marker::Freeze for ag_router::Router
+impl core::marker::Move for ag_router::Router
+impl core::marker::Send for ag_router::Router
+impl core::marker::Sync for ag_router::Router
+impl core::marker::Unpin for ag_router::Router
+impl core::marker::UnsafeUnpin for ag_router::Router
+impl !core::panic::unwind_safe::RefUnwindSafe for ag_router::Router
+impl !core::panic::unwind_safe::UnwindSafe for ag_router::Router
+pub struct ag_router::ThinkingOptions
+impl ag_router::ThinkingOptions
+pub fn ag_router::ThinkingOptions::with_disable_supported(self, bool) -> Self
+pub fn ag_router::ThinkingOptions::with_preserve_reasoning(self, bool) -> Self
+impl core::clone::Clone for ag_router::ThinkingOptions
+pub fn ag_router::ThinkingOptions::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ThinkingOptions
+impl core::cmp::PartialEq for ag_router::ThinkingOptions
+pub fn ag_router::ThinkingOptions::eq(&self, &Self) -> bool
+impl core::default::Default for ag_router::ThinkingOptions
+pub fn ag_router::ThinkingOptions::default() -> Self
+impl core::fmt::Debug for ag_router::ThinkingOptions
+pub fn ag_router::ThinkingOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ag_router::ThinkingOptions
+impl core::marker::StructuralPartialEq for ag_router::ThinkingOptions
+impl core::marker::Forget for ag_router::ThinkingOptions
+impl core::marker::Freeze for ag_router::ThinkingOptions
+impl core::marker::Move for ag_router::ThinkingOptions
+impl core::marker::Send for ag_router::ThinkingOptions
+impl core::marker::Sync for ag_router::ThinkingOptions
+impl core::marker::Unpin for ag_router::ThinkingOptions
+impl core::marker::UnsafeUnpin for ag_router::ThinkingOptions
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ThinkingOptions
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ThinkingOptions
+pub struct ag_router::ToolCall
+impl ag_router::ToolCall
+pub fn ag_router::ToolCall::arguments(&self) -> core::option::Option<&serde_json::value::Value>
+pub fn ag_router::ToolCall::arguments_json(&self) -> alloc::string::String
+pub fn ag_router::ToolCall::assistant_text(&self) -> core::option::Option<&str>
+pub fn ag_router::ToolCall::from_json(alloc::string::String, &str, &str, core::option::Option<alloc::string::String>) -> core::result::Result<Self, ag_router::ModelError>
+pub fn ag_router::ToolCall::id(&self) -> &str
+pub fn ag_router::ToolCall::malformed_reason(&self) -> core::option::Option<&str>
+pub fn ag_router::ToolCall::name(&self) -> &str
+pub fn ag_router::ToolCall::reasoning_content(&self) -> core::option::Option<&str>
+pub fn ag_router::ToolCall::with_assistant_text(self, core::option::Option<alloc::string::String>) -> core::result::Result<Self, ag_router::ModelError>
+impl core::clone::Clone for ag_router::ToolCall
+pub fn ag_router::ToolCall::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ToolCall
+impl core::cmp::PartialEq for ag_router::ToolCall
+pub fn ag_router::ToolCall::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ToolCall
+pub fn ag_router::ToolCall::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ToolCall
+impl core::marker::Forget for ag_router::ToolCall
+impl core::marker::Freeze for ag_router::ToolCall
+impl core::marker::Move for ag_router::ToolCall
+impl core::marker::Send for ag_router::ToolCall
+impl core::marker::Sync for ag_router::ToolCall
+impl core::marker::Unpin for ag_router::ToolCall
+impl core::marker::UnsafeUnpin for ag_router::ToolCall
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ToolCall
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ToolCall
+pub struct ag_router::ToolDefinition
+impl ag_router::ToolDefinition
+pub fn ag_router::ToolDefinition::description(&self) -> &str
+pub fn ag_router::ToolDefinition::name(&self) -> &str
+pub fn ag_router::ToolDefinition::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
+pub fn ag_router::ToolDefinition::parameters(&self) -> &serde_json::value::Value
+impl core::clone::Clone for ag_router::ToolDefinition
+pub fn ag_router::ToolDefinition::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::ToolDefinition
+impl core::cmp::PartialEq for ag_router::ToolDefinition
+pub fn ag_router::ToolDefinition::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::ToolDefinition
+pub fn ag_router::ToolDefinition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::ToolDefinition
+impl core::marker::Forget for ag_router::ToolDefinition
+impl core::marker::Freeze for ag_router::ToolDefinition
+impl core::marker::Move for ag_router::ToolDefinition
+impl core::marker::Send for ag_router::ToolDefinition
+impl core::marker::Sync for ag_router::ToolDefinition
+impl core::marker::Unpin for ag_router::ToolDefinition
+impl core::marker::UnsafeUnpin for ag_router::ToolDefinition
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::ToolDefinition
+impl core::panic::unwind_safe::UnwindSafe for ag_router::ToolDefinition
+pub struct ag_router::TurnInput
+impl ag_router::TurnInput
+pub const ag_router::TurnInput::MAX_ENCODED_BYTES: usize
+pub const ag_router::TurnInput::MAX_IMAGES: usize
+pub const ag_router::TurnInput::MAX_TOTAL_IMAGE_BYTES: usize
+pub fn ag_router::TurnInput::blocks(&self) -> &[ag_router::InputBlock]
+pub fn ag_router::TurnInput::has_images(&self) -> bool
+pub fn ag_router::TurnInput::new(alloc::vec::Vec<ag_router::InputBlock>) -> core::result::Result<Self, ag_router::InputError>
+impl core::clone::Clone for ag_router::TurnInput
+pub fn ag_router::TurnInput::clone(&self) -> Self
+impl core::cmp::Eq for ag_router::TurnInput
+impl core::cmp::PartialEq for ag_router::TurnInput
+pub fn ag_router::TurnInput::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_router::TurnInput
+pub fn ag_router::TurnInput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_router::TurnInput
+impl core::marker::Forget for ag_router::TurnInput
+impl core::marker::Freeze for ag_router::TurnInput
+impl core::marker::Move for ag_router::TurnInput
+impl core::marker::Send for ag_router::TurnInput
+impl core::marker::Sync for ag_router::TurnInput
+impl core::marker::Unpin for ag_router::TurnInput
+impl core::marker::UnsafeUnpin for ag_router::TurnInput
+impl core::panic::unwind_safe::RefUnwindSafe for ag_router::TurnInput
+impl core::panic::unwind_safe::UnwindSafe for ag_router::TurnInput
+pub const ag_router::RESPONSE_CONTENT_LIMIT_BYTES: usize
+pub trait ag_router::CredentialSource: core::marker::Send + core::marker::Sync
+pub fn ag_router::CredentialSource::bearer_token<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl ag_router::CredentialSource for ag_router::chatgpt::ChatGptAuth
+pub fn ag_router::chatgpt::ChatGptAuth::bearer_token<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait ag_router::DeltaObserver: core::marker::Send + core::marker::Sync
+pub fn ag_router::DeltaObserver::delta<'life0, 'async_trait>(&'life0 self, ag_router::ResponseDelta) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait ag_router::RetryObserver: core::marker::Send + core::marker::Sync
+pub fn ag_router::RetryObserver::retrying<'life0, 'async_trait>(&'life0 self, ag_router::RetryNotice) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn ag_router::bounded_diagnostic(impl core::fmt::Display) -> alloc::string::String
+pub fn ag_router::ensure_content_size(&str) -> core::result::Result<(), ag_router::OutputValidationError>
+pub fn ag_router::is_valid_function_name(&str) -> bool
+pub fn ag_router::reasoning_view(&str) -> ag_router::ReasoningView<'_>
+pub fn ag_router::replayable_function_name(&str) -> core::option::Option<alloc::string::String>

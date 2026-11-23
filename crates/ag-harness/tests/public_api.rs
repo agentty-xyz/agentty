@@ -1,26 +1,6 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 #[cfg(test)]
-#[path = "support/model_switch.rs"]
-mod model_switch_test;
-
-#[cfg(test)]
-#[path = "support/model_registry.rs"]
-mod model_registry_test;
-
-#[cfg(test)]
-#[path = "support/catalog_registration.rs"]
-mod catalog_registration_test;
-
-#[cfg(test)]
-#[path = "support/recovery.rs"]
-mod recovery_test;
-
-#[cfg(test)]
-#[path = "support/cancellation.rs"]
-mod cancellation;
-
-#[cfg(test)]
 #[path = "support/repository.rs"]
 mod repository_fixture;
 
@@ -31,22 +11,6 @@ mod context_budget_fixture;
 #[cfg(test)]
 #[path = "support/model_profile.rs"]
 mod model_profile_fixture;
-
-#[cfg(test)]
-#[path = "support/store_conformance.rs"]
-mod store_conformance_test;
-
-#[cfg(test)]
-#[path = "support/store_fixture.rs"]
-mod store_fixture;
-
-#[cfg(test)]
-#[path = "support/store_gate.rs"]
-mod store_gate;
-
-#[cfg(test)]
-#[path = "support/compaction.rs"]
-mod compaction_test;
 
 #[cfg(test)]
 #[cfg(feature = "sqlite")]
@@ -88,14 +52,6 @@ mod run_limits_test;
 #[cfg(feature = "sqlite")]
 #[path = "support/legacy_store.rs"]
 mod legacy_store_test;
-
-#[cfg(test)]
-#[path = "support/transcript.rs"]
-mod transcript_test;
-
-#[cfg(test)]
-#[path = "support/run_cost.rs"]
-mod run_cost_test;
 
 #[cfg(test)]
 #[path = "support/run_budget.rs"]
@@ -165,7 +121,7 @@ use ag_harness::{
     ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent, ImageMediaType, InputBlock,
     Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, OutputSchemaError, Repository,
     RepositoryError, Role, RunError, RunOutput, RunRequest, SessionError, ToolSet, TurnError,
-    TurnInput, TurnInputError, TurnOptions,
+    TurnInput, TurnInputError, TurnOptions, TurnRange,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -173,6 +129,27 @@ use tokio::io::AsyncRead;
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
+
+/// Returns one empty store of each public backend this build includes.
+#[cfg(test)]
+#[cfg(feature = "sqlite")]
+async fn public_stores() -> Vec<Arc<dyn SessionStore>> {
+    vec![
+        Arc::new(MemoryStore::new()),
+        Arc::new(
+            ag_harness::store::SqliteStore::open(Path::new(":memory:"))
+                .await
+                .expect("sqlite"),
+        ),
+    ]
+}
+
+/// Returns one empty store of each public backend this build includes.
+#[cfg(test)]
+#[cfg(not(feature = "sqlite"))]
+fn public_stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
+    std::future::ready(vec![Arc::new(MemoryStore::new())])
+}
 
 struct ExternalToolModel {
     batched: bool,
@@ -299,7 +276,7 @@ fn external_repository_configuration_rejects_relative_git_executable() -> Result
 async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<(), Box<dyn Error>>
 {
     for batched in [false, true] {
-        for store in store_fixture::stores().await {
+        for store in public_stores().await {
             // Arrange
             let requests = Arc::new(Mutex::new(Vec::new()));
             let model = ExternalToolModel {
@@ -789,15 +766,10 @@ async fn external_consumer_restricts_built_ins_with_a_tool_set_alone() -> Result
 }
 
 #[test]
-#[expect(
-    deprecated,
-    reason = "covers the deprecated policy mapping for external callers"
-)]
-fn external_consumer_deprecated_tool_policy_maps_onto_a_tool_set() {
+fn external_consumer_turn_options_offer_their_latest_tool_set() {
     // Arrange
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
     let read_only = ToolSet::empty().with_read();
-    let policy = ag_harness::ToolPolicy::default().allow(ag_harness::Tool::Read);
     let definition =
         ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"})).expect("tool");
     let host_only = ToolSet::builder()
@@ -807,26 +779,19 @@ fn external_consumer_deprecated_tool_policy_maps_onto_a_tool_set() {
 
     // Act
     let options = TurnOptions::from_output(schema.clone()).with_tools(read_only.clone());
-    let legacy = TurnOptions::new(schema.clone(), policy);
-    let legacy_hosted = TurnOptions::new(schema, policy).with_tools(host_only.clone());
+    let same = TurnOptions::from_output(schema.clone()).with_tools(ToolSet::empty().with_read());
+    let hosted = TurnOptions::from_output(schema)
+        .with_tools(read_only.clone())
+        .with_tools(host_only.clone());
 
     // Assert
-    assert_eq!(legacy.tools(), &read_only);
-    assert_eq!(legacy, options, "equal options offer the same tools");
-    assert_eq!(legacy.tool_policy(), policy);
-    assert_eq!(legacy.tool_policy(), options.tool_policy());
+    assert_eq!(options.tools(), &read_only);
+    assert_eq!(same, options, "equal options offer the same tools");
     assert_eq!(
-        legacy.with_tools(ToolSet::builtins()),
-        options.with_tools(ToolSet::builtins()),
-        "equal options stay interchangeable after a later set"
+        hosted.tools(),
+        &host_only,
+        "a later set replaces an earlier one"
     );
-    assert_eq!(legacy_hosted.tools(), &host_only);
-    assert_eq!(
-        legacy_hosted.tool_policy(),
-        ag_harness::ToolPolicy::default(),
-        "the getter reports the built-ins of the offered set"
-    );
-    assert_eq!(ag_harness::Tool::Read.name(), "read");
 }
 
 #[test]
@@ -2002,7 +1967,7 @@ async fn image_input_beyond_the_context_budget_is_rejected_before_acquisition()
     );
     assert_eq!(*calls.lock().expect("calls"), 2);
     assert_eq!(
-        store.load_session("budget").await?.turns.len(),
+        session.transcript(TurnRange::All).await?.len(),
         2,
         "rejected image input must not reserve or persist a turn"
     );
@@ -2055,7 +2020,7 @@ async fn image_input_beyond_the_history_budget_is_rejected_before_acquisition()
     );
     assert_eq!(*calls.lock().expect("calls"), 2);
     assert_eq!(
-        store.load_session("history").await?.turns.len(),
+        session.transcript(TurnRange::All).await?.len(),
         2,
         "rejected image input must not reserve or persist a turn"
     );
@@ -2114,9 +2079,8 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
         ephemeral,
         Err(TurnError::Model(ModelError::UnsupportedImageInput { .. }))
     ));
-    let store: Arc<dyn SessionStore> = Arc::new(store);
     assert!(
-        store.load_session("no-images").await?.turns.is_empty(),
+        session.transcript(TurnRange::All).await?.is_empty(),
         "rejected image input must not reserve or persist a turn"
     );
     let vision_registry = registry(true);
@@ -2177,9 +2141,8 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
         ),
         "a registration declaration must not bypass the model's own input check"
     );
-    let store: Arc<dyn SessionStore> = Arc::new(store);
     assert!(
-        store.load_session("unregistered").await?.turns.is_empty(),
+        session.transcript(TurnRange::All).await?.is_empty(),
         "rejected image input must not reserve or persist a turn"
     );
     session.send("text still works").await?;

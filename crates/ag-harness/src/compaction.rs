@@ -16,14 +16,12 @@ use crate::tool::ToolCall;
 /// Maximum serialized summary payload accepted by checkpoint construction.
 pub const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 
-const CHECKPOINT_VERSION: u64 = 1;
-
 /// Versioned compaction record covering a session's oldest finished turns.
 ///
 /// A checkpoint stores the covered-history boundary, the structured summary
 /// validated against the embedded checkpoint schema, and the model selection
-/// that generated it. Construction and decoding validate every field, so a
-/// stored checkpoint is always usable. Checkpoints replace covered turns in
+/// that generated it. Construction validates every field, so a stored
+/// checkpoint is always usable. Checkpoints replace covered turns in
 /// outgoing requests only; canonical messages, host requests, and journals
 /// remain intact.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,7 +40,7 @@ impl SessionCheckpoint {
     /// Returns [`CheckpointError`] for a negative boundary or generation, an
     /// unpaired provider/model identity, a summary violating the checkpoint
     /// schema, or a summary exceeding [`MAX_SUMMARY_BYTES`].
-    pub fn new(
+    pub(crate) fn new(
         covered_through: i64,
         model_generation: i64,
         provider: Option<String>,
@@ -98,58 +96,6 @@ impl SessionCheckpoint {
         &self.summary
     }
 
-    /// Serializes the versioned storage representation.
-    pub fn encode(&self) -> String {
-        json!({
-            "version": CHECKPOINT_VERSION,
-            "covered_through": self.covered_through,
-            "model_generation": self.model_generation,
-            "provider": self.provider,
-            "model": self.model,
-            "summary": self.summary,
-        })
-        .to_string()
-    }
-
-    /// Decodes and revalidates a stored representation.
-    ///
-    /// # Errors
-    /// Returns [`CheckpointError`] for malformed JSON, an unsupported version,
-    /// or any construction-time validation failure.
-    pub fn decode(payload: &str) -> Result<Self, CheckpointError> {
-        let stored: Value =
-            serde_json::from_str(payload).map_err(|_| CheckpointError::InvalidRecord {
-                reason: "checkpoint payload is not valid JSON",
-            })?;
-        if stored["version"] != CHECKPOINT_VERSION {
-            return Err(CheckpointError::InvalidRecord {
-                reason: "unsupported checkpoint version",
-            });
-        }
-        let boundary = |field: &str| {
-            stored[field]
-                .as_i64()
-                .ok_or(CheckpointError::InvalidRecord {
-                    reason: "checkpoint boundary and generation must be integers",
-                })
-        };
-        let identity = |field: &str| match &stored[field] {
-            Value::Null => Ok(None),
-            Value::String(value) => Ok(Some(value.clone())),
-            _ => Err(CheckpointError::InvalidRecord {
-                reason: "checkpoint provenance must be a string when present",
-            }),
-        };
-
-        Self::new(
-            boundary("covered_through")?,
-            boundary("model_generation")?,
-            identity("provider")?,
-            identity("model")?,
-            stored["summary"].clone(),
-        )
-    }
-
     /// Returns the historical message that replaces covered turns in one
     /// outgoing request. Summaries stay conversation data, never instructions.
     pub(crate) fn history_message(&self) -> ModelMessage {
@@ -167,7 +113,7 @@ impl SessionCheckpoint {
 /// Uncovered finished history the next compaction checkpoint may cover, as
 /// [`crate::store::SessionStore::load_compaction_source`] loads it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct CompactionSource {
+pub(crate) struct CompactionSource {
     /// Current checkpoint, whose boundary every turn follows.
     pub checkpoint: Option<SessionCheckpoint>,
     /// The oldest uncovered finished turns, oldest first, each with its turn

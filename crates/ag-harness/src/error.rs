@@ -504,7 +504,11 @@ impl Classification {
         let kind = match error {
             SessionError::Turn(turn) => return Self::turn(turn),
             #[cfg(feature = "sqlite")]
-            SessionError::QueryContext { source, .. } if is_store_contention(source) => {
+            SessionError::Store { source, .. }
+                if source
+                    .downcast_ref::<sqlx::Error>()
+                    .is_some_and(is_store_contention) =>
+            {
                 ErrorKind::Busy
             }
             SessionError::Busy { .. } | SessionError::HostTurnInProgress(_) => ErrorKind::Busy,
@@ -524,8 +528,6 @@ impl Classification {
             | SessionError::Io(_)
             | SessionError::InvalidData { .. }
             | SessionError::Schema(_) => ErrorKind::Store,
-            #[cfg(feature = "sqlite")]
-            SessionError::Migration(_) | SessionError::QueryContext { .. } => ErrorKind::Store,
             SessionError::UnsupportedModelHistory { .. }
             | SessionError::Registry(_)
             | SessionError::ModelSelection(_)

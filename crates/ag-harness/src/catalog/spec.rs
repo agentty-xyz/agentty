@@ -411,6 +411,7 @@ struct LongContextPricing {
 /// provider's list price per million output tokens; see
 /// [`Pricing::cost_tier`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
 pub enum CostTier {
     /// Served by a local or self-hosted server with no per-token charge.
     Local,

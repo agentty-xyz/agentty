@@ -101,6 +101,7 @@ impl Repository {
 
 /// Invalid host configuration for repository-scoped tools.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum RepositoryError {
     /// The configured repository root could not be resolved to a directory.
     #[error("failed to resolve repository root `{path}`: {source}")]

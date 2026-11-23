@@ -17,7 +17,7 @@ use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::SqliteStore;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation,
-    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    SessionStore, StoreBackend, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::{SettlementError, SettlementPhase};
@@ -195,7 +195,7 @@ impl Gate {
 }
 
 #[async_trait]
-impl SessionStore for Gate {
+impl StoreBackend for Gate {
     fn identity(&self) -> &StoreIdentity {
         self.store.identity()
     }

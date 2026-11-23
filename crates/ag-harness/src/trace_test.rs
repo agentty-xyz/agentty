@@ -39,7 +39,7 @@ use crate::recovery::HostTurnRecord;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
-use crate::store::{HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission};
+use crate::store::{HistoryProjection, ModelSwitch, Reservation, StoreBackend, TurnAdmission};
 use crate::telemetry;
 use crate::tool::{ReadArguments, ToolCall, ToolSet};
 use crate::turn::{TurnError, TurnOutcome};
@@ -1086,7 +1086,7 @@ struct TracedWriteStore {
 }
 
 #[async_trait]
-impl SessionStore for TracedWriteStore {
+impl StoreBackend for TracedWriteStore {
     fn identity(&self) -> &StoreIdentity {
         self.store.identity()
     }

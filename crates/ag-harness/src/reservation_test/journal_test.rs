@@ -4,10 +4,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::fixture::AcquiredTurnFixture as _;
 use crate::TurnInput;
 use crate::session::NewSession;
 use crate::sqlite_store::Database;
-use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, StoreBackend, WriteStatus};
 use crate::store_fixture::{options, schema};
 
 async fn create_session(database: &Database) {

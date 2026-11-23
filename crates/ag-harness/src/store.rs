@@ -2,8 +2,8 @@
 //!
 //! With the `sqlite` feature, [`SqliteStore`] is the default (configured with
 //! `Harness::database`); [`MemoryStore`] keeps resumable sessions for one
-//! process in every build, and custom
-//! backends implement [`SessionStore`] and are injected with `Harness::store`.
+//! process in every build. Either is shared as a sealed [`SessionStore`]
+//! through `Harness::store`.
 //! The records returned by `Session::writes` and `Session::compact` are also
 //! defined here.
 
@@ -13,28 +13,44 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
-pub use crate::admission::{
-    Admission, AdmissionState, ModelSwitch, NewTurn, Reservation, ReservedTurn, TurnAdmission,
+pub(crate) use crate::admission::{
+    Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
-pub use crate::compaction::{
-    CheckpointError, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint,
-};
-pub use crate::context::{HistoryProjection, HistoryTurn, TurnStop};
+pub(crate) use crate::compaction::CompactionSource;
+pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
+pub(crate) use crate::context::HistoryProjection;
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::HostTurnRecord;
-pub use crate::reservation::AcquiredTurn;
+pub(crate) use crate::reservation::AcquiredTurn;
 use crate::session::SessionError;
-pub use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
+pub(crate) use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
 pub use crate::session_model::RecordedModel;
 #[cfg(feature = "sqlite")]
 pub use crate::sqlite_store::{Database as SqliteStore, SQLITE_BUSY_TIMEOUT, SessionInfo};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
-pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
-pub use crate::usage::TurnUsage;
+pub(crate) use crate::turn_options_snapshot::StoredTurnOptions;
+pub(crate) use crate::usage::TurnUsage;
 pub use crate::write_journal::{WriteRecord, WriteStatus};
 
+/// A store a harness keeps durable sessions in: [`MemoryStore`] or, with the
+/// `sqlite` feature, [`SqliteStore`].
+///
+/// Share one store between harnesses as an `Arc<dyn SessionStore>` passed to
+/// `HarnessBuilder::store` or `Harness::store`. The trait is sealed: its
+/// lease, journal, and record operations are internal, so only this crate's
+/// stores implement it.
+#[expect(
+    private_bounds,
+    reason = "seals the trait: only this crate's stores implement the internal operations"
+)]
+pub trait SessionStore: StoreBackend {}
+
+impl<T: StoreBackend> SessionStore for T {}
+
+/// The operations behind a [`SessionStore`].
+///
 /// Stores supply atomic record operations; the harness applies admission
 /// rules and owns every reservation's lease. Owner-scoped mutations validate
 /// ownership in the transaction applying their effects. History returned by
@@ -45,7 +61,7 @@ pub use crate::write_journal::{WriteRecord, WriteStatus};
 /// checkpoint and the projection that history follows. Implementations
 /// preserve the existing options codec and fingerprints.
 #[async_trait]
-pub trait SessionStore: Send + Sync {
+pub(crate) trait StoreBackend: Send + Sync {
     /// Returns command records independently of completed history. Stores that
     /// support Bash must also atomically block new acquisitions while any
     /// command has an unknown or unresolved outcome.
@@ -321,14 +337,9 @@ pub trait SessionStore: Send + Sync {
 }
 
 /// One settled turn as its store recorded it, returned by
-/// [`SessionStore::load_transcript`].
-///
-/// Unlike [`LoadedSession`], it is `#[non_exhaustive]` so it can gain fields
-/// without breaking stores: build it with [`Self::new`] and the `with_`
-/// setters.
+/// [`StoreBackend::load_transcript`].
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct StoredTurn {
+pub(crate) struct StoredTurn {
     /// Content-free classification of a failed or interrupted turn, as the
     /// harness hands it to [`SessionStore::fail_turn`] or the turn owner's
     /// interruption records it.
@@ -358,7 +369,7 @@ impl StoredTurn {
     /// Returns the turn at `position`, admitted at `started_at` and settled
     /// with `status` at `finished_at`, holding `messages`, without error
     /// classification, outcome, or usage, in JSON output mode.
-    pub fn new(
+    pub(crate) fn new(
         position: i64,
         status: TurnStatus,
         started_at: SystemTime,
@@ -380,7 +391,7 @@ impl StoredTurn {
 
     /// Sets the recorded classification of a failed or interrupted turn.
     #[must_use]
-    pub fn with_error_type(mut self, error_type: Option<String>) -> Self {
+    pub(crate) fn with_error_type(mut self, error_type: Option<String>) -> Self {
         self.error_type = error_type;
 
         self
@@ -388,7 +399,7 @@ impl StoredTurn {
 
     /// Sets the committed result of a host-request turn.
     #[must_use]
-    pub fn with_outcome(mut self, outcome: Option<TurnOutcome>) -> Self {
+    pub(crate) fn with_outcome(mut self, outcome: Option<TurnOutcome>) -> Self {
         self.outcome = outcome;
 
         self
@@ -396,7 +407,7 @@ impl StoredTurn {
 
     /// Sets whether the turn answered in text output mode.
     #[must_use]
-    pub fn with_text_output(mut self, text_output: bool) -> Self {
+    pub(crate) fn with_text_output(mut self, text_output: bool) -> Self {
         self.text_output = text_output;
 
         self
@@ -404,7 +415,7 @@ impl StoredTurn {
 
     /// Sets the turn's recorded usage.
     #[must_use]
-    pub fn with_usage(mut self, usage: Option<TurnUsage>) -> Self {
+    pub(crate) fn with_usage(mut self, usage: Option<TurnUsage>) -> Self {
         self.usage = usage;
 
         self

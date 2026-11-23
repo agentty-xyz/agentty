@@ -171,7 +171,7 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// supplies it for `Harness::from_registry`. Like the profile, the budget
 /// never enters request fingerprints or stored history. The budget governs
 /// every provider request of a turn: the initial request replays the session's
-/// history in its sticky [`HistoryProjection`], re-projected only once that
+/// history in its sticky stored projection, re-projected only once that
 /// history outgrows what the budget leaves for it. Within a turn, requests only
 /// append until one exceeds the budget; that request is reduced once, deeply,
 /// by clearing older tool results that a later call superseded, capping the new
@@ -280,6 +280,7 @@ pub enum ContextBudgetError {
 /// deterministic note, and a turn stops asking after
 /// two failures.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ContextSummaryPolicy {
     /// Earlier tool rounds are only elided and removed deterministically.
     #[default]
@@ -538,12 +539,9 @@ impl ContextEstimator for HeuristicContextEstimator {
     }
 }
 
-/// One finished session turn loaded for replay. Stores outside this crate
-/// build it with [`Self::new`], [`Self::with_model`], and
-/// [`Self::with_stop`].
+/// One finished session turn loaded for replay.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct HistoryTurn {
+pub(crate) struct HistoryTurn {
     /// Persisted messages in order, starting with the turn's user input.
     pub messages: Vec<ModelMessage>,
     /// Model selection recorded when the turn was reserved; `None` for a
@@ -559,27 +557,12 @@ pub struct HistoryTurn {
 
 impl HistoryTurn {
     /// Creates a completed turn of `messages` without a model snapshot.
-    pub fn new(messages: Vec<ModelMessage>) -> Self {
+    pub(crate) fn new(messages: Vec<ModelMessage>) -> Self {
         Self {
             messages,
             model: None,
             stop: None,
         }
-    }
-
-    /// Returns this turn with `model`, the selection recorded when the turn
-    /// was reserved.
-    #[must_use]
-    pub fn with_model(mut self, model: RecordedModel) -> Self {
-        self.model = Some(model);
-        self
-    }
-
-    /// Returns this turn stopped for `stop`.
-    #[must_use]
-    pub fn with_stop(mut self, stop: TurnStop) -> Self {
-        self.stop = Some(stop);
-        self
     }
 
     /// Returns the messages replayed for this turn. Its host instructions
@@ -758,7 +741,7 @@ impl From<Vec<ModelMessage>> for HistoryTurn {
 /// a new session or one stored before projections were kept starts from
 /// [`Self::default`], which replays every turn in full.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct HistoryProjection {
+pub(crate) struct HistoryProjection {
     brief_before: i64,
     elided_before: i64,
     start: i64,
@@ -768,7 +751,7 @@ impl HistoryProjection {
     /// Restores stored boundaries, raising `brief_before` to at least
     /// `start` and `elided_before` to at least `brief_before`, so each form
     /// covers contiguous turns.
-    pub fn new(start: i64, brief_before: i64, elided_before: i64) -> Self {
+    pub(crate) fn new(start: i64, brief_before: i64, elided_before: i64) -> Self {
         let brief_before = brief_before.max(start);
 
         Self {
@@ -779,18 +762,20 @@ impl HistoryProjection {
     }
 
     /// Position of the oldest turn later requests may replay.
-    pub fn start(self) -> i64 {
+    pub(crate) fn start(self) -> i64 {
         self.start
     }
 
     /// Position before which replayed turns appear in brief form.
-    pub fn brief_before(self) -> i64 {
+    #[cfg(feature = "sqlite")]
+    pub(crate) fn brief_before(self) -> i64 {
         self.brief_before
     }
 
     /// Position before which replayed turns appear with their tool traffic
     /// cleared; later turns replay in full.
-    pub fn elided_before(self) -> i64 {
+    #[cfg(feature = "sqlite")]
+    pub(crate) fn elided_before(self) -> i64 {
         self.elided_before
     }
 
@@ -1033,7 +1018,7 @@ fn reproject(
 /// Why a replayed turn stopped and which of its effects have no recorded
 /// outcome, as named by the turn's stop note.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TurnStop {
+pub(crate) struct TurnStop {
     /// Stored content-free error type, such as `cancelled` or `Tool`.
     pub error_type: String,
     /// Whether the turn failed rather than being interrupted.

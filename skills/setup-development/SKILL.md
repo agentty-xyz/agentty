@@ -49,6 +49,9 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   `cargo install cargo-semver-checks --version <pinned version> --locked`; a newer
   nightly can require a newer release to read its rustdoc JSON.
 
+- **Public API snapshots:** the `public-api` hook needs `cargo-public-api` at the
+  version `.github/actions/setup-rust-prek/action.yml` pins, installed the same way.
+
 - **`ag-release` tests:** its npm package tests install and run the package with Node.js
   18 or newer and `npm`, which GitHub-hosted runners provide.
 

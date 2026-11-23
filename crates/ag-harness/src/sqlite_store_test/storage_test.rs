@@ -14,7 +14,7 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::request_option::OutputMode;
 use crate::session::{NewSession, SessionError};
 use crate::sqlite_store::{Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource};
-use crate::store::{SessionCheckpoint, SessionStore as _};
+use crate::store::{SessionCheckpoint, StoreBackend as _};
 use crate::store_fixture::image_input;
 use crate::tool::ToolCall;
 

@@ -56,6 +56,7 @@ jobs:
         with:
           cargo-audit: ${{ inputs['cargo-audit'] && 'true' || 'false' }}
           cargo-machete: ${{ inputs['cargo-machete'] && 'true' || 'false' }}
+          cargo-public-api: "true"
           llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}
 
       # With every file selected, the `clippy` hook lints all workspace targets
@@ -73,6 +74,10 @@ jobs:
         env:
           DOCTEST_SCOPE: ${{ inputs['workspace-tests'] && '--all-files' || '--last-commit' }}
         run: prek run test-doc --hook-stage manual "$DOCTEST_SCOPE"
+
+      # The published library APIs must match their reviewed snapshots.
+      - name: Public API snapshots
+        run: prek run public-api --hook-stage manual --all-files
 
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}

@@ -14,6 +14,10 @@ inputs:
     description: Install `cargo-machete` for unused dependency checks.
     required: false
     default: "false"
+  cargo-public-api:
+    description: Install `cargo-public-api` for the public API snapshot check.
+    required: false
+    default: "false"
   cargo-semver-checks:
     description: Install `cargo-semver-checks` for published API compatibility checks.
     required: false
@@ -88,6 +92,14 @@ runs:
       uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
       with:
         tool: cargo-semver-checks@0.51.0
+
+    # Pinned like `cargo-semver-checks`: it reads the pinned nightly's
+    # rustdoc JSON, so a toolchain bump can require a newer version.
+    - name: Install `cargo-public-api`
+      if: ${{ inputs['cargo-public-api'] == 'true' }}
+      uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      with:
+        tool: cargo-public-api@0.52.0
 
     - name: Install `cargo-nextest`
       uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3

@@ -36,6 +36,7 @@ const STALE_PAGE: &str = "<!doctype html><title>Agentty</title><p>This sign-in l
 
 /// Failure to run the browser sign-in.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ChatGptSignInError {
     /// The credential file location is unknown.
     #[error(transparent)]

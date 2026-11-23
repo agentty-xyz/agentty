@@ -12,13 +12,15 @@ use tokio::time::Instant;
 
 use super::Status;
 use crate::bash::CommandIntent;
+use crate::context::{HistoryTurn, TurnStop};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 use crate::store::{
-    AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, SessionStore,
-    StoreIdentity, TurnOwner, TurnStop, WriteRecord, WriteStatus,
+    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionStore, StoreBackend,
+    StoreIdentity, TurnOwner, WriteRecord, WriteStatus,
 };
 use crate::store_fixture::{harness, loaded_turn, options, schema, unselected_model};
 use crate::{ModelError, SessionError, TurnError, TurnInput};

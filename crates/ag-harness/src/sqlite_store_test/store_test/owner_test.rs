@@ -13,12 +13,13 @@ use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
+use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError, StoreIdentity};
 use crate::sqlite_store::Database;
 use crate::sqlite_store::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
-use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, StoreBackend, WriteStatus};
 use crate::store_fixture::unselected_model;
 
 #[tokio::test]
@@ -65,7 +66,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
             Err(SessionError::OwnershipLost { .. })
         ));
         assert!(matches!(
-            SessionStore::complete_turn(
+            StoreBackend::complete_turn(
                 &database,
                 candidate,
                 &[ModelMessage::Assistant("discard".into())],
@@ -75,7 +76,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
             Err(SessionError::OwnershipLost { .. })
         ));
         assert!(matches!(
-            SessionStore::fail_turn(
+            StoreBackend::fail_turn(
                 &database,
                 candidate,
                 &TurnError::Model(ModelError::InvalidResponse)

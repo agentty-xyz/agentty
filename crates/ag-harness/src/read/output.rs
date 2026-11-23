@@ -238,6 +238,7 @@ impl Serialize for ReadOutput {
 
 /// Failure while safely executing one repository-relative read.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ReadError {
     /// The repository root could not be resolved.
     #[error("failed to resolve repository root: {source}")]

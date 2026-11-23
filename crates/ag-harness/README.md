@@ -244,10 +244,6 @@ fn clock_harness(model: Arc<dyn Model>) -> Result<Harness, Box<dyn std::error::E
 - Harness defaults carry no `BashConfig`, so a default set holding `bash`, such as
   `ToolSet::builtins()`, needs `RunRequest::bash` or `TurnOptions::with_bash` on every
   run or turn; for plain defaults, use `ToolSet::empty().with_read().with_write()`.
-- `Tool`, `ToolPolicy`, `Harness::allow`, `HarnessBuilder::allow`, `TurnOptions::new`,
-  `TurnOptions::tool_policy`, `RunRequest::tool_policy`, and `MalformedArguments::tool`
-  are deprecated. They still work: a policy offers the built-ins it allows only when no
-  set is given at any level; a set always wins and is offered exactly.
 - `ToolError::rejected` sends feedback to the model and the turn continues, as do
   arguments that are not a JSON object, which also count toward the malformed-response
   limit. A result over 64 KiB is dropped and the model is told the call ran.
@@ -1150,17 +1146,10 @@ Custom models report the same classes with `ModelError::provider` and
 ## Stores
 
 SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
-`store::MemoryStore` gives resumable sessions within one process. Custom backends
-implement `store::SessionStore` and are injected with `Harness::store`. A store supplies
-atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionState` and
-record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
-harness owns the admission rules and every lease. `complete_turn` also hands the store
-the session's `store::HistoryProjection`, which later loads apply and a model switch
-resets. `load_transcript` and `fork_session` back transcripts and forks, and
-`record_usage` backs per-turn usage; a store that does not implement them fails
-transcripts and forks closed, and records no usage, so its turns' usage comes only from
-outcomes it stores. `load_usage` defaults to reading transcripts. The shared conformance
-suite is in `tests/support/store_conformance.rs`.
+`store::MemoryStore` gives resumable sessions within one process. Share one store
+between harnesses as an `Arc<dyn store::SessionStore>` passed to `HarnessBuilder::store`
+or `Harness::store`. `SessionStore` is sealed: its lease, journal, and record operations
+are internal, so these two are the only implementations.
 
 ## Observability
 
@@ -1178,8 +1167,8 @@ calibrated capacity it was fitted into (`budget_weight`) and its weight before
 ## Features
 
 The default features build every backend. Turn them off with `default-features = false`
-to keep only the core: `MemoryStore` and custom stores, host-implemented `Model`s, and
-host-selected Bash executors such as `UnsandboxedExecutor`.
+to keep only the core: `MemoryStore`, host-implemented `Model`s, and host-selected Bash
+executors such as `UnsandboxedExecutor`.
 
 | Feature               | Default | Enables                                                                                   |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------- |
@@ -1189,7 +1178,6 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
 | `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
 | `providers-anthropic` | yes     | `ModelClient::anthropic` and the `ProviderSpec::anthropic` preset for Claude models       |
-| `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Any provider feature builds the `provider` module, `ModelClient`, and `ProviderSpec`
 with `ModelClient::from_spec` for every wire protocol, and

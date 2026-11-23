@@ -1184,7 +1184,7 @@ fn converts_invalid_json_error() {
     let error = OutputValidationError::InvalidJson("expected value".to_string());
 
     // Act
-    let error = ModelError::from(error);
+    let error = ModelError::from_validation(error);
 
     // Assert
     assert_eq!(
@@ -1202,7 +1202,7 @@ fn converts_schema_violation_error() {
     };
 
     // Act
-    let error = ModelError::from(error);
+    let error = ModelError::from_validation(error);
 
     // Assert
     assert_eq!(
@@ -1214,7 +1214,7 @@ fn converts_schema_violation_error() {
 #[test]
 fn converts_oversized_content_error() {
     // Arrange and Act
-    let error = ModelError::from(OutputValidationError::TooLarge);
+    let error = ModelError::from_validation(OutputValidationError::TooLarge);
 
     // Assert
     assert_eq!(
