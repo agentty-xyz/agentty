@@ -381,6 +381,10 @@ pub struct Session {
     /// it. `None` when there is none to show, including while a review runs:
     /// `progress` then describes it.
     pub focused_review: Option<SessionFocusedReview>,
+    /// The session's latest graph proposal and, once approved, its graph's
+    /// progress, as the host summarizes them beside the chat. `None` when
+    /// the session has no proposal.
+    pub graph: Option<crate::SessionGraphSummary>,
     /// Stable session identifier.
     pub id: SessionId,
     /// Ordered durable transcript messages.

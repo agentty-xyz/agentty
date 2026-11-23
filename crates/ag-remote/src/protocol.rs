@@ -11,12 +11,15 @@
 //! fetch fresh snapshots.
 
 use ag_session::{
-    AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, ReviewRequestSummary, Session, SessionDiffFile,
-    SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionListEntry,
-    SessionMessage, SessionMessageKind, session_branch,
+    AgentSelection, AgentSelectionMetadata, CreateSessionMode, ExecutionGraphStatus,
+    GraphNodeProgress, GraphNodeStatus, GraphResultState, HostContext, HostProjectStatus,
+    HostProjectSync, HostProjectSyncPhase, QuestionItem, ReviewRequestSummary, Session,
+    SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionGraph,
+    SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase, SessionGraphSummary,
+    SessionGraphs, SessionListEntry, SessionMessage, SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// A frame sent by a remote client.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -98,6 +101,27 @@ pub enum RemoteRequest {
     /// Loads one session snapshot.
     GetSession {
         /// Session to load.
+        session_id: String,
+    },
+    /// Reads a session's graph proposal and execution graphs as the
+    /// terminal's inspector shows them, without acting on any. Offered
+    /// through the `graphs` capability.
+    GetSessionGraphs {
+        /// Graph to select, one the response lists in `graphs`. Without it
+        /// the latest proposal's approved graph is selected, or else the
+        /// first graph.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        graph_id: Option<String>,
+        /// `version` of the `graphs` response the device shows for this same
+        /// selection. When the response would be that version again, it is
+        /// `unchanged` instead and carries nothing else.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        known: Option<String>,
+        /// Node of the selected graph whose details and outputs to return.
+        /// Without it, or when the graph has no such node, the first node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+        /// Session to read.
         session_id: String,
     },
     /// Lists the names of the files and directories in the host's active
@@ -379,6 +403,27 @@ pub enum RemoteResponse {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         truncated: bool,
     },
+    /// A session's graphs, answering `get_session_graphs`.
+    Graphs {
+        /// The selected graph, absent when the session has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        graph: Option<Box<RemoteGraph>>,
+        /// Every graph of the session in creation order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        graphs: Vec<RemoteGraphEntry>,
+        /// The session's latest graph proposal, absent when it has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposal: Option<Box<RemoteGraphProposal>>,
+        /// Whether the response is the request's `known` version again; it
+        /// then carries only `version`, and the device keeps what it shows.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unchanged: bool,
+        /// Opaque token for the content of this response: equal content
+        /// gives an equal token within one Agentty process. Absent from
+        /// older servers.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        version: String,
+    },
     /// The host's active project, where new sessions are created.
     Host {
         /// Branch new sessions start from.
@@ -463,7 +508,7 @@ impl RemoteResponse {
             });
         };
         let file = files.iter().find(|file| file.path == path)?;
-        let (kept_patch, truncated) = capped_patch(&file.patch);
+        let (kept_patch, truncated) = capped_text(&file.patch, MAX_FILE_RESPONSE_BYTES);
 
         Some(Self::Diff {
             files: vec![RemoteDiffFile::from(file)],
@@ -501,11 +546,75 @@ impl RemoteResponse {
             truncated: false,
         }
     }
+
+    /// Builds the `graphs` response for a session's `graphs`.
+    ///
+    /// The proposal preview stays within [`MAX_FILE_RESPONSE_BYTES`] encoded
+    /// bytes, and so do the selected node's output texts together, so a
+    /// response stays well under the frame limit; whatever is cut sets
+    /// `truncated`. Its `version` hashes everything else it carries, so it
+    /// changes whenever any part of the response does.
+    pub(crate) fn from_graphs(graphs: SessionGraphs) -> Self {
+        let graph = graphs.graph.map(|graph| Box::new(RemoteGraph::from(graph)));
+        let entries = graphs
+            .graphs
+            .into_iter()
+            .map(|entry| RemoteGraphEntry {
+                id: entry.id,
+                is_focused_review: entry.is_focused_review,
+                revision: entry.revision.get(),
+            })
+            .collect::<Vec<_>>();
+        let proposal = graphs
+            .proposal
+            .map(|proposal| Box::new(RemoteGraphProposal::from(proposal)));
+        let digest = Sha256::digest(format!("{:?}", (&graph, &entries, &proposal)));
+
+        Self::Graphs {
+            graph,
+            graphs: entries,
+            proposal,
+            unchanged: false,
+            version: hex::encode(&digest[..16]),
+        }
+    }
+
+    /// Returns this response, or only its `version` marked `unchanged` when
+    /// it is a `graphs` response of version `known`, the one the device
+    /// already shows.
+    pub(crate) fn unchanged_since(self, known: Option<&str>) -> Self {
+        match self {
+            Self::Graphs { version, .. } if known == Some(version.as_str()) => Self::Graphs {
+                graph: None,
+                graphs: Vec::new(),
+                proposal: None,
+                unchanged: true,
+                version,
+            },
+            response => response,
+        }
+    }
 }
 
-/// Most encoded bytes of file entries, or of patch text, that one `diff` or
-/// `session_files` response carries: a quarter of the 1 MiB frame limit.
+/// Most encoded bytes of file entries or patch text that one `diff` or
+/// `session_files` response carries, and, in a `graphs` response, of the
+/// proposal preview, of the output texts together, and of the node texts
+/// together: a quarter of the 1 MiB frame limit each.
 pub(crate) const MAX_FILE_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Encoded bytes a group of texts in one response may still take.
+struct TextBudget(usize);
+
+impl TextBudget {
+    /// Returns `text` cut at a line boundary to what the budget has left,
+    /// and whether anything was cut, charging the budget what it keeps.
+    fn take(&mut self, text: &str) -> (String, bool) {
+        let (kept, is_cut) = capped_text(text, self.0);
+        self.0 -= encoded_len(kept);
+
+        (kept.to_string(), is_cut)
+    }
+}
 
 /// Encoded bytes counted for one file entry besides its paths: field names,
 /// line counts, status, and punctuation.
@@ -530,21 +639,483 @@ fn encoded_char_len(character: char) -> usize {
     }
 }
 
-/// Returns `patch` cut to [`MAX_FILE_RESPONSE_BYTES`] encoded bytes at the
-/// last whole line, and whether anything was cut.
-fn capped_patch(patch: &str) -> (&str, bool) {
+/// Returns `text` cut to `max_bytes` encoded bytes at the last whole line,
+/// and whether anything was cut.
+fn capped_text(text: &str, max_bytes: usize) -> (&str, bool) {
     let mut size = 0;
-    for (index, character) in patch.char_indices() {
+    for (index, character) in text.char_indices() {
         size += encoded_char_len(character);
-        if size > MAX_FILE_RESPONSE_BYTES {
-            let kept = &patch[..index];
+        if size > max_bytes {
+            let kept = &text[..index];
             let kept = kept.rfind('\n').map_or(kept, |end| &kept[..=end]);
 
             return (kept, true);
         }
     }
 
-    (patch, false)
+    (text, false)
+}
+
+/// One graph of a session in a `graphs` response.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphEntry {
+    /// Graph identity, as `get_session_graphs` accepts it.
+    pub id: String,
+    /// Whether the graph is a focused review that Agentty drives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_focused_review: bool,
+    /// Current revision.
+    pub revision: u64,
+}
+
+/// A session's latest graph proposal.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphProposal {
+    /// Graph the approved version launched, absent before approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_id: Option<String>,
+    /// How the user acts on the pending proposal, absent once it is
+    /// approved or cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Proposal identity.
+    pub id: String,
+    /// Where the proposal stands.
+    pub phase: RemoteGraphProposalPhase,
+    /// The proposal's details as Markdown, including the captured request
+    /// and each proposed node's captured instructions.
+    pub preview: String,
+    /// Clarification questions the version asks before it resolves. Agentty
+    /// bounds them with the size of the proposal's response.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<RemoteQuestion>,
+    /// Whether the server cut the end of `preview`, at a line boundary, to
+    /// keep the response small.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// Version number.
+    pub version: u32,
+}
+
+impl From<SessionGraphProposal> for RemoteGraphProposal {
+    /// Converts `proposal`, cutting its preview to
+    /// [`MAX_FILE_RESPONSE_BYTES`] encoded bytes.
+    fn from(proposal: SessionGraphProposal) -> Self {
+        let version = &proposal.state.version;
+        let (preview, truncated) = TextBudget(MAX_FILE_RESPONSE_BYTES).take(&proposal.preview);
+
+        Self {
+            graph_id: version
+                .approval
+                .as_ref()
+                .map(|approval| approval.graph_id.clone()),
+            hint: proposal.hint,
+            id: proposal.state.input.id.clone(),
+            phase: RemoteGraphProposalPhase::from(proposal.phase),
+            preview,
+            questions: proposal
+                .questions
+                .iter()
+                .map(RemoteQuestion::from)
+                .collect(),
+            truncated,
+            version: version.number,
+        }
+    }
+}
+
+/// Where a graph proposal stands.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteGraphProposalPhase {
+    /// The user approved the version and its graph launched.
+    Approved,
+    /// The version resolved to a graph waiting for the user's approval.
+    AwaitingApproval,
+    /// The proposal was discarded.
+    Cancelled,
+    /// Generation failed.
+    Failed,
+    /// The model is generating the version.
+    Generating,
+    /// The model asked clarification questions.
+    NeedsInput,
+    /// The model proposed a graph Agentty could not resolve.
+    Unresolved,
+}
+
+impl From<SessionGraphProposalPhase> for RemoteGraphProposalPhase {
+    fn from(phase: SessionGraphProposalPhase) -> Self {
+        match phase {
+            SessionGraphProposalPhase::Approved => Self::Approved,
+            SessionGraphProposalPhase::AwaitingApproval => Self::AwaitingApproval,
+            SessionGraphProposalPhase::Cancelled => Self::Cancelled,
+            SessionGraphProposalPhase::Failed => Self::Failed,
+            SessionGraphProposalPhase::Generating => Self::Generating,
+            SessionGraphProposalPhase::NeedsInput => Self::NeedsInput,
+            SessionGraphProposalPhase::Unresolved => Self::Unresolved,
+        }
+    }
+}
+
+/// The selected graph of a `graphs` response.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraph {
+    /// Graph identity.
+    pub id: String,
+    /// Whether the graph is a focused review that Agentty drives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_focused_review: bool,
+    /// The selected node, absent while the graph has no progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// Every node in declaration order.
+    pub nodes: Vec<RemoteGraphNode>,
+    /// What Agentty says about how the graph is driven, when it says
+    /// anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Outputs of the selected node's latest execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<RemoteGraphOutput>,
+    /// Current revision.
+    pub revision: u64,
+    /// Opaque token of the shown graph state; it changes whenever the
+    /// graph's revision, status, or node progress does.
+    pub snapshot: String,
+    /// Live status, absent when Agentty has no progress for the graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<RemoteGraphStatus>,
+    /// `status` as the terminal shows it.
+    pub status_label: String,
+}
+
+impl From<SessionGraph> for RemoteGraph {
+    /// Converts `graph`. Its output texts share
+    /// [`MAX_FILE_RESPONSE_BYTES`] encoded bytes, in order, and so do its
+    /// nodes' objectives, errors, and questions; each part that is cut says
+    /// so.
+    fn from(graph: SessionGraph) -> Self {
+        let mut output_budget = TextBudget(MAX_FILE_RESPONSE_BYTES);
+        let mut node_budget = TextBudget(MAX_FILE_RESPONSE_BYTES);
+        let outputs = graph
+            .outputs
+            .iter()
+            .map(|output| {
+                let (text, truncated) = output_budget.take(&output.display);
+                let reference = &output.result.reference;
+
+                RemoteGraphOutput {
+                    id: reference.id.clone(),
+                    name: reference.output_name.clone(),
+                    state: RemoteGraphOutputState::from(output.result.state),
+                    text,
+                    truncated,
+                    version: reference.version.get(),
+                }
+            })
+            .collect();
+
+        Self {
+            id: graph.id,
+            is_focused_review: graph.is_focused_review,
+            node: graph.node_id,
+            nodes: graph
+                .nodes
+                .into_iter()
+                .map(|node| RemoteGraphNode::new(node, &mut node_budget))
+                .collect(),
+            note: graph.note,
+            outputs,
+            revision: graph.revision.get(),
+            snapshot: graph.snapshot,
+            status: graph.status.map(RemoteGraphStatus::from),
+            status_label: graph.status_label,
+        }
+    }
+}
+
+/// Live status of a graph.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteGraphStatus {
+    /// Prerequisites, acceptance, clarification, or resources hold it.
+    Blocked,
+    /// It was cancelled.
+    Cancelled,
+    /// Every node settled successfully.
+    Completed,
+    /// A node needs a retry.
+    Failed,
+    /// No driver runs it; it needs a resume.
+    Paused,
+    /// Work is queued or running.
+    Running,
+}
+
+impl From<ExecutionGraphStatus> for RemoteGraphStatus {
+    fn from(status: ExecutionGraphStatus) -> Self {
+        match status {
+            ExecutionGraphStatus::Blocked => Self::Blocked,
+            ExecutionGraphStatus::Cancelled => Self::Cancelled,
+            ExecutionGraphStatus::Completed => Self::Completed,
+            ExecutionGraphStatus::Failed => Self::Failed,
+            ExecutionGraphStatus::Paused => Self::Paused,
+            ExecutionGraphStatus::Running => Self::Running,
+        }
+    }
+}
+
+/// One node of a graph.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphNode {
+    /// Name of the agent definition the node runs.
+    pub agent: String,
+    /// Agent provider, such as `codex`.
+    pub agent_kind: String,
+    /// Executions admitted so far, retries included.
+    pub attempts: usize,
+    /// Whether a dependent waits for the user to accept the node's output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub awaits_approval: bool,
+    /// Why the pending node cannot dispatch, each as the terminal says it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
+    /// The latest failure, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// How the user acts on the node while it waits for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Node identity, as `get_session_graphs` accepts it.
+    pub id: String,
+    /// The node's status as the terminal shows it.
+    pub label: String,
+    /// Model identifier the node runs.
+    pub model: String,
+    /// What the node should achieve.
+    pub objective: String,
+    /// Questions from the node's latest settled response.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<RemoteQuestion>,
+    /// Reasoning effort the node runs with, such as `high`.
+    pub reasoning: String,
+    /// The node's dependencies in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<RemoteGraphRequirement>,
+    /// Live state of the node's latest execution.
+    pub status: RemoteGraphNodeStatus,
+    /// Whether the server cut `objective`, `error`, or a question, at a
+    /// line boundary, to keep the response small.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+impl RemoteGraphNode {
+    /// Converts `node`, charging its objective, error, and questions to
+    /// `budget`; whatever is cut sets `truncated`.
+    fn new(node: SessionGraphNode, budget: &mut TextBudget) -> Self {
+        let progress = node.progress.unwrap_or_else(|| GraphNodeProgress {
+            blocked: Vec::new(),
+            executions: Vec::new(),
+            last_error: None,
+            node_id: node.node.id.clone(),
+            questions: Vec::new(),
+            results: Vec::new(),
+            status: GraphNodeStatus::Pending,
+        });
+        let mut truncated = false;
+        let mut take = |text: &str| {
+            let (kept, is_cut) = budget.take(text);
+            truncated |= is_cut;
+
+            kept
+        };
+        let objective = take(&node.node.objective);
+        let error = progress.last_error.as_deref().map(&mut take);
+        let questions = progress
+            .questions
+            .iter()
+            .map(|question| RemoteQuestion {
+                options: question.options.iter().map(|option| take(option)).collect(),
+                text: take(&question.text),
+            })
+            .collect();
+
+        Self {
+            agent: node.node.definition.name,
+            agent_kind: node.node.agent.kind().name().to_string(),
+            attempts: progress.executions.len(),
+            awaits_approval: node.awaits_approval,
+            blocked: node.blocked,
+            error,
+            hint: node.hint,
+            id: node.node.id,
+            label: node.status_label,
+            model: node.node.agent.model().as_str().to_string(),
+            objective,
+            questions,
+            reasoning: node.reasoning_level.as_str().to_string(),
+            requires: node
+                .requirements
+                .into_iter()
+                .map(|requirement| RemoteGraphRequirement {
+                    gate: requirement.gate,
+                    label: requirement.label,
+                    node_id: requirement.node_id,
+                    satisfied: requirement.is_satisfied,
+                })
+                .collect(),
+            status: RemoteGraphNodeStatus::from(progress.status),
+            truncated,
+        }
+    }
+}
+
+/// Live state of a graph node.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteGraphNodeStatus {
+    /// It waits for answers to its questions.
+    AwaitingAnswers,
+    /// It or its graph was cancelled.
+    Cancelled,
+    /// It failed and needs a retry.
+    Failed,
+    /// It has not been admitted.
+    Pending,
+    /// It waits for a worker.
+    Queued,
+    /// A worker runs it.
+    Running,
+    /// It settled without questions.
+    Succeeded,
+}
+
+impl From<GraphNodeStatus> for RemoteGraphNodeStatus {
+    fn from(status: GraphNodeStatus) -> Self {
+        match status {
+            GraphNodeStatus::AwaitingAnswers => Self::AwaitingAnswers,
+            GraphNodeStatus::Cancelled => Self::Cancelled,
+            GraphNodeStatus::Failed => Self::Failed,
+            GraphNodeStatus::Pending => Self::Pending,
+            GraphNodeStatus::Queued => Self::Queued,
+            GraphNodeStatus::Running => Self::Running,
+            GraphNodeStatus::Succeeded => Self::Succeeded,
+        }
+    }
+}
+
+/// One dependency of a graph node.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphRequirement {
+    /// What the dependency waits for, as the terminal's inspector says it.
+    pub gate: String,
+    /// The dependency as the terminal's node timeline shows it.
+    pub label: String,
+    /// Node the dependency waits for.
+    pub node_id: String,
+    /// Whether the dependency no longer blocks the node.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub satisfied: bool,
+}
+
+/// One output of the selected graph node.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphOutput {
+    /// Output identity.
+    pub id: String,
+    /// Output name the node declares.
+    pub name: String,
+    /// Whether the output was validated or accepted.
+    pub state: RemoteGraphOutputState,
+    /// The output as Markdown, cut at a line boundary when it is too large;
+    /// empty when earlier outputs left it no room.
+    pub text: String,
+    /// Whether the server cut the end of `text` to keep the response small.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// Version within the node's named output.
+    pub version: u64,
+}
+
+/// Evidence state of a graph output.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteGraphOutputState {
+    /// The user accepted it.
+    Accepted,
+    /// It was saved but not validated.
+    Produced,
+    /// It was validated and can be accepted.
+    Validated,
+}
+
+impl From<GraphResultState> for RemoteGraphOutputState {
+    fn from(state: GraphResultState) -> Self {
+        match state {
+            GraphResultState::Accepted => Self::Accepted,
+            GraphResultState::Produced => Self::Produced,
+            GraphResultState::Validated => Self::Validated,
+        }
+    }
+}
+
+/// What a session snapshot says about its latest graph proposal and, once
+/// approved, the graph it launched.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteSessionGraph {
+    /// Outputs that wait for the user's approval, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaiting: Vec<RemoteGraphApproval>,
+    /// Nodes of the launched graph that succeeded.
+    pub done: usize,
+    /// Line describing `phase`, or `status` once known, as the terminal
+    /// shows it.
+    pub label: String,
+    /// Where the latest proposal stands.
+    pub phase: RemoteGraphProposalPhase,
+    /// Live status of the approved graph, once Agentty reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<RemoteGraphStatus>,
+    /// Nodes of the resolved proposal; zero before it resolves.
+    pub total: usize,
+    /// Number of the latest proposal version.
+    pub version: u32,
+}
+
+impl From<SessionGraphSummary> for RemoteSessionGraph {
+    fn from(summary: SessionGraphSummary) -> Self {
+        Self {
+            awaiting: summary
+                .awaiting_approval
+                .into_iter()
+                .map(|approval| RemoteGraphApproval {
+                    node_id: approval.node_id,
+                    revisable: approval.takes_revision,
+                    text: approval.text,
+                })
+                .collect(),
+            done: summary.done,
+            label: summary.label,
+            phase: RemoteGraphProposalPhase::from(summary.phase),
+            status: summary.status.map(RemoteGraphStatus::from),
+            total: summary.total,
+            version: summary.version,
+        }
+    }
+}
+
+/// One output that waits for the user's approval.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteGraphApproval {
+    /// Node that produced the output.
+    pub node_id: String,
+    /// Whether a chat reply may revise the output instead of accepting it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub revisable: bool,
+    /// Line telling the user how to act on it, as the terminal says it.
+    pub text: String,
 }
 
 impl From<HostContext> for RemoteResponse {
@@ -924,6 +1495,11 @@ pub struct RemoteSession {
     /// older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_review: Option<RemoteFocusedReview>,
+    /// The session's latest graph proposal and, once approved, its graph's
+    /// progress, as the terminal summarizes them beside the chat. Absent
+    /// when the session has no proposal and from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<RemoteSessionGraph>,
     /// Stable session identifier.
     pub id: String,
     /// Whether the session defers its worktree until its first message.
@@ -988,6 +1564,7 @@ impl From<Session> for RemoteSession {
             created_at: Some(session.created_at),
             draft_prompt: session.draft_prompt,
             focused_review: session.focused_review.map(RemoteFocusedReview::from),
+            graph: session.graph.map(RemoteSessionGraph::from),
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
             model_id: Some(agent.model().as_str().to_string()),
@@ -1008,14 +1585,7 @@ impl From<Session> for RemoteSession {
                 .into_iter()
                 .filter_map(RemoteMessage::from_session_message)
                 .collect(),
-            questions: session
-                .questions
-                .into_iter()
-                .map(|question| RemoteQuestion {
-                    options: question.options,
-                    text: question.text,
-                })
-                .collect(),
+            questions: session.questions.iter().map(RemoteQuestion::from).collect(),
             queued_actions: session.queued_actions,
             queued_messages: session.queued_messages,
             status: session.status.to_string(),
@@ -1148,6 +1718,15 @@ pub struct RemoteQuestion {
     pub options: Vec<String>,
     /// Question text.
     pub text: String,
+}
+
+impl From<&QuestionItem> for RemoteQuestion {
+    fn from(question: &QuestionItem) -> Self {
+        Self {
+            options: question.options.clone(),
+            text: question.text.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

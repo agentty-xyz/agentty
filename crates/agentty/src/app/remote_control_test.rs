@@ -759,6 +759,35 @@ async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_
 }
 
 #[tokio::test]
+async fn graph_actions_admitted_in_the_terminal_advance_the_remote_revision() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let mut view = crate::presentation::execution_graph::tests::graph_view();
+    view.graphs[0].nodes.truncate(1);
+    view.progress.as_mut().expect("progress").nodes.truncate(1);
+    let progress = view.progress.clone();
+    let mut repository = ag_store::MockGraphRepository::new();
+    repository
+        .expect_progress()
+        .returning(move |_| Ok(progress.clone()));
+    repository.expect_cancel().once().returning(|_| Ok(()));
+    app.services.set_graph_repository(Arc::new(repository));
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    let cancelled = app
+        .apply_graph_view_action(&view, crate::app::graph_view::GraphViewAction::Cancel)
+        .await;
+
+    // Assert
+    // Cancelling writes the graph without a session event; the revision
+    // still tells devices to refetch it.
+    assert_eq!(cancelled, Ok(()));
+    assert_eq!(*revisions.borrow_and_update(), initial_revision + 1);
+}
+
+#[tokio::test]
 async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;

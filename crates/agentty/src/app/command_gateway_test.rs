@@ -457,6 +457,7 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
             | SessionRuntimeCommand::ProjectStatus { .. }
             | SessionRuntimeCommand::GetGraphProposal { .. }
             | SessionRuntimeCommand::GetExecutionGraph { .. }
+            | SessionRuntimeCommand::GetSessionGraphs { .. }
             | SessionRuntimeCommand::RunGraphNode { .. }
             | SessionRuntimeCommand::GetTask { .. }
             | SessionRuntimeCommand::ListTasks { .. }

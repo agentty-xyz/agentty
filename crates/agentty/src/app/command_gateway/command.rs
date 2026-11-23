@@ -239,4 +239,19 @@ impl SessionMutation {
             Self::SyncProject => ("sync_project", None),
         }
     }
+
+    /// Whether the mutation changes a stored graph proposal or execution
+    /// graph, which no session event announces when it is written.
+    pub(super) fn changes_graph(&self) -> bool {
+        matches!(
+            self,
+            Self::GraphProposal { .. }
+                | Self::CancelExecutionGraph { .. }
+                | Self::ResumeExecutionGraph { .. }
+                | Self::ExtendExecutionGraphBudget { .. }
+                | Self::ContinueExecutionGraphNode { .. }
+                | Self::StartExecutionGraph { .. }
+                | Self::AcceptExecutionGraphResult { .. }
+        )
+    }
 }

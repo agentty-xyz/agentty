@@ -5,10 +5,13 @@ use std::time::{Duration, Instant};
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    ExecutionGraphProgress, ExecutionGraphStatus, GraphCompletionGate, GraphContext, GraphNode,
-    GraphNodeStatus, GraphProposalState, GraphProposalVersionOutcome, QuestionItem, SessionId,
-    push_numbered_questions,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate,
+    GraphContext, GraphDependency, GraphNode, GraphNodeStatus, GraphProposalState,
+    GraphProposalVersionOutcome, QuestionItem, SessionGraphApproval, SessionGraphProposalPhase,
+    SessionGraphSummary, SessionId, push_numbered_questions,
 };
+
+use super::execution_graph::{outputs_awaiting_acceptance, takes_revision_guidance};
 
 /// Short chat report for a settled proposal version. Clarification questions
 /// are listed as the record of what was asked and answered in the session
@@ -142,6 +145,227 @@ pub(crate) fn gate_label(gate: &GraphCompletionGate) -> String {
         GraphCompletionGate::ExecutionSucceeded => "successful execution without questions".into(),
         GraphCompletionGate::ResultValidated { output_name } => format!("validated {output_name}"),
         GraphCompletionGate::ResultAccepted { output_name } => format!("accepted {output_name}"),
+    }
+}
+
+/// Summary row of a cancelled proposal.
+pub(crate) const CANCELLED_LABEL: &str = "Cancelled. No graph was launched.";
+
+/// Summary row of an approved proposal whose graph progress is not read yet.
+pub(crate) const STARTING_LABEL: &str = "Approved; loading execution status";
+
+/// Summary row of a proposal version that is still generating.
+pub(crate) const GENERATING_LABEL: &str = "Generating preview...";
+
+/// Summary row of a proposal waiting for clarification answers.
+pub(crate) const NEEDS_INPUT_LABEL: &str = "Needs your input";
+
+/// Summary row of a resolved proposal, and status of a node output, that
+/// waits for the user's approval.
+pub(crate) const AWAITING_APPROVAL_LABEL: &str = "Awaiting your approval";
+
+/// Summary row of a proposal the host could not resolve.
+const UNRESOLVED_LABEL: &str = "Unresolved. Reply to revise or cancel it.";
+
+/// Summary row of a proposal whose generation failed with `error`.
+pub(crate) fn generation_failed_label(error: &str) -> String {
+    format!("Generation failed: {error}")
+}
+
+/// Tells the user how to act on `node_id`'s output that waits for their
+/// approval; a reply to a paused graph resumes it before acting.
+pub(crate) fn approval_request(node_id: &str, takes_revision: bool, is_paused: bool) -> String {
+    let action = if takes_revision {
+        "reply in chat to accept or revise it"
+    } else {
+        "reply in chat to accept it"
+    };
+    let resume = if is_paused {
+        " and resume the graph"
+    } else {
+        ""
+    };
+
+    format!("{node_id} awaits your approval; {action}{resume}")
+}
+
+/// User-facing label of an overall graph status.
+pub(crate) fn graph_status_label(status: ExecutionGraphStatus) -> &'static str {
+    match status {
+        ExecutionGraphStatus::Running => "Running",
+        ExecutionGraphStatus::Blocked => "Blocked",
+        ExecutionGraphStatus::Paused => "Paused",
+        ExecutionGraphStatus::Completed => "Completed",
+        ExecutionGraphStatus::Failed => "Failed",
+        ExecutionGraphStatus::Cancelled => "Canceled",
+    }
+}
+
+/// Status of one node as the graph views show it: its live state, or a
+/// pending acceptance of its output by the user.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NodeStatus {
+    /// A dependent waits for the user to accept this node's output.
+    AwaitingApproval,
+    /// Live execution state reported by the graph.
+    Live(GraphNodeStatus),
+}
+
+impl NodeStatus {
+    /// Returns the user-facing label for this status.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::AwaitingApproval => AWAITING_APPROVAL_LABEL,
+            Self::Live(GraphNodeStatus::Pending) => "Waiting",
+            Self::Live(GraphNodeStatus::Queued | GraphNodeStatus::Running) => "Working",
+            Self::Live(GraphNodeStatus::AwaitingAnswers) => "Needs your input",
+            Self::Live(GraphNodeStatus::Succeeded) => "Done",
+            Self::Live(GraphNodeStatus::Failed) => "Failed",
+            Self::Live(GraphNodeStatus::Cancelled) => "Canceled",
+        }
+    }
+}
+
+/// Names what a dependency waits for, omitting the source of an output gate
+/// when it is the node drawn directly above.
+pub(crate) fn edge_label(dependency: &GraphDependency, previous: Option<&str>) -> String {
+    let source = dependency.node_id.as_str();
+    let from = if previous == Some(source) {
+        String::new()
+    } else {
+        format!(" from {source}")
+    };
+
+    match &dependency.gate {
+        GraphCompletionGate::ExecutionSucceeded => format!("after {source}"),
+        GraphCompletionGate::ResultValidated { output_name } => {
+            format!("needs {output_name}{from}")
+        }
+        GraphCompletionGate::ResultAccepted { output_name } => {
+            format!("needs {output_name} accepted{from}")
+        }
+    }
+}
+
+/// A dependency is satisfied once its source succeeded and the dependent no
+/// longer reports it as a blocking gate.
+pub(crate) fn is_dependency_satisfied(
+    progress: Option<&ExecutionGraphProgress>,
+    node: &GraphNode,
+    dependency: &GraphDependency,
+) -> bool {
+    let Some(progress) = progress else {
+        return false;
+    };
+    let source_succeeded = progress.nodes.iter().any(|state| {
+        state.node_id == dependency.node_id && state.status == GraphNodeStatus::Succeeded
+    });
+
+    source_succeeded
+        && progress
+            .nodes
+            .iter()
+            .find(|state| state.node_id == node.id)
+            .is_some_and(|state| {
+                !state.blocked.iter().any(|reason| {
+                    matches!(
+                        reason,
+                        GraphBlockedReason::Dependency { node_id, .. } if *node_id == dependency.node_id
+                    )
+                })
+            })
+}
+
+/// Where `state`'s current version stands, with the summary row the
+/// sidebar shows for it before its graph's progress is read.
+pub(crate) fn proposal_standing(state: &GraphProposalState) -> (SessionGraphProposalPhase, String) {
+    let version = &state.version;
+    if version.is_cancelled {
+        return (SessionGraphProposalPhase::Cancelled, CANCELLED_LABEL.into());
+    }
+    if version.approval.is_some() {
+        return (SessionGraphProposalPhase::Approved, STARTING_LABEL.into());
+    }
+
+    match &version.outcome {
+        GraphProposalVersionOutcome::Generating => (
+            SessionGraphProposalPhase::Generating,
+            GENERATING_LABEL.into(),
+        ),
+        GraphProposalVersionOutcome::Failed(error) => (
+            SessionGraphProposalPhase::Failed,
+            generation_failed_label(error),
+        ),
+        GraphProposalVersionOutcome::Generated { launch, response } => match &response.outcome {
+            GraphProposalOutcome::Clarification { .. } => (
+                SessionGraphProposalPhase::NeedsInput,
+                NEEDS_INPUT_LABEL.into(),
+            ),
+            GraphProposalOutcome::Proposal { .. } if launch.is_some() => (
+                SessionGraphProposalPhase::AwaitingApproval,
+                AWAITING_APPROVAL_LABEL.into(),
+            ),
+            GraphProposalOutcome::Proposal { .. } => (
+                SessionGraphProposalPhase::Unresolved,
+                UNRESOLVED_LABEL.into(),
+            ),
+        },
+    }
+}
+
+/// What the chat summarizes about the latest `proposal` and, once
+/// approved, the live `progress` of the graph it launched, with the
+/// sidebar's wording. A cancelled proposal reports no progress.
+pub(crate) fn graph_summary(
+    proposal: &GraphProposalState,
+    progress: Option<&ExecutionGraphProgress>,
+) -> SessionGraphSummary {
+    let (phase, label) = proposal_standing(proposal);
+    let nodes = launched_graph_nodes(proposal);
+    let mut summary = SessionGraphSummary {
+        awaiting_approval: Vec::new(),
+        done: 0,
+        label,
+        phase,
+        status: None,
+        total: nodes.len(),
+        version: proposal.version.number,
+    };
+    let Some(progress) = progress.filter(|_| phase != SessionGraphProposalPhase::Cancelled) else {
+        return summary;
+    };
+    let is_paused = progress.status == ExecutionGraphStatus::Paused;
+    summary.awaiting_approval = outputs_awaiting_acceptance(progress)
+        .into_iter()
+        .map(|(producer, _)| {
+            let takes_revision = takes_revision_guidance(nodes, progress, &producer.node_id);
+
+            SessionGraphApproval {
+                node_id: producer.node_id.clone(),
+                takes_revision,
+                text: approval_request(&producer.node_id, takes_revision, is_paused),
+            }
+        })
+        .collect();
+    summary.done = progress
+        .nodes
+        .iter()
+        .filter(|state| state.status == GraphNodeStatus::Succeeded)
+        .count();
+    summary.label = graph_status_label(progress.status).to_string();
+    summary.status = Some(progress.status);
+
+    summary
+}
+
+/// Returns the resolved nodes of a proposal that is not cancelled, or none.
+pub(crate) fn launched_graph_nodes(state: &GraphProposalState) -> &[GraphNode] {
+    match &state.version.outcome {
+        GraphProposalVersionOutcome::Generated {
+            launch: Some(launch),
+            ..
+        } if !state.version.is_cancelled => launch.graph.nodes.as_slice(),
+        _ => &[],
     }
 }
 

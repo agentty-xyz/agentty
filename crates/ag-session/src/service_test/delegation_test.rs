@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
-use crate::ReasoningLevel;
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
 use crate::service::{
@@ -14,6 +13,7 @@ use crate::service::{
     DurableMessageVisibility, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
     QuestionAnswer, SessionBackend, SessionOperation, SessionService, SessionSettingsChange,
 };
+use crate::{ReasoningLevel, SessionGraphs, SessionGraphsRequest};
 
 #[tokio::test]
 async fn service_delegates_create_and_get() {
@@ -360,6 +360,8 @@ async fn service_delegates_settings_changes_to_supporting_hosts() {
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
+    /// Graph reads asked for, in order.
+    graph_reads: Mutex<Vec<SessionGraphsRequest>>,
     inner: FakeBackend,
     /// Whether a project sync was asked for and still runs.
     is_project_syncing: Mutex<bool>,
@@ -378,7 +380,22 @@ impl SessionBackend for OptionalBackend {
                 | SessionOperation::SessionSettings
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
+                | SessionOperation::Graphs
         )
+    }
+
+    // Every session has no graph and no proposal.
+    async fn session_graphs(
+        &self,
+        request: SessionGraphsRequest,
+    ) -> Result<SessionGraphs, SessionError> {
+        self.graph_reads.lock().expect("graph reads").push(request);
+
+        Ok(SessionGraphs {
+            graph: None,
+            graphs: Vec::new(),
+            proposal: None,
+        })
     }
 
     async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
@@ -565,5 +582,61 @@ async fn service_delegates_project_status_and_sync_to_supporting_hosts() {
             }),
             ..idle_project
         })
+    );
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_session_graphs() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+
+    // Act
+    let supported = service.supports(SessionOperation::Graphs);
+    let graphs = service
+        .session_graphs(SessionGraphsRequest {
+            graph_id: None,
+            node_id: None,
+            session_id: SessionId::from("session-1"),
+        })
+        .await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        graphs,
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn service_delegates_session_graphs_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+    let request = SessionGraphsRequest {
+        graph_id: Some("graph".to_string()),
+        node_id: Some("review".to_string()),
+        session_id: SessionId::from("session-1"),
+    };
+
+    // Act
+    let supported = service.supports(SessionOperation::Graphs);
+    let graphs = service.session_graphs(request.clone()).await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(
+        graphs,
+        Ok(SessionGraphs {
+            graph: None,
+            graphs: Vec::new(),
+            proposal: None,
+        })
+    );
+    assert_eq!(
+        backend.graph_reads.lock().expect("graph reads").as_slice(),
+        [request]
     );
 }

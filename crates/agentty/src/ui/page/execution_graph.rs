@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use ag_session::{GraphBlockedReason, GraphNodeStatus};
+use ag_session::GraphNodeStatus;
 use ag_tui_text::text_util::{
     borrowed_paint_line, split_line_at_width, wrap_lines_breaking_long_words,
 };
@@ -11,7 +11,10 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
+use crate::presentation::execution_graph::{
+    FOCUSED_REVIEW_NOTE, GraphEditKind, GraphEditor, GraphView, PROPOSAL_REPLY_HINT,
+    QUESTION_REPLY_HINT, UNAVAILABLE_STATUS_LABEL, blocked_reason_label,
+};
 use crate::presentation::graph_chat::{gate_label, proposal_preview};
 use crate::ui::Component;
 use crate::ui::component::chat_input::ChatInput;
@@ -46,7 +49,7 @@ pub(crate) fn render(
                         graph.id,
                         graph.revision,
                         view.progress.as_ref().map_or_else(
-                            || "Unavailable".into(),
+                            || UNAVAILABLE_STATUS_LABEL.into(),
                             |progress| format!("{:?}", progress.status)
                         )
                     )
@@ -215,7 +218,7 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
             .selected_proposal()
             .is_some_and(|state| !state.version.is_cancelled && state.version.approval.is_none())
         {
-            actions.push("reply in chat to approve, revise, or cancel");
+            actions.push(PROPOSAL_REPLY_HINT);
         }
         return actions;
     }
@@ -229,7 +232,7 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
         .node()
         .is_some_and(|node| node.status == GraphNodeStatus::AwaitingAnswers)
     {
-        actions.push("reply in chat to answer");
+        actions.push(QUESTION_REPLY_HINT);
     }
     if view.can_retry() {
         actions.push("t retry node");
@@ -266,10 +269,8 @@ fn details(view: &GraphView) -> String {
         node.objective
     );
     if view.is_focused_review() {
-        text.push_str(
-            "Focused review: use Regenerate review in session view for a new generation with \
-             checkpoints. Generic retry/resume/reply is unavailable.\n",
-        );
+        text.push_str(FOCUSED_REVIEW_NOTE);
+        text.push('\n');
     }
     for dependency in &node.dependencies {
         let _ = writeln!(
@@ -287,20 +288,7 @@ fn details(view: &GraphView) -> String {
             progress.executions.len()
         );
         for reason in &progress.blocked {
-            let reason = match reason {
-                GraphBlockedReason::Dependency { gate, node_id } => {
-                    format!("{node_id}: {}", gate_label(gate))
-                }
-                GraphBlockedReason::EnvironmentBusy => "Workspace is busy".into(),
-                GraphBlockedReason::AwaitingDispatch => {
-                    "Waiting for worker capacity or workspace".into()
-                }
-                GraphBlockedReason::BudgetExhausted(name) => {
-                    format!("Provider-call budget exhausted: {name}")
-                }
-                GraphBlockedReason::ResumeRequired => "Paused; resume required".into(),
-            };
-            let _ = writeln!(text, "Blocked: {reason}");
+            let _ = writeln!(text, "Blocked: {}", blocked_reason_label(reason));
         }
         if let Some(error) = &progress.last_error {
             let _ = writeln!(text, "Error: {error}");

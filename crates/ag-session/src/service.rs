@@ -125,6 +125,10 @@ pub enum SessionOperation {
     /// Syncing the active project's branch with its upstream through
     /// [`SessionBackend::sync_project`].
     SyncProject,
+    /// Reading a session's graph proposal and execution graphs through
+    /// [`SessionBackend::session_graphs`], and summarizing them in
+    /// [`Session::graph`].
+    Graphs,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
@@ -331,6 +335,20 @@ pub trait SessionBackend: Send + Sync {
         graph_id: &str,
     ) -> Result<Option<crate::ExecutionGraphProgress>, SessionError> {
         let _ = graph_id;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Reads a session's graphs, its latest proposal, and the selected
+    /// graph's live progress and outputs, without launching or changing any
+    /// work.
+    async fn session_graphs(
+        &self,
+        request: crate::SessionGraphsRequest,
+    ) -> Result<crate::SessionGraphs, SessionError> {
+        let _ = request;
 
         Err(SessionError::Operation(
             "Host does not support execution graphs".into(),
@@ -768,6 +786,20 @@ impl SessionService {
         graph_id: &str,
     ) -> Result<Option<crate::ExecutionGraphProgress>, SessionError> {
         self.backend.get_execution_graph(graph_id).await
+    }
+
+    /// Reads a session's graphs as an inspector shows them: every graph,
+    /// the latest proposal with its preview, and the selected graph with
+    /// its live progress and the selected node's outputs.
+    ///
+    /// # Errors
+    /// Rejects a `graph_id` of another session, and returns failed
+    /// persistence or query delivery errors.
+    pub async fn session_graphs(
+        &self,
+        request: crate::SessionGraphsRequest,
+    ) -> Result<crate::SessionGraphs, SessionError> {
+        self.backend.session_graphs(request).await
     }
 
     /// Permanently cancels this graph without canceling unrelated session work.

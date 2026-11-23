@@ -752,6 +752,97 @@ async fn session_diff_lists_files_and_returns_one_patch_for_listed_sessions() {
 }
 
 #[tokio::test]
+async fn session_graphs_are_read_for_listed_sessions_with_the_selection_asked_for() {
+    // Arrange
+    let graphs = ag_session::test_support::session_graphs("session-1");
+    let serving = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_graphs(graphs.clone()),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+    let not_serving = fixture(MemoryDeviceStore::default());
+    let graphs_request =
+        |session_id: &str, graph_id: Option<&str>| RemoteRequest::GetSessionGraphs {
+            graph_id: graph_id.map(str::to_string),
+            known: None,
+            node_id: graph_id.map(|_| "fix".to_string()),
+            session_id: session_id.to_string(),
+        };
+
+    // Act
+    let shown = reply_result(&serving.state, graphs_request("session-1", None)).await;
+    let selected = reply_result(&serving.state, graphs_request("session-1", Some("graph"))).await;
+    let unlisted = reply_result(&serving.state, graphs_request("other-project", None)).await;
+    let unsupported = reply_result(&not_serving.state, graphs_request("session-1", None)).await;
+
+    // Assert
+    let expected = RemoteResult::Ok(RemoteResponse::from_graphs(graphs));
+    assert_eq!(shown, expected);
+    assert_eq!(selected, expected);
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list",
+            "graphs:session-1:-:-",
+            "list",
+            "graphs:session-1:graph:fix",
+            "list"
+        ]
+    );
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn session_graphs_answer_unchanged_only_for_the_version_the_device_shows() {
+    // Arrange
+    let graphs = ag_session::test_support::session_graphs("session-1");
+    let fixture = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_graphs(graphs.clone()),
+        Arc::new(ReplayEntropy::new(vec![0])),
+    );
+    let full = RemoteResponse::from_graphs(graphs);
+    let version = match &full {
+        RemoteResponse::Graphs { version, .. } => version.clone(),
+        _ => String::new(),
+    };
+    let graphs_request = |known: Option<&str>| RemoteRequest::GetSessionGraphs {
+        graph_id: None,
+        known: known.map(str::to_string),
+        node_id: None,
+        session_id: "session-1".to_string(),
+    };
+
+    // Act
+    let unchanged = reply_result(&fixture.state, graphs_request(Some(&version))).await;
+    let stale = reply_result(&fixture.state, graphs_request(Some("stale"))).await;
+    let fresh = reply_result(&fixture.state, graphs_request(None)).await;
+
+    // Assert
+    assert_ne!(version, "");
+    assert_eq!(
+        unchanged,
+        RemoteResult::Ok(RemoteResponse::Graphs {
+            graph: None,
+            graphs: Vec::new(),
+            proposal: None,
+            unchanged: true,
+            version,
+        })
+    );
+    assert_eq!(stale, RemoteResult::Ok(full.clone()));
+    assert_eq!(fresh, RemoteResult::Ok(full));
+}
+
+#[tokio::test]
 async fn session_diff_of_a_session_the_host_no_longer_loads_is_not_found() {
     // Arrange
     let fixture = StateFixture::new(

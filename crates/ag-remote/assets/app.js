@@ -6,6 +6,7 @@ import { connectionLostError, createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
 import { parseProject } from "./format.mjs";
+import { createGraph } from "./graph.mjs";
 import { createHome } from "./home.mjs";
 import { isSupported } from "./noise.mjs";
 import { createProject } from "./project.mjs";
@@ -104,6 +105,7 @@ const elements = {
   "heading-sub": document.getElementById("heading-sub"),
   "session-status": document.getElementById("session-status"),
   diff: document.getElementById("diff"),
+  graphs: document.getElementById("graphs"),
   merge: document.getElementById("merge"),
   publish: document.getElementById("publish"),
   "publish-label": document.getElementById("publish-label"),
@@ -116,6 +118,8 @@ const elements = {
   "sheet-details": document.getElementById("sheet-details"),
   "sheet-diff": document.getElementById("sheet-diff"),
   "sheet-diff-label": document.getElementById("sheet-diff-label"),
+  "sheet-graphs": document.getElementById("sheet-graphs"),
+  "sheet-graphs-label": document.getElementById("sheet-graphs-label"),
   "sheet-merge": document.getElementById("sheet-merge"),
   "sheet-merge-label": document.getElementById("sheet-merge-label"),
   "sheet-merge-note": document.getElementById("sheet-merge-note"),
@@ -171,6 +175,19 @@ const elements = {
   "diff-summary": document.getElementById("diff-summary"),
   "diff-error": document.getElementById("diff-error"),
   "diff-files": document.getElementById("diff-files"),
+  "graph-view": document.getElementById("graph-view"),
+  "graph-prev": document.getElementById("graph-prev"),
+  "graph-position": document.getElementById("graph-position"),
+  "graph-next": document.getElementById("graph-next"),
+  "graph-refresh": document.getElementById("graph-refresh"),
+  "graph-title": document.getElementById("graph-title"),
+  "graph-error": document.getElementById("graph-error"),
+  "graph-hints": document.getElementById("graph-hints"),
+  "graph-note": document.getElementById("graph-note"),
+  "graph-preview": document.getElementById("graph-preview"),
+  "graph-nodes": document.getElementById("graph-nodes"),
+  "graph-detail": document.getElementById("graph-detail"),
+  "graph-summary": document.getElementById("graph-summary"),
   dock: document.getElementById("dock"),
   "draft-preview": document.getElementById("draft-preview"),
   transcript: document.getElementById("transcript"),
@@ -786,6 +803,25 @@ const chat = createChat({
     request: request,
   }),
   document: document,
+  graph: createGraph({
+    document: document,
+    elements: {
+      detail: elements["graph-detail"],
+      error: elements["graph-error"],
+      hints: elements["graph-hints"],
+      next: elements["graph-next"],
+      nodes: elements["graph-nodes"],
+      note: elements["graph-note"],
+      position: elements["graph-position"],
+      prev: elements["graph-prev"],
+      preview: elements["graph-preview"],
+      refresh: elements["graph-refresh"],
+      title: elements["graph-title"],
+      view: elements["graph-view"],
+    },
+    request: request,
+    window: window,
+  }),
   elements: {
     actionError: elements["action-error"],
     actionNote: elements["action-note"],
@@ -805,6 +841,8 @@ const chat = createChat({
     draftPreview: elements["draft-preview"],
     focusedReview: elements["focused-review"],
     gone: elements["session-gone"],
+    graphSummary: elements["graph-summary"],
+    graphs: elements.graphs,
     goneHome: elements["session-gone-home"],
     heading: elements.heading,
     jump: elements.jump,
@@ -830,6 +868,8 @@ const chat = createChat({
     sheet: elements["session-sheet"],
     sheetDiff: elements["sheet-diff"],
     sheetDiffLabel: elements["sheet-diff-label"],
+    sheetGraphs: elements["sheet-graphs"],
+    sheetGraphsLabel: elements["sheet-graphs-label"],
     sheetMerge: elements["sheet-merge"],
     sheetMergeLabel: elements["sheet-merge-label"],
     sheetMergeNote: elements["sheet-merge-note"],

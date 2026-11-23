@@ -28,7 +28,10 @@ import {
   wrappedParts,
 } from "../../assets/chat.mjs";
 import { createDiff } from "../../assets/diff.mjs";
+import { createGraph } from "../../assets/graph.mjs";
+import { parsePairingLink } from "../../assets/relay.mjs";
 import { createSettings } from "../../assets/settings.mjs";
+import { NARROW_QUERY, createShell } from "../../assets/shell.mjs";
 
 const INDEX_HTML = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
 
@@ -53,6 +56,8 @@ const ELEMENT_IDS = {
   focusedReview: "focused-review",
   gone: "session-gone",
   goneHome: "session-gone-home",
+  graphSummary: "graph-summary",
+  graphs: "graphs",
   heading: "heading",
   jump: "jump",
   merge: "merge",
@@ -77,6 +82,8 @@ const ELEMENT_IDS = {
   sheet: "session-sheet",
   sheetDiff: "sheet-diff",
   sheetDiffLabel: "sheet-diff-label",
+  sheetGraphs: "sheet-graphs",
+  sheetGraphsLabel: "sheet-graphs-label",
   sheetMerge: "sheet-merge",
   sheetMergeLabel: "sheet-merge-label",
   sheetMergeNote: "sheet-merge-note",
@@ -93,6 +100,22 @@ const ELEMENT_IDS = {
   syncDialog: "sync-dialog",
   syncTarget: "sync-target",
   transcript: "transcript",
+};
+
+// Element names `createGraph` takes, by the id each has in index.html.
+const GRAPH_IDS = {
+  detail: "graph-detail",
+  error: "graph-error",
+  hints: "graph-hints",
+  next: "graph-next",
+  nodes: "graph-nodes",
+  note: "graph-note",
+  position: "graph-position",
+  prev: "graph-prev",
+  preview: "graph-preview",
+  refresh: "graph-refresh",
+  title: "graph-title",
+  view: "graph-view",
 };
 
 // Element names `createSettings` takes, by the id each has in index.html.
@@ -131,13 +154,16 @@ function session(overrides = {}) {
 function mountChat({
   capabilities = [],
   isFinePointer = true,
+  isNarrow = false,
   now = () => 0,
   respond = () => ({ kind: "accepted" }),
   sessionStorage = new MemoryStorage(),
   ResizeObserver = undefined,
+  url = "http://127.0.0.1/",
 } = {}) {
-  const window = createWindow(createDocument(INDEX_HTML), "http://127.0.0.1/", {
-    matches: (query) => query === "(pointer: fine)" && isFinePointer,
+  const window = createWindow(createDocument(INDEX_HTML), url, {
+    matches: (query) =>
+      (query === "(pointer: fine)" && isFinePointer) || (query === NARROW_QUERY && isNarrow),
   });
   window.sessionStorage = sessionStorage;
   window.ResizeObserver = ResizeObserver;
@@ -166,6 +192,12 @@ function mountChat({
     }),
     document: document,
     elements: elements,
+    graph: createGraph({
+      document: document,
+      elements: Object.fromEntries(Object.entries(GRAPH_IDS).map(([name, id]) => [name, byId(id)])),
+      request: request,
+      window: window,
+    }),
     now: now,
     onHome: () => {
       homes += 1;
@@ -884,6 +916,279 @@ test("Diff swaps the transcript and the dock for the session's files and back", 
   chat.open("s2");
   assert.equal(byId("diff-view").hidden, true);
   assert.equal(byId("dock").hidden, false);
+});
+
+const GRAPH_SUMMARY = {
+  awaiting: [{ node_id: "inspect", text: "inspect awaits your approval; reply in chat to accept it" }],
+  done: 1,
+  label: "Blocked",
+  phase: "approved",
+  status: "blocked",
+  total: 2,
+  version: 3,
+};
+
+function graphsAnswer(body) {
+  return body.method === "get_session_graphs"
+    ? { graphs: [{ id: "graph", revision: 1 }], kind: "graphs" }
+    : { kind: "accepted" };
+}
+
+test("the graph summary sits above the composer and opens the graphs, which back closes", async () => {
+  const plain = mountChat();
+  plain.chat.render(session({ graph: GRAPH_SUMMARY }));
+  // Without the capability the summary still shows, but opens nothing.
+  assert.equal(plain.byId("graph-summary").hidden, false);
+  assert.equal(plain.byId("graph-summary").disabled, true);
+  assert.equal(plain.byId("graphs").hidden, true);
+  assert.equal(plain.byId("sheet-graphs").hidden, true);
+  plain.byId("graph-summary").click();
+  assert.deepEqual(plain.requests, []);
+
+  const { byId, chat, requests, window } = mountChat({
+    capabilities: ["graphs"],
+    respond: graphsAnswer,
+  });
+  chat.render(session());
+  assert.equal(byId("graph-summary").hidden, true);
+  // Graphs is offered in every status, as the terminal's `w` is.
+  assert.equal(byId("graphs").hidden, false);
+  assert.equal(byId("sheet-graphs").hidden, false);
+  chat.render(session({ graph: GRAPH_SUMMARY }));
+  const summary = byId("graph-summary");
+  assert.equal(summary.disabled, false);
+  assert.equal(summary.querySelector(".graph-summary-title").textContent, "Execution graph · v3");
+  assert.equal(summary.querySelector(".graph-summary-count").textContent, "1/2 done");
+  assert.equal(summary.querySelector(".graph-summary-status").textContent, "●Blocked");
+  assert.equal(
+    summary.querySelector(".graph-summary-awaiting").textContent,
+    "inspect awaits your approval; reply in chat to accept it",
+  );
+  const historyLength = window.history.length;
+
+  summary.click();
+  await settle();
+  assert.deepEqual(requests, [{ method: "get_session_graphs", session_id: "s1" }]);
+  assert.equal(byId("graph-view").hidden, false);
+  assert.equal(byId("chat-scroll").hidden, true);
+  assert.equal(byId("dock").hidden, true);
+  assert.equal(byId("graphs").getAttribute("aria-pressed"), "true");
+  assert.equal(byId("sheet-graphs-label").textContent, "Back to chat");
+  assert.equal(window.history.length, historyLength + 1);
+  // Each snapshot reads the open graphs again.
+  chat.render(session({ graph: GRAPH_SUMMARY }));
+  await settle();
+  assert.equal(requests.length, 2);
+
+  // The back gesture returns to the chat.
+  window.history.back();
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("chat-scroll").hidden, false);
+  assert.equal(byId("dock").hidden, false);
+  assert.equal(byId("sheet-graphs-label").textContent, "Graphs");
+
+  // The header button closes them through the same history entry, and on
+  // a phone the sheet does.
+  byId("graphs").click();
+  await settle();
+  byId("graphs").click();
+  assert.equal(byId("graph-view").hidden, true);
+  byId("session-more").click();
+  byId("sheet-graphs").click();
+  await settle();
+  assert.equal(byId("graph-view").hidden, false);
+  byId("session-more").click();
+  byId("sheet-graphs").click();
+  assert.equal(byId("graph-view").hidden, true);
+
+  // Another session or a lost capability closes them.
+  byId("graphs").click();
+  chat.setCapabilities([]);
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("dock").hidden, false);
+  chat.setCapabilities(["graphs"]);
+  byId("graphs").click();
+  chat.open("s2");
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("graph-summary").hidden, true);
+  // A back gesture after that changes nothing more.
+  window.history.back();
+  assert.equal(byId("graph-view").hidden, true);
+});
+
+test("the graphs and the diff replace each other and leave no stale back step", async () => {
+  const { byId, chat, window } = mountChat({
+    capabilities: ["diff", "graphs"],
+    respond: (body) =>
+      body.method === "get_session_diff" ? { files: [], kind: "diff" } : graphsAnswer(body),
+  });
+  chat.render(session());
+  byId("graphs").click();
+  await settle();
+  byId("diff").click();
+  await settle();
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("diff-view").hidden, false);
+  assert.equal(byId("chat-scroll").hidden, true);
+  byId("graphs").click();
+  await settle();
+  assert.equal(byId("diff-view").hidden, true);
+  assert.equal(byId("graph-view").hidden, false);
+  assert.equal(byId("dock").hidden, true);
+
+  // After the diff replaced them, the graphs still close on the first try,
+  // with their button and with the back gesture, and leave one entry.
+  byId("graphs").click();
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("chat-scroll").hidden, false);
+  const historyLength = window.history.length;
+  for (let round = 0; round < 2; round += 1) {
+    byId("graphs").click();
+    await settle();
+    byId("diff").click();
+    await settle();
+    byId("graphs").click();
+    await settle();
+  }
+  assert.equal(window.history.length, historyLength);
+  window.history.back();
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(byId("diff-view").hidden, true);
+  assert.equal(byId("dock").hidden, false);
+});
+
+// Mounts the chat on a phone at the route of the open session `s1`, with
+// the shell's drawer wired as app.js wires it: a route to the open session
+// opens nothing again.
+function mountPhone() {
+  const page = mountChat({
+    capabilities: ["graphs"],
+    isNarrow: true,
+    respond: graphsAnswer,
+    url: "http://127.0.0.1/#s=s1",
+  });
+  const byId = page.byId;
+  const shell = createShell({
+    document: page.document,
+    elements: {
+      app: byId("shell"),
+      close: byId("drawer-close"),
+      hide: byId("sidebar-hide"),
+      main: byId("main"),
+      menu: byId("menu"),
+      scrim: byId("scrim"),
+      sidebar: byId("sidebar"),
+    },
+    onRoute: (route) => {
+      if (route.sessionId !== "s1") {
+        page.chat.close();
+      }
+    },
+    parsePairingLink: parsePairingLink,
+    window: page.window,
+  });
+  page.chat.render(session());
+
+  return { ...page, shell };
+}
+
+test("on a phone, the open session chosen again in the drawer over the graphs leaves one step to close them", async () => {
+  for (const close of ["sheet", "back"]) {
+    const { byId, shell, window } = mountPhone();
+    byId("session-more").click();
+    byId("sheet-graphs").click();
+    await settle();
+    byId("menu").click();
+    assert.equal(shell.isOpen(), true);
+
+    // The drawer's list routes to the session it shows already.
+    shell.showSession("s1");
+    assert.equal(shell.isOpen(), false);
+    assert.equal(byId("graph-view").hidden, false);
+    assert.equal(window.history.state?.graphs, true);
+
+    if (close === "sheet") {
+      byId("session-more").click();
+      byId("sheet-graphs").click();
+    } else {
+      window.history.back();
+    }
+    assert.equal(byId("graph-view").hidden, true, close);
+    assert.equal(byId("chat-scroll").hidden, false);
+    assert.equal(byId("dock").hidden, false);
+    assert.equal(window.location.hash, "#s=s1");
+    assert.equal(window.history.state, null);
+  }
+});
+
+test("the graphs close in one step when their entry is not the current one", async () => {
+  const { byId, chat, window } = mountChat({ capabilities: ["graphs"], respond: graphsAnswer });
+  chat.render(session());
+  byId("graphs").click();
+  await settle();
+  // An entry above theirs: closing goes back over nothing.
+  window.history.pushState(null, "", window.location.href);
+  byId("graphs").click();
+  assert.equal(byId("graph-view").hidden, true);
+  assert.equal(window.history.state, null);
+  // Their entry, reached later, opens nothing.
+  window.history.back();
+  assert.equal(window.history.state?.graphs, true);
+  assert.equal(byId("graph-view").hidden, true);
+});
+
+test("Graphs pressed again before the browser went back asks to go back only once", async () => {
+  const { byId, chat, window } = mountChat({ capabilities: ["graphs"], respond: graphsAnswer });
+  chat.render(session());
+  byId("graphs").click();
+  await settle();
+  const back = window.history.back;
+  let backs = 0;
+  window.history.back = () => {
+    backs += 1;
+  };
+
+  byId("graphs").click();
+  byId("graphs").click();
+  byId("graphs").click();
+
+  assert.equal(backs, 1);
+  // Once the step lands, the chat shows and one press opens them again.
+  window.history.back = back;
+  back();
+  assert.equal(byId("graph-view").hidden, true);
+  byId("graphs").click();
+  await settle();
+  assert.equal(byId("graph-view").hidden, false);
+  assert.equal(window.history.state?.graphs, true);
+});
+
+test("the graph summary keeps a reader at the end there as it appears or grows", () => {
+  const { byId, chat } = mountChat();
+  const scroller = byId("chat-scroll");
+  layout(scroller, { client: 500, height: 1000, top: 0 });
+  chat.render(session());
+  assert.equal(scroller.scrollTop, 1000);
+
+  // A reader near the end follows it as the summary appears and grows.
+  // The fake DOM has no layout, so the height stays put.
+  scroller.scrollTop = 460;
+  chat.render(session({ graph: GRAPH_SUMMARY }));
+  assert.equal(scroller.scrollTop, 1000);
+  scroller.scrollTop = 470;
+  chat.render(session({ graph: { ...GRAPH_SUMMARY, done: 2 } }));
+  assert.equal(scroller.scrollTop, 1000);
+  // An unchanged summary moves nothing.
+  scroller.scrollTop = 480;
+  chat.render(session({ graph: { ...GRAPH_SUMMARY, done: 2 } }));
+  assert.equal(scroller.scrollTop, 480);
+
+  // A reader further up keeps their place, and the summary is no news for
+  // the jump button: it shows beside the transcript.
+  scroller.scrollTop = 100;
+  chat.render(session({ graph: { ...GRAPH_SUMMARY, done: 1 } }));
+  assert.equal(scroller.scrollTop, 100);
+  assert.equal(byId("jump").hidden, true);
 });
 
 test("header actions appear only with their capability and status", () => {

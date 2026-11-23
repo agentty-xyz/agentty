@@ -91,18 +91,24 @@ struct SuiteRun {
 }
 
 impl SuiteRun {
-    /// Runs the `node --test` suite `name` from [`WEB_TESTS`].
-    async fn start(name: &str) -> TestResult<Self> {
-        let output = tokio::time::timeout(
-            SUITE_TIMEOUT,
-            Command::new("node")
-                .arg("--test")
-                .arg(format!("{WEB_TESTS}/{name}"))
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await?
-        .map_err(|error| format!("Node.js 22 or newer must be on PATH: {error}"))?;
+    /// Starts the `node --test` suite `name` from [`WEB_TESTS`], so the
+    /// suites run side by side.
+    fn start(name: &str) -> TestResult<Child> {
+        let process = Command::new("node")
+            .arg("--test")
+            .arg(format!("{WEB_TESTS}/{name}"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("Node.js 22 or newer must be on PATH: {error}"))?;
+
+        Ok(process)
+    }
+
+    /// Waits for a started suite to exit and collects its outcome.
+    async fn finish(process: Child) -> TestResult<Self> {
+        let output = tokio::time::timeout(SUITE_TIMEOUT, process.wait_with_output()).await??;
 
         Ok(Self {
             passed: output.status.success(),
@@ -134,10 +140,14 @@ async fn every_node_suite_in_the_web_tests_passes() -> TestResult {
     // Arrange: every suite on disk runs, so a new one needs no runner.
     let suites = node_suites()?;
 
-    // Act
-    let mut runs = Vec::new();
+    // Act: start them all, then collect each outcome.
+    let mut started = Vec::new();
     for suite in &suites {
-        runs.push((suite, SuiteRun::start(suite).await?));
+        started.push((suite, SuiteRun::start(suite)?));
+    }
+    let mut runs = Vec::new();
+    for (suite, process) in started {
+        runs.push((suite, SuiteRun::finish(process).await?));
     }
 
     // Assert
@@ -326,6 +336,7 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     let mut app = WebDevice::run(APP_SCRIPT, &[&address, "route", &token])?;
     let restored = app.next_step().await?;
     let sent = app.next_step().await?;
+    let graphs = app.next_step().await?;
     let diff = app.next_step().await?;
     let settings = app.next_step().await?;
     let sync = app.next_step().await?;
@@ -397,9 +408,11 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
         })
     );
     assert_eq!(sent, json!({"step": "sent", "draft": null, "error": ""}));
+    assert_graphs_shown(&graphs);
     assert!(succeeded);
     let calls = server.backend.calls();
     for expected in [
+        "graphs:session-2:-:-",
         "send:session-2:Resume the plan",
         "settings:session-2:low",
         "sync:session-2",
@@ -412,6 +425,29 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     }
 
     Ok(())
+}
+
+/// Checks the step where `Plan it`'s graph summary opens its graphs in
+/// place of the chat and the back gesture returns to the chat.
+fn assert_graphs_shown(graphs: &Value) {
+    assert_eq!(
+        graphs,
+        &json!({
+            "step": "graphs",
+            "chatHidden": true,
+            "hash": "#s=session-2",
+            "nodes": ["●inspectAwaiting your approval", "○fixWaiting"],
+            "output": "Output 1/1: report v1 (validated)",
+            "position": "Graph 1/1",
+            "returned": true,
+            "summary": [
+                "Execution graph · v11/2 done",
+                "●Blocked",
+                "inspect awaits your approval; reply in chat to accept it",
+            ],
+            "title": "●graph | revision 1 | Blocked",
+        })
+    );
 }
 
 /// Checks the steps where the app opens `Build it`, which waits on a

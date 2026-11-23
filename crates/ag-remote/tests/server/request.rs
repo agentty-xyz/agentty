@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteFocusedReview,
-    RemoteFocusedReviewState, RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption,
-    RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
+    RemoteFocusedReviewState, RemoteGraphApproval, RemoteGraphProposalPhase, RemoteGraphStatus,
+    RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption, RemoteProject,
+    RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionGraph,
     RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -74,6 +75,7 @@ fn expected_session() -> RemoteSession {
             state: RemoteFocusedReviewState::Ready,
             text: "### Suggestions\n- Add a test".to_string(),
         }),
+        graph: None,
         id: "session-1".to_string(),
         is_draft: false,
         messages: vec![
@@ -200,6 +202,136 @@ async fn each_request_reaches_the_session_service() -> TestResult {
             "answer:session-1:Which branch?=main"
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_graphs_and_their_summary_reach_only_listed_sessions() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let graphs = |session_id: &str, graph_id: Option<&str>| RemoteRequest::GetSessionGraphs {
+        graph_id: graph_id.map(str::to_string),
+        known: None,
+        node_id: None,
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let snapshot = call(
+        &mut client,
+        1,
+        RemoteRequest::GetSession {
+            session_id: "session-2".to_string(),
+        },
+    )
+    .await?;
+    let shown = call(&mut client, 2, graphs("session-2", None)).await?;
+    let foreign = call(&mut client, 3, graphs("session-2", Some("other-graph"))).await?;
+    let unlisted = call(&mut client, 4, graphs("other-project-session", None)).await?;
+
+    // Assert
+    let RemoteResult::Ok(RemoteResponse::Session {
+        session: Some(session),
+    }) = snapshot
+    else {
+        return Err(format!("expected a session, got {snapshot:?}").into());
+    };
+    assert_eq!(
+        session.graph,
+        Some(RemoteSessionGraph {
+            awaiting: vec![RemoteGraphApproval {
+                node_id: "inspect".to_string(),
+                revisable: false,
+                text: "inspect awaits your approval; reply in chat to accept it".to_string(),
+            }],
+            done: 1,
+            label: "Blocked".to_string(),
+            phase: RemoteGraphProposalPhase::Approved,
+            status: Some(RemoteGraphStatus::Blocked),
+            total: 2,
+            version: 1,
+        })
+    );
+    let RemoteResult::Ok(RemoteResponse::Graphs {
+        graph: Some(graph),
+        graphs: entries,
+        proposal: Some(proposal),
+        ..
+    }) = shown
+    else {
+        return Err(format!("expected graphs, got {shown:?}").into());
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(proposal.preview, "## Graph proposal v1");
+    assert_eq!(graph.node.as_deref(), Some("inspect"));
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), node.label.as_str()))
+            .collect::<Vec<_>>(),
+        [("inspect", "Awaiting your approval"), ("fix", "Waiting")]
+    );
+    assert_eq!(graph.outputs[0].text, "### Findings\n- One issue");
+    assert_eq!(
+        foreign,
+        RemoteResult::Error("Graph does not belong to this session".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "list",
+            "get:session-2",
+            "list",
+            "graphs:session-2:-:-",
+            "list",
+            "graphs:session-2:other-graph:-",
+            "list"
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_graphs_answer_unchanged_for_the_version_the_device_shows() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let graphs = |known: Option<&str>| RemoteRequest::GetSessionGraphs {
+        graph_id: None,
+        known: known.map(str::to_string),
+        node_id: None,
+        session_id: "session-2".to_string(),
+    };
+
+    // Act
+    let first = call(&mut client, 1, graphs(None)).await?;
+    let RemoteResult::Ok(RemoteResponse::Graphs { version, .. }) = &first else {
+        return Err(format!("expected graphs, got {first:?}").into());
+    };
+    let again = call(&mut client, 2, graphs(Some(version))).await?;
+    let stale = call(&mut client, 3, graphs(Some("stale"))).await?;
+
+    // Assert
+    assert_ne!(version, "");
+    assert_eq!(
+        again,
+        RemoteResult::Ok(RemoteResponse::Graphs {
+            graph: None,
+            graphs: Vec::new(),
+            proposal: None,
+            unchanged: true,
+            version: version.clone(),
+        })
+    );
+    assert_eq!(stale, first);
 
     Ok(())
 }

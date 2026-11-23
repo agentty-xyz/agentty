@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, QuestionAnswer, SessionError, SessionId,
-    SessionOperation, SessionService, SessionSettingsChange,
+    AnswerQuestionsRequest, CreateSessionRequest, QuestionAnswer, SessionError,
+    SessionGraphsRequest, SessionId, SessionOperation, SessionService, SessionSettingsChange,
 };
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
@@ -71,6 +71,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::SessionSettings, "settings"),
     (SessionOperation::PublishSession, "publish"),
     (SessionOperation::SyncProject, "sync_project"),
+    (SessionOperation::Graphs, "graphs"),
 ];
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
@@ -622,6 +623,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         | RemoteRequest::GetHost
         | RemoteRequest::GetSession { .. }
         | RemoteRequest::GetSessionDiff { .. }
+        | RemoteRequest::GetSessionGraphs { .. }
         | RemoteRequest::ListProjectFiles
         | RemoteRequest::ListSessionFiles { .. }
         | RemoteRequest::ListSessions
@@ -701,13 +703,16 @@ async fn respond(
         RemoteRequest::GetSessionDiff { path, session_id } => {
             get_listed_session_diff(sessions, session_id, path.as_deref()).await
         }
-        RemoteRequest::ListProjectFiles => {
-            require_operation(sessions, SessionOperation::ProjectFiles)?;
-
-            Ok(RemoteResponse::from_session_files(
-                &sessions.list_project_files().await?,
-            ))
+        RemoteRequest::GetSessionGraphs {
+            graph_id,
+            known,
+            node_id,
+            session_id,
+        } => {
+            get_listed_session_graphs(sessions, session_id, graph_id, node_id, known.as_deref())
+                .await
         }
+        RemoteRequest::ListProjectFiles => list_project_files(sessions).await,
         RemoteRequest::ListSessionFiles { session_id } => {
             list_listed_session_files(sessions, session_id).await
         }
@@ -889,6 +894,38 @@ async fn get_listed_session_diff(
 
     RemoteResponse::from_diff(&files, path)
         .ok_or_else(|| SessionError::Operation(FILE_NOT_IN_DIFF.to_string()))
+}
+
+/// Reads the graphs of one session only when the host lists it, selecting
+/// `graph_id` and `node_id` when given, and answers `unchanged` when the
+/// device already shows that response as version `known`.
+async fn get_listed_session_graphs(
+    sessions: &SessionService,
+    session_id: String,
+    graph_id: Option<String>,
+    node_id: Option<String>,
+    known: Option<&str>,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::Graphs)?;
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let graphs = sessions
+        .session_graphs(SessionGraphsRequest {
+            graph_id,
+            node_id,
+            session_id,
+        })
+        .await?;
+
+    Ok(RemoteResponse::from_graphs(graphs).unchanged_since(known))
+}
+
+/// Lists the files and directories in the host's active project checkout.
+async fn list_project_files(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::ProjectFiles)?;
+
+    Ok(RemoteResponse::from_session_files(
+        &sessions.list_project_files().await?,
+    ))
 }
 
 /// Lists the files and directories in one session's worktree only when the

@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate,
-    GraphDependency, GraphNode, GraphNodeProgress, GraphNodeStatus, GraphProposalVersionOutcome,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphNode, GraphNodeProgress, GraphNodeStatus,
+    GraphProposalVersionOutcome,
 };
 use ag_tui_text::text_util::{
     inline_text, truncate_spans_with_ellipsis, truncate_with_ellipsis,
@@ -23,7 +23,11 @@ use crate::presentation::app_mode::AppMode;
 use crate::presentation::execution_graph::{
     node_reasoning_level, outputs_awaiting_acceptance, takes_revision_guidance,
 };
-use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::graph_chat::{
+    AWAITING_APPROVAL_LABEL, CANCELLED_LABEL, GENERATING_LABEL, GraphChatSnapshot,
+    NEEDS_INPUT_LABEL, NodeStatus, STARTING_LABEL, approval_request, edge_label,
+    generation_failed_label, graph_status_label, is_dependency_satisfied, launched_graph_nodes,
+};
 use crate::ui::help_format;
 use crate::ui::style::palette;
 
@@ -214,7 +218,7 @@ fn summary(snapshot: Option<&GraphChatSnapshot>, spinner_frame: usize) -> Vec<(S
         ));
     }
     if version.is_cancelled {
-        rows.push(("Cancelled. No graph was launched.".into(), muted_style()));
+        rows.push((CANCELLED_LABEL.into(), muted_style()));
 
         return rows;
     }
@@ -225,48 +229,38 @@ fn summary(snapshot: Option<&GraphChatSnapshot>, spinner_frame: usize) -> Vec<(S
             let takes_revision = launched_nodes(snapshot).is_some_and(|(_, nodes)| {
                 takes_revision_guidance(nodes, progress, &producer.node_id)
             });
-            let action = if takes_revision {
-                "reply in chat to accept or revise it"
-            } else {
-                "reply in chat to accept it"
-            };
-            // A reply to a paused graph resumes it before acting.
-            let resume = if progress.status == ExecutionGraphStatus::Paused {
-                " and resume the graph"
-            } else {
-                ""
-            };
             rows.push((
-                format!(
-                    "{} awaits your approval; {action}{resume}",
-                    producer.node_id
+                approval_request(
+                    &producer.node_id,
+                    takes_revision,
+                    progress.status == ExecutionGraphStatus::Paused,
                 ),
                 color_style(palette::warning()),
             ));
         }
     } else if version.approval.is_some() {
-        rows.push(("Approved; loading execution status".into(), muted_style()));
+        rows.push((STARTING_LABEL.into(), muted_style()));
     }
     match &version.outcome {
         GraphProposalVersionOutcome::Generating => {
             rows.push((
-                format!("{} Generating preview...", active_glyph(spinner_frame)),
+                format!("{} {GENERATING_LABEL}", active_glyph(spinner_frame)),
                 muted_style(),
             ));
         }
         GraphProposalVersionOutcome::Failed(error) => {
             rows.push((
-                format!("Generation failed: {error}"),
+                generation_failed_label(error),
                 color_style(palette::danger()),
             ));
         }
         GraphProposalVersionOutcome::Generated { launch, response } => {
             if let GraphProposalOutcome::Clarification { .. } = &response.outcome {
-                rows.push(("Needs your input".into(), color_style(palette::question())));
+                rows.push((NEEDS_INPUT_LABEL.into(), color_style(palette::question())));
             }
             if launch.is_some() && version.approval.is_none() {
                 rows.push((
-                    "Awaiting your approval".into(),
+                    AWAITING_APPROVAL_LABEL.into(),
                     color_style(palette::warning()),
                 ));
             }
@@ -282,14 +276,16 @@ fn graph_status(
     status: ExecutionGraphStatus,
     spinner_frame: usize,
 ) -> (&'static str, &'static str, Color) {
-    match status {
-        ExecutionGraphStatus::Running => (active_glyph(spinner_frame), "Running", palette::info()),
-        ExecutionGraphStatus::Blocked => ("●", "Blocked", palette::warning()),
-        ExecutionGraphStatus::Paused => ("‖", "Paused", palette::text_muted()),
-        ExecutionGraphStatus::Completed => ("✓", "Completed", palette::success()),
-        ExecutionGraphStatus::Failed => ("✗", "Failed", palette::danger()),
-        ExecutionGraphStatus::Cancelled => ("⊘", "Canceled", palette::text_subtle()),
-    }
+    let (glyph, color) = match status {
+        ExecutionGraphStatus::Running => (active_glyph(spinner_frame), palette::info()),
+        ExecutionGraphStatus::Blocked => ("●", palette::warning()),
+        ExecutionGraphStatus::Paused => ("‖", palette::text_muted()),
+        ExecutionGraphStatus::Completed => ("✓", palette::success()),
+        ExecutionGraphStatus::Failed => ("✗", palette::danger()),
+        ExecutionGraphStatus::Cancelled => ("⊘", palette::text_subtle()),
+    };
+
+    (glyph, graph_status_label(status), color)
 }
 
 /// Returns the rotating active-work glyph for one spinner frame.
@@ -351,15 +347,9 @@ fn progress_bar(
 
 /// Returns the resolved nodes of a proposal that is not cancelled.
 fn launched_nodes(snapshot: &GraphChatSnapshot) -> Option<(&GraphChatSnapshot, &[GraphNode])> {
-    match &snapshot.proposal.version.outcome {
-        GraphProposalVersionOutcome::Generated {
-            launch: Some(launch),
-            ..
-        } if !snapshot.proposal.version.is_cancelled => {
-            Some((snapshot, launch.graph.nodes.as_slice()))
-        }
-        _ => None,
-    }
+    let nodes = launched_graph_nodes(&snapshot.proposal);
+
+    (!nodes.is_empty()).then_some((snapshot, nodes))
 }
 
 /// Producers whose output a dependent waits to see accepted, derived once per
@@ -416,7 +406,9 @@ fn graph_lines(
         .map(|node| {
             node.dependencies
                 .iter()
-                .map(|dependency| is_dependency_satisfied(snapshot, node, dependency))
+                .map(|dependency| {
+                    is_dependency_satisfied(snapshot.progress.as_ref(), node, dependency)
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -543,27 +535,6 @@ fn edge_label_style(is_satisfied: bool) -> Style {
     color_style(color).add_modifier(Modifier::ITALIC)
 }
 
-/// Names what a dependency waits for, omitting the source of an output gate
-/// when it is the node drawn directly above.
-fn edge_label(dependency: &GraphDependency, previous: Option<&str>) -> String {
-    let source = dependency.node_id.as_str();
-    let from = if previous == Some(source) {
-        String::new()
-    } else {
-        format!(" from {source}")
-    };
-
-    match &dependency.gate {
-        GraphCompletionGate::ExecutionSucceeded => format!("after {source}"),
-        GraphCompletionGate::ResultValidated { output_name } => {
-            format!("needs {output_name}{from}")
-        }
-        GraphCompletionGate::ResultAccepted { output_name } => {
-            format!("needs {output_name} accepted{from}")
-        }
-    }
-}
-
 /// One node row with a right-aligned status, or the name and status on two
 /// rows when both do not fit.
 fn node_lines(
@@ -576,7 +547,7 @@ fn node_lines(
         return vec![node_row(node.id.clone(), status, width, spinner_frame)];
     }
     let (glyph, color) = status_glyph(status, spinner_frame);
-    let label = status_label(status);
+    let label = status.label();
     let padding = width
         .saturating_sub(label.width())
         .max(DETAIL_INDENT.width());
@@ -652,16 +623,6 @@ fn node_progress<'a>(
         .and_then(|progress| progress.nodes.iter().find(|state| state.node_id == node.id))
 }
 
-/// Sidebar status of one node: its live state, or a pending acceptance of
-/// its output by the user.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NodeStatus {
-    /// A dependent waits for the user to accept this node's output.
-    AwaitingApproval,
-    /// Live execution state reported by the graph.
-    Live(GraphNodeStatus),
-}
-
 /// Returns the sidebar status for `node`; nodes of an unapproved or unloaded
 /// graph are pending, and a node whose output a dependent waits to see
 /// accepted awaits approval.
@@ -683,7 +644,7 @@ fn node_status(
 /// right-aligned, keeping at least [`STATUS_GAP`] columns between them.
 fn node_row(name: String, status: NodeStatus, width: usize, spinner_frame: usize) -> Line<'static> {
     let (glyph, color) = status_glyph(status, spinner_frame);
-    let label = status_label(status);
+    let label = status.label();
     let padding = width
         .saturating_sub(name.width() + status_label_width(status))
         .max(STATUS_GAP);
@@ -704,20 +665,7 @@ fn node_row(name: String, status: NodeStatus, width: usize, spinner_frame: usize
 /// Every animation phase of a glyph has the same width, so the first frame
 /// measures all of them.
 fn status_label_width(status: NodeStatus) -> usize {
-    status_glyph(status, 0).0.width() + 1 + status_label(status).width()
-}
-
-/// Returns the user-facing label for one node status.
-fn status_label(status: NodeStatus) -> &'static str {
-    match status {
-        NodeStatus::AwaitingApproval => "Awaiting your approval",
-        NodeStatus::Live(GraphNodeStatus::Pending) => "Waiting",
-        NodeStatus::Live(GraphNodeStatus::Queued | GraphNodeStatus::Running) => "Working",
-        NodeStatus::Live(GraphNodeStatus::AwaitingAnswers) => "Needs your input",
-        NodeStatus::Live(GraphNodeStatus::Succeeded) => "Done",
-        NodeStatus::Live(GraphNodeStatus::Failed) => "Failed",
-        NodeStatus::Live(GraphNodeStatus::Cancelled) => "Canceled",
-    }
+    status_glyph(status, 0).0.width() + 1 + status.label().width()
 }
 
 /// Returns the per-status glyph and semantic color; working nodes' glyphs
@@ -755,31 +703,6 @@ fn name_style(status: NodeStatus) -> Style {
     }
 
     style
-}
-
-/// A dependency is satisfied once its source succeeded and the dependent no
-/// longer reports it as a blocking gate.
-fn is_dependency_satisfied(
-    snapshot: &GraphChatSnapshot,
-    node: &GraphNode,
-    dependency: &GraphDependency,
-) -> bool {
-    let Some(progress) = snapshot.progress.as_ref() else {
-        return false;
-    };
-    let source_succeeded = progress.nodes.iter().any(|state| {
-        state.node_id == dependency.node_id && state.status == GraphNodeStatus::Succeeded
-    });
-
-    source_succeeded
-        && node_progress(snapshot, node).is_some_and(|state| {
-            !state.blocked.iter().any(|reason| {
-                matches!(
-                    reason,
-                    GraphBlockedReason::Dependency { node_id, .. } if *node_id == dependency.node_id
-                )
-            })
-        })
 }
 
 fn node_priority(
