@@ -13,6 +13,8 @@ pub mod input;
 /// Persisted project entities and project-list ordering.
 pub mod project;
 pub mod question;
+/// Validation of relay, pairing page, and platform addresses.
+pub mod remote_url;
 /// Live process-accounting projections.
 pub mod resource;
 pub mod review;

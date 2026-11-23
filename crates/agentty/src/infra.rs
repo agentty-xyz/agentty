@@ -17,6 +17,9 @@ pub mod fs;
 pub mod home;
 /// Shell-installer receipt interpretation for analytics and updates.
 pub(crate) mod install_receipt;
+/// Agentty Platform HTTP boundary: device sign-in, account discovery, and
+/// instance registration.
+pub mod platform;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
 /// Remote-control listener and paired-device persistence boundary.
