@@ -486,8 +486,11 @@ function onConnectionState(instance) {
 // The device footer: one Agentty's state, or how many of several are
 // connected.
 function renderFooter() {
-  const pairing = state.pairing?.instance;
-  const shown = state.instances.length > 0 ? state.instances : pairing ? [pairing] : [];
+  // Before any Agentty is paired, the one being paired.
+  let shown = state.instances;
+  if (shown.length === 0 && state.pairing?.instance) {
+    shown = [state.pairing.instance];
+  }
   const kinds = shown.map((instance) => instance.connection.kind());
   let label;
   if (kinds.length <= 1) {
@@ -640,15 +643,7 @@ function renderHome() {
   const host = home.host();
   elements["home-view"].classList.toggle("is-composing", Boolean(host));
   if (host) {
-    const parts = ["New session"];
-    if (isMany()) {
-      parts.push(state.homeTarget.name);
-    }
-    parts.push(host.project);
-    if (host.baseBranch) {
-      parts.push("base " + host.baseBranch);
-    }
-    elements["home-eyebrow"].textContent = parts.join(" · ");
+    elements["home-eyebrow"].textContent = newSessionEyebrow(host);
     elements["home-title"].textContent = "What should the agent work on?";
   } else {
     elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
@@ -659,16 +654,31 @@ function renderHome() {
   elements["home-sessions"].hidden = isEmpty;
   let summary = "";
   if (isAuthenticated) {
-    if (!isEmpty) {
-      summary = sessionCountText(count);
-    } else {
-      summary = isMany() ? "no sessions" : "no sessions in this project";
-    }
+    summary = sessionCountText(count);
   }
   elements["heading-sub"].replaceChildren(summary);
 }
 
+// What home says above a new session's message: the Agentty, when the
+// page shows several, the project, and the base branch.
+function newSessionEyebrow(host) {
+  const parts = ["New session"];
+  if (isMany()) {
+    parts.push(state.homeTarget.name);
+  }
+  parts.push(host.project);
+  if (host.baseBranch) {
+    parts.push("base " + host.baseBranch);
+  }
+
+  return parts.join(" · ");
+}
+
 function sessionCountText(count) {
+  if (count === 0) {
+    return isMany() ? "no sessions" : "no sessions in this project";
+  }
+
   return count === 1 ? "1 session" : count + " sessions";
 }
 

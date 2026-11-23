@@ -151,6 +151,7 @@ function write(storage, key, value) {
 
     return true;
   } catch (_error) {
+    // Full or blocked storage: the caller keeps the page's own copy.
     refusing.add(storage);
 
     return false;
@@ -164,6 +165,7 @@ function remove(storage, key) {
 
     return true;
   } catch (_error) {
+    // Blocked storage: the caller keeps the page's own copy.
     refusing.add(storage);
 
     return false;

@@ -101,21 +101,8 @@ export function createSessionList({
   // of, as after pairing with another Agentty, counts as seen, except for
   // the times a page that showed one Agentty kept under bare session ids.
   function reconcile() {
-    let known = mergeSeen(state.seen, readStored());
+    const known = adoptNewSources(mergeSeen(state.seen, readStored()));
     const keyed = state.sources.flatMap((source) => keyedSessions(source));
-    if (known) {
-      for (const source of state.sources) {
-        const entries = keyedSessions(source);
-        if (entries.length > 0 && !entries.some((entry) => Object.hasOwn(known, entry.id))) {
-          known = { ...known };
-          for (const session of source.sessions) {
-            known[seenKey(source.id, session.id)] = Object.hasOwn(known, session.id)
-              ? known[session.id]
-              : session.updated_at;
-          }
-        }
-      }
-    }
     state.seen = reconcileSeen(known, keyed, visibleOpenKey());
     if (state.isStorageBroken) {
       return;
@@ -127,18 +114,44 @@ export function createSessionList({
     }
   }
 
+  // Returns `known` with each source it knows none of counted as seen, at
+  // the times a page that showed one Agentty kept under bare session ids
+  // where it has them. Without a map, `reconcileSeen` counts all as seen.
+  function adoptNewSources(known) {
+    if (!known) {
+      return known;
+    }
+    const adopted = { ...known };
+    for (const source of state.sources) {
+      const keys = source.sessions.map((session) => seenKey(source.id, session.id));
+      if (keys.length === 0 || keys.some((key) => Object.hasOwn(known, key))) {
+        continue;
+      }
+      for (const session of source.sessions) {
+        const bare = Object.hasOwn(known, session.id) ? known[session.id] : null;
+        adopted[seenKey(source.id, session.id)] = bare ?? session.updated_at;
+      }
+    }
+
+    return adopted;
+  }
+
+  // The sessions with the unread dot; none while storage fails.
+  function unreadKeys() {
+    if (state.isStorageBroken) {
+      return new Set();
+    }
+    const openKey = state.openId === null ? null : seenKey(state.openSource, state.openId);
+
+    return unreadIds(state.sources.flatMap((source) => keyedSessions(source)), state.seen, openKey);
+  }
+
   // Rebuilds the lists, chips and cards. A focused row, card, chip or
   // toggle is focused again in its new copy, so keyboard users keep their
   // place when an update arrives.
   function render() {
     const focused = focusedKey();
-    const unread = state.isStorageBroken
-      ? new Set()
-      : unreadIds(
-          state.sources.flatMap((source) => keyedSessions(source)),
-          state.seen,
-          state.openId === null ? null : seenKey(state.openSource, state.openId),
-        );
+    const unread = unreadKeys();
     const isFiltering = state.query.trim() !== "" || state.filter !== FILTERS[0].id;
     const time = now();
     let total = 0;

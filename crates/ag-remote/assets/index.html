@@ -217,7 +217,11 @@
                         </button>
                         <div id="device-menu" class="menu" role="menu" hidden>
                             <button id="forget" class="menu-item is-danger" type="button" role="menuitem">Forget this device</button>
-                            <div id="forget-each" class="menu-group" role="none" hidden></div>
+                            <div id="forget-each"
+                                 class="menu-group"
+                                 role="group"
+                                 aria-label="Forget this device on"
+                                 hidden></div>
                         </div>
                     </div>
                 </footer>
@@ -676,7 +680,7 @@
         </div>
         <div id="instance-prototype" hidden>
             <div class="instance-head" data-part="head">
-                <h2 class="instance-name" data-part="name"></h2>
+                <h2 class="instance-name" data-part="name">Agentty</h2>
                 <span class="status status--idle" data-part="connection"><i class="status-dot"></i><span data-part="connection-label"></span></span>
             </div>
             <div class="instance-top" data-part="top">
