@@ -37,6 +37,12 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
             .sign_in_chatgpt(on_url)
             .await
     }
+
+    async fn save_harness_api_key(&self, provider: &str, api_key: &str) -> Result<(), String> {
+        ag_agent::RealAgentAvailabilityProbe
+            .save_harness_api_key(provider, api_key)
+            .await
+    }
 }
 
 /// Initializes provider resources in a session workspace.

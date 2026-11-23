@@ -669,6 +669,35 @@ fn render_chatgpt_sign_in_popup_above_its_session() {
 }
 
 #[test]
+fn render_api_key_popup_masks_the_key_then_shows_the_outcome() {
+    // Arrange
+    let mut editing = crate::test_support::api_key_input_mode("session-overlay");
+    if let AppMode::ApiKeyInput { dialog } = &mut editing {
+        dialog.input = crate::domain::input::InputState::with_text("sk-secret".to_string());
+    }
+    let mut saved = crate::test_support::api_key_input_mode("session-overlay");
+    if let AppMode::ApiKeyInput { dialog } = &mut saved {
+        dialog.phase = crate::presentation::api_key::ApiKeyPhase::Saved {
+            message: "Saved your Kimi API key.".to_string(),
+        };
+    }
+
+    // Act
+    let (editing_handled, editing_text) = render_list_backed_mode(&editing);
+    let (saved_handled, saved_text) = render_list_backed_mode(&saved);
+
+    // Assert
+    assert!(editing_handled);
+    assert!(editing_text.contains("Paste API Key"));
+    assert!(editing_text.contains("•••••••••"));
+    assert!(!editing_text.contains("sk-secret"));
+    assert!(editing_text.contains("Enter: save | Esc: cancel"));
+    assert!(saved_handled);
+    assert!(saved_text.contains("Saved your Kimi API key."));
+    assert!(saved_text.contains("OK"));
+}
+
+#[test]
 fn render_list_backed_modes_forward_frame_time_to_every_overlay() {
     // Arrange
     let restore_view = ConfirmationViewMode {

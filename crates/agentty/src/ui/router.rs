@@ -15,9 +15,11 @@ use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
+use crate::presentation::api_key::{API_KEY_TITLE, ApiKeyDialog};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
-    DiffReviewComments, DiffSidebarFocus, HelpContext, allows_diff_line_comment_reply,
+    DiffReviewComments, DiffSidebarFocus, HelpContext, PromptModeSnapshot,
+    allows_diff_line_comment_reply,
 };
 use crate::presentation::chatgpt_sign_in::{
     CHATGPT_SIGN_IN_LOADING_LABEL, CHATGPT_SIGN_IN_TITLE, ChatGptSignInDialog,
@@ -325,11 +327,8 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
             scroll_offset: restore_view.scroll_offset,
             session_id: &restore_view.session_id,
         },
-        AppMode::ChatGptSignIn { dialog } => Surface::Session {
-            mode: SessionSurfaceMode::View,
-            scroll_offset: dialog.restore.scroll_offset,
-            session_id: dialog.session_id(),
-        },
+        AppMode::ChatGptSignIn { dialog } => composer_popup_surface(&dialog.restore),
+        AppMode::ApiKeyInput { dialog } => composer_popup_surface(&dialog.restore),
         AppMode::List
         | AppMode::SessionCreation { .. }
         | AppMode::PreCommitHookWarning { .. }
@@ -397,6 +396,16 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                     review_comments.sidebar_focus
                 }),
         },
+    }
+}
+
+/// Resolves the session page painted behind a popup opened from the
+/// composer captured in `restore`.
+fn composer_popup_surface(restore: &PromptModeSnapshot) -> Surface<'_> {
+    Surface::Session {
+        mode: SessionSurfaceMode::View,
+        scroll_offset: restore.scroll_offset,
+        session_id: &restore.session_id,
     }
 }
 
@@ -601,6 +610,9 @@ fn render_mode_overlay(
         AppMode::ChatGptSignIn { dialog } => {
             render_chatgpt_sign_in_overlay(frame, area, dialog, resources.frame_time);
         }
+        AppMode::ApiKeyInput { dialog } => {
+            render_api_key_overlay(frame, area, dialog, resources.frame_time);
+        }
         AppMode::Help {
             context: help_context,
             scroll_offset,
@@ -668,6 +680,30 @@ fn render_chatgpt_sign_in_overlay(
         .is_loading(dialog.is_loading())
         .loading_label(CHATGPT_SIGN_IN_LOADING_LABEL)
         .action_label(dialog.action_label());
+    render_information_overlay(frame, area, popup, frame_time);
+}
+
+/// Renders the API key popup: the masked key field while editing, then the
+/// saved outcome.
+fn render_api_key_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &ApiKeyDialog,
+    frame_time: FrameTime,
+) {
+    let message = dialog.message();
+    if dialog.is_editing() {
+        let masked_input = dialog.masked_input();
+        component::api_key_overlay::ApiKeyOverlay::new(
+            &message,
+            &masked_input,
+            dialog.input.cursor,
+        )
+        .render(frame, area);
+
+        return;
+    }
+    let popup = InfoOverlay::new(API_KEY_TITLE, &message).action_label("OK");
     render_information_overlay(frame, area, popup, frame_time);
 }
 

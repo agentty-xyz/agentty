@@ -64,8 +64,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     }
 
     async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
-        super::native::harness_models(&super::native::process_environment(), chatgpt_is_signed_in)
-            .await
+        let environment =
+            super::native::with_stored_api_keys(super::native::process_environment()).await;
+
+        super::native::harness_models(&environment, chatgpt_is_signed_in).await
     }
 
     async fn sign_in_chatgpt(
@@ -73,6 +75,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
         on_url: ChatGptSignInUrlHandler,
     ) -> Result<ChatGptSignInOutcome, String> {
         super::native::sign_in_chatgpt(&super::native::process_environment(), on_url).await
+    }
+
+    async fn save_harness_api_key(&self, provider: &str, api_key: &str) -> Result<(), String> {
+        super::native::save_api_key(&super::native::process_environment(), provider, api_key).await
     }
 }
 

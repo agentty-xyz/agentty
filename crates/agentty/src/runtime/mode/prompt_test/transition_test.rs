@@ -9,10 +9,10 @@ use super::super::{
     PromptEffect, apply_prompt_input_to_mode, apply_prompt_paste_to_mode, clear_prompt_slash_input,
     dismiss_at_mention, exit_to_list_saving_progress, is_plain_char_key,
     mark_prompt_image_paste_pending, move_at_mention_selection_down, move_at_mention_selection_up,
-    move_prompt_slash_selection, open_chatgpt_sign_in, prompt_context, prompt_image_paste_number,
-    reduce_prompt_submit, reduce_prompt_vertical_key, restore_prompt_composer, select_at_mention,
-    sync_prompt_at_mention_state, take_prompt_attachment_cleanup, take_prompt_snapshot,
-    update_prompt_slash_state,
+    move_prompt_slash_selection, open_api_key_input, open_chatgpt_sign_in, prompt_context,
+    prompt_image_paste_number, reduce_prompt_submit, reduce_prompt_vertical_key,
+    restore_prompt_composer, select_at_mention, sync_prompt_at_mention_state,
+    take_prompt_attachment_cleanup, take_prompt_snapshot, update_prompt_slash_state,
 };
 use super::support::{
     TEST_INPUT_WIDTH, apply_next_session_diff, install_mock_fs_client, install_mock_git_client,
@@ -523,6 +523,11 @@ fn prompt_reducers_leave_other_modes_unchanged() {
     open_chatgpt_sign_in(
         &mut mode,
         AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol),
+        &mut effects,
+    );
+    open_api_key_input(
+        &mut mode,
+        AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3),
         &mut effects,
     );
 

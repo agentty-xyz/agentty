@@ -106,6 +106,7 @@ impl App {
             AppMode::ChatGptSignIn { dialog } => {
                 dialog.is_loading() || self.session_has_tick_driven_ui(dialog.session_id())
             }
+            AppMode::ApiKeyInput { dialog } => self.session_has_tick_driven_ui(dialog.session_id()),
             AppMode::ExecutionGraph(_) | AppMode::DiffLoading { .. } | AppMode::Diff { .. } => {
                 false
             }

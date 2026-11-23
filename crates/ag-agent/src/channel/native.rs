@@ -36,7 +36,7 @@ use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
     NativeTurnError, OutputProjector, RunOptions, SESSION_SANDBOX, cleanup_failure, failure,
     output_schema, parse_output, reject_attachments, repository, running_context_window,
-    sandbox_notice, system_prompt, turn_notice,
+    sandbox_notice, system_prompt, turn_notice, with_stored_api_keys,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -131,6 +131,7 @@ async fn run_session_turn(
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
     let selection = ModelSelection::resolve(&req.model, &environment)?;
+    let environment = with_stored_api_keys(environment).await;
     let (compacts, summary_model) = match &req.context_compaction {
         ContextCompaction::Off => (false, None),
         ContextCompaction::Automatic { summary_model } => (

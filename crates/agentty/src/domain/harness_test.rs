@@ -33,7 +33,7 @@ fn local_qwen() -> HarnessModelOption {
 /// them on the catalog default.
 fn harness_availability_follows_runnable_models() {
     // Arrange
-    let missing_key = kimi(HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"));
+    let missing_key = kimi(HarnessModelStatus::ApiKeyRequired("kimi"));
     let cases = [
         (
             HarnessModelCatalog::default(),

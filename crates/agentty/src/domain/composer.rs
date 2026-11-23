@@ -47,6 +47,9 @@ pub enum PromptSuggestionSelection {
     /// Harness model selected during `/model` that needs a provider sign-in
     /// before it can run.
     SignIn(AgentSelection),
+    /// Harness model selected during `/model` whose provider needs an API
+    /// key before it can run.
+    ApiKey(AgentSelection),
     /// Harness `/model` row that cannot run now, with the notice saying what
     /// it still needs.
     Unavailable(String),
@@ -1217,6 +1220,9 @@ fn selected_slash_action(
                 ModelRowChoice::SignIn(model) => Some(PromptSuggestionSelection::SignIn(
                     AgentSelection::new(selected_agent_kind, model),
                 )),
+                ModelRowChoice::ApiKey(model) => Some(PromptSuggestionSelection::ApiKey(
+                    AgentSelection::new(selected_agent_kind, model),
+                )),
                 ModelRowChoice::Unavailable(reason) => {
                     Some(PromptSuggestionSelection::Unavailable(reason.notice()))
                 }
@@ -1281,6 +1287,8 @@ enum ModelRowChoice {
     Ready(AgentModel),
     /// Offers the provider sign-in the model still needs.
     SignIn(AgentModel),
+    /// Asks for the API key the model's provider still needs.
+    ApiKey(AgentModel),
     /// Reports why the row cannot run a turn now.
     Unavailable(UnavailableModel),
 }
@@ -1291,6 +1299,7 @@ impl ModelRowChoice {
         match option.status {
             HarnessModelStatus::Ready => Self::Ready(option.model),
             HarnessModelStatus::SignInRequired(_) => Self::SignIn(option.model),
+            HarnessModelStatus::ApiKeyRequired(_) => Self::ApiKey(option.model),
             HarnessModelStatus::MissingConfiguration(variable) => {
                 Self::Unavailable(UnavailableModel::MissingConfiguration {
                     model: option.model,
@@ -1338,7 +1347,8 @@ impl UnavailableModel {
 }
 
 /// Returns the `/model` rows for `agent_kind`, each with what selecting it
-/// does: switch to a ready model, sign in for one, or report what it needs.
+/// does: switch to a ready model, sign in or paste an API key for one, or
+/// report what it needs.
 ///
 /// Harness rows come from `harness_models`, local models first, badged
 /// `local` or `paid`. Paid rows show the model description like every other

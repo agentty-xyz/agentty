@@ -399,6 +399,21 @@ async fn chatgpt_sign_in_popup_is_viewing_its_composer_session() {
 }
 
 #[tokio::test]
+async fn api_key_popup_is_viewing_its_composer_session() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = crate::test_support::api_key_input_mode("key-session");
+
+    // Act
+    let is_composer_session_visible = app.is_viewing_session("key-session");
+    let is_other_session_visible = app.is_viewing_session("other-session");
+
+    // Assert
+    assert!(is_composer_session_visible);
+    assert!(!is_other_session_visible);
+}
+
+#[tokio::test]
 async fn diff_loading_mode_is_viewing_its_session() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;

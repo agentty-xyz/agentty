@@ -66,8 +66,14 @@ fn environment(server: &MockServer) -> BTreeMap<String, String> {
     ])
 }
 
-/// Builds a harness configuration over a fixed environment snapshot.
-fn config(data_root: &Path, environment: BTreeMap<String, String>) -> NativeHarnessConfig {
+/// Builds a harness configuration over a fixed environment snapshot whose
+/// API keys are imported into a key file under `data_root`, so tests never
+/// share stored keys.
+fn config(data_root: &Path, mut environment: BTreeMap<String, String>) -> NativeHarnessConfig {
+    environment
+        .entry("AGENTTY_ROOT".to_string())
+        .or_insert_with(|| data_root.to_string_lossy().into_owned());
+
     NativeHarnessConfig::with_environment(data_root.to_path_buf(), move || environment.clone())
 }
 
@@ -1587,12 +1593,13 @@ async fn configuration_failures_stop_before_any_provider_call() {
     let server = MockServer::start().await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
+    let keyless_root = tempfile::tempdir().expect("keyless data root");
     let mut without_key = environment(&server);
     without_key.remove("MODEL_API_KEY");
     let missing_key = create_agent_channel(
         AgentKind::Harness,
         None,
-        Some(&config(data_root.path(), without_key)),
+        Some(&config(keyless_root.path(), without_key)),
     );
     let channel = create_agent_channel(
         AgentKind::Harness,
@@ -1643,7 +1650,7 @@ async fn configuration_failures_stop_before_any_provider_call() {
     );
     let openai_key_error = openai_key_error.expect_err("missing OpenAI key should fail");
     assert!(
-        openai_key_error.contains("Set OPENAI_API_KEY"),
+        openai_key_error.contains("Pick the model with `/model` to paste its API key"),
         "{openai_key_error}"
     );
     assert!(
@@ -2343,10 +2350,11 @@ async fn utility_configuration_failures_stop_before_any_provider_call() {
     let server = MockServer::start().await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
+    let keyless_root = tempfile::tempdir().expect("keyless data root");
     let mut without_key = environment(&server);
     without_key.remove("MODEL_API_KEY");
-    let missing_key =
-        RealOneShotClient::pooled(None).with_native_harness(config(data_root.path(), without_key));
+    let missing_key = RealOneShotClient::pooled(None)
+        .with_native_harness(config(keyless_root.path(), without_key));
     let client = RealOneShotClient::pooled(None)
         .with_native_harness(config(data_root.path(), environment(&server)));
     let mut mcp_request = utility_request(worktree.path(), None);
@@ -2833,4 +2841,80 @@ async fn session_recorded_before_automatic_compaction_resumes_and_compacts() {
     let fast_bodies = request_bodies(&fast).await;
     assert_eq!(fast_bodies.len(), 1);
     assert!(fast_bodies[0].contains(COMPACTION_SOURCE));
+}
+
+#[tokio::test]
+async fn session_turns_send_the_stored_api_key_over_an_exported_one() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Which key", answer("Stored key"), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::create_dir_all(data_root.path().join("auth")).expect("auth directory");
+    std::fs::write(
+        data_root.path().join("auth/api_keys.json"),
+        r#"{"version":1,"providers":{"muse":{"api_key":"stored-key"}}}"#,
+    )
+    .expect("API key file");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-stored-key",
+        turn_request(worktree.path(), MUSE_MODEL, "Which key"),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        result
+            .expect("turn should succeed")
+            .assistant_message
+            .answer,
+        "Stored key"
+    );
+    let requests = chat_requests(&server).await;
+    assert!(!requests.is_empty());
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("authorization")
+            .is_some_and(|value| value == "Bearer stored-key")
+    }));
+}
+
+#[tokio::test]
+async fn the_first_session_turn_imports_exported_api_keys() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Import keys", answer("Imported"), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-import",
+        turn_request(worktree.path(), MUSE_MODEL, "Import keys"),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        result
+            .expect("turn should succeed")
+            .assistant_message
+            .answer,
+        "Imported"
+    );
+    let stored: Value = serde_json::from_slice(
+        &std::fs::read(data_root.path().join("auth/api_keys.json")).expect("API key file"),
+    )
+    .expect("API key JSON");
+    assert_eq!(stored["providers"]["muse"]["api_key"], "muse-key");
+    assert_eq!(stored["providers"]["qwen"]["api_key"], "qwen-key");
 }

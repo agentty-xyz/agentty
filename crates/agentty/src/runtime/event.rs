@@ -475,6 +475,8 @@ async fn process_paste_event(app: &mut App, pasted_text: &str) {
         mode::question::handle_paste(app, pasted_text);
     }
 
+    mode::api_key::handle_paste(app, pasted_text);
+
     if matches!(&app.mode, AppMode::Diff { .. }) {
         mode::diff::handle_paste(app, pasted_text);
     }

@@ -171,7 +171,9 @@ impl App {
                             .email
                             .unwrap_or_else(|| "your ChatGPT account".to_string());
                         let model = selection.model().as_str();
-                        self.mark_chatgpt_models_signed_in();
+                        self.publish_harness_models_ready(|status| {
+                            matches!(status, HarnessModelStatus::SignInRequired(_))
+                        });
                         let model_change = self
                             .update_prompt_session_model(&session_id, selection)
                             .await;
@@ -204,28 +206,6 @@ impl App {
         if let AppMode::ChatGptSignIn { dialog } = &mut self.mode {
             dialog.phase = ChatGptSignInPhase::Finished { message };
         }
-    }
-
-    /// Publishes the cached harness models with sign-in rows marked ready,
-    /// so the composer accepts the signed-in model before the next listing
-    /// completes.
-    fn mark_chatgpt_models_signed_in(&self) {
-        let options = self
-            .services
-            .harness_model_options()
-            .into_iter()
-            .map(|mut option| {
-                if matches!(option.status, HarnessModelStatus::SignInRequired(_)) {
-                    option.status = HarnessModelStatus::Ready;
-                }
-
-                option
-            })
-            .collect();
-        let _ = self
-            .services
-            .event_sender()
-            .send(AppEvent::HarnessModelsUpdated { options });
     }
 }
 

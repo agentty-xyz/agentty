@@ -668,6 +668,18 @@ fn mode_session_id_uses_chatgpt_sign_in_composer() {
 }
 
 #[test]
+fn mode_session_id_uses_api_key_composer() {
+    // Arrange
+    let mode = crate::test_support::api_key_input_mode("key-session");
+
+    // Act
+    let session_id = SessionManager::mode_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id.map(SessionId::as_str), Some("key-session"));
+}
+
+#[test]
 fn mode_session_id_uses_view_help_context() {
     // Arrange
     let mode = AppMode::Help {

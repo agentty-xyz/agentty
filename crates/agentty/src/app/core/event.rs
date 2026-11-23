@@ -1727,6 +1727,13 @@ impl App {
                         .harness_models
                         .clone_from(&options);
                 }
+                AppMode::ApiKeyInput { dialog } => {
+                    dialog
+                        .restore
+                        .slash_state
+                        .harness_models
+                        .clone_from(&options);
+                }
                 _ => {}
             }
             self.settings.replace_harness_models(options.clone()).await;
@@ -2134,6 +2141,7 @@ impl App {
                 ..
             } => view_id == session_id,
             AppMode::ChatGptSignIn { dialog } => dialog.session_id() == session_id,
+            AppMode::ApiKeyInput { dialog } => dialog.session_id() == session_id,
             AppMode::List
             | AppMode::SessionCreation { .. }
             | AppMode::PreCommitHookWarning { .. }

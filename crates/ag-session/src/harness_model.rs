@@ -54,6 +54,9 @@ impl ModelCost {
 pub enum HarnessModelStatus {
     /// The provider is configured and, for a served model, offers tool calls.
     Ready,
+    /// The user must paste an API key for the named provider, such as
+    /// `kimi`, before the provider can serve requests.
+    ApiKeyRequired(&'static str),
     /// The named environment variable must be set before the provider can
     /// serve requests.
     MissingConfiguration(&'static str),

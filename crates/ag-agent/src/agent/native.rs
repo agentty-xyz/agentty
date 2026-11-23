@@ -1,6 +1,7 @@
 //! In-process `ag-harness` transport for [`ag_session::AgentKind::Harness`].
 
 mod activity;
+mod api_key;
 mod config;
 mod output;
 mod sandbox;
@@ -9,6 +10,7 @@ mod turn;
 mod turn_error;
 
 pub(crate) use activity::ActivityBridge;
+pub(crate) use api_key::{save_api_key, with_stored_api_keys};
 pub use config::NativeHarnessConfig;
 pub(crate) use config::{
     HarnessContext, ModelSelection, RunOptions, failure, harness_models, output_schema,

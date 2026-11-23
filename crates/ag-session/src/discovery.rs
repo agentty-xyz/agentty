@@ -1,5 +1,5 @@
-//! Discovery of locally runnable agent CLIs, harness models, and `ChatGPT`
-//! plan sign-in.
+//! Discovery of locally runnable agent CLIs, harness models, `ChatGPT` plan
+//! sign-in, and harness API key storage.
 
 use async_trait::async_trait;
 
@@ -114,6 +114,17 @@ pub trait AgentAvailabilityProbe: Send + Sync {
         _on_url: ChatGptSignInUrlHandler,
     ) -> Result<ChatGptSignInOutcome, String> {
         Err("ChatGPT sign-in is unavailable in this launch.".to_string())
+    }
+
+    /// Stores `api_key` as the key harness models of `provider`, such as
+    /// `kimi`, use from now on, replacing a stored one. Probes without
+    /// harness discovery do not support it.
+    ///
+    /// # Errors
+    /// Returns a user-facing message when the provider takes no API key or
+    /// the key cannot be stored.
+    async fn save_harness_api_key(&self, _provider: &str, _api_key: &str) -> Result<(), String> {
+        Err("API keys cannot be saved in this launch.".to_string())
     }
 }
 

@@ -110,6 +110,11 @@ enum PromptEffect {
     CleanupAttachments(Vec<PromptAttachment>),
     /// Loads `@`-mention entries for the reopened dropdown.
     LoadAtMentionEntries,
+    /// Opens the API key popup above the captured composer.
+    OpenApiKeyInput {
+        restore: PromptModeSnapshot,
+        selected_agent: AgentSelection,
+    },
     /// Opens the `ChatGPT` sign-in popup above the captured composer.
     OpenChatGptSignIn {
         restore: PromptModeSnapshot,
@@ -398,6 +403,10 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
                 &mut app.sessions,
             );
         }
+        PromptEffect::OpenApiKeyInput {
+            restore,
+            selected_agent,
+        } => app.open_api_key_input(selected_agent, restore),
         PromptEffect::OpenChatGptSignIn {
             restore,
             selected_agent,
@@ -1053,6 +1062,10 @@ fn reduce_prompt_slash_submit(
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
             open_chatgpt_sign_in(mode, selected_agent, effects);
         }
+        Some(PromptSuggestionSelection::ApiKey(selected_agent)) => {
+            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
+            open_api_key_input(mode, selected_agent, effects);
+        }
         Some(PromptSuggestionSelection::Unavailable(notice)) => {
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
             effects.push(PromptEffect::ReportUnavailableModel(notice));
@@ -1082,6 +1095,7 @@ fn prompt_slash_setting_effect(selection: &PromptSuggestionSelection) -> Option<
             Some(PromptEffect::UpdateResponseStyle(*response_style))
         }
         PromptSuggestionSelection::Agent(_)
+        | PromptSuggestionSelection::ApiKey(_)
         | PromptSuggestionSelection::Command(_)
         | PromptSuggestionSelection::SignIn(_)
         | PromptSuggestionSelection::Unavailable(_) => None,
@@ -1128,6 +1142,21 @@ fn open_chatgpt_sign_in(
 ) {
     if let Some(restore) = take_prompt_snapshot(mode) {
         effects.push(PromptEffect::OpenChatGptSignIn {
+            restore,
+            selected_agent,
+        });
+    }
+}
+
+/// Captures the composer and requests the API key popup for
+/// `selected_agent`, keeping the draft for when the popup closes.
+fn open_api_key_input(
+    mode: &mut AppMode,
+    selected_agent: AgentSelection,
+    effects: &mut Vec<PromptEffect>,
+) {
+    if let Some(restore) = take_prompt_snapshot(mode) {
+        effects.push(PromptEffect::OpenApiKeyInput {
             restore,
             selected_agent,
         });

@@ -161,14 +161,19 @@ pub struct NativeHarnessConfig {
 
 impl NativeHarnessConfig {
     /// Configures harness storage under `data_root`, reading provider
-    /// credentials from the process environment.
+    /// settings from the process environment.
     pub fn new(data_root: PathBuf) -> Self {
         Self::with_environment(data_root, process_environment)
     }
 
     /// Configures harness storage under `data_root` with an explicit
-    /// environment source for provider credentials and `bash` grants. A
+    /// environment source for provider settings and `bash` grants. A
     /// relative `data_root` is resolved against the current directory.
+    ///
+    /// Provider API keys come from the API key file the environment
+    /// locates, `auth/api_keys.json` in Agentty's data directory:
+    /// `AGENTTY_ROOT`, else `~/.agentty`. A key variable is only imported into
+    /// that file.
     pub fn with_environment(
         data_root: PathBuf,
         environment: impl Fn() -> BTreeMap<String, String> + Send + Sync + 'static,
@@ -180,7 +185,8 @@ impl NativeHarnessConfig {
         }
     }
 
-    /// Returns a fresh environment snapshot.
+    /// Returns a fresh environment snapshot, before stored API keys replace
+    /// its key variables.
     pub(crate) fn environment(&self) -> BTreeMap<String, String> {
         (self.environment)()
     }
@@ -277,8 +283,8 @@ pub(crate) fn process_environment() -> BTreeMap<String, String> {
 /// Returns the harness models a user can choose: the models the local
 /// OpenAI-compatible server serves, plus `OPENAI_COMPATIBLE_MODEL` when the
 /// server does not list it, then the paid hosted catalog models with the
-/// variable or sign-in each still needs. `is_signed_in` reports whether
-/// a sign-in provider's credential file holds a usable sign-in.
+/// API key, variable, or sign-in each still needs. `is_signed_in` reports
+/// whether a sign-in provider's credential file holds a usable sign-in.
 ///
 /// Listing the local server is bounded by short request timeouts; an
 /// unreachable server contributes no discovered models.
@@ -352,8 +358,8 @@ async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessMode
     options
 }
 
-/// Returns one paid catalog model with the variable or sign-in its provider
-/// still needs, or `None` for a model no built-in provider serves.
+/// Returns one paid catalog model with the API key, variable, or sign-in its
+/// provider still needs, or `None` for a model no built-in provider serves.
 fn hosted_model(
     model: AgentModel,
     environment: &BTreeMap<String, String>,
@@ -470,7 +476,8 @@ pub(super) fn chatgpt_auth_file(environment: &BTreeMap<String, String>) -> Optio
 }
 
 /// Returns Agentty's data directory as `agentty` reads it: `AGENTTY_ROOT`,
-/// else `~/.agentty`, each used as given unless empty.
+/// else `~/.agentty`, each used as given unless empty, or `None` when
+/// neither variable is set.
 pub(super) fn agentty_home(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
     let set = |name: &str| {
         environment
@@ -494,7 +501,7 @@ fn unicode_environment(
 
 /// Returns whether a provider can serve requests now: a sign-in provider
 /// needs a usable sign-in, as `is_signed_in` reports; another needs
-/// its API key unless optional, then a base URL unless it has a default.
+/// its stored API key unless optional, then a base URL unless it has a default.
 fn configuration_status(
     provider: ModelProvider,
     environment: &BTreeMap<String, String>,
@@ -511,7 +518,7 @@ fn configuration_status(
         };
     }
     if provider.requires_api_key() && !has_value(environment, provider.api_key_environment()) {
-        return HarnessModelStatus::MissingConfiguration(provider.api_key_environment());
+        return HarnessModelStatus::ApiKeyRequired(provider.as_str());
     }
     if provider.default_base_url().is_none()
         && !has_value(environment, provider.base_url_environment())
@@ -760,10 +767,7 @@ impl ModelSelection {
                 let remedy = if self.provider.requires_sign_in() {
                     format!("Run `{CHATGPT_SIGN_IN_COMMAND}`, then retry.")
                 } else if self.provider.requires_api_key() {
-                    format!(
-                        "Set {} before starting Agentty.",
-                        self.provider.api_key_environment()
-                    )
+                    "Pick the model with `/model` to paste its API key, then retry.".to_string()
                 } else {
                     format!(
                         "Check {OPENAI_COMPATIBLE_MODEL_ENV} and {} before starting Agentty.",

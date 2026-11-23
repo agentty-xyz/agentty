@@ -58,7 +58,7 @@ fn default_falls_back_to_a_ready_paid_model_without_local_models() {
     let options = [
         paid(
             AgentModel::MuseSpark13,
-            HarnessModelStatus::MissingConfiguration("MODEL_API_KEY"),
+            HarnessModelStatus::ApiKeyRequired("muse"),
         ),
         paid(AgentModel::KimiK3, HarnessModelStatus::Ready),
     ];
@@ -103,7 +103,7 @@ fn default_replaces_a_remembered_paid_model_whose_key_is_gone() {
     let options = [
         paid(
             AgentModel::KimiK3,
-            HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+            HarnessModelStatus::ApiKeyRequired("kimi"),
         ),
         local("qwen3:latest", HarnessModelStatus::Ready),
     ];
@@ -120,7 +120,7 @@ fn default_is_none_when_no_model_is_ready() {
     // Arrange
     let options = [paid(
         AgentModel::KimiK3,
-        HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+        HarnessModelStatus::ApiKeyRequired("kimi"),
     )];
 
     // Act
@@ -200,7 +200,7 @@ fn default_is_none_when_models_only_need_a_key_or_sign_in() {
     let options = [
         paid(
             AgentModel::MuseSpark13,
-            HarnessModelStatus::MissingConfiguration("MODEL_API_KEY"),
+            HarnessModelStatus::ApiKeyRequired("muse"),
         ),
         paid(
             AgentModel::ChatGptGpt6Luna,

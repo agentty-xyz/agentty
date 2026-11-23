@@ -253,6 +253,7 @@ fn render_footer_bar(
             ..
         } => Some(session_id.as_str()),
         AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id().as_str()),
+        AppMode::ApiKeyInput { dialog } => Some(dialog.session_id().as_str()),
         _ => None,
     };
     let session_for_footer = session_id

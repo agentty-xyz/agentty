@@ -14,8 +14,10 @@ use crate::app::command_gateway::{
 use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
-use crate::app::{App, ReviewCacheEntry, SessionManager, spawn};
-use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager, spawn};
+use crate::domain::agent::{
+    AgentSelection, HarnessModelStatus, ReasoningLevel, ResponseStyle, SpeedMode,
+};
 use crate::domain::composer::{PromptAttachment, PromptSlashCommandSet};
 use crate::domain::question::QuestionAttachmentState;
 use crate::domain::review;
@@ -557,6 +559,31 @@ impl App {
     /// sessions in a launch without agent CLIs.
     pub(crate) fn refresh_harness_models(&self) {
         self.services.refresh_harness_models();
+    }
+
+    /// Publishes the cached harness models with every row whose status
+    /// matches `needs_ready` marked ready, so the composer accepts a model the
+    /// user just enabled before the next listing completes.
+    pub(crate) fn publish_harness_models_ready(
+        &self,
+        needs_ready: impl Fn(&HarnessModelStatus) -> bool,
+    ) {
+        let options = self
+            .services
+            .harness_model_options()
+            .into_iter()
+            .map(|mut option| {
+                if needs_ready(&option.status) {
+                    option.status = HarnessModelStatus::Ready;
+                }
+
+                option
+            })
+            .collect();
+        let _ = self
+            .services
+            .event_sender()
+            .send(AppEvent::HarnessModelsUpdated { options });
     }
 
     /// Applies one slash-selected model change and logs any failure with

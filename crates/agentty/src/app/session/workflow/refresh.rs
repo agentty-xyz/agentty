@@ -277,6 +277,7 @@ impl SessionManager {
                 ..
             } => Some(session_id),
             AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
+            AppMode::ApiKeyInput { dialog } => Some(dialog.session_id()),
             _ => None,
         }
     }

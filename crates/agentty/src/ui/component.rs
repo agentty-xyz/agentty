@@ -1,5 +1,7 @@
 //! Reusable UI components.
 
+/// Masked harness provider API key popup.
+pub mod api_key_overlay;
 /// Prompt text input and suggestion-dropdown component.
 pub mod chat_input;
 /// Generic binary-choice confirmation popup.

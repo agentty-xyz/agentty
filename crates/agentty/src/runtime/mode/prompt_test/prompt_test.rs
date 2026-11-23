@@ -2109,6 +2109,45 @@ async fn test_handle_prompt_slash_submit_sets_selected_model_and_resets_input() 
     assert_eq!(app.sessions.sessions()[0].agent.model(), expected_model);
 }
 
+/// Verifies `Enter` on a harness row whose provider needs an API key opens
+/// the key popup above the cleared composer without changing the model.
+#[tokio::test]
+async fn test_handle_prompt_slash_submit_on_an_api_key_row_opens_the_key_popup() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+    let kimi = crate::test_support::api_key_required_harness_model(AgentModel::KimiK3);
+    app.services.set_harness_models(
+        crate::domain::harness::HarnessModelCatalog::new(vec![kimi.clone()], None),
+        app.services.harness_model_probe(),
+    );
+    let initial_model = app.sessions.sessions()[0].agent.model();
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        *slash_state = PromptSlashState {
+            harness_models: vec![kimi],
+            selected_agent: Some(AgentKind::Harness),
+            selected_index: 1,
+            stage: PromptSlashStage::Model,
+            ..PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness])
+        };
+    }
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
+
+    // Assert
+    let AppMode::ApiKeyInput { dialog } = &app.mode else {
+        unreachable!("expected the API key popup");
+    };
+    assert_eq!(
+        dialog.selection,
+        AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3)
+    );
+    assert_eq!(dialog.provider, "kimi");
+    assert!(dialog.restore.input.is_empty());
+    assert_eq!(app.sessions.sessions()[0].agent.model(), initial_model);
+}
+
 /// Verifies `/reasoning` and `/style` preselect the session's current value,
 /// and that a stale command highlight is clamped before resolving.
 #[test]

@@ -1,5 +1,6 @@
 //! `AppMode`-specific key handling modules.
 
+pub(crate) mod api_key;
 pub(crate) mod at_mention;
 pub(crate) mod chat_scroll;
 pub(crate) mod chatgpt_sign_in;
