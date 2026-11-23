@@ -12,6 +12,12 @@ mod focused_review;
 #[path = "session_api_test/graph_test.rs"]
 mod graph;
 
+#[path = "session_api_test/graph_proposal_test.rs"]
+mod graph_proposal;
+
+#[path = "session_api_test/graph_question_test.rs"]
+mod graph_question;
+
 #[path = "session_api_test/lifecycle_test.rs"]
 mod lifecycle;
 

@@ -8,7 +8,9 @@ use crate::app::prompt_intent::{PromptSubmission, PromptWorkflowOutcome};
 
 impl App {
     /// Submits the selected graph mode's task literally, without parsing chat
-    /// text as graph operations. Rejections retain the armed composer draft.
+    /// text as graph operations. The host records the request and that
+    /// generation started; a rejection is reported in chat and retains the
+    /// armed composer draft.
     pub(crate) async fn submit_graph_request(
         &mut self,
         submission: PromptSubmission,
@@ -28,21 +30,14 @@ impl App {
         let result = self
             .drive_session_request(service.generate_graph_proposal(request))
             .await;
-        let (notice, outcome) = match result {
-            Ok(()) => (
-                "Generating execution graph…".into(),
-                PromptWorkflowOutcome::ShowSession {
-                    session_id: session_id.clone(),
-                },
-            ),
-            Err(error) => (
-                format!("Graph proposal: {error}"),
-                PromptWorkflowOutcome::KeepPrompt,
-            ),
-        };
-        self.append_output_for_session(&session_id, &notice).await;
+        if let Err(error) = result {
+            self.append_output_for_session(&session_id, &format!("Graph proposal: {error}"))
+                .await;
 
-        outcome
+            return PromptWorkflowOutcome::KeepPrompt;
+        }
+
+        PromptWorkflowOutcome::ShowSession { session_id }
     }
 }
 

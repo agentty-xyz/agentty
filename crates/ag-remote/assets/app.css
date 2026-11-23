@@ -2169,6 +2169,13 @@ input.graph-editor-input {
   border-top: 1px solid var(--color-border);
 }
 
+/* Who asks the questions, when the session's graph work does. */
+.questions-source {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+}
+
 .question-text {
   margin: 0;
   color: var(--color-text);
@@ -2396,6 +2403,53 @@ input.graph-editor-input {
 
 .composer-settings:disabled {
   cursor: default;
+}
+
+/* The `Graph` marker of a composer `/graph` armed, as the terminal titles
+   its composer. */
+.composer-graph {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.composer-graph-tag {
+  flex: none;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer-graph-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-dim);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A graph task the session or the host cannot take now. */
+.composer-graph.is-blocked .composer-graph-tag {
+  border-color: var(--color-border);
+  color: var(--color-dim);
+}
+
+.composer-graph.is-blocked .composer-graph-note {
+  color: var(--tone-failed);
+}
+
+.composer-graph-leave {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1rem;
 }
 
 /* ---- Suggestion popup (suggest.mjs) ---------------------------------

@@ -6,6 +6,7 @@ import { parseModels } from "../../assets/settings.mjs";
 import {
   SLASH_COMMANDS,
   createSlashCommands,
+  offersGraph,
   slashCommands,
   slashQuery,
   slashScore,
@@ -43,8 +44,12 @@ function settle() {
 
 // Mounts the slash commands on a text field. `respond(body)` answers each
 // request; the requests sent and the errors shown are recorded. `context`
-// is what the provider reads, and tests change it in place.
-function mountSlash({ respond = (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }) } = {}) {
+// is what the provider reads, and tests change it in place. `onGraph`,
+// when given, arms graph mode and offers `/graph`.
+function mountSlash({
+  onGraph = null,
+  respond = (body) => (body.method === "get_host" ? HOST : { kind: "accepted" }),
+} = {}) {
   const document = createDocument(
     "<!DOCTYPE html><html><body><form><textarea id=\"field\"></textarea></form></body></html>",
   );
@@ -57,6 +62,7 @@ function mountSlash({ respond = (body) => (body.method === "get_host" ? HOST : {
   const slash = createSlashCommands({
     context: () => context,
     input: input,
+    onGraph: onGraph,
     request: async (body) => {
       requests.push(body);
 
@@ -113,7 +119,36 @@ test("slashCommands matches fuzzily as the terminal does, and lists /fast only w
   assert.deepEqual(names(slashCommands("apply", { canFast: true })), []);
   assert.deepEqual(names(slashCommands("graph", { canFast: true })), []);
   assert.deepEqual(names(slashCommands("remote", { canFast: true })), []);
-  assert.equal(SLASH_COMMANDS[0].description, "Choose an agent and model for this session.");
+  assert.equal(SLASH_COMMANDS[1].description, "Choose an agent and model for this session.");
+});
+
+test("slashCommands lists /graph first, as the terminal does, only when it may arm", () => {
+  const names = (list) => list.map((command) => command.name);
+
+  assert.deepEqual(names(slashCommands("", { canFast: true, canGraph: true })), [
+    "/graph",
+    "/model",
+    "/reasoning",
+    "/style",
+    "/fast",
+  ]);
+  assert.deepEqual(names(slashCommands("g", { canGraph: true })), ["/graph", "/reasoning"]);
+  assert.deepEqual(names(slashCommands("gr", { canGraph: true })), ["/graph"]);
+  assert.deepEqual(names(slashCommands("", { canGraph: true, canSettings: false })), ["/graph"]);
+  assert.deepEqual(names(slashCommands("", { canFast: true, canSettings: false })), []);
+  assert.deepEqual(SLASH_COMMANDS[0], {
+    description: "Discuss a task with its execution graph beside the chat.",
+    name: "/graph",
+  });
+});
+
+test("offersGraph needs the capability and a session that is not busy", () => {
+  assert.equal(offersGraph(["graph_proposal"], session()), true);
+  assert.equal(offersGraph(["graph_proposal"], session({ status: "Draft" })), true);
+  assert.equal(offersGraph(["graph_proposal"], session({ status: "InProgress" })), false);
+  assert.equal(offersGraph(["graph_proposal"], session({ status: "Rebasing" })), false);
+  assert.equal(offersGraph(["graph_proposal"], null), false);
+  assert.equal(offersGraph(["graphs", "graph_actions"], session()), false);
 });
 
 test("slashScore ranks like the terminal's slash_command_fuzzy_score", () => {
@@ -420,6 +455,61 @@ test("a late failure of a forgotten model list shows nothing", async () => {
   await settle();
 
   assert.deepEqual(errors, []);
+});
+
+test("/graph arms graph mode with an empty field and sends nothing", async () => {
+  let armed = 0;
+  const { context, press, requests, shown, suggestions, texts, type } = mountSlash({
+    onGraph: () => {
+      armed += 1;
+    },
+  });
+  context.capabilities = ["host", "settings", "graph_proposal"];
+  type("/");
+  await settle();
+
+  assert.deepEqual(shown(), ["/graph", "/model", "/reasoning", "/style", "/fast"]);
+  type("/gr");
+  assert.deepEqual(shown(), ["/graph"]);
+  press("Enter");
+
+  assert.equal(armed, 1);
+  assert.deepEqual(texts, [""]);
+  assert.equal(suggestions.isOpen(), false);
+  assert.deepEqual(requests, [{ method: "get_host" }]);
+  // An armed composer takes its task literally, so `/` opens nothing.
+  context.isGraphArmed = true;
+  assert.equal(type("/"), false);
+});
+
+test("/graph alone needs neither the settings nor the models, and hides while the session is busy", async () => {
+  const { context, requests, shown, slash, suggestions, type } = mountSlash({ onGraph: () => {} });
+  context.capabilities = ["graph_proposal"];
+  type("/");
+  await settle();
+
+  assert.deepEqual(shown(), ["/graph"]);
+  assert.deepEqual(requests, []);
+  context.session = session({ status: "InProgress" });
+  slash.refresh();
+  assert.equal(suggestions.isOpen(), false);
+  assert.equal(type("/"), false);
+  // Without a way to arm, as in home's composer, the command is not offered.
+  const home = mountSlash();
+  home.context.capabilities = ["graph_proposal"];
+  assert.equal(home.type("/"), false);
+});
+
+test("a value list closes once only /graph stays offered", () => {
+  const { context, press, shown, slash, suggestions, type } = mountSlash({ onGraph: () => {} });
+  context.capabilities = ["host", "settings", "graph_proposal"];
+  type("/sty");
+  press("Enter");
+  assert.deepEqual(shown(), ["concise", "balanced", "detailed"]);
+  context.capabilities = ["graph_proposal"];
+  slash.refresh();
+
+  assert.equal(suggestions.isOpen(), false);
 });
 
 test("a pick after the session stops offering settings only closes the menu", async () => {

@@ -175,6 +175,7 @@ pub(super) fn session_fixture() -> Session {
         draft_prompt: None,
         focused_review: None,
         graph: None,
+        graph_question_target: None,
         id: SessionId::from("session-1"),
         messages: vec![SessionMessage::new(
             0,

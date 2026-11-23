@@ -76,6 +76,8 @@ fn expected_session() -> RemoteSession {
             text: "### Suggestions\n- Add a test".to_string(),
         }),
         graph: None,
+        graph_question_target: None,
+        graph_questions: Vec::new(),
         id: "session-1".to_string(),
         is_draft: false,
         messages: vec![
@@ -149,6 +151,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
                 answer: "main".to_string(),
                 question: "Which branch?".to_string(),
             }],
+            graph_question_target: None,
             session_id: "session-1".to_string(),
         },
     )
@@ -418,6 +421,45 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
             "list".to_string(),
             "list".to_string(),
             "list".to_string(),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_proposals_reach_listed_sessions_under_an_identity_the_server_mints() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let propose = |session_id: &str, message: &str| RemoteRequest::GenerateGraphProposal {
+        message: message.to_string(),
+        session_id: session_id.to_string(),
+    };
+
+    // Act
+    let accepted = call(&mut client, 1, propose("session-1", "Split the parser")).await?;
+    let refused = call(&mut client, 2, propose("session-1", "busy")).await?;
+    let unlisted = call(&mut client, 3, propose("other-project-session", "Split")).await?;
+
+    // Assert
+    assert_eq!(accepted, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        refused,
+        RemoteResult::Error("Graph generation requires a prepared idle session".to_string())
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "list",
+            "graph_proposal:session-1:Split the parser",
+            "list",
+            "graph_proposal:session-1:busy",
+            "list",
         ]
     );
 
@@ -887,6 +929,7 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
         2,
         RemoteRequest::AnswerQuestions {
             answers: Vec::new(),
+            graph_question_target: None,
             session_id: session_id.clone(),
         },
     )

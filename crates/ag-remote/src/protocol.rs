@@ -71,10 +71,22 @@ pub enum RemoteRequest {
     /// `snapshot` no longer matches or does not offer. Offered through the
     /// `graph_actions` capability.
     ActOnSessionGraph(RemoteGraphActionRequest),
-    /// Answers the session's complete current question set.
+    /// Answers the session's complete current question set: its turn's
+    /// `questions`, or, with `graph_question_target`, its `graph_questions`,
+    /// which go to the graph work that asked them.
+    ///
+    /// Agentty refuses answers that name graph work other than the one whose
+    /// questions are pending now, even when it asks the same questions, and
+    /// answers naming graph work while the turn asks its own. Answers that
+    /// name no graph work answer only the turn's questions, so a request
+    /// from a page that predates graph questions never reaches graph work.
     AnswerQuestions {
         /// Answers paired with the exact question text.
         answers: Vec<RemoteQuestionAnswer>,
+        /// The snapshot's `graph_question_target` of the `graph_questions`
+        /// answered; absent when answering the turn's `questions`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        graph_question_target: Option<String>,
         /// Session that asked the questions.
         session_id: String,
     },
@@ -93,6 +105,18 @@ pub enum RemoteRequest {
         /// How the session runs; one of the modes `get_host` lists.
         #[serde(default)]
         mode: RemoteSessionMode,
+    },
+    /// Starts model work that proposes an execution graph for the task in
+    /// `message`, as the terminal's `/graph` does. The proposal appears in
+    /// the session's `graph`; nothing launches until a chat reply approves
+    /// it. Agentty refuses it unless the session is prepared and idle, so
+    /// also for a draft that has not started, and refuses an empty or
+    /// oversized task. Offered through the `graph_proposal` capability.
+    GenerateGraphProposal {
+        /// Task the graph should carry out.
+        message: String,
+        /// Session that owns the proposal.
+        session_id: String,
     },
     /// Describes the host's active project. Offered through the `host`
     /// capability.
@@ -1681,6 +1705,21 @@ pub struct RemoteSession {
     /// when the session has no proposal and from older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<RemoteSessionGraph>,
+    /// Opaque key of the graph work that asks `graph_questions`, which other
+    /// graph work asking the same questions does not share, so a device can
+    /// tell a new set from one it closed. It identifies no proposal or node;
+    /// `answer_questions` echoes it as `graph_question_target` so the
+    /// answers reach only the work they were entered for. Absent without
+    /// graph questions and from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_question_target: Option<String>,
+    /// Clarification questions of the session's graph work, its pending
+    /// graph proposal or one of its graph nodes, while its turn asks none.
+    /// `answer_questions` naming their `graph_question_target` answers them,
+    /// and so does a chat message, so the status need not be `Question`.
+    /// Absent when there are none and from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph_questions: Vec<RemoteQuestion>,
     /// Stable session identifier.
     pub id: String,
     /// Whether the session defers its worktree until its first message.
@@ -1703,7 +1742,7 @@ pub struct RemoteSession {
     /// Upstream branch the session branch was published to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_upstream_ref: Option<String>,
-    /// Pending clarification questions.
+    /// Pending clarification questions of the session's turn.
     pub questions: Vec<RemoteQuestion>,
     /// Labels of the workflow actions waiting behind the active turn, such
     /// as a queued sync or publish, in the order they run. Absent when none
@@ -1737,6 +1776,15 @@ impl From<Session> for RemoteSession {
     fn from(session: Session) -> Self {
         let settings = session.settings;
         let agent = settings.agent;
+        let questions: Vec<RemoteQuestion> =
+            session.questions.iter().map(RemoteQuestion::from).collect();
+        // Older pages answer `questions` only while the status is
+        // `Question`, so graph questions travel apart from them.
+        let (questions, graph_questions) = if session.graph_question_target.is_some() {
+            (Vec::new(), questions)
+        } else {
+            (questions, Vec::new())
+        };
 
         Self {
             agent: Some(agent.kind().name().to_string()),
@@ -1746,6 +1794,8 @@ impl From<Session> for RemoteSession {
             draft_prompt: session.draft_prompt,
             focused_review: session.focused_review.map(RemoteFocusedReview::from),
             graph: session.graph.map(RemoteSessionGraph::from),
+            graph_question_target: session.graph_question_target,
+            graph_questions,
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
             model_id: Some(agent.model().as_str().to_string()),
@@ -1766,7 +1816,7 @@ impl From<Session> for RemoteSession {
                 .into_iter()
                 .filter_map(RemoteMessage::from_session_message)
                 .collect(),
-            questions: session.questions.iter().map(RemoteQuestion::from).collect(),
+            questions,
             queued_actions: session.queued_actions,
             queued_messages: session.queued_messages,
             status: session.status.to_string(),

@@ -86,14 +86,17 @@ mutations the terminal admits, which write graph state without a session event),
 change to a session's live status line, queued actions, or shown focused review, a step
 of a project sync, or new Git status of the project or its sessions. A graph driver
 reports a session update each time a node settles, not only after its dispatch pass, so
-remote views follow a pass that runs wave after wave. The foreground loop makes the same
-live-detail check after terminal input, because a key can clear or replace a review
-without any app event. Connected clients then fetch the list and the open session again,
-so remote views converge on durable state instead of replaying events. A session diff
-query captures its diff source in the mailbox and runs Git in a detached task that
-answers the caller directly, so it adds no reducer event. A session file listing works
-the same way: the mailbox captures the worktree folder, or answers from the `@`-mention
-index cache, and a blocking worker walks the worktree.
+remote views follow a pass that runs wave after wave. That also covers the graph
+questions a session snapshot reports: they change only when a proposal version or a node
+settles, a reply is recorded or decided, or a graph mutation is admitted, each of which
+already advances the revision, so devices need no poll of their own. The foreground loop
+makes the same live-detail check after terminal input, because a key can clear or
+replace a review without any app event. Connected clients then fetch the list and the
+open session again, so remote views converge on durable state instead of replaying
+events. A session diff query captures its diff source in the mailbox and runs Git in a
+detached task that answers the caller directly, so it adds no reducer event. A session
+file listing works the same way: the mailbox captures the worktree folder, or answers
+from the `@`-mention index cache, and a blocking worker walks the worktree.
 
 ## App Event Reducer
 
@@ -161,7 +164,10 @@ decision, and the resulting action enters the shared command gateway. Proposal a
 output replies are saved with their first decision, so recovery after a restart or
 project switch decides or applies a reply whose action was not attempted. Pending graph
 questions open the ordinary question panel bound to the exact asking version or
-execution, so a reply never reaches work that asked later.
+execution, so a reply never reaches work that asked later. The session API reports the
+same questions in a session snapshot while the turn asks none, with an opaque key of the
+work that asks them. A complete answer set names that key and is refused once other work
+is pending, so answers never reach work they were not entered for.
 
 ## Session Turn Data Flow
 

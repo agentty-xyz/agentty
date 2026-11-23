@@ -21,6 +21,9 @@ use crate::app::{App, spawn};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 
+/// Notice that follows a new proposal's request in its session's chat.
+const GENERATION_STARTED_NOTICE: &str = "Generating execution graph…";
+
 #[derive(Template)]
 #[template(path = "graph_proposal_prompt.md", escape = "none")]
 struct GraphProposalPrompt<'a> {
@@ -158,7 +161,8 @@ impl App {
             .map_err(proposal_error)?
         {
             // Record the request so the transcript shows what the proposal
-            // answers, live and after reload.
+            // answers, live and after reload, and that generation started,
+            // whichever frontend asked.
             SessionTaskService::append_user_prompt(
                 &transcript,
                 self.services.db(),
@@ -166,6 +170,15 @@ impl App {
                 &self.services.session_update_versions(),
                 &state.input.session_id,
                 &state.input.request.transcript_text(),
+            )
+            .await;
+            SessionTaskService::append_workflow_notice(
+                &transcript,
+                self.services.db(),
+                &self.services.event_sender(),
+                &self.services.session_update_versions(),
+                &state.input.session_id,
+                GENERATION_STARTED_NOTICE,
             )
             .await;
             self.graph_chat.invalidate();

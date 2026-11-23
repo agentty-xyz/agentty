@@ -385,6 +385,17 @@ pub struct Session {
     /// progress, as the host summarizes them beside the chat. `None` when
     /// the session has no proposal.
     pub graph: Option<crate::SessionGraphSummary>,
+    /// Opaque key of the graph work that asked `questions`, its pending
+    /// graph proposal version or one of its graph node executions, or `None`
+    /// when the session's own turn asked them. Other graph work asking the
+    /// same questions has another key. The key identifies no proposal or
+    /// node; a frontend echoes it in
+    /// [`AnswerQuestionsRequest::graph_question_target`](crate::AnswerQuestionsRequest)
+    /// so its answers reach only the work they were entered for. The host
+    /// reports graph questions only while the turn asks none, and a chat
+    /// message still answers them, so the session's status need not be
+    /// [`SessionStatus::Question`].
+    pub graph_question_target: Option<String>,
     /// Stable session identifier.
     pub id: SessionId,
     /// Ordered durable transcript messages.
@@ -395,7 +406,8 @@ pub struct Session {
     pub progress: Option<String>,
     /// Published upstream branch reference, when present.
     pub published_upstream_ref: Option<String>,
-    /// Structured clarification questions waiting for answers.
+    /// Structured clarification questions waiting for answers, which
+    /// [`crate::SessionService::answer_questions`] answers.
     pub questions: Vec<QuestionItem>,
     /// Workflow actions waiting behind the active turn, such as a queued
     /// sync, publish, or settings change, as display labels in the order

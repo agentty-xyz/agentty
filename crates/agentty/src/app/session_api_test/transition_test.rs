@@ -141,6 +141,7 @@ async fn runtime_backend_preserves_workflow_validation_errors() {
                 question: "Which target?".to_string(),
             }],
             attachments: Vec::new(),
+            graph_question_target: None,
         },
     )
     .await

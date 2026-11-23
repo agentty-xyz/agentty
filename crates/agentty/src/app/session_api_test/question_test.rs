@@ -46,6 +46,7 @@ async fn runtime_backend_restores_claimed_questions_when_resume_is_rejected() {
                 question: "Current question?".to_string(),
             }],
             attachments: Vec::new(),
+            graph_question_target: None,
         },
     )
     .await
@@ -121,6 +122,7 @@ async fn question_answers_report_claim_and_restore_persistence_failures() {
                         question: "Current question?".to_string(),
                     }],
                     attachments: Vec::new(),
+                    graph_question_target: None,
                 },
             )
             .await
@@ -150,6 +152,7 @@ async fn question_answers_report_session_read_failure() {
             AnswerQuestionsRequest {
                 answers: Vec::new(),
                 attachments: Vec::new(),
+                graph_question_target: None,
             },
         )
         .await

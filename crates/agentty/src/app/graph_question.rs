@@ -10,6 +10,7 @@
 //! reopened; a typed chat reply still answers them.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use ag_session::{GraphExecutionRef, QuestionAnswer};
@@ -34,6 +35,20 @@ pub(crate) enum GraphQuestionTarget {
     Node(GraphExecutionRef),
     /// One exact version of a pending graph proposal.
     Proposal { proposal_id: String, version: u32 },
+}
+
+impl GraphQuestionTarget {
+    /// Returns an opaque key of this graph work, which another proposal
+    /// version or node execution does not share, so a frontend can tell new
+    /// graph work asking the same questions apart and name the work its
+    /// answers are for. It identifies no proposal or node, and is stable
+    /// within one process.
+    pub(crate) fn key(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        format!("{self:?}").hash(&mut hasher);
+
+        format!("{:016x}", hasher.finish())
+    }
 }
 
 /// Pending clarification questions and the graph work that asked them.
@@ -152,17 +167,10 @@ impl App {
             return false;
         };
         let session_id = session_id.clone();
-        // Archived sessions keep settled graph questions but no longer
-        // accept answers, so their chat stays in place.
         if self
             .sessions
             .session_for_id(&session_id)
-            .is_none_or(|session| {
-                matches!(
-                    session.status,
-                    Status::Question | Status::Done | Status::Canceled
-                )
-            })
+            .is_none_or(|session| !shows_graph_questions(session.status))
         {
             return false;
         }
@@ -182,6 +190,24 @@ impl App {
         self.open_question_panel(&session_id, pending.questions, Some(pending.target));
 
         true
+    }
+
+    /// Returns the graph questions the question panel of a session in
+    /// `status` would show now, as [`Self::pending_graph_questions`] finds
+    /// them, or `None` in a status that shows none.
+    ///
+    /// # Errors
+    /// Returns an error when the proposal or graph lookup fails.
+    pub(crate) async fn shown_graph_questions(
+        &self,
+        session_id: &SessionId,
+        status: Status,
+    ) -> Result<Option<GraphQuestions>, String> {
+        if !shows_graph_questions(status) {
+            return Ok(None);
+        }
+
+        self.pending_graph_questions(session_id).await
     }
 
     /// Returns the clarification questions a chat reply in this session
@@ -239,7 +265,8 @@ impl App {
         true
     }
 
-    /// Sends one completed answer set to the graph work that asked.
+    /// Sends one completed answer set from the question panel to the graph
+    /// work that asked.
     ///
     /// Only a retryable rejection keeps the panel's target. Sent and stale
     /// answers release it and check again on the next tick, so the questions
@@ -252,11 +279,34 @@ impl App {
         answers: &[QuestionAnswer],
         attachments: Vec<TurnPromptAttachment>,
     ) -> GraphAnswerOutcome {
+        let outcome = self
+            .send_graph_answers(session_id, target, answers, attachments)
+            .await;
+        if outcome != GraphAnswerOutcome::Retry {
+            self.graph_questions.active = None;
+            // Check again on the next tick so pending questions open promptly.
+            self.graph_questions.checked = None;
+        }
+
+        outcome
+    }
+
+    /// Sends one completed answer set, in the ordinary clarification reply
+    /// format, to the exact graph work `target` names, whichever frontend
+    /// answered.
+    pub(crate) async fn send_graph_answers(
+        &mut self,
+        session_id: &SessionId,
+        target: &GraphQuestionTarget,
+        answers: &[QuestionAnswer],
+        attachments: Vec<TurnPromptAttachment>,
+    ) -> GraphAnswerOutcome {
         let prompt = TurnPrompt {
             attachments,
             ..TurnPrompt::from_text(question_answer_message(answers))
         };
-        let outcome = match target {
+
+        match target {
             GraphQuestionTarget::Node(execution) => {
                 self.answer_graph_node_questions(session_id, execution, &prompt)
                     .await
@@ -268,15 +318,15 @@ impl App {
                 self.answer_graph_proposal_questions(session_id, proposal_id, *version, &prompt)
                     .await
             }
-        };
-        if outcome != GraphAnswerOutcome::Retry {
-            self.graph_questions.active = None;
-            // Check again on the next tick so pending questions open promptly.
-            self.graph_questions.checked = None;
         }
-
-        outcome
     }
+}
+
+/// Returns whether a session in `status` shows its graph work's questions.
+/// A session asking its own questions shows those instead, and archived
+/// sessions keep settled graph questions but no longer accept answers.
+fn shows_graph_questions(status: Status) -> bool {
+    !matches!(status, Status::Question | Status::Done | Status::Canceled)
 }
 
 #[cfg(test)]

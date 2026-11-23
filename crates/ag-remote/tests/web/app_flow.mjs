@@ -11,7 +11,8 @@
 // whenever a message is sent or a question answered. After `answered` and
 // after `queued` the Rust test bumps the server's revision, so the server
 // pushes `changed`: first `Plan it` turns unread, then its queued message
-// shows.
+// shows. Answered, `Build it` waits in review on its graph work's
+// question, and the page replies in chat with a `/graph` request instead.
 //
 // In `route` mode the page loads at `#s=session-2` with a draft left in
 // this tab, as after a reload, sends it, and opens its graphs and its diff.
@@ -195,6 +196,47 @@ async function sessionFlow() {
     isDialogOpen: dialog.open,
     isSheetOpen: sheet.open,
     sheetOpened: sheetOpened,
+  });
+
+  // Answered, the session waits in review on its graph work's question,
+  // which the question panel shows. Replying in chat instead opens the
+  // composer, where `/graph` asks for a graph proposal.
+  await waitFor("the graph question", () => byId("questions").querySelector(".questions-source"));
+  const graphQuestion = {
+    answerChatHidden: byId("answer-chat").hidden,
+    composerHidden: byId("composer").hidden,
+    source: byId("questions").querySelector(".questions-source").textContent,
+    text: byId("questions").querySelector("[data-question]").dataset.question,
+  };
+  // Answers name the graph work that asked; the panel stays until the
+  // host stops reporting the questions.
+  byId("questions").querySelector(".option").click();
+  byId("answer-send").click();
+  await waitFor("the graph answers to go through", () => !byId("answer-send").disabled);
+  graphQuestion.answerError = byId("answer-error").textContent;
+  byId("answer-chat").click();
+  const task = byId("message");
+  task.value = "/gr";
+  task.dispatchEvent(new FakeEvent("input"));
+  const commands = Array.from(byId("message-suggestions").children, (option) => option.dataset.key);
+  task.dispatchEvent(new FakeEvent("keydown", { key: "Enter" }));
+  const armed = {
+    markerHidden: byId("composer-graph").hidden,
+    placeholder: task.placeholder,
+  };
+  task.value = "Split the parser";
+  task.dispatchEvent(new FakeEvent("input"));
+  task.dispatchEvent(new FakeEvent("keydown", { ctrlKey: true, key: "Enter" }));
+  await waitFor("the graph request to go through", () => task.value === "");
+  report({
+    step: "graph",
+    armed: armed,
+    commands: commands,
+    composerHidden: byId("composer").hidden,
+    error: byId("session-error").textContent,
+    markerHidden: byId("composer-graph").hidden,
+    question: graphQuestion,
+    questionsHidden: byId("questions").hidden,
   });
 
   // The back gesture returns to where the session was opened from.

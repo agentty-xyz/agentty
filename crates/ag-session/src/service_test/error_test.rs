@@ -76,6 +76,7 @@ async fn fake_backend_requires_explicit_results() {
             AnswerQuestionsRequest {
                 answers: Vec::new(),
                 attachments: Vec::new(),
+                graph_question_target: None,
             },
         )
         .await

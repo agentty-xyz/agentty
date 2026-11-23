@@ -179,6 +179,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
     server.revisions_tx.send(2)?;
     let refreshed = app.next_step().await?;
     let canceled = app.next_step().await?;
+    let graph = app.next_step().await?;
     let closed = app.next_step().await?;
     let running = app.next_step().await?;
     let queued = app.next_step().await?;
@@ -223,6 +224,7 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
             "sheetOpened": true,
         })
     );
+    assert_graph_requested(&graph);
     assert_eq!(
         closed,
         json!({
@@ -257,11 +259,41 @@ async fn web_client_app_lists_opens_sends_answers_and_cancels_through_the_listen
         [
             "answer:session-1:Which branch?=main",
             "cancel:session-1",
+            "answer:session-1:Where should the graph run?=Locally@c0ffee",
+            "graph_proposal:session-1:Split the parser",
             "send:session-2:Use the main branch",
         ]
     );
 
     Ok(())
+}
+
+/// Checks the step where `Build it` waits on its graph work's question, the
+/// page answers it, then replies in chat instead, and `/graph` asks for a
+/// graph proposal.
+fn assert_graph_requested(graph: &Value) {
+    assert_eq!(
+        graph,
+        &json!({
+            "step": "graph",
+            "armed": {
+                "markerHidden": false,
+                "placeholder": "Describe the task for the execution graph",
+            },
+            "commands": ["/graph"],
+            "composerHidden": false,
+            "error": "",
+            "markerHidden": true,
+            "question": {
+                "answerChatHidden": false,
+                "answerError": "",
+                "composerHidden": true,
+                "source": "The execution graph asks. Answer here, or reply in chat.",
+                "text": "Where should the graph run?",
+            },
+            "questionsHidden": true,
+        })
+    );
 }
 
 #[tokio::test]

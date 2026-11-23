@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use super::{
     Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, DeviceProof,
     MAX_DEVICE_NAME_CHARS, MessageOutcome, PairingDevice, complete_pairing, device_display_name,
-    execute, handle_incoming,
+    execute, handle_incoming, mutated_session,
 };
 use crate::PROTOCOL_VERSION;
 use crate::device::{key_hash, token_hash};
@@ -96,7 +96,7 @@ async fn reply_result(state: &ServerState, request: RemoteRequest) -> RemoteResu
     }
     .expect("expected request 9");
 
-    execute(state.sessions(), request).await
+    execute(state.sessions(), state.entropy.as_ref(), request).await
 }
 
 #[tokio::test]
@@ -461,6 +461,7 @@ async fn handle_incoming_runs_each_request_against_the_session_service() {
                 answer: "main".to_string(),
                 question: "Which branch?".to_string(),
             }],
+            graph_question_target: None,
             session_id: "session-1".to_string(),
         },
         RemoteRequest::CancelSession {
@@ -526,6 +527,7 @@ async fn handle_incoming_refuses_mutations_of_unlisted_sessions() {
         },
         RemoteRequest::AnswerQuestions {
             answers: Vec::new(),
+            graph_question_target: None,
             session_id: "other-project".to_string(),
         },
         RemoteRequest::CancelSession {
@@ -885,6 +887,128 @@ async fn graph_actions_reach_only_listed_sessions_of_hosts_that_serve_them() {
         ]
     );
     assert_eq!(reading_only.backend.calls(), Vec::<String>::new());
+}
+
+/// Asks for a graph proposal for `message` in `session_id`.
+fn graph_proposal(session_id: &str, message: &str) -> RemoteRequest {
+    RemoteRequest::GenerateGraphProposal {
+        message: message.to_string(),
+        session_id: session_id.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn graph_proposals_reach_only_listed_sessions_of_hosts_that_serve_them() {
+    // Arrange
+    let serving = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::GenerateGraphProposal],
+    );
+    let acting_only = supporting_fixture(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::GraphActions],
+    );
+    let no_entropy = StateFixture::new(
+        MemoryDeviceStore::default(),
+        RecordingBackend::supporting(&[SessionOperation::GenerateGraphProposal]),
+        Arc::new(FailingEntropy),
+    );
+    let split = || graph_proposal("session-1", "Split the parser");
+
+    // Act
+    let generated = reply_result(&serving.state, split()).await;
+    let unlisted = reply_result(
+        &serving.state,
+        graph_proposal("other-project", "Split the parser"),
+    )
+    .await;
+    let unsupported = reply_result(&acting_only.state, split()).await;
+    let without_identity = reply_result(&no_entropy.state, split()).await;
+
+    // Assert
+    assert_eq!(generated, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        without_identity,
+        RemoteResult::Error("Cannot generate a graph proposal identity".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list".to_string(),
+            format!(
+                "graph_proposal:session-1:remote-{}:Split the parser",
+                "0".repeat(32)
+            ),
+            "list".to_string(),
+        ]
+    );
+    assert_eq!(acting_only.backend.calls(), Vec::<String>::new());
+    assert_eq!(no_entropy.backend.calls(), ["list"]);
+}
+
+#[tokio::test]
+async fn graph_answers_reach_the_host_with_the_graph_work_they_answer() {
+    // Arrange
+    let fixture = fixture(MemoryDeviceStore::default());
+    let older = r#"{"type":"request","id":9,"request":{"method":"answer_questions","answers":[{"answer":"Local","question":"Where?"}],"session_id":"session-1"}}"#;
+
+    // Act
+    let targeted = reply_result(
+        &fixture.state,
+        RemoteRequest::AnswerQuestions {
+            answers: vec![RemoteQuestionAnswer {
+                answer: "Local".to_string(),
+                question: "Where?".to_string(),
+            }],
+            graph_question_target: Some("c0ffee".to_string()),
+            session_id: "session-1".to_string(),
+        },
+    )
+    .await;
+    let request = match handle_incoming(Incoming::Text(older.to_string())) {
+        MessageOutcome::Request { request, .. } => Some(request),
+        _ => None,
+    }
+    .expect("an older answer frame should parse");
+    let untargeted = execute(
+        fixture.state.sessions(),
+        fixture.state.entropy.as_ref(),
+        request,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(targeted, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(untargeted, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        fixture.backend.calls(),
+        [
+            "list",
+            "answer:session-1:Where?=Local:0@c0ffee",
+            "list",
+            "answer:session-1:Where?=Local:0"
+        ]
+    );
+}
+
+#[test]
+fn a_graph_proposal_queues_behind_earlier_changes_of_its_session() {
+    // Arrange
+    let request = graph_proposal("session-1", "Split the parser");
+
+    // Act
+    let session = mutated_session(&request);
+
+    // Assert
+    assert_eq!(session, Some("session-1"));
 }
 
 #[test]
@@ -1297,6 +1421,7 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
     let fixture = supporting_fixture(
         MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
         &[
+            SessionOperation::GenerateGraphProposal,
             SessionOperation::GraphActions,
             SessionOperation::RebaseSession,
             SessionOperation::StopTurn,
@@ -1324,7 +1449,8 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
             "stop_turn".to_string(),
             "sync".to_string(),
             "graphs".to_string(),
-            "graph_actions".to_string()
+            "graph_actions".to_string(),
+            "graph_proposal".to_string()
         ])
     );
 }

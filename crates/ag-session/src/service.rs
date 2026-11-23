@@ -56,6 +56,12 @@ pub struct AnswerQuestionsRequest {
     /// delivered with the reply turn like prompt attachments. The caller
     /// keeps the files when the request fails, so it can retry with them.
     pub attachments: Vec<TurnPromptAttachment>,
+    /// [`crate::Session::graph_question_target`] of the graph questions the
+    /// answers are for, as the snapshot the answers were entered on
+    /// reported it. `None` answers the questions of the session's own turn.
+    /// The host refuses answers for graph work other than the one pending
+    /// now, even when it asks the same questions.
+    pub graph_question_target: Option<String>,
 }
 
 /// Idempotent turn submitted to one session.
@@ -133,6 +139,10 @@ pub enum SessionOperation {
     /// to the snapshot a [`SessionBackend::session_graphs`] read returned,
     /// through [`SessionBackend::act_on_session_graph`].
     GraphActions,
+    /// Generating a graph proposal for a task, as the host's own graph
+    /// command does, through [`SessionBackend::generate_graph_proposal`].
+    /// Nothing launches until a reply approves the proposal.
+    GenerateGraphProposal,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
