@@ -16,7 +16,7 @@ use super::support::{
 use crate::app::session::SessionGitStatus;
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
-    SyncSessionStartError,
+    SyncSessionStartError, start_fake_listener,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 
@@ -73,8 +73,10 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
         }),
         ..idle_project.clone()
     };
-    let mut revisions = app.remote_control.subscribe_revisions();
-    let mut revision_changed = || {
+    let mut revisions = start_fake_listener(&mut app).await;
+    // Each step ends with the check the foreground cycle makes.
+    let mut revision_changed = |app: &mut App| {
+        app.publish_reported_state_changes();
         let is_changed = revisions
             .has_changed()
             .expect("revision sender should live");
@@ -88,17 +90,20 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
     let supports_status = service.supports(SessionOperation::ProjectStatus);
     let supports_sync = service.supports(SessionOperation::SyncProject);
     let idle = request_project_status(&mut app).await;
+    let idle_changed = revision_changed(&mut app);
     let synced = request_project_sync(&mut app).await;
-    let started_changed = revision_changed();
+    let started_changed = revision_changed(&mut app);
     let running = request_project_status(&mut app).await;
     let repeated = request_project_sync(&mut app).await;
+    // The repeated request is a mutation, which publishes on its own.
+    revision_changed(&mut app);
     let operation = shown_sync_operation(&app);
     app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
         conflicted_files: vec!["src/lib.rs".to_string(), "README.md".to_string()],
         operation: operation.clone(),
     })
     .await;
-    let conflict_changed = revision_changed();
+    let conflict_changed = revision_changed(&mut app);
     let resolving = request_project_status(&mut app).await;
     app.apply_app_events(sync_completed(
         operation,
@@ -112,14 +117,15 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
         }),
     ))
     .await;
-    let completion_changed = revision_changed();
+    let completion_changed = revision_changed(&mut app);
     let complete = request_project_status(&mut app).await;
     let expires_at = app
         .project_sync_status_expires_at
         .expect("a finished sync should expire");
     app.expire_project_sync_status(expires_at);
-    let expiry_changed = revision_changed();
+    let expiry_changed = revision_changed(&mut app);
     let expired = request_project_status(&mut app).await;
+    let expired_changed = revision_changed(&mut app);
 
     // Assert
     assert!(supports_status);
@@ -152,6 +158,9 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
         ],
         [true; 4]
     );
+    // Reading the status changes nothing devices read.
+    assert!(!idle_changed);
+    assert!(!expired_changed);
 }
 
 #[tokio::test]
@@ -213,6 +222,11 @@ async fn runtime_backend_leaves_out_the_sync_of_another_project() {
 async fn git_status_updates_advance_the_remote_revision_only_when_they_change() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    app.sessions
+        .push_session(crate::test_support::session_fixture(
+            "session-1",
+            crate::domain::session::Status::Review,
+        ));
     let generation = app.sync_handle.current_generation();
     let update = |status| AppEvent::GitStatusUpdated {
         generation,
@@ -230,21 +244,41 @@ async fn git_status_updates_advance_the_remote_revision_only_when_they_change() 
         )]),
         status: Some((0, 2)),
     };
-    let mut revisions = app.remote_control.subscribe_revisions();
+    let conflict = SessionGitStatus {
+        has_merge_conflict: Some(true),
+        ..SessionGitStatus::default()
+    };
+    let unlisted_conflict_update = AppEvent::GitStatusUpdated {
+        generation,
+        session_statuses: HashMap::from([
+            (SessionId::from("session-1"), conflict),
+            (SessionId::from("unlisted-session"), conflict),
+        ]),
+        status: Some((0, 2)),
+    };
+    let mut revisions = start_fake_listener(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
-    // Act
+    // Act: each update ends with the check the foreground cycle makes.
     app.apply_app_events(update(Some((0, 2)))).await;
+    app.publish_reported_state_changes();
     let after_counts = *revisions.borrow_and_update();
     app.apply_app_events(update(Some((0, 2)))).await;
+    app.publish_reported_state_changes();
     let after_same_counts = *revisions.borrow_and_update();
     app.apply_app_events(conflict_update).await;
+    app.publish_reported_state_changes();
     let after_conflict = *revisions.borrow_and_update();
+    app.apply_app_events(unlisted_conflict_update).await;
+    app.publish_reported_state_changes();
+    let after_unlisted_conflict = *revisions.borrow_and_update();
 
     // Assert
     assert_eq!(after_counts, initial_revision + 1);
     assert_eq!(after_same_counts, after_counts);
     assert_eq!(after_conflict, after_counts + 1);
+    // A session the host does not list shows devices nothing new.
+    assert_eq!(after_unlisted_conflict, after_conflict);
 }
 
 #[tokio::test]

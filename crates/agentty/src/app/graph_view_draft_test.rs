@@ -24,7 +24,7 @@ use crate::test_support::new_test_app;
 async fn rejected_replies_require_explicit_reconciliation() {
     // Arrange / Act / Assert
     for fault in ["stale", "persistence"] {
-        exercise_rejected_draft(fault).await;
+        Box::pin(exercise_rejected_draft(fault)).await;
     }
 }
 

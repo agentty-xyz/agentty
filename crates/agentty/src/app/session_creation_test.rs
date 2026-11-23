@@ -86,6 +86,51 @@ async fn finish_creation(app: &mut App) {
 }
 
 #[tokio::test]
+async fn events_pumped_while_a_creation_is_pending_advance_the_remote_revision() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.sessions
+        .push_session(crate::test_support::session_fixture(
+            "session-1",
+            Status::Review,
+        ));
+    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let initial_revision = *revisions.borrow_and_update();
+    // A pending creation makes the request's own loop apply app events.
+    app.pending_session_creations.insert(
+        "pending".to_string(),
+        PendingSessionCreation {
+            project_id: app.active_project_id(),
+            response_tx: None,
+            session_id: None,
+        },
+    );
+    // A setting changed in the terminal, whose event publishes nothing.
+    app.services
+        .emit_app_event(crate::app::AppEvent::SessionReasoningLevelUpdated {
+            reasoning_level: crate::domain::agent::ReasoningLevel::Low,
+            session_id: "session-1".into(),
+        });
+
+    // Act: the request finishes only once the revision advances.
+    let request = async move {
+        revisions
+            .changed()
+            .await
+            .expect("revision sender should live");
+
+        *revisions.borrow_and_update()
+    };
+    let advanced_revision =
+        tokio::time::timeout(Duration::from_secs(5), app.drive_session_request(request))
+            .await
+            .expect("the pumped event should advance the revision");
+
+    // Assert
+    assert_eq!(advanced_revision, initial_revision + 1);
+}
+
+#[tokio::test]
 async fn saved_submission_routes_preserve_the_first_prompt() {
     // Arrange
     let (mut app, _directory, release) = delayed_creation_app(1).await;

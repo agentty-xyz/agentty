@@ -1,13 +1,17 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::thread;
 
 use axum::http::{HeaderMap, HeaderValue, header};
+use tokio::sync::oneshot;
 
 use super::{
-    ConnectionOrigin, MAX_UNAUTHENTICATED_SOCKETS, PairingRequest, RemoteConnection,
-    RemoteServerStatus, WEB_ASSETS, host_is_allowed, origin_matches_host, replace_status,
+    ConnectionOrigin, MAX_UNAUTHENTICATED_SOCKETS, PairingRequest, RegisteredConnection,
+    RemoteConnection, RemoteServerStatus, WEB_ASSETS, host_is_allowed, origin_matches_host,
+    replace_status,
 };
 use crate::device::{DeviceStore, DeviceStoreError};
+use crate::relay::RelayStatus;
 use crate::server::{RemoteError, RemoteHost, RemoteServerConfig, start_with_entropy};
 use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
 
@@ -132,6 +136,73 @@ async fn pairing_requests_are_listed_until_settled_or_withdrawn() {
     assert!(!settled_twice);
     assert!(!unknown);
     assert_eq!(status.borrow().pairing_requests, []);
+}
+
+#[test]
+fn a_publication_that_waits_reads_the_registry_as_it_is_when_it_sends() {
+    // Arrange: the only device reloads. Its old socket leaves and starts
+    // publishing while a reader holds the status, so the publication waits.
+    let device = |device_id: &str| RemoteConnection {
+        device_id: device_id.to_string(),
+        device_name: "Phone".to_string(),
+    };
+    let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
+    let status = fixture.state.status_tx.subscribe();
+    let (_old_close_rx, old_guard) = fixture.state.register(device("old"));
+    let held_status = status.borrow();
+    let leaving = thread::spawn(move || drop(old_guard));
+    while !fixture.state.registry().entries.is_empty() {
+        thread::yield_now();
+    }
+
+    // Act: the new socket registers while the old one's publication still
+    // waits, and the reader then lets it send.
+    let (new_close_tx, _new_close_rx) = oneshot::channel();
+    fixture.state.registry().entries.insert(
+        1,
+        RegisteredConnection {
+            close_tx: new_close_tx,
+            connection: device("new"),
+        },
+    );
+    drop(held_status);
+    leaving.join().expect("leaving socket should finish");
+
+    // Assert: a status read before the wait would have listed nobody.
+    assert_eq!(status.borrow().connections, [device("new")]);
+}
+
+#[test]
+fn current_status_lists_connections_pairing_requests_and_the_relay_link() {
+    // Arrange
+    let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
+    let connection = RemoteConnection {
+        device_id: "phone".to_string(),
+        device_name: "Phone".to_string(),
+    };
+    let (_close_rx, _registration) = fixture.state.register(connection.clone());
+    let (_decision_rx, _pairing) = fixture
+        .state
+        .request_pairing("Tablet".to_string(), "ABCD".to_string());
+    fixture.state.set_relay_status(RelayStatus::Connected);
+
+    // Act
+    let status = fixture.state.current_status();
+
+    // Assert
+    assert_eq!(
+        status,
+        RemoteServerStatus {
+            connections: vec![connection],
+            pairing_requests: vec![PairingRequest {
+                confirmation: "ABCD".to_string(),
+                device_name: "Tablet".to_string(),
+                id: 0,
+            }],
+            relay: Some(RelayStatus::Connected),
+        }
+    );
+    assert_eq!(*fixture.state.status_tx.borrow(), status);
 }
 
 #[test]

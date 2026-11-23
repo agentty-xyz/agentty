@@ -641,6 +641,15 @@ impl Session {
             .collect()
     }
 
+    /// Returns the transcript text of each message queued behind the active
+    /// turn, in the order they will be sent.
+    pub(crate) fn queued_message_texts(&self) -> Vec<String> {
+        self.queued_messages
+            .iter()
+            .map(|message| message.transcript_text().to_string())
+            .collect()
+    }
+
     /// Returns the loading text of a running review, when one runs.
     pub(crate) fn review_loading_message(&self) -> Option<&str> {
         self.loading_message(TransientMessageSlot::Review)

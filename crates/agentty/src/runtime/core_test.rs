@@ -27,7 +27,7 @@ use super::{
 };
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::{App, AppEvent};
-use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
+use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::browser::MockBrowserClient;
@@ -913,6 +913,139 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
             assert_eq!(event["properties"]["model"], agent.model().as_str());
         }
     }
+}
+
+#[tokio::test]
+/// Verifies each cycle tells remote clients about a change to what the
+/// session API reports, here a setting whose event publishes nothing, and
+/// stays quiet while nothing changes.
+async fn run_cycle_advances_the_remote_revision_once_for_a_reported_change() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.sessions
+        .push_session(crate::test_support::session_fixture(
+            "session-1",
+            Status::Review,
+        ));
+    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let initial_revision = *revisions.borrow_and_update();
+    app.services
+        .emit_app_event(AppEvent::SessionReasoningLevelUpdated {
+            reasoning_level: ReasoningLevel::Low,
+            session_id: "session-1".into(),
+        });
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("failed to create terminal");
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::unix_epoch());
+    let last_draw = DrawStamp::now(clock.as_ref());
+    let mut tick = tokio::time::interval(Duration::from_millis(1));
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        clock,
+        event_rx: &mut event_rx,
+        last_draw,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+        timing: CycleTiming::default(),
+    };
+
+    // Act
+    let first_cycle = main_loop_state.run_cycle().await;
+    let after_change = *revisions.borrow_and_update();
+    let second_cycle = main_loop_state.run_cycle().await;
+    let is_changed_again = revisions
+        .has_changed()
+        .expect("revision sender should live");
+
+    // Assert
+    assert!(matches!(first_cycle, Ok(EventResult::Continue)));
+    assert!(matches!(second_cycle, Ok(EventResult::Continue)));
+    assert_eq!(after_change, initial_revision + 1);
+    assert!(!is_changed_again);
+}
+
+#[tokio::test]
+/// Verifies the cycle after a key tells remote clients what the key
+/// changed, here a project sync the key starts, although no app event
+/// follows the key.
+async fn run_cycle_advances_the_remote_revision_once_for_a_change_made_by_a_key() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning(|_, _, _, _| {});
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    // The sync orchestrator reports Git status once at startup and then
+    // waits for its next periodic pass; apply that report now.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = app.next_app_event().await.expect("startup event");
+            let is_git_status = matches!(event, AppEvent::GitStatusUpdated { .. });
+            app.apply_app_events(event).await;
+            if is_git_status {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("startup Git status should arrive");
+    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let initial_revision = *revisions.borrow_and_update();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("failed to create terminal");
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::unix_epoch());
+    let last_draw = DrawStamp::now(clock.as_ref());
+    // The first tick fires at once; consuming it leaves only terminal input
+    // to wake the cycles below.
+    let mut tick = tokio::time::interval(Duration::from_mins(1));
+    tick.tick().await;
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        clock,
+        event_rx: &mut event_rx,
+        last_draw,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+        timing: CycleTiming::default(),
+    };
+    let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+
+    // Act: a late startup event may take a cycle before the key, which
+    // stays queued until a cycle handles it.
+    event_tx
+        .send(key(KeyCode::Char('s')))
+        .expect("failed to send sync key");
+    // A cycle starts only while the key is queued, so none waits on the
+    // tick, and the last one is the cycle that handled the key.
+    while !main_loop_state.event_rx.is_empty() {
+        assert!(matches!(
+            main_loop_state.run_cycle().await,
+            Ok(EventResult::Continue)
+        ));
+    }
+    let is_sync_started = main_loop_state.app.project_sync_status.is_some();
+    let after_key_cycle = *revisions.borrow_and_update();
+    event_tx
+        .send(Event::FocusGained)
+        .expect("failed to send focus event");
+    let next_cycle = main_loop_state.run_cycle().await;
+    let after_next_cycle = *revisions.borrow_and_update();
+    main_loop_state.app.publish_reported_state_changes();
+    let is_changed_again = revisions
+        .has_changed()
+        .expect("revision sender should live");
+
+    // Assert
+    assert!(is_sync_started);
+    assert!(matches!(next_cycle, Ok(EventResult::Continue)));
+    // The key runs after its cycle's check, so the next cycle reports it.
+    assert_eq!(after_key_cycle, initial_revision);
+    assert_eq!(after_next_cycle, initial_revision + 1);
+    assert!(!is_changed_again);
 }
 
 #[tokio::test]

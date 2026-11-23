@@ -549,7 +549,19 @@ impl ServerState {
 
     /// Publishes the registered connections and pairing requests in arrival
     /// order.
+    ///
+    /// The status is read while the channel is locked for the send, so
+    /// publications run one at a time and each reads every change made
+    /// before it began: the last one sent always matches the registries.
+    /// Callers hold none of the registry locks.
     fn publish_status(&self) {
+        self.status_tx
+            .send_if_modified(|status| replace_status(status, self.current_status()));
+    }
+
+    /// Reads the registered connections, pairing requests, and relay link,
+    /// taking each lock in turn and never two at once.
+    fn current_status(&self) -> RemoteServerStatus {
         let connections = self
             .registry()
             .entries
@@ -566,13 +578,12 @@ impl ServerState {
             .relay_status
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let next = RemoteServerStatus {
+
+        RemoteServerStatus {
             connections,
             pairing_requests,
             relay,
-        };
-        self.status_tx
-            .send_if_modified(|status| replace_status(status, next));
+        }
     }
 
     /// Locks the connection registry, recovering it after a panic elsewhere.

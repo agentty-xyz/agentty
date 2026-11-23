@@ -82,23 +82,27 @@ not execution ownership.
 runtime's Tokio executor but owns no application state. It calls the session API through
 the mailbox like any programmatic caller, under the remote initiator: the foreground
 turn that serves each of its requests answers a session the host does not list as
-missing and refuses any operation remote control does not serve. The reducer advances
-the session-change revision after it applies session updates, reloads, admitted
-mutations (including graph mutations the terminal admits, which write graph state
-without a session event), a change to a session's live status line, queued actions, or
-shown focused review, a step of a project sync, or new Git status of the project or its
-sessions. A graph driver reports a session update each time a node settles, not only
-after its dispatch pass, so remote views follow a pass that runs wave after wave. That
-also covers the graph questions a session snapshot reports: they change only when a
-proposal version or a node settles, a reply is recorded or decided, or a graph mutation
-is admitted, each of which already advances the revision, so devices need no poll of
-their own. The foreground loop makes the same live-detail check after terminal input,
-because a key can clear or replace a review without any app event. Connected clients
-then fetch the list and the open session again, so remote views converge on durable
-state instead of replaying events. A session diff query captures its diff source in the
-mailbox and runs Git in a detached task that answers the caller directly, so it adds no
-reducer event. A session file listing works the same way: the mailbox captures the
-worktree folder, or answers from the `@`-mention index cache, and a blocking worker
+missing and refuses any operation remote control does not serve. While a device is
+connected, the session-change revision follows a fingerprint of what the session API
+reports from memory, built from the same helpers the API reads: each loaded session's
+list entry and live details, the project status, the host's model choices, the graph
+replies being decided, and what live graph drivers add to stored graph progress. Each
+foreground cycle, and each step of a foreground request that drives the mailbox itself,
+compares the fingerprint once and advances the revision when it differs, however the
+change was made. A device reads as soon as it authenticates, before the host hears of
+the connection, so the first connection takes a new baseline and advances the revision
+once. The fingerprint reads no clock and no database, so it stays unchanged while
+nothing a device reads changes. Explicit publishes remain only for state the database
+alone holds: session updates, which carry transcripts, reloads, mailbox mutations, and
+admitted graph mutations, which write graph tables without a session event. A graph
+driver reports a session update each time a node settles, so remote views follow a pass
+that runs wave after wave, and graph questions change only with one of these. Creation
+defaults of the host context come from stored settings and are not followed. Connected
+clients then fetch the list and the open session again, so remote views converge on
+durable state instead of replaying events. A session diff query captures its diff source
+in the mailbox and runs Git in a detached task that answers the caller directly, so it
+adds no reducer event. A session file listing works the same way: the mailbox captures
+the worktree folder, or answers from the `@`-mention index cache, and a blocking worker
 walks the worktree.
 
 ## App Event Reducer

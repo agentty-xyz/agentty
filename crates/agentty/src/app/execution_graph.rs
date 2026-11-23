@@ -126,6 +126,57 @@ impl GraphNodeRunner for SessionStatusGraphRunner {
     }
 }
 
+/// What one live driver adds to its graph's persisted progress: the
+/// executions it still settles and the nodes whose shared budget it has
+/// spent. Graph progress projects from it, and remote clients compare it.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct GraphDriverReport {
+    /// Nodes whose shared provider-call budget has no calls left, with that
+    /// budget, in definition order.
+    exhausted_nodes: Vec<(String, String)>,
+    graph_id: String,
+    /// Executions that ended but whose settlement is not stored yet.
+    unsettled_executions: Vec<GraphExecutionRef>,
+}
+
+impl GraphDriverReport {
+    /// Reports `driver`, which runs `graph_id`, or nothing when it is not
+    /// live: a driver that is not live adds the same as no driver.
+    fn of(graph_id: &str, driver: &GraphDriver) -> Option<Self> {
+        if !driver.is_live() {
+            return None;
+        }
+
+        let exhausted_nodes = driver
+            .request
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|definition| {
+                let budget = definition.execution.shared_budget_id.as_ref()?;
+
+                (driver.executor.remaining_provider_calls(budget) == Some(0))
+                    .then(|| (definition.id.clone(), budget.clone()))
+            })
+            .collect();
+
+        Some(Self {
+            exhausted_nodes,
+            graph_id: graph_id.to_string(),
+            unsettled_executions: driver.executor.unsettled_executions(),
+        })
+    }
+
+    /// Returns the spent shared budget of `node_id`, when it has one. Graph
+    /// validation keeps node identities unique.
+    fn exhausted_budget(&self, node_id: &str) -> Option<&str> {
+        self.exhausted_nodes
+            .iter()
+            .find(|(exhausted_node_id, _)| exhausted_node_id == node_id)
+            .map(|(_, budget)| budget.as_str())
+    }
+}
+
 /// Active graph drivers keyed by graph identity, shared with lifecycle
 /// controls and session cleanup.
 pub(super) type GraphDrivers = Arc<Mutex<HashMap<String, GraphDriver>>>;
@@ -195,6 +246,34 @@ impl App {
             .is_some_and(GraphDriver::is_live)
     }
 
+    /// Reports what each live driver adds to persisted graph progress, as
+    /// [`Self::execution_graph_progress`] projects it, ordered by graph.
+    pub(super) fn live_graph_driver_reports(&self) -> Vec<GraphDriverReport> {
+        let drivers = self
+            .services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reports = drivers
+            .iter()
+            .filter_map(|(graph_id, driver)| GraphDriverReport::of(graph_id, driver))
+            .collect::<Vec<_>>();
+        reports.sort_unstable_by(|left, right| left.graph_id.cmp(&right.graph_id));
+
+        reports
+    }
+
+    /// Reports what the live driver of `graph_id` adds to its persisted
+    /// progress, or nothing when no live driver runs it.
+    fn live_graph_driver_report(&self, graph_id: &str) -> Option<GraphDriverReport> {
+        self.services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(graph_id)
+            .and_then(|driver| GraphDriverReport::of(graph_id, driver))
+    }
+
     /// Whether automatic review of `session_id` waits for a graph: a live
     /// driver dispatches a graph that does the session's own work, and that
     /// graph can still finish. The review then covers the finished graph
@@ -233,13 +312,8 @@ impl App {
         // Sampled before the read, so the read reflects the settlement of any
         // execution missing from the sample.
         let unsettled = self
-            .services
-            .graph_drivers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(graph_id)
-            .filter(|driver| driver.is_live())
-            .map(|driver| driver.executor.unsettled_executions());
+            .live_graph_driver_report(graph_id)
+            .map(|report| report.unsettled_executions);
         let Some(mut progress) = self
             .services
             .db()
@@ -250,12 +324,7 @@ impl App {
         else {
             return Ok(None);
         };
-        let drivers = self
-            .services
-            .graph_drivers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let driver = drivers.get(graph_id).filter(|driver| driver.is_live());
+        let driver = self.live_graph_driver_report(graph_id);
         if let Some(unsettled) = &unsettled {
             project_unsettled_nodes_running(&mut progress, unsettled);
         }
@@ -263,19 +332,10 @@ impl App {
             if node.status != GraphNodeStatus::Pending {
                 continue;
             }
-            if let Some(driver) = driver {
-                let budget = driver
-                    .request
-                    .graph
-                    .nodes
-                    .iter()
-                    .find(|definition| definition.id == node.node_id)
-                    .and_then(|definition| definition.execution.shared_budget_id.as_ref());
-                if let Some(id) = budget
-                    && driver.executor.remaining_provider_calls(id) == Some(0)
-                {
+            if let Some(driver) = &driver {
+                if let Some(id) = driver.exhausted_budget(&node.node_id) {
                     node.blocked
-                        .push(GraphBlockedReason::BudgetExhausted(id.clone()));
+                        .push(GraphBlockedReason::BudgetExhausted(id.to_string()));
                 }
             } else {
                 node.blocked.push(GraphBlockedReason::ResumeRequired);

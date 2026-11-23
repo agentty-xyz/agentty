@@ -8,18 +8,20 @@
 //! commands share terminal admission, the host limits them to the remote
 //! scope, and model work stays behind the worker boundary.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use ag_contracts::{ResponseStyle, SpeedMode};
 use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
     RemoteServerStatus, StaticKeypair, pairing_link, pairing_link_on_page,
 };
-use ag_session::SessionId;
+use ag_session::{HostProjectStatus, SessionListEntry};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+use crate::app::execution_graph::GraphDriverReport;
 use crate::app::link_copy::LinkCopy;
+use crate::app::session_api::{HostInputs, LiveSessionDetails};
 use crate::app::spawn::spawn_detached;
 use crate::app::{App, AppEvent, review};
 use crate::domain::setting::SettingName;
@@ -66,9 +68,6 @@ pub(crate) struct RemoteControl {
     /// Relay the running listener registers with and the key devices pin,
     /// while it is linked to one.
     linked_relay: Option<LinkedRelay>,
-    /// Live details of each session showing any, as remote clients last
-    /// learned of them.
-    live_details: HashMap<SessionId, LiveSessionDetails>,
     /// Relay of the platform this Agentty is registered with, used unless
     /// `--remote-relay` names one.
     platform_relay: Option<RemoteControlService>,
@@ -77,6 +76,9 @@ pub(crate) struct RemoteControl {
     port: Option<u16>,
     /// Relay base URL from `--remote-relay`.
     relay_url: Option<String>,
+    /// What the session API reported from host memory at the latest check,
+    /// held only while a listener runs with a device connected.
+    reported_state: Option<ReportedState>,
     revision_tx: watch::Sender<u64>,
     server: Option<Box<dyn RemoteControlServer>>,
     view: RemoteControlView,
@@ -108,10 +110,10 @@ impl RemoteControl {
                 }
             }),
             linked_relay: None,
-            live_details: HashMap::new(),
             platform_relay: None,
             port: None,
             relay_url: None,
+            reported_state: None,
             revision_tx,
             server: None,
             view: RemoteControlView::default(),
@@ -211,25 +213,44 @@ impl LinkedRelay {
     }
 }
 
-/// What a session snapshot reports beyond its persisted row, compared to
-/// tell remote clients when it changes.
+/// What the session API reports from host memory, without database reads,
+/// compared once per foreground cycle to tell remote clients when it
+/// changes.
+///
+/// Each part comes from the helper the session API itself reads, so an
+/// input added there is compared here too. It holds no clock reading: a
+/// running session reports when its timer started and the seconds it had
+/// already run, not a ticking value.
 #[derive(Debug, Eq, PartialEq)]
-struct LiveSessionDetails {
-    /// Invocation token of the focused review the session shows.
-    focused_review_id: Option<Uuid>,
-    /// Labels of the workflow actions waiting behind the active turn.
-    queued_actions: Vec<String>,
-    /// Line describing the session's current work.
-    status_line: Option<String>,
+struct ReportedState {
+    /// Proposals whose chat reply is being decided, which hides their
+    /// questions from a session snapshot.
+    deciding_proposal_replies: Vec<String>,
+    /// What live graph drivers add to persisted graph progress.
+    graph_drivers: Vec<GraphDriverReport>,
+    /// In-memory inputs of the host context.
+    host: HostInputs,
+    /// Active project status, as the session listing reports it.
+    project: HostProjectStatus,
+    /// Each loaded session, in list order.
+    sessions: Vec<ReportedSession>,
 }
 
-impl LiveSessionDetails {
-    /// Returns whether the session shows any live detail.
-    fn is_shown(&self) -> bool {
-        self.focused_review_id.is_some()
-            || !self.queued_actions.is_empty()
-            || self.status_line.is_some()
-    }
+/// What the session API reports about one loaded session from memory.
+#[derive(Debug, Eq, PartialEq)]
+struct ReportedSession {
+    /// Live snapshot details, with the shown focused review's invocation
+    /// token, which changes whenever the shown review does, instead of its
+    /// text.
+    details: LiveSessionDetails<Uuid>,
+    /// Session list entry.
+    entry: SessionListEntry,
+    /// Response style, which the snapshot reads from the stored row that
+    /// the loaded session mirrors.
+    response_style: ResponseStyle,
+    /// Response speed, which the snapshot reads from the stored row that
+    /// the loaded session mirrors.
+    speed_mode: SpeedMode,
 }
 
 impl App {
@@ -252,37 +273,83 @@ impl App {
 
     /// Tells connected remote clients that session state changed, so they
     /// fetch it again. Bursts coalesce into one notification.
+    ///
+    /// The foreground cycle publishes changes to what the API reports from
+    /// memory through [`Self::publish_reported_state_changes`]; callers
+    /// publish explicitly only state held in the database alone, such as
+    /// transcripts and graph tables.
     pub(crate) fn publish_session_change(&self) {
         self.remote_control
             .revision_tx
             .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
-    /// Tells connected remote clients when a session's status line, its
-    /// queued actions, or its shown focused review changed, such as a new
-    /// thought after `Working...`, a review step, a sync queued in the
-    /// terminal, or a review that finished or was cleared, which no session
-    /// event marks.
-    pub(crate) fn publish_live_session_changes(&mut self) {
-        let live_details = self
-            .sessions
-            .sessions()
-            .iter()
-            .filter_map(|session| {
-                let details = LiveSessionDetails {
-                    focused_review_id: review::shown_focused_review_id(&self.review_cache, session),
-                    queued_actions: session.queued_action_labels(),
-                    status_line: session.status_line(self.session_progress_message(&session.id)),
-                };
+    /// Tells connected remote clients when anything the session API reports
+    /// from host memory changed since the previous check: a session's list
+    /// entry or live details, the project status, the host's models, a
+    /// reply being decided, or a live graph driver. The foreground cycle
+    /// calls it once per pass, so a change reaches devices however it was
+    /// made.
+    ///
+    /// Does nothing while no device is connected; the first connection
+    /// starts the comparison.
+    pub(crate) fn publish_reported_state_changes(&mut self) {
+        let Some(previous_state) = self.remote_control.reported_state.as_ref() else {
+            return;
+        };
 
-                details.is_shown().then(|| (session.id.clone(), details))
-            })
-            .collect::<HashMap<_, _>>();
-        if live_details == self.remote_control.live_details {
+        let reported_state = self.reported_state();
+        if reported_state == *previous_state {
             return;
         }
 
-        self.remote_control.live_details = live_details;
+        self.remote_control.reported_state = Some(reported_state);
+        self.publish_session_change();
+    }
+
+    /// Captures what the session API reports from host memory now.
+    fn reported_state(&self) -> ReportedState {
+        // The listing maps the loaded sessions in order, so each entry
+        // pairs with its own session.
+        let sessions = self
+            .list_api_session_entries()
+            .into_iter()
+            .zip(self.sessions.sessions())
+            .map(|(entry, session)| ReportedSession {
+                details: self.live_session_details(session, review::shown_focused_review_id),
+                entry,
+                response_style: session.response_style,
+                speed_mode: session.speed_mode,
+            })
+            .collect();
+
+        ReportedState {
+            deciding_proposal_replies: self.deciding_graph_proposal_replies(),
+            graph_drivers: self.live_graph_driver_reports(),
+            host: self.api_host_inputs(),
+            project: self.api_project_status(),
+            sessions,
+        }
+    }
+
+    /// Starts comparing what the session API reports once a device
+    /// connects, and stops once none is connected.
+    ///
+    /// A device reads the state as soon as it authenticates, before the
+    /// host hears of its connection, and nothing was compared meanwhile. The
+    /// first connection therefore tells devices to read again, from the
+    /// state later checks compare against.
+    fn follow_connected_devices(&mut self, was_connected: bool) {
+        if self.remote_control.connections.is_empty() {
+            self.remote_control.reported_state = None;
+
+            return;
+        }
+        if was_connected {
+            return;
+        }
+
+        self.remote_control.reported_state = Some(self.reported_state());
         self.publish_session_change();
     }
 
@@ -471,6 +538,7 @@ impl App {
         self.remote_control.generation += 1;
         self.remote_control.connections.clear();
         self.remote_control.linked_relay = None;
+        self.remote_control.reported_state = None;
         self.remote_control.view.listener = None;
         self.remote_control.forget_link_copy();
         self.remote_control.view.pairing_requests.clear();
@@ -547,7 +615,9 @@ impl App {
             return;
         }
 
+        let was_connected = !self.remote_control.connections.is_empty();
         self.remote_control.connections = status.connections;
+        self.follow_connected_devices(was_connected);
         self.remote_control.view.pairing_requests = status
             .pairing_requests
             .into_iter()
@@ -627,6 +697,9 @@ fn forward_status(
     mut status_rx: watch::Receiver<RemoteServerStatus>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
 ) {
+    // A paired device can reconnect as soon as the listener starts, before
+    // this subscribed, so the status current at subscription goes first.
+    status_rx.mark_changed();
     spawn_detached(async move {
         while status_rx.changed().await.is_ok() {
             let status = status_rx.borrow_and_update().clone();
@@ -637,4 +710,4 @@ fn forward_status(
 
 #[cfg(test)]
 #[path = "remote_control_test.rs"]
-mod tests;
+pub(super) mod tests;

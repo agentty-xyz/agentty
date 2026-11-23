@@ -235,7 +235,8 @@ where
     /// session has reached `Status::Question`, covering cases where the live
     /// `AgentResponseReceived` projection did not flip the view. Visible `@`
     /// lookup rows then request their file descriptions so drawing never reads
-    /// files.
+    /// files. Remote clients then hear of any change to what the session API
+    /// reports from memory.
     ///
     /// The drawn frame ends the latency measurement that began when the
     /// previous cycle's wait returned, so a slow wake-up-to-frame interval is
@@ -248,6 +249,9 @@ where
         self.app.request_visible_at_mention_descriptions();
         self.app
             .expire_project_sync_status(self.clock.now_instant());
+        // Covers everything the previous cycle's events, session commands,
+        // terminal input, and tick changed, as well as the reduction above.
+        self.app.publish_reported_state_changes();
         self.timing.record_reduce(CycleTiming::elapsed_since(
             self.clock.as_ref(),
             reduce_started_at,

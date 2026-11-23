@@ -1,6 +1,9 @@
-//! Remote-control lifecycle, pairing code, device, and status tests.
+//! Remote-control lifecycle, pairing code, device, status, and revision
+//! tests.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use ag_remote::{
@@ -11,13 +14,21 @@ use ag_remote::{
 use async_trait::async_trait;
 use mockall::predicate::eq;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
-use crate::app::{App, AppEvent, AppRuntimeEvent, Tab};
-use crate::domain::session::Status;
+use crate::app::graph_reply_decision::ReplyDecision;
+use crate::app::session::SessionGitStatus;
+use crate::app::sync::ProjectSyncContext;
+use crate::app::{App, AppEvent, AppRuntimeEvent, ProjectSyncPhase, ProjectSyncStatus, Tab};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::session::{
+    ForgeKind, QueuedMessage, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
+    SessionDiffStats, SessionId, SessionSize, Status,
+};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
 use crate::infra::platform::RemoteControlService;
@@ -176,6 +187,46 @@ fn remote_control_with_links(
     )
 }
 
+/// Starts a fake listener for `app` with one connected device, so the
+/// foreground cycle checks what the session API reports, and returns the
+/// revisions the listener follows with the current one marked seen.
+/// Replaces any earlier remote control, so earlier revision subscriptions
+/// no longer follow it.
+pub(crate) async fn start_fake_listener(app: &mut App) -> watch::Receiver<u64> {
+    let (mut revisions, probe) = start_listener_without_devices(app).await;
+    probe.status_tx.send_replace(connected("phone"));
+    apply_events_until_device_connects(app).await;
+    revisions.borrow_and_update();
+
+    revisions
+}
+
+/// Applies background app events until the listener reports a connection,
+/// whether or not the device is paired in the app database. The same step
+/// marks a paired device connected in the Remote tab.
+async fn apply_events_until_device_connects(app: &mut App) {
+    apply_events_until(app, |app| !app.remote_control.connections.is_empty()).await;
+}
+
+/// Starts a fake listener for `app` that no device has connected to, and
+/// returns the revisions it follows, with the current one marked seen, and
+/// the listener's probe.
+async fn start_listener_without_devices(app: &mut App) -> (watch::Receiver<u64>, FakeServerProbe) {
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_launcher(app, launcher).await;
+    app.start_remote_control().await;
+    let mut revisions = probe
+        .host
+        .lock()
+        .expect("host lock")
+        .take()
+        .expect("listener should receive a host")
+        .revisions;
+    revisions.borrow_and_update();
+
+    (revisions, probe)
+}
+
 /// Replaces the app's remote control with `launcher` over the app database.
 async fn install_launcher(app: &mut App, launcher: MockRemoteControlLauncher) {
     app.remote_control = remote_control(app, launcher);
@@ -211,14 +262,6 @@ async fn pair_device(app: &App, id: &str, name: &str) {
         .insert_device(id, name, &format!("hash-{id}"))
         .await
         .expect("device should be stored");
-}
-
-/// Applies background app events until a paired device shows as connected.
-async fn apply_events_until_connected(app: &mut App) {
-    apply_events_until(app, |app| {
-        app.remote_control.view().connected_device_count() > 0
-    })
-    .await;
 }
 
 /// Applies background app events until a link copy shows its result.
@@ -528,7 +571,7 @@ async fn listener_status_marks_connected_devices() {
 
     // Act
     probe.status_tx.send_replace(connected("tablet"));
-    apply_events_until_connected(&mut app).await;
+    apply_events_until_device_connects(&mut app).await;
 
     // Assert
     assert_eq!(
@@ -546,6 +589,25 @@ async fn listener_status_marks_connected_devices() {
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn a_device_connected_before_forwarding_starts_reaches_the_host() {
+    // Arrange: a paired device reconnects as soon as the listener starts,
+    // before the host subscribes to its status.
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    pair_device(&app, "phone", "Phone").await;
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    probe.status_tx.send_replace(connected("phone"));
+    install_launcher(&mut app, launcher).await;
+
+    // Act
+    app.start_remote_control().await;
+    apply_events_until_device_connects(&mut app).await;
+
+    // Assert
+    assert_eq!(app.remote_control.view().connected_device_count(), 1);
+    assert!(app.remote_control.reported_state.is_some());
 }
 
 #[tokio::test]
@@ -582,7 +644,7 @@ async fn stop_remote_control_shuts_down_and_disconnects_devices() {
     install_launcher(&mut app, launcher).await;
     app.start_remote_control().await;
     probe.status_tx.send_replace(connected("phone"));
-    apply_events_until_connected(&mut app).await;
+    apply_events_until_device_connects(&mut app).await;
 
     // Act
     app.stop_remote_control().await;
@@ -774,39 +836,403 @@ async fn publish_session_change_advances_the_remote_revision() {
     assert_eq!(*revisions.borrow(), initial_revision + 1);
 }
 
-#[tokio::test]
-async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_each() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
+/// One change to state the session API reports from host memory.
+#[derive(Clone, Copy, Debug)]
+enum ReportedChange {
+    DiffStats,
+    GitStatus,
+    HarnessModels,
+    Model,
+    ProjectSyncPhase,
+    ProposalReplyDecision,
+    QueuedAction,
+    QueuedMessage,
+    ReasoningLevel,
+    ResponseStyle,
+    ReviewRequestSummary,
+    SessionGitStatus,
+    ShownFocusedReview,
+    SpeedMode,
+    Status,
+    StatusLine,
+    Title,
+}
+
+impl ReportedChange {
+    /// Every change, in the order the table test applies them.
+    const ALL: [Self; 17] = [
+        Self::DiffStats,
+        Self::GitStatus,
+        Self::HarnessModels,
+        Self::Model,
+        Self::ProjectSyncPhase,
+        Self::ProposalReplyDecision,
+        Self::QueuedAction,
+        Self::QueuedMessage,
+        Self::ReasoningLevel,
+        Self::ResponseStyle,
+        Self::ReviewRequestSummary,
+        Self::SessionGitStatus,
+        Self::ShownFocusedReview,
+        Self::SpeedMode,
+        Self::Status,
+        Self::StatusLine,
+        Self::Title,
+    ];
+
+    /// Applies the change to `app`, which loads the running `session-1`
+    /// and the reviewed `session-2`, through the reducer event that makes
+    /// it where one exists.
+    async fn apply(self, app: &mut App) {
+        if let Some(event) = self.app_event(app) {
+            app.apply_app_events(event).await;
+
+            return;
+        }
+
+        match self {
+            Self::ProjectSyncPhase => {
+                app.project_sync_status = Some(ProjectSyncStatus {
+                    context: ProjectSyncContext {
+                        default_branch: "main".to_string(),
+                        operation_id: 1,
+                        project_id: app.active_project_id(),
+                        project_name: "project".to_string(),
+                    },
+                    phase: ProjectSyncPhase::Running,
+                });
+            }
+            Self::ProposalReplyDecision => {
+                app.services
+                    .proposal_reply_decisions
+                    .lock()
+                    .expect("decisions lock")
+                    .insert(
+                        "proposal".to_string(),
+                        ReplyDecision {
+                            cancellation: CancellationToken::new(),
+                            is_abandoned: Arc::new(AtomicBool::new(false)),
+                            session_id: "session-1".into(),
+                        },
+                    );
+            }
+            Self::QueuedAction => app.sessions.queue_session_sync("session-2", 1),
+            Self::QueuedMessage => session_mut(app, "session-1")
+                .queued_messages
+                .push(QueuedMessage::new(1, "next".into())),
+            Self::ReviewRequestSummary => {
+                session_mut(app, "session-2").review_request = Some(review_request());
+            }
+            Self::ShownFocusedReview => {
+                app.set_review_ready_output("session-2", 42, "review".to_string());
+            }
+            Self::Status => {
+                test_support::set_session_status_for_test(app, "session-2", Status::Done);
+            }
+            Self::StatusLine => {
+                app.session_progress_messages
+                    .insert("session-1".into(), "Reading files".to_string());
+            }
+            Self::Title => session_mut(app, "session-1").title = Some("Renamed".to_string()),
+            Self::DiffStats
+            | Self::GitStatus
+            | Self::HarnessModels
+            | Self::Model
+            | Self::ReasoningLevel
+            | Self::ResponseStyle
+            | Self::SessionGitStatus
+            | Self::SpeedMode => unreachable!("{self:?} applies through an app event"),
+        }
+    }
+
+    /// Returns the reducer event that makes the change, when one does.
+    fn app_event(self, app: &App) -> Option<AppEvent> {
+        let generation = app.sync_handle.current_generation();
+        let session_id = SessionId::from("session-1");
+        let event = match self {
+            Self::DiffStats => AppEvent::SessionDiffStatsUpdated {
+                diff_stats: SessionDiffStats::Known {
+                    added_lines: 12,
+                    deleted_lines: 4,
+                    has_diff: true,
+                    session_size: SessionSize::Small,
+                },
+                session_id,
+            },
+            Self::GitStatus => AppEvent::GitStatusUpdated {
+                generation,
+                session_statuses: HashMap::new(),
+                status: Some((0, 2)),
+            },
+            Self::HarnessModels => AppEvent::HarnessModelsUpdated {
+                options: vec![test_support::ready_harness_model(
+                    AgentKind::Harness.default_model(),
+                )],
+            },
+            Self::Model => AppEvent::SessionModelUpdated {
+                session_agent: AgentSelection::new(
+                    AgentKind::Antigravity,
+                    AgentKind::Antigravity.default_model(),
+                ),
+                session_id,
+            },
+            Self::ReasoningLevel => AppEvent::SessionReasoningLevelUpdated {
+                reasoning_level: ReasoningLevel::Low,
+                session_id,
+            },
+            Self::ResponseStyle => AppEvent::SessionResponseStyleUpdated {
+                response_style: ResponseStyle::Detailed,
+                session_id,
+            },
+            Self::SessionGitStatus => AppEvent::GitStatusUpdated {
+                generation,
+                session_statuses: HashMap::from([(
+                    SessionId::from("session-2"),
+                    SessionGitStatus {
+                        has_merge_conflict: Some(true),
+                        ..SessionGitStatus::default()
+                    },
+                )]),
+                status: None,
+            },
+            Self::SpeedMode => AppEvent::SessionSpeedModeUpdated {
+                session_id,
+                speed_mode: SpeedMode::Fast,
+            },
+            Self::ProjectSyncPhase
+            | Self::ProposalReplyDecision
+            | Self::QueuedAction
+            | Self::QueuedMessage
+            | Self::ReviewRequestSummary
+            | Self::ShownFocusedReview
+            | Self::Status
+            | Self::StatusLine
+            | Self::Title => return None,
+        };
+
+        Some(event)
+    }
+}
+
+/// Returns the loaded session `session_id` of `app`.
+fn session_mut<'app>(app: &'app mut App, session_id: &str) -> &'app mut Session {
+    app.sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == session_id)
+        .expect("session should be loaded")
+}
+
+/// Builds the linked review request of a reviewed session.
+fn review_request() -> ReviewRequest {
+    ReviewRequest {
+        last_refreshed_at: 1,
+        summary: ReviewRequestSummary {
+            display_id: "#5".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: "wt/session-2".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "feat".to_string(),
+            web_url: String::new(),
+        },
+    }
+}
+
+/// Builds an app that loads the running `session-1` and the reviewed
+/// `session-2`, with a listener running, and returns the revisions the
+/// listener follows.
+async fn listening_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiver<u64>) {
+    let (mut app, base_dir) = test_support::new_test_app().await;
     app.sessions.push_session(test_support::session_fixture(
         "session-1",
         Status::InProgress,
     ));
     app.sessions
         .push_session(test_support::session_fixture("session-2", Status::Review));
+    let revisions = start_fake_listener(&mut app).await;
+
+    (app, base_dir, revisions)
+}
+
+#[tokio::test]
+async fn each_reported_change_advances_the_remote_revision_once_after_the_cycle_check() {
+    for change in ReportedChange::ALL {
+        // Arrange
+        let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+        let initial_revision = *revisions.borrow_and_update();
+
+        // Act
+        change.apply(&mut app).await;
+        app.publish_reported_state_changes();
+        let after_change = *revisions.borrow_and_update();
+        app.publish_reported_state_changes();
+        let is_changed_again = revisions
+            .has_changed()
+            .expect("revision sender should live");
+
+        // Assert
+        assert_eq!(after_change, initial_revision + 1, "{change:?}");
+        assert!(!is_changed_again, "{change:?}");
+    }
+}
+
+#[tokio::test]
+async fn reported_changes_leave_the_remote_revision_alone_while_no_device_is_connected() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.sessions.push_session(test_support::session_fixture(
+        "session-1",
+        Status::InProgress,
+    ));
+    let (mut revisions, _probe) = start_listener_without_devices(&mut app).await;
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+
+    // Assert
+    assert_eq!(*revisions.borrow(), initial_revision);
+    assert!(app.remote_control.reported_state.is_none());
+}
+
+#[tokio::test]
+async fn the_first_connection_tells_a_device_that_already_read_to_read_again() {
+    // Arrange: the device authenticates and reads the current revision
+    // before the host hears of its connection.
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.sessions.push_session(test_support::session_fixture(
+        "session-1",
+        Status::InProgress,
+    ));
+    let (mut revisions, probe) = start_listener_without_devices(&mut app).await;
+    let read_revision = *revisions.borrow_and_update();
+    let generation = app.remote_control.generation;
+
+    // Act: the state changes before the connection arrives, the first
+    // device connects, a second one joins, and later checks find nothing
+    // new.
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+    let before_connection = *revisions.borrow_and_update();
+    probe.status_tx.send_replace(connected("phone"));
+    apply_events_until_device_connects(&mut app).await;
+    let after_connection = *revisions.borrow_and_update();
+    app.publish_reported_state_changes();
+    let mut both_connected = connected("phone");
+    both_connected
+        .connections
+        .extend(connected("tablet").connections);
+    app.apply_remote_control_status(generation, both_connected)
+        .await;
+    app.publish_reported_state_changes();
+    let after_second_device = *revisions.borrow_and_update();
+
+    // Assert
+    assert_eq!(before_connection, read_revision);
+    assert_eq!(after_connection, read_revision + 1);
+    assert_eq!(after_second_device, after_connection);
+}
+
+#[tokio::test]
+async fn the_check_stops_when_the_last_device_leaves_and_restarts_on_reconnection() {
+    // Arrange
+    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    let generation = app.remote_control.generation;
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.apply_remote_control_status(generation, RemoteServerStatus::default())
+        .await;
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+    let while_disconnected = *revisions.borrow_and_update();
+    let is_following_while_disconnected = app.remote_control.reported_state.is_some();
+    app.apply_remote_control_status(generation, connected("phone"))
+        .await;
+    let after_reconnection = *revisions.borrow_and_update();
+    app.publish_reported_state_changes();
+    let is_changed_after_reconnection = revisions
+        .has_changed()
+        .expect("revision sender should live");
+
+    // Assert
+    assert_eq!(while_disconnected, initial_revision);
+    assert!(!is_following_while_disconnected);
+    assert_eq!(after_reconnection, initial_revision + 1);
+    assert!(!is_changed_after_reconnection);
+}
+
+#[tokio::test]
+async fn reported_changes_leave_the_remote_revision_alone_while_no_listener_runs() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.sessions.push_session(test_support::session_fixture(
+        "session-1",
+        Status::InProgress,
+    ));
     let mut revisions = app.remote_control.subscribe_revisions();
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
-    app.publish_live_session_changes();
-    let after_first_line = *revisions.borrow_and_update();
-    app.publish_live_session_changes();
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+
+    // Assert
+    assert_eq!(*revisions.borrow(), initial_revision);
+    assert!(app.remote_control.reported_state.is_none());
+}
+
+#[tokio::test]
+async fn stopping_the_listener_stops_the_reported_state_check() {
+    // Arrange
+    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    app.stop_remote_control().await;
+    let stopped_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+
+    // Assert
+    assert_eq!(*revisions.borrow(), stopped_revision);
+    assert!(app.remote_control.reported_state.is_none());
+}
+
+#[tokio::test]
+async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_each() {
+    // Arrange
+    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    // The listener started with the running session's `Working...` line.
+    app.publish_reported_state_changes();
+    let after_first_check = *revisions.borrow_and_update();
+    app.session_progress_messages
+        .insert("session-1".into(), "Reading files".to_string());
+    app.publish_reported_state_changes();
+    let after_progress = *revisions.borrow_and_update();
+    app.sessions.queue_session_sync("session-2", 1);
+    app.publish_reported_state_changes();
+    let after_queued_action = *revisions.borrow_and_update();
+    app.publish_reported_state_changes();
     let unchanged = revisions
         .has_changed()
         .expect("revision sender should live");
-    app.session_progress_messages
-        .insert("session-1".into(), "Reading files".to_string());
-    app.publish_live_session_changes();
-    let after_progress = *revisions.borrow_and_update();
-    app.sessions.queue_session_sync("session-2", 1);
-    app.publish_live_session_changes();
-    let after_queued_action = *revisions.borrow_and_update();
 
     // Assert
-    assert_eq!(after_first_line, initial_revision + 1);
+    assert_eq!(after_first_check, initial_revision);
+    assert_eq!(after_progress, initial_revision + 1);
+    assert_eq!(after_queued_action, initial_revision + 2);
     assert!(!unchanged);
-    assert_eq!(after_progress, initial_revision + 2);
-    assert_eq!(after_queued_action, initial_revision + 3);
 }
 
 #[tokio::test]
@@ -902,31 +1328,33 @@ async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.sessions
         .push_session(test_support::session_fixture("session-1", Status::Review));
-    let mut revisions = app.remote_control.subscribe_revisions();
+    let mut revisions = start_fake_listener(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
     app.set_review_ready_output("session-1", 42, "first review".to_string());
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_ready = *revisions.borrow_and_update();
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let unchanged = revisions
         .has_changed()
         .expect("revision sender should live");
     app.set_review_ready_output("session-1", 42, "regenerated review".to_string());
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_regenerated = *revisions.borrow_and_update();
     app.clear_review_output("session-1");
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_clear = *revisions.borrow_and_update();
     app.suppress_review_output("session-1");
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_suppress = *revisions.borrow_and_update();
     app.set_review_ready_output("session-1", 43, "next review".to_string());
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_next = *revisions.borrow_and_update();
+    // Leaving review hides the review; the status change itself shows in
+    // the list entry.
     test_support::set_session_status_for_test(&mut app, "session-1", Status::Done);
-    app.publish_live_session_changes();
+    app.publish_reported_state_changes();
     let after_done = *revisions.borrow_and_update();
 
     // Assert
