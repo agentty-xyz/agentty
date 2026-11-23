@@ -11,7 +11,8 @@ pub(crate) enum CloseReason {
     InstanceBusy,
     /// The instance did not answer the stream in time.
     NoAnswer,
-    /// The admission policy refused the instance.
+    /// The admission policy refused the instance. `ag-remote` matches this
+    /// reason's code and text to tell the user, so keep both.
     NotAdmitted,
     /// The other end of the stream left.
     PeerLeft,

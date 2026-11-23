@@ -277,7 +277,8 @@ domain, run `fly certs add <domain>` and add the DNS records it prints.
 proves its key. To serve only your own, pass `--allow-instance` with each instance's
 identifier, repeated for several; on Fly.io, add it to the `app` line under
 `[processes]` in `relay.fly.toml`. The relay refuses any other instance, which then
-shows the relay as `Connecting` and keeps retrying, with waits that grow to 30 seconds.
+shows the relay as `Not admitted` and keeps retrying, with waits that grow to 30
+seconds, so it connects once the relay admits it.
 
 The identifier is the SHA-256 digest of the instance key that the pairing link carries
 after `key=`. This prints it:

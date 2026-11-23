@@ -1,6 +1,7 @@
 //! Remote tab page showing the remote-control listener, its pairing code,
 //! and the paired devices of the active project.
 
+use ag_remote::RelayStatus;
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -189,13 +190,20 @@ impl Page for RemoteControlPage<'_> {
 /// Builds the relay status, `qr_code` rows in dark-on-light colors, the
 /// pairing link, and how to use them.
 fn relay_lines(relay: &RemoteRelayView, qr_code: &[String]) -> Vec<Line<'static>> {
-    let (state, color) = if relay.is_connected {
-        ("Connected", palette::success())
-    } else {
-        ("Connecting", palette::warning())
+    let (state, color) = match relay.status {
+        RelayStatus::Connected => ("Connected", palette::success()),
+        RelayStatus::Connecting => ("Connecting", palette::warning()),
+        RelayStatus::NotAdmitted => ("Not admitted", palette::danger()),
     };
     let qr_style = style::scannable_code_style();
     let mut lines = vec![Line::from(""), field_line("Relay", state, color)];
+    if relay.status == RelayStatus::NotAdmitted {
+        lines.push(Line::from(Span::styled(
+            "The relay refused this Agentty: it serves only the instances it admits. Devices \
+             cannot reach this Agentty through it until it does; Agentty keeps trying.",
+            Style::default().fg(palette::danger()),
+        )));
+    }
     lines.extend(
         qr_code
             .iter()

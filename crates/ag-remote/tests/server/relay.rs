@@ -1,18 +1,24 @@
 //! Devices that reach the server through a relay, end to end encrypted.
 
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use ag_noise::{Handshake, Session};
-use ag_relay::{CONNECT_PATH_PREFIX, RelayConfig, RelayHandle};
+use ag_relay::{AdmissionError, AdmissionPolicy, CONNECT_PATH_PREFIX, RelayConfig, RelayHandle};
 use ag_remote::protocol::{ClientFrame, RemoteRequest, RemoteResult, ServerFrame};
-use ag_remote::{PROTOCOL_VERSION, RelayStatus, RemoteRelayConfig, StaticKeypair};
+use ag_remote::{
+    PROTOCOL_VERSION, RelayStatus, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
+};
+use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::watch;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
     Client, TestResult, TestServer, relay_limits, start_linked_server, start_relay,
+    start_relay_with_admission, start_server_linked_to,
 };
 
 /// Largest frame the test device accepts, in bytes.
@@ -256,6 +262,73 @@ async fn server_reconnects_after_the_relay_restarts() -> TestResult {
     assert!(reconnected.is_ok());
     assert!(reached.is_ok());
     server.handle.shutdown().await;
+
+    Ok(())
+}
+
+/// What [`SwitchableAdmission`] answers.
+#[derive(Clone, Copy)]
+enum Decision {
+    Admit,
+    Fail,
+    Refuse,
+}
+
+/// Admission policy whose answer the test changes between registrations.
+struct SwitchableAdmission(Mutex<Decision>);
+
+impl SwitchableAdmission {
+    /// Makes later registrations get `decision`.
+    fn set(&self, decision: Decision) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = decision;
+    }
+}
+
+#[async_trait]
+impl AdmissionPolicy for SwitchableAdmission {
+    async fn admit(&self, _instance_id: &str) -> Result<bool, AdmissionError> {
+        match *self.0.lock().unwrap_or_else(PoisonError::into_inner) {
+            Decision::Admit => Ok(true),
+            Decision::Fail => Err(AdmissionError("policy unavailable".to_string())),
+            Decision::Refuse => Ok(false),
+        }
+    }
+}
+
+#[tokio::test]
+async fn refusal_is_reported_only_while_the_relay_refuses_and_the_link_keeps_retrying() -> TestResult
+{
+    // Arrange
+    let admission = Arc::new(SwitchableAdmission(Mutex::new(Decision::Refuse)));
+    let relay =
+        start_relay_with_admission(Arc::clone(&admission) as Arc<dyn AdmissionPolicy>).await?;
+    let server = start_server_linked_to(&relay, &StaticKeypair::generate()?).await?;
+    let status = server.handle.status();
+    let reaches = |status: &watch::Receiver<RemoteServerStatus>, expected: RelayStatus| {
+        let mut status = status.clone();
+
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                status.wait_for(|status| status.relay == Some(expected)),
+            )
+            .await
+            .is_ok()
+        }
+    };
+
+    // Act: refused, then failing for another reason, then admitted.
+    let refused = reaches(&status, RelayStatus::NotAdmitted).await;
+    admission.set(Decision::Fail);
+    let failed = reaches(&status, RelayStatus::Connecting).await;
+    admission.set(Decision::Admit);
+    let admitted = reaches(&status, RelayStatus::Connected).await;
+    server.handle.shutdown().await;
+
+    // Assert
+    assert!(refused);
+    assert!(failed);
+    assert!(admitted);
 
     Ok(())
 }

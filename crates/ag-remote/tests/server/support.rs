@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use ag_relay::{RelayConfig, RelayHandle, RelayLimits};
+use ag_relay::{AdmissionPolicy, RelayConfig, RelayHandle, RelayLimits};
 use ag_remote::protocol::{ClientFrame, ServerFrame};
 use ag_remote::{
     DeviceStore, DeviceStoreError, NewRemoteDevice, PROTOCOL_VERSION, RelayStatus, RemoteDevice,
@@ -178,14 +178,28 @@ impl TestServer {
 
 /// Starts a relay on a free loopback port.
 pub(crate) async fn start_relay() -> TestResult<RelayHandle> {
-    let relay = ag_relay::start(RelayConfig {
+    let relay = ag_relay::start(relay_config()).await?;
+
+    Ok(relay)
+}
+
+/// Starts a relay on a free loopback port that registers only the
+/// instances `admission` admits.
+pub(crate) async fn start_relay_with_admission(
+    admission: Arc<dyn AdmissionPolicy>,
+) -> TestResult<RelayHandle> {
+    let relay = ag_relay::start_with_admission(relay_config(), admission).await?;
+
+    Ok(relay)
+}
+
+/// Settings of a test relay on a free loopback port.
+fn relay_config() -> RelayConfig {
+    RelayConfig {
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         client_address_header: None,
         limits: relay_limits(),
-    })
-    .await?;
-
-    Ok(relay)
+    }
 }
 
 /// Relay limits with frequent keepalive pings, so the server's handling of
@@ -202,11 +216,7 @@ pub(crate) async fn start_linked_server(
     relay: &RelayHandle,
     instance: &StaticKeypair,
 ) -> TestResult<TestServer> {
-    let server = TestServer::start_linked(RemoteRelayConfig {
-        instance_key: instance.clone(),
-        url: format!("ws://{}/", relay.local_addr()),
-    })
-    .await?;
+    let server = start_server_linked_to(relay, instance).await?;
     let mut status = server.handle.status();
     tokio::time::timeout(
         FRAME_TIMEOUT,
@@ -215,6 +225,19 @@ pub(crate) async fn start_linked_server(
     .await??;
 
     Ok(server)
+}
+
+/// Starts a server linked to `relay` as `instance`, without waiting for
+/// the relay to register it.
+pub(crate) async fn start_server_linked_to(
+    relay: &RelayHandle,
+    instance: &StaticKeypair,
+) -> TestResult<TestServer> {
+    TestServer::start_linked(RemoteRelayConfig {
+        instance_key: instance.clone(),
+        url: format!("ws://{}/", relay.local_addr()),
+    })
+    .await
 }
 
 /// Builds a hello frame for the current protocol.

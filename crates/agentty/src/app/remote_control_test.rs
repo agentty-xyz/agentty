@@ -891,6 +891,40 @@ async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
 }
 
 #[tokio::test]
+async fn relay_that_does_not_admit_this_instance_stays_shown_across_new_codes() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_relay_launcher(
+        &mut app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    )
+    .await;
+    app.start_remote_control().await;
+    let generation = app.remote_control.generation;
+
+    // Act
+    let status = RemoteServerStatus {
+        relay: Some(RelayStatus::NotAdmitted),
+        ..RemoteServerStatus::default()
+    };
+    app.apply_remote_control_status(generation, status).await;
+    app.issue_remote_pairing_code();
+
+    // Assert
+    let relay_status = app
+        .remote_control
+        .view()
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.status);
+    assert_eq!(relay_status, Some(RelayStatus::NotAdmitted));
+}
+
+#[tokio::test]
 async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
@@ -937,7 +971,7 @@ async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
         .clone()
         .and_then(|listener| listener.relay)
         .expect("relay should be shown");
-    assert!(relay_view.is_connected);
+    assert_eq!(relay_view.status, RelayStatus::Connected);
     assert_eq!(
         relay_view.link,
         pairing_link(RELAY_URL, relay.instance_key.public(), "LAST-CODE")

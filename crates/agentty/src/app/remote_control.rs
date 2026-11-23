@@ -336,13 +336,13 @@ impl App {
 
         match server.issue_pairing_code() {
             Ok(pairing_code) => {
-                let is_connected = self
+                let relay_status = self
                     .remote_control
                     .view
                     .listener
                     .as_ref()
                     .and_then(|listener| listener.relay.as_ref())
-                    .is_some_and(|relay| relay.is_connected);
+                    .map_or(RelayStatus::Connecting, |relay| relay.status);
                 let relay = self
                     .remote_control
                     .relay_url
@@ -351,7 +351,7 @@ impl App {
                     .map(|(relay_url, instance_key)| {
                         RemoteRelayView::new(
                             pairing_link(relay_url, instance_key, &pairing_code),
-                            is_connected,
+                            relay_status,
                         )
                     });
                 self.remote_control.view.listener = Some(RemoteListenerView {
@@ -498,7 +498,7 @@ impl App {
             .as_mut()
             .and_then(|listener| listener.relay.as_mut());
         if let Some(relay) = relay {
-            relay.is_connected = status.relay == Some(RelayStatus::Connected);
+            relay.status = status.relay.unwrap_or(RelayStatus::Connecting);
         }
         self.refresh_remote_devices().await;
     }
