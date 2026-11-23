@@ -243,11 +243,14 @@ impl NativeHarnessConfig {
         if !self.swept_utility_directories.swap(true, Ordering::SeqCst) {
             let _ = tokio::fs::remove_dir_all(&parent).await;
         }
-        let directory = std::fs::create_dir_all(&parent)
-            .and_then(|()| tempfile::Builder::new().prefix("run-").tempdir_in(&parent))
-            .map_err(|error| {
-                format!("Failed to create the harness temporary directory: {error}")
-            })?;
+        let directory = tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&parent)
+                .and_then(|()| tempfile::Builder::new().prefix("run-").tempdir_in(&parent))
+        })
+        .await
+        .map_err(io::Error::other)
+        .flatten()
+        .map_err(|error| format!("Failed to create the harness temporary directory: {error}"))?;
         let sandbox = CommandSandbox::prepare(
             &self.data_root,
             directory.path().to_path_buf(),
