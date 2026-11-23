@@ -569,9 +569,7 @@ export function auditRules(reference, surface, markup = []) {
 export function companionClasses(markup, component) {
   const companions = new Map();
   for (const text of markup) {
-    const code = text
-      .replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const code = withoutComments(text).replace(/^\s*\/\/.*$/gm, "");
     for (const quoted of code.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g)) {
       const tokens = (quoted[1] ?? quoted[2] ?? quoted[3]).split(/\s+/).filter((token) => /^-?[A-Za-z_][\w-]*$/.test(token));
       const shared = tokens.find((token) => component(token));
@@ -584,6 +582,30 @@ export function companionClasses(markup, component) {
   }
 
   return companions;
+}
+
+// Returns `text` with every block comment and HTML comment cut out, scanning
+// for each opener and its closer, so the result is never itself a
+// comment that one pass of a pattern left behind. An unclosed comment runs
+// to the end.
+function withoutComments(text) {
+  let kept = "";
+  let index = 0;
+  while (index < text.length) {
+    const block = text.indexOf("/*", index);
+    const html = text.indexOf("<!--", index);
+    const starts = [block, html].filter((start) => start >= 0);
+    if (starts.length === 0) {
+      return kept + text.slice(index);
+    }
+    const start = Math.min(...starts);
+    const [opener, closer] = start === block ? ["/*", "*/"] : ["<!--", "-->"];
+    const end = text.indexOf(closer, start + opener.length);
+    kept += text.slice(index, start);
+    index = end < 0 ? text.length : end + closer.length;
+  }
+
+  return kept;
 }
 
 // Splits a selector list into complex selectors and returns, for each, the

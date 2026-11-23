@@ -125,6 +125,7 @@ test("companionClasses finds the classes quoted beside a shared class, outside c
     '<span class="badge github-badge">x</span>\n<!-- "badge in-comment" -->',
     "/* 'status in-block' */\n  // \"status in-line\"\nnode.className = 'status status--line status-line status--' + tone;",
     "const label = `status narrow-only`; const text = \"the status of $1\";",
+    '<i class="badge kept"></i> /* an unclosed comment runs to the end: "badge cut"',
   ];
 
   assert.deepEqual(
@@ -135,6 +136,7 @@ test("companionClasses finds the classes quoted beside a shared class, outside c
       ["narrow-only", ".status"],
       ["the", ".status"],
       ["of", ".status"],
+      ["kept", ".badge"],
     ],
   );
 });
