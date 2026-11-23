@@ -13,12 +13,13 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    ForgeKind, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
-    HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError,
-    SessionFileEntry, SessionFocusedReview, SessionId, SessionListEntry, SessionListStats,
-    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
-    SessionSettingsChange, SessionStatus, SessionSummary,
+    ExecutionGraphStatus, ForgeKind, HostContext, HostProjectStatus, HostProjectSync,
+    HostProjectSyncPhase, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
+    ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
+    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraphApproval,
+    SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId,
+    SessionListEntry, SessionListStats, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -493,6 +494,30 @@ impl SessionBackend for RecordingBackend {
         }]))
     }
 
+    // Every session has the graphs of
+    // `ag_session::test_support::session_graphs`; a graph other than `graph`
+    // belongs to another session.
+    async fn session_graphs(
+        &self,
+        request: SessionGraphsRequest,
+    ) -> Result<SessionGraphs, SessionError> {
+        let graph_id = request.graph_id.as_deref().unwrap_or("-");
+        let node_id = request.node_id.as_deref().unwrap_or("-");
+        self.record(format!(
+            "graphs:{}:{graph_id}:{node_id}",
+            request.session_id
+        ));
+        if !matches!(graph_id, "-" | "graph") {
+            return Err(SessionError::Operation(
+                "Graph does not belong to this session".to_string(),
+            ));
+        }
+
+        Ok(ag_session::test_support::session_graphs(
+            request.session_id.as_str(),
+        ))
+    }
+
     // Every worktree holds the directory `src` and the file `src/lib.rs`.
     async fn list_session_files(
         &self,
@@ -699,9 +724,9 @@ impl SessionBackend for RecordingBackend {
 }
 
 /// Builds a session with `queued_messages` waiting behind its turn.
-/// `session-2` runs a turn after an activity summary and a notice; any
-/// other session has a hidden prompt, an answer, one question, and a
-/// finished focused review.
+/// `session-2` runs a turn after an activity summary and a notice, beside
+/// a graph whose `inspect` output waits for approval; any other session has
+/// a hidden prompt, an answer, one question, and a finished focused review.
 fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
     let is_running = session_id.as_str() == "session-2";
     let (messages, questions, status, title) = if is_running {
@@ -744,6 +769,19 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
         draft_prompt: None,
         focused_review: (!is_running).then(|| SessionFocusedReview::Ready {
             text: "### Suggestions\n- Add a test".to_string(),
+        }),
+        graph: is_running.then(|| SessionGraphSummary {
+            awaiting_approval: vec![SessionGraphApproval {
+                node_id: "inspect".to_string(),
+                takes_revision: false,
+                text: "inspect awaits your approval; reply in chat to accept it".to_string(),
+            }],
+            done: 1,
+            label: "Blocked".to_string(),
+            phase: SessionGraphProposalPhase::Approved,
+            status: Some(ExecutionGraphStatus::Blocked),
+            total: 2,
+            version: 1,
         }),
         id: session_id.clone(),
         messages,

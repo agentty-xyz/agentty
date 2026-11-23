@@ -20,13 +20,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use unicode_width::UnicodeWidthStr;
 
-use super::{
-    NodeStatus, areas, graph_status, render, status_glyph, status_label, status_label_width,
-    summary,
-};
+use super::{areas, graph_status, render, status_glyph, status_label_width, summary};
 use crate::domain::agent::ReasoningLevel;
 use crate::presentation::app_mode::AppMode;
-use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::graph_chat::{GraphChatSnapshot, NodeStatus};
 use crate::ui::style::palette;
 
 #[test]
@@ -183,7 +180,7 @@ fn every_node_status_has_a_styled_label_and_matching_width() {
         let width = status_label_width(status);
 
         // Assert
-        assert_eq!(format!("{glyph} {}", status_label(status)), expected_text);
+        assert_eq!(format!("{glyph} {}", status.label()), expected_text);
         assert_eq!(width, expected_text.width());
         assert_eq!(color, expected_color);
     }

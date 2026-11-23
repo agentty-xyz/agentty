@@ -46,7 +46,13 @@ impl App {
                 request,
                 response_tx,
             } => {
+                let changes_graph = request.changes_graph();
                 let result = self.execute_session_mutation(request).await;
+                // Remote devices refetch the graphs they show, whichever
+                // frontend admitted the change.
+                if changes_graph {
+                    self.publish_session_change();
+                }
                 if let Some(response_tx) = response_tx {
                     let _ = response_tx.send(result);
                 } else {

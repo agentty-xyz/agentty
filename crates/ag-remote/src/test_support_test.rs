@@ -8,9 +8,10 @@ use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
     DurableMessageRequest, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
     HostSessionMode, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
-    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionId, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, SessionSummary, SpeedMode,
+    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionGraphs,
+    SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
+    SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -184,12 +185,23 @@ impl DeviceStore for MemoryDeviceStore {
 pub(crate) struct RecordingBackend {
     calls: Mutex<Vec<String>>,
     diff_files: Option<Vec<SessionDiffFile>>,
+    graphs: Option<SessionGraphs>,
     is_failing: bool,
     session_files: Option<Vec<SessionFileEntry>>,
     supported: Vec<SessionOperation>,
 }
 
 impl RecordingBackend {
+    /// Creates a backend that serves graph reads and reports `graphs` for
+    /// every session.
+    pub(crate) fn with_graphs(graphs: SessionGraphs) -> Self {
+        Self {
+            graphs: Some(graphs),
+            supported: vec![SessionOperation::Graphs],
+            ..Self::default()
+        }
+    }
+
     /// Creates a backend that serves diffs and reports `files` as the
     /// changes of every session, or `None` as a session it has not loaded.
     pub(crate) fn with_diff(files: Option<Vec<SessionDiffFile>>) -> Self {
@@ -298,6 +310,21 @@ impl SessionBackend for RecordingBackend {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
         self.record(format!("files:{session_id}"), self.session_files.clone())
+    }
+
+    async fn session_graphs(
+        &self,
+        request: SessionGraphsRequest,
+    ) -> Result<SessionGraphs, SessionError> {
+        let call = format!(
+            "graphs:{}:{}:{}",
+            request.session_id,
+            request.graph_id.as_deref().unwrap_or("-"),
+            request.node_id.as_deref().unwrap_or("-")
+        );
+        let graphs = self.record(call, self.graphs.clone())?;
+
+        graphs.ok_or(SessionError::NotFound)
     }
 
     async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
@@ -452,6 +479,7 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
         created_at: 10,
         draft_prompt: None,
         focused_review: None,
+        graph: None,
         id: session_id.clone(),
         messages: vec![
             SessionMessage::new(0, SessionMessageKind::UserPrompt, "build it"),

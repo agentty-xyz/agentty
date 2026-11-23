@@ -213,6 +213,12 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
     // Closes the drawer and drops its history entry, as when the app gives
     // way to the pairing card.
     reset: dismiss,
-    showSession: (sessionId) => apply("choose", routeHash(sessionId)),
+    // Choosing the route already shown only closes the drawer, through its
+    // own entry, so no back step is left that returns to the same place
+    // and whatever the route's entry opened stays reachable.
+    showSession: (sessionId) => {
+      const hash = routeHash(sessionId);
+      apply(window.location.hash === hash ? "dismiss" : "choose", hash);
+    },
   };
 }

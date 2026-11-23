@@ -16,6 +16,9 @@ use crate::protocol::{
 };
 use crate::test_support::{host_fixture, project_status_fixture, session_fixture};
 
+#[path = "protocol_test/graph_test.rs"]
+mod graph;
+
 #[test]
 fn client_frames_use_snake_case_type_and_method_tags() {
     // Arrange
@@ -608,6 +611,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             created_at: Some(10),
             draft_prompt: None,
             focused_review: None,
+            graph: None,
             id: "session-1".to_string(),
             is_draft: false,
             model: Some("gpt-6.1-sol".to_string()),

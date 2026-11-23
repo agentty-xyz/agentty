@@ -391,6 +391,64 @@ async fn running_graph_nodes_hold_the_session_in_progress_until_the_graph_settle
     assert_eq!(after_graph, (Status::Review, "Review".into(), 0));
 }
 
+#[tokio::test]
+async fn each_settled_node_updates_the_session_before_the_dispatch_pass_ends() {
+    // Arrange: `second` waits for `first`, so one dispatch pass runs both.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    let mut snapshot = utility_graph("waves", &["first", "second"]);
+    snapshot.nodes[1].dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "first".into(),
+    });
+    app.services
+        .db()
+        .graphs()
+        .save_graph(&snapshot, None)
+        .await
+        .expect("graph");
+    let (started, mut started_rx) = mpsc::unbounded_channel();
+    let runner = Arc::new(StaggeredRunner {
+        fast_fails: false,
+        fast_release: Notify::new(),
+        runs: app.services.db().runs(),
+        slow_release: Notify::new(),
+        started,
+    });
+    let versions = app.services.session_update_versions();
+    let version = move || {
+        versions
+            .lock()
+            .expect("versions")
+            .get("sess")
+            .copied()
+            .unwrap_or_default()
+    };
+    spawn_driver(
+        &app.services,
+        snapshot,
+        app.services.db().graph_dispatch(),
+        runner.clone(),
+    );
+    started_rx.recv().await.expect("first node started");
+    let before_settling = version();
+
+    // Act
+    runner.slow_release.notify_one();
+    started_rx.recv().await.expect("second node started");
+    let updated = tokio::time::timeout(Duration::from_secs(5), async {
+        while version() == before_settling {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    runner.slow_release.notify_one();
+
+    // Assert: the update arrives while `second` still runs in the same pass.
+    updated.expect("settling `first` must update the session");
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
 /// Returns the session's in-memory and stored status with its unfinished
 /// graph node leases.
 async fn observe_session(app: &App, status: &Mutex<Status>) -> (Status, String, usize) {

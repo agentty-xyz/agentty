@@ -160,6 +160,22 @@ a phone, shows the session's changed files in place of the chat, each with its s
 letter and changed lines. Open a file to read its patch; press `Diff` again to return to
 the chat. A very large file list or patch shows only its beginning.
 
+When this Agentty lets devices read graphs, a session with a
+[generated graph proposal](@/docs/usage/workflow.md#generated-graph-proposals) shows a
+summary above the message box, as the terminal's sidebar does: `Execution graph · v2`,
+how many nodes are done, the proposal or graph status, and each output that awaits your
+approval. Tap it, or `Graphs` in the header or the `⋯` sheet, to open the graphs in
+place of the chat, like the terminal's
+[inspector](@/docs/usage/workflow.md#execution-graph-inspector). Step through the
+proposal and each graph with `‹` and `›`; the proposal shows its preview, and a graph
+lists its nodes with their status, model, objective, and dependencies. Tap a node for
+its details and outputs, which render like an answer; a very large preview or output
+shows only its beginning and says so. The panel follows new progress, moving from the
+proposal to its graph once you approve it, and `Refresh` reads it again; the back
+gesture or `Graphs` returns to the chat. Acting on a graph stays a chat reply: approve,
+revise, or cancel a proposal, accept or revise an output, and answer a node's questions
+by replying in chat.
+
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
 next to the device offers `Forget this device`. While the connection is down, a banner
@@ -285,6 +301,9 @@ device can:
   is ahead of and behind its base branch and its remote branch;
 - read a session's diff against its base branch, which shows the repository content the
   session changed;
+- read a session's graph proposals and execution graphs: the proposal preview with the
+  captured request and each proposed node's captured instructions, and each node's
+  status, objective, errors, questions, and outputs;
 - list the names of the files and directories in a session's worktree, as `@` lookup in
   the terminal does, without reading their contents;
 - list the names of the files and directories in the active project's checkout, for `@`

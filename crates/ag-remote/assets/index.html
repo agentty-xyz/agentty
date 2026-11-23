@@ -68,6 +68,13 @@
             <line x1="8" y1="8" x2="16" y2="8" />
             <line x1="8" y1="18" x2="16" y2="18" />
             </symbol>
+            <symbol id="i-graph" viewBox="0 0 24 24">
+            <circle cx="6" cy="6" r="2" />
+            <circle cx="6" cy="18" r="2" />
+            <circle cx="18" cy="12" r="2" />
+            <path d="M8 6.5l8 4.5" />
+            <path d="M8 17.5l8-4.5" />
+            </symbol>
             <symbol id="i-publish" viewBox="0 0 24 24">
             <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
             <line x1="12" y1="15" x2="12" y2="4" />
@@ -265,6 +272,16 @@
                             </svg>
                             Diff
                         </button>
+                        <button id="graphs"
+                                type="button"
+                                class="btn btn--ghost wide-only"
+                                aria-pressed="false"
+                                hidden>
+                            <svg class="icon icon--sm" aria-hidden="true">
+                                <use href="#i-graph" />
+                            </svg>
+                            Graphs
+                        </button>
                         <button id="publish" type="button" class="btn wide-only" hidden>
                             <svg class="icon icon--sm" aria-hidden="true">
                                 <use href="#i-publish" />
@@ -378,6 +395,46 @@
                             </ul>
                         </div>
                     </div>
+                    <div id="graph-view"
+                         class="graph-view"
+                         aria-label="Execution graphs"
+                         hidden>
+                        <div class="chat-column">
+                            <div class="graph-bar">
+                                <button id="graph-prev"
+                                        type="button"
+                                        class="icon-btn graph-step"
+                                        aria-label="Previous graph">‹</button>
+                                <p id="graph-position" class="graph-position"></p>
+                                <button id="graph-next"
+                                        type="button"
+                                        class="icon-btn graph-step"
+                                        aria-label="Next graph">›</button>
+                                <button id="graph-refresh" type="button" class="btn btn--ghost graph-refresh">
+                                    <svg class="icon icon--sm" aria-hidden="true">
+                                        <use href="#i-sync" />
+                                    </svg>
+                                    Refresh
+                                </button>
+                            </div>
+                            <p id="graph-title" class="graph-title"></p>
+                            <p id="graph-error" class="error" role="alert"></p>
+                            <div id="graph-hints" class="graph-hints"></div>
+                            <p id="graph-note" class="graph-note" hidden></p>
+                            <section id="graph-preview"
+                                     class="graph-preview"
+                                     aria-label="Graph proposal"
+                                     hidden>
+                            </section>
+                            <ol id="graph-nodes" class="graph-nodes" aria-label="Nodes">
+                            </ol>
+                            <section id="graph-detail"
+                                     class="graph-detail"
+                                     aria-label="Selected node"
+                                     hidden>
+                            </section>
+                        </div>
+                    </div>
                     <footer id="dock" class="dock">
                         <button id="jump" type="button" class="jump" hidden>
                             <svg class="icon icon--sm" aria-hidden="true">
@@ -386,6 +443,11 @@
                             Jump to latest
                         </button>
                         <div class="chat-column">
+                            <button id="graph-summary"
+                                    type="button"
+                                    class="graph-summary"
+                                    aria-controls="graph-view"
+                                    hidden></button>
                             <div id="queued-box" class="queued-box" hidden>
                                 <p class="queued-label">Queued · runs after this turn</p>
                                 <ul id="queued" class="queued">
@@ -441,6 +503,16 @@
                             <use href="#i-diff" />
                         </svg>
                         <span id="sheet-diff-label">Diff</span>
+                        <small>read only</small>
+                    </button>
+                    <button id="sheet-graphs"
+                            value="graphs"
+                            class="sheet-item narrow-only"
+                            hidden>
+                        <svg class="icon" aria-hidden="true">
+                            <use href="#i-graph" />
+                        </svg>
+                        <span id="sheet-graphs-label">Graphs</span>
                         <small>read only</small>
                     </button>
                     <button id="sheet-sync" value="sync" class="sheet-item" hidden>

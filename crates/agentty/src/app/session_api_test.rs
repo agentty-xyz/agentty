@@ -9,6 +9,9 @@ mod file;
 #[path = "session_api_test/focused_review_test.rs"]
 mod focused_review;
 
+#[path = "session_api_test/graph_test.rs"]
+mod graph;
+
 #[path = "session_api_test/lifecycle_test.rs"]
 mod lifecycle;
 

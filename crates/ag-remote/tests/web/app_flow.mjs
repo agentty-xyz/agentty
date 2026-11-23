@@ -14,7 +14,7 @@
 // shows.
 //
 // In `route` mode the page loads at `#s=session-2` with a draft left in
-// this tab, as after a reload, sends it, and opens the diff.
+// this tab, as after a reload, sends it, and opens its graphs and its diff.
 //
 // In `create` mode the page starts at home, where the test server offers
 // new sessions in its `agentty` project, and creates one with a message.
@@ -342,6 +342,27 @@ async function routeFlow() {
     step: "sent",
     draft: window.sessionStorage.getItem(ROUTED_DRAFT_KEY),
     error: byId("session-error").textContent,
+  });
+
+  // The graph summary above the composer opens the graphs in place of the
+  // chat, and the back gesture returns to it.
+  const summary = texts(byId("graph-summary").children);
+  byId("graph-summary").click();
+  await waitFor("the graph nodes", () => byId("graph-nodes").children.length > 0);
+  const graphs = {
+    chatHidden: byId("chat-scroll").hidden,
+    nodes: texts(byId("graph-nodes").querySelectorAll(".graph-node-head")),
+    output: byId("graph-detail").querySelector(".graph-output-label")?.textContent ?? null,
+    position: byId("graph-position").textContent,
+    title: byId("graph-title").textContent,
+  };
+  window.history.back();
+  report({
+    step: "graphs",
+    ...graphs,
+    hash: window.location.hash,
+    returned: !byId("chat-scroll").hidden && byId("graph-view").hidden,
+    summary: summary,
   });
 
   // The diff replaces the chat, and an opened file loads its patch.

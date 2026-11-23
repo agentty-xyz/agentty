@@ -16,6 +16,10 @@
 // `MAX_NESTING` levels stays text, so a hostile answer cannot freeze the
 // page. The subset matches what the TUI renders; see
 // crates/ag-remote/tests/web/markdown.test.mjs for each construct.
+//
+// `renderAnswer(item, content, document, options)` builds on the renderer
+// the view an answer gets: the rendering, its source, and the toggle
+// between them.
 
 // Longest text that is parsed. A longer message renders as plain text.
 export const MAX_MARKDOWN_LENGTH = 256 * 1024;
@@ -141,6 +145,50 @@ export function renderMarkdown(tree, document, { window = null } = {}) {
   }
 
   return fragment;
+}
+
+// ---- Answers ---------------------------------------------------------
+
+// Appends `content` to `item` as an answer shows it: rendered as Markdown,
+// with its source one toggle away for whatever the renderer gets wrong.
+// `window` is as for `renderMarkdown`.
+export function renderAnswer(item, content, document, { window = null } = {}) {
+  const rendered = document.createElement("div");
+  rendered.className = "md prose";
+  rendered.append(renderMarkdown(parseMarkdown(content), document, { window }));
+  const source = document.createElement("div");
+  source.className = "md-source";
+  source.textContent = content;
+  source.hidden = true;
+  const toggle = document.createElement("button");
+  toggle.className = "source-toggle";
+  toggle.textContent = "View source";
+  toggle.type = "button";
+  toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", () => showSource(item, source.hidden));
+  const tools = document.createElement("div");
+  tools.className = "msg-tools";
+  tools.append(toggle);
+  item.append(rendered, source, tools);
+}
+
+// Shows the source of the answer in `item` instead of its rendering, or
+// the rendering again.
+export function showSource(item, isSource) {
+  item.querySelector(".md").hidden = isSource;
+  item.querySelector(".md-source").hidden = !isSource;
+  const toggle = item.querySelector(".source-toggle");
+  toggle.textContent = isSource ? "View rendered" : "View source";
+  toggle.setAttribute("aria-pressed", String(isSource));
+}
+
+// An answer whose source the reader opened keeps showing it when its
+// content changes and `newNode` replaces `oldNode`.
+export function keepSourceView(oldNode, newNode) {
+  const oldSource = oldNode?.querySelector?.(".md-source");
+  if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
+    showSource(newNode, true);
+  }
 }
 
 // ---- Blocks ----------------------------------------------------------

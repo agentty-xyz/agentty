@@ -58,7 +58,8 @@ A paired device is an authenticated control surface, not a viewer. Within the se
 of the active project, it can do what the
 [usage page](https://agentty.xyz/docs/usage/remote-control/#usage-remote-control-device-access)
 lists under "What a paired device can do": today that is reading transcripts, focused
-review results, and diffs, listing the file and directory names in a session's worktree
+review results, diffs, and graph proposals and execution graphs with their captured
+instructions and outputs, listing the file and directory names in a session's worktree
 and in the active project's checkout, seeing the project's branch and sync state,
 sending prompts, answering questions, stopping a turn, syncing a session branch,
 changing session settings, canceling a session, merging a session into its base branch,

@@ -356,6 +356,22 @@ test("choosing a session replaces the drawer's entry, so back returns to the las
   assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
 });
 
+test("choosing the open session goes back over the drawer's entry and leaves no step to the same place", () => {
+  // Arrange
+  const { elements, routes, shell, window } = mountShell({ url: "http://127.0.0.1/#s=one" });
+  window.history.pushState({ panel: true }, "", window.location.href);
+  elements.menu.click();
+
+  // Act
+  shell.showSession("one");
+
+  // Assert
+  assert.equal(shell.isOpen(), false);
+  assert.deepEqual(window.history.state, { panel: true });
+  assert.equal(window.location.hash, "#s=one");
+  assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
+});
+
 test("on a wide screen a chosen session pushes a route and home drops the fragment", () => {
   // Arrange
   const { routes, shell, window } = mountShell({ isNarrow: false });

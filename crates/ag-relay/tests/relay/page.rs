@@ -32,6 +32,7 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
     let page = get(address, "/").await?;
     let script = get(address, "/app.js").await?;
     let device_key = get(address, "/device_key.mjs").await?;
+    let graph = get(address, "/graph.mjs").await?;
     let noise = get(address, "/noise.mjs").await?;
     let transport = get(address, "/relay.mjs").await?;
     let stylesheet = get(address, "/app.css").await?;
@@ -41,6 +42,7 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
         (&page, "text/html; charset=utf-8"),
         (&script, "text/javascript; charset=utf-8"),
         (&device_key, "text/javascript; charset=utf-8"),
+        (&graph, "text/javascript; charset=utf-8"),
         (&noise, "text/javascript; charset=utf-8"),
         (&transport, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
@@ -73,6 +75,8 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
     );
     assert!(script.contains(r#"from "./device_key.mjs""#));
     assert!(script.contains(r#"from "./relay.mjs""#));
+    assert!(script.contains(r#"from "./graph.mjs""#));
+    assert!(graph.contains(r#"from "./markdown.mjs""#));
     assert!(device_key.contains(r#"from "./noise.mjs""#));
     assert!(transport.contains(r#"from "./noise.mjs""#));
     assert!(noise.contains("Noise_IK_25519_AESGCM_SHA256"));

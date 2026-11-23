@@ -21,7 +21,14 @@ import {
   statusInfo,
   statusLine,
 } from "./format.mjs";
-import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
+import { renderGraphSummary } from "./graph.mjs";
+import {
+  keepSourceView,
+  parseInlineMarkdown,
+  renderAnswer,
+  renderMarkdown,
+  safeLink,
+} from "./markdown.mjs";
 import { createMentions } from "./mention.mjs";
 import { conflictLabel, lineCounts } from "./session_list.mjs";
 import { createSuggestions } from "./suggest.mjs";
@@ -273,8 +280,9 @@ export function createRefreshGate({
 // resolves with its result; `onHome()` returns to home. `now()` returns
 // the time in seconds, for the header's timer.
 //
-// `diff` and `settings` are the diff view and the settings sheet, from
-// diff.mjs and settings.mjs, when the page has them.
+// `diff`, `graph` and `settings` are the diff view, the graphs panel and
+// the settings sheet, from diff.mjs, graph.mjs and settings.mjs, when the
+// page has them.
 //
 // Returns `open(sessionId, failure)`, `close()`, `render(session, summary)` for a
 // snapshot and the session's entry in the listing (`session` is `null`
@@ -288,6 +296,7 @@ export function createChat({
   request,
   onHome,
   diff = null,
+  graph = null,
   settings = null,
   now = () => Date.now() / 1000,
 }) {
@@ -312,14 +321,19 @@ export function createChat({
     answerLookups: [],
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
-    // Where the transcript was when the diff replaced it.
+    // Where the transcript was when the diff or the graphs replaced it.
     chatPlace: null,
     // How many rows the sheet's details list.
     detailCount: 0,
     // What the open diff was loaded for; see `diffKey`.
     diffKey: null,
+    // Whether the open graphs added a history entry the back gesture pops.
+    graphEntry: false,
     isAnswering: false,
     isConnected: false,
+    // Whether the page went back over the graphs' entry and the browser
+    // has not landed yet.
+    isLeavingGraphs: false,
     // Whether the header's error says a refresh failed.
     isLoadError: false,
     isSending: false,
@@ -508,6 +522,7 @@ export function createChat({
     elements.sheetDiff.hidden = !actions.diff;
     elements.sheetDiff.disabled = elements.diff.disabled;
     elements.sheetDiffLabel.textContent = isDiffOpen ? "Back to chat" : "Diff";
+    renderGraphActions();
     elements.merge.hidden = !actions.merge;
     elements.merge.disabled = !actions.mergeEnabled || isActing("merge_session") || !state.isConnected;
     elements.merge.title = hasReviewRequest ? MERGE_OFF_TITLE : "";
@@ -529,10 +544,36 @@ export function createChat({
     elements.mergeLines.textContent = lines ? " (+" + lines.added + " -" + lines.deleted + ")" : "";
   }
 
+  // Whether the host lets a device read the open session's graphs, which
+  // the terminal's `w` offers in every status.
+  function hasGraphs() {
+    return Boolean(graph && state.session) && state.capabilities.includes("graphs");
+  }
+
+  // Graphs sits in the header on wide screens and in the sheet on phones,
+  // like Diff; the summary beside the chat opens it too.
+  function renderGraphActions() {
+    const isOpen = Boolean(graph?.isOpen());
+    if (isOpen && !hasGraphs()) {
+      // Closing renders the actions again.
+      leaveGraphEntry();
+      showGraphs(false);
+
+      return;
+    }
+    elements.graphs.hidden = !hasGraphs();
+    elements.graphs.disabled = !state.isConnected;
+    elements.graphs.setAttribute("aria-pressed", String(isOpen));
+    elements.sheetGraphs.hidden = elements.graphs.hidden;
+    elements.sheetGraphs.disabled = elements.graphs.disabled;
+    elements.sheetGraphsLabel.textContent = isOpen ? "Back to chat" : "Graphs";
+    elements.graphSummary.disabled = !hasGraphs() || !state.isConnected;
+  }
+
   // Shows the `⋯` button when its sheet has details or an action to offer.
   function renderMore(actions) {
     const hasDetails = state.detailCount > 0;
-    elements.more.hidden = !hasDetails &&
+    elements.more.hidden = !hasDetails && !hasGraphs() &&
       !actions.cancel && !actions.merge && !actions.diff && !actions.publish && !actions.sync;
     // With only Diff, Publish and Merge in it and no details, the sheet
     // adds nothing to the wide header.
@@ -673,29 +714,105 @@ export function createChat({
   // `Jump to latest` for what arrived meanwhile.
   function showDiff(isOpen) {
     if (isOpen) {
-      state.chatPlace = {
-        hasMissed: !elements.jump.hidden,
-        isAtEnd: isNearEnd(),
-        top: elements.scroller.scrollTop,
-      };
+      leaveGraphEntry();
+      closeGraphs();
+      leaveChat();
       state.diffKey = diffKey(state.session, state.summary);
-    }
-    elements.scroller.hidden = isOpen;
-    elements.dock.hidden = isOpen;
-    if (isOpen) {
       void diff.open(state.sessionId);
     } else {
       diff.close();
-      const place = state.chatPlace;
-      state.chatPlace = null;
-      if (place?.isAtEnd) {
-        scrollToEnd();
-      } else if (place) {
-        elements.scroller.scrollTop = place.top;
-        elements.jump.hidden = !place.hasMissed;
-      }
+      returnToChat();
     }
     renderActions();
+  }
+
+  // Hides the transcript and the dock for a panel, remembering where the
+  // reader was. A panel that replaces another keeps the first place.
+  function leaveChat() {
+    state.chatPlace ??= {
+      hasMissed: !elements.jump.hidden,
+      isAtEnd: isNearEnd(),
+      top: elements.scroller.scrollTop,
+    };
+    elements.scroller.hidden = true;
+    elements.dock.hidden = true;
+  }
+
+  // Shows the transcript and the dock again where the reader left them.
+  function returnToChat() {
+    elements.scroller.hidden = false;
+    elements.dock.hidden = false;
+    const place = state.chatPlace;
+    state.chatPlace = null;
+    if (place?.isAtEnd) {
+      scrollToEnd();
+    } else if (place) {
+      elements.scroller.scrollTop = place.top;
+      elements.jump.hidden = !place.hasMissed;
+    }
+  }
+
+  // Shows the session's graphs in place of the transcript and the dock, as
+  // the terminal's `w` does, or the chat again. Opening adds a history
+  // entry, so the back gesture returns to the chat; the page never stacks
+  // a second one.
+  function showGraphs(isOpen) {
+    if (isOpen) {
+      if (diff?.isOpen()) {
+        diff.close();
+      }
+      leaveChat();
+      if (window.history.state?.graphs !== true) {
+        window.history.pushState({ graphs: true }, "", window.location.href);
+      }
+      state.graphEntry = true;
+      void graph.open(state.sessionId);
+    } else {
+      graph.close();
+      state.graphEntry = false;
+      returnToChat();
+    }
+    renderActions();
+  }
+
+  // Opens the graphs, or closes them at once and drops their history
+  // entry when it is still the current one, so the entry goes with them.
+  function toggleGraphs() {
+    if (!hasGraphs()) {
+      return;
+    }
+    if (graph.isOpen()) {
+      leaveGraphEntry();
+      showGraphs(false);
+    } else {
+      showGraphs(true);
+    }
+  }
+
+  // Closes the graphs without returning to the chat, for a panel or a
+  // session that replaces them. Their history entry stays: after a session
+  // switch it is no longer the current one.
+  function closeGraphs() {
+    if (graph?.isOpen()) {
+      graph.close();
+    }
+    state.graphEntry = false;
+  }
+
+  // Goes back over the open graphs' history entry, so no back step is left
+  // that shows nothing, as when the diff replaces them on the same entry.
+  // An entry above theirs is left alone: going back would only reach
+  // theirs. The flag clears first, so the `popstate` the step fires finds
+  // nothing more to close, and a step already under way is not asked for
+  // twice: until it lands, the entry still reads as theirs.
+  function leaveGraphEntry() {
+    const isCurrent =
+      state.graphEntry && !state.isLeavingGraphs && window.history.state?.graphs === true;
+    state.graphEntry = false;
+    if (isCurrent) {
+      state.isLeavingGraphs = true;
+      window.history.back();
+    }
   }
 
   function toggleDiff() {
@@ -749,7 +866,7 @@ export function createChat({
     }
     const body = element(document, "div", "focused-review-body");
     if (review.state === "ready") {
-      renderAnswer(body, review.text);
+      renderAnswer(body, review.text, document, { window });
       keepSourceView(node.querySelector(".focused-review-body"), body);
     } else {
       body.append(element(document, "p", "focused-review-failure", review.text));
@@ -836,7 +953,7 @@ export function createChat({
       }
       item.append(inlineMarkdown("span", "notice-body", notice.body));
     } else if (kind === "assistant") {
-      renderAnswer(item, content);
+      renderAnswer(item, content, document, { window });
     } else {
       item.textContent = content;
     }
@@ -851,22 +968,6 @@ export function createChat({
     node.append(renderMarkdown(parseInlineMarkdown(text), document, { window }));
 
     return node;
-  }
-
-  // An answer renders as Markdown, with its source one toggle away for
-  // whatever the renderer gets wrong.
-  function renderAnswer(item, content) {
-    const rendered = element(document, "div", "md prose");
-    rendered.append(renderMarkdown(parseMarkdown(content), document, { window }));
-    const source = element(document, "div", "md-source", content);
-    source.hidden = true;
-    const toggle = element(document, "button", "source-toggle", "View source");
-    toggle.type = "button";
-    toggle.setAttribute("aria-pressed", "false");
-    toggle.addEventListener("click", () => showSource(item, source.hidden));
-    const tools = element(document, "div", "msg-tools");
-    tools.append(toggle);
-    item.append(rendered, source, tools);
   }
 
   function renderActivity(content) {
@@ -1114,6 +1215,8 @@ export function createChat({
     elements.scroller.hidden = false;
     elements.dock.hidden = false;
     diff?.close();
+    closeGraphs();
+    renderGraphSummary(document, elements.graphSummary, null);
     state.chatPlace = null;
     elements.composer.hidden = false;
     elements.answerBar.hidden = true;
@@ -1172,15 +1275,38 @@ export function createChat({
 
   function render(session, summary = null) {
     if (!session) {
-      reset();
-      elements.heading.textContent = "Session not found";
-      elements.gone.hidden = false;
-      elements.scroller.hidden = true;
-      elements.composer.hidden = true;
+      renderGone();
 
       return;
     }
     const isFirst = state.session === null;
+    adoptSnapshot(session, summary);
+    // The header closes the diff or the graphs when they are no longer
+    // offered.
+    renderHeader(session);
+    const isPanelOpen = Boolean(diff?.isOpen() || graph?.isOpen());
+    const wasNearEnd = isNearEnd();
+    elements.scroller.hidden = isPanelOpen;
+    const changes = renderSessionBody(session);
+    if (isPanelOpen) {
+      refreshPanel(session, changes);
+    } else {
+      followChanges(changes, isFirst, wasNearEnd);
+    }
+  }
+
+  // Shows that the open session no longer exists.
+  function renderGone() {
+    reset();
+    elements.heading.textContent = "Session not found";
+    elements.gone.hidden = false;
+    elements.scroller.hidden = true;
+    elements.composer.hidden = true;
+  }
+
+  // Keeps `session` and its listing `summary` as the open snapshot, and
+  // ends what the snapshot shows to be over.
+  function adoptSnapshot(session, summary) {
     state.session = session;
     state.summary = summary?.id === session.id ? summary : null;
     state.clockSkew = clockSkew(state.summary, now());
@@ -1196,37 +1322,56 @@ export function createChat({
       state.queuedPublishes.delete(session.id);
     }
     elements.gone.hidden = true;
-    // The header closes the diff when the new status allows none.
-    renderHeader(session);
-    const isDiffOpen = Boolean(diff?.isOpen());
-    const wasNearEnd = isNearEnd();
-    elements.scroller.hidden = isDiffOpen;
+  }
+
+  // Shows everything below the header, and returns what changed: the
+  // transcript, the questions, and the `layout` of the status line and
+  // the graph summary above the composer, which move the transcript's end.
+  function renderSessionBody(session) {
+    const summaryChanged = renderGraphSummary(document, elements.graphSummary, session.graph ?? null);
     const draftChanged = renderDraft(session);
     const messagesChanged = renderTranscript(session.messages || []);
     const reviewChanged = renderFocusedReview(session.focused_review);
-    const transcriptChanged = messagesChanged || reviewChanged || draftChanged;
     const statusLineChanged = renderStatusLine(session.status, session.progress);
-    const questionsChanged = renderQuestions(session.questions || []);
+    const changes = {
+      layout: statusLineChanged || summaryChanged,
+      questions: renderQuestions(session.questions || []),
+      transcript: messagesChanged || reviewChanged || draftChanged,
+    };
     renderQueued(session.queued_messages || [], session.queued_actions || []);
     renderDock();
     settings?.update(session, { isRunning: statusInfo(session.status).running });
-    if (isDiffOpen) {
-      // The transcript is out of sight; returning to it says what arrived.
-      state.chatPlace.hasMissed ||= transcriptChanged || questionsChanged;
-      // The files are read again only when the session's changes may have.
-      const key = diffKey(session, state.summary);
-      if (key !== state.diffKey) {
-        state.diffKey = key;
-        void diff.refresh();
-      }
+
+    return changes;
+  }
+
+  // Brings the open diff or graphs up to date with `session`. The
+  // transcript is out of sight; returning to it says what arrived.
+  function refreshPanel(session, changes) {
+    state.chatPlace.hasMissed ||= changes.transcript || changes.questions;
+    if (!diff?.isOpen()) {
+      // Each snapshot follows a change, and graph work rarely shows in
+      // the session's own fields, so the open graphs are read again.
+      void graph.refresh();
 
       return;
     }
-    // The status line follows the end only for a reader already there; it
-    // alone is no news worth the jump button.
-    if (isFirst || (wasNearEnd && (transcriptChanged || statusLineChanged || questionsChanged))) {
+    // The files are read again only when the session's changes may have.
+    const key = diffKey(session, state.summary);
+    if (key !== state.diffKey) {
+      state.diffKey = key;
+      void diff.refresh();
+    }
+  }
+
+  // The status line and the graph summary follow the end only for a
+  // reader already there; they alone are no news worth the jump button:
+  // the summary shows beside the transcript, not in it.
+  function followChanges(changes, isFirst, wasNearEnd) {
+    const hasNews = changes.transcript || changes.questions;
+    if (isFirst || (wasNearEnd && (hasNews || changes.layout))) {
       scrollToEnd();
-    } else if (transcriptChanged || questionsChanged) {
+    } else if (hasNews) {
       elements.jump.hidden = false;
     }
   }
@@ -1380,9 +1525,25 @@ export function createChat({
       confirmWith(elements.syncDialog);
     } else if (choice === "diff") {
       toggleDiff();
+    } else if (choice === "graphs") {
+      toggleGraphs();
     }
   });
   elements.diff.addEventListener("click", toggleDiff);
+  elements.graphs.addEventListener("click", toggleGraphs);
+  elements.graphSummary.addEventListener("click", () => {
+    if (!graph?.isOpen()) {
+      toggleGraphs();
+    }
+  });
+  // The back gesture pops the entry the graphs added and returns to the
+  // chat.
+  window.addEventListener("popstate", () => {
+    state.isLeavingGraphs = false;
+    if (state.graphEntry && window.history.state?.graphs !== true) {
+      showGraphs(false);
+    }
+  });
   elements.merge.addEventListener("click", () => confirmWith(elements.mergeDialog));
   elements.publish.addEventListener("click", () => confirmWith(elements.publishDialog));
   elements.publishDialog.addEventListener("close", () => {
@@ -1457,25 +1618,6 @@ function keepActivityOpen(oldNode, newNode) {
   if (oldDetails?.dataset.toggled && newDetails) {
     newDetails.open = oldDetails.open;
     newDetails.dataset.toggled = "true";
-  }
-}
-
-// Shows the source of the answer in `item` instead of its rendering, or
-// the rendering again.
-function showSource(item, isSource) {
-  item.querySelector(".md").hidden = isSource;
-  item.querySelector(".md-source").hidden = !isSource;
-  const toggle = item.querySelector(".source-toggle");
-  toggle.textContent = isSource ? "View rendered" : "View source";
-  toggle.setAttribute("aria-pressed", String(isSource));
-}
-
-// An answer whose source the reader opened keeps showing it when its
-// content changes.
-function keepSourceView(oldNode, newNode) {
-  const oldSource = oldNode?.querySelector?.(".md-source");
-  if (oldSource && !oldSource.hidden && newNode.querySelector(".md-source")) {
-    showSource(newNode, true);
   }
 }
 

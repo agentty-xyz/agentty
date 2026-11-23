@@ -8,6 +8,7 @@ mod proposal;
 mod proposal_state;
 mod result;
 mod selection;
+mod session_graph;
 
 #[cfg(test)]
 #[path = "execution_graph/test_support_test.rs"]
@@ -33,4 +34,9 @@ pub use proposal_state::{
 pub use result::{
     GraphExecutionRef, GraphOutputReplyOutcome, GraphResolvedInput, GraphResult, GraphResultRef,
     GraphResultState,
+};
+pub use session_graph::{
+    SessionGraph, SessionGraphApproval, SessionGraphEntry, SessionGraphNode, SessionGraphOutput,
+    SessionGraphProposal, SessionGraphProposalPhase, SessionGraphRequirement, SessionGraphSummary,
+    SessionGraphs, SessionGraphsRequest,
 };

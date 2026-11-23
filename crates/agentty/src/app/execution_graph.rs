@@ -756,7 +756,7 @@ impl AppServices {
                 }
                 continue;
             };
-            let result = ag_worker::in_scope(
+            let pass = ag_worker::in_scope(
                 ag_worker::RunScope {
                     cancellation: Some(cancellation.clone()),
                     session_id: Some(graph.session_id.to_string()),
@@ -764,8 +764,10 @@ impl AppServices {
                     ..ag_worker::RunScope::default()
                 },
                 executor.run_ready(&graph.id, graph.revision, &session.folder, permission),
-            )
-            .await;
+            );
+            let result = self
+                .announce_settlements_during(&graph.session_id, pass)
+                .await;
             // The pass settled every node it admitted; a node that becomes
             // ready later takes a new lease when it starts.
             session.leases.finish(self).await;
@@ -841,6 +843,33 @@ impl AppServices {
                 changed = releases.changed() => if changed.is_err() { break; },
                 () = executor.capacity_released() => {},
                 () = executor.environment_released() => {},
+            }
+        }
+    }
+
+    /// Runs one dispatch `pass` and refreshes the views of `session_id`
+    /// whenever a graph node settles meanwhile. A pass runs wave after wave
+    /// until nothing more is ready, and its own update follows only the last
+    /// wave, so remote devices would otherwise see none of the waves before
+    /// it.
+    async fn announce_settlements_during<Output>(
+        &self,
+        session_id: &SessionId,
+        pass: impl Future<Output = Output>,
+    ) -> Output {
+        let mut settlements = self.graph_resources.subscribe_releases();
+        tokio::pin!(pass);
+        loop {
+            tokio::select! {
+                biased;
+                output = &mut pass => return output,
+                Ok(()) = settlements.changed() => {
+                    SessionTaskService::emit_session_updated(
+                        &self.event_sender(),
+                        &self.session_update_versions(),
+                        session_id,
+                    );
+                }
             }
         }
     }

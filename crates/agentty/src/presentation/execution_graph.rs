@@ -11,6 +11,7 @@ use ag_session::{
 use ag_worker::GraphUtilityRunner;
 
 use super::app_mode::ConfirmationViewMode;
+use super::graph_chat::gate_label;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 
@@ -254,6 +255,36 @@ impl GraphViewOutput {
 
     pub(crate) fn display(&self) -> &str {
         self.display.as_deref().unwrap_or(&self.body)
+    }
+}
+
+/// Status shown for a graph whose progress the host cannot read.
+pub(crate) const UNAVAILABLE_STATUS_LABEL: &str = "Unavailable";
+
+/// Hint shown while the latest proposal waits for the user's decision.
+pub(crate) const PROPOSAL_REPLY_HINT: &str = "reply in chat to approve, revise, or cancel";
+
+/// Hint shown while the selected node waits for answers to its questions.
+pub(crate) const QUESTION_REPLY_HINT: &str = "reply in chat to answer";
+
+/// Note shown for a focused review graph, which only the review workflow
+/// drives.
+pub(crate) const FOCUSED_REVIEW_NOTE: &str = "Focused review: use Regenerate review in session \
+                                              view for a new generation with checkpoints. Generic \
+                                              retry/resume/reply is unavailable.";
+
+/// Why a pending node cannot dispatch, as the inspector says it.
+pub(crate) fn blocked_reason_label(reason: &GraphBlockedReason) -> String {
+    match reason {
+        GraphBlockedReason::Dependency { gate, node_id } => {
+            format!("{node_id}: {}", gate_label(gate))
+        }
+        GraphBlockedReason::EnvironmentBusy => "Workspace is busy".into(),
+        GraphBlockedReason::AwaitingDispatch => "Waiting for worker capacity or workspace".into(),
+        GraphBlockedReason::BudgetExhausted(name) => {
+            format!("Provider-call budget exhausted: {name}")
+        }
+        GraphBlockedReason::ResumeRequired => "Paused; resume required".into(),
     }
 }
 

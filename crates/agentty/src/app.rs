@@ -14,6 +14,7 @@ mod diff_prompt;
 mod error;
 mod execution_graph;
 mod graph_activity;
+mod graph_api;
 mod graph_budget;
 mod graph_chat;
 mod graph_node_reply;

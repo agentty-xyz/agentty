@@ -52,6 +52,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::PublishSession
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
+                | SessionOperation::Graphs
         )
     }
 
@@ -83,6 +84,13 @@ impl SessionBackend for SessionRuntimeHandle {
         graph_id: &str,
     ) -> Result<Option<ag_session::ExecutionGraphProgress>, ApiSessionError> {
         SessionRuntimeHandle::get_execution_graph(self, graph_id).await
+    }
+
+    async fn session_graphs(
+        &self,
+        request: ag_session::SessionGraphsRequest,
+    ) -> Result<ag_session::SessionGraphs, ApiSessionError> {
+        SessionRuntimeHandle::session_graphs(self, request).await
     }
 
     async fn cancel_execution_graph(
@@ -370,6 +378,12 @@ impl App {
                 response_tx,
             } => {
                 let _ = response_tx.send(self.execution_graph_progress(&graph_id).await);
+            }
+            SessionRuntimeCommand::GetSessionGraphs {
+                request,
+                response_tx,
+            } => {
+                let _ = response_tx.send(self.api_session_graphs(request).await);
             }
             SessionRuntimeCommand::RunGraphNode {
                 admitted_tx,
@@ -863,7 +877,7 @@ impl App {
     }
 
     /// Loads one complete session aggregate from persistence plus live queue
-    /// state.
+    /// state, and the summary of its latest graph proposal.
     async fn get_api_session(
         &self,
         session_id: &SessionId,
@@ -910,6 +924,7 @@ impl App {
         let queued_actions = live_session.map_or_default(Session::queued_action_labels);
         let focused_review = live_session
             .and_then(|session| review::shown_focused_review(&self.review_cache, session));
+        let graph = self.api_graph_summary(session_id).await;
 
         let live_status = live_session.map(|session| session.status);
 
@@ -928,6 +943,7 @@ impl App {
 
             Some(ag_session::Session {
                 focused_review,
+                graph,
                 progress,
                 queued_actions,
                 status,
@@ -1556,6 +1572,7 @@ fn build_api_session(
         created_at: row.created_at,
         draft_prompt,
         focused_review: None,
+        graph: None,
         id: SessionId::from(row.id),
         messages,
         progress: None,

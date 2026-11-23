@@ -6,12 +6,16 @@ use std::time::{Duration, Instant};
 
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, QuestionItem};
 use ag_session::{
-    ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphNodeProgress,
-    GraphNodeStatus, GraphProposalResolution, GraphProposalVersionOutcome,
-    StartExecutionGraphRequest, test_support,
+    ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphCompletionGate,
+    GraphDependency, GraphNodeProgress, GraphNodeStatus, GraphProposalApproval,
+    GraphProposalResolution, GraphProposalVersionOutcome, SessionGraphApproval,
+    SessionGraphProposalPhase, SessionGraphSummary, StartExecutionGraphRequest, test_support,
 };
 
-use super::{GraphChatCache, GraphChatSnapshot, output_approval_notice, proposal_chat_notice};
+use super::{
+    GraphChatCache, GraphChatSnapshot, edge_label, graph_summary, output_approval_notice,
+    proposal_chat_notice, proposal_standing,
+};
 
 #[test]
 fn cache_is_session_scoped_and_refreshes_on_updates_live_status_and_failures() {
@@ -225,4 +229,195 @@ fn output_approval_notice_shows_the_output_and_the_reply_guidance() {
             expected
         );
     }
+}
+
+/// Returns a proposal outcome that resolved to `graph`, or that the host
+/// could not resolve without one.
+fn resolved_outcome(graph: Option<ExecutionGraph>) -> GraphProposalVersionOutcome {
+    GraphProposalVersionOutcome::Generated {
+        launch: graph.map(|graph| {
+            Box::new(StartExecutionGraphRequest {
+                graph,
+                provider_call_limits: BTreeMap::new(),
+            })
+        }),
+        response: GraphProposalResponse {
+            outcome: GraphProposalOutcome::Proposal {
+                proposal: test_support::graph_proposal(),
+            },
+        },
+    }
+}
+
+#[test]
+fn proposal_standing_names_each_phase_with_the_sidebar_row() {
+    // Arrange
+    let mut state = test_support::graph_proposal_state("proposal", "session");
+    let graph = crate::presentation::execution_graph::tests::graph_view().graphs[0].clone();
+    let cases = [
+        (
+            GraphProposalVersionOutcome::Generating,
+            SessionGraphProposalPhase::Generating,
+            "Generating preview...",
+        ),
+        (
+            GraphProposalVersionOutcome::Failed("invalid graph".into()),
+            SessionGraphProposalPhase::Failed,
+            "Generation failed: invalid graph",
+        ),
+        (
+            GraphProposalVersionOutcome::Generated {
+                launch: None,
+                response: GraphProposalResponse {
+                    outcome: GraphProposalOutcome::Clarification {
+                        questions: vec![QuestionItem::new("Which target?")],
+                    },
+                },
+            },
+            SessionGraphProposalPhase::NeedsInput,
+            "Needs your input",
+        ),
+        (
+            resolved_outcome(None),
+            SessionGraphProposalPhase::Unresolved,
+            "Unresolved. Reply to revise or cancel it.",
+        ),
+        (
+            resolved_outcome(Some(graph)),
+            SessionGraphProposalPhase::AwaitingApproval,
+            "Awaiting your approval",
+        ),
+    ];
+
+    // Act / Assert
+    for (outcome, phase, label) in cases {
+        state.version.outcome = outcome;
+        assert_eq!(proposal_standing(&state), (phase, label.to_string()));
+    }
+    state.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: state.limits.clone(),
+        version: 1,
+    });
+    assert_eq!(
+        proposal_standing(&state),
+        (
+            SessionGraphProposalPhase::Approved,
+            "Approved; loading execution status".to_string()
+        )
+    );
+    state.version.is_cancelled = true;
+    assert_eq!(
+        proposal_standing(&state),
+        (
+            SessionGraphProposalPhase::Cancelled,
+            "Cancelled. No graph was launched.".to_string()
+        )
+    );
+}
+
+#[test]
+fn graph_summary_counts_nodes_and_names_outputs_awaiting_approval() {
+    // Arrange
+    let view = crate::presentation::execution_graph::tests::acceptance_gated_view();
+    let graph = view.graphs[0].clone();
+    let mut progress = view.progress.expect("progress");
+    let mut state = test_support::graph_proposal_state("proposal", "session");
+    state.version.outcome = resolved_outcome(Some(graph));
+    state.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: state.limits.clone(),
+        version: 1,
+    });
+
+    // Act
+    let starting = graph_summary(&state, None);
+    let blocked = graph_summary(&state, Some(&progress));
+    progress.status = ExecutionGraphStatus::Paused;
+    let paused = graph_summary(&state, Some(&progress));
+    state.version.is_cancelled = true;
+    let cancelled = graph_summary(&state, Some(&progress));
+
+    // Assert
+    assert_eq!(
+        starting,
+        SessionGraphSummary {
+            awaiting_approval: Vec::new(),
+            done: 0,
+            label: "Approved; loading execution status".into(),
+            phase: SessionGraphProposalPhase::Approved,
+            status: None,
+            total: 2,
+            version: 1,
+        }
+    );
+    assert_eq!(
+        blocked,
+        SessionGraphSummary {
+            awaiting_approval: vec![SessionGraphApproval {
+                node_id: "first".into(),
+                takes_revision: true,
+                text: "first awaits your approval; reply in chat to accept or revise it".into(),
+            }],
+            done: 1,
+            label: "Blocked".into(),
+            phase: SessionGraphProposalPhase::Approved,
+            status: Some(ExecutionGraphStatus::Blocked),
+            total: 2,
+            version: 1,
+        }
+    );
+    assert_eq!(
+        paused.awaiting_approval[0].text,
+        "first awaits your approval; reply in chat to accept or revise it and resume the graph"
+    );
+    assert_eq!(paused.label, "Paused");
+    assert_eq!(
+        cancelled,
+        SessionGraphSummary {
+            awaiting_approval: Vec::new(),
+            done: 0,
+            label: "Cancelled. No graph was launched.".into(),
+            phase: SessionGraphProposalPhase::Cancelled,
+            status: None,
+            total: 0,
+            version: 1,
+        }
+    );
+}
+
+#[test]
+fn dependency_labels_name_their_source_unless_it_is_drawn_above() {
+    // Arrange
+    let output = |output_name: &str, accepted: bool| GraphDependency {
+        gate: if accepted {
+            GraphCompletionGate::ResultAccepted {
+                output_name: output_name.into(),
+            }
+        } else {
+            GraphCompletionGate::ResultValidated {
+                output_name: output_name.into(),
+            }
+        },
+        node_id: "plan".into(),
+    };
+    let after = GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "plan".into(),
+    };
+
+    // Act / Assert
+    assert_eq!(edge_label(&after, Some("plan")), "after plan");
+    assert_eq!(
+        edge_label(&output("report", false), Some("plan")),
+        "needs report"
+    );
+    assert_eq!(
+        edge_label(&output("report", true), Some("other")),
+        "needs report accepted from plan"
+    );
+    assert_eq!(
+        edge_label(&output("report", false), None),
+        "needs report from plan"
+    );
 }

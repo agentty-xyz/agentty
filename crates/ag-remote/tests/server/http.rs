@@ -35,6 +35,21 @@ async fn fetch(addr: SocketAddr, path: &str, host: &str) -> TestResult<String> {
     Ok(response)
 }
 
+/// Asserts that `response` serves `content_type` with the headers every web
+/// client asset carries.
+fn assert_restrictive_headers(response: &str, content_type: &str) {
+    assert!(response.starts_with("http/1.1 200 ok"));
+    assert!(response.contains(&format!("content-type: {content_type}")));
+    assert!(response.contains(
+        "content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; \
+         font-src data:; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'none'"
+    ));
+    assert!(response.contains("x-content-type-options: nosniff"));
+    assert!(response.contains("referrer-policy: no-referrer"));
+    assert!(response.contains("cache-control: no-store"));
+}
+
 #[tokio::test]
 async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // Arrange
@@ -49,6 +64,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     let device_key = get(addr, "/device_key.mjs").await?;
     let diff = get(addr, "/diff.mjs").await?;
     let format = get(addr, "/format.mjs").await?;
+    let graph = get(addr, "/graph.mjs").await?;
     let home = get(addr, "/home.mjs").await?;
     let markdown = get(addr, "/markdown.mjs").await?;
     let mention = get(addr, "/mention.mjs").await?;
@@ -71,6 +87,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&device_key, "text/javascript; charset=utf-8"),
         (&diff, "text/javascript; charset=utf-8"),
         (&format, "text/javascript; charset=utf-8"),
+        (&graph, "text/javascript; charset=utf-8"),
         (&home, "text/javascript; charset=utf-8"),
         (&markdown, "text/javascript; charset=utf-8"),
         (&mention, "text/javascript; charset=utf-8"),
@@ -84,16 +101,7 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
         (&suggest, "text/javascript; charset=utf-8"),
         (&stylesheet, "text/css; charset=utf-8"),
     ] {
-        assert!(response.starts_with("http/1.1 200 ok"));
-        assert!(response.contains(&format!("content-type: {content_type}")));
-        assert!(response.contains(
-            "content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; \
-             font-src data:; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action \
-             'none'; frame-ancestors 'none'"
-        ));
-        assert!(response.contains("x-content-type-options: nosniff"));
-        assert!(response.contains("referrer-policy: no-referrer"));
-        assert!(response.contains("cache-control: no-store"));
+        assert_restrictive_headers(response, content_type);
     }
     assert!(page.contains("<script type=\"module\" src=\"app.js\""));
     assert!(page.contains("<meta name=\"agentty-transport\" content=\"local\""));
@@ -125,6 +133,8 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     assert!(script.contains("from \"./chat.mjs\""));
     assert!(script.contains("from \"./device_key.mjs\""));
     assert!(script.contains("from \"./diff.mjs\""));
+    assert!(script.contains("from \"./graph.mjs\""));
+    assert!(graph.contains("from \"./markdown.mjs\""));
     assert!(script.contains("from \"./home.mjs\""));
     assert!(home.contains("from \"./chat.mjs\""));
     assert!(script.contains("from \"./project.mjs\""));
@@ -259,6 +269,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/device_key.mjs",
             "/diff.mjs",
             "/format.mjs",
+            "/graph.mjs",
             "/home.mjs",
             "/markdown.mjs",
             "/mention.mjs",

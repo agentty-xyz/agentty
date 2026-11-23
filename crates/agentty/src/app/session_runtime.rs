@@ -43,6 +43,10 @@ pub(crate) enum SessionRuntimeCommand {
         response_tx:
             oneshot::Sender<Result<Option<ag_session::ExecutionGraphProgress>, SessionError>>,
     },
+    GetSessionGraphs {
+        request: ag_session::SessionGraphsRequest,
+        response_tx: oneshot::Sender<Result<ag_session::SessionGraphs, SessionError>>,
+    },
     /// Trusted handoff of an already admitted graph task to its serial owner.
     RunGraphNode {
         admitted_tx: oneshot::Sender<()>,
@@ -155,6 +159,18 @@ impl SessionRuntimeHandle {
     ) -> Result<Option<ag_session::ExecutionGraphProgress>, SessionError> {
         self.request(|response_tx| SessionRuntimeCommand::GetExecutionGraph {
             graph_id: graph_id.into(),
+            response_tx,
+        })
+        .await
+    }
+
+    /// Reads a session's graphs as the terminal inspector loads them.
+    pub(crate) async fn session_graphs(
+        &self,
+        request: ag_session::SessionGraphsRequest,
+    ) -> Result<ag_session::SessionGraphs, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetSessionGraphs {
+            request,
             response_tx,
         })
         .await
