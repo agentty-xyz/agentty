@@ -1,6 +1,7 @@
-/* Design values come from tokens.css, generated from design/tokens.json,
-   which is served ahead of this file as /app.css. The tokens below size
-   this client's layout or alias design tokens. */
+/* Design values come from tokens.css, generated from design/tokens.json, and
+   shared foundations from base.css, a generated copy of design/base.css; both
+   are served ahead of this file as /app.css. The tokens below size this
+   client's layout or alias design tokens. */
 :root {
   /* Layout of this client. --chat-width is the site's
      .docs-content-wrapper. */
@@ -19,34 +20,20 @@
   color-scheme: dark;
 }
 
-* {
-  box-sizing: border-box;
-}
-
 html {
   background: var(--color-bg);
 }
 
-/* Only the session list and the transcript scroll, never the page. */
+/* Only the session list and the transcript scroll, never the page. The
+   text size stays fixed when the browser's default font size changes. */
 body {
   height: 100dvh;
-  margin: 0;
   overflow: hidden;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-sans);
   font-size: 16px;
-  line-height: 1.6;
-  text-rendering: optimizeLegibility;
 }
 
-button,
-input,
-textarea {
-  font-family: var(--font-sans);
-}
-
-:where(a, button, input, textarea, summary):focus-visible {
+/* Focusable elements beyond the shared links, buttons, and inputs. */
+:where(textarea, summary):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 3px;
 }

@@ -1,7 +1,9 @@
 //! Check that `standards.toml` names exports that exist and that every export
-//! stays portable: exported instruction sections, skills, and ast-grep rules
-//! name no workspace crate, hook, or repository path that the manifest does
-//! not export, and no shared rule is anchored to a repository path.
+//! stays portable: exported instruction sections, skills, ast-grep rules, and
+//! the design guide and stylesheets name no workspace crate, hook, or
+//! repository path that the manifest does not export, no shared rule is
+//! anchored to a repository path, and no design stylesheet uses Sass or loads
+//! another file.
 
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
@@ -20,8 +22,9 @@ use crate::repository;
 /// Manifest path, relative to the repository root.
 const MANIFEST: &str = "standards.toml";
 
-/// Manifest schema version this check understands.
-const VERSION: u32 = 1;
+/// Manifest schema version this check understands. Version 2 added the
+/// required `[design]` table.
+const VERSION: u32 = 2;
 
 /// Hook catalog that names this workspace's hooks.
 const CATALOG: &str = ".pre-commit-config.yaml";
@@ -56,19 +59,23 @@ trait Host {
 
 /// Manifest policy, independent of the host filesystem and Git process.
 struct StandardCheck<'host> {
+    at_rule: Regex,
     hook: Regex,
     host: &'host dyn Host,
     inline: Regex,
     literal: Regex,
+    url: Regex,
 }
 
 impl<'host> StandardCheck<'host> {
     fn new(host: &'host dyn Host) -> Result<Self, String> {
         Ok(Self {
+            at_rule: Self::pattern(r"@(?:import|use|forward|mixin|include|extend)\b")?,
             hook: Self::pattern(r"\bprek\s+run\s+([a-z][a-z0-9-]*)")?,
             host,
             inline: Self::pattern(r"`[^`\n]+`")?,
             literal: Self::pattern(r"^[\w./-]+$")?,
+            url: Self::pattern(r#"\burl\(\s*['"]?([^'")\s]*)"#)?,
         })
     }
 
@@ -112,6 +119,7 @@ impl<'host> StandardCheck<'host> {
         for instructions in &manifest.instructions {
             count += self.check_instructions(root, &context, instructions, &mut errors)?;
         }
+        count += self.check_design(root, &context, &manifest.design, &mut errors)?;
         if !errors.is_empty() {
             return Err(errors.join("\n"));
         }
@@ -430,6 +438,76 @@ impl<'host> StandardCheck<'host> {
         Ok(count)
     }
 
+    /// Checks the design guide and its stylesheets and returns how many were
+    /// checked.
+    fn check_design(
+        &self,
+        root: &Path,
+        context: &Context,
+        design: &Design,
+        errors: &mut Vec<String>,
+    ) -> Result<usize, String> {
+        let mut count = 0;
+        let guide = Path::new(&design.guide);
+        if let Some(text) = self.read_export(root, guide, errors)? {
+            self.check_text(context, guide, &text, 0..text.len(), errors);
+            count += 1;
+        }
+        for file in &design.files {
+            let path = Path::new(file);
+            let Some(text) = self.read_export(root, path, errors)? else {
+                continue;
+            };
+            if path.extension().is_none_or(|extension| extension != "css") {
+                errors.push(format!(
+                    "{file}: a design stylesheet must be a plain .css file"
+                ));
+            }
+            self.check_text(context, path, &text, 0..text.len(), errors);
+            self.check_stylesheet(path, &text, errors);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    /// Reports Sass and import at-rules, and `url()` targets other than
+    /// `data:` URIs and fragments, so the stylesheet works on its own when
+    /// copied.
+    fn check_stylesheet(&self, path: &Path, text: &str, errors: &mut Vec<String>) {
+        for matched in self.at_rule.find_iter(text) {
+            Self::report(
+                errors,
+                path,
+                text,
+                matched.start(),
+                &format!(
+                    "uses {}; an exported stylesheet is plain CSS that stands alone",
+                    matched.as_str()
+                ),
+            );
+        }
+        for target in self
+            .url
+            .captures_iter(text)
+            .filter_map(|capture| capture.get(1))
+            .filter(|target| {
+                !target.as_str().starts_with("data:") && !target.as_str().starts_with('#')
+            })
+        {
+            Self::report(
+                errors,
+                path,
+                text,
+                target.start(),
+                &format!(
+                    "loads {}; an exported stylesheet loads nothing from a path or the network",
+                    target.as_str()
+                ),
+            );
+        }
+    }
+
     fn headings(text: &str) -> Vec<Heading> {
         let mut headings = Vec::new();
         let mut current = None;
@@ -551,6 +629,7 @@ impl Context {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    design: Design,
     files: Vec<String>,
     instructions: Vec<Instructions>,
     lints: Lints,
@@ -566,7 +645,9 @@ impl Manifest {
     fn exports(&self) -> Vec<PathBuf> {
         self.files
             .iter()
+            .chain(&self.design.files)
             .chain([
+                &self.design.guide,
                 &self.toolchain.file,
                 &self.lints.manifest,
                 &self.rules.directory,
@@ -580,6 +661,14 @@ impl Manifest {
             )
             .collect()
     }
+}
+
+/// The design guide and the stylesheets a web page copies to follow it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Design {
+    files: Vec<String>,
+    guide: String,
 }
 
 #[derive(Deserialize)]

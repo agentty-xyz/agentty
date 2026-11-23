@@ -11,14 +11,17 @@ use std::{env, fs, io};
 use tempfile::{TempDir, tempdir};
 
 /// Repository files the fixture writes and its stub `git ls-files` lists.
-const FILES: [(&str, &str); 9] = [
+const FILES: [(&str, &str); 11] = [
     (
         "standards.toml",
-        "version = 1\nfiles = [\"clippy.toml\"]\nskills = []\n\n[toolchain]\nfile = \
+        "version = 2\nfiles = [\"clippy.toml\"]\nskills = []\n\n[toolchain]\nfile = \
          \"rust-toolchain.toml\"\n\n[lints]\nmanifest = \"Cargo.toml\"\n\n[rules]\ndirectory = \
          \"lint/rules/shared\"\ntests = \"lint/rule-tests/shared\"\n\n[[instructions]]\nfile = \
-         \"AGENTS.md\"\nsections = [\"Shared\"]\n",
+         \"AGENTS.md\"\nsections = [\"Shared\"]\n\n[design]\nguide = \"design/DESIGN.md\"\nfiles \
+         = [\"design/tokens.css\"]\n",
     ),
+    ("design/DESIGN.md", "# Design\n\nLoad `tokens.css` first.\n"),
+    ("design/tokens.css", ":root {\n  --color-bg: #000000;\n}\n"),
     ("clippy.toml", "warn-on-all-wildcard-imports = true\n"),
     (
         "rust-toolchain.toml",
@@ -124,7 +127,7 @@ fn cli_reports_success_and_the_location_of_unportable_exports() {
     assert!(valid.status.success(), "{valid:?}");
     assert!(
         String::from_utf8_lossy(&valid.stdout)
-            .contains("Standards manifest passed (3 exported documents).")
+            .contains("Standards manifest passed (5 exported documents).")
     );
     assert!(!invalid.status.success());
     let report = String::from_utf8_lossy(&invalid.stdout);

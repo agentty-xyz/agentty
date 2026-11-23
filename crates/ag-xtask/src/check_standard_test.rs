@@ -8,7 +8,7 @@ use crate::check_standard::{Host, MockHost, RealHost, StandardCheck, run};
 
 const ROOT: &str = "repo";
 
-const MANIFEST: &str = r#"version = 1
+const MANIFEST: &str = r#"version = 2
 files = [".rustfmt.toml"]
 skills = ["review"]
 
@@ -25,7 +25,18 @@ tests = "lint/shared-tests"
 [[instructions]]
 file = "crates/AGENTS.md"
 sections = ["Shared"]
+
+[design]
+guide = "design/DESIGN.md"
+files = ["design/tokens.css", "design/base.css"]
 "#;
+
+const DESIGN_GUIDE: &str = "# Design
+
+## Colors
+
+- Load `tokens.css`, then `design/base.css`, then page rules.
+";
 
 const GUIDE: &str = "# Crates
 
@@ -99,6 +110,12 @@ impl Fixture {
             "lint/shared-tests/no-todo-test.yml",
             "id: no-todo\nvalid:\n  - fn done() {}\n",
         );
+        fixture.write("design/DESIGN.md", DESIGN_GUIDE);
+        fixture.write("design/tokens.css", ":root {\n  --color-bg: #000000;\n}\n");
+        fixture.write(
+            "design/base.css",
+            ".mark {\n  background: url(\"data:image/svg+xml,<svg/>\"), url(#mark);\n}\n",
+        );
 
         fixture
     }
@@ -168,7 +185,7 @@ fn portable_exports_pass_and_count_each_checked_document() {
     let result = fixture.check();
 
     // Assert
-    assert_eq!(result, Ok(5));
+    assert_eq!(result, Ok(8));
 }
 
 #[test]
@@ -233,6 +250,8 @@ fn manifest_paths_that_do_not_exist_are_reported() {
         "Cargo.toml",
         "skills/review/SKILL.md",
         "crates/AGENTS.md",
+        "design/DESIGN.md",
+        "design/base.css",
     ] {
         fixture.remove(path);
     }
@@ -254,6 +273,53 @@ fn manifest_paths_that_do_not_exist_are_reported() {
             "standards.toml: missing path skills/review/SKILL.md",
             "lint/shared-tests: rule no-todo has no no-todo-test.yml",
             "standards.toml: missing path crates/AGENTS.md",
+            "standards.toml: missing path design/DESIGN.md",
+            "standards.toml: missing path design/base.css",
+        ]
+    );
+}
+
+#[test]
+fn design_exports_must_be_portable_plain_css() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        "standards.toml",
+        &MANIFEST.replace("design/base.css", "design/base.scss"),
+    );
+    fixture.write(
+        "design/DESIGN.md",
+        "# Design\n\n## Colors\n\n- Read `crates/ag-demo/` and run `prek run check`.\n",
+    );
+    fixture.write(
+        "design/tokens.css",
+        "@import url(\"fonts.css\");\n:root {\n  --mark: url(data:image/png;base64,AA);\n}\n.a { \
+         background: url( 'https://example.com/a.png'); }\n",
+    );
+    fixture.write(
+        "design/base.scss",
+        "/* Copied from ag-demo. */ @use \"tokens\";\n",
+    );
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    assert_eq!(
+        errors,
+        [
+            "design/DESIGN.md:5: names workspace crate ag-demo",
+            "design/DESIGN.md:5: names crates/ag-demo/, which standards.toml does not export",
+            "design/DESIGN.md:5: names workspace hook check",
+            "design/tokens.css:1: uses @import; an exported stylesheet is plain CSS that stands \
+             alone",
+            "design/tokens.css:1: loads fonts.css; an exported stylesheet loads nothing from a \
+             path or the network",
+            "design/tokens.css:5: loads https://example.com/a.png; an exported stylesheet loads \
+             nothing from a path or the network",
+            "design/base.scss: a design stylesheet must be a plain .css file",
+            "design/base.scss:1: names workspace crate ag-demo",
+            "design/base.scss:1: uses @use; an exported stylesheet is plain CSS that stands alone",
         ]
     );
 }
@@ -271,8 +337,17 @@ fn invalid_manifests_and_unsupported_versions_fail() {
             "standards.toml: invalid manifest:",
         ),
         (
-            MANIFEST.replace("version = 1", "version = 2"),
-            "standards.toml: unsupported version 2; expected 1",
+            MANIFEST.replace("version = 2", "version = 1"),
+            "standards.toml: unsupported version 1; expected 2",
+        ),
+        // A version 1 manifest has no `[design]` table.
+        (
+            MANIFEST
+                .replace("version = 2", "version = 1")
+                .replace("[design]", "")
+                .replace("guide = \"design/DESIGN.md\"\n", "")
+                .replace("files = [\"design/tokens.css\", \"design/base.css\"]\n", ""),
+            "standards.toml: invalid manifest:",
         ),
     ] {
         let mut fixture = Fixture::new();

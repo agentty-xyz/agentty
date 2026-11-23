@@ -60,10 +60,15 @@ async fn relay_serves_the_web_client_marked_for_the_relay_transport() -> TestRes
     assert!(page.contains(r#"<meta name="agentty-transport" content="relay">"#));
     assert!(!page.contains(r#"content="local""#));
     assert!(page.contains(r#"<script type="module" src="app.js">"#));
-    // The generated design tokens come ahead of the client's own rules.
+    // The generated design tokens, then the shared base styles, come ahead
+    // of the client's own rules.
     let tokens = stylesheet.find("--color-bg: #070b08;");
+    let base = stylesheet.find(".skip-link {");
     let rules = stylesheet.find("--tone-ready:");
-    assert!(tokens.is_some() && tokens < rules, "{stylesheet}");
+    assert!(
+        tokens.is_some() && tokens < base && base < rules,
+        "{stylesheet}"
+    );
     assert!(script.contains(r#"from "./device_key.mjs""#));
     assert!(script.contains(r#"from "./relay.mjs""#));
     assert!(device_key.contains(r#"from "./noise.mjs""#));

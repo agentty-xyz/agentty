@@ -53,13 +53,9 @@ documentation maintainable as it grows.
   edit that file by hand. Keep layout sizes in `sass/site.scss`. Extend an existing
   token before adding a raw visual value: the `check-design-tokens` hook rejects raw
   colors in stylesheets.
-- Keep the terminal identity in the ASCII mark, monospace labels, code, prompts, and
-  demo frames. Use the sans-serif stack for prose and larger interface headings.
-- Use `--color-text` for primary content, `--color-muted` for supporting prose, and
-  `--color-dim` only for short metadata. Use `--color-border-strong` for interactive
-  boundaries and `--color-focus` for keyboard focus.
-- Preserve the shared `:focus-visible` treatment and test both the `green` and `dark`
-  themes when adding controls.
+- Follow `design/DESIGN.md` for color roles, typography, both themes, accessibility, and
+  components. The shared foundations and components it describes live in
+  `design/base.css`, which reaches the site as the generated `sass/_base.scss`.
 - Keep animated feature images behind the `data-motion-demo` loader so off-screen media
   remains deferred. Pair each GIF with a same-named PNG poster so
   `prefers-reduced-motion` users receive a meaningful static preview.

@@ -80,8 +80,15 @@ toolchain, the `[workspace.lints]` tables, the ast-grep rules in `lint/rules/sha
 with their tests, whole skills, and `AGENTS.md` sections named by heading. Rules that
 name this workspace's crates or paths stay in `lint/rules/workspace/`.
 
-Exported means portable. An exported section, skill, or rule names no crate, hook, or
-repository path that only this workspace has, unless the manifest exports that path too,
-and a shared rule selects files by pattern, such as `**/src/**/*.rs`, rather than by one
-of this workspace's directories. The `check-standards` hook enforces this and checks
-that every path, skill, and heading the manifest names exists.
+Its `[design]` table names the design guide, `design/DESIGN.md`, and the stylesheets a
+web page copies beside it, `design/tokens.css` and then `design/base.css`, so another
+workspace's pages can share the same look. The manifest's `version` is 2 since that
+table was added; a reader of version 1 rejects it.
+
+Exported means portable. An exported section, skill, rule, guide, or stylesheet names no
+crate, hook, or repository path that only this workspace has, unless the manifest
+exports that path too, and a shared rule selects files by pattern, such as
+`**/src/**/*.rs`, rather than by one of this workspace's directories. A design
+stylesheet is plain CSS that stands alone: it uses no Sass or `@import`, and its `url()`
+targets are only `data:` URIs or fragments. The `check-standards` hook enforces this and
+checks that every path, skill, and heading the manifest names exists.

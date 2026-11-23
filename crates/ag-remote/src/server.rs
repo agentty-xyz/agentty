@@ -58,13 +58,14 @@ const WEB_ASSETS: [(&str, &str, &str); 18] = [
         "text/html; charset=utf-8",
         include_str!("../assets/index.html"),
     ),
-    // The generated design tokens come first, so the page loads one
-    // stylesheet.
+    // The generated design tokens and shared base styles come first, so the
+    // page loads one stylesheet.
     (
         "/app.css",
         "text/css; charset=utf-8",
         concat!(
             include_str!("../assets/tokens.css"),
+            include_str!("../assets/base.css"),
             include_str!("../assets/app.css")
         ),
     ),

@@ -17,27 +17,44 @@ const SOURCE: &str = "design/tokens.json";
 /// Command that regenerates the stylesheets.
 const REGENERATE: &str = "cargo run -p ag-xtask -- design-tokens";
 
+/// Shared foundations and components that each surface loads a copy of.
+const BASE: &str = "design/base.css";
+
 /// Header of the generated surface stylesheets.
 const SURFACE_HEADER: &str = "/* Generated from design/tokens.json by `cargo run -p ag-xtask -- \
                               design-tokens`. Do not edit. */";
 
+/// Header of the surface copies of the base stylesheet.
+const BASE_HEADER: &str = "/* Generated from design/base.css by `cargo run -p ag-xtask -- \
+                           design-tokens`. Do not edit. */";
+
 /// Generated stylesheets. The shared one names no workspace path, so another
 /// workspace can copy it unchanged.
-const OUTPUTS: [Output; 3] = [
+const OUTPUTS: [Output; 5] = [
     Output {
+        content: Content::Tokens(None),
         header: "/* Generated from tokens.json. Do not edit. */",
         path: "design/tokens.css",
-        surface: None,
     },
     Output {
+        content: Content::Tokens(Some("docs-site")),
         header: SURFACE_HEADER,
         path: "docs/site/sass/_tokens.scss",
-        surface: Some("docs-site"),
     },
     Output {
+        content: Content::Copy(BASE),
+        header: BASE_HEADER,
+        path: "docs/site/sass/_base.scss",
+    },
+    Output {
+        content: Content::Tokens(Some("remote-client")),
         header: SURFACE_HEADER,
         path: "crates/ag-remote/assets/tokens.css",
-        surface: Some("remote-client"),
+    },
+    Output {
+        content: Content::Copy(BASE),
+        header: BASE_HEADER,
+        path: "crates/ag-remote/assets/base.css",
     },
 ];
 
@@ -76,9 +93,18 @@ trait Host {
 
 /// One generated stylesheet.
 struct Output {
+    content: Content,
     header: &'static str,
     path: &'static str,
-    surface: Option<&'static str>,
+}
+
+/// What a generated stylesheet holds.
+enum Content {
+    /// A copy of a hand-written stylesheet, so a surface that must not load
+    /// files from outside its own directory can still use it.
+    Copy(&'static str),
+    /// The shared tokens, with a surface's own tokens when it names one.
+    Tokens(Option<&'static str>),
 }
 
 /// Token policy, independent of the host filesystem and Git process.
@@ -103,7 +129,9 @@ impl DesignTokens<'_> {
         })?;
         let mut errors = Vec::new();
         for surface in set.surfaces() {
-            if !OUTPUTS.iter().any(|output| output.surface == Some(surface)) {
+            if !OUTPUTS.iter().any(
+                |output| matches!(output.content, Content::Tokens(Some(name)) if name == surface),
+            ) {
                 errors.push(format!(
                     "{SOURCE}: surface {surface} has no generated stylesheet"
                 ));
@@ -134,7 +162,18 @@ impl DesignTokens<'_> {
         check: bool,
         errors: &mut Vec<String>,
     ) -> Result<(), String> {
-        let text = set.stylesheet(output.header, output.surface);
+        let text = match output.content {
+            Content::Copy(source) => {
+                let source = root.join(source);
+                let text = self
+                    .host
+                    .read(&source)
+                    .map_err(|error| format!("Failed to read {}: {error}", source.display()))?;
+
+                format!("{}\n{text}", output.header)
+            }
+            Content::Tokens(surface) => set.stylesheet(output.header, surface),
+        };
         let path = root.join(output.path);
         if !check {
             return self
