@@ -1818,8 +1818,9 @@ test("Merge is off for a session with a review request, and says why", () => {
   assert.equal(byId("merge").hidden, false);
   assert.equal(byId("merge").disabled, true);
   assert.equal(byId("sheet-merge").disabled, true);
-  assert.equal(byId("merge").title, "Merge is off: merge its pull request instead");
-  assert.equal(byId("sheet-merge-note").textContent, "merge its pull request instead");
+  assert.equal(byId("merge").title, "Merge is off: merge the session's pull request instead");
+  // The sheet's note stays short enough for a phone.
+  assert.equal(byId("sheet-merge-note").textContent, "has a pull request");
 });
 
 test("the header names a merge conflict with the base branch", () => {

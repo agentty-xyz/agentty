@@ -35,8 +35,10 @@ const QUEUEING_STATUSES = new Set(["InProgress", "Rebasing"]);
 // What a read-only status says instead of the composer, when its label
 // alone would not.
 const READ_ONLY_LABELS = { Queued: "Queued to merge" };
-// Why Merge is off for a session with a linked review request.
-const MERGE_ON_FORGE_HINT = "merge its pull request instead";
+// Why Merge is off for a session with a linked review request: the
+// header button's tooltip, and the short note that fits the phone sheet.
+const MERGE_OFF_TITLE = "Merge is off: merge the session's pull request instead";
+const MERGE_OFF_NOTE = "has a pull request";
 
 // The kind a message renders as. A kind this client does not know, from a
 // newer Agentty, renders as a notice.
@@ -374,8 +376,8 @@ export function createChat({
     elements.sheetDiffLabel.textContent = isDiffOpen ? "Back to chat" : "Diff";
     elements.merge.hidden = !actions.merge;
     elements.merge.disabled = !actions.mergeEnabled || isActing("merge_session") || !state.isConnected;
-    elements.merge.title = hasReviewRequest ? "Merge is off: " + MERGE_ON_FORGE_HINT : "";
-    elements.sheetMergeNote.textContent = hasReviewRequest ? MERGE_ON_FORGE_HINT : "asks first";
+    elements.merge.title = hasReviewRequest ? MERGE_OFF_TITLE : "";
+    elements.sheetMergeNote.textContent = hasReviewRequest ? MERGE_OFF_NOTE : "asks first";
     elements.sheetMerge.hidden = !actions.merge;
     elements.sheetMerge.disabled = elements.merge.disabled;
     renderPublish(actions);
