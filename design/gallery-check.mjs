@@ -322,7 +322,11 @@ export async function capture(page, html, viewport) {
   const layout = [...LAYOUT_PROPERTIES];
   const styles = await page.evaluate(collectPage, { layout: layout, mode: "styles", motion: true, selector: SPECIMENS });
   await page.evaluate(collectPage, { css: FREEZE, mode: "freeze" });
-  Object.assign(styles, await page.evaluate(collectPage, { layout: layout, mode: "styles", motion: false, selector: SPECIMENS }));
+  // Each element's motion read before the freeze joins the rest read after.
+  const frozen = await page.evaluate(collectPage, { layout: layout, mode: "styles", motion: false, selector: SPECIMENS });
+  for (const [key, values] of Object.entries(frozen)) {
+    styles[key] = { ...styles[key], ...values };
+  }
   const nodes = await page.nodes(SPECIMENS);
   for (const state of STATES) {
     for (const element of elements.filter((candidate) => candidate[state.target])) {

@@ -458,6 +458,31 @@ test("capture forces each state on a target's ancestors too, and reads them", as
   assert.equal(result.styles["focus table > tr:0 > td:0 | table > tr:0 > td:0"], undefined);
 });
 
+test("check compares motion read before the freeze alongside everything read after it", async () => {
+  // Arrange: a surface that only shortens the link's transition, which
+  // the freeze would otherwise hide.
+  const page = new FakePage((html) => {
+    const body = specimenBody();
+    if (html.includes("STILL")) {
+      body.children[0].children[0].styles["transition-duration"] = "0s";
+    }
+
+    return fakeWindow(body);
+  });
+
+  // Act
+  const rest = await capture(page, "", VIEWPORT);
+  const result = await check(fakeBrowser(page), { gallery: GALLERY, reference: "", surfaces: [{ css: "STILL", name: "site" }] });
+
+  // Assert
+  assert.deepEqual(rest.styles["badge > a:0"], { color: "accent", "transition-duration": "0.14s" });
+  assert.equal(result.passed, false);
+  assert.deepEqual(
+    result.surfaces[0].differences.filter((difference) => difference.variant === "green, desktop"),
+    [{ actual: "0s", expected: "0.14s", key: "badge > a:0", property: "transition-duration", variant: "green, desktop" }],
+  );
+});
+
 test("check fails when the gallery marks no specimen", async () => {
   const page = new FakePage(() => fakeWindow(new FakeElement("body")));
 
