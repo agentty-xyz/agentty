@@ -1,11 +1,11 @@
 # Agentty Design
 
-This guide describes how Agentty's web pages look and why. The values it names live in
-`tokens.json`, in the W3C Design Tokens format, and reach pages as CSS custom properties
-through `tokens.css`. `base.css` holds the foundations and components that the pages
-share. Load `tokens.css` first, then `base.css`, then a page's own rules, and build
-every color, font, radius, shadow, and transition from the custom properties instead of
-writing values by hand.
+This guide describes how Agentty's web pages look and why. The values it names reach
+pages as CSS custom properties through `tokens.css`, which is generated from a token
+source in the W3C Design Tokens format. `base.css` holds the foundations and components
+that the pages share. Load `tokens.css` first, then `base.css`, then a page's own rules,
+and build every color, font, radius, shadow, and transition from the custom properties
+instead of writing values by hand.
 
 ## Overview
 
@@ -96,10 +96,8 @@ Never let color alone carry a state: always pair the dot with its label.
 ### Accessibility
 
 Text meets WCAG 2 AA contrast, 4.5:1, and focus rings, status dots, and outlines that
-identify a control meet 3:1. `tokens.json` lists the foreground and background pairs the
-pages use, and a contrast check measures each pair in both themes. A pair that falls
-short today is recorded there with its measured ratio and reason, and the record must
-change when either color does. Known shortfalls:
+identify a control meet 3:1, for every foreground and background pair the pages use, in
+both themes. These pairs fall short today:
 
 - In the green theme, `--color-dim` text on `--color-surface-raised` reaches only
   4.41:1, and on `--color-surface-interactive` 4.01:1. Inside raised panels and on
@@ -146,8 +144,8 @@ as follows:
 
 The terminal also has success and info roles, and tinted surfaces for diffs and prompts,
 which the web pages do not use. Some of its status colors differ from the web tones:
-done states use success green, review states info blue, and syncing and merging the full
-accent.
+draft states use muted text where the web uses the dim tone, done states use success
+green, review states info blue, and syncing and merging the full accent.
 
 ## Typography
 
@@ -248,8 +246,8 @@ Pages build these from the same tokens when they need them:
 
 - Do build every color, font, radius, shadow, and transition from the custom properties;
   don't write a hex value, `rgb()`, or a named color in a stylesheet.
-- Do change a value in `tokens.json` and regenerate `tokens.css`; don't edit generated
-  files.
+- Do change a value only at its token source and regenerate `tokens.css`; don't edit
+  `tokens.css` or override a token in page rules.
 - Do keep one primary action per view; don't fill several buttons with the accent.
 - Do pair every status color with a label; don't signal state by color alone.
 - Do use `--color-muted` for text people must read in raised panels; don't use
