@@ -154,24 +154,15 @@ function remove(storage, key) {
   return change(storage, () => storage.removeItem(key));
 }
 
-// Runs `apply` on `storage` and reports whether storage took it. Full or
-// blocked storage refuses, and the caller keeps the page's own copy.
+// Runs `apply` on `storage` and reports whether storage took it.
 function change(storage, apply) {
-  const isTaken = attempt(apply);
-  if (!isTaken) {
+  try {
+    apply();
+  } catch (_error) {
+    // Full or blocked storage refused the change; the caller keeps the
+    // page's own copy from here on.
     refusing.add(storage);
   }
 
-  return isTaken;
-}
-
-// Runs `apply` and reports whether it finished without throwing.
-function attempt(apply) {
-  try {
-    apply();
-
-    return true;
-  } catch (_error) {
-    return false;
-  }
+  return !refusing.has(storage);
 }
