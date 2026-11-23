@@ -19,7 +19,7 @@ use prost::Message as _;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::{Cli, ExperimentalFeatures, parse_relay_url, run, run_with_analytics};
+use super::{Cli, ExperimentalFeatures, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
 const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
@@ -125,47 +125,6 @@ fn cli_gates_remote_control_behind_experimental_remote() {
         with_hosts.remote_control_host,
         ["box.tailnet.ts.net", "localhost.example"]
     );
-}
-
-#[test]
-fn relay_url_needs_a_websocket_scheme_and_a_host() {
-    // Arrange
-    let accepted = [
-        ("wss://relay.example/", "wss://relay.example"),
-        ("ws://127.0.0.1:8787", "ws://127.0.0.1:8787"),
-        (" wss://relay.example/base ", "wss://relay.example/base"),
-    ];
-    let rejected = [
-        "https://relay.example",
-        "relay.example",
-        "wss://",
-        "wss:///path",
-        "wss://relay.example/?token=1",
-        "wss://relay.example/#x",
-        "wss://relay example",
-        "wss://user:token@relay.example",
-    ];
-
-    // Act
-    let parsed: Vec<_> = accepted
-        .iter()
-        .map(|(value, _)| parse_relay_url(value))
-        .collect();
-    let refused: Vec<_> = rejected
-        .iter()
-        .map(|value| parse_relay_url(value))
-        .collect();
-
-    // Assert
-    for ((_, expected), parsed) in accepted.iter().zip(parsed) {
-        assert_eq!(parsed.as_deref(), Ok(*expected));
-    }
-    for refused in refused {
-        assert_eq!(
-            refused,
-            Err("expected a relay URL such as wss://relay.example".to_string())
-        );
-    }
 }
 
 #[test]

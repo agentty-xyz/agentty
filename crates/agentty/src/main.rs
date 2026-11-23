@@ -12,6 +12,7 @@ use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
 use agentty::app::{AGENTTY_WT_DIR, App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
+use agentty::domain::remote_url::parse_relay_url;
 use agentty::infra::db::{
     AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
@@ -107,28 +108,6 @@ async fn run(
     let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
 
     run_application(cli, runtime).with_context(context).await
-}
-
-/// Accepts a relay base URL: `ws://` or `wss://`, a host without
-/// credentials, and no query or fragment, since the pairing link appends its
-/// own fragment. A trailing slash is dropped.
-fn parse_relay_url(value: &str) -> Result<String, String> {
-    let url = value.trim().trim_end_matches('/');
-    let host = url
-        .strip_prefix("wss://")
-        .or_else(|| url.strip_prefix("ws://"))
-        .unwrap_or_default();
-    let authority = host.split('/').next().unwrap_or_default();
-    // Credentials would end up in the pairing link and its QR code.
-    let is_valid = !authority.is_empty()
-        && !authority.contains('@')
-        && !host.contains(['?', '#'])
-        && !host.contains(char::is_whitespace);
-    if !is_valid {
-        return Err("expected a relay URL such as wss://relay.example".to_string());
-    }
-
-    Ok(url.to_string())
 }
 
 /// Reports an OTLP setup failure using its bounded, credential-free message.
