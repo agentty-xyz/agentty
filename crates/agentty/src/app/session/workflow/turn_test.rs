@@ -17,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    BaseBranchSnapshot, MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events,
-    fresh_turn_cancel_token, live_transcript_source, load_session_response_style,
-    load_title_reasoning_level, prepare_turn_request, sandbox_notice_target,
+    MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events, fresh_turn_cancel_token,
+    live_transcript_source, load_session_response_style, load_title_reasoning_level,
+    prepare_turn_request, sandbox_notice_target,
 };
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
@@ -441,99 +441,6 @@ async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pa
             .count(),
         1
     );
-}
-
-/// Returns a Git client whose base branch resolves to `commits` in order,
-/// with `None` for an unresolvable branch.
-fn base_branch_git(commits: &'static [Option<&'static str>]) -> MockGitClient {
-    let mut git_client = MockGitClient::new();
-    let mut remaining = commits.iter();
-    git_client
-        .expect_ref_hash()
-        .withf(|_, reference| reference == "refs/heads/main")
-        .times(commits.len())
-        .returning(move |_, _| {
-            let commit = remaining.next().copied().flatten();
-            Box::pin(async move {
-                commit
-                    .map(str::to_string)
-                    .ok_or_else(|| GitError::OutputParse("unknown revision".into()))
-            })
-        });
-
-    git_client
-}
-
-/// Returns a successful turn result.
-fn completed_turn() -> TurnResult {
-    TurnResult {
-        assistant_message: AgentResponse::plain("done"),
-        context_reset: false,
-        harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
-        provider_conversation_id: None,
-    }
-}
-
-#[tokio::test]
-async fn harness_turns_that_move_the_base_branch_fail_before_publishing() {
-    // Arrange
-    let (mut context, _) = persisted_turn_test_context().await;
-    context.session_agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
-    // Capture, unchanged, moved, deleted, then an unresolvable capture; a
-    // failed turn reads nothing.
-    context.git_client = Arc::new(base_branch_git(&[
-        Some("base-1"),
-        Some("base-1"),
-        Some("moved"),
-        None,
-        None,
-    ]));
-    let env = resolved_turn_test_env();
-
-    // Act
-    let snapshot = BaseBranchSnapshot::capture(&context, &env)
-        .await
-        .expect("base branch snapshot");
-    let verify = |turn_result| BaseBranchSnapshot::verify(Some(&snapshot), &context, turn_result);
-    let unchanged = verify(Ok(completed_turn())).await;
-    let moved = verify(Ok(completed_turn())).await;
-    let failed = verify(Err(AgentError::Backend("provider".to_string()))).await;
-    let deleted = verify(Ok(completed_turn())).await;
-    let unresolvable = BaseBranchSnapshot::capture(&context, &env).await;
-    let without_snapshot = BaseBranchSnapshot::verify(None, &context, Ok(completed_turn())).await;
-
-    // Assert
-    assert!(unchanged.is_ok());
-    let moved = moved.expect_err("a moved base fails the turn").to_string();
-    assert!(moved.contains("base branch `main` moved"), "{moved}");
-    assert!(
-        moved.contains("git update-ref refs/heads/main base-1"),
-        "{moved}"
-    );
-    assert!(matches!(failed, Err(AgentError::Backend(message)) if message == "provider"));
-    assert!(deleted.is_err());
-    assert!(unresolvable.is_none());
-    assert!(without_snapshot.is_ok());
-}
-
-#[tokio::test]
-async fn base_branch_snapshots_cover_only_harness_sessions_with_a_base() {
-    // Arrange
-    let (mut context, _) = persisted_turn_test_context().await;
-    context.git_client = Arc::new(base_branch_git(&[]));
-    let env = resolved_turn_test_env();
-    let other_agent = BaseBranchSnapshot::capture(&context, &env).await;
-    context.session_agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
-    context.session_id = "missing".into();
-
-    // Act
-    let without_base = BaseBranchSnapshot::capture(&context, &env).await;
-
-    // Assert
-    assert!(other_agent.is_none());
-    assert!(without_base.is_none());
 }
 
 #[tokio::test]

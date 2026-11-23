@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
@@ -738,6 +739,9 @@ struct SessionWorkerRebaseAssistClient {
     db: AppRepositories,
     /// Session worktree folder where the utility prompt runs.
     folder: PathBuf,
+    /// Git boundary that checks the session's base branch around Harness
+    /// assist turns.
+    git_client: Arc<dyn GitClient>,
     /// Main repository checkout that must remain read-only during assist
     /// turns, or `None` when the shared repository is bare and has no main
     /// working checkout.
@@ -762,6 +766,7 @@ impl SessionWorkerRebaseAssistClient {
             child_pid: Arc::clone(&context.child_pid),
             db: context.db.clone(),
             folder: context.folder.clone(),
+            git_client: Arc::clone(&context.git_client),
             main_checkout_root,
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
@@ -831,13 +836,25 @@ impl SessionWorkerRebaseAssistClient {
             transcript: &self.transcript,
         };
 
+        let base_branch_scope = BaseBranchScope {
+            db: &self.db,
+            folder: &self.folder,
+            git_client: self.git_client.as_ref(),
+            session_id: &self.session_id,
+        };
+        let base_branch =
+            BaseBranchSnapshot::capture(&base_branch_scope, self.session_agent.kind()).await?;
+
         let (turn_result, ()) = tokio::join!(
             self.run_turn_with_cancellation(turn_cancel_token, req, event_tx),
             sandbox_notices.relay(relayed_rx, relay_tx),
         );
         let activity = consumer.await.unwrap_or_default();
         activity.clear_live(&self.app_event_tx, &self.session_id);
-        let turn_result = turn_result.map_err(turn::session_error_from_agent_error)?;
+        let turn_result =
+            BaseBranchSnapshot::verify(base_branch.as_ref(), &base_branch_scope, turn_result)
+                .await
+                .map_err(turn::session_error_from_agent_error)?;
 
         self.append_assist_answer(&turn_result.assistant_message)
             .await;

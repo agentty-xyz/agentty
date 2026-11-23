@@ -10,6 +10,7 @@ use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::base_branch::BaseBranchSnapshot;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
@@ -93,6 +94,12 @@ async fn execute(
         Arc::clone(&context.child_pid),
     ));
     let permission_mode = prepared.permission_mode;
+    let base_branch_scope = turn::base_branch_scope(context);
+    let base_branch = BaseBranchSnapshot::capture(
+        &base_branch_scope,
+        history.context.context.assignment.agent.kind(),
+    )
+    .await?;
     let sandbox_notices = turn::sandbox_notice_target(context);
     let (result, ()) = tokio::join!(
         client.submit(prepared, event_tx, cancellation.clone()),
@@ -101,7 +108,9 @@ async fn execute(
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);
-    let result = result.map_err(turn::session_error_from_agent_error)?;
+    let result = BaseBranchSnapshot::verify(base_branch.as_ref(), &base_branch_scope, result)
+        .await
+        .map_err(turn::session_error_from_agent_error)?;
     cleanup.map_err(turn::session_error_from_agent_error)?;
     check_cancellation(&cancellation)?;
     let assignment = &history.context.context.assignment;

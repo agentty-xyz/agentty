@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use super::base_branch::BaseBranchSnapshot;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
@@ -196,6 +197,9 @@ async fn execute(
         context.session_id.clone(),
         context.child_pid.clone(),
     ));
+    let base_branch_scope = turn::base_branch_scope(context);
+    let base_branch =
+        BaseBranchSnapshot::capture(&base_branch_scope, dispatch.node.agent.kind()).await?;
     let sandbox_notices = turn::sandbox_notice_target(context);
     let (result, ()) = tokio::join!(
         client.submit(prepared, event_tx, task.cancellation.as_ref().clone()),
@@ -204,7 +208,9 @@ async fn execute(
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);
-    let result = result.map_err(turn::session_error_from_agent_error)?;
+    let result = BaseBranchSnapshot::verify(base_branch.as_ref(), &base_branch_scope, result)
+        .await
+        .map_err(turn::session_error_from_agent_error)?;
     cleanup.map_err(turn::session_error_from_agent_error)?;
     check_cancellation(&task.cancellation)?;
     let body = serde_json::json!(result.assistant_message).to_string();

@@ -264,9 +264,10 @@ model.
   unauthenticated inside a session.
 - Git writes stay limited: commands can commit on the session branch, but cannot write
   Git configuration, hooks, replacement refs, grafts, or object alternates, and
-  Agentty's own Git ignores replacement refs and grafts. A turn that moves the session's
-  base branch fails before Agentty commits or publishes anything, with the command to
-  restore the branch.
+  Agentty's own Git ignores replacement refs and grafts. A turn, task, or graph node
+  that moves or deletes the session's base branch fails before Agentty commits or
+  publishes anything, with the commit to restore, and no turn starts while the base does
+  not resolve.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
   removed with the session; host tools and other sessions never read it. Each new

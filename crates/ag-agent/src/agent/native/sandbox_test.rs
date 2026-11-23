@@ -229,6 +229,8 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
         .expect("planted config");
     std::os::unix::fs::symlink("/etc/hosts", cargo_home.join("credentials.toml"))
         .expect("planted link");
+    std::fs::write(temporary.join(".agentty-discarded-cargo-entry"), "")
+        .expect("planted discard entry");
     let outside = root.path().join("outside");
     std::fs::create_dir_all(&outside).expect("outside directory");
     std::fs::write(outside.join("config.toml"), "kept").expect("outside file");
@@ -241,7 +243,8 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
     let environment = BTreeMap::new();
 
     // Act
-    let planted = CommandSandbox::prepare(&data_root, temporary, root.path(), &environment).await;
+    let planted =
+        CommandSandbox::prepare(&data_root, temporary.clone(), root.path(), &environment).await;
     let linked = CommandSandbox::prepare(
         &data_root,
         linked_temporary.clone(),
@@ -263,6 +266,7 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
         .expect("Cargo directory")
         .count();
     assert_eq!(left, 0, "planted files must be gone");
+    assert!(std::fs::symlink_metadata(temporary.join(".agentty-discarded-cargo-entry")).is_err());
     for temporary in [linked_temporary, filed_temporary] {
         let metadata = std::fs::symlink_metadata(temporary.join("cargo")).expect("Cargo directory");
         assert!(metadata.is_dir());
@@ -270,6 +274,53 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
     assert_eq!(
         std::fs::read_to_string(outside.join("config.toml")).expect("outside file"),
         "kept"
+    );
+}
+
+#[test]
+/// Clears the Cargo directory that was opened, not whatever a command
+/// swaps in at its path afterwards: a link to a directory outside the
+/// temporary directory never redirects the removals or the host link.
+fn clearing_follows_the_opened_cargo_directory_not_a_swapped_link() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let temporary = root.path().join("tmp");
+    let cargo_home = temporary.join("cargo");
+    std::fs::create_dir_all(cargo_home.join("credentials")).expect("planted directory");
+    std::fs::write(cargo_home.join("config.toml"), "planted").expect("planted config");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(outside.join("credentials")).expect("outside directory");
+    std::fs::write(outside.join("config.toml"), "kept").expect("outside file");
+    let host_config = root.path().join("host-config.toml");
+    let flags =
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW;
+    let temporary_handle =
+        rustix::fs::open(&temporary, flags, rustix::fs::Mode::empty()).expect("temporary handle");
+    let cargo_handle =
+        rustix::fs::open(&cargo_home, flags, rustix::fs::Mode::empty()).expect("Cargo handle");
+    let opened = temporary.join("opened");
+    std::fs::rename(&cargo_home, &opened).expect("move the opened directory");
+    std::os::unix::fs::symlink(&outside, &cargo_home).expect("swapped link");
+
+    // Act
+    let cleared = CommandSandbox::clear_cargo_home(
+        &temporary,
+        &temporary_handle,
+        &cargo_handle,
+        Some(&host_config),
+    );
+
+    // Assert
+    assert!(cleared.is_ok(), "{cleared:?}");
+    assert_eq!(
+        std::fs::read_to_string(outside.join("config.toml")).expect("outside file"),
+        "kept"
+    );
+    assert!(outside.join("credentials").is_dir());
+    assert!(std::fs::symlink_metadata(opened.join("credentials")).is_err());
+    assert_eq!(
+        std::fs::read_link(opened.join("config.toml")).expect("host link"),
+        host_config
     );
 }
 

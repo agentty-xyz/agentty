@@ -8,6 +8,7 @@
 //! while utility prompts refuse to run commands at all.
 
 use std::collections::BTreeMap;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -16,6 +17,7 @@ use ag_harness::RunEventKind;
 use ag_harness::bash::{BashConfig, BashError};
 use ag_harness::event::Item;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
+use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
 
 use super::config::{agentty_home, chatgpt_auth_file};
 
@@ -38,6 +40,9 @@ const CARGO_CONFIG_FILES: [&str; 2] = ["config.toml", "config"];
 /// Entries of the sandbox `CARGO_HOME` that Cargo reads as configuration or
 /// credentials, replaced before every turn whatever commands left there.
 const CARGO_TRUSTED_FILES: [&str; 4] = ["config.toml", "config", "credentials.toml", "credentials"];
+/// Entry of the temporary directory that a planted directory in place of a
+/// trusted Cargo file moves to before it is removed.
+const DISCARDED_CARGO_ENTRY: &str = ".agentty-discarded-cargo-entry";
 /// Tool caches redirected into the temporary directory, by variable and
 /// subdirectory: commands cannot write the shared caches in the home
 /// directory, which host tools would later trust.
@@ -83,14 +88,15 @@ impl CommandSandbox {
         workspace: &Path,
         environment: &BTreeMap<String, String>,
     ) -> Result<Self, String> {
-        let cargo_home = temporary_directory.join(CARGO_HOME_DIRECTORY);
-        Self::reset_cargo_home(&cargo_home)
-            .await
-            .map_err(|error| format!("Failed to prepare the sandbox Cargo directory: {error}"))?;
-        if let Some(config) = Self::host_cargo_config(workspace, environment).await {
-            // Best effort: without the link only those settings are lost.
-            let _ = tokio::fs::symlink(config, cargo_home.join(CARGO_CONFIG_FILES[0])).await;
-        }
+        let host_config = Self::host_cargo_config(workspace, environment).await;
+        let directory = temporary_directory.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::reset_cargo_home(&directory, host_config.as_deref())
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .flatten()
+        .map_err(|error| format!("Failed to prepare the sandbox Cargo directory: {error}"))?;
 
         Ok(Self::new(data_root, temporary_directory, environment))
     }
@@ -147,30 +153,93 @@ impl CommandSandbox {
         Ok(config)
     }
 
-    /// Makes `cargo_home` a real directory without the Cargo configuration
-    /// and credential files commands may have planted, never following a
-    /// link: a planted `cargo_home` link or file is removed itself, so
-    /// nothing outside the temporary directory is touched.
+    /// Makes the `CARGO_HOME` of `temporary_directory` a real directory
+    /// without the Cargo configuration and credential files commands may
+    /// have planted, then links `host_config` into it.
+    ///
+    /// Only `temporary_directory` is resolved by path: commands cannot
+    /// replace it, because its parent is hidden from them. Its Cargo
+    /// directory is opened once without following links and every later
+    /// change is made relative to that handle, so a link that a surviving
+    /// command swaps in meanwhile cannot redirect them outside.
     ///
     /// # Errors
     /// Returns the filesystem error that keeps it from being made safe.
-    async fn reset_cargo_home(cargo_home: &Path) -> std::io::Result<()> {
-        if let Ok(metadata) = tokio::fs::symlink_metadata(cargo_home).await
-            && !metadata.is_dir()
-        {
-            tokio::fs::remove_file(cargo_home).await?;
+    fn reset_cargo_home(
+        temporary_directory: &Path,
+        host_config: Option<&Path>,
+    ) -> std::io::Result<()> {
+        std::fs::create_dir_all(temporary_directory)?;
+        let temporary = fs::open(temporary_directory, Self::directory_flags(), Mode::empty())?;
+        let planted = fs::statat(&temporary, CARGO_HOME_DIRECTORY, AtFlags::SYMLINK_NOFOLLOW)
+            .is_ok_and(|stat| !FileType::from_raw_mode(stat.st_mode).is_dir());
+        if planted {
+            fs::unlinkat(&temporary, CARGO_HOME_DIRECTORY, AtFlags::empty())?;
         }
-        tokio::fs::create_dir_all(cargo_home).await?;
+        // An existing directory is fine; any other failure fails the open.
+        let _ = fs::mkdirat(&temporary, CARGO_HOME_DIRECTORY, Mode::RWXU);
+        let cargo = fs::openat(
+            &temporary,
+            CARGO_HOME_DIRECTORY,
+            Self::directory_flags(),
+            Mode::empty(),
+        )?;
+
+        Self::clear_cargo_home(temporary_directory, &temporary, &cargo, host_config)
+    }
+
+    /// Returns the flags that open a directory handle without following a
+    /// final link.
+    fn directory_flags() -> OFlags {
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+    }
+
+    /// Removes the trusted Cargo files from the open `cargo` directory and
+    /// links `host_config` in their place. A planted directory is first
+    /// moved out of `cargo` into `temporary`, the handle of
+    /// `temporary_directory`, so its removal resolves no command-writable
+    /// path but its own name.
+    ///
+    /// # Errors
+    /// Returns the filesystem error that keeps an entry from being removed.
+    fn clear_cargo_home(
+        temporary_directory: &Path,
+        temporary: &OwnedFd,
+        cargo: &OwnedFd,
+        host_config: Option<&Path>,
+    ) -> std::io::Result<()> {
         for name in CARGO_TRUSTED_FILES {
-            let path = cargo_home.join(name);
-            match tokio::fs::symlink_metadata(&path).await {
-                Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(&path).await?,
-                Ok(_) => tokio::fs::remove_file(&path).await?,
+            match fs::statat(cargo, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) if FileType::from_raw_mode(stat.st_mode).is_dir() => {
+                    let discarded = temporary_directory.join(DISCARDED_CARGO_ENTRY);
+                    Self::remove_discarded(&discarded)?;
+                    fs::renameat(cargo, name, temporary, DISCARDED_CARGO_ENTRY)?;
+                    Self::remove_discarded(&discarded)?;
+                }
+                Ok(_) => fs::unlinkat(cargo, name, AtFlags::empty())?,
                 Err(_) => {}
             }
         }
+        if let Some(config) = host_config {
+            // Best effort: without the link only those settings are lost.
+            let _ = fs::symlinkat(config, cargo, CARGO_CONFIG_FILES[0]);
+        }
 
         Ok(())
+    }
+
+    /// Removes `path`, an entry of the temporary directory, whatever it is:
+    /// a link is removed itself, and the standard library removes a
+    /// directory tree without following the links inside it.
+    ///
+    /// # Errors
+    /// Returns the filesystem error that keeps `path` from being removed.
+    fn remove_discarded(path: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(path),
+            Ok(_) => std::fs::remove_file(path),
+            Err(_) => Ok(()),
+        }
     }
 
     /// Returns the host's Cargo configuration file, unless Cargo finds it
