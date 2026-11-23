@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
@@ -22,6 +23,7 @@ use ag_harness::provider::{
     ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider,
     chatgpt_auth_file_in,
 };
+use ag_harness::sandbox::Sandbox;
 use ag_harness::{
     Harness, HarnessError, Model, ModelError, OutputSchema, Repository, RepositoryError,
     RunRequest, ToolSet, TurnInput,
@@ -34,7 +36,7 @@ use ag_session::{
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
-use super::sandbox::{self, CommandSandbox};
+use super::sandbox::CommandSandbox;
 use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
@@ -61,6 +63,12 @@ const BASH_EXECUTABLE: &str = "/bin/bash";
 /// grants, the Bash executable, or the `ag-harness` sandbox enforcement
 /// change.
 const BASH_POLICY_REVISION: &str = "agentty-native-sandbox-1";
+/// Directory beside a session's harness database that its commands use as
+/// `TMPDIR` and for tool caches.
+const SESSION_TEMPORARY_DIRECTORY: &str = "tmp";
+/// Directory under the data root holding one temporary directory per
+/// running utility prompt. Agentty session ids never start with a dot.
+const UTILITY_TEMPORARY_PARENT: &str = ".utility";
 /// Deadline for one `bash` call.
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 /// Environment variable naming the model the OpenAI-compatible server serves
@@ -82,6 +90,17 @@ const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 6] = [
     "MODEL_",
     "OPENAI_",
 ];
+/// Prefixes of variable names withheld from `bash` as credentials, matched
+/// case-insensitively.
+const CREDENTIAL_PREFIXES: [&str; 5] = ["AWS_", "GH_", "GITHUB_", "GITLAB_", "GLAB_"];
+/// Endings of variable names withheld from `bash` as credentials, matched
+/// case-insensitively: `*_KEY` (including `*_API_KEY`) and the connection
+/// strings that embed passwords.
+const CREDENTIAL_SUFFIXES: [&str; 3] = ["_KEY", "DATABASE_URL", "_DSN"];
+/// Words whose presence anywhere in a variable name withholds it from
+/// `bash` as a credential, matched case-insensitively, such as
+/// `NPM_TOKEN` or `CARGO_REGISTRY_TOKEN`.
+const CREDENTIAL_WORDS: [&str; 5] = ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
 /// Variables granted to `bash` first, so the harness environment limit never
 /// drops them.
 const PRIORITY_ENVIRONMENT: [&str; 17] = [
@@ -119,10 +138,9 @@ type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>
 ///
 /// Each session keeps its durable harness history in
 /// `<data_root>/<session id>/`, outside the session worktree; hosts remove
-/// that directory when they delete the session. Commands use
-/// `<data_root>/sandbox-cache/<project>/` as their temporary directory and
-/// tool cache, shared by the repository's sessions; deleting it only drops
-/// cached downloads. Commands cannot read the rest of the data root.
+/// that directory when they delete the session. Its `tmp` directory is the
+/// `TMPDIR` and tool cache of the session's commands, which cannot read the
+/// rest of the data root; utility prompts get a fresh one each.
 ///
 /// `bash` runs inside the native sandbox, which needs the host to call
 /// [`super::dispatch_sandbox_helper`] first in `main`; where the sandbox
@@ -131,6 +149,9 @@ type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>
 pub struct NativeHarnessConfig {
     data_root: PathBuf,
     environment: EnvironmentSource,
+    /// Whether this process already removed the utility temporary
+    /// directories earlier processes left behind.
+    swept_utility_directories: Arc<AtomicBool>,
 }
 
 impl NativeHarnessConfig {
@@ -150,6 +171,7 @@ impl NativeHarnessConfig {
         Self {
             data_root: std::path::absolute(&data_root).unwrap_or(data_root),
             environment: Arc::new(environment),
+            swept_utility_directories: Arc::default(),
         }
     }
 
@@ -179,18 +201,62 @@ impl NativeHarnessConfig {
         Ok(directory.join(SESSION_DATABASE_FILE))
     }
 
-    /// Returns the sandbox of commands run in `workspace`, whose project
-    /// directory every session and utility prompt of the same repository
-    /// shares.
+    /// Returns the sandbox of the session's commands run in `workspace`,
+    /// with the session's own temporary directory, which keeps one path for
+    /// the session's lifetime because the harness fingerprints it into the
+    /// policy, and goes with the session's harness directory.
     ///
     /// # Errors
-    /// Returns an error when the project directory cannot be created.
-    pub(crate) async fn command_sandbox(
+    /// Returns an error for an invalid session id or when the directory
+    /// cannot be prepared.
+    pub(crate) async fn session_sandbox(
         &self,
+        session_id: &str,
         workspace: &Path,
         environment: &BTreeMap<String, String>,
     ) -> Result<CommandSandbox, String> {
-        CommandSandbox::prepare(&self.data_root, workspace, environment).await
+        let database = self.session_database(session_id).await?;
+        let temporary_directory = database.with_file_name(SESSION_TEMPORARY_DIRECTORY);
+        tokio::fs::create_dir_all(&temporary_directory)
+            .await
+            .map_err(|error| {
+                format!("Failed to create the harness temporary directory: {error}")
+            })?;
+
+        CommandSandbox::prepare(&self.data_root, temporary_directory, workspace, environment).await
+    }
+
+    /// Returns the sandbox of one utility prompt's commands run in
+    /// `workspace`, with a fresh temporary directory removed when the
+    /// returned guard drops. The first call of this process first removes
+    /// the directories earlier processes left behind, which only one process
+    /// per data root can own.
+    ///
+    /// # Errors
+    /// Returns an error when the directory cannot be created or prepared.
+    pub(crate) async fn utility_sandbox(
+        &self,
+        workspace: &Path,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<(CommandSandbox, tempfile::TempDir), String> {
+        let parent = self.data_root.join(UTILITY_TEMPORARY_PARENT);
+        if !self.swept_utility_directories.swap(true, Ordering::SeqCst) {
+            let _ = tokio::fs::remove_dir_all(&parent).await;
+        }
+        let directory = std::fs::create_dir_all(&parent)
+            .and_then(|()| tempfile::Builder::new().prefix("run-").tempdir_in(&parent))
+            .map_err(|error| {
+                format!("Failed to create the harness temporary directory: {error}")
+            })?;
+        let sandbox = CommandSandbox::prepare(
+            &self.data_root,
+            directory.path().to_path_buf(),
+            workspace,
+            environment,
+        )
+        .await?;
+
+        Ok((sandbox, directory))
     }
 }
 
@@ -383,15 +449,20 @@ pub(super) fn lookup(
 /// variable is used as given unless it is empty, as `agentty`'s data
 /// directory reads it.
 pub(super) fn chatgpt_auth_file(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
+    chatgpt_auth_file_in(lookup(environment), agentty_home(environment).as_deref())
+}
+
+/// Returns Agentty's data directory as `agentty` reads it: `AGENTTY_ROOT`,
+/// else `~/.agentty`, each used as given unless empty.
+pub(super) fn agentty_home(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
     let set = |name: &str| {
         environment
             .get(name)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    let data_dir = set(AGENTTY_ROOT_ENV).or_else(|| set("HOME").map(|home| home.join(".agentty")));
 
-    chatgpt_auth_file_in(lookup(environment), data_dir.as_deref())
+    set(AGENTTY_ROOT_ENV).or_else(|| set("HOME").map(|home| home.join(".agentty")))
 }
 
 /// Keeps the variables whose name and value are both valid Unicode.
@@ -815,7 +886,7 @@ impl ModelSelection {
             .map_err(failure("Invalid harness model registration"))?
             .context_policy(context_policy)
             .repository(context.repository.clone())
-            .sandbox(sandbox::SANDBOX)
+            .sandbox(context.sandbox)
             .model_reasoning_effort(reasoning_effort(context.reasoning_level))
             .with_lifecycle_observer(traced(observer)))
     }
@@ -866,6 +937,8 @@ pub(crate) struct HarnessContext<'a> {
     pub(crate) repository: &'a Repository,
     /// Context window the local server runs the model with, when known.
     pub(crate) running_context_window: Option<u64>,
+    /// How `bash` runs where the native sandbox cannot.
+    pub(crate) sandbox: Sandbox,
     /// Model that writes compaction summaries in place of the turn's model,
     /// resolved by [`ModelSelection::summary_model`].
     pub(crate) summary_model: Option<&'a ModelSelection>,
@@ -975,7 +1048,7 @@ fn bash_config(
         BASH_TIMEOUT,
         BashConfig::DEFAULT_CAPTURE_BYTES,
     )
-    .and_then(|config| sandbox.grant(config.with_host_information(), environment))
+    .and_then(|config| sandbox.grant(config.with_host_information()))
     .map_err(failure("Invalid harness bash policy"))?;
     for (name, value) in bash_environment(environment) {
         if let Ok(granted) = config.clone().with_environment(name.clone(), value.clone()) {
@@ -986,12 +1059,14 @@ fn bash_config(
     Ok(config)
 }
 
-/// Orders granted variables: essentials first, then the rest by name.
+/// Orders granted variables: essentials first, then the rest by name,
+/// without provider variables or credentials.
 fn bash_environment(environment: &BTreeMap<String, String>) -> Vec<(&String, &String)> {
     let is_granted = |name: &str| {
         !PROVIDER_ENVIRONMENT_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
+            && !is_credential(name)
     };
     let priority = PRIORITY_ENVIRONMENT
         .iter()
@@ -1004,6 +1079,22 @@ fn bash_environment(environment: &BTreeMap<String, String>) -> Vec<(&String, &St
         .chain(remaining)
         .filter(|(name, _)| is_granted(name))
         .collect()
+}
+
+/// Returns whether the variable `name` likely carries a credential, which
+/// commands with network access could send anywhere: tokens, secrets, keys,
+/// passwords, credentials, and connection strings, plus every AWS, GitHub,
+/// and `GitLab` variable, whatever their case.
+fn is_credential(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+
+    CREDENTIAL_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || CREDENTIAL_SUFFIXES
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+        || CREDENTIAL_WORDS.iter().any(|word| name.contains(word))
 }
 
 /// Validates the worktree with the first absolute `git` on `PATH`.

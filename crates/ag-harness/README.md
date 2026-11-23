@@ -642,8 +642,12 @@ are files of that grant; commands cannot create new ones that reach outside it. 
 only a linked worktree can stage and commit under `with_git_writes`, which refuses a
 write grant containing a Git directory, and only the repository's own Git metadata and a
 repository at the top of each write grant stay read-only; macOS protects every `.git`
-name. A command the sandbox refuses to start, for example because a granted directory is
-missing, comes back to the model as a rejected tool call, and the turn continues.
+name. Replacement refs, object alternates, grafts, and the shallow boundary stay
+read-only too, since they change the history Git shows without changing what it pushes;
+commands can still move references and edit `packed-refs`, so a host that reviews
+history should run its own Git with `GIT_NO_REPLACE_OBJECTS=1`. A command the sandbox
+refuses to start, for example because a granted directory is missing, comes back to the
+model as a rejected tool call, and the turn continues.
 
 Coding sessions follow the sandboxes of Claude Code and Codex:
 

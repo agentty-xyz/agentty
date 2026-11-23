@@ -10,7 +10,7 @@ use ag_harness::bash::BashConfig;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
 use serde_json::json;
 
-use super::{CommandSandbox, SANDBOX, notice};
+use super::{CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, notice};
 
 /// Returns a native policy without Agentty's grants.
 fn base_policy() -> BashConfig {
@@ -24,7 +24,8 @@ fn base_policy() -> BashConfig {
 }
 
 /// Returns the policy Agentty's grants must produce for `temporary` and
-/// the hidden `data_root` and `auth_file`.
+/// the hidden `data_root` and `auth_file`, with the application database
+/// and pasted images of the Agentty root `/agentty-root` hidden too.
 fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> BashConfig {
     let mut expected = base_policy()
         .with_full_disk_read()
@@ -34,6 +35,8 @@ fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> Bash
         .and_then(|config| config.with_temporary_directory(temporary.to_path_buf()))
         .and_then(|config| config.with_hidden_path(data_root.to_path_buf()))
         .and_then(|config| config.with_hidden_path(auth_file.to_path_buf()))
+        .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/db")))
+        .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/tmp")))
         .expect("expected grants");
     for (name, directory) in [
         ("CARGO_HOME", "cargo"),
@@ -53,14 +56,20 @@ fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> Bash
 }
 
 #[test]
-/// Runs commands in the native sandbox and without it, with a warning,
-/// where it cannot run.
-fn sandbox_is_native_with_an_unsandboxed_fallback() {
+/// Session commands fall back to running without the sandbox, with a
+/// warning; utility prompts, which report no notices, refuse instead.
+fn sessions_fall_back_and_utility_prompts_refuse() {
     // Arrange, Act, Assert
     assert_eq!(
-        SANDBOX,
+        SESSION_SANDBOX,
         Sandbox::Native {
             if_unavailable: IfUnavailable::Unsandboxed
+        }
+    );
+    assert_eq!(
+        UTILITY_SANDBOX,
+        Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse
         }
     );
 }
@@ -68,17 +77,23 @@ fn sandbox_is_native_with_an_unsandboxed_fallback() {
 #[test]
 /// Grants full-disk reads, worktree, Git, and temporary-directory writes,
 /// the network, and caches in the temporary directory, and hides the data
-/// root and the `ChatGPT` sign-in, with no writable roots or excluded
-/// commands.
+/// root and the `ChatGPT` sign-in, with no writable roots, sockets (not
+/// even an SSH agent's), or excluded commands.
 fn grant_adds_the_coding_agent_grant_set() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
     let temporary = data_root.path().join("session-1").join("tmp");
-    let environment = BTreeMap::from([("AGENTTY_ROOT".to_string(), "/agentty-root".to_string())]);
+    let socket_directory = tempfile::tempdir().expect("socket directory");
+    let socket = socket_directory.path().join("agent.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket");
+    let environment = BTreeMap::from([
+        ("AGENTTY_ROOT".to_string(), "/agentty-root".to_string()),
+        ("SSH_AUTH_SOCK".to_string(), socket.display().to_string()),
+    ]);
     let sandbox = CommandSandbox::new(data_root.path(), temporary.clone(), &environment);
 
     // Act
-    let granted = sandbox.grant(base_policy(), &environment);
+    let granted = sandbox.grant(base_policy());
 
     // Assert
     assert_eq!(
@@ -89,51 +104,6 @@ fn grant_adds_the_coding_agent_grant_set() {
             Path::new("/agentty-root/auth/chatgpt.json"),
         )
     );
-}
-
-#[test]
-/// Grants the SSH agent's socket only where the sandbox can allow one by
-/// path, and skips a socket that does not exist.
-fn grant_allows_the_ssh_agent_socket_on_macos() {
-    // Arrange
-    let directory = tempfile::tempdir().expect("socket directory");
-    let socket = directory.path().join("agent.sock");
-    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket");
-    let temporary = directory.path().join("tmp");
-    let environment = |socket: &Path| {
-        BTreeMap::from([
-            ("AGENTTY_ROOT".to_string(), "/agentty-root".to_string()),
-            ("SSH_AUTH_SOCK".to_string(), socket.display().to_string()),
-        ])
-    };
-    let sandbox = CommandSandbox::new(
-        Path::new("/data-root"),
-        temporary.clone(),
-        &environment(&socket),
-    );
-    let without_socket = expected_policy(
-        &temporary,
-        Path::new("/data-root"),
-        Path::new("/agentty-root/auth/chatgpt.json"),
-    );
-
-    // Act
-    let granted = sandbox.grant(base_policy(), &environment(&socket));
-    let missing = sandbox.grant(
-        base_policy(),
-        &environment(&directory.path().join("missing.sock")),
-    );
-
-    // Assert
-    #[cfg(target_os = "macos")]
-    let expected = without_socket
-        .clone()
-        .with_unix_socket(socket)
-        .expect("socket grant");
-    #[cfg(not(target_os = "macos"))]
-    let expected = without_socket.clone();
-    assert_eq!(granted.expect("granted policy"), expected);
-    assert_eq!(missing.expect("granted policy"), without_socket);
 }
 
 #[test]
@@ -238,83 +208,90 @@ fn likely_denials_are_reported_only_for_marked_tool_calls() {
     assert_eq!(other, None);
 }
 
-/// Creates a main checkout `project` under `root` with one linked worktree,
-/// as Git lays them out, and returns both paths.
-fn repository_with_worktree(root: &Path) -> (PathBuf, PathBuf) {
-    let checkout = root.join("project");
-    let worktree_git = checkout.join(".git/worktrees/session");
-    std::fs::create_dir_all(&worktree_git).expect("worktree Git directory");
-    std::fs::write(worktree_git.join("commondir"), "../..\n").expect("commondir");
-    let worktree = root.join("session");
-    std::fs::create_dir_all(&worktree).expect("worktree");
-    std::fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}\n", worktree_git.display()),
-    )
-    .expect("worktree link");
-
-    (checkout, worktree)
-}
-
-/// Returns the temporary directory `sandbox` grants commands.
-fn sandbox_directory(sandbox: &CommandSandbox) -> PathBuf {
-    sandbox.temporary_directory.clone()
-}
-
 #[tokio::test]
-/// Shares one sandbox directory between a repository's checkout and its
-/// linked worktrees, named after the repository, and gives a directory
-/// outside any repository, or with an unreadable Git link, its own.
-async fn prepare_shares_one_directory_per_repository() {
+/// Replaces whatever earlier commands planted in the sandbox `CARGO_HOME`:
+/// configuration and credential files of any type, and a `cargo` link
+/// leading out of the temporary directory, which it removes without
+/// touching the target.
+async fn prepare_replaces_planted_cargo_files_and_links() {
     // Arrange
     let root = tempfile::tempdir().expect("root");
     let data_root = root.path().join("data");
-    let (checkout, worktree) = repository_with_worktree(root.path());
-    let plain = root.path().join("plain");
-    std::fs::create_dir_all(&plain).expect("plain directory");
-    let malformed = root.path().join("malformed");
-    std::fs::create_dir_all(&malformed).expect("malformed directory");
-    std::fs::write(malformed.join(".git"), "not a link\n").expect("malformed link");
+    let temporary = data_root.join("session-1/tmp");
+    let cargo_home = temporary.join("cargo");
+    std::fs::create_dir_all(cargo_home.join("credentials")).expect("planted directory");
+    std::fs::write(
+        cargo_home.join("config"),
+        "[build]\nrustc-wrapper = \"evil\"\n",
+    )
+    .expect("planted legacy config");
+    std::fs::write(cargo_home.join("config.toml"), "[env]\nEVIL = \"1\"\n")
+        .expect("planted config");
+    std::os::unix::fs::symlink("/etc/hosts", cargo_home.join("credentials.toml"))
+        .expect("planted link");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("outside directory");
+    std::fs::write(outside.join("config.toml"), "kept").expect("outside file");
+    let linked_temporary = data_root.join("session-2/tmp");
+    std::fs::create_dir_all(&linked_temporary).expect("second temporary directory");
+    std::os::unix::fs::symlink(&outside, linked_temporary.join("cargo")).expect("planted link");
+    let filed_temporary = data_root.join("session-3/tmp");
+    std::fs::create_dir_all(&filed_temporary).expect("third temporary directory");
+    std::fs::write(filed_temporary.join("cargo"), "").expect("planted file");
     let environment = BTreeMap::new();
 
     // Act
-    let from_checkout = CommandSandbox::prepare(&data_root, &checkout, &environment).await;
-    let from_worktree = CommandSandbox::prepare(&data_root, &worktree, &environment).await;
-    let from_plain = CommandSandbox::prepare(&data_root, &plain, &environment).await;
-    let from_malformed = CommandSandbox::prepare(&data_root, &malformed, &environment).await;
+    let planted = CommandSandbox::prepare(&data_root, temporary, root.path(), &environment).await;
+    let linked = CommandSandbox::prepare(
+        &data_root,
+        linked_temporary.clone(),
+        root.path(),
+        &environment,
+    )
+    .await;
+    let filed = CommandSandbox::prepare(
+        &data_root,
+        filed_temporary.clone(),
+        root.path(),
+        &environment,
+    )
+    .await;
 
     // Assert
-    let from_checkout = sandbox_directory(&from_checkout.expect("checkout sandbox"));
+    assert!(planted.is_ok() && linked.is_ok() && filed.is_ok());
+    let left = std::fs::read_dir(&cargo_home)
+        .expect("Cargo directory")
+        .count();
+    assert_eq!(left, 0, "planted files must be gone");
+    for temporary in [linked_temporary, filed_temporary] {
+        let metadata = std::fs::symlink_metadata(temporary.join("cargo")).expect("Cargo directory");
+        assert!(metadata.is_dir());
+    }
     assert_eq!(
-        from_checkout,
-        sandbox_directory(&from_worktree.expect("worktree sandbox"))
+        std::fs::read_to_string(outside.join("config.toml")).expect("outside file"),
+        "kept"
     );
-    assert_eq!(
-        from_checkout.parent(),
-        Some(data_root.join("sandbox-cache").as_path())
-    );
-    let name = from_checkout
-        .file_name()
-        .expect("project name")
-        .to_string_lossy()
-        .into_owned();
-    assert!(name.starts_with("project-"), "{name}");
-    assert!(from_checkout.join("cargo").is_dir());
-    let from_plain = sandbox_directory(&from_plain.expect("plain sandbox"));
-    let from_malformed = sandbox_directory(&from_malformed.expect("malformed sandbox"));
-    assert_ne!(from_plain, from_checkout);
-    assert_ne!(from_malformed, from_plain);
 }
 
-#[test]
-/// Names a repository without a usable directory name by its digest alone.
-fn project_names_fall_back_to_the_digest() {
-    // Arrange, Act
-    let name = CommandSandbox::project_name(Path::new("/"));
+#[tokio::test]
+/// Reports a temporary directory whose Cargo directory cannot be created.
+async fn prepare_reports_an_unusable_temporary_directory() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let temporary = root.path().join("tmp");
+    std::fs::write(&temporary, "").expect("file in place of the directory");
+
+    // Act
+    let failure =
+        CommandSandbox::prepare(root.path(), temporary, root.path(), &BTreeMap::new()).await;
 
     // Assert
-    assert_eq!(name.len(), 12);
-    assert!(name.chars().all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        failure
+            .err()
+            .expect("a file temporary directory should fail")
+            .contains("Failed to prepare the sandbox Cargo directory")
+    );
 }
 
 #[tokio::test]
@@ -338,16 +315,20 @@ async fn prepare_links_the_host_cargo_configuration() {
     let empty_home = BTreeMap::from([("HOME".to_string(), unrelated_home.display().to_string())]);
     let relative = BTreeMap::from([("CARGO_HOME".to_string(), "relative".to_string())]);
 
+    let temporary = data_root.join("session-1/tmp");
+
     // Act
-    let linked = CommandSandbox::prepare(&data_root, &workspace, &custom)
+    CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &custom)
         .await
         .expect("linked sandbox");
-    let link = sandbox_directory(&linked).join("cargo/config.toml");
+    let link = temporary.join("cargo/config.toml");
     let linked_target = std::fs::read_link(&link).ok();
-    let found = CommandSandbox::prepare(&data_root, &workspace, &home_above).await;
+    let found =
+        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &home_above).await;
     let after_found = std::fs::symlink_metadata(&link).is_ok();
-    let missing = CommandSandbox::prepare(&data_root, &workspace, &empty_home).await;
-    let unset = CommandSandbox::prepare(&data_root, &workspace, &relative).await;
+    let missing =
+        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &empty_home).await;
+    let unset = CommandSandbox::prepare(&data_root, temporary, &workspace, &relative).await;
 
     // Assert
     assert_eq!(linked_target, Some(custom_home.join("config")));

@@ -166,6 +166,80 @@ impl MainCheckoutSnapshot {
     }
 }
 
+/// Base branch commit captured before a Harness turn, whose sandboxed
+/// commands can move Git references in the shared repository: moving the
+/// base under the session would hide the session's changes from the review
+/// diff that Agentty commits, merges, and pushes from.
+struct BaseBranchSnapshot {
+    branch: String,
+    commit: String,
+}
+
+impl BaseBranchSnapshot {
+    /// Captures the session's base branch commit before a Harness turn, or
+    /// returns `None` for other agents and for a base that is not a local
+    /// branch.
+    async fn capture(context: &SessionWorkerContext, env: &ResolvedEnv) -> Option<Self> {
+        if context.session_agent.kind() != AgentKind::Harness {
+            return None;
+        }
+        let branch = context
+            .db
+            .sessions()
+            .get_session_base_branch(&context.session_id)
+            .await
+            .ok()
+            .flatten()?;
+        let commit = context
+            .git_client
+            .ref_hash(env.folder.clone(), Self::reference(&branch))
+            .await
+            .ok()?;
+
+        Some(Self { branch, commit })
+    }
+
+    /// Fails a successful turn that moved the base branch `snapshot`
+    /// recorded, so Agentty commits, reviews, and publishes nothing on top of
+    /// a moved base; a turn without a snapshot passes unchanged.
+    ///
+    /// # Errors
+    /// Returns the turn's own error, or a backend error naming the moved
+    /// branch and how to restore it.
+    async fn verify(
+        snapshot: Option<&Self>,
+        context: &SessionWorkerContext,
+        turn_result: Result<TurnResult, AgentError>,
+    ) -> Result<TurnResult, AgentError> {
+        let Some(snapshot) = snapshot else {
+            return turn_result;
+        };
+        let result = turn_result?;
+        let current = context
+            .git_client
+            .ref_hash(context.folder.clone(), Self::reference(&snapshot.branch))
+            .await
+            .ok();
+        if current.as_deref() == Some(snapshot.commit.as_str()) {
+            return Ok(result);
+        }
+
+        Err(AgentError::Backend(format!(
+            "The base branch `{branch}` moved during this turn, so Agentty stopped before \
+             committing or publishing the session. If the session's commands moved it, restore it \
+             with `git update-ref refs/heads/{branch} {commit}` in the repository; if you moved \
+             it yourself, send the prompt again.",
+            branch = snapshot.branch,
+            commit = snapshot.commit,
+        )))
+    }
+
+    /// Returns the local branch reference of `branch`.
+    fn reference(branch: &str) -> String {
+        format!("refs/heads/{branch}")
+    }
+}
+
 /// Executes one agent turn through the session channel and applies all
 /// post-turn effects (stats, auto-commit, size refresh, status update).
 ///
@@ -268,6 +342,8 @@ pub(super) async fn run_channel_turn(
 
     let turn_result =
         add_main_checkout_warning(context, workspace.snapshot.as_ref(), turn_result).await;
+    let turn_result =
+        BaseBranchSnapshot::verify(workspace.base_branch.as_ref(), context, turn_result).await;
     let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
@@ -288,6 +364,8 @@ pub(super) async fn run_channel_turn(
 
 /// Validated execution location plus the existing main-checkout warning state.
 struct PreparedTurnWorkspace {
+    /// Base branch commit a Harness turn must leave in place.
+    base_branch: Option<BaseBranchSnapshot>,
     env: ResolvedEnv,
     snapshot: Option<MainCheckoutSnapshot>,
 }
@@ -316,8 +394,9 @@ async fn prepare_turn_workspace(
                         &context.session_id,
                     ).await?;
                     let snapshot = MainCheckoutSnapshot::capture(context, &env).await?;
+                    let base_branch = BaseBranchSnapshot::capture(context, &env).await;
 
-                    Ok(PreparedTurnWorkspace { env, snapshot })
+                    Ok(PreparedTurnWorkspace { base_branch, env, snapshot })
                 }, |_: &SessionError| Outcome::Failed)
                 .await?;
             SessionWorkerService::prepare_review_comment_turn(context, turn_metadata, prompt).await?;
@@ -750,7 +829,7 @@ pub(super) fn fresh_turn_cancel_token(
 }
 
 /// Returns the session transcript that receives a turn's sandbox notices.
-fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
+pub(super) fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
     SandboxNoticeTarget {
         app_event_tx: &context.app_event_tx,
         db: &context.db,

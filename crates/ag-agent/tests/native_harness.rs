@@ -827,15 +827,10 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
         .expect("bash result should reach the model");
     assert!(bash_result.contains("hello harness"));
     assert!(bash_result.contains("PATH="));
-    let project = std::fs::read_dir(data_root.path().join("sandbox-cache"))
-        .expect("sandbox cache")
-        .next()
-        .expect("project sandbox directory")
-        .expect("project entry")
-        .path();
+    let cargo_home = data_root.path().join("session-tools/tmp/cargo");
     assert!(
-        bash_result.contains(&format!("CARGO_HOME={}", project.join("cargo").display())),
-        "tool caches must live in the project's sandbox directory"
+        bash_result.contains(&format!("CARGO_HOME={}", cargo_home.display())),
+        "tool caches must live in the session's temporary directory"
     );
     assert!(!bash_result.contains("muse-key"));
     assert!(!bash_result.contains("MODEL_API_KEY"));
@@ -2243,6 +2238,43 @@ async fn utility_run_charges_the_budget_and_parses_the_answer() {
     assert!(exhausted.is_err());
     assert!(budget.ensure_available().is_err());
     assert_eq!(request_bodies(&server).await.len(), 1);
+}
+
+/// Utility prompts report no notices, so an edit-mode one refuses to run
+/// commands without the sandbox, which this process never dispatches, and
+/// says why before any provider call.
+#[tokio::test]
+async fn edit_mode_utility_run_refuses_to_run_commands_without_the_sandbox() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Name this session", utility_answer("unused"), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let client = RealOneShotClient::pooled(None)
+        .with_native_harness(config(data_root.path(), environment(&server)));
+    let mut request = utility_request(worktree.path(), None);
+    request.permission_mode = PermissionMode::AutoEdit;
+
+    // Act
+    let refused = client.submit(request).await;
+
+    // Assert
+    let error = refused
+        .expect_err("the utility run must refuse")
+        .to_string();
+    assert!(
+        error.contains("Agentty did not run this prompt's commands"),
+        "{error}"
+    );
+    assert!(error.contains("Reinstall or update Agentty"), "{error}");
+    assert_eq!(request_bodies(&server).await, Vec::<String>::new());
+    assert_eq!(
+        std::fs::read_dir(data_root.path().join(".utility"))
+            .expect("utility temporary parent")
+            .count(),
+        0,
+        "the run's temporary directory is removed"
+    );
 }
 
 #[tokio::test]

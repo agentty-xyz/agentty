@@ -528,6 +528,43 @@ async fn native_linux_system_reads_mount_a_private_proc_and_a_minimal_dev() {
     assert_eq!(result.stdout, "private", "{result:?}");
 }
 
+/// Replacement refs, grafts, the shallow boundary, and object alternates
+/// change the history Git run outside the sandbox shows without changing
+/// the objects it pushes, so commands cannot write them, whether they exist
+/// or not.
+#[tokio::test]
+async fn native_git_writes_keep_history_rewrites_read_only() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let common = fixture.root().join("main/.git");
+    std::fs::write(common.join("objects/info/alternates"), "").expect("alternates");
+
+    // Act
+    let result = fixture
+        .run(
+            "set -e; common=$(git rev-parse --path-format=absolute --git-common-dir); \
+             evil=$(printf evil | git hash-object -w --stdin); original=$(git rev-parse \
+             HEAD:tracked); if git replace \"$original\" \"$evil\" 2>/dev/null; then exit 91; fi; \
+             if printf x >> \"$common/objects/info/alternates\"; then exit 92; fi; if printf x > \
+             \"$common/objects/info/http-alternates\"; then exit 93; fi; if printf x > \
+             \"$common/info/grafts\"; then exit 94; fi; if printf x > \"$common/shallow\"; then \
+             exit 95; fi; printf confined",
+            fixture.configuration(),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "confined", "{result:?}");
+    assert_eq!(git(&fixture.worktree(), &["replace", "-l"]), "");
+    assert_eq!(
+        std::fs::read_to_string(common.join("objects/info/alternates")).expect("alternates"),
+        ""
+    );
+    assert!(!common.join("info/grafts").exists());
+    assert!(!common.join("shallow").exists());
+}
+
 /// Git run outside the sandbox resumes a rebase from its to-do list, which
 /// can run commands, so a rebase the host left in progress stays read-only
 /// and none can be started by writing new state.

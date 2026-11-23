@@ -34,9 +34,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, OutputProjector, RunOptions, cleanup_failure, failure, output_schema,
-    parse_output, reject_attachments, repository, running_context_window, sandbox_notice,
-    system_prompt, turn_notice,
+    NativeTurnError, OutputProjector, RunOptions, SESSION_SANDBOX, cleanup_failure, failure,
+    output_schema, parse_output, reject_attachments, repository, running_context_window,
+    sandbox_notice, system_prompt, turn_notice,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -141,7 +141,9 @@ async fn run_session_turn(
     let profile = req.request_kind.protocol_profile();
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
-    let sandbox = config.command_sandbox(&req.folder, &environment).await?;
+    let sandbox = config
+        .session_sandbox(&session_id, &req.folder, &environment)
+        .await?;
     let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
         .map_err(failure("Failed to apply the response style"))?
@@ -544,6 +546,7 @@ impl SessionOpener<'_> {
             reasoning_level: self.reasoning_level,
             repository: self.repository,
             running_context_window: self.running_context_window,
+            sandbox: SESSION_SANDBOX,
             summary_model: self.summary_model,
         }
     }

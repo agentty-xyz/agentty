@@ -84,7 +84,8 @@ async fn execute(
     let client = factory
         .create_task(&history.context.context)
         .map_err(turn::session_error_from_agent_error)?;
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (event_tx, relayed_rx) = mpsc::unbounded_channel();
+    let (relay_tx, event_rx) = mpsc::unbounded_channel();
     let consumer = spawn::spawn_detached(turn::consume_turn_events(
         event_rx,
         context.app_event_tx.clone(),
@@ -92,9 +93,11 @@ async fn execute(
         Arc::clone(&context.child_pid),
     ));
     let permission_mode = prepared.permission_mode;
-    let result = client
-        .submit(prepared, event_tx, cancellation.clone())
-        .await;
+    let sandbox_notices = turn::sandbox_notice_target(context);
+    let (result, ()) = tokio::join!(
+        client.submit(prepared, event_tx, cancellation.clone()),
+        sandbox_notices.relay(relayed_rx, relay_tx),
+    );
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);

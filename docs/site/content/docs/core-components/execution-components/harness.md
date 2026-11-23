@@ -94,6 +94,6 @@ user-facing remedy text, that they ran in it, or that a sandboxed command likely
 sandbox denial. The host shows the warning as soon as it arrives, once per change of the
 sandbox state, a note when the sandbox works again after a warning, and the denial hint
 once per turn, and leaves them all out of provider replay. Notices are advisory; no
-layer reruns a command outside the sandbox because of one. One-shot utility runs use the
-same sandbox but report no notices, because `OneShotSubmission` carries none; the
-session's own turns report the same host-wide condition.
+layer reruns a command outside the sandbox because of one. One-shot utility runs report
+no notices, because `OneShotSubmission` carries none, so they refuse to run commands
+where the sandbox cannot run, failing with its remedy.

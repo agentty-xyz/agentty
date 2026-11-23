@@ -659,8 +659,13 @@ where
     }
 }
 
+/// Graft file Git reads instead of `info/grafts`: a path below a file,
+/// which can never exist, so Git reads no grafts and warns about none.
+const NO_GRAFT_FILE: &str = "/dev/null/grafts";
+
 /// Disables optional index writes and interactive prompts for Git subprocesses.
 /// Required locks for staging, commits, and other mutations remain enabled.
+/// See [`trusted_history_environment`] for the history Git reads.
 fn apply_non_interactive_environment(command: &mut Command) {
     let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
@@ -668,10 +673,12 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
-        .env("GIT_SSH_COMMAND", git_ssh_command);
+        .env("GIT_SSH_COMMAND", git_ssh_command)
+        .envs(trusted_history_environment());
 }
 
 /// Disables optional index writes and interactive prompts for async Git.
+/// See [`trusted_history_environment`] for the history Git reads.
 fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
     let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
@@ -679,7 +686,19 @@ fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
-        .env("GIT_SSH_COMMAND", git_ssh_command);
+        .env("GIT_SSH_COMMAND", git_ssh_command)
+        .envs(trusted_history_environment());
+}
+
+/// Makes Git read the history the objects record, ignoring `refs/replace`
+/// and grafts, which an agent working in a session can write: otherwise a
+/// replacement could hide content from Agentty's review diff while a push
+/// still sends the real objects.
+fn trusted_history_environment() -> [(&'static str, &'static str); 2] {
+    [
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+        ("GIT_GRAFT_FILE", NO_GRAFT_FILE),
+    ]
 }
 
 /// Appends SSH batch mode to the configured `GIT_SSH_COMMAND`, or uses plain

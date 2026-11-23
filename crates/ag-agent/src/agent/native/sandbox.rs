@@ -1,13 +1,13 @@
 //! Native sandbox grants for `bash` and the sandbox notices a run reports.
 //!
 //! Commands read the whole disk except credential stores, write only the
-//! worktree, its Git metadata, and their project's sandbox directory, and
+//! worktree, its Git metadata, and their session's temporary directory, and
 //! keep network access, like the sandboxes of other coding agents. Where
-//! the native sandbox cannot run they run without it, and the run reports
-//! why so the session view can tell the user how to fix it.
+//! the native sandbox cannot run, session commands run without it and the
+//! run reports why so the session view can tell the user how to fix it,
+//! while utility prompts refuse to run commands at all.
 
 use std::collections::BTreeMap;
-use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -16,28 +16,29 @@ use ag_harness::RunEventKind;
 use ag_harness::bash::{BashConfig, BashError};
 use ag_harness::event::Item;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
-use sha2::{Digest as _, Sha256};
 
-use super::config::chatgpt_auth_file;
+use super::config::{agentty_home, chatgpt_auth_file};
 
-/// How Agentty runs `bash`: inside the native sandbox, and without it, with
-/// a warning, on a host where it cannot run.
-pub(crate) const SANDBOX: Sandbox = Sandbox::Native {
+/// How session turns run `bash`: inside the native sandbox, and without it,
+/// with a warning the session shows, on a host where it cannot run.
+pub(crate) const SESSION_SANDBOX: Sandbox = Sandbox::Native {
     if_unavailable: IfUnavailable::Unsandboxed,
 };
-/// Directory under the data root holding one sandbox directory per project:
-/// the commands' temporary directory and tool caches, which host tools
-/// never read and which can be deleted between sessions.
-const PROJECT_DIRECTORY_PARENT: &str = "sandbox-cache";
-/// Subdirectory of the project directory that commands use as `CARGO_HOME`.
+/// How utility prompts run `bash`: only inside the native sandbox. They
+/// report no notices, so where the sandbox cannot run they fail with its
+/// remedy instead of running commands unseen.
+pub(crate) const UTILITY_SANDBOX: Sandbox = Sandbox::Native {
+    if_unavailable: IfUnavailable::Refuse,
+};
+/// Subdirectory of the temporary directory that commands use as
+/// `CARGO_HOME`.
 const CARGO_HOME_DIRECTORY: &str = "cargo";
 /// Host Cargo configuration files, newest name first.
 const CARGO_CONFIG_FILES: [&str; 2] = ["config.toml", "config"];
-/// Bytes of the repository path digest that name a project directory.
-const PROJECT_DIGEST_BYTES: usize = 6;
-/// Longest repository name kept in a project directory name.
-const PROJECT_NAME_CHARACTERS: usize = 32;
-/// Tool caches redirected into the project directory, by variable and
+/// Entries of the sandbox `CARGO_HOME` that Cargo reads as configuration or
+/// credentials, replaced before every turn whatever commands left there.
+const CARGO_TRUSTED_FILES: [&str; 4] = ["config.toml", "config", "credentials.toml", "credentials"];
+/// Tool caches redirected into the temporary directory, by variable and
 /// subdirectory: commands cannot write the shared caches in the home
 /// directory, which host tools would later trust.
 const CACHE_ENVIRONMENT: [(&str, &str); 6] = [
@@ -48,9 +49,10 @@ const CACHE_ENVIRONMENT: [(&str, &str); 6] = [
     ("XDG_CACHE_HOME", "cache"),
     ("npm_config_cache", "npm"),
 ];
-/// Variable naming the SSH agent's socket.
-#[cfg(target_os = "macos")]
-const SSH_AUTH_SOCK: &str = "SSH_AUTH_SOCK";
+/// Directories of Agentty's data directory hidden from commands: the
+/// application database, with every session's transcript and the
+/// remote-control identity, and the pasted images of every session.
+const AGENTTY_PRIVATE_DIRECTORIES: [&str; 2] = ["db", "tmp"];
 /// Name the harness's user-facing remedies use for the host application.
 const APPLICATION: &str = "the application";
 
@@ -60,50 +62,56 @@ pub(crate) struct CommandSandbox {
     /// Paths hidden from commands: the harness histories and the `ChatGPT`
     /// sign-in.
     hidden: Vec<PathBuf>,
-    /// The project's sandbox directory, inside the hidden data root: the
-    /// commands' temporary directory and tool caches.
+    /// The session's own temporary directory, inside the hidden data root:
+    /// `TMPDIR` and the tool caches.
     temporary_directory: PathBuf,
 }
 
 impl CommandSandbox {
-    /// Creates the sandbox directory of the project `workspace` belongs to
-    /// under `data_root`, links the host's Cargo configuration into it, and
-    /// returns the sandbox of commands run in `workspace`.
-    ///
-    /// Every session and utility prompt of one repository shares the
-    /// directory, so downloaded dependencies stay cached across them, and
-    /// its path is stable, as the harness fingerprints it into the policy.
+    /// Prepares `temporary_directory`, which the host created inside
+    /// `data_root` and commands may have written on earlier turns, for
+    /// commands run in `workspace`: makes its `CARGO_HOME` a real directory,
+    /// replaces the Cargo configuration and credential files commands could
+    /// have planted with a link to the host's configuration, and returns
+    /// the sandbox.
     ///
     /// # Errors
-    /// Returns an error when the directory cannot be created.
+    /// Returns an error when the Cargo directory cannot be made safe.
     pub(crate) async fn prepare(
         data_root: &Path,
+        temporary_directory: PathBuf,
         workspace: &Path,
         environment: &BTreeMap<String, String>,
     ) -> Result<Self, String> {
-        let repository = Self::git_common_directory(workspace).await;
-        let directory = data_root
-            .join(PROJECT_DIRECTORY_PARENT)
-            .join(Self::project_name(&repository));
-        let cargo_home = directory.join(CARGO_HOME_DIRECTORY);
-        tokio::fs::create_dir_all(&cargo_home)
+        let cargo_home = temporary_directory.join(CARGO_HOME_DIRECTORY);
+        Self::reset_cargo_home(&cargo_home)
             .await
-            .map_err(|error| format!("Failed to create the sandbox cache directory: {error}"))?;
-        Self::link_cargo_config(&cargo_home, workspace, environment).await;
+            .map_err(|error| format!("Failed to prepare the sandbox Cargo directory: {error}"))?;
+        if let Some(config) = Self::host_cargo_config(workspace, environment).await {
+            // Best effort: without the link only those settings are lost.
+            let _ = tokio::fs::symlink(config, cargo_home.join(CARGO_CONFIG_FILES[0])).await;
+        }
 
-        Ok(Self::new(data_root, directory, environment))
+        Ok(Self::new(data_root, temporary_directory, environment))
     }
 
     /// Describes commands that write `temporary_directory` and cannot read
-    /// `data_root`, other than that directory, or the `ChatGPT` sign-in
-    /// `environment` names.
+    /// `data_root`, other than that directory, the `ChatGPT` sign-in
+    /// `environment` names, or Agentty's application database and pasted
+    /// images, which hold every session's transcript and the remote-control
+    /// identity.
     pub(crate) fn new(
         data_root: &Path,
         temporary_directory: PathBuf,
         environment: &BTreeMap<String, String>,
     ) -> Self {
+        let agentty_files = agentty_home(environment)
+            .into_iter()
+            .flat_map(|home| AGENTTY_PRIVATE_DIRECTORIES.map(|directory| home.join(directory)));
         let hidden = std::iter::once(data_root.to_path_buf())
-            .chain(chatgpt_auth_file(environment).and_then(|file| std::path::absolute(file).ok()))
+            .chain(chatgpt_auth_file(environment))
+            .chain(agentty_files)
+            .filter_map(|path| std::path::absolute(path).ok())
             .collect();
 
         Self {
@@ -115,15 +123,13 @@ impl CommandSandbox {
     /// Adds Agentty's grants to `config`: full-disk reads except credential
     /// stores and the hidden paths; writes to the worktree, its Git
     /// metadata, and the temporary directory, which also holds the tool
-    /// caches; network access; and on macOS the SSH agent's socket.
+    /// caches; and network access. No Unix-domain socket is granted, not
+    /// even the SSH agent's, whose keys would sign for any host the network
+    /// reaches; Agentty pushes outside the sandbox itself.
     ///
     /// # Errors
     /// Returns the grant the harness rejects.
-    pub(crate) fn grant(
-        &self,
-        config: BashConfig,
-        environment: &BTreeMap<String, String>,
-    ) -> Result<BashConfig, BashError> {
+    pub(crate) fn grant(&self, config: BashConfig) -> Result<BashConfig, BashError> {
         let mut config = config
             .with_full_disk_read()?
             .with_write(PathBuf::from("."))?
@@ -138,81 +144,33 @@ impl CommandSandbox {
             config = config.with_environment(name.to_string(), value.display().to_string())?;
         }
 
-        Ok(with_ssh_agent(config, environment))
+        Ok(config)
     }
 
-    /// Returns the Git common directory of the repository `workspace`
-    /// belongs to, resolved: the main repository's for a linked worktree,
-    /// else `workspace/.git`, or `workspace` itself when neither exists.
-    async fn git_common_directory(workspace: &Path) -> PathBuf {
-        let dot_git = workspace.join(".git");
-        // A linked worktree's `.git` is a file naming its own Git directory,
-        // whose `commondir` file leads to the shared one.
-        let git_directory = match tokio::fs::read_to_string(&dot_git).await {
-            Ok(link) => link
-                .strip_prefix("gitdir:")
-                .map_or_else(|| dot_git.clone(), |path| workspace.join(path.trim())),
-            Err(_) => dot_git,
-        };
-        let common_directory =
-            match tokio::fs::read_to_string(git_directory.join("commondir")).await {
-                Ok(relative) => git_directory.join(relative.trim()),
-                Err(_) => git_directory,
-            };
-
-        tokio::fs::canonicalize(&common_directory)
-            .await
-            .unwrap_or_else(|_| workspace.to_path_buf())
-    }
-
-    /// Names the sandbox directory of the repository whose Git common
-    /// directory is `repository`: its directory name, for people looking at
-    /// the cache, and a digest of its path, which tells repositories of the
-    /// same name apart.
-    fn project_name(repository: &Path) -> String {
-        let checkout = if repository.file_name() == Some(".git".as_ref()) {
-            repository.parent()
-        } else {
-            Some(repository)
-        };
-        let name = checkout.and_then(Path::file_name).map_or_default(|name| {
-            name.to_string_lossy()
-                .chars()
-                .filter(|character| character.is_ascii_alphanumeric() || "-_.".contains(*character))
-                .take(PROJECT_NAME_CHARACTERS)
-                .collect::<String>()
-        });
-        let digest = Sha256::digest(repository.as_os_str().as_bytes());
-        let digest = hex::encode(&digest[..PROJECT_DIGEST_BYTES]);
-
-        if name.is_empty() {
-            digest
-        } else {
-            format!("{name}-{digest}")
+    /// Makes `cargo_home` a real directory without the Cargo configuration
+    /// and credential files commands may have planted, never following a
+    /// link: a planted `cargo_home` link or file is removed itself, so
+    /// nothing outside the temporary directory is touched.
+    ///
+    /// # Errors
+    /// Returns the filesystem error that keeps it from being made safe.
+    async fn reset_cargo_home(cargo_home: &Path) -> std::io::Result<()> {
+        if let Ok(metadata) = tokio::fs::symlink_metadata(cargo_home).await
+            && !metadata.is_dir()
+        {
+            tokio::fs::remove_file(cargo_home).await?;
         }
-    }
+        tokio::fs::create_dir_all(cargo_home).await?;
+        for name in CARGO_TRUSTED_FILES {
+            let path = cargo_home.join(name);
+            match tokio::fs::symlink_metadata(&path).await {
+                Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(&path).await?,
+                Ok(_) => tokio::fs::remove_file(&path).await?,
+                Err(_) => {}
+            }
+        }
 
-    /// Links the host's Cargo configuration into the sandbox `cargo_home`
-    /// when Cargo would not find it from `workspace` by itself, so its
-    /// registries, mirrors, and build settings keep applying. Only the
-    /// configuration is linked, never the credentials, which the sandbox
-    /// hides. Linking is best effort: a missing link only loses those
-    /// settings.
-    async fn link_cargo_config(
-        cargo_home: &Path,
-        workspace: &Path,
-        environment: &BTreeMap<String, String>,
-    ) {
-        let link = cargo_home.join(CARGO_CONFIG_FILES[0]);
-        let is_link = tokio::fs::symlink_metadata(&link)
-            .await
-            .is_ok_and(|metadata| metadata.file_type().is_symlink());
-        if is_link {
-            let _ = tokio::fs::remove_file(&link).await;
-        }
-        if let Some(config) = Self::host_cargo_config(workspace, environment).await {
-            let _ = tokio::fs::symlink(config, &link).await;
-        }
+        Ok(())
     }
 
     /// Returns the host's Cargo configuration file, unless Cargo finds it
@@ -290,24 +248,6 @@ fn unavailable(warning: &SandboxWarning) -> TurnNotice {
         message,
         remedy: warning.remedy.replace(APPLICATION, "Agentty"),
     }
-}
-
-/// Grants the SSH agent's socket that `environment` names, so Git over SSH
-/// works with agent keys. Only the macOS sandbox can allow one socket by
-/// path, so it is granted nowhere else; a socket that does not exist is
-/// skipped.
-#[cfg(target_os = "macos")]
-fn with_ssh_agent(config: BashConfig, environment: &BTreeMap<String, String>) -> BashConfig {
-    environment
-        .get(SSH_AUTH_SOCK)
-        .and_then(|socket| config.clone().with_unix_socket(PathBuf::from(socket)).ok())
-        .unwrap_or(config)
-}
-
-/// Grants no socket: only the macOS sandbox can allow one by path.
-#[cfg(not(target_os = "macos"))]
-fn with_ssh_agent(config: BashConfig, _environment: &BTreeMap<String, String>) -> BashConfig {
-    config
 }
 
 #[cfg(test)]

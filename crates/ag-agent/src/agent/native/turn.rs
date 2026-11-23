@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use super::activity::ActivityBridge;
 use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig, RunOptions};
 use super::failure;
+use super::sandbox::UTILITY_SANDBOX;
 use super::turn_error::NativeTurnError;
 use crate::agent::{
     InstructionDeliveryMode, PromptPreparationRequest, execution_policy, parse_turn_response,
@@ -116,8 +117,10 @@ pub(crate) async fn run_one_shot(
     let selection = ModelSelection::resolve(&request.model, &environment)?;
     let profile = request.request_kind.protocol_profile();
     let repository = config::repository(&request.folder, &environment)?;
-    let sandbox = config
-        .command_sandbox(&request.folder, &environment)
+    // Kept until the run settles; dropping it removes the run's temporary
+    // directory.
+    let (sandbox, _temporary_directory) = config
+        .utility_sandbox(&request.folder, &environment)
         .await?;
     let options = RunOptions::new(profile, request.permission_mode, &environment, &sandbox)?;
     let running_context_window = config::running_context_window(&selection, &environment).await?;
@@ -130,6 +133,7 @@ pub(crate) async fn run_one_shot(
             reasoning_level: request.reasoning_level,
             repository: &repository,
             running_context_window,
+            sandbox: UTILITY_SANDBOX,
             summary_model: None,
         },
         ActivityBridge::new(move |event| {

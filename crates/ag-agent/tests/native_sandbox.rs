@@ -188,8 +188,9 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
         .iter()
         .find(|body| body.contains(r#""tool_call_id":"call-bash""#))
         .ok_or("bash result should reach the model")?;
-    // The command commits, then the write outside and the history read
-    // fail, so only the first marker reaches standard output.
+    // The command commits, then the write outside and the reads of the
+    // harness history and the application database fail, so only the first
+    // marker reaches standard output.
     assert!(
         bash_result.contains(r#"\"stdout\":\"committed\\n\""#),
         "{bash_result}"
@@ -205,9 +206,10 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
     fixture.assert_effects()
 }
 
-/// A repository with a linked session worktree, a directory outside it, and
-/// the harness data root.
+/// A repository with a linked session worktree, a directory outside it, the
+/// harness data root, and an Agentty root holding the application database.
 struct Fixture {
+    agentty_root: TempDir,
     data_root: TempDir,
     outside: TempDir,
     repository: TempDir,
@@ -232,7 +234,12 @@ impl Fixture {
             &["worktree", "add", "-q", "-b", "session", &worktree_path],
         )?;
 
+        let agentty_root = tempfile::tempdir()?;
+        std::fs::create_dir(agentty_root.path().join("db"))?;
+        std::fs::write(agentty_root.path().join("db/agentty.db"), "transcripts")?;
+
         Ok(Self {
+            agentty_root,
             data_root: tempfile::tempdir()?,
             outside: tempfile::tempdir()?,
             repository,
@@ -242,25 +249,31 @@ impl Fixture {
     }
 
     /// Returns the command the model runs: a commit, a temporary file, a
-    /// write outside the worktree, and a read of the harness history.
+    /// write outside the worktree, and reads of the harness history and of
+    /// Agentty's application database.
     fn command(&self) -> String {
         format!(
             "printf 'sandboxed\\n' > notes.txt && git add notes.txt && git -c user.name=Agentty \
              -c user.email=agentty@example.com commit -qm 'Add notes' && touch \
              \"$TMPDIR/scratch\" && echo committed; touch '{}' && echo escaped; cat '{}' > \
-             /dev/null && echo read-history",
+             /dev/null && echo read-history; cat '{}' > /dev/null && echo read-database",
             self.escape().display(),
             self.data_root
                 .path()
                 .join(SESSION_ID)
                 .join("harness.db")
                 .display(),
+            self.agentty_root.path().join("db/agentty.db").display(),
         )
     }
 
     /// Returns a harness configuration whose provider is `server`.
     fn config(&self, server: &MockServer) -> NativeHarnessConfig {
         let environment = BTreeMap::from([
+            (
+                "AGENTTY_ROOT".to_string(),
+                self.agentty_root.path().display().to_string(),
+            ),
             (
                 "HOME".to_string(),
                 std::env::var("HOME").unwrap_or_default(),
@@ -279,7 +292,7 @@ impl Fixture {
     }
 
     /// Asserts that the commit landed on the session branch, the temporary
-    /// file is in the project's one sandbox directory, and nothing was
+    /// file is in the session's temporary directory, and nothing was
     /// written outside.
     fn assert_effects(&self) -> TestResult {
         let log = Command::new("git")
@@ -287,11 +300,14 @@ impl Fixture {
             .current_dir(self.repository.path())
             .output()?;
         assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add notes");
-        let projects = std::fs::read_dir(self.data_root.path().join("sandbox-cache"))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(projects.len(), 1, "{projects:?}");
-        assert!(projects[0].join("scratch").exists());
+        assert!(
+            self.data_root
+                .path()
+                .join(SESSION_ID)
+                .join("tmp")
+                .join("scratch")
+                .exists()
+        );
         assert!(!self.escape().exists());
 
         Ok(())

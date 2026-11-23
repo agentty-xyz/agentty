@@ -566,14 +566,20 @@ impl BashConfig {
     /// work. Configuration, hooks, worktree links, submodule metadata, and
     /// rebase and cherry-pick state stay read-only, because Git run later
     /// outside the sandbox would otherwise execute or follow what a command
-    /// wrote there. Commands can still move any reference, including other
-    /// branches. On Linux only a linked worktree can stage and commit:
-    /// Landlock cannot keep a main worktree's Git directory from gaining a
-    /// `commondir` link, so there only its object, reference, and log stores
-    /// are writable, and commands are refused while a write grant contains a
-    /// Git directory, such as `with_write(".")` in a main worktree. A linked
-    /// worktree whose repository enables `extensions.worktreeConfig` needs
-    /// its `config.worktree` to exist.
+    /// wrote there. So do replacement refs, object alternates, grafts, and
+    /// the shallow boundary, which would change the history that Git shows
+    /// without changing the objects it pushes; on Linux a missing
+    /// `refs/replace` directory or alternates file is created empty to hold
+    /// the read-only mount. Commands can still move any reference, including
+    /// other branches, and edit `packed-refs`, where a replacement ref can
+    /// also live on macOS, so hosts that review history should also run
+    /// their own Git with `GIT_NO_REPLACE_OBJECTS=1`. On Linux only a linked
+    /// worktree can stage and commit: Landlock cannot keep a main worktree's
+    /// Git directory from gaining a `commondir` link, so there only its object,
+    /// reference, and log stores are writable, and commands are refused while a
+    /// write grant contains a Git directory, such as `with_write(".")` in a
+    /// main worktree. A linked worktree whose repository enables
+    /// `extensions.worktreeConfig` needs its `config.worktree` to exist.
     ///
     /// An executor other than the native sandbox that cannot keep these
     /// entries read-only must refuse a policy granting Git writes.
