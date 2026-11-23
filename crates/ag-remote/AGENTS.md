@@ -30,7 +30,9 @@ through `ag_session::SessionService`.
 - Keep the web client in `crates/ag-remote/assets/` free of build steps and external
   resources, and render untrusted text with `textContent` so the content security policy
   can stay strict. Refer to its files by relative path: `ag-relay` serves the same files
-  and may sit under a path prefix.
+  and may sit under a path prefix, and so may another web application that serves the
+  page through `ag-relay` on its own origin. A new file joins the lists in
+  `crates/ag-remote/src/server.rs` and `crates/ag-relay/src/web_client.rs`.
 - Keep the relay device key non-extractable wherever the browser can store it. The
   encrypted copy in `device_key.mjs` is only for browsers that cannot, and must keep
   upgrading itself.

@@ -33,6 +33,14 @@
 //! then opens a device stream. Whoever runs the relay controls the code
 //! this page runs.
 //!
+//! Another web application can serve the same page on its own origin, with
+//! its own navigation and a directory of the Agenttys its users have, from
+//! [`WebClientPage`] and [`web_client_files`]. Its page reaches instances
+//! through this relay as the relay's own page does. The relay accepts
+//! device streams whatever page opened them, so it needs no setting for
+//! that: the streams are encrypted end to end, and each instance approves
+//! each device itself.
+//!
 //! [`RelayLimits`] bounds what clients hold once a request reaches the
 //! relay. It does not cap plain TCP connections or slow request headers, and
 //! the relay speaks unencrypted HTTP: run it behind a reverse proxy that
@@ -47,10 +55,15 @@ mod peer;
 mod registry;
 mod server;
 mod stream;
+mod web_client;
 
 pub use admission::{AdmissionError, AdmissionPolicy, InstanceAllowList};
 pub use limit::RelayLimits;
 pub use server::{
     ACCEPT_PATH_PREFIX, CONNECT_PATH_PREFIX, REGISTER_PATH, REGISTERED_MESSAGE, RelayConfig,
     RelayError, RelayHandle, STREAM_MESSAGE_PREFIX, start, start_with_admission,
+};
+pub use web_client::{
+    WebClientError, WebClientFile, WebClientLink, WebClientOptions, WebClientPage,
+    WebClientSection, web_client_files,
 };

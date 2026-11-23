@@ -53,7 +53,7 @@ macro_rules! script {
 /// Web client files by request path, with their content types. The page
 /// refers to the others by relative path, so a relay can serve the same
 /// files under a path prefix.
-const WEB_ASSETS: [(&str, &str, &str); 24] = [
+const WEB_ASSETS: [(&str, &str, &str); 25] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -77,6 +77,7 @@ const WEB_ASSETS: [(&str, &str, &str); 24] = [
     script!("connection.mjs"),
     script!("device_key.mjs"),
     script!("diff.mjs"),
+    script!("directory.mjs"),
     script!("format.mjs"),
     script!("graph.mjs"),
     script!("home.mjs"),

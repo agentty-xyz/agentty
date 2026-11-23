@@ -4,12 +4,21 @@
 //! and the key store with the faults a browser can show.
 
 use std::fs;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use ag_relay::{WebClientLink, WebClientOptions, WebClientPage, WebClientSection};
 use ag_remote::{StaticKeypair, pairing_link};
+use axum::Router;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+use tokio::net::TcpListener;
 use tokio::process::{Child, ChildStdout, Command};
 
 use crate::support::{TestResult, TestServer, start_linked_server, start_relay};
@@ -885,6 +894,266 @@ async fn web_client_app_keeps_pairing_another_agentty_while_one_revokes_it_throu
             "rows": ["B/session-1", "B/session-2"],
             "sections": 0,
             "stored": ["B"],
+        })
+    );
+    assert!(succeeded);
+
+    Ok(())
+}
+
+/// Starts a web application that serves `page` at `/sessions/` with the
+/// client's files beside it, every response with the headers the page
+/// names, and an instance directory at `/api/instances`, which lists
+/// `instances` while `signed_in` holds and answers `401` after. Returns
+/// its address.
+async fn start_embedder(
+    page: &WebClientPage,
+    instances: Value,
+    signed_in: Arc<AtomicBool>,
+) -> TestResult<SocketAddr> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let address = listener.local_addr()?;
+    let directory = move || {
+        let body = instances.to_string();
+        let is_signed_in = signed_in.load(Ordering::SeqCst);
+
+        async move {
+            if !is_signed_in {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+
+            ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+    };
+    let html = page.html().to_string();
+    let mut page_headers = axum::http::HeaderMap::new();
+    for (name, value) in page.headers() {
+        page_headers.insert(
+            axum::http::HeaderName::try_from(name)?,
+            axum::http::HeaderValue::try_from(value)?,
+        );
+    }
+    let mut router = Router::new().route(
+        "/sessions/",
+        get({
+            let page_headers = page_headers.clone();
+
+            move || {
+                let response = served("text/html; charset=utf-8", html.clone(), &page_headers);
+
+                async move { response }
+            }
+        }),
+    );
+    for file in ag_relay::web_client_files() {
+        let page_headers = page_headers.clone();
+        router = router.route(
+            &format!("/sessions/{}", file.path),
+            get(move || {
+                let response = served(file.content_type, file.body.to_string(), &page_headers);
+
+                async move { response }
+            }),
+        );
+    }
+    let router = router.route("/api/instances", get(directory));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    Ok(address)
+}
+
+/// `body` with its content type and the page's headers.
+fn served(content_type: &str, body: String, page_headers: &axum::http::HeaderMap) -> Response {
+    let mut response = ([(header::CONTENT_TYPE, content_type.to_string())], body).into_response();
+    response.headers_mut().extend(page_headers.clone());
+
+    response
+}
+
+/// Checks that the page another web application serves loads every file
+/// the client needs with a policy that reaches `relay`, that a first link
+/// whose code does not work leaves the card ready for another link, and
+/// that the pasted real link moves on to the device name.
+fn assert_first_pairing_by_paste(
+    served: &Value,
+    wrong_code: &Value,
+    awaiting: &Value,
+    relay: &ag_relay::RelayHandle,
+) {
+    assert_eq!(
+        served,
+        &json!({
+            "step": "served",
+            "connect": format!("connect-src 'self' ws://{}", relay.local_addr()),
+            "failures": [],
+            "fetched": ag_relay::web_client_files().len(),
+        })
+    );
+    assert_eq!(
+        wrong_code,
+        &json!({
+            "step": "wrongCode",
+            "card": {"hintHidden": false, "linkHidden": false, "submitHidden": true},
+            "error": "Invalid or expired pairing code",
+            "linkHidden": false,
+        })
+    );
+    assert_eq!(
+        awaiting,
+        &json!({
+            "step": "awaiting",
+            "badge": "cloud",
+            "directory": ["laptop", "server"],
+            "focused": "pair-name",
+            "sections": ["Dashboard", "Sessions2"],
+        })
+    );
+}
+
+/// The directory's answer naming `first` `laptop` and `second` `server`,
+/// which never connected.
+fn directory_listing(first: &StaticKeypair, second: &StaticKeypair) -> Value {
+    json!({"instances": [
+        {
+            "instance_id": first.public().fingerprint(),
+            "last_connected_at": "2026-11-01T08:00:00Z",
+            "name": "laptop",
+        },
+        {
+            "instance_id": second.public().fingerprint(),
+            "last_connected_at": null,
+            "name": "server",
+        },
+    ]})
+}
+
+/// The options of a web application that serves the page beside its
+/// dashboard, reaching instances through `relay`.
+fn embedder_options(relay: &ag_relay::RelayHandle) -> WebClientOptions {
+    WebClientOptions {
+        relay_url: Some(format!("ws://{}", relay.local_addr())),
+        directory_path: Some("/api/instances".to_string()),
+        brand_badge: Some("cloud".to_string()),
+        sections: vec![
+            WebClientSection {
+                label: "Dashboard".to_string(),
+                href: "/dashboard".to_string(),
+                current: false,
+                badge: None,
+            },
+            WebClientSection {
+                label: "Sessions".to_string(),
+                href: "/sessions/".to_string(),
+                current: true,
+                badge: Some("2".to_string()),
+            },
+        ],
+        account: Some(WebClientLink {
+            label: "ada".to_string(),
+            href: "/account".to_string(),
+        }),
+    }
+}
+
+#[tokio::test]
+async fn web_client_served_by_another_web_application_reaches_agenttys_through_the_relay()
+-> TestResult {
+    // Arrange: the page's origin is the web application's, not the relay's.
+    let relay = start_relay().await?;
+    let first_key = StaticKeypair::generate()?;
+    let second_key = StaticKeypair::generate()?;
+    let first = start_linked_server(&relay, &first_key).await?;
+    let second = start_linked_server(&relay, &second_key).await?;
+    let first_link = link_of(&relay, &first_key, &first)?;
+    let second_link = link_of(&relay, &second_key, &second)?;
+    let page = WebClientPage::new(&embedder_options(&relay))?;
+    let signed_in = Arc::new(AtomicBool::new(true));
+    let listing = directory_listing(&first_key, &second_key);
+    let embedder = start_embedder(&page, listing, Arc::clone(&signed_in)).await?;
+    let page_url = format!("http://{embedder}/sessions/");
+
+    // Act
+    let mut app = WebDevice::run(
+        RELAY_APP_SCRIPT,
+        &["embed", &first_link, &second_link, &page_url],
+    )?;
+    let served = app.next_step().await?;
+    let wrong_code = app.next_step().await?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&first).await?;
+    let paired = app.next_step().await?;
+    let other_relay = app.next_step().await?;
+    let awaiting_second = app.next_step().await?;
+    // The page reads the directory again only when it shows later.
+    signed_in.store(false, Ordering::SeqCst);
+    approve_first_request(&second).await?;
+    let paired_second = app.next_step().await?;
+    let signed_out = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_first_pairing_by_paste(&served, &wrong_code, &awaiting, &relay);
+    assert_eq!(
+        paired,
+        json!({
+            "step": "paired",
+            "account": ["/account", ["a", "ada"]],
+            "badge": "cloud",
+            "directory": [[
+                "server",
+                "Never connected",
+                "To pair, use the pairing link from its Remote tab.",
+            ]],
+            "rows": ["A/session-1", "A/session-2"],
+            "sections": [
+                ["Dashboard", "/dashboard", null],
+                ["Sessions2", "/sessions/", "page"],
+            ],
+            "stored": ["A"],
+        })
+    );
+    // Agentty's link opens the relay's page, so this page takes it pasted.
+    assert_eq!(
+        other_relay,
+        json!({
+            "step": "otherRelay",
+            "card": {"hintHidden": false, "linkHidden": false, "view": "pair-view"},
+            "error": "This pairing link is for another relay. Open it from the address it names.",
+            "fieldsHidden": true,
+            "linkHidden": false,
+            "notLink": "Paste the whole pairing link from the Remote tab.",
+            "submitHidden": true,
+        })
+    );
+    assert_eq!(
+        awaiting_second,
+        json!({"step": "awaitingB", "linkHidden": true, "pasted": ""})
+    );
+    assert_eq!(
+        paired_second,
+        json!({
+            "step": "pairedB",
+            "directoryHidden": true,
+            "forgetItems": ["Forget on laptop", "Forget on server"],
+            "heads": [
+                {"name": "laptop", "state": "Connected"},
+                {"name": "server", "state": "Connected"},
+            ],
+        })
+    );
+    assert_eq!(
+        signed_out,
+        json!({
+            "step": "signedOut",
+            "directoryHidden": false,
+            "error": "You are signed out. Sign in again to see your Agenttys.",
+            "heads": [
+                {"name": "laptop", "state": "Connected"},
+                {"name": "server", "state": "Connected"},
+            ],
+            "listed": 0,
         })
     );
     assert!(succeeded);

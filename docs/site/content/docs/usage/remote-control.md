@@ -305,15 +305,15 @@ and a relay served over HTTPS.
 One browser can pair with several Agenttys through the same relay: open the pairing link
 of another Agentty, and it joins the ones already paired; `Back to sessions` on the
 pairing page returns to them without pairing. The sidebar then lists each Agentty's
-sessions under its own heading, which names it by the start of its instance identifier
-and shows its connection state, above its project line with `Sync` and `New session`.
-The filter, the `All`, `Needs you`, and `Running` buttons, and the sessions waiting on
-home span them all, and each waiting session names its Agentty. The address names the
-Agentty as well as the session. Each Agentty connects on its own, so one that is offline
-or refuses this device leaves the others working; the banner names the Agentty it is
-about, and the footer counts how many are connected. The footer's `⋯` button offers
-`Forget on` each Agentty. With one Agentty paired, the page looks as it does without the
-others.
+sessions under its own heading, which names it by the start of its instance identifier,
+or by the name the page's directory gives it, and shows its connection state, above its
+project line with `Sync` and `New session`. The filter, the `All`, `Needs you`, and
+`Running` buttons, and the sessions waiting on home span them all, and each waiting
+session names its Agentty. The address names the Agentty as well as the session. Each
+Agentty connects on its own, so one that is offline or refuses this device leaves the
+others working; the banner names the Agentty it is about, and the footer counts how many
+are connected. The footer's `⋯` button offers `Forget on` each Agentty. With one Agentty
+paired, the page looks as it does without the others.
 
 Traffic through the relay is encrypted between the device and Agentty. The relay sees
 when devices connect and how much they send, but not what they send. The relay also
@@ -325,6 +325,30 @@ including every browser on iPhone and iPad, cannot store such a key yet, so ther
 key is kept in a form that a script running in the page could read; the page switches to
 the stronger form by itself once Safari supports it. Agentty keeps its relay key in its
 database; removing it unpairs every relay device.
+
+### Serve the Page From Another Web Application
+
+<a id="usage-remote-control-embedded"></a> Another web application can serve the same
+page on its own address, as one section of its site, and reach Agenttys through a relay
+at another address; the `ag-relay` crate's `WebClientPage` renders the page for it and
+names the content security policy it needs. The relay accepts device connections from
+any page, since what they carry is encrypted end to end. Such a page works as the
+relay's own:
+
+- Links to the application's other sections sit at the top of the sidebar, its own badge
+  stands beside the brand, and a link to your account sits under the theme switch.
+- The pairing link that Agentty's `Remote` tab shows opens the relay's own page, so copy
+  it and paste it into the page's pairing card instead; `Pair another Agentty` in the
+  device menu opens that card once one Agentty is paired. A link to the page itself may
+  leave out the relay, and the page refuses a link for another relay.
+- The page may list the Agenttys of your account that this browser has not paired yet,
+  with when each last connected and how to pair it, and name the paired ones as the
+  application does. When the list says you are signed out, sign in to the application
+  again; the paired Agenttys stay connected meanwhile.
+
+Being listed grants nothing: each Agentty still pairs only through its own link and your
+approval in its terminal. Whoever serves the page controls the code it runs, as for a
+relay's page, so use only an application you trust with your sessions.
 
 ## Security
 
