@@ -19,6 +19,19 @@ pub struct GenerateGraphProposalRequest {
     pub session_id: SessionId,
 }
 
+impl GenerateGraphProposalRequest {
+    /// Asks for a proposal for the task `text`, without attachments, under
+    /// the delivery identity `id`.
+    #[must_use]
+    pub fn from_text(id: String, session_id: SessionId, text: String) -> Self {
+        Self {
+            id,
+            request: TurnPrompt::from_text(text),
+            session_id,
+        }
+    }
+}
+
 /// Explicit mutation of an inspected proposal version.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphProposalAction {

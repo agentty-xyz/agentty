@@ -795,3 +795,108 @@ fn graph_action_requests_without_a_needed_field_or_with_an_unknown_action_are_re
         ))
     );
 }
+
+#[test]
+fn graph_proposal_requests_carry_the_task_and_its_session() {
+    // Arrange
+    let frame = json!({
+        "method": "generate_graph_proposal",
+        "message": "Split the parser",
+        "session_id": "s"
+    });
+
+    // Act
+    let request: RemoteRequest =
+        serde_json::from_value(frame.clone()).expect("request should parse");
+    let encoded = serde_json::to_value(&request).expect("request should encode");
+
+    // Assert
+    assert_eq!(
+        request,
+        RemoteRequest::GenerateGraphProposal {
+            message: "Split the parser".to_string(),
+            session_id: "s".to_string(),
+        }
+    );
+    assert_eq!(encoded, frame);
+}
+
+#[test]
+fn answers_name_the_graph_work_they_answer_and_omit_it_for_the_turn() {
+    // Arrange
+    let targeted = json!({
+        "method": "answer_questions",
+        "answers": [{"answer": "Local", "question": "Where?"}],
+        "graph_question_target": "c0ffee",
+        "session_id": "s"
+    });
+    let older = json!({
+        "method": "answer_questions",
+        "answers": [{"answer": "main", "question": "Which branch?"}],
+        "session_id": "s"
+    });
+
+    // Act
+    let parsed: RemoteRequest =
+        serde_json::from_value(targeted.clone()).expect("request should parse");
+    let parsed_older: RemoteRequest =
+        serde_json::from_value(older.clone()).expect("request should parse");
+
+    // Assert
+    assert!(matches!(
+        &parsed,
+        RemoteRequest::AnswerQuestions { graph_question_target: Some(target), .. } if target == "c0ffee"
+    ));
+    assert!(matches!(
+        &parsed_older,
+        RemoteRequest::AnswerQuestions {
+            graph_question_target: None,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("request should encode"),
+        targeted
+    );
+    assert_eq!(
+        serde_json::to_value(&parsed_older).expect("request should encode"),
+        older
+    );
+}
+
+#[test]
+fn graph_questions_travel_apart_from_the_questions_of_the_turn() {
+    // Arrange
+    let mut session = session_fixture(&SessionId::from("session-1"));
+    session.questions = vec![QuestionItem {
+        options: vec!["Local".to_string(), "Remote".to_string()],
+        text: "Where should it run?".to_string(),
+    }];
+    session.graph_question_target = Some("c0ffee".to_string());
+    let turn = session_fixture(&SessionId::from("session-1"));
+
+    // Act
+    let remote = RemoteSession::from(session);
+    let encoded = serde_json::to_value(&remote).expect("session should encode");
+    let turn_encoded =
+        serde_json::to_value(RemoteSession::from(turn)).expect("session should encode");
+
+    // Assert
+    assert_eq!(remote.questions, Vec::new());
+    assert_eq!(
+        remote.graph_questions,
+        [RemoteQuestion {
+            options: vec!["Local".to_string(), "Remote".to_string()],
+            text: "Where should it run?".to_string(),
+        }]
+    );
+    assert_eq!(encoded["questions"], json!([]));
+    assert_eq!(
+        encoded["graph_questions"],
+        json!([{"options": ["Local", "Remote"], "text": "Where should it run?"}])
+    );
+    assert_eq!(encoded["graph_question_target"], json!("c0ffee"));
+    assert!(turn_encoded.get("graph_questions").is_none());
+    assert!(turn_encoded.get("graph_question_target").is_none());
+    assert_eq!(turn_encoded["questions"][0]["text"], json!("Which branch?"));
+}

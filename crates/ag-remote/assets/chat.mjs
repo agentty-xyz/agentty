@@ -121,14 +121,22 @@ export function wrappedParts(tops, lineTop, lineHeight) {
 
 // Decides what the dock shows for a session in `statusName`: `compose`
 // with a placeholder and a hint, `answer` while questions wait, or
-// `readonly` with the reason. `capabilities` gates `Stop`; `isFinePointer`
-// picks the key hint.
+// `readonly` with the reason. The turn's questions wait in `Question`;
+// `isGraphQuestions` says the questions come from the session's graph
+// work, which asks them in any status and also takes a chat reply.
+// `capabilities` gates `Stop`; `isFinePointer` picks the key hint.
 export function composerState(
   statusName,
-  { capabilities = [], hasQuestions = false, isConnected = true, isFinePointer = true } = {},
+  {
+    capabilities = [],
+    hasQuestions = false,
+    isConnected = true,
+    isFinePointer = true,
+    isGraphQuestions = false,
+  } = {},
 ) {
   const info = statusInfo(statusName);
-  if (statusName === "Question" && hasQuestions) {
+  if (hasQuestions && (statusName === "Question" || isGraphQuestions)) {
     return { mode: "answer" };
   }
   if (!info.composer) {
@@ -152,6 +160,46 @@ export function composerState(
   return { hint, isQueueing, mode: "compose", placeholder, showStop };
 }
 
+// The questions the panel shows for `session`: the turn's own, or else
+// the `graph_questions` its graph work asks, unless the user chose to
+// reply in chat to that same graph work, as `graphQuestionsKey` names it.
+// Returns the `questions`, whether they are `isGraph`, and the `target`
+// key of the graph work that asks them, which their answers name, or
+// `null` for the turn's.
+export function shownQuestions(session, dismissedKey = null) {
+  const own = Array.isArray(session?.questions) ? session.questions : [];
+  if (own.length > 0) {
+    return { isGraph: false, questions: own, target: null };
+  }
+  const graph = Array.isArray(session?.graph_questions) ? session.graph_questions : [];
+  if (graph.length === 0 || graphQuestionsKey(session) === dismissedKey) {
+    return { isGraph: false, questions: [], target: null };
+  }
+
+  return { isGraph: true, questions: graph, target: session.graph_question_target ?? null };
+}
+
+// Identifies one set of questions on screen.
+export function questionsKey(questions) {
+  return JSON.stringify(questions);
+}
+
+// What the question panel says above `session`'s graph questions: who asks
+// them, and, where the session takes chat, that a chat reply answers them
+// too.
+export function graphQuestionsSource(session) {
+  const canChat = statusInfo(session?.status).composer;
+
+  return "The execution graph asks. Answer here" + (canChat ? ", or reply in chat." : ".");
+}
+
+// Identifies the graph work that asks `session`'s graph questions: the
+// host's opaque `graph_question_target`, so a new proposal version or
+// node execution asking the same questions counts as new, joined with the
+// questions themselves.
+export function graphQuestionsKey(session) {
+  return String(session?.graph_question_target ?? "") + ":" + questionsKey(session?.graph_questions ?? []);
+}
 
 // Collects the answers to `questions`: typed text wins over the chosen
 // option in `picks`. Returns the answers, how many questions have one, and
@@ -277,7 +325,8 @@ export function createRefreshGate({
 
 // Wires the open session. `elements` holds the nodes with the ids named in
 // index.html, keyed as in `app.js`. `request(body)` sends one request and
-// resolves with its result; `onHome()` returns to home. `now()` returns
+// resolves with its result; `onHome()` returns to home; `onRefresh()`
+// reads the open session again, as after refused answers. `now()` returns
 // the time in seconds, for the header's timer.
 //
 // `diff`, `graph` and `settings` are the diff view, the graphs panel and
@@ -295,6 +344,7 @@ export function createChat({
   elements,
   request,
   onHome,
+  onRefresh = () => {},
   diff = null,
   graph = null,
   settings = null,
@@ -319,6 +369,9 @@ export function createChat({
     acting: new Set(),
     // The `@` file lookups of the answer fields on screen.
     answerLookups: [],
+    // Why Agentty refused the answers just sent, kept for the questions the
+    // refresh that follows shows in their place.
+    answerRefusal: "",
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
     // Where the transcript was when the diff or the graphs replaced it.
@@ -327,10 +380,16 @@ export function createChat({
     detailCount: 0,
     // What the open diff was loaded for; see `diffKey`.
     diffKey: null,
+    // The graph questions the user chose to reply to in chat, by
+    // `graphQuestionsKey`, until the session is opened again or other graph
+    // work asks, as in the terminal.
+    dismissedGraphQuestions: null,
     // Whether the open graphs added a history entry the back gesture pops.
     graphEntry: false,
     isAnswering: false,
     isConnected: false,
+    // Whether the questions on screen come from the session's graph work.
+    isGraphQuestions: false,
     // Whether the page went back over the graphs' entry and the browser
     // has not landed yet.
     isLeavingGraphs: false,
@@ -340,6 +399,9 @@ export function createChat({
     picks: [],
     questions: [],
     questionsKey: null,
+    // The key of the graph work that asks the questions on screen, which
+    // their answers name; `null` for the turn's.
+    questionsTarget: null,
     rendered: [],
     session: null,
     // The open session's entry in the listing, with its figures.
@@ -359,6 +421,9 @@ export function createChat({
     document: document,
     elements: {
       form: elements.composer,
+      graphLeave: elements.composerGraphLeave,
+      graphMode: elements.composerGraph,
+      graphNote: elements.composerGraphNote,
       hint: elements.composerHint,
       message: elements.message,
       meta: elements.composerMeta,
@@ -996,24 +1061,48 @@ export function createChat({
     return details;
   }
 
-  // Rebuilds the questions only when the set changes, so chosen options
-  // and typed answers survive refreshes.
-  function renderQuestions(questions) {
-    const key = JSON.stringify(questions);
+  // Rebuilds the questions, a `shownQuestions` result, only when the set
+  // or the graph work asking it changes, so chosen options and typed
+  // answers survive refreshes, and new graph work asking the same
+  // questions starts empty. The graph work's questions say who asks them.
+  // A refusal of the answers just sent stays over the questions that
+  // replace them, so the reader sees why the answers went away.
+  function renderQuestions({ isGraph, questions, target }) {
+    const refusal = state.answerRefusal;
+    state.answerRefusal = "";
+    const key = (isGraph ? "graph:" + target + ":" : "turn:") + questionsKey(questions);
     if (key === state.questionsKey) {
       return false;
     }
     state.questionsKey = key;
     state.questions = questions;
+    state.questionsTarget = target;
+    state.isGraphQuestions = isGraph;
     state.picks = questions.map(() => null);
     forgetAnswerLookups();
-    elements.answerError.textContent = "";
+    elements.answerError.textContent = questions.length > 0 ? refusal : "";
     elements.questions.hidden = questions.length === 0;
+    const source = isGraph
+      ? [element(document, "p", "questions-source", graphQuestionsSource(state.session))]
+      : [];
     elements.questions.replaceChildren(
+      ...source,
       ...questions.map((question, index) => renderQuestion(question, index, questions.length)),
     );
 
     return true;
+  }
+
+  // Closes the graph work's questions so the composer takes a chat reply,
+  // which answers them too.
+  function replyInChat() {
+    if (!state.isGraphQuestions || !state.session) {
+      return;
+    }
+    state.dismissedGraphQuestions = graphQuestionsKey(state.session);
+    renderQuestions(shownQuestions(state.session, state.dismissedGraphQuestions));
+    renderDock();
+    elements.message.focus();
   }
 
   // Ends the file lookups of answer fields that are going, so a file load
@@ -1167,9 +1256,17 @@ export function createChat({
       hasQuestions: state.questions.length > 0,
       isConnected: state.isConnected,
       isFinePointer: composer.isFinePointer(),
+      isGraphQuestions: state.isGraphQuestions,
     });
     elements.composer.hidden = dock.mode !== "compose";
     elements.answerBar.hidden = dock.mode !== "answer";
+    // Replying in chat needs a composer to reply with, and the panel says
+    // so as the status changes.
+    elements.answerChat.hidden = !state.isGraphQuestions || !statusInfo(session.status).composer;
+    const source = elements.questions.querySelector(".questions-source");
+    if (source) {
+      source.textContent = graphQuestionsSource(session);
+    }
     elements.readonly.hidden = dock.mode !== "readonly";
     composer.refresh();
     for (const lookup of state.answerLookups) {
@@ -1200,6 +1297,10 @@ export function createChat({
     state.rendered = [];
     state.questions = [];
     state.questionsKey = null;
+    state.questionsTarget = null;
+    state.answerRefusal = "";
+    state.isGraphQuestions = false;
+    state.dismissedGraphQuestions = null;
     state.picks = [];
     forgetAnswerLookups();
     elements.transcript.replaceChildren();
@@ -1335,7 +1436,7 @@ export function createChat({
     const statusLineChanged = renderStatusLine(session.status, session.progress);
     const changes = {
       layout: statusLineChanged || summaryChanged,
-      questions: renderQuestions(session.questions || []),
+      questions: renderQuestions(shownQuestions(session, state.dismissedGraphQuestions)),
       transcript: messagesChanged || reviewChanged || draftChanged,
     };
     renderQueued(session.queued_messages || [], session.queued_actions || []);
@@ -1379,15 +1480,29 @@ export function createChat({
   async function sendMessage() {
     const sessionId = state.sessionId;
     const message = elements.message.value;
-    if (!message.trim() || !sessionId || state.isSending || !state.isConnected) {
+    // A graph task the host or the session cannot take now is never sent
+    // as a chat message instead.
+    const isBlocked = composer.isGraphBlocked();
+    if (!message.trim() || !sessionId || state.isSending || !state.isConnected || isBlocked) {
       return;
     }
+    // An armed `/graph` composer asks for a graph proposal of the task
+    // instead; a refusal keeps it armed with its text.
+    const isGraph = composer.isGraphArmed();
     state.isSending = true;
     renderDock();
     try {
-      await request({ method: "send_message", session_id: sessionId, message: message });
-      // Text typed after sending, here or before switching away, stays.
-      composer.forgetDraft(sessionId, message);
+      await request({
+        method: isGraph ? "generate_graph_proposal" : "send_message",
+        session_id: sessionId,
+        message: message,
+      });
+      // Text typed after sending, here or before switching away, stays,
+      // and so does the graph mode of a draft that did not go out.
+      const isDraftGone = composer.forgetDraft(sessionId, message);
+      if (isGraph && isDraftGone) {
+        composer.disarmGraph(sessionId);
+      }
       if (state.sessionId === sessionId) {
         composer.clearText(message);
         elements.sessionError.textContent = "";
@@ -1413,6 +1528,9 @@ export function createChat({
 
       return;
     }
+    // Answers to graph questions name the graph work that asked them, so
+    // they never reach other work asking the same questions.
+    const target = state.isGraphQuestions ? { graph_question_target: state.questionsTarget } : {};
     state.isAnswering = true;
     renderAnswerBar();
     try {
@@ -1420,11 +1538,15 @@ export function createChat({
         method: "answer_questions",
         session_id: sessionId,
         answers: collected.answers,
+        ...target,
       });
       elements.answerError.textContent = "";
     } catch (error) {
       if (state.sessionId === sessionId) {
         elements.answerError.textContent = error.message;
+        // A refusal can mean the questions changed; show what waits now.
+        state.answerRefusal = error.message;
+        onRefresh();
       }
     } finally {
       state.isAnswering = false;
@@ -1491,6 +1613,7 @@ export function createChat({
     void sendAnswers();
   });
   elements.answerSend.addEventListener("click", () => void sendAnswers());
+  elements.answerChat.addEventListener("click", replyInChat);
   elements.scroller.addEventListener("scroll", () => {
     if (isNearEnd()) {
       elements.jump.hidden = true;

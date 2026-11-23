@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use ag_protocol::TurnPrompt;
 use async_trait::async_trait;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
@@ -14,8 +15,8 @@ use crate::service::{
     QuestionAnswer, SessionBackend, SessionOperation, SessionService, SessionSettingsChange,
 };
 use crate::{
-    ReasoningLevel, SessionGraphAction, SessionGraphActionRequest, SessionGraphs,
-    SessionGraphsRequest,
+    GenerateGraphProposalRequest, ReasoningLevel, SessionGraphAction, SessionGraphActionRequest,
+    SessionGraphs, SessionGraphsRequest,
 };
 
 #[tokio::test]
@@ -66,6 +67,7 @@ async fn service_delegates_mutating_operations_through_clones() {
             question: "Which branch?".to_string(),
         }],
         attachments: Vec::new(),
+        graph_question_target: None,
     };
 
     // Act
@@ -363,6 +365,8 @@ async fn service_delegates_settings_changes_to_supporting_hosts() {
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
+    /// Graph proposals asked for, in order.
+    generations: Mutex<Vec<GenerateGraphProposalRequest>>,
     /// Graph actions asked for, in order.
     graph_actions: Mutex<Vec<SessionGraphActionRequest>>,
     /// Graph reads asked for, in order.
@@ -387,7 +391,17 @@ impl SessionBackend for OptionalBackend {
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
                 | SessionOperation::GraphActions
+                | SessionOperation::GenerateGraphProposal
         )
+    }
+
+    async fn generate_graph_proposal(
+        &self,
+        request: GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        self.generations.lock().expect("generations").push(request);
+
+        Ok(())
     }
 
     async fn act_on_session_graph(
@@ -723,5 +737,35 @@ async fn service_delegates_graph_actions_to_supporting_hosts() {
             .expect("graph actions")
             .as_slice(),
         requests
+    );
+}
+
+#[tokio::test]
+async fn service_delegates_graph_proposal_generation_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+    let request = GenerateGraphProposalRequest::from_text(
+        "remote-1".to_string(),
+        SessionId::from("session-1"),
+        "Split the parser".to_string(),
+    );
+
+    // Act
+    let supported = service.supports(SessionOperation::GenerateGraphProposal);
+    service
+        .generate_graph_proposal(request)
+        .await
+        .expect("generation should reach the host");
+
+    // Assert
+    assert!(supported);
+    assert_eq!(
+        backend.generations.lock().expect("generations").as_slice(),
+        [GenerateGraphProposalRequest {
+            id: "remote-1".to_string(),
+            request: TurnPrompt::from_text("Split the parser".to_string()),
+            session_id: SessionId::from("session-1"),
+        }]
     );
 }

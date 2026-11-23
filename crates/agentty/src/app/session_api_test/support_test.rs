@@ -226,6 +226,7 @@ pub(super) fn current_question_answer(answer: &str) -> AnswerQuestionsRequest {
             question: "Current question?".to_string(),
         }],
         attachments: Vec::new(),
+        graph_question_target: None,
     }
 }
 

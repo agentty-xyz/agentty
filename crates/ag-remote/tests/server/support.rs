@@ -469,13 +469,15 @@ impl SessionBackend for RecordingBackend {
         }
 
         let prefix = format!("send:{session_id}:");
-        let sent = self
-            .calls()
+        let answered = format!("answer:{session_id}:");
+        let calls = self.calls();
+        let sent = calls
             .iter()
             .filter_map(|call| call.strip_prefix(&prefix).map(str::to_string))
             .collect();
+        let is_answered = calls.iter().any(|call| call.starts_with(&answered));
 
-        Ok(Some(session(session_id, sent)))
+        Ok(Some(session(session_id, sent, is_answered)))
     }
 
     // Every diff adds one line to `a.rs`.
@@ -624,6 +626,33 @@ impl SessionBackend for RecordingBackend {
         ])
     }
 
+    // The task `busy` is refused as the host refuses a session that is not
+    // ready. A delivery identity other than a fresh one the server minted,
+    // `remote-` and 32 hex digits, is refused too.
+    async fn generate_graph_proposal(
+        &self,
+        request: ag_session::GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        let message = request.request.text;
+        self.record(format!("graph_proposal:{}:{message}", request.session_id));
+        let is_minted = request.id.strip_prefix("remote-").is_some_and(|digits| {
+            digits.len() == 32 && digits.chars().all(|digit| digit.is_ascii_hexdigit())
+        });
+        if !is_minted {
+            return Err(SessionError::Operation(format!(
+                "Unexpected proposal identity `{}`",
+                request.id
+            )));
+        }
+        if message == "busy" {
+            return Err(SessionError::Operation(
+                "Graph generation requires a prepared idle session".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     // The message `busy` is rejected, `panic` panics, and `wait` is held,
     // and recorded only once [`RecordingBackend::release`] is called.
     async fn send_message(
@@ -666,7 +695,11 @@ impl SessionBackend for RecordingBackend {
             .iter()
             .map(|answer| format!("{}={}", answer.question, answer.answer))
             .collect();
-        self.record(format!("answer:{session_id}:{}", answers.join(",")));
+        // Answers for graph work end with `@` and the work's key.
+        let target = request
+            .graph_question_target
+            .map_or_default(|target| format!("@{target}"));
+        self.record(format!("answer:{session_id}:{}{target}", answers.join(",")));
 
         Ok(())
     }
@@ -747,7 +780,9 @@ impl SessionBackend for RecordingBackend {
 /// `session-2` runs a turn after an activity summary and a notice, beside
 /// a graph whose `inspect` output waits for approval; any other session has
 /// a hidden prompt, an answer, one question, and a finished focused review.
-fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
+/// Once `is_answered`, that question is gone, and the session waits in
+/// review on its graph work's question instead.
+fn session(session_id: &SessionId, queued_messages: Vec<String>, is_answered: bool) -> Session {
     let is_running = session_id.as_str() == "session-2";
     let (messages, questions, status, title) = if is_running {
         (
@@ -775,11 +810,22 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
                 SessionMessage::new(1, SessionMessageKind::AgentPrompt, "hidden"),
                 SessionMessage::new(2, SessionMessageKind::AssistantAnswer, "which branch?"),
             ],
-            vec![QuestionItem {
-                options: vec!["main".to_string()],
-                text: "Which branch?".to_string(),
+            vec![if is_answered {
+                QuestionItem {
+                    options: vec!["Locally".to_string()],
+                    text: "Where should the graph run?".to_string(),
+                }
+            } else {
+                QuestionItem {
+                    options: vec!["main".to_string()],
+                    text: "Which branch?".to_string(),
+                }
             }],
-            SessionStatus::Question,
+            if is_answered {
+                SessionStatus::Review
+            } else {
+                SessionStatus::Question
+            },
             "Build it",
         )
     };
@@ -803,6 +849,7 @@ fn session(session_id: &SessionId, queued_messages: Vec<String>) -> Session {
             total: 2,
             version: 1,
         }),
+        graph_question_target: (is_answered && !is_running).then(|| "c0ffee".to_string()),
         id: session_id.clone(),
         messages,
         progress: None,

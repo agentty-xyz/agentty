@@ -3,8 +3,10 @@
 // change the open session's settings; `/model`, `/reasoning` and `/style`
 // then list their values, and `/fast` toggles the speed. Every pick makes
 // one `set_session_settings` change, held for a session not yet created,
-// so the menu needs the same `settings` and `host` capabilities as the
-// settings sheet. Model names
+// so those commands need the same `settings` and `host` capabilities as
+// the settings sheet. `/graph`, offered with the `graph_proposal`
+// capability, arms the composer to ask for a graph proposal instead of
+// sending a message. Model names
 // from `get_host` only ever become text nodes, through suggest.mjs.
 // The Node tests in crates/ag-remote/tests/web/slash.test.mjs and
 // chat.test.mjs pass the fake DOM.
@@ -21,9 +23,10 @@ import {
 } from "./settings.mjs";
 
 // The commands a remote device can run, in the terminal's order and with
-// its descriptions. `/apply` and `/graph` need operations the host does
-// not offer remotely.
+// its descriptions. `/apply` needs an operation the host does not offer
+// remotely.
 export const SLASH_COMMANDS = [
+  { description: "Discuss a task with its execution graph beside the chat.", name: "/graph" },
   { description: "Choose an agent and model for this session.", name: "/model" },
   { description: "Override the reasoning level for this session.", name: "/reasoning" },
   { description: "Control how concise or detailed responses are.", name: "/style" },
@@ -32,6 +35,9 @@ export const SLASH_COMMANDS = [
 
 // Names the menu's lists in the popup it shares with the `@` file lookup.
 const OWNER = "slash";
+// Statuses in which the terminal hides `/graph`: the session runs a turn
+// or a sync, and its composer queues messages.
+const BUSY_STATUSES = new Set(["InProgress", "Rebasing"]);
 
 // What each command with a value list chooses, as `currentChoice` names
 // it, and the list's title.
@@ -56,16 +62,33 @@ export function slashQuery(text, selectionStart = text.length, selectionEnd = se
   return text.slice(1).toLowerCase();
 }
 
+// Whether `/graph` is offered for `session` with the host's
+// `capabilities`: the host generates graph proposals for devices, and the
+// session is not busy, as the terminal lists it.
+export function offersGraph(capabilities, session) {
+  return capabilities.includes("graph_proposal") && Boolean(session) && !BUSY_STATUSES.has(session.status);
+}
+
 // The commands whose name matches `query` fuzzily, best match first, as
 // `prompt_slash_commands` in crates/agentty/src/domain/composer.rs ranks
-// them; see `slashScore`. `/fast` is listed only when `canFast`: the
-// session's model can run fast.
-export function slashCommands(query, { canFast = false } = {}) {
-  return SLASH_COMMANDS.filter((command) => command.name !== "/fast" || canFast)
+// them; see `slashScore`. The setting commands are listed only when
+// `canSettings`, `/fast` only when `canFast` too: the session's model can
+// run fast. `/graph` is listed only when `canGraph`.
+export function slashCommands(query, { canFast = false, canGraph = false, canSettings = true } = {}) {
+  return SLASH_COMMANDS.filter((command) => isListed(command.name, { canFast, canGraph, canSettings }))
     .map((command) => ({ command: command, score: slashScore(command.name, query) }))
     .filter((entry) => entry.score !== null)
     .sort((first, second) => first.score - second.score)
     .map((entry) => entry.command);
+}
+
+// Whether `slashCommands` lists command `name`.
+function isListed(name, { canFast, canGraph, canSettings }) {
+  if (name === "/graph") {
+    return canGraph;
+  }
+
+  return canSettings && (name !== "/fast" || canFast);
 }
 
 // How well command `name` matches lowercase `query`, lower being better,
@@ -138,9 +161,12 @@ export function slashValues(command, session, models) {
 
 // Wires the slash commands of text field `input` to popup `suggestions`
 // from suggest.mjs. `context()` returns the open `session`, the host's
-// `capabilities` and `isConnected`; `request(body)` sends one request and
-// resolves with its result; `applySettings(session, change)` applies a
-// `set_session_settings` change, by sending it unless given;
+// `capabilities`, `isConnected`, and `isGraphArmed`, while `/graph` has
+// armed the composer, which then offers no commands, as in the terminal;
+// `request(body)` sends one request and resolves with its result;
+// `applySettings(session, change)` applies a `set_session_settings`
+// change, by sending it unless given; `onGraph()` arms the composer for a
+// graph request, and `/graph` is offered only when it is given;
 // `setText(text)` replaces the field's text and its saved draft;
 // `showError(message)` shows a failure, or clears it when empty.
 //
@@ -157,6 +183,7 @@ export function createSlashCommands({
   showError,
   applySettings = (session, change) =>
     request({ method: "set_session_settings", session_id: session.id, ...change }),
+  onGraph = null,
 }) {
   const state = {
     // Text the user closed the menu on with `Escape`; it stays closed
@@ -175,11 +202,19 @@ export function createSlashCommands({
     text: null,
   };
 
-  // The open session when this device may change its settings.
-  function settingsSession() {
-    const { capabilities = [], isConnected = false, session = null } = context() ?? {};
+  // What the menu may offer now: the open `session`, whether this device
+  // may change its settings (`canSettings`), and whether `/graph` may arm
+  // the composer (`canGraph`). `null` when it may offer nothing.
+  function offer() {
+    const { capabilities = [], isConnected = false, isGraphArmed = false, session = null } =
+      context() ?? {};
+    if (!session || !isConnected || isGraphArmed) {
+      return null;
+    }
+    const canSettings = offersSettings(capabilities);
+    const canGraph = onGraph !== null && offersGraph(capabilities, session);
 
-    return session && isConnected && offersSettings(capabilities) ? session : null;
+    return canSettings || canGraph ? { canGraph, canSettings, session } : null;
   }
 
   function close() {
@@ -217,9 +252,11 @@ export function createSlashCommands({
     return state.modelsLoad;
   }
 
-  // Lists what `stage` offers. A stage with nothing to list yet stays
-  // current, closed, so the models from the host can still fill it.
-  function show(stage, session) {
+  // Lists what `stage` offers under `current`, an `offer()`. A stage with
+  // nothing to list yet stays current, closed, so the models from the host
+  // can still fill it.
+  function show(stage, current) {
+    const { canGraph, canSettings, session } = current;
     state.stage = stage;
     state.text = input.value;
     const options = { onDismiss: dismiss, onPick: (item) => pick(stage, item.key), owner: OWNER };
@@ -227,7 +264,7 @@ export function createSlashCommands({
       const query = slashQuery(input.value) ?? "";
       const canFast = offersSpeed(state.models, currentChoice(session).model);
       suggestions.show({
-        items: slashCommands(query, { canFast: canFast }).map((command) => ({
+        items: slashCommands(query, { canFast, canGraph, canSettings }).map((command) => ({
           detail: command.description,
           key: command.name,
           label: command.name,
@@ -251,9 +288,9 @@ export function createSlashCommands({
   }
 
   function update() {
-    const session = settingsSession();
+    const current = offer();
     const text = input.value;
-    if (!session || (state.dismissed !== null && text === state.dismissed)) {
+    if (!current || (state.dismissed !== null && text === state.dismissed)) {
       close();
 
       return false;
@@ -266,8 +303,10 @@ export function createSlashCommands({
     }
     // The same text keeps what the menu shows, such as a value list.
     if (state.stage === null || state.text !== text) {
-      void loadModels(session);
-      show("commands", session);
+      if (current.canSettings) {
+        void loadModels(current.session);
+      }
+      show("commands", current);
     }
 
     return suggestions.isOpen(OWNER);
@@ -276,27 +315,42 @@ export function createSlashCommands({
   // Shows what is on screen again for a newer snapshot, or closes the menu
   // once the session no longer allows it.
   function refresh() {
-    const session = settingsSession();
-    // Text changed outside the menu, as when a message is sent, ends it.
-    if (!session || (state.stage !== null && input.value !== state.text)) {
+    const current = offer();
+    // Text changed outside the menu, as when a message is sent, ends it,
+    // and a value list needs the settings.
+    const isOver =
+      !current ||
+      (state.stage !== null && input.value !== state.text) ||
+      (state.stage !== "commands" && !current.canSettings);
+    if (isOver) {
       close();
     } else if (state.stage !== null) {
-      show(state.stage, session);
+      show(state.stage, current);
     }
   }
 
   function pick(stage, key) {
-    const session = settingsSession();
-    if (!session) {
+    const current = offer();
+    if (stage === "commands" && key === "/graph" && current?.canGraph) {
+      // As in the terminal, the command leaves an empty composer for the
+      // task.
+      close();
+      setText("");
+      onGraph();
+
+      return;
+    }
+    if (!current?.canSettings) {
       close();
 
       return;
     }
+    const session = current.session;
     if (stage === "commands" && key !== "/fast") {
       // The models from `get_host` replace the session's own one once
       // they arrive.
       setText(key);
-      show(key, session);
+      show(key, current);
 
       return;
     }

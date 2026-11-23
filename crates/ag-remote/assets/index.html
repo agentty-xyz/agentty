@@ -459,6 +459,15 @@
                                 </ul>
                             </div>
                             <form id="composer" class="composer">
+                                <div id="composer-graph" class="composer-graph" hidden>
+                                    <span class="composer-graph-tag">Graph</span>
+                                    <span id="composer-graph-note" class="composer-graph-note">Sending asks for a graph proposal</span>
+                                    <button id="composer-graph-leave"
+                                            type="button"
+                                            class="icon-btn composer-graph-leave"
+                                            aria-label="Back to chat"
+                                            title="Back to chat (Esc)">×</button>
+                                </div>
                                 <textarea id="message"
                                           rows="1"
                                           placeholder="Reply to the agent"
@@ -489,6 +498,7 @@
                             <p id="session-error" class="error" role="alert"></p>
                             <div id="answer-bar" class="answer-bar" hidden>
                                 <p id="answer-count"></p>
+                                <button id="answer-chat" type="button" class="btn btn--ghost" hidden>Reply in chat</button>
                                 <button id="answer-send" type="button" class="btn btn--primary" disabled>Send answers</button>
                             </div>
                             <p id="answer-error" class="error" role="alert"></p>

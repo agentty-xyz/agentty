@@ -764,6 +764,7 @@ async fn submit_response(app: &mut App, response: String) {
         AnswerQuestionsRequest {
             answers,
             attachments,
+            graph_question_target: None,
         },
     );
     let reply_enqueued = match app.drive_session_request(request).await {

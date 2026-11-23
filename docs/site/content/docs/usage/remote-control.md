@@ -14,8 +14,8 @@ for you, a message replies to it as a terminal reply would; see
 paired device can also stop a running turn, sync a session branch with its base branch,
 change a session's settings, create sessions in the active project, merge a session into
 its base branch, publish its branch, sync the active project's branch with its remote,
-and act on an execution graph as the terminal's graph inspector does; the web page
-offers each of these.
+ask for a graph proposal with `/graph`, and act on an execution graph as the terminal's
+graph inspector does; the web page offers each of these.
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote` to add
 the `Remote` tab to the right of `Settings`.
@@ -112,9 +112,13 @@ message waits in the queue above the box for the next turn. The queue also lists
 model change. A draft session starts with a `Draft session` preview of the messages
 staged for it; your next message starts the session with them. While the agent asks
 questions, the box gives way to the questions: pick an option or type an answer, then
-press `Send answers` once each has one. A session that is merging or finished shows why
-you cannot chat. Unsent text stays in the box for each session until Agentty accepts it,
-even after a reload of the tab.
+press `Send answers` once each has one. When the session's graph proposal or one of its
+graph nodes asks instead, as the terminal's question panel shows, the page shows those
+questions the same way and sends the answers to the graph work that asked; where the
+session takes chat, `Reply in chat` closes them until you open the session again or
+other graph work asks, and a chat message answers them too. A session that is merging or
+finished shows why you cannot chat. Unsent text stays in the box for each session until
+Agentty accepts it, even after a reload of the tab.
 
 Once a session is in review, its latest
 [focused review](@/docs/usage/workflow.md#focused-review) follows the transcript under a
@@ -151,6 +155,18 @@ when the model can run fast, `/fast`, as in the terminal: type any of a command'
 letters in order to narrow the list, pick one with the arrow keys and `Enter`, or tap
 it, then pick a value; `/fast` toggles the speed at once.
 
+When this Agentty lets devices ask for graph proposals, the `/` list in an open session
+also offers `/graph`, except while the session runs a turn or a sync, as in the
+terminal. It turns the box into a `Graph` request: describe the task and send it, and
+Agentty starts generating a
+[graph proposal](@/docs/usage/workflow.md#generated-graph-proposals), which the graph
+summary then shows. `Esc` or the `×` beside `Graph` returns to chat and keeps your text;
+a refused request says why and keeps both. An unsent task stays a `Graph` request when
+you switch sessions or the tab reloads. While the session or this Agentty cannot take a
+graph request, the marker says so and the box sends nothing until you return to chat.
+Nothing runs until you approve the proposal by replying in chat. Home's first message
+for a new session cannot start with `/graph`; open the session first.
+
 When this Agentty lets devices list a session's files, typing `@` at the start of a word
 lists the files and directories in the session's worktree, best match first, as in the
 terminal. Picking one puts `@path` in the message, or in a typed answer to a question,
@@ -184,8 +200,9 @@ spent budget it names: the selected node's, or else the first one. Cancelling a 
 permanent, so the page asks first. Each action applies to the graph as the panel last
 showed it; if the graph changed meanwhile, Agentty refuses the action, the panel shows
 why and reloads, and a typed reply or number stays while the panel still shows the node
-or budget it was typed for. A proposal stays a chat reply: approve, revise, or cancel
-it, and answer a node's questions, by replying in chat.
+or budget it was typed for. A proposal stays a chat reply: approve, revise, or cancel it
+by replying in chat. Questions a proposal or a node asks open the question panel, as
+described above.
 
 The sidebar footer shows this device and its connection. Its `green` / `dark` switch
 picks one of the site's two themes, and the browser remembers the choice. The `⋯` button
@@ -324,7 +341,11 @@ device can:
   fails;
 - send messages, which start, resume, or queue a turn that agents run with edit
   permissions;
-- answer an agent's questions;
+- answer an agent's questions, and the questions of a session's graph proposal or graph
+  nodes, which go to the graph work that asked them as a terminal answer would;
+- ask for a graph proposal with `/graph`, which starts model work that reads the
+  session's worktree and proposes an execution graph; nothing launches until a chat
+  reply approves the proposal;
 - stop a running turn, which returns the session to review with its worktree and changes
   kept but discards the messages queued behind the turn;
 - sync a session branch, which rebases it onto its base branch and starts an agent turn

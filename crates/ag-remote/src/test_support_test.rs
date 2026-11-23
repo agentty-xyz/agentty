@@ -6,12 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
-    DurableMessageRequest, HostContext, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
-    HostSessionMode, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session,
-    SessionBackend, SessionDiffFile, SessionError, SessionFileEntry, SessionGraphActionRequest,
-    SessionGraphs, SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind,
-    SessionOperation, SessionService, SessionSettings, SessionSettingsChange, SessionStatus,
-    SessionSummary, SpeedMode,
+    DurableMessageRequest, GenerateGraphProposalRequest, HostContext, HostProjectStatus,
+    HostProjectSync, HostProjectSyncPhase, HostSessionMode, QuestionItem, ReasoningLevel,
+    ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile, SessionError,
+    SessionFileEntry, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest, SessionId,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -368,6 +368,19 @@ impl SessionBackend for RecordingBackend {
         self.record(format!("send:{session_id}:{message}"), ())
     }
 
+    // Records the request as `graph_proposal:<session>:<id>:<task>`.
+    async fn generate_graph_proposal(
+        &self,
+        request: GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        let call = format!(
+            "graph_proposal:{}:{}:{}",
+            request.session_id, request.id, request.request.text
+        );
+
+        self.record(call, ())
+    }
+
     async fn submit_durable_message(
         &self,
         session_id: &SessionId,
@@ -387,9 +400,14 @@ impl SessionBackend for RecordingBackend {
             .map(|answer| format!("{}={}", answer.question, answer.answer))
             .collect();
 
+        // Answers for graph work end with `@` and the work's key.
+        let target = request
+            .graph_question_target
+            .map_or_default(|target| format!("@{target}"));
+
         self.record(
             format!(
-                "answer:{session_id}:{}:{}",
+                "answer:{session_id}:{}:{}{target}",
                 answers.join(","),
                 request.attachments.len()
             ),
@@ -494,6 +512,7 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
         draft_prompt: None,
         focused_review: None,
         graph: None,
+        graph_question_target: None,
         id: session_id.clone(),
         messages: vec![
             SessionMessage::new(0, SessionMessageKind::UserPrompt, "build it"),

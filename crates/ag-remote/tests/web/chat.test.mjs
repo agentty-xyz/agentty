@@ -4,8 +4,11 @@ import test from "node:test";
 
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
 import {
+  DRAFT_GRAPH_KEY_PREFIX,
   DRAFT_KEY_PREFIX,
+  GRAPH_PLACEHOLDER,
   composerKeyAction,
+  composerLabels,
   composerRows,
   historyKeyAction,
   promptHistory,
@@ -21,8 +24,12 @@ import {
   isConnectionLost,
   mergeTarget,
   messageKind,
+  graphQuestionsKey,
+  graphQuestionsSource,
   publishBranch,
+  questionsKey,
   sessionActions,
+  shownQuestions,
   transcriptChanges,
   transcriptEntries,
   wrappedParts,
@@ -40,6 +47,7 @@ const ELEMENT_IDS = {
   actionError: "action-error",
   actionNote: "action-note",
   answerBar: "answer-bar",
+  answerChat: "answer-chat",
   answerCount: "answer-count",
   answerError: "answer-error",
   answerSend: "answer-send",
@@ -47,6 +55,9 @@ const ELEMENT_IDS = {
   cancel: "cancel",
   cancelDialog: "cancel-dialog",
   composer: "composer",
+  composerGraph: "composer-graph",
+  composerGraphLeave: "composer-graph-leave",
+  composerGraphNote: "composer-graph-note",
   composerHint: "composer-hint",
   composerMeta: "composer-meta",
   composerSettings: "composer-settings",
@@ -176,6 +187,7 @@ function mountChat({
   );
   const requests = [];
   let homes = 0;
+  let refreshes = 0;
   const request = async (body) => {
     requests.push(body);
 
@@ -204,6 +216,9 @@ function mountChat({
     onHome: () => {
       homes += 1;
     },
+    onRefresh: () => {
+      refreshes += 1;
+    },
     request: request,
     settings: createSettings({
       document: document,
@@ -216,7 +231,7 @@ function mountChat({
   chat.setConnected(true);
   chat.open("s1");
 
-  return { byId, chat, document, homes: () => homes, requests, window };
+  return { byId, chat, document, homes: () => homes, refreshes: () => refreshes, requests, window };
 }
 
 // Lets pending promise callbacks run.
@@ -2045,6 +2060,529 @@ test("without settings and host, / is plain text and Enter sends it", async () =
     await settle();
     assert.deepEqual(requests, [{ method: "send_message", message: "/model", session_id: "s1" }]);
   }
+});
+
+// Mounts the chat with the `graph_proposal` capability on `s1` in
+// review, answering each request with `respond`.
+function mountGraphChat(respond = () => ({ kind: "accepted" })) {
+  const mounted = mountChat({ capabilities: ["graph_proposal"], respond: respond });
+  mounted.chat.render(session());
+
+  return mounted;
+}
+
+// Picks `/graph` from the slash menu of the composer.
+function armGraph(byId) {
+  typeMessage(byId, "/gr");
+  pressKey(byId, "Enter");
+}
+
+test("/graph arms the composer, which then asks for a graph proposal and disarms", async () => {
+  const { byId, chat, requests } = mountGraphChat();
+  typeMessage(byId, "/");
+  assert.deepEqual(suggested(byId), ["/graph"]);
+  assert.equal(
+    byId("message-suggestions").children[0].textContent,
+    "/graphDiscuss a task with its execution graph beside the chat.",
+  );
+  assert.equal(byId("composer-graph").hidden, true);
+
+  armGraph(byId);
+  assert.equal(byId("message").value, "");
+  assert.equal(byId("composer-graph").hidden, false);
+  assert.equal(byId("message").placeholder, "Describe the task for the execution graph");
+  assert.equal(byId("send").getAttribute("aria-label"), "Ask for a graph proposal");
+  assert.equal(byId("composer-meta").textContent, "Enter asks for a graph proposal · Esc returns to chat");
+  // The task is taken literally, so `/` opens no menu now.
+  typeMessage(byId, "/split the parser");
+  assert.deepEqual(suggested(byId), []);
+  // A refresh keeps the armed composer.
+  chat.render(session());
+  assert.equal(byId("composer-graph").hidden, false);
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.deepEqual(requests, [
+    { message: "/split the parser", method: "generate_graph_proposal", session_id: "s1" },
+  ]);
+  assert.equal(byId("message").value, "");
+  assert.equal(byId("composer-graph").hidden, true);
+  assert.equal(byId("message").placeholder, "Reply to the agent");
+  // The next message is chat again.
+  typeMessage(byId, "Thanks");
+  pressKey(byId, "Enter");
+  await settle();
+  assert.equal(requests[1].method, "send_message");
+});
+
+test("a refused graph request keeps the task and graph mode, and Escape or the marker leaves it", async () => {
+  const { byId, requests } = mountGraphChat(() => {
+    throw new Error("Graph generation requires a prepared idle session");
+  });
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.equal(requests.length, 1);
+  assert.equal(byId("session-error").textContent, "Graph generation requires a prepared idle session");
+  assert.equal(byId("message").value, "Split the parser");
+  assert.equal(byId("composer-graph").hidden, false);
+  // Escape only leaves graph mode, keeping the text.
+  assert.equal(pressKey(byId, "Escape").defaultPrevented, true);
+  assert.equal(byId("composer-graph").hidden, true);
+  assert.equal(byId("message").value, "Split the parser");
+  assert.equal(byId("message").placeholder, "Reply to the agent");
+  assert.equal(pressKey(byId, "Escape").defaultPrevented, false);
+  // The marker's button leaves it too.
+  typeMessage(byId, "/gr");
+  pressKey(byId, "Enter");
+  byId("composer-graph-leave").click();
+  assert.equal(byId("composer-graph").hidden, true);
+});
+
+test("composerLabels asks for the graph task while graph mode is armed", () => {
+  const dock = { hint: "Enter sends", placeholder: "Reply to the agent", sendLabel: "Send" };
+
+  assert.deepEqual(composerLabels(dock, { isFinePointer: true, isGraphArmed: false }), dock);
+  assert.deepEqual(composerLabels(dock, { isFinePointer: false, isGraphArmed: true }), {
+    hint: "Sending asks for a graph proposal",
+    placeholder: GRAPH_PLACEHOLDER,
+    sendLabel: "Ask for a graph proposal",
+  });
+  assert.equal(GRAPH_PLACEHOLDER, "Describe the task for the execution graph");
+  assert.deepEqual(composerLabels(dock, { isFinePointer: false, isGraphArmed: true, isGraphBlocked: true }), {
+    hint: "Graph requests unavailable now · × returns to chat",
+    placeholder: GRAPH_PLACEHOLDER,
+    sendLabel: "Graph requests unavailable now",
+  });
+  // Blocked means nothing without graph mode.
+  assert.deepEqual(composerLabels(dock, { isFinePointer: true, isGraphArmed: false, isGraphBlocked: true }), dock);
+});
+
+test("/graph is offered only with its capability, in sessions the terminal lists it for", () => {
+  for (const status of ["InProgress", "Rebasing"]) {
+    const { byId, chat } = mountGraphChat();
+    chat.render(session({ status: status }));
+    typeMessage(byId, "/");
+    assert.deepEqual(suggested(byId), [], status);
+  }
+  const { byId, chat } = mountChat({ capabilities: ["graphs", "graph_actions"] });
+  chat.render(session());
+  typeMessage(byId, "/");
+  assert.deepEqual(suggested(byId), []);
+});
+
+test("graph mode stays with its draft across a session switch, and Esc forgets it", async () => {
+  const { byId, chat, requests } = mountGraphChat();
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  assert.equal(byId("composer-graph").hidden, true);
+  assert.equal(byId("message").value, "");
+
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("composer-graph").hidden, false);
+  assert.equal(byId("message").value, "Split the parser");
+  assert.equal(byId("message").placeholder, "Describe the task for the execution graph");
+  // Leaving graph mode is kept with the draft too.
+  pressKey(byId, "Escape");
+  chat.open("s2");
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("composer-graph").hidden, true);
+  assert.equal(byId("message").value, "Split the parser");
+  pressKey(byId, "Enter");
+  await settle();
+  assert.deepEqual(requests, [{ message: "Split the parser", method: "send_message", session_id: "s1" }]);
+});
+
+test("a reloaded tab brings a graph task back in graph mode, and sending it asks for a proposal", async () => {
+  const storage = new MemoryStorage();
+  const first = mountChat({ capabilities: ["graph_proposal"], sessionStorage: storage });
+  first.chat.render(session());
+  armGraph(first.byId);
+  typeMessage(first.byId, "Split the parser");
+
+  const reloaded = mountChat({ capabilities: ["graph_proposal"], sessionStorage: storage });
+  reloaded.chat.render(session());
+  assert.equal(reloaded.byId("composer-graph").hidden, false);
+  assert.equal(reloaded.byId("message").value, "Split the parser");
+  pressKey(reloaded.byId, "Enter");
+  await settle();
+
+  assert.deepEqual(reloaded.requests, [
+    { message: "Split the parser", method: "generate_graph_proposal", session_id: "s1" },
+  ]);
+  assert.equal(reloaded.byId("composer-graph").hidden, true);
+  assert.equal(storage.getItem(DRAFT_GRAPH_KEY_PREFIX + "s1"), null);
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), null);
+});
+
+test("a graph task survives its session going missing and coming back", async () => {
+  const { byId, chat, requests } = mountGraphChat();
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  // The host stops listing the session, as when the terminal switches
+  // projects, and lists it again.
+  chat.render(null);
+  chat.render(session());
+
+  assert.equal(byId("composer-graph").hidden, false);
+  assert.equal(byId("message").value, "Split the parser");
+  pressKey(byId, "Enter");
+  await settle();
+  assert.deepEqual(requests, [
+    { message: "Split the parser", method: "generate_graph_proposal", session_id: "s1" },
+  ]);
+});
+
+test("an earlier prompt sent in graph mode leaves the graph task it replaced armed", async () => {
+  const { byId, requests } = mountGraphChat();
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  pressArrow(byId, "ArrowUp");
+  assert.equal(byId("message").value, "Build it");
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.equal(byId("message").value, "Split the parser");
+  assert.equal(byId("composer-graph").hidden, false);
+  pressKey(byId, "Enter");
+  await settle();
+  assert.deepEqual(
+    requests.map((body) => [body.method, body.message]),
+    [
+      ["generate_graph_proposal", "Build it"],
+      ["generate_graph_proposal", "Split the parser"],
+    ],
+  );
+});
+
+test("a graph request that went out ends graph mode of its emptied draft in another session", async () => {
+  let release;
+  const { byId, chat } = mountGraphChat(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  pressKey(byId, "Enter");
+  // The box is emptied while the request runs, then the reader leaves.
+  typeMessage(byId, "");
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  release({ kind: "accepted" });
+  await settle();
+
+  chat.open("s1");
+  chat.render(session());
+  assert.equal(byId("composer-graph").hidden, true);
+  assert.equal(byId("message").placeholder, "Reply to the agent");
+});
+
+test("an armed draft loaded before the first snapshot shows that it cannot go yet", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(DRAFT_KEY_PREFIX + "s1", "Split the parser");
+  storage.setItem(DRAFT_GRAPH_KEY_PREFIX + "s1", "1");
+
+  const { byId } = mountChat({ capabilities: ["graph_proposal"], sessionStorage: storage });
+
+  assert.equal(byId("message").value, "Split the parser");
+  assert.equal(byId("composer-graph").hidden, false);
+  assert.equal(byId("composer-graph").classList.contains("is-blocked"), true);
+  assert.equal(byId("composer-graph-note").textContent, "Graph requests unavailable now");
+  assert.equal(byId("send").disabled, true);
+});
+
+test("a graph task the host or the session cannot take now stays one, and sends nothing", async () => {
+  const { byId, chat, requests } = mountGraphChat();
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  chat.setCapabilities([]);
+  chat.render(session());
+
+  assert.equal(byId("composer-graph").hidden, false);
+  assert.equal(byId("composer-graph").classList.contains("is-blocked"), true);
+  assert.equal(byId("composer-graph-note").textContent, "Graph requests unavailable now");
+  assert.equal(byId("composer-meta").textContent, "Graph requests unavailable now · Esc returns to chat");
+  assert.equal(byId("send").disabled, true);
+  pressKey(byId, "Enter");
+  byId("composer").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+  assert.deepEqual(requests, []);
+
+  // A busy session cannot take it either; once idle with the host
+  // offering it again, the task can go.
+  chat.setCapabilities(["graph_proposal"]);
+  chat.render(session({ status: "InProgress" }));
+  assert.equal(byId("send").disabled, true);
+  chat.render(session());
+  assert.equal(byId("composer-graph").classList.contains("is-blocked"), false);
+  assert.equal(byId("composer-graph-note").textContent, "Sending asks for a graph proposal");
+  assert.equal(byId("send").disabled, false);
+
+  // Leaving graph mode makes it an ordinary message, sent as chat.
+  chat.setCapabilities([]);
+  chat.render(session());
+  byId("composer-graph-leave").click();
+  assert.equal(byId("send").disabled, false);
+  pressKey(byId, "Enter");
+  await settle();
+  assert.deepEqual(requests, [{ message: "Split the parser", method: "send_message", session_id: "s1" }]);
+});
+
+test("a graph request whose session closed meanwhile leaves the open composer alone", async () => {
+  let release;
+  const { byId, chat } = mountGraphChat(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  armGraph(byId);
+  typeMessage(byId, "Split the parser");
+  pressKey(byId, "Enter");
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  armGraph(byId);
+  release({ kind: "accepted" });
+  await settle();
+
+  assert.equal(byId("composer-graph").hidden, false);
+});
+
+test("the graph work's questions open the question panel in any status, and Reply in chat closes them", async () => {
+  const { byId, chat, refreshes, requests } = mountChat();
+  const graphQuestions = [{ options: ["Local", "Remote"], text: "Where should it run?" }];
+  chat.render(session({ graph_question_target: "proposal-v1", graph_questions: graphQuestions }));
+
+  assert.equal(byId("questions").hidden, false);
+  assert.equal(
+    byId("questions").querySelector(".questions-source").textContent,
+    "The execution graph asks. Answer here, or reply in chat.",
+  );
+  assert.equal(byId("answer-bar").hidden, false);
+  assert.equal(byId("answer-chat").hidden, false);
+  assert.equal(byId("composer").hidden, true);
+  byId("questions").querySelectorAll(".option")[0].click();
+  byId("answer-send").click();
+  await settle();
+  // The answers name the graph work whose questions the panel showed.
+  assert.deepEqual(requests, [
+    {
+      answers: [{ answer: "Local", question: "Where should it run?" }],
+      graph_question_target: "proposal-v1",
+      method: "answer_questions",
+      session_id: "s1",
+    },
+  ]);
+  assert.equal(refreshes(), 0);
+
+  byId("answer-chat").click();
+  assert.equal(byId("questions").hidden, true);
+  assert.equal(byId("answer-bar").hidden, true);
+  assert.equal(byId("composer").hidden, false);
+  // The same questions stay closed through refreshes; new ones open.
+  chat.render(session({ graph_question_target: "proposal-v1", graph_questions: graphQuestions }));
+  assert.equal(byId("questions").hidden, true);
+  const next = [{ options: [], text: "Which file?" }];
+  chat.render(session({ graph_questions: next }));
+  assert.equal(byId("questions").hidden, false);
+  // Opening the session again shows dismissed questions again.
+  byId("answer-chat").click();
+  chat.open("s1");
+  chat.render(session({ graph_questions: next }));
+  assert.equal(byId("questions").hidden, false);
+});
+
+test("closed graph questions open again when other graph work asks the same ones", () => {
+  const { byId, chat } = mountChat();
+  const graphQuestions = [{ options: [], text: "Where should it run?" }];
+  const asked = (target) => session({ graph_question_target: target, graph_questions: graphQuestions });
+  chat.render(asked("proposal-v1"));
+  byId("answer-chat").click();
+  chat.render(asked("proposal-v1"));
+  assert.equal(byId("questions").hidden, true);
+
+  chat.render(asked("proposal-v2"));
+
+  assert.equal(byId("questions").hidden, false);
+  assert.equal(byId("answer-bar").hidden, false);
+});
+
+test("new graph work asking the same questions starts with empty answers", () => {
+  const { byId, chat } = mountChat();
+  const graphQuestions = [{ options: ["Local", "Remote"], text: "Where should it run?" }];
+  const asked = (target) => session({ graph_question_target: target, graph_questions: graphQuestions });
+  chat.render(asked("node-a"));
+  byId("questions").querySelectorAll(".option")[1].click();
+  typeAnswer(byId("questions").querySelector("input"), "Both");
+  chat.render(asked("node-a"));
+  assert.equal(byId("questions").querySelector("input").value, "Both");
+
+  chat.render(asked("node-b"));
+
+  assert.equal(byId("questions").querySelector("input").value, "");
+  assert.deepEqual(
+    Array.from(byId("questions").querySelectorAll(".option"), (option) => option.getAttribute("aria-pressed")),
+    ["false", "false"],
+  );
+  assert.equal(byId("answer-count").textContent, "0 of 1 answered");
+});
+
+test("refused graph answers say why, keep the answers, and read the session again", async () => {
+  const { byId, chat, refreshes } = mountChat({
+    respond: () => {
+      throw new Error("These questions were already answered or are no longer pending.");
+    },
+  });
+  chat.render(
+    session({
+      graph_question_target: "node-a",
+      graph_questions: [{ options: ["Local"], text: "Where should it run?" }],
+    }),
+  );
+  byId("questions").querySelector(".option").click();
+  byId("answer-send").click();
+  await settle();
+
+  assert.equal(
+    byId("answer-error").textContent,
+    "These questions were already answered or are no longer pending.",
+  );
+  assert.equal(byId("answer-count").textContent, "1 of 1 answered");
+  assert.equal(refreshes(), 1);
+});
+
+test("a refusal stays over the questions other graph work asks in their place", async () => {
+  const refusal = "These questions were already answered or are no longer pending.";
+  const { byId, chat } = mountChat({
+    respond: () => {
+      throw new Error(refusal);
+    },
+  });
+  const graphQuestions = [{ options: ["Local"], text: "Where should it run?" }];
+  const asked = (target) => session({ graph_question_target: target, graph_questions: graphQuestions });
+  chat.render(asked("node-a"));
+  byId("questions").querySelector(".option").click();
+  byId("answer-send").click();
+  await settle();
+
+  // The refresh shows other graph work asking the same questions: the
+  // answers start empty, and the reason they went away stays.
+  chat.render(asked("node-b"));
+  assert.equal(byId("answer-count").textContent, "0 of 1 answered");
+  assert.equal(byId("answer-error").textContent, refusal);
+
+  // It is said once: the next set of questions starts without it.
+  chat.render(asked("node-c"));
+  assert.equal(byId("answer-error").textContent, "");
+});
+
+test("a refusal does not outlive the questions it was about", async () => {
+  const { byId, chat } = mountChat({
+    respond: () => {
+      throw new Error("These questions were already answered or are no longer pending.");
+    },
+  });
+  const graphQuestions = [{ options: ["Local"], text: "Where should it run?" }];
+  chat.render(session({ graph_question_target: "node-a", graph_questions: graphQuestions }));
+  byId("questions").querySelector(".option").click();
+  byId("answer-send").click();
+  await settle();
+
+  // Nothing asks any more, and later other work does.
+  chat.render(session());
+  assert.equal(byId("answer-error").textContent, "");
+  chat.render(session({ graph_question_target: "node-b", graph_questions: graphQuestions }));
+  assert.equal(byId("answer-error").textContent, "");
+});
+
+test("Reply in chat shows only where the status has a composer to reply with", () => {
+  const graphQuestions = [{ options: [], text: "Where should it run?" }];
+  for (const [status, isShown] of [
+    ["Review", true],
+    ["InProgress", true],
+    ["Queued", false],
+    ["Merging", false],
+    ["Merged", false],
+  ]) {
+    const { byId, chat } = mountChat();
+    chat.render(session({ graph_questions: graphQuestions, status: status }));
+    assert.equal(byId("answer-bar").hidden, false, status);
+    assert.equal(byId("answer-chat").hidden, !isShown, status);
+    assert.equal(
+      byId("questions").querySelector(".questions-source").textContent,
+      isShown
+        ? "The execution graph asks. Answer here, or reply in chat."
+        : "The execution graph asks. Answer here.",
+      status,
+    );
+  }
+  // The line follows the status while the same questions stay.
+  const { byId, chat } = mountChat();
+  chat.render(session({ graph_questions: graphQuestions }));
+  chat.render(session({ graph_questions: graphQuestions, status: "Merging" }));
+  assert.equal(
+    byId("questions").querySelector(".questions-source").textContent,
+    "The execution graph asks. Answer here.",
+  );
+  assert.equal(graphQuestionsSource(null), "The execution graph asks. Answer here.");
+});
+
+test("the turn's own questions win over the graph work's, and keep no Reply in chat", () => {
+  const { byId, chat } = mountChat();
+  chat.render(
+    session({
+      graph_questions: [{ options: [], text: "Where should it run?" }],
+      questions: [{ options: [], text: "Which branch?" }],
+      status: "Question",
+    }),
+  );
+
+  assert.equal(byId("questions").querySelector(".question").dataset.question, "Which branch?");
+  assert.equal(byId("questions").querySelector(".questions-source"), null);
+  assert.equal(byId("answer-chat").hidden, true);
+  // Without its turn's questions, the session shows no answer bar.
+  chat.render(session());
+  assert.equal(byId("answer-bar").hidden, true);
+  assert.equal(byId("questions").hidden, true);
+});
+
+test("shownQuestions prefers the turn's questions and skips a dismissed graph set", () => {
+  const graph = [{ options: [], text: "Where?" }];
+  const own = [{ options: [], text: "Which?" }];
+
+  const none = { isGraph: false, questions: [], target: null };
+  assert.deepEqual(shownQuestions(session({ graph_questions: graph, questions: own })), {
+    isGraph: false,
+    questions: own,
+    target: null,
+  });
+  assert.deepEqual(shownQuestions(session({ graph_questions: graph })), {
+    isGraph: true,
+    questions: graph,
+    target: null,
+  });
+  const asked = session({ graph_question_target: "v1", graph_questions: graph });
+  assert.deepEqual(shownQuestions(asked, graphQuestionsKey(asked)), none);
+  // Other graph work asking the same questions is not dismissed.
+  const again = session({ graph_question_target: "v2", graph_questions: graph });
+  assert.deepEqual(shownQuestions(again, graphQuestionsKey(asked)), {
+    isGraph: true,
+    questions: graph,
+    target: "v2",
+  });
+  assert.equal(graphQuestionsKey(asked), "v1:" + questionsKey(graph));
+  assert.equal(graphQuestionsKey({}), ":[]");
+  assert.deepEqual(shownQuestions({}), none);
+  assert.deepEqual(composerState("Review", { hasQuestions: true, isGraphQuestions: true }), { mode: "answer" });
+  assert.equal(composerState("Review", { hasQuestions: true }).mode, "compose");
 });
 
 test("the slash menu closes on blur, offline, in a read-only session, and on a session switch", async () => {

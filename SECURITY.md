@@ -61,10 +61,13 @@ lists under "What a paired device can do": today that is reading transcripts, fo
 review results, diffs, and graph proposals and execution graphs with their captured
 instructions and outputs, listing the file and directory names in a session's worktree
 and in the active project's checkout, seeing the project's branch and sync state,
-sending prompts, answering questions, stopping a turn, syncing a session branch,
-changing session settings, canceling a session, merging a session into its base branch,
-creating sessions, publishing a session branch and opening its pull request with the
-user's forge credentials, syncing the active project's branch with its Git remote, and
+sending prompts, answering questions, including those of a session's graph proposal or
+graph nodes, stopping a turn, syncing a session branch, changing session settings,
+canceling a session, merging a session into its base branch, creating sessions,
+publishing a session branch and opening its pull request with the user's forge
+credentials, syncing the active project's branch with its Git remote, asking for a graph
+proposal with `/graph`, which starts model work that reads the session's worktree and
+proposes a graph but launches nothing until a chat reply approves the proposal, and
 acting on an execution graph as the terminal's graph inspector does: accepting an
 output, retrying a node or replying to it with guidance, resuming a paused graph, adding
 provider calls to its spent budget, and cancelling a graph, which is permanent and which

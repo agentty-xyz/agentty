@@ -42,6 +42,7 @@ fn session() -> Session {
         draft_prompt: None,
         focused_review: None,
         graph: None,
+        graph_question_target: None,
         id: "12345678-owner".into(),
         messages: Vec::new(),
         progress: None,

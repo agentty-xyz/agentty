@@ -17,6 +17,8 @@ use ag_session::{
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
+use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
+use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptModelChange;
 use crate::app::session::{
@@ -34,6 +36,14 @@ use crate::domain::question::question_answer_message;
 use crate::domain::session::Session;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
+
+/// Rejection of answers to a session that asks no questions now.
+const NO_QUESTIONS_TO_ANSWER: &str = "Session has no questions to answer";
+
+/// Rejection of answers the graph work that asked refused for now; the
+/// session's chat says why.
+const GRAPH_ANSWERS_NOT_TAKEN: &str =
+    "The graph work did not take the answers; the chat says why. Try again.";
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
@@ -54,6 +64,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
                 | SessionOperation::GraphActions
+                | SessionOperation::GenerateGraphProposal
         )
     }
 
@@ -935,29 +946,43 @@ impl App {
         let graph = self.api_graph_summary(session_id).await;
 
         let live_status = live_session.map(|session| session.status);
+        let session = build_api_session(row, message_rows, queued_messages)?;
+        // A running focused review marks the session `AgentReview` only in
+        // memory; the row keeps `Review` or `Watching`. Report it as the
+        // session list does, and otherwise trust the row, which the worker
+        // updates before the live state hears of it.
+        let status = match (session.status, live_status) {
+            (SessionStatus::Review | SessionStatus::Watching, Some(SessionStatus::AgentReview)) => {
+                SessionStatus::AgentReview
+            }
+            (persisted_status, _) => persisted_status,
+        };
+        // As in the terminal's question panel, the session's graph work asks
+        // its questions only while the turn asks none. A failed lookup leaves
+        // them out; a chat reply still answers them.
+        let graph_questions = if session.questions.is_empty() {
+            self.shown_graph_questions(session_id, status)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let (questions, graph_question_target) = match graph_questions {
+            Some(pending) => (pending.questions, Some(pending.target.key())),
+            None => (session.questions, None),
+        };
 
-        build_api_session(row, message_rows, queued_messages).map(|session| {
-            // A running focused review marks the session `AgentReview` only
-            // in memory; the row keeps `Review` or `Watching`. Report it as
-            // the session list does, and otherwise trust the row, which the
-            // worker updates before the live state hears of it.
-            let status = match (session.status, live_status) {
-                (
-                    SessionStatus::Review | SessionStatus::Watching,
-                    Some(SessionStatus::AgentReview),
-                ) => SessionStatus::AgentReview,
-                (persisted_status, _) => persisted_status,
-            };
-
-            Some(ag_session::Session {
-                focused_review,
-                graph,
-                progress,
-                queued_actions,
-                status,
-                ..session
-            })
-        })
+        Ok(Some(ag_session::Session {
+            focused_review,
+            graph,
+            graph_question_target,
+            progress,
+            questions,
+            queued_actions,
+            status,
+            ..session
+        }))
     }
 
     /// Sends one validated API message through the existing session workflow.
@@ -1258,6 +1283,10 @@ impl App {
     /// Claims structured question answers against the current persisted
     /// question set before resuming the session with a reply turn that
     /// carries the answers' image attachments.
+    ///
+    /// Answers that name a `graph_question_target` answer the graph work's
+    /// questions instead, as the snapshot reports them, and only while the
+    /// turn asks none. Answers without one answer only the turn's questions.
     pub(super) async fn answer_api_questions(
         &mut self,
         session_id: &SessionId,
@@ -1273,6 +1302,16 @@ impl App {
             .ok_or(ApiSessionError::NotFound)?;
         let persisted_questions = row.questions.unwrap_or_default();
         let questions = api_questions_from_json(Some(&persisted_questions), session_id)?;
+        if let Some(target) = request.graph_question_target.clone() {
+            // The turn's own questions hide the graph work's.
+            if !questions.is_empty() {
+                return Err(ApiSessionError::Operation(
+                    QUESTIONS_NOT_PENDING.to_string(),
+                ));
+            }
+
+            return Box::pin(self.answer_api_graph_questions(session_id, &target, request)).await;
+        }
         validate_question_answers(&questions, &request.answers)?;
         let prompt = TurnPrompt {
             attachments: request.attachments,
@@ -1316,6 +1355,50 @@ impl App {
         self.services.emit_app_event(AppEvent::RefreshSessions);
 
         Ok(())
+    }
+
+    /// Sends a complete answer set to the graph work whose questions the
+    /// session's snapshot reports now, in the ordinary clarification reply
+    /// format, as the terminal's question panel does, only while that work
+    /// is still the one `target` names.
+    async fn answer_api_graph_questions(
+        &mut self,
+        session_id: &SessionId,
+        target: &str,
+        request: AnswerQuestionsRequest,
+    ) -> Result<(), ApiSessionError> {
+        let status = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?
+            .status;
+        // Answers entered for other graph work never reach the work pending
+        // now, even when it asks the same questions.
+        let pending = self
+            .shown_graph_questions(session_id, status)
+            .await
+            .map_err(ApiSessionError::Operation)?
+            .filter(|pending| pending.target.key() == target)
+            .ok_or_else(|| ApiSessionError::Operation(QUESTIONS_NOT_PENDING.to_string()))?;
+        validate_question_answers(&pending.questions, &request.answers)?;
+        let outcome = self
+            .send_graph_answers(
+                session_id,
+                &pending.target,
+                &request.answers,
+                request.attachments,
+            )
+            .await;
+
+        match outcome {
+            GraphAnswerOutcome::Sent => Ok(()),
+            GraphAnswerOutcome::Stale => Err(ApiSessionError::Operation(
+                QUESTIONS_NOT_PENDING.to_string(),
+            )),
+            GraphAnswerOutcome::Retry => Err(ApiSessionError::Operation(
+                GRAPH_ANSWERS_NOT_TAKEN.to_string(),
+            )),
+        }
     }
 
     pub(super) async fn merge_api_session(
@@ -1510,7 +1593,7 @@ fn validate_question_answers(
 ) -> Result<(), ApiSessionError> {
     if questions.is_empty() {
         return Err(ApiSessionError::Operation(
-            "Session has no questions to answer".to_string(),
+            NO_QUESTIONS_TO_ANSWER.to_string(),
         ));
     }
 
@@ -1581,6 +1664,7 @@ fn build_api_session(
         draft_prompt,
         focused_review: None,
         graph: None,
+        graph_question_target: None,
         id: SessionId::from(row.id),
         messages,
         progress: None,

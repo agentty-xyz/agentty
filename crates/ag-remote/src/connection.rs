@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use ag_noise::PublicKey;
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, QuestionAnswer, SessionError,
-    SessionGraphsRequest, SessionId, SessionOperation, SessionService, SessionSettingsChange,
+    AnswerQuestionsRequest, CreateSessionRequest, GenerateGraphProposalRequest, QuestionAnswer,
+    SessionError, SessionGraphsRequest, SessionId, SessionOperation, SessionService,
+    SessionSettingsChange,
 };
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
@@ -18,7 +19,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
 use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
-use crate::entropy::random_hex;
+use crate::entropy::{Entropy, random_hex};
 use crate::pairing::random_code;
 use crate::protocol::{
     ClientFrame, RemoteGraphActionRequest, RemoteProject, RemoteQuestionAnswer, RemoteRequest,
@@ -74,7 +75,13 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::SyncProject, "sync_project"),
     (SessionOperation::Graphs, "graphs"),
     (SessionOperation::GraphActions, "graph_actions"),
+    (SessionOperation::GenerateGraphProposal, "graph_proposal"),
 ];
+/// Random bytes in the delivery identity of a graph proposal a device asks
+/// for.
+const PROPOSAL_ID_BYTES: usize = 16;
+/// Error returned when secure randomness for a proposal identity fails.
+const PROPOSAL_ID_UNAVAILABLE: &str = "Cannot generate a graph proposal identity";
 /// Error returned when a device asks for a creation mode the host does not
 /// serve now.
 const UNAVAILABLE_SESSION_MODE: &str = "Session mode is not available";
@@ -492,7 +499,7 @@ async fn serve_authenticated<T: FrameTransport>(
                         return;
                     }
                     MessageOutcome::Request { id, request } => {
-                        if !requests.start(state.sessions(), id, request) {
+                        if !requests.start(state, id, request) {
                             let busy = ServerFrame::Response {
                                 id,
                                 result: RemoteResult::Error(TOO_MANY_REQUESTS.to_string()),
@@ -529,12 +536,13 @@ impl RequestTasks {
     ///
     /// A request that changes a session waits for the earlier ones that
     /// change the same session, so they reach the host in arrival order.
-    fn start(&mut self, sessions: &SessionService, id: u64, request: RemoteRequest) -> bool {
+    fn start(&mut self, state: &ServerState, id: u64, request: RemoteRequest) -> bool {
         if self.tasks.len() >= MAX_REQUESTS_IN_PROGRESS {
             return false;
         }
         let queue = mutated_session(&request).map(|session_id| self.enqueue(session_id));
-        let sessions = sessions.clone();
+        let sessions = state.sessions().clone();
+        let entropy = Arc::clone(&state.entropy);
         let handle = self.tasks.spawn(async move {
             let _done = match queue {
                 Some((previous, done)) => {
@@ -551,7 +559,7 @@ impl RequestTasks {
 
             ServerFrame::Response {
                 id,
-                result: execute(&sessions, request).await,
+                result: execute(&sessions, entropy.as_ref(), request).await,
             }
         });
         self.request_ids.insert(handle.id(), id);
@@ -617,6 +625,7 @@ fn mutated_session(request: &RemoteRequest) -> Option<&str> {
         RemoteRequest::ActOnSessionGraph(request) => Some(&request.session_id),
         RemoteRequest::AnswerQuestions { session_id, .. }
         | RemoteRequest::CancelSession { session_id }
+        | RemoteRequest::GenerateGraphProposal { session_id, .. }
         | RemoteRequest::MergeSession { session_id }
         | RemoteRequest::SendMessage { session_id, .. }
         | RemoteRequest::StopTurn { session_id }
@@ -669,9 +678,14 @@ pub(crate) fn handle_incoming(incoming: Incoming) -> MessageOutcome {
     }
 }
 
-/// Runs one request against the session service.
-pub(crate) async fn execute(sessions: &SessionService, request: RemoteRequest) -> RemoteResult {
-    match respond(sessions, request).await {
+/// Runs one request against the session service, drawing the identities it
+/// mints from `entropy`.
+pub(crate) async fn execute(
+    sessions: &SessionService,
+    entropy: &dyn Entropy,
+    request: RemoteRequest,
+) -> RemoteResult {
+    match respond(sessions, entropy, request).await {
         Ok(response) => RemoteResult::Ok(response),
         Err(error) => RemoteResult::Error(error.to_string()),
     }
@@ -683,6 +697,7 @@ pub(crate) async fn execute(sessions: &SessionService, request: RemoteRequest) -
 /// so a remote client reaches only the sessions it can see.
 async fn respond(
     sessions: &SessionService,
+    entropy: &dyn Entropy,
     request: RemoteRequest,
 ) -> Result<RemoteResponse, SessionError> {
     match request {
@@ -691,8 +706,9 @@ async fn respond(
         }
         RemoteRequest::AnswerQuestions {
             answers,
+            graph_question_target,
             session_id,
-        } => answer_listed_questions(sessions, session_id, answers).await,
+        } => answer_listed_questions(sessions, session_id, answers, graph_question_target).await,
         RemoteRequest::CancelSession { session_id } => {
             let session_id = listed_session_id(sessions, session_id).await?;
             sessions.cancel_session(&session_id).await?;
@@ -700,6 +716,10 @@ async fn respond(
             Ok(RemoteResponse::Accepted)
         }
         RemoteRequest::CreateSession { mode } => create_session(sessions, mode).await,
+        RemoteRequest::GenerateGraphProposal {
+            message,
+            session_id,
+        } => generate_listed_graph_proposal(sessions, entropy, session_id, message).await,
         RemoteRequest::GetHost => {
             require_operation(sessions, SessionOperation::HostContext)?;
 
@@ -731,13 +751,7 @@ async fn respond(
             Ok(RemoteResponse::Accepted)
         }
         RemoteRequest::PublishSession { session_id } => {
-            require_operation(sessions, SessionOperation::PublishSession)?;
-            let session_id = listed_session_id(sessions, session_id).await?;
-            let review_request = sessions.create_review_request(&session_id).await?;
-
-            Ok(RemoteResponse::ReviewRequest {
-                review_request: RemoteReviewRequest::from(review_request.summary),
-            })
+            publish_listed_session(sessions, session_id).await
         }
         RemoteRequest::SendMessage {
             message,
@@ -809,12 +823,53 @@ async fn act_on_listed_session_graph(
     Ok(RemoteResponse::Accepted)
 }
 
+/// Publishes one session and opens or refreshes its review request only
+/// when the host lists that session.
+async fn publish_listed_session(
+    sessions: &SessionService,
+    session_id: String,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::PublishSession)?;
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let review_request = sessions.create_review_request(&session_id).await?;
+
+    Ok(RemoteResponse::ReviewRequest {
+        review_request: RemoteReviewRequest::from(review_request.summary),
+    })
+}
+
+/// Asks for a graph proposal for the task `message` only when the host
+/// lists the session, under a fresh delivery identity; the host checks the
+/// session's readiness and the task's size.
+async fn generate_listed_graph_proposal(
+    sessions: &SessionService,
+    entropy: &dyn Entropy,
+    session_id: String,
+    message: String,
+) -> Result<RemoteResponse, SessionError> {
+    require_operation(sessions, SessionOperation::GenerateGraphProposal)?;
+    let session_id = listed_session_id(sessions, session_id).await?;
+    let id = random_hex(entropy, PROPOSAL_ID_BYTES)
+        .ok_or_else(|| SessionError::Operation(PROPOSAL_ID_UNAVAILABLE.to_string()))?;
+    sessions
+        .generate_graph_proposal(GenerateGraphProposalRequest::from_text(
+            format!("remote-{id}"),
+            session_id,
+            message,
+        ))
+        .await?;
+
+    Ok(RemoteResponse::Accepted)
+}
+
 /// Answers the current question set of one session only when the host lists
-/// that session.
+/// that session: its turn's, or with `graph_question_target` the graph
+/// questions of the graph work that key names.
 async fn answer_listed_questions(
     sessions: &SessionService,
     session_id: String,
     answers: Vec<RemoteQuestionAnswer>,
+    graph_question_target: Option<String>,
 ) -> Result<RemoteResponse, SessionError> {
     let session_id = listed_session_id(sessions, session_id).await?;
     let request = AnswerQuestionsRequest {
@@ -826,6 +881,7 @@ async fn answer_listed_questions(
             })
             .collect(),
         attachments: Vec::new(),
+        graph_question_target,
     };
     sessions.answer_questions(&session_id, request).await?;
 
