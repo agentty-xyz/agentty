@@ -759,6 +759,51 @@ async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_
 }
 
 #[tokio::test]
+async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    app.sessions
+        .push_session(test_support::session_fixture("session-1", Status::Review));
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+
+    // Act
+    app.set_review_ready_output("session-1", 42, "first review".to_string());
+    app.publish_live_session_changes();
+    let after_ready = *revisions.borrow_and_update();
+    app.publish_live_session_changes();
+    let unchanged = revisions
+        .has_changed()
+        .expect("revision sender should live");
+    app.set_review_ready_output("session-1", 42, "regenerated review".to_string());
+    app.publish_live_session_changes();
+    let after_regenerated = *revisions.borrow_and_update();
+    app.clear_review_output("session-1");
+    app.publish_live_session_changes();
+    let after_clear = *revisions.borrow_and_update();
+    app.suppress_review_output("session-1");
+    app.publish_live_session_changes();
+    let after_suppress = *revisions.borrow_and_update();
+    app.set_review_ready_output("session-1", 43, "next review".to_string());
+    app.publish_live_session_changes();
+    let after_next = *revisions.borrow_and_update();
+    test_support::set_session_status_for_test(&mut app, "session-1", Status::Done);
+    app.publish_live_session_changes();
+    let after_done = *revisions.borrow_and_update();
+
+    // Assert
+    assert_eq!(after_ready, initial_revision + 1);
+    assert!(!unchanged);
+    assert_eq!(after_regenerated, initial_revision + 2);
+    assert_eq!(after_clear, initial_revision + 3);
+    // Suppressing an already cleared review shows nothing new.
+    assert_eq!(after_suppress, after_clear);
+    assert_eq!(after_next, initial_revision + 4);
+    // A session that leaves review stops showing its review.
+    assert_eq!(after_done, initial_revision + 5);
+}
+
+#[tokio::test]
 async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;

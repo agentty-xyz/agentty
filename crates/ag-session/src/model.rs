@@ -377,6 +377,10 @@ pub struct Session {
     pub created_at: i64,
     /// Staged draft prompt that has not entered the durable transcript.
     pub draft_prompt: Option<String>,
+    /// Latest focused review of the session's changes, while the host shows
+    /// it. `None` when there is none to show, including while a review runs:
+    /// `progress` then describes it.
+    pub focused_review: Option<SessionFocusedReview>,
     /// Stable session identifier.
     pub id: SessionId,
     /// Ordered durable transcript messages.
@@ -415,6 +419,22 @@ impl Session {
     pub fn env_id(&self) -> EnvId {
         EnvId::SessionWorktree(self.id.clone())
     }
+}
+
+/// Outcome of a session's latest focused review.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionFocusedReview {
+    /// The review finished; `text` is its Markdown.
+    Ready {
+        /// Review findings and suggestions as Markdown.
+        text: String,
+    },
+    /// The review could not be produced; `message` says why, ready to
+    /// display.
+    Failed {
+        /// Plain-text failure description.
+        message: String,
+    },
 }
 
 /// Listing entry for one session, without its transcript or settings.

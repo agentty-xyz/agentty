@@ -1009,6 +1009,52 @@ async fn test_process_events_with_handler_drives_app_runtime_events() {
     assert!(matches!(result, Ok(EventResult::Continue)));
 }
 
+/// Verifies remote clients hear about a focused review that terminal input
+/// changed, although no app event follows the key.
+#[tokio::test]
+async fn test_process_events_with_handler_publishes_live_changes_after_terminal_input() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions
+        .push_session(crate::test_support::session_fixture(
+            "session-1",
+            Status::Review,
+        ));
+    let mut revisions = app.remote_control.subscribe_revisions();
+    let initial_revision = *revisions.borrow_and_update();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    event_tx
+        .send(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        ))))
+        .expect("failed to queue event");
+    let mut tick = tokio::time::interval(Duration::from_mins(1));
+    tick.tick().await;
+
+    // Act
+    let result = process_events_with_handler(
+        &crate::test_support::FixedClock::unix_epoch(),
+        &mut app,
+        &mut (),
+        &mut event_rx,
+        &mut tick,
+        &mut CycleTiming::default(),
+        |app, (), event| {
+            if event.is_some() {
+                app.set_review_ready_output("session-1", 42, "review".to_string());
+            }
+
+            Box::pin(async { Ok(EventResult::Continue) })
+        },
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert_eq!(*revisions.borrow(), initial_revision + 1);
+}
+
 /// Verifies queued terminal events beyond the foreground budget stay in
 /// the channel for the next render cycle.
 #[tokio::test]

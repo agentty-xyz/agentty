@@ -115,6 +115,13 @@ press `Send answers` once each has one. A session that is merging or finished sh
 you cannot chat. Unsent text stays in the box for each session until Agentty accepts it,
 even after a reload of the tab.
 
+Once a session is in review, its latest
+[focused review](@/docs/usage/workflow.md#focused-review) follows the transcript under a
+`Focused review` heading, as in the terminal: the findings render like an answer, with
+`View source`, and a review that failed says why. While a review runs, the status line
+says so. Applying the review's suggestions and regenerating the review stay in the
+terminal.
+
 The `⋯` button in the session header offers `Cancel session`. When this Agentty lets
 devices stop a turn or merge, the page also shows `Stop` next to the send button while a
 turn runs, and `Merge` in the header, or in the `⋯` sheet on a phone. `Stop` returns the
@@ -270,8 +277,9 @@ run with the session's permissions, so treat a pairing like a login.
 <a id="usage-remote-control-device-access"></a> Within the sessions it lists, a paired
 device can:
 
-- list sessions and read their transcripts, questions, queued messages and actions,
-  staged draft messages, agent and model settings, branches, and linked pull request;
+- list sessions and read their transcripts, focused review results, questions, queued
+  messages and actions, staged draft messages, agent and model settings, branches, and
+  linked pull request;
 - see each listed session's diff size, changed lines, model, active time, merge
   conflicts, pull request state, whether its branch is published, and how far its branch
   is ahead of and behind its base branch and its remote branch;

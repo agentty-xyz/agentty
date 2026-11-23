@@ -2,16 +2,17 @@ use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
     HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, ReasoningLevel,
     ResponseStyle, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionDiffFile,
-    SessionDiffFileStatus, SessionFileEntry, SessionId, SessionListEntry, SessionListStats,
-    SessionStatus, SessionSummary, SpeedMode,
+    SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionId, SessionListEntry,
+    SessionListStats, SessionStatus, SessionSummary, SpeedMode,
 };
 use serde_json::json;
 
 use crate::protocol::{
-    ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteMessage, RemoteMessageKind,
-    RemoteModeModel, RemoteModelOption, RemoteProject, RemoteQuestion, RemoteQuestionAnswer,
-    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest,
-    RemoteSession, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteFocusedReview,
+    RemoteFocusedReviewState, RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption,
+    RemoteProject, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, project_status_fixture, session_fixture};
 
@@ -606,6 +607,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             branch: Some("wt/session-".to_string()),
             created_at: Some(10),
             draft_prompt: None,
+            focused_review: None,
             id: "session-1".to_string(),
             is_draft: false,
             model: Some("gpt-6.1-sol".to_string()),
@@ -725,7 +727,69 @@ fn session_frames_from_an_older_server_parse_without_details() {
     assert!(!session.is_draft);
     assert_eq!(session.draft_prompt, None);
     assert_eq!(session.queued_actions, Vec::<String>::new());
+    assert_eq!(session.focused_review, None);
     assert_eq!(encoded, old);
+}
+
+#[test]
+fn session_conversion_carries_a_ready_focused_review_as_markdown() {
+    // Arrange
+    let mut session = session_fixture(&SessionId::from("session-1"));
+    session.focused_review = Some(SessionFocusedReview::Ready {
+        text: "### Suggestions\n- Add a test".to_string(),
+    });
+
+    // Act
+    let remote = RemoteSession::from(session);
+    let encoded = serde_json::to_value(&remote).expect("session should encode");
+
+    // Assert
+    assert_eq!(
+        remote.focused_review,
+        Some(RemoteFocusedReview {
+            state: RemoteFocusedReviewState::Ready,
+            text: "### Suggestions\n- Add a test".to_string(),
+        })
+    );
+    assert_eq!(
+        encoded["focused_review"],
+        json!({"state": "ready", "text": "### Suggestions\n- Add a test"})
+    );
+}
+
+#[test]
+fn session_conversion_carries_a_failed_focused_review_as_its_message() {
+    // Arrange
+    let mut session = session_fixture(&SessionId::from("session-1"));
+    session.focused_review = Some(SessionFocusedReview::Failed {
+        message: "Review assist unavailable: timeout".to_string(),
+    });
+
+    // Act
+    let remote = RemoteSession::from(session);
+    let encoded = serde_json::to_value(&remote).expect("session should encode");
+    let decoded: RemoteSession =
+        serde_json::from_value(encoded.clone()).expect("session should decode");
+
+    // Assert
+    assert_eq!(
+        encoded["focused_review"],
+        json!({"state": "failed", "text": "Review assist unavailable: timeout"})
+    );
+    assert_eq!(decoded, remote);
+}
+
+#[test]
+fn session_frames_omit_an_absent_focused_review() {
+    // Arrange
+    let session = session_fixture(&SessionId::from("session-1"));
+
+    // Act
+    let encoded =
+        serde_json::to_value(RemoteSession::from(session)).expect("session should encode");
+
+    // Assert
+    assert!(encoded.get("focused_review").is_none());
 }
 
 /// Returns one changed file at `path` with `status` and patch `text`.

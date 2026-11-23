@@ -411,20 +411,75 @@ pub(crate) fn focused_review_result_anchor(session: &Session) -> TransientMessag
         })
 }
 
+/// Returns the finished or failed focused review that `session` shows, as
+/// the session view shows it under the transcript.
+///
+/// `Loading` and `Suppressed` entries give `None`: the status line
+/// describes a running review instead. The text is the raw review, without
+/// the terminal's `/apply` hint.
+pub(crate) fn shown_focused_review(
+    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
+    session: &Session,
+) -> Option<ag_session::SessionFocusedReview> {
+    match shown_review_entry(review_cache, session)? {
+        ReviewCacheEntry::Ready { text, .. } => {
+            Some(ag_session::SessionFocusedReview::Ready { text: text.clone() })
+        }
+        ReviewCacheEntry::Failed { error, .. } => Some(ag_session::SessionFocusedReview::Failed {
+            message: review_failure_message(error),
+        }),
+        ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed => None,
+    }
+}
+
+/// Identifies the focused review that [`shown_focused_review`] reports for
+/// `session`, without copying its text.
+///
+/// Every `Ready` or `Failed` entry carries its own invocation token, so the
+/// token changes whenever the shown review does.
+pub(crate) fn shown_focused_review_id(
+    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
+    session: &Session,
+) -> Option<Uuid> {
+    match shown_review_entry(review_cache, session)? {
+        ReviewCacheEntry::Ready { request_id, .. }
+        | ReviewCacheEntry::Failed { request_id, .. } => Some(*request_id),
+        ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed => None,
+    }
+}
+
+/// Returns the cache entry of `session` while its status shows focused
+/// review output.
+fn shown_review_entry<'a>(
+    review_cache: &'a HashMap<SessionId, ReviewCacheEntry>,
+    session: &Session,
+) -> Option<&'a ReviewCacheEntry> {
+    if !shows_focused_review(session.status) {
+        return None;
+    }
+
+    review_cache.get(&session.id)
+}
+
+/// Returns whether a session in `status` shows its focused review.
+fn shows_focused_review(status: Status) -> bool {
+    matches!(
+        status,
+        Status::Review
+            | Status::Question
+            | Status::AgentReview
+            | Status::Watching
+            | Status::Rebasing
+    )
+}
+
 /// Synchronizes one session's focused-review display slot from the canonical
 /// cache state.
 fn hydrate_session_review_transient(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session: &mut Session,
 ) {
-    if !matches!(
-        session.status,
-        Status::Review
-            | Status::Question
-            | Status::AgentReview
-            | Status::Watching
-            | Status::Rebasing
-    ) {
+    if !shows_focused_review(session.status) {
         session
             .transient_messages
             .retract(TransientMessageSlot::Review);

@@ -6,6 +6,9 @@ pub(crate) mod support;
 #[path = "session_api_test/file_test.rs"]
 mod file;
 
+#[path = "session_api_test/focused_review_test.rs"]
+mod focused_review;
+
 #[path = "session_api_test/lifecycle_test.rs"]
 mod lifecycle;
 

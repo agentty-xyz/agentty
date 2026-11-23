@@ -15,10 +15,11 @@ use ag_remote::{
 };
 use ag_session::{SessionId, SessionService};
 use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
 
 use crate::app::command_gateway::CommandInitiator;
 use crate::app::spawn::{spawn_blocking_detached, spawn_detached};
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppEvent, review};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
 use crate::infra::db::AppRepositories;
@@ -64,9 +65,9 @@ pub(crate) struct RemoteControl {
     /// Identifies the latest link copy so the result of an earlier one, or
     /// of a link that is no longer shown, is ignored.
     link_copy_request: u64,
-    /// Status line and queued-action labels of each session showing either,
-    /// as remote clients last learned of them.
-    live_details: HashMap<SessionId, (Option<String>, Vec<String>)>,
+    /// Live details of each session showing any, as remote clients last
+    /// learned of them.
+    live_details: HashMap<SessionId, LiveSessionDetails>,
     /// Loopback port, or `None` until `--experimental-remote` enables
     /// remote control.
     port: Option<u16>,
@@ -155,6 +156,27 @@ impl RemoteControl {
     }
 }
 
+/// What a session snapshot reports beyond its persisted row, compared to
+/// tell remote clients when it changes.
+#[derive(Debug, Eq, PartialEq)]
+struct LiveSessionDetails {
+    /// Invocation token of the focused review the session shows.
+    focused_review_id: Option<Uuid>,
+    /// Labels of the workflow actions waiting behind the active turn.
+    queued_actions: Vec<String>,
+    /// Line describing the session's current work.
+    status_line: Option<String>,
+}
+
+impl LiveSessionDetails {
+    /// Returns whether the session shows any live detail.
+    fn is_shown(&self) -> bool {
+        self.focused_review_id.is_some()
+            || !self.queued_actions.is_empty()
+            || self.status_line.is_some()
+    }
+}
+
 impl App {
     /// Offers the experimental Remote tab with its paired devices. Remote
     /// control listens on the loopback `port` once it starts and accepts
@@ -181,21 +203,24 @@ impl App {
             .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
-    /// Tells connected remote clients when a session's status line or its
-    /// queued actions changed, such as a new thought after `Working...`, a
-    /// review step, or a sync queued in the terminal, which no session event
-    /// marks.
+    /// Tells connected remote clients when a session's status line, its
+    /// queued actions, or its shown focused review changed, such as a new
+    /// thought after `Working...`, a review step, a sync queued in the
+    /// terminal, or a review that finished or was cleared, which no session
+    /// event marks.
     pub(crate) fn publish_live_session_changes(&mut self) {
         let live_details = self
             .sessions
             .sessions()
             .iter()
             .filter_map(|session| {
-                let status_line = session.status_line(self.session_progress_message(&session.id));
-                let queued_actions = session.queued_action_labels();
+                let details = LiveSessionDetails {
+                    focused_review_id: review::shown_focused_review_id(&self.review_cache, session),
+                    queued_actions: session.queued_action_labels(),
+                    status_line: session.status_line(self.session_progress_message(&session.id)),
+                };
 
-                (status_line.is_some() || !queued_actions.is_empty())
-                    .then(|| (session.id.clone(), (status_line, queued_actions)))
+                details.is_shown().then(|| (session.id.clone(), details))
             })
             .collect::<HashMap<_, _>>();
         if live_details == self.remote_control.live_details {

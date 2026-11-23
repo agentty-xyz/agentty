@@ -173,6 +173,7 @@ pub(super) fn session_fixture() -> Session {
     Session {
         created_at: 10,
         draft_prompt: None,
+        focused_review: None,
         id: SessionId::from("session-1"),
         messages: vec![SessionMessage::new(
             0,

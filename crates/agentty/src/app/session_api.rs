@@ -26,7 +26,7 @@ use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
 use crate::app::{
     App, AppError, AppEvent, ProjectSyncPhase, ProjectSyncStatus, SessionError,
-    SessionRuntimeCommand, SessionRuntimeHandle, spawn,
+    SessionRuntimeCommand, SessionRuntimeHandle, review, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::domain::file_entry::FileEntry;
@@ -908,11 +908,29 @@ impl App {
         let progress = live_session
             .and_then(|session| session.status_line(self.session_progress_message(session_id)));
         let queued_actions = live_session.map_or_default(Session::queued_action_labels);
+        let focused_review = live_session
+            .and_then(|session| review::shown_focused_review(&self.review_cache, session));
+
+        let live_status = live_session.map(|session| session.status);
 
         build_api_session(row, message_rows, queued_messages).map(|session| {
+            // A running focused review marks the session `AgentReview` only
+            // in memory; the row keeps `Review` or `Watching`. Report it as
+            // the session list does, and otherwise trust the row, which the
+            // worker updates before the live state hears of it.
+            let status = match (session.status, live_status) {
+                (
+                    SessionStatus::Review | SessionStatus::Watching,
+                    Some(SessionStatus::AgentReview),
+                ) => SessionStatus::AgentReview,
+                (persisted_status, _) => persisted_status,
+            };
+
             Some(ag_session::Session {
+                focused_review,
                 progress,
                 queued_actions,
+                status,
                 ..session
             })
         })
@@ -1537,6 +1555,7 @@ fn build_api_session(
     Ok(ag_session::Session {
         created_at: row.created_at,
         draft_prompt,
+        focused_review: None,
         id: SessionId::from(row.id),
         messages,
         progress: None,

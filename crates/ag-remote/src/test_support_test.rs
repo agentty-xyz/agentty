@@ -451,6 +451,7 @@ pub(crate) fn session_fixture(session_id: &SessionId) -> Session {
     Session {
         created_at: 10,
         draft_prompt: None,
+        focused_review: None,
         id: session_id.clone(),
         messages: vec![
             SessionMessage::new(0, SessionMessageKind::UserPrompt, "build it"),

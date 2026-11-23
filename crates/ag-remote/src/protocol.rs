@@ -13,8 +13,8 @@
 use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, HostContext, HostProjectStatus,
     HostProjectSync, HostProjectSyncPhase, ReviewRequestSummary, Session, SessionDiffFile,
-    SessionDiffFileStatus, SessionFileEntry, SessionListEntry, SessionMessage, SessionMessageKind,
-    session_branch,
+    SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionListEntry,
+    SessionMessage, SessionMessageKind, session_branch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -919,6 +919,11 @@ pub struct RemoteSession {
     /// starts. Absent when it has none and from older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft_prompt: Option<String>,
+    /// Latest focused review of the session's changes, while the terminal
+    /// shows it. Absent when there is none, while a review runs, and from
+    /// older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_review: Option<RemoteFocusedReview>,
     /// Stable session identifier.
     pub id: String,
     /// Whether the session defers its worktree until its first message.
@@ -982,6 +987,7 @@ impl From<Session> for RemoteSession {
             branch: Some(session_branch(&session.id)),
             created_at: Some(session.created_at),
             draft_prompt: session.draft_prompt,
+            focused_review: session.focused_review.map(RemoteFocusedReview::from),
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
             model_id: Some(agent.model().as_str().to_string()),
@@ -1017,6 +1023,41 @@ impl From<Session> for RemoteSession {
             updated_at: session.updated_at,
         }
     }
+}
+
+/// Outcome of a session's latest focused review.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteFocusedReview {
+    /// Whether the review finished or failed.
+    pub state: RemoteFocusedReviewState,
+    /// The review's Markdown when it is `ready`, or the plain-text failure
+    /// message when it `failed`.
+    pub text: String,
+}
+
+impl From<SessionFocusedReview> for RemoteFocusedReview {
+    fn from(review: SessionFocusedReview) -> Self {
+        match review {
+            SessionFocusedReview::Ready { text } => Self {
+                state: RemoteFocusedReviewState::Ready,
+                text,
+            },
+            SessionFocusedReview::Failed { message } => Self {
+                state: RemoteFocusedReviewState::Failed,
+                text: message,
+            },
+        }
+    }
+}
+
+/// State of a focused review a remote client can show.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteFocusedReviewState {
+    /// The review could not be produced.
+    Failed,
+    /// The review finished.
+    Ready,
 }
 
 /// Pull or merge request linked to a session, as of the host's latest
