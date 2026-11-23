@@ -17,6 +17,7 @@ use ag_session::{
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
+use crate::app::command_gateway::RemoteScope;
 use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::message_admission::MessagePlan;
@@ -27,8 +28,8 @@ use crate::app::session::{
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
 use crate::app::{
-    App, AppError, AppEvent, ProjectSyncPhase, ProjectSyncStatus, SessionError,
-    SessionRuntimeCommand, SessionRuntimeHandle, review, spawn,
+    App, AppError, AppEvent, LocalQuery, ProjectQuery, ProjectSyncPhase, ProjectSyncStatus,
+    SessionError, SessionQuery, SessionRuntimeCommand, SessionRuntimeHandle, review, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::domain::file_entry::FileEntry;
@@ -335,6 +336,17 @@ impl App {
         ))
     }
 
+    /// Uses the same mailbox for paired remote-control devices, whose
+    /// requests the host limits to the sessions it lists and the operations
+    /// remote control serves.
+    pub(crate) fn remote_session_service(&self) -> SessionService {
+        SessionService::new(Arc::new(
+            self.sessions
+                .handle()
+                .with_initiator(crate::app::command_gateway::CommandInitiator::Remote),
+        ))
+    }
+
     /// Drives one local API request while processing the actor commands ahead
     /// of it.
     ///
@@ -380,29 +392,30 @@ impl App {
     }
 
     /// Routes mutations to shared admission and keeps reads on the query path.
+    ///
+    /// Each read's variant decides its remote-control scope: project reads
+    /// serve every caller, a paired device's session read reaches only a
+    /// session the host lists, and its local reads are refused.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
-            SessionRuntimeCommand::GetGraphProposal { id, response_tx } => {
-                let result = self
-                    .services
-                    .db()
-                    .graph_proposals()
-                    .get(&id, None)
-                    .await
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
-                let _ = response_tx.send(result);
-            }
-            SessionRuntimeCommand::GetExecutionGraph {
-                graph_id,
-                response_tx,
+            SessionRuntimeCommand::Project(query) => self.answer_project_query(query).await,
+            SessionRuntimeCommand::Session {
+                initiator,
+                query,
+                session_id,
             } => {
-                let _ = response_tx.send(self.execution_graph_progress(&graph_id).await);
+                let scope = RemoteScope::Session(&session_id);
+                if self.remote_refusal(initiator, scope).is_some() {
+                    query.answer_unlisted();
+                } else {
+                    self.answer_session_query(session_id, query).await;
+                }
             }
-            SessionRuntimeCommand::GetSessionGraphs {
-                request,
-                response_tx,
-            } => {
-                let _ = response_tx.send(self.api_session_graphs(request).await);
+            SessionRuntimeCommand::Local { initiator, query } => {
+                match self.remote_refusal(initiator, RemoteScope::NotServed) {
+                    Some(refusal) => query.refuse(refusal),
+                    None => self.answer_local_query(query).await,
+                }
             }
             SessionRuntimeCommand::RunGraphNode {
                 admitted_tx,
@@ -413,26 +426,84 @@ impl App {
                 self.enqueue_graph_node(*request, cancellation, admitted_tx, response_tx)
                     .await;
             }
-            SessionRuntimeCommand::GetAgentTaskHistory {
+            SessionRuntimeCommand::Mutation(command) => {
+                let _ = self.admit_session_command(command).await;
+                self.publish_session_change();
+            }
+        }
+    }
+
+    /// Answers one read of the active project.
+    async fn answer_project_query(&mut self, query: ProjectQuery) {
+        match query {
+            ProjectQuery::HostContext { response_tx } => {
+                let _ = response_tx.send(self.api_host_context().await);
+            }
+            ProjectQuery::List { response_tx } => {
+                let _ = response_tx.send(Ok(self.list_api_session_entries()));
+            }
+            ProjectQuery::ListProjectFiles { response_tx } => {
+                self.start_api_project_files(response_tx);
+            }
+            ProjectQuery::ProjectStatus { response_tx } => {
+                let _ = response_tx.send(Ok(self.api_project_status()));
+            }
+        }
+    }
+
+    /// Answers one read of `session_id` that its caller may make.
+    async fn answer_session_query(&mut self, session_id: SessionId, query: SessionQuery) {
+        match query {
+            SessionQuery::Get { response_tx } => {
+                let _ = response_tx.send(self.get_api_session(&session_id).await);
+            }
+            SessionQuery::GetDiff { response_tx } => {
+                self.start_api_session_diff(&session_id, response_tx);
+            }
+            SessionQuery::GetGraphs {
+                graph_id,
+                node_id,
+                response_tx,
+            } => {
+                let request = ag_session::SessionGraphsRequest {
+                    graph_id,
+                    node_id,
+                    session_id,
+                };
+                let _ = response_tx.send(self.api_session_graphs(request).await);
+            }
+            SessionQuery::ListFiles { response_tx } => {
+                self.start_api_session_files(&session_id, response_tx);
+            }
+        }
+    }
+
+    /// Answers one graph, proposal, or task read that its caller may make.
+    async fn answer_local_query(&self, query: LocalQuery) {
+        match query {
+            LocalQuery::GetAgentTaskHistory {
                 response_tx,
                 task_id,
             } => {
                 let _ = response_tx.send(self.load_api_task_history(&task_id).await);
             }
-            SessionRuntimeCommand::ListTasks {
+            LocalQuery::GetExecutionGraph {
+                graph_id,
                 response_tx,
-                session_id,
             } => {
+                let _ = response_tx.send(self.execution_graph_progress(&graph_id).await);
+            }
+            LocalQuery::GetGraphProposal { id, response_tx } => {
                 let result = self
                     .services
                     .db()
-                    .tasks()
-                    .list_tasks(&session_id)
+                    .graph_proposals()
+                    .get(&id, None)
                     .await
                     .map_err(|error| ApiSessionError::Operation(error.to_string()));
                 let _ = response_tx.send(result);
             }
-            SessionRuntimeCommand::GetTask {
+            LocalQuery::GetTask {
                 response_tx,
                 task_id,
             } => {
@@ -445,35 +516,18 @@ impl App {
                     .map_err(|error| ApiSessionError::Operation(error.to_string()));
                 let _ = response_tx.send(result);
             }
-            SessionRuntimeCommand::Get {
+            LocalQuery::ListTasks {
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(self.get_api_session(&session_id).await);
-            }
-            SessionRuntimeCommand::GetDiff {
-                response_tx,
-                session_id,
-            } => self.start_api_session_diff(&session_id, response_tx),
-            SessionRuntimeCommand::List { response_tx } => {
-                let _ = response_tx.send(Ok(self.list_api_session_entries()));
-            }
-            SessionRuntimeCommand::ListFiles {
-                response_tx,
-                session_id,
-            } => self.start_api_session_files(&session_id, response_tx),
-            SessionRuntimeCommand::ListProjectFiles { response_tx } => {
-                self.start_api_project_files(response_tx);
-            }
-            SessionRuntimeCommand::HostContext { response_tx } => {
-                let _ = response_tx.send(self.api_host_context().await);
-            }
-            SessionRuntimeCommand::ProjectStatus { response_tx } => {
-                let _ = response_tx.send(Ok(self.api_project_status()));
-            }
-            SessionRuntimeCommand::Mutation(command) => {
-                let _ = self.admit_session_command(command).await;
-                self.publish_session_change();
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .list_tasks(&session_id)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
             }
         }
     }

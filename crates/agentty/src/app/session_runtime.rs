@@ -33,64 +33,144 @@ const SESSION_RUNTIME_COMMAND_CAPACITY: usize = 32;
 const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
+///
+/// Each read sits in the query type of its remote-control scope, which the
+/// foreground dispatch applies by variant: [`ProjectQuery`] reads the active
+/// project and is served to every caller, [`SessionQuery`] reads the session
+/// [`Self::Session`] names and reaches a paired device only while the host
+/// lists that session, and [`LocalQuery`] is not served to remote control.
 pub(crate) enum SessionRuntimeCommand {
-    GetGraphProposal {
-        id: String,
-        response_tx: oneshot::Sender<Result<Option<ag_session::GraphProposalState>, SessionError>>,
+    /// A read of the active project, which carries no initiator because
+    /// every caller may make it.
+    Project(ProjectQuery),
+    /// A read of one session.
+    Session {
+        initiator: CommandInitiator,
+        query: SessionQuery,
+        session_id: SessionId,
     },
-    GetExecutionGraph {
-        graph_id: String,
-        response_tx:
-            oneshot::Sender<Result<Option<ag_session::ExecutionGraphProgress>, SessionError>>,
-    },
-    GetSessionGraphs {
-        request: ag_session::SessionGraphsRequest,
-        response_tx: oneshot::Sender<Result<ag_session::SessionGraphs, SessionError>>,
+    /// A read of graphs, proposals, or tasks by their own identity.
+    Local {
+        initiator: CommandInitiator,
+        query: LocalQuery,
     },
     /// Trusted handoff of an already admitted graph task to its serial owner.
+    /// No session service exposes it.
     RunGraphNode {
         admitted_tx: oneshot::Sender<()>,
         cancellation: CancellationToken,
         request: Box<ag_worker::GraphRunRequest>,
         response_tx: oneshot::Sender<Result<String, ag_contracts::OneShotError>>,
     },
+    /// A mutation, which shared admission checks against its initiator.
+    Mutation(SessionCommand),
+}
+
+/// A read of the active project, served to every caller.
+pub(crate) enum ProjectQuery {
+    HostContext {
+        response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
+    },
+    /// Lists the loaded sessions, the ones the host lists to every caller.
+    List {
+        response_tx: oneshot::Sender<Result<Vec<SessionListEntry>, SessionError>>,
+    },
+    ListProjectFiles {
+        response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, SessionError>>,
+    },
+    ProjectStatus {
+        response_tx: oneshot::Sender<Result<HostProjectStatus, SessionError>>,
+    },
+}
+
+/// A read of the session its [`SessionRuntimeCommand::Session`] names.
+pub(crate) enum SessionQuery {
+    Get {
+        response_tx: oneshot::Sender<Result<Option<Session>, SessionError>>,
+    },
+    GetDiff {
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionDiffFile>>, SessionError>>,
+    },
+    /// Reads the session's graphs as the terminal inspector loads them.
+    GetGraphs {
+        graph_id: Option<String>,
+        node_id: Option<String>,
+        response_tx: oneshot::Sender<Result<ag_session::SessionGraphs, SessionError>>,
+    },
+    ListFiles {
+        response_tx: oneshot::Sender<Result<Option<Vec<SessionFileEntry>>, SessionError>>,
+    },
+}
+
+impl SessionQuery {
+    /// Answers the read as the host answers a session it does not list: no
+    /// session, diff, or files, and not found for its graphs, as remote
+    /// control reports a session it cannot see.
+    pub(crate) fn answer_unlisted(self) {
+        match self {
+            Self::Get { response_tx } => {
+                let _ = response_tx.send(Ok(None));
+            }
+            Self::GetDiff { response_tx } => {
+                let _ = response_tx.send(Ok(None));
+            }
+            Self::GetGraphs { response_tx, .. } => {
+                let _ = response_tx.send(Err(SessionError::NotFound));
+            }
+            Self::ListFiles { response_tx } => {
+                let _ = response_tx.send(Ok(None));
+            }
+        }
+    }
+}
+
+/// A read by graph, proposal, or task identity, or of a session's tasks,
+/// which only the terminal and in-process callers make.
+pub(crate) enum LocalQuery {
     GetAgentTaskHistory {
         response_tx: oneshot::Sender<Result<Option<ag_session::TaskAgentHistory>, SessionError>>,
+        task_id: String,
+    },
+    GetExecutionGraph {
+        graph_id: String,
+        response_tx:
+            oneshot::Sender<Result<Option<ag_session::ExecutionGraphProgress>, SessionError>>,
+    },
+    GetGraphProposal {
+        id: String,
+        response_tx: oneshot::Sender<Result<Option<ag_session::GraphProposalState>, SessionError>>,
+    },
+    GetTask {
+        response_tx: oneshot::Sender<Result<Option<ag_session::Task>, SessionError>>,
         task_id: String,
     },
     ListTasks {
         response_tx: oneshot::Sender<Result<Vec<ag_session::Task>, SessionError>>,
         session_id: SessionId,
     },
-    GetTask {
-        response_tx: oneshot::Sender<Result<Option<ag_session::Task>, SessionError>>,
-        task_id: String,
-    },
-    Get {
-        response_tx: oneshot::Sender<Result<Option<Session>, SessionError>>,
-        session_id: SessionId,
-    },
-    GetDiff {
-        response_tx: oneshot::Sender<Result<Option<Vec<SessionDiffFile>>, SessionError>>,
-        session_id: SessionId,
-    },
-    List {
-        response_tx: oneshot::Sender<Result<Vec<SessionListEntry>, SessionError>>,
-    },
-    ListFiles {
-        response_tx: oneshot::Sender<Result<Option<Vec<SessionFileEntry>>, SessionError>>,
-        session_id: SessionId,
-    },
-    ListProjectFiles {
-        response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, SessionError>>,
-    },
-    HostContext {
-        response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
-    },
-    ProjectStatus {
-        response_tx: oneshot::Sender<Result<HostProjectStatus, SessionError>>,
-    },
-    Mutation(SessionCommand),
+}
+
+impl LocalQuery {
+    /// Answers the read with `refusal` instead of serving it.
+    pub(crate) fn refuse(self, refusal: SessionError) {
+        match self {
+            Self::GetAgentTaskHistory { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::GetExecutionGraph { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::GetGraphProposal { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::GetTask { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::ListTasks { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+        }
+    }
 }
 
 /// Cloneable control capability for the foreground session runtime.
@@ -120,7 +200,7 @@ impl SessionRuntimeHandle {
         &self,
         id: &str,
     ) -> Result<Option<ag_session::GraphProposalState>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetGraphProposal {
+        self.request_local(|response_tx| LocalQuery::GetGraphProposal {
             id: id.into(),
             response_tx,
         })
@@ -157,7 +237,7 @@ impl SessionRuntimeHandle {
         &self,
         graph_id: &str,
     ) -> Result<Option<ag_session::ExecutionGraphProgress>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetExecutionGraph {
+        self.request_local(|response_tx| LocalQuery::GetExecutionGraph {
             graph_id: graph_id.into(),
             response_tx,
         })
@@ -169,8 +249,15 @@ impl SessionRuntimeHandle {
         &self,
         request: ag_session::SessionGraphsRequest,
     ) -> Result<ag_session::SessionGraphs, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetSessionGraphs {
-            request,
+        let ag_session::SessionGraphsRequest {
+            graph_id,
+            node_id,
+            session_id,
+        } = request;
+
+        self.request_session(session_id, |response_tx| SessionQuery::GetGraphs {
+            graph_id,
+            node_id,
             response_tx,
         })
         .await
@@ -309,7 +396,7 @@ impl SessionRuntimeHandle {
         &self,
         task_id: &str,
     ) -> Result<Option<ag_session::TaskAgentHistory>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetAgentTaskHistory {
+        self.request_local(|response_tx| LocalQuery::GetAgentTaskHistory {
             response_tx,
             task_id: task_id.to_string(),
         })
@@ -334,7 +421,7 @@ impl SessionRuntimeHandle {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<ag_session::Task>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::ListTasks {
+        self.request_local(|response_tx| LocalQuery::ListTasks {
             response_tx,
             session_id: session_id.clone(),
         })
@@ -359,7 +446,7 @@ impl SessionRuntimeHandle {
         &self,
         task_id: &str,
     ) -> Result<Option<ag_session::Task>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetTask {
+        self.request_local(|response_tx| LocalQuery::GetTask {
             response_tx,
             task_id: task_id.to_string(),
         })
@@ -374,7 +461,10 @@ impl SessionRuntimeHandle {
         .await
     }
 
-    /// Selects caller provenance without changing mailbox ordering or replies.
+    /// Selects caller provenance without changing mailbox ordering. The
+    /// foreground owner answers every request a session service can make
+    /// through a [`CommandInitiator::Remote`] handle within the
+    /// remote-control scope, refusing the others.
     pub(crate) fn with_initiator(mut self, initiator: CommandInitiator) -> Self {
         self.initiator = initiator;
 
@@ -398,11 +488,8 @@ impl SessionRuntimeHandle {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<Session>, SessionError> {
-        let session_id = session_id.clone();
-
-        self.request(|response_tx| SessionRuntimeCommand::Get {
+        self.request_session(session_id.clone(), |response_tx| SessionQuery::Get {
             response_tx,
-            session_id,
         })
         .await
     }
@@ -413,11 +500,8 @@ impl SessionRuntimeHandle {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
-        let session_id = session_id.clone();
-
-        self.request(|response_tx| SessionRuntimeCommand::GetDiff {
+        self.request_session(session_id.clone(), |response_tx| SessionQuery::GetDiff {
             response_tx,
-            session_id,
         })
         .await
     }
@@ -428,11 +512,8 @@ impl SessionRuntimeHandle {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionFileEntry>>, SessionError> {
-        let session_id = session_id.clone();
-
-        self.request(|response_tx| SessionRuntimeCommand::ListFiles {
+        self.request_session(session_id.clone(), |response_tx| SessionQuery::ListFiles {
             response_tx,
-            session_id,
         })
         .await
     }
@@ -441,22 +522,28 @@ impl SessionRuntimeHandle {
     /// through the runtime actor, which walks the checkout off the
     /// foreground loop.
     pub(crate) async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::ListProjectFiles { response_tx })
-            .await
+        self.request(|response_tx| {
+            SessionRuntimeCommand::Project(ProjectQuery::ListProjectFiles { response_tx })
+        })
+        .await
     }
 
     /// Describes the active project new sessions are created in through the
     /// runtime actor.
     pub(crate) async fn host_context(&self) -> Result<HostContext, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::HostContext { response_tx })
-            .await
+        self.request(|response_tx| {
+            SessionRuntimeCommand::Project(ProjectQuery::HostContext { response_tx })
+        })
+        .await
     }
 
     /// Reports the active project's branch, its distance from upstream, and
     /// its latest explicit sync through the runtime actor.
     pub(crate) async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::ProjectStatus { response_tx })
-            .await
+        self.request(|response_tx| {
+            SessionRuntimeCommand::Project(ProjectQuery::ProjectStatus { response_tx })
+        })
+        .await
     }
 
     /// Starts or queues a sync of the active project's branch through the
@@ -475,8 +562,10 @@ impl SessionRuntimeHandle {
     /// Lists the loaded sessions in display order, with their list stats,
     /// through the runtime actor.
     pub(crate) async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::List { response_tx })
-            .await
+        self.request(|response_tx| {
+            SessionRuntimeCommand::Project(ProjectQuery::List { response_tx })
+        })
+        .await
     }
 
     /// Sends one message through the runtime actor.
@@ -580,6 +669,33 @@ impl SessionRuntimeHandle {
         self.request_mutation(|response_tx| CommandDelivery::Review {
             request: ReviewRequestCommand::new(session_id, None),
             response_tx: Some(response_tx),
+        })
+        .await
+    }
+
+    /// Asks for one graph, proposal, or task read under this handle's
+    /// initiator.
+    async fn request_local<ResultValue>(
+        &self,
+        query: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> LocalQuery,
+    ) -> Result<ResultValue, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::Local {
+            initiator: self.initiator,
+            query: query(response_tx),
+        })
+        .await
+    }
+
+    /// Asks for one read of `session_id` under this handle's initiator.
+    async fn request_session<ResultValue>(
+        &self,
+        session_id: SessionId,
+        query: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> SessionQuery,
+    ) -> Result<ResultValue, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::Session {
+            initiator: self.initiator,
+            query: query(response_tx),
+            session_id,
         })
         .await
     }

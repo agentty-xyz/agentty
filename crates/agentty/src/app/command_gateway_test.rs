@@ -429,15 +429,10 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     let _consumer = app.sessions.foreground_consumer();
-    let remote_service = ag_session::SessionService::new(std::sync::Arc::new(
-        app.sessions
-            .handle()
-            .with_initiator(CommandInitiator::Remote),
-    ));
     let services = [
         (app.session_view_service(), CommandInitiator::SessionView),
         (app.session_service(), CommandInitiator::SessionApi),
-        (remote_service, CommandInitiator::Remote),
+        (app.remote_session_service(), CommandInitiator::Remote),
     ];
     let mut command_ids = Vec::new();
 
@@ -448,20 +443,10 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
         let command = app.sessions.next_command().await;
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
-            SessionRuntimeCommand::Get { .. }
-            | SessionRuntimeCommand::GetDiff { .. }
-            | SessionRuntimeCommand::List { .. }
-            | SessionRuntimeCommand::ListFiles { .. }
-            | SessionRuntimeCommand::ListProjectFiles { .. }
-            | SessionRuntimeCommand::HostContext { .. }
-            | SessionRuntimeCommand::ProjectStatus { .. }
-            | SessionRuntimeCommand::GetGraphProposal { .. }
-            | SessionRuntimeCommand::GetExecutionGraph { .. }
-            | SessionRuntimeCommand::GetSessionGraphs { .. }
-            | SessionRuntimeCommand::RunGraphNode { .. }
-            | SessionRuntimeCommand::GetTask { .. }
-            | SessionRuntimeCommand::ListTasks { .. }
-            | SessionRuntimeCommand::GetAgentTaskHistory { .. } => None,
+            SessionRuntimeCommand::Project(_)
+            | SessionRuntimeCommand::Session { .. }
+            | SessionRuntimeCommand::Local { .. }
+            | SessionRuntimeCommand::RunGraphNode { .. } => None,
         }
         .expect("cancellation must be a mutation");
 

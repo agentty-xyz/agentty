@@ -3,9 +3,10 @@
 //! Agentty is registered there), tracks paired devices, and tells connected
 //! clients when session state changes.
 //!
-//! Remote clients reach sessions only through [`SessionService`] over the
-//! session-runtime mailbox, so their commands share terminal admission and
-//! model work stays behind the worker boundary.
+//! Remote clients reach sessions only through
+//! [`App::remote_session_service`] over the session-runtime mailbox, so their
+//! commands share terminal admission, the host limits them to the remote
+//! scope, and model work stays behind the worker boundary.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,11 +15,10 @@ use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
     RemoteServerStatus, StaticKeypair, pairing_link, pairing_link_on_page,
 };
-use ag_session::{SessionId, SessionService};
+use ag_session::SessionId;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-use crate::app::command_gateway::CommandInitiator;
 use crate::app::link_copy::LinkCopy;
 use crate::app::spawn::spawn_detached;
 use crate::app::{App, AppEvent, review};
@@ -350,11 +350,7 @@ impl App {
         let host = RemoteHost {
             devices: Arc::clone(&self.remote_control.devices),
             revisions: self.remote_control.subscribe_revisions(),
-            sessions: SessionService::new(Arc::new(
-                self.sessions
-                    .handle()
-                    .with_initiator(CommandInitiator::Remote),
-            )),
+            sessions: self.remote_session_service(),
         };
         let started = self
             .remote_control

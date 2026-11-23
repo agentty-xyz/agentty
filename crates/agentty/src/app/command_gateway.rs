@@ -9,7 +9,8 @@ mod command;
 mod review;
 
 pub(crate) use command::{
-    CommandDelivery, CommandInitiator, GraphProposalCommand, SessionCommand, SessionMutation,
+    CommandDelivery, CommandInitiator, GraphProposalCommand, RemoteScope, SessionCommand,
+    SessionMutation,
 };
 pub(crate) use review::ReviewRequestCommand;
 

@@ -18,6 +18,10 @@ through `ag_session::SessionService`.
 - Every mutation names its capability, checks that the host lists the session it
   targets, if it targets one, and is listed under Security in
   `docs/site/content/docs/usage/remote-control.md` and in `SECURITY.md`.
+- The host enforces the same listed-session scope and approved operations for remote
+  requests, so a new operation also needs the host to serve it to remote control:
+  mutations in `crates/agentty/src/app/command_gateway/command.rs`, reads in
+  `crates/agentty/src/app/session_runtime.rs`. Keep this crate's own checks.
 - Keep device tokens secret: persist only their SHA-256 hash, and never log tokens,
   pairing codes, or message content.
 - Keep the connection defences: a redeemed pairing code yields a token only after host

@@ -21,7 +21,7 @@ use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
-use crate::app::{App, SessionManager, SessionRuntimeCommand};
+use crate::app::{App, SessionManager, SessionQuery, SessionRuntimeCommand};
 use crate::domain::session::Status;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::SessionPreparationState;
@@ -799,8 +799,11 @@ async fn delayed_api_creation_allows_other_commands_before_answering() {
     )
     .await
     .expect("command must return before Git finishes");
-    app.apply_session_runtime_command(SessionRuntimeCommand::Get {
-        response_tx: lookup_tx,
+    app.apply_session_runtime_command(SessionRuntimeCommand::Session {
+        initiator: CommandInitiator::SessionApi,
+        query: SessionQuery::Get {
+            response_tx: lookup_tx,
+        },
         session_id: "missing".into(),
     })
     .await;

@@ -700,6 +700,53 @@ async fn device_store_failures_are_reported() {
 }
 
 #[tokio::test]
+async fn listener_sessions_are_limited_to_the_remote_scope() {
+    // Arrange
+    let (mut app, _base_dir) = test_support::new_test_app().await;
+    let project_id = app.active_project_id();
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "hidden",
+            ag_session::test_support::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("session should persist");
+    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher).await;
+    app.start_remote_control().await;
+    let sessions = probe
+        .host
+        .lock()
+        .expect("host lock")
+        .take()
+        .expect("listener should receive a host")
+        .sessions;
+
+    // Act
+    let proposal = app
+        .drive_session_request(sessions.get_graph_proposal("proposal"))
+        .await;
+    let unlisted = app
+        .drive_session_request(sessions.get_session(&"hidden".into()))
+        .await;
+
+    // Assert
+    // Other callers read the stored session and get no proposal.
+    assert_eq!(
+        proposal,
+        Err(ag_session::SessionError::Operation(
+            "Remote control does not serve this operation".to_string()
+        ))
+    );
+    assert_eq!(unlisted, Ok(None));
+}
+
+#[tokio::test]
 async fn publish_session_change_advances_the_remote_revision() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
@@ -795,6 +842,9 @@ async fn graph_actions_admitted_in_the_terminal_advance_the_remote_revision() {
 async fn graph_actions_admitted_from_devices_advance_the_remote_revision() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
+    // Devices reach only the sessions the host lists.
+    app.sessions
+        .push_session(test_support::session_fixture("sess", Status::Review));
     let mut view = crate::presentation::execution_graph::tests::graph_view();
     view.graphs[0].nodes.truncate(1);
     view.progress.as_mut().expect("progress").nodes.truncate(1);
