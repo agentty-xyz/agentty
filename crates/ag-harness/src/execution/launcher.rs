@@ -528,25 +528,7 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         // and log stores and to files at the top of the worktree's own
         // administration directory, whose links stay mounted read-only.
         command.arg("--bind").arg(&git.common).arg(&git.common);
-        // Replacement refs and object alternates lie inside the writable
-        // stores but change the history Git run outside the sandbox shows,
-        // so they stay read-only: the existing ones mounted over themselves,
-        // missing ones covered by an empty read-only directory or file.
-        // Grafts and the shallow boundary lie outside the stores already.
-        for (relative, is_directory) in GIT_HISTORY_PROTECTED {
-            let path = git.common.join(relative);
-            if path.exists() {
-                command.arg("--ro-bind").arg(&path).arg(&path);
-            } else if is_directory {
-                command
-                    .arg("--tmpfs")
-                    .arg(&path)
-                    .arg("--remount-ro")
-                    .arg(&path);
-            } else {
-                command.arg("--ro-bind").arg("/dev/null").arg(&path);
-            }
-        }
+        protect_git_history(&mut command, &git.common);
         if let Some(admin) = &git.admin {
             command.arg("--bind").arg(admin).arg(admin);
             for name in super::landlock::GIT_ADMIN_PROTECTED {
@@ -573,6 +555,30 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .args([HELPER_ARGUMENT, "--namespace-init"]);
 
     Err(command.exec())
+}
+
+/// Mounts the entries of `common` that [`GIT_HISTORY_PROTECTED`] lists
+/// read-only over the writable Git mount: replacement refs and object
+/// alternates lie inside the writable stores but change the history Git run
+/// outside the sandbox shows. Existing ones are mounted over themselves,
+/// missing ones covered by an empty read-only directory or file. Grafts and
+/// the shallow boundary lie outside the stores already.
+#[cfg(target_os = "linux")]
+fn protect_git_history(command: &mut Command, common: &std::path::Path) {
+    for (relative, is_directory) in GIT_HISTORY_PROTECTED {
+        let path = common.join(relative);
+        if path.exists() {
+            command.arg("--ro-bind").arg(&path).arg(&path);
+        } else if is_directory {
+            command
+                .arg("--tmpfs")
+                .arg(&path)
+                .arg("--remount-ro")
+                .arg(&path);
+        } else {
+            command.arg("--ro-bind").arg("/dev/null").arg(&path);
+        }
+    }
 }
 
 #[cfg(test)]
