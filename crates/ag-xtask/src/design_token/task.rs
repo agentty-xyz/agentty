@@ -1,5 +1,6 @@
 //! Generation and `--check` orchestration for the design token stylesheets.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -158,7 +159,7 @@ impl DesignTokens<'_> {
     fn check_stylesheets(&self, root: &Path, errors: &mut Vec<String>) -> Result<usize, String> {
         let mut count = 0;
         for path in self.host.inventory(root)? {
-            let extension = path.extension().and_then(|extension| extension.to_str());
+            let extension = path.extension().and_then(OsStr::to_str);
             let scss = match extension {
                 Some("css") => false,
                 Some("scss") => true,

@@ -194,44 +194,27 @@ fn declaration_values(source: &str, scss: bool) -> Vec<(Vec<usize>, String)> {
     while let Some(current) = chars.next() {
         match current {
             '/' if chars.peek() == Some(&'*') => {
-                let mut previous = ' ';
-                for skipped in chars.by_ref() {
-                    line += usize::from(skipped == '\n');
-                    if previous == '*' && skipped == '/' {
-                        break;
-                    }
-                    previous = skipped;
-                }
+                skip(&mut chars, &mut line, |previous, char| {
+                    previous == '*' && char == '/'
+                });
             }
             '/' if scss && chars.peek() == Some(&'/') => {
-                for skipped in chars.by_ref() {
-                    if skipped == '\n' {
-                        line += 1;
-                        break;
-                    }
-                }
+                skip(&mut chars, &mut line, |_, char| char == '\n');
             }
             '"' | '\'' => {
                 statement.push((line, '"'));
                 let mut escaped = false;
-                for skipped in chars.by_ref() {
-                    line += usize::from(skipped == '\n');
-                    if !escaped && skipped == current {
-                        break;
-                    }
-                    escaped = !escaped && skipped == '\\';
-                }
+                skip(&mut chars, &mut line, |_, char| {
+                    let ends = !escaped && char == current;
+                    escaped = !escaped && char == '\\';
+
+                    ends
+                });
                 statement.push((line, '"'));
             }
             '{' => statement.clear(),
             ';' | '}' => {
-                if let Some(colon) = statement.iter().position(|(_, char)| *char == ':') {
-                    let value = &statement[colon + 1..];
-                    values.push((
-                        value.iter().map(|(line, _)| *line).collect(),
-                        value.iter().map(|(_, char)| *char).collect(),
-                    ));
-                }
+                push_value(&statement, &mut values);
                 statement.clear();
             }
             _ => {
@@ -242,6 +225,35 @@ fn declaration_values(source: &str, scss: bool) -> Vec<(Vec<usize>, String)> {
     }
 
     values
+}
+
+/// Consumes characters through the first one that `ends` accepts, given it
+/// and the character before it, counting the lines it passes.
+fn skip(
+    chars: &mut impl Iterator<Item = char>,
+    line: &mut usize,
+    mut ends: impl FnMut(char, char) -> bool,
+) {
+    let mut previous = ' ';
+    for skipped in chars {
+        *line += usize::from(skipped == '\n');
+        if ends(previous, skipped) {
+            break;
+        }
+        previous = skipped;
+    }
+}
+
+/// Records the value of `statement` when it is a declaration, which a colon
+/// separates from its property name.
+fn push_value(statement: &[(usize, char)], values: &mut Vec<(Vec<usize>, String)>) {
+    if let Some(colon) = statement.iter().position(|(_, char)| *char == ':') {
+        let value = &statement[colon + 1..];
+        values.push((
+            value.iter().map(|(line, _)| *line).collect(),
+            value.iter().map(|(_, char)| *char).collect(),
+        ));
+    }
 }
 
 /// Reports hex colours, colour functions, and named colours in one value,
