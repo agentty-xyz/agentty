@@ -8,6 +8,7 @@
 //! providers available as [`preset`]s.
 
 mod anthropic;
+mod anthropic_schema;
 mod chat_completion;
 pub mod chatgpt;
 mod credential;

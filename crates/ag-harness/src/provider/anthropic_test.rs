@@ -1,5 +1,6 @@
 //! Anthropic provider tests for model context profiles, output limits, and
-//! client capability and request policy.
+//! client capability and request policy, including the structured-output
+//! schema the compaction summary sends.
 
 use std::num::NonZeroU32;
 
@@ -11,6 +12,7 @@ use super::{
     AnthropicConfig, CLAUDE_FABLE_5_2, CLAUDE_HAIKU_5_5, CLAUDE_OPUS_5_5, CLAUDE_SONNET_5_5,
     max_output_tokens, profile,
 };
+use crate::compaction::summary_schema;
 use crate::model::{HeuristicContextEstimator, Model, ModelClient, ModelRequest};
 use crate::request_option::GenerationParams;
 use crate::schema_contract::OutputSchema;
@@ -162,5 +164,54 @@ async fn unbounded_requests_send_the_cataloged_output_limit() {
     assert_eq!(
         sent_max_tokens(&server).await,
         [json!(128_000), json!(16_000), json!(4_096)]
+    );
+}
+
+#[tokio::test]
+async fn summary_schema_sends_only_keywords_claude_accepts() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_1",
+            "model": CLAUDE_HAIKU_5_5,
+            "content": [{
+                "type": "text",
+                "text": "{\"context\":\"c\",\"decisions\":[\"d\"],\"state\":\"s\"}"
+            }],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        })))
+        .mount(&server)
+        .await;
+    let client = client(CLAUDE_HAIKU_5_5, &format!("{}/v1", server.uri()));
+    let schema = summary_schema().expect("summary schema");
+
+    // Act
+    client
+        .complete(ModelRequest::new("Summarize the history", schema))
+        .await
+        .expect("the summary should be accepted");
+
+    // Assert
+    let requests = server.received_requests().await.expect("recording");
+    let body: Value = requests[0].body_json().expect("JSON request body");
+    assert_eq!(
+        body["output_config"]["format"]["schema"],
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["context", "decisions", "state"],
+            "properties": {
+                "context": {"type": "string", "description": "{minLength: 1, maxLength: 4000}"},
+                "decisions": {
+                    "type": "array",
+                    "items": {"type": "string", "description": "{minLength: 1, maxLength: 400}"},
+                    "description": "{maxItems: 32}"
+                },
+                "state": {"type": "string", "description": "{minLength: 1, maxLength: 2000}"}
+            }
+        })
     );
 }
