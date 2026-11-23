@@ -1,5 +1,7 @@
 //! Remote tab page listener, device, error, and hint rendering tests.
 
+use ag_remote::RelayStatus;
+
 use super::RemoteControlPage;
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
@@ -7,6 +9,7 @@ use crate::presentation::remote_control::{
 };
 use crate::ui::render::Page;
 use crate::ui::style;
+use crate::ui::style::palette;
 
 /// Renders the page for `view` on a `width` by `height` terminal and
 /// returns its rows.
@@ -172,12 +175,12 @@ fn selected_device_row_uses_the_selection_style() {
 }
 
 /// Builds a running listener linked to a relay.
-fn relay_view(is_connected: bool, notice: Option<&str>) -> RemoteControlView {
+fn relay_view(status: RelayStatus, notice: Option<&str>) -> RemoteControlView {
     RemoteControlView {
         listener: Some(RemoteListenerView {
             relay: Some(RemoteRelayView::new(
                 "https://relay.example/#code=ABCD".to_string(),
-                is_connected,
+                status,
             )),
             ..listener()
         }),
@@ -198,7 +201,7 @@ fn qr_code(view: &RemoteControlView) -> Vec<String> {
 #[test]
 fn relay_listener_shows_status_link_qr_code_and_link_hints() {
     // Arrange
-    let view = relay_view(true, Some("Link copied. It works once."));
+    let view = relay_view(RelayStatus::Connected, Some("Link copied. It works once."));
     let page = RemoteControlPage::new(&view, None);
 
     // Act
@@ -232,7 +235,7 @@ fn relay_listener_shows_status_link_qr_code_and_link_hints() {
 #[test]
 fn rendered_qr_code_keeps_every_row_intact_and_aligned() {
     // Arrange
-    let view = relay_view(true, None);
+    let view = relay_view(RelayStatus::Connected, None);
     let qr_code = qr_code(&view);
 
     // Act
@@ -252,7 +255,7 @@ fn rendered_qr_code_keeps_every_row_intact_and_aligned() {
 #[test]
 fn rendered_page_keeps_its_hints_when_the_qr_code_barely_fits() {
     // Arrange
-    let view = relay_view(true, None);
+    let view = relay_view(RelayStatus::Connected, None);
     let first_qr_row = qr_code(&view).swap_remove(0);
 
     // Act
@@ -279,7 +282,7 @@ fn rendered_page_keeps_its_hints_when_the_qr_code_barely_fits() {
 #[test]
 fn relay_qr_code_is_left_out_when_it_does_not_fit() {
     // Arrange
-    let view = relay_view(false, None);
+    let view = relay_view(RelayStatus::Connecting, None);
     let page = RemoteControlPage::new(&view, None);
     let qr_height = qr_code(&view).len();
 
@@ -296,6 +299,31 @@ fn relay_qr_code_is_left_out_when_it_does_not_fit() {
             .expect("relay row should render");
         assert!(text[relay_index + 1].starts_with("Link"));
     }
+}
+
+#[test]
+fn relay_that_does_not_admit_this_agentty_says_so_in_danger_color() {
+    // Arrange
+    let view = relay_view(RelayStatus::NotAdmitted, None);
+    let page = RemoteControlPage::new(&view, None);
+
+    // Act
+    let lines = page.lines(200, 80);
+
+    // Assert
+    let relay_index = lines
+        .iter()
+        .position(|line| line.to_string().starts_with("Relay   Not admitted"))
+        .expect("relay row should render");
+    assert_eq!(
+        lines[relay_index].spans[1].style.fg,
+        Some(palette::danger())
+    );
+    assert!(
+        lines[relay_index + 1]
+            .to_string()
+            .starts_with("The relay refused this Agentty")
+    );
 }
 
 #[test]

@@ -1,5 +1,9 @@
-//! Remote tab E2E tests: listener lifecycle and tab label.
+//! Remote tab E2E tests: listener lifecycle, tab label, and relay state.
 
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+
+use ag_relay::{InstanceAllowList, RelayConfig, RelayLimits};
 use testty::assertion;
 use testty::region::Region;
 
@@ -121,6 +125,60 @@ async fn remote_control_tab_relay() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .await?;
+
+    Ok(())
+}
+
+/// Verify a relay that admits no instance shows as `Not admitted`, with
+/// the reason, instead of connecting forever.
+#[tokio::test]
+async fn remote_control_tab_relay_not_admitted() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let relay = ag_relay::start_with_admission(
+        RelayConfig {
+            bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            client_address_header: None,
+            limits: RelayLimits::default(),
+        },
+        Arc::new(InstanceAllowList::new(Vec::new())),
+    )
+    .await?;
+
+    // Act, Assert
+    FeatureTest::new("remote_control_tab_relay_not_admitted")
+        .with_git()
+        .with_terminal_size(140, 36)
+        .args([
+            "--experimental-remote".to_string(),
+            "--remote-control-port".to_string(),
+            "0".to_string(),
+            "--remote-relay".to_string(),
+            format!("ws://{}", relay.local_addr()),
+        ])
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Remote"))
+                    .press_key("Enter")
+                    .wait_for_text("Relay   Not admitted", 10000)
+                    .capture_labeled("not_admitted", "The relay refuses this Agentty")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let frame = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(&frame, "Relay   Not admitted", &full);
+                    assertion::assert_text_in_region(
+                        &frame,
+                        "The relay refused this Agentty",
+                        &full,
+                    );
+                })
+            },
+        )
+        .await?;
+    relay.shutdown().await;
 
     Ok(())
 }

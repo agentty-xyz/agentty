@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
 };
@@ -30,6 +31,9 @@ const REGISTER_PATH: &str = "/v1/register";
 const ACCEPT_PATH_PREFIX: &str = "/v1/accept/";
 /// Text message that confirms a registration.
 const REGISTERED_MESSAGE: &str = "registered";
+/// Close reason the relay sends, with a policy-violation code, instead of
+/// confirming a registration its admission policy refused.
+const NOT_ADMITTED_REASON: &str = "Instance is not admitted";
 /// Prefix of the text message that announces a stream identifier.
 const STREAM_MESSAGE_PREFIX: &str = "stream ";
 /// Longest stream identifier accepted from the relay, in characters.
@@ -65,6 +69,10 @@ pub enum RelayStatus {
     Connected,
     /// Not registered: connecting, or waiting to retry.
     Connecting,
+    /// The relay refused the latest registration because its admission
+    /// policy does not admit this instance. The link keeps retrying, since
+    /// the relay may admit it later.
+    NotAdmitted,
 }
 
 /// Builds the link a device opens to pair through the relay at `relay_url`.
@@ -99,13 +107,18 @@ pub(crate) async fn run(state: Arc<ServerState>, config: RemoteRelayConfig) {
     let mut retry_delay = INITIAL_RETRY_DELAY;
 
     loop {
-        let was_registered = tokio::select! {
+        let outcome = tokio::select! {
             biased;
             () = state.stopping() => return,
-            was_registered = link(&state, &dialer, &config.instance_key) => was_registered,
+            outcome = link(&state, &dialer, &config.instance_key) => outcome,
         };
-        state.set_relay_status(RelayStatus::Connecting);
-        let delay = retry_delay_after(retry_delay, was_registered);
+        // A refusal stays reported until a later attempt ends otherwise.
+        state.set_relay_status(if outcome == LinkOutcome::NotAdmitted {
+            RelayStatus::NotAdmitted
+        } else {
+            RelayStatus::Connecting
+        });
+        let delay = retry_delay_after(retry_delay, outcome == LinkOutcome::Registered);
         tokio::select! {
             biased;
             () = state.stopping() => return,
@@ -167,17 +180,38 @@ impl Dialer {
 
         Some(RelayStream {
             is_broken: false,
+            is_not_admitted: false,
             socket,
         })
     }
 }
 
+/// How one registration attempt ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinkOutcome {
+    /// The registration failed for another reason, such as an unreachable
+    /// relay or a timeout.
+    Failed,
+    /// The relay refused the registration as not admitted.
+    NotAdmitted,
+    /// The relay confirmed the registration, and the control connection has
+    /// since ended.
+    Registered,
+}
+
 /// Registers once and answers stream notices until the control connection
-/// ends. Returns whether the registration succeeded.
-async fn link(state: &Arc<ServerState>, dialer: &Dialer, instance_key: &StaticKeypair) -> bool {
-    let registered = timeout(HANDSHAKE_TIMEOUT, register(dialer, instance_key)).await;
-    let Some(mut control) = registered.ok().flatten() else {
-        return false;
+/// ends.
+async fn link(
+    state: &Arc<ServerState>,
+    dialer: &Dialer,
+    instance_key: &StaticKeypair,
+) -> LinkOutcome {
+    let registered = timeout(HANDSHAKE_TIMEOUT, register(dialer, instance_key))
+        .await
+        .unwrap_or(Err(LinkOutcome::Failed));
+    let mut control = match registered {
+        Ok(control) => control,
+        Err(outcome) => return outcome,
     };
     state.set_relay_status(RelayStatus::Connected);
     while let Some(stream_id) = next_stream_id(&mut control).await {
@@ -189,20 +223,45 @@ async fn link(state: &Arc<ServerState>, dialer: &Dialer, instance_key: &StaticKe
         ));
     }
 
-    true
+    LinkOutcome::Registered
 }
 
 /// Opens the control connection and proves `instance_key` to the relay.
-async fn register(dialer: &Dialer, instance_key: &StaticKeypair) -> Option<RelayStream> {
-    let mut control = dialer.open(REGISTER_PATH).await?;
+/// Returns the confirmed control connection, or how the attempt ended
+/// without one.
+async fn register(
+    dialer: &Dialer,
+    instance_key: &StaticKeypair,
+) -> Result<RelayStream, LinkOutcome> {
+    let mut control = dialer
+        .open(REGISTER_PATH)
+        .await
+        .ok_or(LinkOutcome::Failed)?;
+    let confirmation = confirm_registration(&mut control, instance_key).await;
+    if confirmation.as_deref() == Some(REGISTERED_MESSAGE) {
+        return Ok(control);
+    }
+
+    Err(if control.is_not_admitted {
+        LinkOutcome::NotAdmitted
+    } else {
+        LinkOutcome::Failed
+    })
+}
+
+/// Runs the relay handshake on `control` and returns the relay's answer,
+/// or `None` when the handshake fails or the relay closes the connection.
+async fn confirm_registration(
+    control: &mut RelayStream,
+    instance_key: &StaticKeypair,
+) -> Option<String> {
     let mut handshake = Handshake::relay_initiator(instance_key).ok()?;
     control.send(handshake.write_message().ok()?).await;
     let second = control.receive().await?;
     handshake.read_message(&second).ok()?;
     control.send(handshake.write_message().ok()?).await;
-    let confirmation = control.next_text().await?;
 
-    (confirmation == REGISTERED_MESSAGE).then_some(control)
+    control.next_text().await
 }
 
 /// Reads the next stream notice. Returns `None` when the control connection
@@ -256,6 +315,9 @@ async fn open_stream(
 /// broken, so the next receive reports the end.
 struct RelayStream {
     is_broken: bool,
+    /// Whether the relay closed the socket because it does not admit this
+    /// instance.
+    is_not_admitted: bool,
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
@@ -267,7 +329,15 @@ impl RelayStream {
             match timeout(IDLE_TIMEOUT, self.socket.next()).await {
                 Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
                 Ok(Some(Ok(message))) if !message.is_close() => return Some(message),
-                _ => self.is_broken = true,
+                ended => {
+                    self.is_not_admitted = matches!(
+                        ended,
+                        Ok(Some(Ok(Message::Close(Some(frame)))))
+                            if frame.code == CloseCode::Policy
+                                && frame.reason == NOT_ADMITTED_REASON
+                    );
+                    self.is_broken = true;
+                }
             }
         }
 

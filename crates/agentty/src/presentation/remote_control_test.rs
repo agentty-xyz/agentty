@@ -1,5 +1,7 @@
 //! Tests for the remote-control frame projection.
 
+use ag_remote::RelayStatus;
+
 use crate::presentation::remote_control::{
     LIGHT_CELL, RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
     RemoteRelayView,
@@ -39,7 +41,7 @@ fn relay_view_encodes_the_link_as_square_half_block_rows() {
     let link = "https://relay.example/#code=ABCD".to_string();
 
     // Act
-    let relay = RemoteRelayView::new(link.clone(), true);
+    let relay = RemoteRelayView::new(link.clone(), RelayStatus::Connected);
 
     // Assert
     let row_widths: Vec<usize> = relay
@@ -49,7 +51,7 @@ fn relay_view_encodes_the_link_as_square_half_block_rows() {
         .collect();
     let size = row_widths[0];
     assert_eq!(relay.link, link);
-    assert!(relay.is_connected);
+    assert_eq!(relay.status, RelayStatus::Connected);
     assert!(row_widths.iter().all(|width| *width == size));
     assert_eq!(relay.qr_code.len(), size.div_ceil(2));
     assert!(relay.qr_code[0].chars().all(|cell| cell == LIGHT_CELL));
@@ -68,7 +70,7 @@ fn relay_view_has_no_qr_code_for_a_link_too_long_to_encode() {
     let link = "x".repeat(8_000);
 
     // Act
-    let relay = RemoteRelayView::new(link, false);
+    let relay = RemoteRelayView::new(link, RelayStatus::Connecting);
 
     // Assert
     assert_eq!(relay.qr_code, Vec::<String>::new());

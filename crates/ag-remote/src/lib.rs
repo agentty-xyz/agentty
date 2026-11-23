@@ -17,7 +17,8 @@
 //! [`RemoteRelayConfig::instance_key`], so the relay carries only ciphertext,
 //! and it pairs with the same one-time code and host approval. Its own key,
 //! not a token, authenticates it afterwards. [`RemoteServerStatus::relay`]
-//! reports whether the relay link is up.
+//! reports whether the relay link is up, or whether the relay refused to
+//! admit this instance.
 
 mod connection;
 mod device;

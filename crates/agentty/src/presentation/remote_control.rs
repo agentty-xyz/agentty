@@ -1,5 +1,6 @@
 //! Remote-control state projected for the Remote tab.
 
+use ag_remote::RelayStatus;
 use qrcode::{Color as QrColor, EcLevel, QrCode};
 
 /// Remote-control listener and paired-device state for one frame.
@@ -52,23 +53,24 @@ pub struct RemoteListenerView {
 /// The relay a running listener registers with.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteRelayView {
-    /// Whether the relay currently accepts devices for this instance.
-    pub is_connected: bool,
     /// Pairing link a device opens, or scans as a QR code, to pair through
     /// the relay. It carries the one-time code, so it works once.
     pub link: String,
     /// The link as QR code rows of half-block characters, encoded once per
     /// link; empty when the link cannot be encoded.
     pub qr_code: Vec<String>,
+    /// Whether the relay accepts devices for this instance now, is being
+    /// connected to, or refused to admit this instance.
+    pub status: RelayStatus,
 }
 
 impl RemoteRelayView {
     /// Projects `link` and its QR code.
-    pub fn new(link: String, is_connected: bool) -> Self {
+    pub fn new(link: String, status: RelayStatus) -> Self {
         Self {
-            is_connected,
             qr_code: qr_rows(&link),
             link,
+            status,
         }
     }
 }

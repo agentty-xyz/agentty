@@ -1,6 +1,8 @@
 //! Shortcut availability tests for list, settings, remote, session view, and
 //! diff help actions.
 
+use ag_remote::RelayStatus;
+
 use super::{
     DiffReviewCommentHelp, HelpAction, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
     ViewHelpState, ViewSessionState, diff_actions, project_list_actions, remote_actions,
@@ -53,7 +55,7 @@ fn test_remote_actions_follow_the_listener_pairings_and_devices() {
             pairing_code: "ABCD-EFGH".to_string(),
             relay: Some(RemoteRelayView::new(
                 "https://relay.example/".to_string(),
-                true,
+                RelayStatus::Connected,
             )),
             url: "http://127.0.0.1:4646/".to_string(),
         }),
