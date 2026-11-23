@@ -30,7 +30,7 @@ export function parseDirectory(body) {
     ) {
       continue;
     }
-    const time = typeof item.last_connected_at === "string" ? Date.parse(item.last_connected_at) : NaN;
+    const time = typeof item.last_connected_at === "string" ? Date.parse(item.last_connected_at) : Number.NaN;
     entries.push({
       instanceId: item.instance_id,
       lastConnectedAt: Number.isFinite(time) ? Math.floor(time / 1000) : null,

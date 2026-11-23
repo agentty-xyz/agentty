@@ -453,15 +453,18 @@ function parseLink(hash) {
 // Whether `link` names this page's relay, compared as addresses so case
 // and a trailing slash do not matter; a page without one takes any.
 function isOwnRelay(link) {
+  // Text that is not an address names no relay this page uses.
   const normal = (address) => {
-    try {
-      const url = new URL(address);
-
-      return url.protocol + "//" + url.host + url.pathname.replace(/\/+$/, "");
-    } catch (_error) {
-      // Not an address, so it names no relay this page uses.
+    if (!URL.canParse(address)) {
       return null;
     }
+    const url = new URL(address);
+    let path = url.pathname;
+    while (path.endsWith("/")) {
+      path = path.slice(0, -1);
+    }
+
+    return url.protocol + "//" + url.host + path;
   };
 
   const relay = normal(link.relayUrl);

@@ -67,7 +67,10 @@ fn default_options_render_the_relays_own_page() {
             .count(),
         2
     );
-    assert!(page.html().contains(r#"<a class="account" hidden></a>"#));
+    assert!(
+        page.html()
+            .contains(r#"<span class="account" hidden></span>"#)
+    );
     assert_eq!(page.content_security_policy(), DEFAULT_POLICY);
     assert_eq!(page.connect_sources(), ["'self'"]);
     assert_eq!(

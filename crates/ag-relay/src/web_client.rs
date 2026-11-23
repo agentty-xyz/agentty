@@ -17,7 +17,7 @@ const SECTIONS: (&str, &str) = (
     "</nav>",
 );
 /// Where the account link goes in the sidebar foot.
-const ACCOUNT: (&str, &str) = (r#"<a class="account" hidden>"#, "</a>");
+const ACCOUNT: (&str, &str) = (r#"<span class="account" hidden>"#, "</span>");
 /// Every directive of the content security policy but `connect-src`.
 /// Fonts may only be the `data:` URIs the stylesheet embeds.
 const POLICY_BEFORE_CONNECT: &str =
