@@ -319,7 +319,9 @@ a {
   font-family: var(--font-mono);
   font-size: var(--font-size-3xs);
   font-weight: var(--font-weight-regular);
+  letter-spacing: normal;
   line-height: var(--line-height-none);
+  text-transform: none;
   white-space: nowrap;
   transition: border-color var(--transition-fast), color var(--transition-fast);
 }
@@ -365,6 +367,8 @@ a:hover .badge-label {
   color: var(--status-tone, var(--color-dim));
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
+  letter-spacing: normal;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -374,6 +378,20 @@ a:hover .badge-label {
   flex: none;
   border-radius: 50%;
   background: var(--status-tone, var(--color-dim));
+}
+
+/* A status that reads as a line of text and wraps, such as what a session
+   is doing, with its dot centred on the first line. */
+.status--line {
+  display: flex;
+  align-items: flex-start;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-compact);
+  white-space: normal;
+}
+
+.status--line .status-dot {
+  margin-top: calc((var(--line-height-compact) * 1em - 0.45rem) / 2);
 }
 
 .status--working {

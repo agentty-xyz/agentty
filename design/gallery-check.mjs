@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Checks that pages render the shared components as the design gallery does.
 //
-//   node gallery-check.mjs gallery.html --surface <name>=<stylesheet>[,<stylesheet>...] ...
+//   node gallery-check.mjs gallery.html --surface <name>=<stylesheet>[,<stylesheet>...] \
+//     [--markup <name>=<path>[,<path>...]] ...
 //
 // The gallery loads the shared stylesheets by relative path. For each
 // surface, this script renders the gallery's markup once with those
@@ -11,11 +12,13 @@
 // It fails when any computed style of an element inside a `data-specimen`
 // element differs, other than the properties that place or size a
 // component in its page, and when a surface rule names a shared component
-// to set any other property. It reads only local files and needs a
+// to set any other property. With `--markup`, the surface's templates and
+// scripts, a rule on a class the markup sets beside a shared class counts
+// as naming that component too. It reads only local files and needs a
 // Chromium-based browser: set CHROME_PATH, or it looks in the usual places.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -100,6 +103,8 @@ export const SELECTORS = Object.freeze({
 const SPECIMENS = SELECTORS.specimens;
 const FREEZE = "*, *::before, *::after { transition: none !important; animation: none !important; }";
 const COMMAND_TIMEOUT_MS = 30000;
+// Files under a markup directory that can hold class names.
+const MARKUP = /\.(html?|m?[jt]sx?|vue|svelte)$/;
 const REPORT_LIMIT = 200;
 
 // Runs the check for `argv` and returns the exit code; output goes to `io`.
@@ -129,6 +134,7 @@ export async function main(argv, environment, io, launch = Browser.launch) {
       reference: readStylesheets(reference),
       surfaces: options.surfaces.map((surface) => ({
         css: readStylesheets(surface.files),
+        markup: surface.markup.flatMap(readMarkup),
         name: surface.name,
       })),
     });
@@ -142,27 +148,59 @@ export async function main(argv, environment, io, launch = Browser.launch) {
   }
 }
 
-// Reads `--surface name=a.css,b.css` options after the gallery path.
+// Reads `--surface name=a.css,b.css` options after the gallery path, and
+// for any of them `--markup name=templates,scripts`, files or directories.
 export function parseArguments(argv) {
   const [gallery, ...rest] = argv;
   if (!gallery || gallery.startsWith("--")) {
-    throw new Error("usage: gallery-check.mjs <gallery.html> --surface <name>=<stylesheet>[,<stylesheet>...] ...");
+    throw new Error(
+      "usage: gallery-check.mjs <gallery.html> --surface <name>=<stylesheet>[,<stylesheet>...] " +
+        "[--markup <name>=<path>[,<path>...]] ...",
+    );
   }
   const surfaces = [];
-  for (let index = 0; index < rest.length; index += 1) {
+  const markup = [];
+  for (let index = 0; index < rest.length; index += 2) {
     const value = rest[index + 1] ?? "";
     const separator = value.indexOf("=");
-    if (rest[index] !== "--surface" || separator < 1 || separator === value.length - 1) {
-      throw new Error("expected --surface <name>=<stylesheet>[,<stylesheet>...], not " + rest.slice(index).join(" "));
+    const option = rest[index];
+    if (!["--surface", "--markup"].includes(option) || separator < 1 || separator === value.length - 1) {
+      throw new Error("expected --surface or --markup <name>=<path>[,<path>...], not " + rest.slice(index).join(" "));
     }
-    surfaces.push({ files: value.slice(separator + 1).split(","), name: value.slice(0, separator) });
-    index += 1;
+    const entry = { name: value.slice(0, separator), paths: value.slice(separator + 1).split(",") };
+    (option === "--surface" ? surfaces : markup).push(entry);
   }
   if (surfaces.length === 0) {
     throw new Error("name at least one --surface to compare with the gallery");
   }
+  for (const entry of markup.filter((candidate) => !surfaces.some((surface) => surface.name === candidate.name))) {
+    throw new Error("--markup names " + entry.name + ", which no --surface names");
+  }
 
-  return { gallery: gallery, surfaces: surfaces };
+  return {
+    gallery: gallery,
+    surfaces: surfaces.map((surface) => ({
+      files: surface.paths,
+      markup: markup.filter((entry) => entry.name === surface.name).flatMap((entry) => entry.paths),
+      name: surface.name,
+    })),
+  };
+}
+
+// Returns the text of the markup at `path`: a file, or every template and
+// script file under a directory, in a stable order.
+export function readMarkup(path) {
+  if (!statSync(path).isDirectory()) {
+    return [readFileSync(path, "utf8")];
+  }
+
+  return readdirSync(path)
+    .sort()
+    .flatMap((name) => {
+      const child = join(path, name);
+
+      return statSync(child).isDirectory() || MARKUP.test(name) ? readMarkup(child) : [];
+    });
 }
 
 // Returns the browser to run: CHROME_PATH, then the usual install places,
@@ -256,7 +294,7 @@ export async function check(browser, input) {
         captures += 1;
         surfaces[index].differences.push(...compareStyles(reference.styles, rendered.styles, variant));
         if (theme === THEMES[0] && viewport === VIEWPORTS[0]) {
-          surfaces[index].findings.push(...auditRules(reference.rules, rendered.rules));
+          surfaces[index].findings.push(...auditRules(reference.rules, rendered.rules, surface.markup));
         }
       }
     }
@@ -292,15 +330,23 @@ export async function capture(page, html, viewport) {
       for (const ancestor of element.ancestors) {
         await page.force(nodes[ancestor], state.ancestors);
       }
+      // The whole specimen, since a forced state also styles ancestors,
+      // such as a field that shows its input's focus with :focus-within.
       const forced = await page.evaluate(collectPage, {
         layout: layout,
         mode: "styles",
         motion: false,
-        root: element.index,
+        root: element.specimen,
         selector: SPECIMENS,
       });
-      for (const [key, value] of Object.entries(forced)) {
-        styles[state.name + " " + element.key + " | " + key] = value;
+      // Only what the state changes from rest, so a difference at rest is
+      // reported once rather than again under every forced state.
+      for (const [key, values] of Object.entries(forced)) {
+        const rest = styles[key] ?? {};
+        const changed = Object.entries(values).filter(([name, value]) => rest[name] !== value);
+        if (changed.length > 0) {
+          styles[state.name + " " + element.key + " | " + key] = Object.fromEntries(changed);
+        }
       }
       for (const node of [element.index, ...element.ancestors]) {
         await page.force(nodes[node], []);
@@ -347,6 +393,7 @@ export function collectPage(window, options) {
         index: index,
         key: keyOf(element),
         root: element.hasAttribute("data-specimen"),
+        specimen: element.hasAttribute("data-specimen") ? index : ancestors[0],
       };
     });
   }
@@ -367,7 +414,13 @@ export function collectPage(window, options) {
           // it sets: a compiler may rewrite values, as Sass does with
           // `transparent`, without changing what they mean.
           const text = conditions.concat(rule.selectorText, "{" + declarations.join(";") + "}").join(" ");
-          rules.push({ conditions: conditions, declarations: declarations, selector: rule.selectorText, text: text });
+          rules.push({
+            conditions: conditions,
+            declarations: declarations,
+            hidden: rule.style.getPropertyValue("display") === "none",
+            selector: rule.selectorText,
+            text: text,
+          });
         } else if (rule.cssRules) {
           const kind = rule.media
             ? "@media "
@@ -447,8 +500,11 @@ export function compareStyles(reference, surface, variant) {
 // and the element types under a class that styles only its descendants
 // (such as the container of rendered Markdown), that the reference rules
 // select; an element type under another shared class counts only with
-// that class.
-export function auditRules(reference, surface) {
+// that class. `markup`, the text of the surface's templates and scripts,
+// adds the surface's own classes that sit beside a shared class in one
+// quoted string, such as a class attribute: a rule on one of those
+// restyles the component's element too.
+export function auditRules(reference, surface, markup = []) {
   const known = new Set(reference.map((rule) => rule.text));
   const scopedTypes = new Set();
   const pairs = new Set();
@@ -468,10 +524,14 @@ export function auditRules(reference, surface) {
       }
     }
   }
+  const companions = companionClasses(markup, component);
   const findings = [];
   for (const rule of surface.filter((candidate) => !known.has(candidate.text))) {
     const named = parts(rule.selector).flatMap((part) => [
       ...part.subject.classes.filter((name) => component(name)).map((name) => "." + name),
+      ...part.subject.classes
+        .filter((name) => companions.has(name))
+        .map((name) => "." + name + " (with " + companions.get(name) + ")"),
       ...part.subject.types.filter((type) => scopedTypes.has(type)),
       ...part.subject.types.flatMap((type) =>
         part.context
@@ -479,7 +539,10 @@ export function auditRules(reference, surface) {
           .map((name) => "." + name + " " + type),
       ),
     ]);
-    const properties = rule.declarations.filter((name) => !LAYOUT_PROPERTIES.has(name));
+    // Hiding a component, as a narrow layout may, places it too.
+    const properties = rule.declarations.filter(
+      (name) => !LAYOUT_PROPERTIES.has(name) && !(name === "display" && rule.hidden),
+    );
     if (named.length > 0 && properties.length > 0) {
       findings.push({
         components: [...new Set(named)],
@@ -491,6 +554,32 @@ export function auditRules(reference, surface) {
   }
 
   return findings;
+}
+
+// Returns each class that shares a quoted string in `markup` with a shared
+// class, which `component` recognizes, mapped to the first such shared
+// class. Scripts that build a class name by concatenation keep the shared
+// class and its companions in one literal, as in "status status-line".
+// Block comments, HTML comments, and lines that hold only a comment are
+// skipped, since their prose quotes words, not classes.
+export function companionClasses(markup, component) {
+  const companions = new Map();
+  for (const text of markup) {
+    const code = text
+      .replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    for (const quoted of code.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g)) {
+      const tokens = (quoted[1] ?? quoted[2] ?? quoted[3]).split(/\s+/).filter((token) => /^-?[A-Za-z_][\w-]*$/.test(token));
+      const shared = tokens.find((token) => component(token));
+      for (const token of shared ? tokens.filter((candidate) => !component(candidate)) : []) {
+        if (!companions.has(token)) {
+          companions.set(token, "." + shared);
+        }
+      }
+    }
+  }
+
+  return companions;
 }
 
 // Splits a selector list into complex selectors and returns, for each, the
@@ -633,6 +722,9 @@ export function formatReport(result) {
           finding.properties.join(", "),
       );
     }
+    // A forced state records only what it changes, so a missing value is
+    // the value at rest.
+    const value = (text) => text ?? "as at rest";
     for (const difference of surface.differences) {
       lines.push(
         surface.name +
@@ -643,9 +735,9 @@ export function formatReport(result) {
           ": " +
           difference.property +
           " is " +
-          difference.actual +
+          value(difference.actual) +
           ", gallery " +
-          difference.expected,
+          value(difference.expected),
       );
     }
   }

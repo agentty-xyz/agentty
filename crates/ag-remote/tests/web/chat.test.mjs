@@ -384,7 +384,7 @@ test("the transcript ends with what a working session does, and drops it when th
 
   // Assert
   assert.deepEqual(working, {
-    className: "status status-line status--working status--live",
+    className: "status status--line status-line status--working status--live",
     hidden: false,
     text: "Working...",
   });
@@ -392,12 +392,12 @@ test("the transcript ends with what a working session does, and drops it when th
   assert.equal(keptMarker, true);
   assert.equal(marker.className, "status-dot");
   assert.deepEqual(rebasing, {
-    className: "status status-line status--queue status--live",
+    className: "status status--line status-line status--queue status--live",
     text: "Rebasing...",
   });
   assert.equal(reviewHidden, true);
   assert.deepEqual(queued, {
-    className: "status status-line status--queue",
+    className: "status status--line status-line status--queue",
     text: "Waiting in merge queue...",
   });
   assert.equal(line.hidden, true);

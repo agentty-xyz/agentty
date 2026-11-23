@@ -371,7 +371,10 @@ keeps the same one.
 - **Status:** `.status.status--<tone>` holds an `i.status-dot` and the label: a 0.45rem
   dot and monospace label at `--font-size-2xs`, both in the tone that Status Tones
   lists. The modifier also sets `--status-tone`, so a page's own element can take the
-  same color. The pulse stops when the system asks for reduced motion.
+  same color. `.status--line` is a status that reads as a line of text and wraps, at
+  `--font-size-sm` and `--line-height-compact`, with its dot centred on the first line.
+  The pulse stops when the system asks for reduced motion. Badges and statuses set their
+  own letter spacing and case, so a label around them cannot change either.
 - **Inline code and tables:** `code.code` is inline code: `--color-surface` with a
   `--color-border` outline, a 0.3rem radius, and `--color-accent` monospace text at
   0.9em. `table.table` is a data table at `--font-size-md`: a `--color-surface` header
@@ -398,19 +401,38 @@ browser:
 ```sh
 node gallery-check.mjs gallery.html \
   --surface site=tokens.css,fonts.css,base.css,site.css \
-  --surface app=compiled/app.css
+  --markup site=templates \
+  --surface app=compiled/app.css \
+  --markup app=src/index.html,src/views
 ```
 
 For each page, it renders the gallery's markup once with the stylesheets the gallery
 links and once with the page's chain, in both themes, on a desktop and a touch phone
 viewport, at rest and with each interactive element hovered, focused, and pressed, and
 compares the computed styles of every element inside a `data-specimen` element, other
-than the placement properties a page may set. Animations and transitions are frozen, and
-scripts are off. It also fails on a page rule that names a component, or a bare element
-inside `.prose`, to set anything but placement. It reads only local files and runs on
-Node.js with a Chromium-based browser: Chrome, Chromium, or `chrome-headless-shell`,
-which `CHROME_PATH` names, or which it finds in the usual install places. Compile a Sass
-or bundled stylesheet first, and pass its output.
+than the placement properties a page may set. A forced state compares the whole
+specimen, so a field that shows its input's focus with `:focus-within` counts.
+Animations and transitions are frozen, and scripts are off. It also fails on a page rule
+that names a component, or a bare element inside `.prose`, to set anything but
+placement; hiding with `display: none` counts as placement. The optional `--markup`
+files and directories are the page's templates and scripts: a class that shares a quoted
+string with a component's class there, as in `class="status status-line"` or a script's
+`"status status-line"`, sits on the component's element, so a rule on it may only place
+it too. It reads only local files and runs on Node.js with a Chromium-based browser:
+Chrome, Chromium, or `chrome-headless-shell`, which `CHROME_PATH` names, or which it
+finds in the usual install places. Compile a Sass or bundled stylesheet first, and pass
+its output.
+
+The check does not see a page's own markup around a component, so keep these by hand:
+
+- A page rule on an element type in a page context, such as `.panel p`, outranks a
+  component on that element, such as `p.eyebrow`. Exclude the component, as in
+  `.panel p:where(:not(.eyebrow))`.
+- A component inherits what it does not set, such as `letter-spacing` from a label
+  around it. Components set the text properties they depend on; look at a component in
+  any styled context it is placed in.
+- A class the page adds to a component's element in a way the markup scan misses, such
+  as a class string assembled from separate literals, escapes the rule audit.
 
 ## Do's and Don'ts
 

@@ -741,7 +741,7 @@ export function createChat({
       return true;
     }
     const loading = line.isLoading ? " status--live" : "";
-    node.className = "status status-line status--" + statusInfo(statusName).tone + loading;
+    node.className = "status status--line status-line status--" + statusInfo(statusName).tone + loading;
     if (!node.firstElementChild) {
       node.replaceChildren(element(document, "i", "status-dot"), element(document, "span", "status-line-body"));
     }

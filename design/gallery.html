@@ -122,6 +122,11 @@
                 margin: 0;
             }
 
+            /* Narrow enough that a long status wraps. */
+            .gallery-narrow {
+                max-width: 16rem;
+            }
+
             .gallery-window-body {
                 margin: 0;
                 padding: var(--space-lg);
@@ -321,6 +326,23 @@
                             <span class="status status--failed"><i class="status-dot"></i>failed</span>
                             <span class="status status--queue status--live"><i class="status-dot"></i>syncing</span>
                             <span class="status"><i class="status-dot"></i>unknown</span>
+                        </div>
+                    </figure>
+                    <figure class="gallery-item gallery-item-wide">
+                        <figcaption class="gallery-caption">.status--line, a status that wraps, in a narrow column</figcaption>
+                        <div class="gallery-specimen gallery-specimen-block"
+                             data-specimen="status-line">
+                            <p class="status status--line status--working status--live gallery-narrow">
+                                <i class="status-dot"></i><span>Resolving three review comments across the session's changed files</span>
+                            </p>
+                        </div>
+                    </figure>
+                    <figure class="gallery-item">
+                        <figcaption class="gallery-caption">.badge and .status inside an uppercase, tracked label</figcaption>
+                        <div class="gallery-specimen" data-specimen="status-context">
+                            <p class="eyebrow">
+                                session <span class="badge">v1</span> <span class="status status--ready"><i class="status-dot"></i>ready</span>
+                            </p>
                         </div>
                     </figure>
                 </div>

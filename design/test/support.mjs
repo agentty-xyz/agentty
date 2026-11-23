@@ -132,9 +132,13 @@ export function fakeSheet(rules, chain = true) {
   return { cssRules: rules, ownerNode: { hasAttribute: (name) => chain && name === "data-gallery-chain" } };
 }
 
-// A style rule that sets `declarations`.
-export function styleRule(selector, declarations) {
-  return { selectorText: selector, style: declarations };
+// A style rule that sets `declarations`, each to "value" unless `values`
+// names its own.
+export function styleRule(selector, declarations, values = {}) {
+  const style = [...declarations];
+  style.getPropertyValue = (name) => values[name] ?? "value";
+
+  return { selectorText: selector, style: style };
 }
 
 // A page whose documents `build(html, viewport)` creates, and which runs

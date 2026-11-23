@@ -41,7 +41,7 @@ macro_rules! script {
 }
 
 /// Files the page loads, by request path, with their content types.
-const FILES: [(&str, &str, &str); 18] = [
+const FILES: [(&str, &str, &str); 19] = [
     // The generated design tokens, font faces, and shared base styles come
     // first, as Agentty's listener serves them.
     (
@@ -71,6 +71,7 @@ const FILES: [(&str, &str, &str); 18] = [
     script!("shell.mjs"),
     script!("slash.mjs"),
     script!("suggest.mjs"),
+    script!("theme.js"),
 ];
 
 /// Adds the web client's routes to `router`.

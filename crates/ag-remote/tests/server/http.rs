@@ -186,6 +186,32 @@ fn referenced_paths(body: &str) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn page_applies_the_saved_theme_before_its_module_runs() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let addr = server.handle.local_addr();
+
+    // Act
+    let page = get(addr, "/").await?;
+    let theme = get(addr, "/theme.js").await?;
+
+    // Assert: a classic script runs in the head while the page parses, ahead
+    // of the deferred module, so a saved theme shows from the first paint.
+    // It carries the same restrictive headers as every other file.
+    assert!(theme.starts_with("http/1.1 200 ok"));
+    assert!(theme.contains("content-type: text/javascript; charset=utf-8"));
+    assert!(theme.contains("content-security-policy: default-src 'none'; script-src 'self';"));
+    assert!(theme.contains("x-content-type-options: nosniff"));
+    let classic = page.find("<script src=\"theme.js\"></script>");
+    let module = page.find("<script type=\"module\" src=\"app.js\"");
+    assert!(classic.is_some() && classic < module, "{page}");
+    // `get` lowercases the whole response.
+    assert!(theme.contains("classlist.add(\"theme-dark\")"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
@@ -243,7 +269,8 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/settings.mjs",
             "/shell.mjs",
             "/slash.mjs",
-            "/suggest.mjs"
+            "/suggest.mjs",
+            "/theme.js"
         ]
     );
 

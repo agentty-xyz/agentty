@@ -73,6 +73,14 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   Session replay starts only after allowing analytics and requires Session Replay to be
   enabled in the PostHog project's settings.
 
+- **Design gallery:** changes to `design/`, the docs site's styles, templates, or
+  scripts, or the remote client's assets run the `design-gallery` hook, which needs
+  Zola, Node.js, and a Chromium-based browser: Google Chrome or Chromium in its usual
+  install path, a headless shell that Playwright installed, or any of them named by
+  `CHROME_PATH`. Changes to the gallery check itself run `design-gallery-check-test`,
+  which needs Node.js 22.8 or newer for its coverage flags. GitHub-hosted runners
+  provide Node.js and Chrome, and the workflow installs Zola.
+
 - **Feature recording:** intentional recording also needs a running Podman environment;
   follow `skills/refresh-feature-recordings/references/recording.md` for the canonical
   container workflow.

@@ -279,7 +279,8 @@ test("a row renders a hostile title only as a text node", () => {
     assert.equal(node.textContent, title);
   }
   assert.equal(page.document.querySelectorAll("img").length, 0);
-  assert.equal(page.document.querySelectorAll("script").length, 1);
+  // Only the page's own two: the theme script and the module.
+  assert.equal(page.document.querySelectorAll("script").length, 2);
 });
 
 test("choosing a row or a card opens its session", () => {

@@ -1384,19 +1384,10 @@ body {
   font-size: var(--font-size-md);
 }
 
-/* What the session is doing, after the last message, as in the terminal */
+/* What the session is doing, after the last message, as in the terminal: a
+   shared .status--line. */
 .status-line {
-  display: flex;
-  align-items: flex-start;
   margin: 1.1rem 0 0;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-compact);
-  white-space: normal;
-}
-
-/* Centred on the first line, above any detail rows */
-.status-line .status-dot {
-  margin-top: calc((1.4em - 0.45rem) / 2);
 }
 
 .status-line-body {
@@ -2357,8 +2348,12 @@ body {
   gap: var(--space-sm);
 }
 
-.narrow-only {
-  display: none;
+/* Hidden on a wide layout only, so on a narrow one each element keeps its
+   own display, including a shared component's. */
+@media (min-width: 861px) {
+  .narrow-only {
+    display: none;
+  }
 }
 
 /* ---- Narrow: the sidebar becomes a drawer ------------------------- */
@@ -2387,8 +2382,7 @@ body {
     transition: transform var(--transition-fast);
   }
 
-  .menu-btn,
-  .narrow-only {
+  .menu-btn {
     display: inline-flex;
   }
 

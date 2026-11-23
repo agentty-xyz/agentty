@@ -46,7 +46,7 @@ test('readHero reads the eyebrow, title, and font stylesheet of the home page', 
 
 test('readHero rejects a template without a hero title', () => {
   // Arrange
-  const indexHtml = `${FONT_LINK}<p class="hero-eyebrow">// eyebrow</p>`;
+  const indexHtml = `${FONT_LINK}<p class="eyebrow">// eyebrow</p>`;
 
   // Act
   const read = () => readHero(indexHtml);
@@ -57,7 +57,7 @@ test('readHero rejects a template without a hero title', () => {
 
 test('readHero rejects hero text that comes from a template expression', () => {
   // Arrange
-  const indexHtml = `${FONT_LINK}<p class="hero-eyebrow">// eyebrow</p>`
+  const indexHtml = `${FONT_LINK}<p class="eyebrow">// eyebrow</p>`
     + '<h1 class="hero-title" id="t">{{ section.title }}</h1>';
 
   // Act

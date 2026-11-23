@@ -20,7 +20,10 @@ test("createDocument reads the client's page with its ids, attributes and text",
   assert.equal(document.getElementById("shell").hidden, true);
   assert.equal(document.getElementById("pair-code").getAttribute("maxlength"), "16");
   assert.equal(document.getElementById("message").value, "");
-  assert.equal(document.querySelector("script").getAttribute("src"), "app.js");
+  assert.deepEqual(
+    Array.from(document.querySelectorAll("script"), (script) => script.getAttribute("src")),
+    ["theme.js", "app.js"],
+  );
   assert.equal(document.querySelectorAll("symbol").length, 15);
   assert.equal(document.querySelector("#menu use").getAttribute("href"), "#i-menu");
   assert.match(document.getElementById("pair-hint-local").textContent, /Start remote control in Agentty's Remote tab/);

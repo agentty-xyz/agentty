@@ -16,6 +16,7 @@ import {
   capture,
   check,
   collectPage,
+  companionClasses,
   compareStyles,
   findChrome,
   formatReport,
@@ -23,6 +24,7 @@ import {
   galleryStylesheets,
   main,
   parseArguments,
+  readMarkup,
   selectorParts,
 } from "../gallery-check.mjs";
 import { FakeElement, FakePage, fakeBrowser, fakeProcess, fakeSheet, fakeWindow, styleRule } from "./support.mjs";
@@ -32,12 +34,12 @@ const VIEWPORT = { height: 900, mobile: false, name: "desktop", width: 1280 };
 
 // One specimen: a link holding a badge, and an input; plus an element
 // outside every specimen, which the check ignores.
-function specimenBody(badgeColor = "green") {
+function specimenBody(badgeColor = "green", hoverColor = "focus") {
   const body = new FakeElement("body");
   const root = new FakeElement("div", { attributes: { "data-specimen": "badge" } });
   const link = new FakeElement("a", {
     selectors: [SELECTORS.hover, SELECTORS.focus],
-    states: { hover: { color: "focus" } },
+    states: { hover: { color: hoverColor } },
     styles: { color: "accent", "margin-top": "0px", "transition-duration": "0.14s" },
   });
   const badge = new FakeElement("span", {
@@ -67,7 +69,7 @@ function galleryWindows() {
       rules.push(styleRule(".site .badge", ["color"]));
     }
 
-    return fakeWindow(specimenBody(isBad ? "red" : "green"), [fakeSheet(rules)]);
+    return fakeWindow(specimenBody(isBad ? "red" : "green", isBad ? "error" : "focus"), [fakeSheet(rules)]);
   });
 }
 
@@ -75,24 +77,66 @@ const GALLERY =
   '<!DOCTYPE html><html lang="en"><head><link rel="stylesheet" href="tokens.css">' +
   '<link rel="icon" href="favicon.ico"><link rel="stylesheet" href="base.css"></head><body></body></html>';
 
-test("parseArguments reads the gallery and each surface's stylesheets", () => {
-  assert.deepEqual(parseArguments(["gallery.html", "--surface", "site=a.css,b.css", "--surface", "app=c.css"]), {
+test("parseArguments reads the gallery and each surface's stylesheets and markup", () => {
+  const argv = ["gallery.html", "--surface", "site=a.css,b.css", "--markup", "site=templates,app.js", "--surface", "app=c.css"];
+
+  assert.deepEqual(parseArguments(argv), {
     gallery: "gallery.html",
     surfaces: [
-      { files: ["a.css", "b.css"], name: "site" },
-      { files: ["c.css"], name: "app" },
+      { files: ["a.css", "b.css"], markup: ["templates", "app.js"], name: "site" },
+      { files: ["c.css"], markup: [], name: "app" },
     ],
   });
 });
 
-test("parseArguments rejects a missing gallery, a malformed surface, and no surface", () => {
+test("parseArguments rejects a missing gallery, a malformed option, no surface, and stray markup", () => {
   assert.throws(() => parseArguments([]), /usage/);
   assert.throws(() => parseArguments(["--surface", "a=b.css"]), /usage/);
-  assert.throws(() => parseArguments(["gallery.html", "--other", "a=b.css"]), /expected --surface/);
-  assert.throws(() => parseArguments(["gallery.html", "--surface", "=b.css"]), /expected --surface/);
-  assert.throws(() => parseArguments(["gallery.html", "--surface", "a="]), /expected --surface/);
-  assert.throws(() => parseArguments(["gallery.html", "--surface"]), /expected --surface/);
+  assert.throws(() => parseArguments(["gallery.html", "--other", "a=b.css"]), /expected --surface or --markup/);
+  assert.throws(() => parseArguments(["gallery.html", "--surface", "=b.css"]), /expected --surface or --markup/);
+  assert.throws(() => parseArguments(["gallery.html", "--surface", "a="]), /expected --surface or --markup/);
+  assert.throws(() => parseArguments(["gallery.html", "--surface"]), /expected --surface or --markup/);
   assert.throws(() => parseArguments(["gallery.html"]), /at least one --surface/);
+  assert.throws(
+    () => parseArguments(["gallery.html", "--surface", "a=b.css", "--markup", "c=d.html"]),
+    /--markup names c, which no --surface names/,
+  );
+});
+
+test("readMarkup reads a file, or the templates and scripts under a directory in name order", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gallery-check-test-"));
+  try {
+    mkdirSync(join(directory, "partials"));
+    writeFileSync(join(directory, "b.html"), "b");
+    writeFileSync(join(directory, "a.mjs"), "a");
+    writeFileSync(join(directory, "site.css"), "css");
+    writeFileSync(join(directory, "partials", "c.htm"), "c");
+
+    assert.deepEqual(readMarkup(directory), ["a", "b", "c"]);
+    assert.deepEqual(readMarkup(join(directory, "site.css")), ["css"]);
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("companionClasses finds the classes quoted beside a shared class, outside comments", () => {
+  const component = (name) => (["status", "badge"].includes(name.split("--")[0]) ? name.split("--")[0] : null);
+  const markup = [
+    '<span class="badge github-badge">x</span>\n<!-- "badge in-comment" -->',
+    "/* 'status in-block' */\n  // \"status in-line\"\nnode.className = 'status status--line status-line status--' + tone;",
+    "const label = `status narrow-only`; const text = \"the status of $1\";",
+  ];
+
+  assert.deepEqual(
+    [...companionClasses(markup, component)],
+    [
+      ["github-badge", ".badge"],
+      ["status-line", ".status"],
+      ["narrow-only", ".status"],
+      ["the", ".status"],
+      ["of", ".status"],
+    ],
+  );
 });
 
 test("findChrome prefers CHROME_PATH and otherwise the newest headless shell or an installed browser", () => {
@@ -137,12 +181,12 @@ test("collectPage lists specimen elements with their targets and ancestors", () 
   const list = collectPage(window, { focus: SELECTORS.focus, hover: SELECTORS.hover, mode: "list", selector: SELECTORS.specimens });
 
   assert.deepEqual(
-    list.map((element) => [element.key, element.root, element.hover, element.focus, element.ancestors]),
+    list.map((element) => [element.key, element.root, element.hover, element.focus, element.ancestors, element.specimen]),
     [
-      ["badge", true, false, false, []],
-      ["badge > a:0", false, true, true, []],
-      ["badge > a:0 > span.badge:0", false, false, false, [1]],
-      ["badge > input:1", false, true, true, []],
+      ["badge", true, false, false, [], 0],
+      ["badge > a:0", false, true, true, [], 0],
+      ["badge > a:0 > span.badge:0", false, false, false, [1], 0],
+      ["badge > input:1", false, true, true, [], 0],
     ],
   );
 });
@@ -182,15 +226,17 @@ test("collectPage freezes motion with a style element and reads only the chain's
   assert.equal(collectPage(window, { css: "* {}", mode: "freeze" }), true);
   assert.deepEqual(window.document.head.appended, [{ localName: "style", textContent: "* {}" }]);
   assert.deepEqual(
-    collectPage(window, { mode: "rules" }).map((rule) => rule.text),
+    collectPage(window, { mode: "rules" }).map((rule) => [rule.text, rule.hidden]),
     [
-      ".badge {color}",
-      "@media (max-width: 560px) .badge {padding-top}",
-      "@layer base .status {color}",
-      "@supports (display: grid) .grid {display}",
-      "@container (width > 1px) .card {color}",
+      [".badge {color}", false],
+      ["@media (max-width: 560px) .badge {padding-top}", false],
+      ["@layer base .status {color}", false],
+      ["@supports (display: grid) .grid {display}", false],
+      ["@container (width > 1px) .card {color}", false],
     ],
   );
+  const hiding = fakeWindow(specimenBody(), [fakeSheet([styleRule(".wide-only", ["display"], { display: "none" })])]);
+  assert.equal(collectPage(hiding, { mode: "rules" })[0].hidden, true);
 });
 
 test("compareStyles reports changed, missing, and extra properties and elements", () => {
@@ -226,9 +272,10 @@ test("selectorParts finds each subject's classes and types, and the classes befo
 });
 
 test("auditRules reports a surface's own rules that restyle a shared component", () => {
-  const rule = (selector, declarations, conditions = []) => ({
+  const rule = (selector, declarations, conditions = [], hidden = false) => ({
     conditions: conditions,
     declarations: declarations,
+    hidden: hidden,
     selector: selector,
     text: conditions.concat(selector, "{" + declarations.join(";") + "}").join(" "),
   });
@@ -256,8 +303,17 @@ test("auditRules reports a surface's own rules that restyle a shared component",
     rule(".chips button, .filter input", ["color"]),
     rule(":root.theme-dark", ["--color-demo"]),
     rule(".x:not(.badge)", ["color"]),
+    rule(".status-line", ["font-size", "margin-top"]),
+    rule(".wide-only", ["display"], ["@media (max-width: 860px)"], true),
+    rule(".wide-only", ["display"]),
   ];
+  const markup = ['<span class="badge status-line wide-only">'];
 
+  assert.deepEqual(auditRules(reference, surface).length, 6);
+  assert.deepEqual(auditRules(reference, surface, markup).slice(6), [
+    { components: [".status-line (with .badge)"], conditions: [], properties: ["font-size"], selector: ".status-line" },
+    { components: [".wide-only (with .badge)"], conditions: [], properties: ["display"], selector: ".wide-only" },
+  ]);
   assert.deepEqual(auditRules(reference, surface), [
     { components: [".badge"], conditions: ["@media (max-width: 560px)"], properties: ["color"], selector: ".site .badge" },
     { components: [".badge--pair"], conditions: [], properties: ["color"], selector: ".badge--pair" },
@@ -280,7 +336,11 @@ test("formatReport summarizes a pass and lists a bounded number of failures", ()
     specimens: 3,
     surfaces: [
       {
-        differences: [difference],
+        differences: [
+          difference,
+          { actual: undefined, expected: "red", key: "hover a:0 | a:0", property: "color", variant: "green, desktop" },
+          { actual: "red", expected: undefined, key: "hover a:0 | a:0", property: "border-color", variant: "green, desktop" },
+        ],
         findings: [
           { components: [".badge"], conditions: [], properties: ["color"], selector: ".site .badge" },
           { components: ["td"], conditions: ["@media (max-width: 560px)"], properties: ["padding-top", "color"], selector: ".docs td" },
@@ -294,6 +354,8 @@ test("formatReport summarizes a pass and lists a bounded number of failures", ()
     "site: .site .badge restyles .badge with color",
     "site: @media (max-width: 560px) .docs td restyles td with padding-top, color",
     "site [dark, phone] badge > span:0: color is red, gallery green",
+    "site [green, desktop] hover a:0 | a:0: color is as at rest, gallery red",
+    "site [green, desktop] hover a:0 | a:0: border-color is red, gallery as at rest",
   ]);
   failing.surfaces[0].differences = Array.from({ length: 205 }, () => difference);
   const lines = formatReport(failing);
@@ -348,20 +410,20 @@ test("check reports a surface's differences in each state and its own rules once
   ]);
   assert.deepEqual(
     result.surfaces[0].differences.filter((difference) => difference.variant === "green, desktop").map((difference) => difference.key),
-    [
-      "badge > a:0 > span.badge:0",
-      "hover badge > a:0 | badge > a:0 > span.badge:0",
-      "focus badge > a:0 | badge > a:0 > span.badge:0",
-      "active badge > a:0 | badge > a:0 > span.badge:0",
-    ],
+    // The badge's colour differs at rest, reported once; the link's colour
+    // differs only while hovered and pressed.
+    ["badge > a:0 > span.badge:0", "hover badge > a:0 | badge > a:0", "active badge > a:0 | badge > a:0"],
   );
 });
 
-test("capture forces each state on a target's ancestors too", async () => {
+test("capture forces each state on a target's ancestors too, and reads them", async () => {
   const page = new FakePage(() => {
     const body = new FakeElement("body");
     const root = new FakeElement("div", { attributes: { "data-specimen": "table" } });
-    const row = new FakeElement("tr", { selectors: [SELECTORS.hover], states: { hover: { background: "surface" } } });
+    const row = new FakeElement("tr", {
+      selectors: [SELECTORS.hover],
+      states: { "focus-within": { "border-color": "focus" }, hover: { background: "surface" } },
+    });
     const cell = new FakeElement("td", { selectors: [SELECTORS.hover, SELECTORS.focus], styles: { color: "muted" } });
     root.append(row.append(cell));
 
@@ -390,6 +452,10 @@ test("capture forces each state on a target's ancestors too", async () => {
   ]);
   assert.equal(result.specimens, 1);
   assert.deepEqual(result.styles["hover table > tr:0 | table > tr:0"], { background: "surface" });
+  // The cell's focus shows on its row, which the capture reads too; a state
+  // records only what it changes from rest.
+  assert.deepEqual(result.styles["focus table > tr:0 > td:0 | table > tr:0"], { "border-color": "focus" });
+  assert.equal(result.styles["focus table > tr:0 > td:0 | table > tr:0 > td:0"], undefined);
 });
 
 test("check fails when the gallery marks no specimen", async () => {
@@ -418,7 +484,8 @@ test("main checks the surfaces against the gallery and exits with the result", a
     let browser;
     const gallery = join(directory, "gallery.html");
 
-    assert.equal(await main([gallery, "--surface", "same=" + join(directory, "base.css")], environment, io, launch), 0);
+    const same = [gallery, "--surface", "same=" + join(directory, "base.css"), "--markup", "same=" + directory];
+    assert.equal(await main(same, environment, io, launch), 0);
     assert.deepEqual(output.log, ["Gallery check: same render all 1 specimens as the gallery does (8 renders)."]);
     assert.equal(browser.closed, true);
     assert.deepEqual(launches, [[SCRIPT, { linux: process.platform === "linux" }]]);
