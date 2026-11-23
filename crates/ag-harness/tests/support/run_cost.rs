@@ -20,13 +20,14 @@ use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolCall;
+#[cfg(feature = "sqlite")]
 use ag_harness::transcript::TurnStatus;
 use ag_harness::{
-    Cost, ErrorKind, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role,
-    Run, RunEvent, RunEventKind, RunOutcome, RunRequest, TurnRange,
+    Cost, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role, Run, RunEvent,
+    RunEventKind, RunOutcome, RunRequest, TurnRange,
 };
 #[cfg(feature = "sqlite")]
-use ag_harness::{LimitKind, RunLimits};
+use ag_harness::{ErrorKind, LimitKind, RunLimits};
 use async_trait::async_trait;
 use futures_core::Stream;
 use serde_json::json;

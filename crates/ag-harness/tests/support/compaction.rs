@@ -454,7 +454,7 @@ async fn model_switch_keeps_checkpoints_and_journals_intact() {
             checkpoint.summary(),
             "switching models preserves the existing checkpoint and its provenance"
         );
-        assert_eq!(replayed_turns(&harness, "switch").await.len(), 1);
+        assert_eq!(replayed_turns(&target_harness, "switch").await.len(), 1);
     }
 }
 

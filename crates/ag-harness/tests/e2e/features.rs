@@ -494,6 +494,7 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
         Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
             budget: reported,
             required,
+            ..
         })) => {
             if reported != budget || required <= budget || elapsed > Duration::from_secs(1) {
                 return Err(format!(
@@ -1195,7 +1196,7 @@ async fn requested_repetition(provider: Provider) -> Result<String, DynError> {
             "inconclusive: the model did not repeat the read, calls={}",
             outcome.report().tool_calls().len()
         )),
-        Err(TurnError::RepeatedToolCalls { repeats, tool }) => {
+        Err(TurnError::RepeatedToolCalls { repeats, tool, .. }) => {
             Ok(format!("stopped tool={tool} repeats={repeats}"))
         }
         Err(error) => Err(error.into()),
