@@ -346,16 +346,11 @@ async fn host_lists_harness_models_as_the_terminal_model_picker_does() {
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
 
     // Act
-    let without_harness = request_host_context(&mut app)
-        .await
-        .expect("host context should load")
-        .models;
-    crate::test_support::set_test_harness_models(&mut app.services, true, None);
     let unlisted = request_host_context(&mut app)
         .await
         .expect("host context should load")
         .models;
-    crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
+    crate::test_support::set_test_harness_models(&mut app.services, Some(AgentModel::KimiK3));
     let listed = request_host_context(&mut app)
         .await
         .expect("host context should load")
@@ -369,8 +364,11 @@ async fn host_lists_harness_models_as_the_terminal_model_picker_does() {
             .map(|model| model.model())
             .collect::<Vec<_>>()
     };
-    assert_ne!(without_harness, Vec::<AgentSelection>::new());
-    assert_eq!(harness(&without_harness), Vec::<AgentModel>::new());
+    assert!(
+        unlisted
+            .iter()
+            .any(|model| model.kind() != AgentKind::Harness)
+    );
     // Before the harness lists its models, `/model` offers the fixed catalog.
     assert_eq!(harness(&unlisted), AgentKind::Harness.models());
     assert_eq!(harness(&listed), [AgentModel::KimiK3]);

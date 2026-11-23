@@ -132,8 +132,6 @@ pub(crate) struct AppClients {
     pub(super) agent_cli_version_task_enabled: bool,
     /// Opens sign-in pages and clicked links in the user's browser.
     pub(super) browser_client: Arc<dyn BrowserClient>,
-    /// Whether Agentty started with `--experimental-harness`.
-    pub(super) experimental_harness: bool,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
@@ -163,7 +161,6 @@ impl AppClients {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: true,
             browser_client: Arc::new(RealBrowserClient::new()),
-            experimental_harness: false,
             runtime_config: RuntimeConfig::default(),
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -182,11 +179,10 @@ impl AppClients {
         }
     }
 
-    /// Enables `--experimental-harness`: Harness sessions run in process and
-    /// keep their durable history under `harness_data_root`.
+    /// Runs Harness sessions in process, keeping their durable history under
+    /// `harness_data_root`.
     #[must_use]
-    pub(crate) fn with_experimental_harness(mut self, harness_data_root: PathBuf) -> Self {
-        self.experimental_harness = true;
+    pub(crate) fn with_harness_data_root(mut self, harness_data_root: PathBuf) -> Self {
         self.runtime_config = self.runtime_config.with_native_harness(harness_data_root);
         self.session_run_factory =
             Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));

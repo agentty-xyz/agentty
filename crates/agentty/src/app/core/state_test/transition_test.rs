@@ -601,7 +601,9 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
     assert_eq!(
         error.to_string(),
         "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or Antigravity CLI \
-         1.5.8 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
+         1.5.8 or newer. For an older `agy`, run `agy update`, then restart `agentty`. To use the \
+         built-in `ag-harness` instead, set a provider key such as `MODEL_API_KEY` or serve a \
+         model from a local Ollama server."
     );
 }
 

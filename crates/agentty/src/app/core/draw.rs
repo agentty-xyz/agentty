@@ -32,21 +32,16 @@ impl App {
     /// Builds prompt slash-menu state for one session.
     ///
     /// `/model` offers the cached machine-scoped agent CLIs, followed by the
-    /// in-process harness and its cached models when the launch offers it.
+    /// in-process harness and its cached models.
     pub(crate) fn prompt_slash_state(&self) -> crate::presentation::prompt::PromptSlashState {
         let mut available_agent_kinds = self.services.available_agent_kinds();
-        let offers_harness = self.services.harness_availability().is_visible();
-        if offers_harness {
-            available_agent_kinds.push(AgentKind::Harness);
-        }
+        available_agent_kinds.push(AgentKind::Harness);
 
         let mut slash_state =
             crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
                 available_agent_kinds,
             );
-        if offers_harness {
-            slash_state.harness_models = self.services.harness_model_options();
-        }
+        slash_state.harness_models = self.services.harness_model_options();
 
         slash_state
     }

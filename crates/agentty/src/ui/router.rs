@@ -46,7 +46,8 @@ struct RouteSharedContext<'a> {
     available_agent_kinds: &'a [AgentKind],
     current_tab: Tab,
     default_reasoning_level: ReasoningLevel,
-    /// Whether this launch offers the in-process harness and can run it.
+    /// Whether the in-process harness can run new sessions, and on which
+    /// model.
     harness_availability: HarnessAvailability,
     has_more_archived_sessions: bool,
     is_archive_expanded: bool,

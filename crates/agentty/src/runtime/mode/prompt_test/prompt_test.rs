@@ -797,7 +797,7 @@ fn test_handle_paste_inserts_multiline_content_with_normalized_newlines() {
 async fn test_model_command_choosing_ag_harness_opens_refreshed_harness_models() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
+    crate::test_support::set_test_harness_models(&mut app.services, Some(AgentModel::KimiK3));
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         *slash_state = PromptSlashState::with_available_agent_kinds(vec![
             AgentKind::Codex,

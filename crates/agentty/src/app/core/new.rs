@@ -41,9 +41,9 @@ impl App {
     ///
     /// When `auto_update` is `true`, a background global package-manager update
     /// runs automatically after detecting a newer version at startup or in an
-    /// hourly follow-up check. When `experimental_harness` is `true`, Harness
-    /// sessions run in process and keep their history under
-    /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR). The saved
+    /// hourly follow-up check. Harness sessions run in process and keep their
+    /// history under [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR). The
+    /// saved
     /// `Max Subagents` setting caps provider-native subagents for every worker
     /// this launch composes.
     ///
@@ -53,23 +53,17 @@ impl App {
     /// recovery cannot complete.
     pub async fn new(
         auto_update: bool,
-        experimental_harness: bool,
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
         repositories: impl Into<AppRepositories>,
     ) -> Result<Self, AppError> {
         let repositories = repositories.into();
-        let clients = if experimental_harness {
-            AppClients::new().with_experimental_harness(
-                crate::app::agentty_home().join(super::AGENTTY_HARNESS_DIR),
-            )
-        } else {
-            AppClients::new()
-        };
-        let clients = clients.with_max_concurrent_subagents(
-            load_max_concurrent_subagents_setting(&repositories).await,
-        );
+        let clients = AppClients::new()
+            .with_harness_data_root(crate::app::agentty_home().join(super::AGENTTY_HARNESS_DIR))
+            .with_max_concurrent_subagents(
+                load_max_concurrent_subagents_setting(&repositories).await,
+            );
         let current_version_display_text = current_version_display_text(
             std::env::var_os(E2E_PIN_DISPLAY_VERSION_ENV_VAR).as_deref(),
             env!("CARGO_PKG_VERSION"),
@@ -516,16 +510,13 @@ impl App {
         Ok(services)
     }
 
-    /// Lists the harness models a launch with `--experimental-harness`
-    /// offers, with the user's remembered choice. The probe bounds the local
-    /// server listing with short timeouts; other launches skip it.
+    /// Lists the harness models this launch offers, with the user's
+    /// remembered choice. The probe bounds the local server listing with
+    /// short timeouts.
     async fn load_harness_models(
         clients: &AppClients,
         repositories: &AppRepositories,
     ) -> HarnessModelCatalog {
-        if !clients.experimental_harness {
-            return HarnessModelCatalog::default();
-        }
         let options = clients
             .agent_availability_probe
             .native_harness_models()
@@ -538,7 +529,7 @@ impl App {
             .flatten()
             .and_then(|model| AgentKind::Harness.parse_model(&model));
 
-        HarnessModelCatalog::new(true, options, remembered)
+        HarnessModelCatalog::new(options, remembered)
     }
 
     /// Completes durable run and operation recovery before startup admits

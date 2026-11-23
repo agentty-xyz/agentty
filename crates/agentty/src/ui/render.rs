@@ -63,7 +63,8 @@ pub struct RenderContext<'a> {
     pub current_version_display_text: &'a str,
     /// Active project-scoped reasoning level used by session pages.
     pub default_reasoning_level: ReasoningLevel,
-    /// Whether this launch offers the in-process harness and can run it.
+    /// Whether the in-process harness can run new sessions, and on which
+    /// model.
     pub harness_availability: HarnessAvailability,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,

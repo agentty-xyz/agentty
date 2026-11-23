@@ -247,9 +247,8 @@ branch, it creates or updates one session commit, and reverting all changes remo
 empty commit. After publishing, each file-changing turn adds a new commit instead, so
 reviewers can see what changed since their last look.
 
-The project's Fast model writes each message, honoring the coauthor setting; with
-`--experimental-harness`, that can be a
-[harness model](@/docs/agents/backends.md#backends-harness-fast-model). The session
+The project's Fast model writes each message, honoring the coauthor setting; that can be
+a [harness model](@/docs/agents/backends.md#backends-harness-fast-model). The session
 commit message covers the cumulative changes, and a later commit covers only its turn.
 If message generation fails, auto-commit stops and the worktree stays intact.
 
@@ -299,9 +298,8 @@ Unavailable types are shown muted.
 - **Draft**: Each `Enter` stages a message; `s` starts them together and creates the
   worktree from the current base branch.
 
-With `--experimental-harness`, any session can switch to Agentty's built-in agent loop
-by choosing `ag-harness` in `/model`; see
-[Harness Agent](@/docs/agents/backends.md#backends-harness).
+Any session can switch to Agentty's built-in agent loop by choosing `ag-harness` in
+`/model`; see [Harness Agent](@/docs/agents/backends.md#backends-harness).
 
 The orchestrator session type is retired. Former controllers and their children remain
 independent sessions with transcripts and workspaces intact; pending campaign work is

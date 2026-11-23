@@ -176,7 +176,6 @@ agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 agentty --disable-telemetry  # Launch without PostHog usage telemetry
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
-agentty --experimental-harness  # Offer the preview ag-harness agent in /model
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
@@ -191,10 +190,10 @@ agentty --version    # Show the installed Agentty version
 - **Remote control**: `--experimental-remote` adds a preview `Remote` tab that pairs a
   phone or browser to start, follow, reply to, and merge sessions through a tunnel you
   provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
-- **Harness**: `--experimental-harness` adds a preview `ag-harness` agent to `/model`
-  that runs Agentty's built-in agent loop against local or hosted models. Its edit mode
-  runs shell commands in the operating system's sandbox where available (Seatbelt on
-  macOS, Bubblewrap on Linux), and warns when they run without it. See
+- **Harness**: `/model` lists `ag-harness`, Agentty's built-in agent loop, with local
+  models and hosted models whose provider key is set. Its edit mode runs shell commands
+  in the operating system's sandbox where available (Seatbelt on macOS, Bubblewrap on
+  Linux), and warns when they run without it. See
   [Harness agent](https://agentty.xyz/docs/agents/backends/#backends-harness).
 - **Tracing**: disabled unless `--otlp-endpoint` supplies a complete OTLP HTTP/protobuf
   traces URL. A URL ending in `/v1/traces` also sends usage events as OTLP log records

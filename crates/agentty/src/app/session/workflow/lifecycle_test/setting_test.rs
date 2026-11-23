@@ -30,7 +30,7 @@ async fn set_session_model_remembers_an_explicit_local_harness_choice() {
         Arc::new(git::MockGitClient::new()),
         Arc::new(forge::MockReviewRequestClient::new()),
     );
-    crate::test_support::set_test_harness_models(&mut services, true, Some(AgentModel::KimiK3));
+    crate::test_support::set_test_harness_models(&mut services, Some(AgentModel::KimiK3));
     let local = AgentModel::OpenAiCompatible(ServedModel::new("qwen3:latest").expect("name"));
 
     // Act

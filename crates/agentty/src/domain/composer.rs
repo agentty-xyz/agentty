@@ -548,8 +548,8 @@ impl PromptSlashState {
         }
     }
 
-    /// Opens `/model` on its agent list, which ends with `ag-harness` when
-    /// the launch offers the in-process harness.
+    /// Opens `/model` on its agent list, which ends with `ag-harness`, the
+    /// in-process harness.
     pub fn open_model_stage(&mut self) {
         self.selected_agent = None;
         self.selected_index = 0;

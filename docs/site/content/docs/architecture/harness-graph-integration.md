@@ -24,8 +24,8 @@ behavior.
   [execution boundary](@/docs/core-components/execution-components/execution-boundary.md)
   unchanged: **Run Worker → Agent Runtime → Harness → LLM**. Only `ag-agent` sees
   `ag-harness` types; graph code and workflows see `ag-contracts` types only.
-- Keep the change behind `--experimental-harness`. Codex, Claude, and other external
-  backends keep their behavior.
+- Limit the change to harness nodes. Codex, Claude, and other external backends keep
+  their behavior.
 
 Not in scope: model-requested delegation (subagents), dynamic graph rewriting, cost
 display for external backends that do not report prices, and making the harness the
@@ -248,15 +248,13 @@ M7 (`ag-harness-cli`) has no graph impact. Recovery uses the existing
 `Session::recover`, but `RunRequest` does not carry a host ID on the open branches yet;
 that upstream addition (the plan's `idempotency_key`) is a prerequisite.
 
-Every step is gated by `--experimental-harness`, and every step except the sandbox is
-additive; nothing changes for external backends except optional cost fields, which they
-leave empty. M3 and M5 change recorded TUI output and are never in flight together.
+Every step except the sandbox is additive; nothing changes for external backends except
+optional cost fields, which they leave empty. M3 and M5 change recorded TUI output and
+are never in flight together.
 
 ## Migration and Rollback
 
-- **Flag.** Without `--experimental-harness`, harness nodes fail before execution as
-  they do today; turning the flag off on the same or a newer binary is the rollback.
-- **Sandbox.** Writer sandboxing rolls back through its own setting, not the flag.
+- **Sandbox.** Writer sandboxing rolls back through its own setting.
 - **Storage.** New columns (per-execution cost) are nullable and additive, and older
   databases load with unknown usage. `ag-store` and `ag-harness` run their migrators
   without ignoring missing versions, so an older binary refuses a database with a newer
@@ -265,8 +263,8 @@ leave empty. M3 and M5 change recorded TUI output and are never in flight togeth
 - **Session databases.** Harness session databases stay per Agentty session under the
   data root and are removed with the session.
 - **Old paths.** Each step deletes the old adapter path it replaces instead of keeping
-  both under the coverage gate. Rollback is `--experimental-harness` or `git revert` of
-  the step. Sealing (A9) happens only after every step has shipped.
+  both under the coverage gate. Rollback is `git revert` of the step. Sealing (A9)
+  happens only after every step has shipped.
 
 ## Test Plan
 

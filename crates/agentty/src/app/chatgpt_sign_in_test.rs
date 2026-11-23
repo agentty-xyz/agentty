@@ -80,7 +80,6 @@ async fn sign_in_app(script: ScriptedSignIn, opens: usize) -> (App, tempfile::Te
     let session_id = SessionId::from(app.create_session().await.expect("session"));
     app.services.set_harness_models(
         HarnessModelCatalog::new(
-            true,
             vec![
                 test_support::ready_harness_model(AgentModel::KimiK3),
                 test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt6Sol),

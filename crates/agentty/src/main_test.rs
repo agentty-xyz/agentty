@@ -66,17 +66,7 @@ fn cli_defaults_to_automatic_updates() {
     // Assert
     assert!(!cli.no_update);
     assert!(!cli.otlp_capture_content);
-    assert!(!cli.experimental.harness);
-}
-
-#[test]
-fn cli_parses_experimental_harness_flag() {
-    // Arrange / Act
-    let cli = Cli::try_parse_from(["agentty", "--experimental-harness"])
-        .expect("--experimental-harness should parse");
-
-    // Assert
-    assert!(cli.experimental.harness);
+    assert!(!cli.experimental.remote);
 }
 
 #[test]
@@ -190,7 +180,11 @@ fn cli_parses_no_update_flag() {
 #[test]
 fn cli_rejects_retired_experimental_flags() {
     // Arrange
-    let retired_flags = ["--experimental-graph", "--experimental-multi-agent"];
+    let retired_flags = [
+        "--experimental-graph",
+        "--experimental-harness",
+        "--experimental-multi-agent",
+    ];
 
     for flag in retired_flags {
         // Act
@@ -619,10 +613,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
 fn telemetry_child_cli() -> Cli {
     Cli {
         disable_telemetry: true,
-        experimental: ExperimentalFeatures {
-            harness: false,
-            remote: true,
-        },
+        experimental: ExperimentalFeatures { remote: true },
         no_update: true,
         otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),

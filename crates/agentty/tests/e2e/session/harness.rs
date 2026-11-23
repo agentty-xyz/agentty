@@ -1,4 +1,4 @@
-//! Preview `ag-harness` models in `/model` behind `--experimental-harness`.
+//! `ag-harness` models in `/model` and the sessions they run.
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
@@ -30,13 +30,12 @@ const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
 /// joins a scenario's harness models.
 const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
-/// Starts the scenario `name` with `--experimental-harness` and the
-/// developer's Anthropic key and endpoint blanked, so an exported
-/// `ANTHROPIC_API_KEY` never adds ready Claude rows to a scenario's frames;
-/// a scenario serving Claude sets them again.
+/// Starts the scenario `name` with the developer's Anthropic key and
+/// endpoint blanked, so an exported `ANTHROPIC_API_KEY` never adds ready
+/// Claude rows to a scenario's frames; a scenario serving Claude sets them
+/// again.
 fn harness_test(name: &str) -> FeatureTest {
     FeatureTest::new(name)
-        .args(["--experimental-harness".to_string()])
         .env("ANTHROPIC_API_KEY", "")
         .env("ANTHROPIC_BASE_URL", "")
 }
@@ -134,7 +133,7 @@ async fn scripted_provider() -> MockServer {
 }
 
 #[tokio::test]
-async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
+async fn test_harness_session_runs_with_a_provider_key() -> E2eResult {
     // Arrange
     let server = scripted_provider().await;
 
@@ -377,13 +376,17 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
 }
 
 #[tokio::test]
-async fn test_ag_harness_is_hidden_from_model_picker_without_flag() -> E2eResult {
+async fn test_ag_harness_models_are_listed_without_provider_keys() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("harness_hidden")
+    harness_test("harness_without_keys")
         .with_git()
-        .env("ANTHROPIC_API_KEY", "")
-        .env("ANTHROPIC_BASE_URL", "")
-        .env("MODEL_API_KEY", "test-key")
+        .env("CHATGPT_AUTH_FILE", "")
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
         .run(
             |scenario| {
                 scenario
@@ -394,20 +397,48 @@ async fn test_ag_harness_is_hidden_from_model_picker_without_flag() -> E2eResult
                     .capture_labeled("session_types", "Session types")
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
-                    .press_key("/")
-                    .write_text("model")
-                    .wait_for_text("Slash Command", 3000)
+                    .capture_labeled("default_model", "New session on its agent CLI")
+                    .compose(&open_model_picker())
+                    .wait_for_text("muse-spark-1.3", 3000)
+                    .capture_labeled("harness_models", "ag-harness models without keys")
+                    // Rows: the no-local-models hint, then muse-spark-1.3.
+                    .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("/model Agent", 3000)
-                    .capture_labeled("model_agents", "Model agents without ag-harness")
+                    .wait_for_text("Set it before starting Agentty", 3000)
             },
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_not_visible(frame, "ag-harness");
+                    let notice = frame
+                        .all_text()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    // The transcript renders the notice's code spans as
+                    // plain text.
+                    assert!(
+                        notice.contains("muse-spark-1.3 needs MODEL_API_KEY"),
+                        "{notice}"
+                    );
+                    // The session keeps its agent CLI model.
+                    assertion::assert_not_visible(frame, "harness/");
                     let session_types = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_text_in_region(&session_types, "Draft", &full);
                     assertion::assert_not_visible(&session_types, "Harness");
+                    let default_model = common::frame_from_capture(&report.captures[1]);
+                    assertion::assert_not_visible(&default_model, "harness/");
+                    let picker_text = common::frame_from_capture(&report.captures[2])
+                        .all_text()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    for row in [
+                        "[local] no local models",
+                        "[paid] muse-spark-1.3 Muse Spark model",
+                        "[paid] kimi-k3 Latest Kimi model",
+                    ] {
+                        assert!(picker_text.contains(row), "{row} in {picker_text}");
+                    }
                 })
             },
         )
@@ -1867,7 +1898,6 @@ async fn test_harness_session_warns_when_commands_run_without_the_sandbox() -> E
     FeatureTest::new("harness_sandbox_warning")
         .with_git()
         .binary(binary.clone())
-        .args(["--experimental-harness".to_string()])
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())

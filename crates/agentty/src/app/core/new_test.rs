@@ -230,40 +230,15 @@ async fn test_new_uses_production_client_bundle() {
             .await
             .expect("failed to open in-memory database");
 
-        let harness_database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory database");
-
         // Act
-        let app = App::new(
-            false,
-            false,
-            base_path.clone(),
-            base_path.clone(),
-            None,
-            database,
-        )
-        .await
-        .expect("public constructor should build app");
-        let harness_app = App::new(
-            false,
-            true,
-            base_path.clone(),
-            base_path,
-            None,
-            harness_database,
-        )
-        .await
-        .expect("public constructor should build a harness app");
+        let app = App::new(false, base_path.clone(), base_path, None, database)
+            .await
+            .expect("public constructor should build app");
 
         // Assert
         assert!(app.selected_session().is_none());
         assert_eq!(
             app.services.harness_availability(),
-            HarnessAvailability::Hidden
-        );
-        assert_eq!(
-            harness_app.services.harness_availability(),
             HarnessAvailability::Available(AgentModel::MuseSpark13)
         );
 

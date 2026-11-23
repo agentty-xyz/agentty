@@ -16,7 +16,7 @@ use super::response_parser::ParsedResponse;
 /// Error reported for harness work when the native transport is not
 /// configured.
 pub(super) const HARNESS_UNAVAILABLE_MESSAGE: &str =
-    "Harness sessions run only when Agentty starts with `--experimental-harness`.";
+    "Harness sessions need the in-process harness transport, which this host has not configured.";
 
 /// Backend that rejects every harness command before execution.
 pub(super) struct HarnessBackend;

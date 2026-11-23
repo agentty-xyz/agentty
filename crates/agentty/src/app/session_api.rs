@@ -715,11 +715,9 @@ impl App {
     }
 
     /// Lists the agents and models a session can switch to now: every model
-    /// of each available agent CLI, then, when the launch offers the harness,
-    /// its ready listed models, or its fixed catalog before any are listed.
-    /// A session
-    /// switches only among its own agent's entries, as the terminal's
-    /// `/model` offers them.
+    /// of each available agent CLI, then the harness's ready listed models, or
+    /// its fixed catalog before any are listed. A session switches only among
+    /// its own agent's entries, as the terminal's `/model` offers them.
     fn api_session_models(&self) -> Vec<AgentSelection> {
         let mut models = self
             .services
@@ -731,23 +729,21 @@ impl App {
                     .map(move |model| AgentSelection::new(kind, *model))
             })
             .collect::<Vec<_>>();
-        if self.services.harness_availability().is_visible() {
-            let options = self.services.harness_model_options();
-            let harness_models = if options.is_empty() {
-                AgentKind::Harness.models().to_vec()
-            } else {
-                options
-                    .into_iter()
-                    .filter(|option| option.status == HarnessModelStatus::Ready)
-                    .map(|option| option.model)
-                    .collect()
-            };
-            models.extend(
-                harness_models
-                    .into_iter()
-                    .map(|model| AgentSelection::new(AgentKind::Harness, model)),
-            );
-        }
+        let options = self.services.harness_model_options();
+        let harness_models = if options.is_empty() {
+            AgentKind::Harness.models().to_vec()
+        } else {
+            options
+                .into_iter()
+                .filter(|option| option.status == HarnessModelStatus::Ready)
+                .map(|option| option.model)
+                .collect()
+        };
+        models.extend(
+            harness_models
+                .into_iter()
+                .map(|model| AgentSelection::new(AgentKind::Harness, model)),
+        );
 
         models
     }
@@ -851,9 +847,9 @@ impl App {
             && !self.services.harness_availability().is_available()
         {
             return Err(ApiSessionError::Operation(
-                "Harness sessions need `agentty --experimental-harness` and a runnable model: a \
-                 local Ollama or OpenAI-compatible server serving a model, `MODEL_API_KEY`, \
-                 `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`."
+                "Harness sessions need a runnable model: a local Ollama or OpenAI-compatible \
+                 server serving a model, `MODEL_API_KEY`, `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` \
+                 with `DASHSCOPE_BASE_URL`."
                     .to_string(),
             ));
         }
