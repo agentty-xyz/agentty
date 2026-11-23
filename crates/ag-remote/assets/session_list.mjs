@@ -180,9 +180,17 @@ export function createSessionList({
     const figures = sessionFigures(session);
     const meta = element(document, "span", "row-meta");
     // A row has no room for the line counts; the card and header show them.
+    // Beside a merge conflict, it has no room for the review request's id
+    // or `PR ready` either; the card shows both.
+    const rowFigures = {
+      ...figures,
+      lines: null,
+      prReady: figures.hasConflict ? null : figures.prReady,
+    };
     meta.append(
       statusLine(document, session.status),
-      ...figureNodes(document, { ...figures, lines: null }),
+      ...forgeNodes(document, figures.forge, { isCompact: figures.hasConflict }),
+      ...figureNodes(document, rowFigures),
       timeNode(session.updated_at, time),
     );
     const title = element(document, "span", "row-title");
@@ -238,7 +246,11 @@ export function createSessionList({
         card.dataset.sessionId = session.id;
         const figures = sessionFigures(session);
         const line = element(document, "span", "card-meta");
-        line.append(statusLine(document, session.status), timeNode(session.updated_at, time));
+        line.append(
+          statusLine(document, session.status),
+          ...forgeNodes(document, figures.forge),
+          timeNode(session.updated_at, time),
+        );
         const title = element(document, "strong", "card-title");
         title.append(...sizeBadge(document, figures.size), displayTitle(session));
         card.append(line, title);
@@ -379,6 +391,21 @@ function figureNodes(document, figures) {
   }
 
   return nodes.flatMap((node) => [separator(document), node]);
+}
+
+// The forge indicator from `sessionFigures`, right after the status as in
+// the terminal's status column, or nothing when the session has none.
+// `isCompact` shows the mark alone, for a row that also names a merge
+// conflict; the title keeps the whole label.
+function forgeNodes(document, forge, { isCompact = false } = {}) {
+  if (!forge) {
+    return [];
+  }
+  const text = isCompact ? forge.mark : forge.text;
+  const node = element(document, "span", "forge forge--" + forge.tone, text);
+  node.title = forge.label;
+
+  return [node];
 }
 
 // The `merge conflict` label of a session whose branch conflicts with its

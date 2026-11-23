@@ -25,6 +25,7 @@ import {
   sessionActions,
   transcriptChanges,
   transcriptEntries,
+  wrappedParts,
 } from "../../assets/chat.mjs";
 import { createDiff } from "../../assets/diff.mjs";
 import { createSettings } from "../../assets/settings.mjs";
@@ -48,6 +49,7 @@ const ELEMENT_IDS = {
   composerSettings: "composer-settings",
   diff: "diff",
   dock: "dock",
+  draftPreview: "draft-preview",
   gone: "session-gone",
   goneHome: "session-gone-home",
   heading: "heading",
@@ -79,6 +81,7 @@ const ELEMENT_IDS = {
   sheetMergeNote: "sheet-merge-note",
   sheetPublish: "sheet-publish",
   sheetPublishNote: "sheet-publish-note",
+  sheetDetails: "sheet-details",
   sheetSub: "sheet-sub",
   sheetSync: "sheet-sync",
   sheetSyncLabel: "sheet-sync-label",
@@ -122,18 +125,21 @@ function session(overrides = {}) {
 }
 
 // Mounts the chat on the client's page. `respond(body)` answers each
-// request; the requests sent are recorded.
+// request; the requests sent are recorded. `ResizeObserver`, when given,
+// stands in for the browser's.
 function mountChat({
   capabilities = [],
   isFinePointer = true,
   now = () => 0,
   respond = () => ({ kind: "accepted" }),
   sessionStorage = new MemoryStorage(),
+  ResizeObserver = undefined,
 } = {}) {
   const window = createWindow(createDocument(INDEX_HTML), "http://127.0.0.1/", {
     matches: (query) => query === "(pointer: fine)" && isFinePointer,
   });
   window.sessionStorage = sessionStorage;
+  window.ResizeObserver = ResizeObserver;
   const document = window.document;
   const byId = (id) => document.getElementById(id);
   const elements = Object.fromEntries(
@@ -2322,6 +2328,8 @@ test("the header names a merge conflict with the base branch", () => {
   chat.render(detailedSession(), detailedSummary({ has_merge_conflict: true }));
   assert.deepEqual(subParts(byId).slice(0, 3), ["[M]", "+64 -9", "Merge conflict with main"]);
   assert.equal(byId("heading-sub").querySelector(".conflict").textContent, "Merge conflict with main");
+  // A phone shows the conflict without the branch it is with.
+  assert.equal(byId("heading-sub").querySelector(".conflict .wide-only").textContent, " with main");
 
   // An older host names no base branch.
   chat.render(session(), detailedSummary({ has_merge_conflict: true }));
@@ -2346,7 +2354,7 @@ test("the header shows size, lines, branches, model and the review request", () 
   assert.equal(sub.querySelector(".add").textContent, "+64");
   assert.equal(sub.querySelector(".del").textContent, "-9");
   // The branch and model give way on a phone; the status takes their place.
-  assert.equal(sub.children[3].className, "wide-only");
+  assert.equal(sub.children[3].className, "branch wide-only");
   assert.equal(sub.querySelector(".model").classList.contains("wide-only"), true);
   const link = sub.querySelector("a");
   assert.equal(link.getAttribute("href"), "https://github.com/example/project/pull/1261");
@@ -2375,6 +2383,263 @@ test("the header hides whatever an older host omits", () => {
     "claude-opus-5-5",
     "#1261 open · PR ready",
   ]);
+});
+
+test("the header shows how far the branch is from its base and from its upstream", () => {
+  const { byId, chat } = mountChat();
+  const published = detailedSession({ published_upstream_ref: "origin/wt/3f9a1c2e" });
+  const distances = { base_ahead: 3, base_behind: 1, upstream_ahead: 0, upstream_behind: 0 };
+
+  chat.render(published, detailedSummary(distances));
+  // The upstream named after the session branch shows by its remote. Each
+  // branch and its counts are one part, so a full line drops them together.
+  assert.deepEqual(subParts(byId).slice(2, 4), ["wt/3f9a1c2e → main ↓1 ↑3", "⇡ origin ✓"]);
+  const sub = byId("heading-sub");
+  const [base, upstream] = sub.querySelectorAll(".branch-counts");
+  assert.equal(base.title, "Behind and ahead of main");
+  assert.equal(upstream.title, "Even with origin/wt/3f9a1c2e");
+  assert.equal(base.parentElement, sub.querySelector(".branch"));
+  assert.equal(upstream.parentElement, sub.querySelector(".upstream"));
+  assert.equal(sub.querySelector(".branch-name").title, "wt/3f9a1c2e → main");
+  assert.equal(sub.querySelector(".upstream").title, "Published to origin/wt/3f9a1c2e");
+  assert.equal(sub.querySelector(".upstream").classList.contains("wide-only"), true);
+
+  // Before the host compares the branches, only the names show, and an
+  // upstream under another name shows whole; an unpublished branch has
+  // no upstream.
+  chat.render(
+    detailedSession({ published_upstream_ref: "origin/review/pager" }),
+    detailedSummary(),
+  );
+  assert.deepEqual(subParts(byId).slice(2, 4), ["wt/3f9a1c2e → main", "⇡ origin/review/pager"]);
+  chat.render(detailedSession(), detailedSummary(distances));
+  assert.equal(byId("heading-sub").querySelector(".upstream"), null);
+  // Without a base branch there is nothing to count against.
+  chat.render(detailedSession({ base_branch: undefined }), detailedSummary(distances));
+  assert.equal(subParts(byId)[2], "wt/3f9a1c2e");
+});
+
+test("wrappedParts finds the header parts below its one line", () => {
+  // A 20px line at 100: parts on it may sit a little lower when centred.
+  assert.deepEqual(wrappedParts([100, 102, 120, 140], 100, 20), [false, false, true, true]);
+  // A part with no box measures at 0, above the line.
+  assert.deepEqual(wrappedParts([0, 100], 100, 20), [false, false]);
+  // Without layout every box is empty, and nothing counts as wrapped.
+  assert.deepEqual(wrappedParts([0, 0], 0, 0), [false, false]);
+});
+
+test("header parts that wrap off the line are inert until they fit again", () => {
+  const observers = [];
+  class FakeResizeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      observers.push(this);
+    }
+
+    observe(target) {
+      this.target = target;
+    }
+  }
+  const { byId, chat, document } = mountChat({ ResizeObserver: FakeResizeObserver });
+  // A line that holds everything up to the review link; the rest wraps.
+  let wrapFrom = ["timer", "branch", "model", "upstream", "started"];
+  document.layout = (node) => {
+    if (node === byId("heading-sub")) {
+      return { height: 20, top: 100 };
+    }
+    const isWrapped = wrapFrom.some((part) => node.classList.contains(part));
+
+    return { height: 20, top: isWrapped ? 120 : 100 };
+  };
+  const inert = () =>
+    Array.from(byId("heading-sub").children)
+      .filter((node) => node.hasAttribute("inert"))
+      .map((node) => node.className.split(" ")[0]);
+
+  chat.render(detailedSession(), detailedSummary({ in_progress_total_seconds: 60 }));
+  assert.deepEqual(inert(), ["branch", "model", "timer"]);
+  const link = byId("heading-sub").querySelector("a");
+  link.focus();
+  assert.equal(link.hasAttribute("inert"), false);
+
+  // A wider line, as when the sidebar hides, frees what fits again; a
+  // refresh keeps the focused link in place and never inert.
+  assert.equal(observers[0].target, byId("heading-sub"));
+  wrapFrom = ["model"];
+  observers[0].callback();
+  assert.deepEqual(inert(), ["model"]);
+  chat.render(detailedSession({ updated_at: 11 }), detailedSummary({ in_progress_total_seconds: 60 }));
+  assert.equal(byId("heading-sub").querySelector("a"), link);
+  assert.equal(document.activeElement, link);
+  assert.deepEqual(inert(), ["model"]);
+});
+
+// The sheet's detail rows as `[label, value]`.
+function sheetRows(byId) {
+  return Array.from(byId("sheet-details").children, (row) => [
+    row.querySelector("dt").textContent,
+    row.querySelector("dd").textContent,
+  ]);
+}
+
+test("the sheet lists the session's details in full, and an older host's none", () => {
+  let time = 20000;
+  const { byId, chat } = mountChat({ now: () => time });
+  const full = detailedSession({
+    created_at: 20000 - 11100,
+    published_upstream_ref: "origin/review/a-very-long-branch-name-for-the-pager",
+  });
+  const summary = detailedSummary({
+    base_ahead: 3,
+    base_behind: 1,
+    in_progress_started_at: 19900,
+    in_progress_total_seconds: 20,
+    status: "InProgress",
+    upstream_ahead: 0,
+    upstream_behind: 2,
+  });
+
+  chat.render(full, summary);
+  assert.equal(byId("sheet-details").hidden, false);
+  assert.deepEqual(sheetRows(byId), [
+    ["Branch", "wt/3f9a1c2e → main ↓1 ↑3"],
+    ["Upstream", "origin/review/a-very-long-branch-name-for-the-pager ↓2 ↑0"],
+    ["Model", "claude/opus-5.5 [high]"],
+    ["Timer", "2m 0s"],
+    ["Started", "3h 5m ago"],
+    ["Pull request", "#1261 open · PR ready"],
+  ]);
+  const link = byId("sheet-details").querySelector("a");
+  assert.equal(link.getAttribute("href"), "https://github.com/example/project/pull/1261");
+  assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+
+  // The timer row ticks with the header, in place, and a refresh keeps
+  // the rows, so a focused link keeps its focus.
+  const timer = byId("sheet-details").querySelector(".sheet-timer");
+  time = 20001;
+  chat.tick();
+  assert.equal(timer.textContent, "2m 1s");
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer: 2m 1s");
+  chat.render(full, summary);
+  assert.equal(byId("sheet-details").querySelector("a"), link);
+  assert.equal(byId("sheet-details").querySelector(".sheet-timer"), timer);
+
+  // An older host sends none of the optional fields: no rows, no list.
+  chat.render(session(), null);
+  assert.deepEqual(sheetRows(byId), []);
+  assert.equal(byId("sheet-details").hidden, true);
+  // A host that sends some of them gets only those rows.
+  chat.render(detailedSession({ review_request: undefined }), null);
+  assert.deepEqual(
+    sheetRows(byId).map(([label]) => label),
+    ["Branch", "Model"],
+  );
+});
+
+test("the sheet links a review request only through the Markdown link filter", () => {
+  const { byId, chat } = mountChat();
+  chat.render(
+    detailedSession({
+      review_request: { display_id: "#9", state: "Open", title: "", web_url: "javascript:alert(1)" },
+    }),
+  );
+
+  assert.equal(byId("sheet-details").querySelector("a"), null);
+  assert.deepEqual(sheetRows(byId).at(-1), ["Pull request", "#9 open"]);
+});
+
+test("the sheet button shows for the details on wide screens too", () => {
+  // Details alone open the sheet everywhere.
+  const details = mountChat();
+  details.chat.render(detailedSession({ status: "Done" }), null);
+  assert.equal(details.byId("session-more").hidden, false);
+  assert.equal(details.byId("session-more").classList.contains("narrow-only"), false);
+
+  // Only Merge, which the wide header shows, and no details: phones only.
+  const merge = mountChat({ capabilities: ["merge"] });
+  merge.chat.render(session({ status: "Merged" }), null);
+  assert.equal(merge.byId("session-more").hidden, false);
+  assert.equal(merge.byId("session-more").classList.contains("narrow-only"), true);
+
+  // No details and nothing to offer: no button.
+  const none = mountChat();
+  none.chat.render(session({ status: "Done" }), null);
+  assert.equal(none.byId("session-more").hidden, true);
+  // Leaving the session clears the details and the button.
+  details.chat.close();
+  assert.equal(details.byId("sheet-details").hidden, true);
+  assert.equal(details.byId("session-more").hidden, true);
+});
+
+test("queued actions follow the queued messages, marked as actions", () => {
+  const { byId, chat } = mountChat();
+  chat.render(
+    session({
+      queued_actions: ["sync — rebase onto the base branch after this turn"],
+      queued_messages: ["first"],
+      status: "InProgress",
+    }),
+  );
+  const queued = () => Array.from(byId("queued").children);
+
+  assert.equal(byId("queued-box").hidden, false);
+  assert.deepEqual(
+    queued().map((item) => [item.className, item.textContent]),
+    [
+      ["", "first"],
+      ["queued-action", "Actionsync — rebase onto the base branch after this turn"],
+    ],
+  );
+  assert.equal(queued()[1].querySelector(".queued-tag").textContent, "Action");
+  assert.equal(queued()[1].title, "sync — rebase onto the base branch after this turn");
+
+  // A message with the text of an action is still a message.
+  const action = queued()[1];
+  chat.render(session({ queued_actions: ["first"], queued_messages: [], status: "InProgress" }));
+  assert.deepEqual(
+    queued().map((item) => item.className),
+    ["queued-action"],
+  );
+  assert.notEqual(queued()[0], action);
+  // Actions alone show the box; an older host sends none.
+  chat.render(session({ queued_actions: undefined, status: "InProgress" }));
+  assert.equal(byId("queued-box").hidden, true);
+});
+
+test("a draft session previews its staged messages as text, and a started one does not", () => {
+  const { byId, chat } = mountChat();
+  const draft = { is_draft: true, messages: [], status: "Draft" };
+  const hostile = "<img src=x onerror=alert(1)>\nsecond line";
+
+  chat.render(session({ ...draft, draft_prompt: hostile }));
+  const preview = byId("draft-preview");
+  assert.equal(preview.hidden, false);
+  assert.deepEqual(
+    Array.from(preview.children, (node) => [node.className, node.textContent]),
+    [
+      ["eyebrow", "Draft session"],
+      ["draft-note", "Staged on the host. Your next message starts the session with it."],
+      ["msg msg--user", hostile],
+    ],
+  );
+  assert.equal(preview.querySelector("img"), null);
+
+  // Nothing staged yet, or an older host that does not send it.
+  chat.render(session(draft));
+  assert.deepEqual(
+    Array.from(preview.children, (node) => node.textContent),
+    ["Draft session", "Your first message starts the session."],
+  );
+  // A started draft and a regular session show no preview.
+  chat.render(session({ ...draft, draft_prompt: hostile, status: "InProgress" }));
+  assert.equal(preview.hidden, true);
+  assert.equal(preview.children.length, 0);
+  chat.render(session({ draft_prompt: hostile, status: "Draft" }));
+  assert.equal(preview.hidden, true);
+  // Leaving the session clears it.
+  chat.render(session({ ...draft, draft_prompt: hostile }));
+  chat.close();
+  assert.equal(preview.hidden, true);
 });
 
 test("a review request links only through the Markdown link filter", () => {

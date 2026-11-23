@@ -491,16 +491,20 @@ fn session_summary_converts_status_to_display_string() {
     );
 }
 
-/// Builds a list entry for `session-1` with stats and, optionally, a linked
-/// review request whose forge status is `status_summary`.
+/// Builds a list entry for `session-1` with stats, three commits ahead of
+/// and one behind its base and, optionally, published two commits behind
+/// its upstream with a linked review request whose forge status is
+/// `status_summary`.
 fn entry_with_stats(status_summary: Option<&str>) -> SessionListEntry {
     SessionListEntry {
         stats: Some(SessionListStats {
             added_lines: 12,
+            base_ahead_behind: Some((3, 1)),
             deleted_lines: 3,
             has_merge_conflict: true,
             in_progress_started_at: Some(40),
             in_progress_total_seconds: 90,
+            is_published: status_summary.is_some(),
             model: AgentModel::ClaudeOpus55,
             reasoning_level: ReasoningLevel::Max,
             review_request: status_summary.map(|status_summary| ReviewRequestSummary {
@@ -514,6 +518,7 @@ fn entry_with_stats(status_summary: Option<&str>) -> SessionListEntry {
                 web_url: "https://example.com/pull/12".to_string(),
             }),
             size_label: "S".to_string(),
+            upstream_ahead_behind: status_summary.map(|_| (0, 2)),
         }),
         summary: SessionSummary {
             id: SessionId::from("session-1"),
@@ -525,7 +530,7 @@ fn entry_with_stats(status_summary: Option<&str>) -> SessionListEntry {
 }
 
 #[test]
-fn session_list_stats_carry_the_host_size_label_and_review_readiness() {
+fn session_list_stats_carry_the_size_label_branch_distances_and_review_request() {
     // Arrange
     let ready = entry_with_stats(Some("Mergeable, PR ready"));
     let bypass = entry_with_stats(Some("Review required, PR ready with bypass"));
@@ -544,20 +549,26 @@ fn session_list_stats_carry_the_host_size_label_and_review_readiness() {
         encoded,
         json!({
             "added_lines": 12,
+            "base_ahead": 3,
+            "base_behind": 1,
             "deleted_lines": 3,
             "has_merge_conflict": true,
             "id": "session-1",
             "in_progress_started_at": 40,
             "in_progress_total_seconds": 90,
+            "is_published": true,
             "model": "claude-opus-5-5",
             "model_short_name": AgentModel::ClaudeOpus55.short_name(),
             "reasoning": "max",
+            "review_display_id": "#12",
             "review_ready": "ready",
             "review_state": "Open",
             "size": "S",
             "status": "Review",
             "title": "Build it",
-            "updated_at": 5
+            "updated_at": 5,
+            "upstream_ahead": 0,
+            "upstream_behind": 2
         })
     );
     assert_eq!(
@@ -566,7 +577,12 @@ fn session_list_stats_carry_the_host_size_label_and_review_readiness() {
     );
     assert_eq!(blocked.review_ready, None);
     assert_eq!(blocked.review_state.as_deref(), Some("Open"));
+    assert_eq!(unlinked.review_display_id, None);
     assert_eq!(unlinked.review_state, None);
+    let unlinked = serde_json::to_value(&unlinked).expect("summary should encode");
+    assert!(unlinked.get("is_published").is_none());
+    assert!(unlinked.get("upstream_ahead").is_none());
+    assert_eq!(unlinked["base_ahead"], 3);
     assert_eq!(
         serde_json::from_value::<RemoteSessionSummary>(encoded).expect("summary should decode"),
         ready
@@ -589,6 +605,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
             base_branch: Some("main".to_string()),
             branch: Some("wt/session-".to_string()),
             created_at: Some(10),
+            draft_prompt: None,
             id: "session-1".to_string(),
             is_draft: false,
             model: Some("gpt-6.1-sol".to_string()),
@@ -621,6 +638,7 @@ fn session_conversion_keeps_chat_messages_and_drops_agent_prompts() {
                 options: vec!["main".to_string(), "develop".to_string()],
                 text: "Which branch?".to_string(),
             }],
+            queued_actions: vec!["sync after this turn".to_string()],
             queued_messages: vec!["next".to_string()],
             status: "Question".to_string(),
             title: Some("Build it".to_string()),
@@ -650,6 +668,8 @@ fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control(
     });
     session.settings.agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Neon);
     session.settings.is_draft = true;
+    session.draft_prompt = Some("staged prompt".to_string());
+    session.queued_actions = Vec::new();
 
     // Act
     let remote = RemoteSession::from(session);
@@ -660,6 +680,8 @@ fn session_conversion_maps_the_review_request_and_hides_an_absent_speed_control(
     assert_eq!(encoded["progress"], "Working... Reading files");
     assert_eq!(remote.speed_mode, None);
     assert!(remote.is_draft);
+    assert_eq!(encoded["draft_prompt"], "staged prompt");
+    assert!(encoded.get("queued_actions").is_none());
     assert_eq!(
         remote.published_upstream_ref.as_deref(),
         Some("origin/wt/session-")
@@ -701,6 +723,8 @@ fn session_frames_from_an_older_server_parse_without_details() {
     assert_eq!(session.agent, None);
     assert_eq!(session.review_request, None);
     assert!(!session.is_draft);
+    assert_eq!(session.draft_prompt, None);
+    assert_eq!(session.queued_actions, Vec::<String>::new());
     assert_eq!(encoded, old);
 }
 

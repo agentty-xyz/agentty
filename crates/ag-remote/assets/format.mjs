@@ -209,9 +209,11 @@ export const MERGE_CONFLICT_LABEL = "merge conflict";
 
 // What a listed session's figures show: the host's size label, the line
 // counts (`null` when unknown or both zero), the compact model name,
-// whether its branch conflicts with its base, and the label of a pull
-// request that can merge (`null` when it cannot or the forge does not
-// say). Older hosts omit every figure.
+// whether its branch conflicts with its base, the label of a pull request
+// that can merge (`null` when it cannot or the forge does not say), the
+// forge indicator, and how far the session branch is from its base and
+// from its upstream, as `branchCounts` words them. Older hosts omit every
+// figure.
 export function sessionFigures(summary) {
   const added = summary?.added_lines;
   const deleted = summary?.deleted_lines;
@@ -219,12 +221,64 @@ export function sessionFigures(summary) {
   const readiness = summary?.review_ready;
 
   return {
+    base: branchCounts(summary?.base_ahead, summary?.base_behind),
+    forge: forgeIndicator(summary),
     hasConflict: summary?.has_merge_conflict === true,
     lines: hasLines ? { added: added, deleted: deleted } : null,
     model: text(summary?.model_short_name) || text(summary?.model),
     prReady: Object.hasOwn(PR_READY_LABELS, readiness) ? PR_READY_LABELS[readiness] : null,
     size: text(summary?.size),
+    upstream: branchCounts(summary?.upstream_ahead, summary?.upstream_behind),
   };
+}
+
+// The terminal's marks for each state of a linked review request, with
+// the tone each shows in.
+const FORGE_STATES = {
+  Closed: { label: "closed", mark: "✗", tone: "closed" },
+  Merged: { label: "merged", mark: "✓", tone: "merged" },
+  Open: { label: "open", mark: "⊙", tone: "open" },
+};
+
+// The forge indicator the terminal's status column shows for a listed
+// session, as `{ label, mark, text, tone }`: `⊙ #12`, `✓ #12` or `✗ #12`
+// for an open, merged or closed review request, or `↑` for a branch
+// published without one; `mark` is the symbol alone, for a narrow place.
+// `null` when neither applies, or when a newer host reports a review state
+// this page does not know. Older hosts that send the state without the
+// display id get the mark alone.
+export function forgeIndicator(summary) {
+  const state = summary?.review_state;
+  if (Object.hasOwn(FORGE_STATES, state)) {
+    const { label, mark, tone } = FORGE_STATES[state];
+    const id = text(summary.review_display_id);
+
+    return {
+      label: "Review request " + (id ? id + " " : "") + label,
+      mark: mark,
+      text: id ? mark + " " + id : mark,
+      tone: tone,
+    };
+  }
+  if (!state && summary?.is_published === true) {
+    return { label: "Branch published", mark: "↑", text: "↑", tone: "published" };
+  }
+
+  return null;
+}
+
+// How far one branch is from another, as the terminal's footer shows it:
+// `✓` when even, or `↓2 ↑1` for two commits behind and one ahead. `null`
+// when either count is unknown.
+export function branchCounts(ahead, behind) {
+  if (count(ahead) === null || count(behind) === null) {
+    return null;
+  }
+  if (ahead === 0 && behind === 0) {
+    return "✓";
+  }
+
+  return "↓" + behind + " ↑" + ahead;
 }
 
 // The active project a listing names, with the fields the sidebar shows,
@@ -276,19 +330,11 @@ function parseProjectSync(sync) {
   };
 }
 
-// How far the branch of `project` is from its upstream, as the terminal's
-// footer shows it: `✓` when even, or `↓2 ↑1` for two commits behind and
-// one ahead. `null` when the project has no branch or the host has not
+// How far the branch of `project` is from its upstream, as `branchCounts`
+// words it. `null` when the project has no branch or the host has not
 // compared it.
 export function projectCounts(project) {
-  if (!project?.branch || project.ahead === null || project.behind === null) {
-    return null;
-  }
-  if (project.ahead === 0 && project.behind === 0) {
-    return "✓";
-  }
-
-  return "↓" + project.behind + " ↑" + project.ahead;
+  return project?.branch ? branchCounts(project.ahead, project.behind) : null;
 }
 
 // What the sync of `project` is called: the project and the branch it

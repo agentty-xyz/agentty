@@ -185,3 +185,45 @@ async fn runtime_backend_keeps_question_answer_and_its_images_when_worker_enqueu
         "the caller keeps answer images for a retry"
     );
 }
+
+#[tokio::test]
+async fn runtime_backend_lists_queued_actions_in_the_order_they_run() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Draft,
+            project_id,
+        },
+    )
+    .await
+    .expect("draft session should be created");
+    app.sessions
+        .queue_session_settings(&session_id, "model change after this turn".to_string());
+    app.sessions.queue_session_sync(&session_id, 2);
+    app.sessions
+        .queue_branch_publish(&session_id, 1, "publish after this turn".to_string());
+    // A generated turn that already runs is not queued.
+    app.sessions
+        .show_generated_turn_progress(&session_id, "Resolving 1 review comment...".to_string());
+
+    // Act
+    let session = request_session(&mut app, session_id)
+        .await
+        .expect("session should load")
+        .expect("session should exist");
+
+    // Assert
+    assert_eq!(
+        session.queued_actions,
+        [
+            "publish after this turn",
+            "sync — rebase onto the base branch after this turn",
+            "model change after this turn",
+        ]
+    );
+    assert_eq!(session.queued_messages, [] as [String; 0]);
+}

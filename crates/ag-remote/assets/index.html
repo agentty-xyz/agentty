@@ -352,6 +352,11 @@
                     </div>
                     <div id="chat-scroll" class="chat-scroll">
                         <div class="chat-column">
+                            <section id="draft-preview"
+                                     class="draft-preview"
+                                     aria-label="Draft session"
+                                     hidden>
+                            </section>
                             <ol id="transcript" class="transcript">
                             </ol>
                             <output id="status-line" class="status status-line" hidden></output>
@@ -423,6 +428,8 @@
                 <form method="dialog">
                     <h2 id="sheet-title">Session actions</h2>
                     <p id="sheet-sub" class="sheet-sub"></p>
+                    <dl id="sheet-details" class="sheet-details" hidden>
+                    </dl>
                     <button id="sheet-diff" value="diff" class="sheet-item narrow-only" hidden>
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-diff" />

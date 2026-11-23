@@ -384,6 +384,10 @@ pub struct Session {
     pub published_upstream_ref: Option<String>,
     /// Structured clarification questions waiting for answers.
     pub questions: Vec<QuestionItem>,
+    /// Workflow actions waiting behind the active turn, such as a queued
+    /// sync, publish, or settings change, as display labels in the order
+    /// they run. Chat messages wait in `queued_messages`.
+    pub queued_actions: Vec<String>,
     /// Chat messages waiting behind the active turn or queued branch action.
     pub queued_messages: Vec<String>,
     /// Persisted review-request linkage, when present.
@@ -446,6 +450,9 @@ impl From<SessionSummary> for SessionListEntry {
 pub struct SessionListStats {
     /// Lines the session's diff adds.
     pub added_lines: u64,
+    /// Commits the session branch is ahead of and behind its base branch,
+    /// in that order, as of the host's latest check; `None` before one.
+    pub base_ahead_behind: Option<(u32, u32)>,
     /// Lines the session's diff removes.
     pub deleted_lines: u64,
     /// Whether merging the session branch into its base would conflict, as
@@ -456,6 +463,8 @@ pub struct SessionListStats {
     pub in_progress_started_at: Option<i64>,
     /// Active-work seconds completed before the current interval.
     pub in_progress_total_seconds: i64,
+    /// Whether the session branch was published to an upstream branch.
+    pub is_published: bool,
     /// Model the session runs on.
     pub model: AgentModel,
     /// Reasoning level of the session's next turn.
@@ -464,6 +473,10 @@ pub struct SessionListStats {
     pub review_request: Option<ReviewRequestSummary>,
     /// Host size bucket of the diff, such as `XS` or `XXL`.
     pub size_label: String,
+    /// Commits the session branch is ahead of and behind the upstream
+    /// branch it tracks, in that order, as of the host's latest fetch;
+    /// `None` when it tracks none or before the host compared them.
+    pub upstream_ahead_behind: Option<(u32, u32)>,
 }
 
 /// Converts Unix timestamp seconds to a day key after applying a UTC offset.

@@ -7,8 +7,10 @@ import {
   MAX_SEEN,
   MERGE_CONFLICT_LABEL,
   activeSeconds,
+  branchCounts,
   filterCounts,
   filterSessions,
+  forgeIndicator,
   formatTimer,
   groupSessions,
   mergeSeen,
@@ -522,26 +524,39 @@ test("sessionFigures reads the listing's figures and hides what an older host om
   assert.deepEqual(
     sessionFigures({
       added_lines: 64,
+      base_ahead: 3,
+      base_behind: 1,
       deleted_lines: 9,
+      is_published: true,
       model: "claude-opus-5-5",
       model_short_name: "opus-5.5",
+      review_display_id: "#12",
       review_ready: "ready",
+      review_state: "Open",
       size: "M",
+      upstream_ahead: 0,
+      upstream_behind: 0,
     }),
     {
+      base: "↓1 ↑3",
+      forge: { label: "Review request #12 open", mark: "⊙", text: "⊙ #12", tone: "open" },
       hasConflict: false,
       lines: { added: 64, deleted: 9 },
       model: "opus-5.5",
       prReady: "PR ready",
       size: "M",
+      upstream: "✓",
     },
   );
   assert.deepEqual(sessionFigures({ id: "old", status: "Review" }), {
+    base: null,
+    forge: null,
     hasConflict: false,
     lines: null,
     model: null,
     prReady: null,
     size: null,
+    upstream: null,
   });
   assert.equal(sessionFigures(null).size, null);
   // No changes yet, so no counts; the model id stands in for a short name.
@@ -619,6 +634,50 @@ test("projectCounts shows the branch's distance from upstream as the terminal do
   // No branch to compare.
   assert.equal(projectCounts(project({ ahead: 1, behind: 2 })), null);
   assert.equal(projectCounts(null), null);
+});
+
+test("branchCounts words a distance as the terminal's footer does and needs both counts", () => {
+  assert.equal(branchCounts(3, 1), "↓1 ↑3");
+  assert.equal(branchCounts(0, 0), "✓");
+  assert.equal(branchCounts(0, 4), "↓4 ↑0");
+  assert.equal(branchCounts(undefined, 1), null);
+  assert.equal(branchCounts(1, -1), null);
+  assert.equal(branchCounts("1", 2), null);
+});
+
+test("forgeIndicator marks review requests and published branches as the terminal does", () => {
+  const forge = (summary) => forgeIndicator(summary)?.text ?? null;
+
+  assert.equal(forge({ review_display_id: "#12", review_state: "Open" }), "⊙ #12");
+  assert.equal(forge({ review_display_id: "#12", review_state: "Merged" }), "✓ #12");
+  assert.deepEqual(forgeIndicator({ review_display_id: "!7", review_state: "Closed" }), {
+    label: "Review request !7 closed",
+    mark: "✗",
+    text: "✗ !7",
+    tone: "closed",
+  });
+  // The review request wins over the published branch it came from.
+  const linked = { is_published: true, review_display_id: "#3", review_state: "Open" };
+  assert.equal(forge(linked), "⊙ #3");
+  assert.deepEqual(forgeIndicator({ is_published: true }), {
+    label: "Branch published",
+    mark: "↑",
+    text: "↑",
+    tone: "published",
+  });
+  // An older host sends the state without the id, or nothing.
+  assert.deepEqual(forgeIndicator({ review_state: "Merged" }), {
+    label: "Review request merged",
+    mark: "✓",
+    text: "✓",
+    tone: "merged",
+  });
+  assert.equal(forgeIndicator({ id: "old", status: "Review" }), null);
+  assert.equal(forgeIndicator(null), null);
+  // A state this page does not know, even on a published branch, shows
+  // nothing rather than a wrong mark.
+  assert.equal(forgeIndicator({ is_published: true, review_state: "Draft" }), null);
+  assert.equal(forgeIndicator({ review_state: "toString" }), null);
 });
 
 test("projectSyncLine words each phase as the terminal's status bar does", () => {

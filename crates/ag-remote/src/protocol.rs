@@ -772,6 +772,14 @@ pub struct RemoteSessionSummary {
     /// Lines the session's diff adds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_lines: Option<u64>,
+    /// Commits the session branch is ahead of its base branch. Absent while
+    /// the host has not compared them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_ahead: Option<u32>,
+    /// Commits the session branch is behind its base branch. Absent while
+    /// the host has not compared them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_behind: Option<u32>,
     /// Lines the session's diff removes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_lines: Option<u64>,
@@ -787,6 +795,9 @@ pub struct RemoteSessionSummary {
     /// Active-work seconds completed before the current interval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_progress_total_seconds: Option<i64>,
+    /// Whether the session branch was published to an upstream branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_published: bool,
     /// Model name, as `get_host` reports `default_model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -796,6 +807,9 @@ pub struct RemoteSessionSummary {
     /// Reasoning level, such as `high`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Forge display id of the linked review request, such as `#123`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_display_id: Option<String>,
     /// Whether the linked pull request can merge, when the forge says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_ready: Option<RemoteReviewReadiness>,
@@ -811,6 +825,15 @@ pub struct RemoteSessionSummary {
     pub title: Option<String>,
     /// Last update timestamp in Unix seconds.
     pub updated_at: i64,
+    /// Commits the session branch is ahead of the upstream branch it
+    /// tracks. Absent when it tracks none or the host has not compared
+    /// them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_ahead: Option<u32>,
+    /// Commits the session branch is behind the upstream branch it tracks.
+    /// Absent when it tracks none or the host has not compared them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_behind: Option<u32>,
 }
 
 impl From<SessionListEntry> for RemoteSessionSummary {
@@ -827,18 +850,24 @@ impl From<SessionListEntry> for RemoteSessionSummary {
             return remote;
         };
         remote.added_lines = Some(stats.added_lines);
+        remote.base_ahead = stats.base_ahead_behind.map(|(ahead, _)| ahead);
+        remote.base_behind = stats.base_ahead_behind.map(|(_, behind)| behind);
         remote.deleted_lines = Some(stats.deleted_lines);
         remote.has_merge_conflict = stats.has_merge_conflict;
         remote.in_progress_started_at = stats.in_progress_started_at;
         remote.in_progress_total_seconds = Some(stats.in_progress_total_seconds);
+        remote.is_published = stats.is_published;
         remote.model = Some(stats.model.name().to_string());
         remote.model_short_name = Some(stats.model.short_name().to_string());
         remote.reasoning = Some(stats.reasoning_level.as_str().to_string());
         if let Some(review_request) = stats.review_request {
             remote.review_ready = RemoteReviewReadiness::from_summary(&review_request);
             remote.review_state = Some(review_request.state.as_str().to_string());
+            remote.review_display_id = Some(review_request.display_id);
         }
         remote.size = Some(stats.size_label);
+        remote.upstream_ahead = stats.upstream_ahead_behind.map(|(ahead, _)| ahead);
+        remote.upstream_behind = stats.upstream_ahead_behind.map(|(_, behind)| behind);
 
         remote
     }
@@ -886,6 +915,10 @@ pub struct RemoteSession {
     /// Creation timestamp in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+    /// Messages a draft session has staged and will send together when it
+    /// starts. Absent when it has none and from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_prompt: Option<String>,
     /// Stable session identifier.
     pub id: String,
     /// Whether the session defers its worktree until its first message.
@@ -910,6 +943,11 @@ pub struct RemoteSession {
     pub published_upstream_ref: Option<String>,
     /// Pending clarification questions.
     pub questions: Vec<RemoteQuestion>,
+    /// Labels of the workflow actions waiting behind the active turn, such
+    /// as a queued sync or publish, in the order they run. Absent when none
+    /// wait and from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_actions: Vec<String>,
     /// Chat messages waiting behind the active turn.
     pub queued_messages: Vec<String>,
     /// Reasoning level, such as `high`.
@@ -943,6 +981,7 @@ impl From<Session> for RemoteSession {
             base_branch: Some(settings.base_branch),
             branch: Some(session_branch(&session.id)),
             created_at: Some(session.created_at),
+            draft_prompt: session.draft_prompt,
             is_draft: settings.is_draft,
             model: Some(agent.model().name().to_string()),
             model_id: Some(agent.model().as_str().to_string()),
@@ -971,6 +1010,7 @@ impl From<Session> for RemoteSession {
                     text: question.text,
                 })
                 .collect(),
+            queued_actions: session.queued_actions,
             queued_messages: session.queued_messages,
             status: session.status.to_string(),
             title: session.title,
