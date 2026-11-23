@@ -374,10 +374,11 @@ export function createChat({
     elements.heading.textContent = session.title || "No title";
     const info = statusInfo(session.status);
     elements.badge.hidden = false;
-    elements.badge.className = "status status-badge wide-only status--" + info.tone;
-    elements.badge.replaceChildren(element(document, "i"), info.label);
+    const badgeStatus = element(document, "span", "status status--" + info.tone);
+    badgeStatus.append(element(document, "i", "status-dot"), info.label);
+    elements.badge.replaceChildren(badgeStatus);
     const line = element(document, "span", "status narrow-only status--" + info.tone);
-    line.append(element(document, "i"), info.label);
+    line.append(element(document, "i", "status-dot"), info.label);
     // Parts that did not change stay in place, so a focused review link
     // keeps its focus through a refresh.
     updateChildren(elements.sub, [line, ...headerDetails(document, session, state.summary)]);
@@ -739,10 +740,10 @@ export function createChat({
 
       return true;
     }
-    const loading = line.isLoading ? " is-loading" : "";
-    node.className = "status status-line status--" + statusInfo(statusName).tone + loading;
+    const loading = line.isLoading ? " status--live" : "";
+    node.className = "status status--line status-line status--" + statusInfo(statusName).tone + loading;
     if (!node.firstElementChild) {
-      node.replaceChildren(element(document, "i"), element(document, "span", "status-line-body"));
+      node.replaceChildren(element(document, "i", "status-dot"), element(document, "span", "status-line-body"));
     }
     node.lastElementChild.replaceChildren(
       element(document, "span", null, line.text),
@@ -807,9 +808,9 @@ export function createChat({
   }
 
   // `tag` with class `className`, holding `text` rendered as inline
-  // Markdown.
+  // Markdown, whose bare code elements take the shared `.prose` style.
   function inlineMarkdown(tag, className, text) {
-    const node = element(document, tag, className + " md-inline");
+    const node = element(document, tag, className + " md-inline prose");
     node.append(renderMarkdown(parseInlineMarkdown(text), document, { window }));
 
     return node;
@@ -818,7 +819,7 @@ export function createChat({
   // An answer renders as Markdown, with its source one toggle away for
   // whatever the renderer gets wrong.
   function renderAnswer(item, content) {
-    const rendered = element(document, "div", "md");
+    const rendered = element(document, "div", "md prose");
     rendered.append(renderMarkdown(parseMarkdown(content), document, { window }));
     const source = element(document, "div", "md-source", content);
     source.hidden = true;

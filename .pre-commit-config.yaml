@@ -64,6 +64,34 @@ repos:
         language: system
         files: ^(\.github/actions/test-timing/|\.pre-commit-config\.yaml$)
         pass_filenames: false
+      - id: design-gallery-check-test
+        name: design gallery check tests
+        description: Test the exported design gallery check against a fake page and browser process, with complete JavaScript line coverage, and write its LCOV report for SonarQube.
+        entry: >-
+          bash -eu -o pipefail -c 'rm -f design-gallery-check.lcov;
+          node --test --experimental-test-coverage --test-coverage-lines=100
+          --test-coverage-include=design/gallery-check.mjs
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=lcov --test-reporter-destination=design-gallery-check.lcov
+          design/tests/gallery-check.test.mjs && test -s design-gallery-check.lcov'
+        language: system
+        files: ^(design/gallery-check\.mjs|design/tests/|\.pre-commit-config\.yaml$)
+        pass_filenames: false
+      - id: design-gallery
+        name: design gallery
+        description: Render `design/gallery.html` under each public surface's whole stylesheet chain, the docs site's stylesheet as Zola compiles it and the remote client's `/app.css`, in a local headless Chromium-based browser (`CHROME_PATH` or a usual install), and fail when a surface renders a shared component differently from the shared stylesheets alone or restyles one, including through a class its templates and scripts set beside a shared class.
+        entry: >-
+          bash -eu -o pipefail -c 'site="$(mktemp -d)"; trap "rm -rf \"$site\"" EXIT;
+          zola --root docs/site build --output-dir "$site/public" >/dev/null;
+          assets=crates/ag-remote/assets;
+          node design/gallery-check.mjs design/gallery.html
+          --surface "docs-site=$site/public/site.css"
+          --markup "docs-site=docs/site/templates,docs/site/static"
+          --surface "remote-client=$assets/tokens.css,$assets/fonts.css,$assets/base.css,$assets/app.css"
+          --markup "remote-client=$assets"'
+        language: system
+        files: ^(design/|docs/site/(config\.toml|sass/|templates/|static/.*\.js$)|crates/ag-remote/assets/|crates/ag-remote/src/server\.rs$|crates/ag-relay/src/page\.rs$|\.pre-commit-config\.yaml$)
+        pass_filenames: false
       - id: clippy-fix
         name: clippy fix
         description: Auto-fix clippy lints across Rust targets when a mechanical fix is available.

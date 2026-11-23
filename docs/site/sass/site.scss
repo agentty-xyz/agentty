@@ -1,8 +1,9 @@
 /* Design values come from the generated _tokens.scss, the self-hosted
    monospace face from the generated _fonts.scss, and shared foundations and
    components from the generated _base.scss; change design/tokens.json or
-   design/base.css instead. The tokens below derive from them or size this
-   site's layout. */
+   design/base.css instead. This file places the shared components but never
+   restyles them. The tokens below derive from them or size this site's
+   layout. */
 @use "tokens";
 @use "fonts";
 @use "base";
@@ -25,12 +26,6 @@ svg {
 /* Hidden UI must outrank component display rules such as .search-dialog. */
 .site-body [hidden] {
     display: none;
-}
-
-/* Focusable elements beyond the shared links, buttons, and inputs. */
-:where([tabindex]):focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 3px;
 }
 
 .site-nav-left {
@@ -73,12 +68,10 @@ svg {
 }
 
 .site-nav-link,
-.site-theme-btn,
 .site-search-trigger,
 .github-link,
 .docs-card-link,
 .docs-sidebar-title,
-.theme-btn,
 .copy-btn,
 .site-footer-text {
     transition: color var(--transition-fast);
@@ -105,7 +98,6 @@ svg {
 
 .site-nav-link:hover,
 .github-link:hover,
-.site-theme-btn:hover,
 .copy-btn:hover,
 .docs-card-link:hover {
     color: var(--color-accent);
@@ -131,18 +123,6 @@ svg {
     color: var(--color-text);
 }
 
-.site-search-trigger kbd {
-    min-width: 1.25rem;
-    padding: 0.05rem var(--space-2xs);
-    border: 1px solid var(--color-border);
-    border-radius: 0.25rem;
-    background: var(--color-bg);
-    color: var(--color-dim);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-3xs);
-    text-align: center;
-}
-
 .github-link-rich {
     display: inline-flex;
     align-items: center;
@@ -164,86 +144,13 @@ svg {
     gap: var(--space-xs);
 }
 
-.github-badge {
-    display: inline-flex;
-    align-items: center;
-    line-height: var(--line-height-none);
-    border: 1px solid var(--color-border);
-    border-radius: 0.25rem;
-    background: var(--color-surface);
-    overflow: hidden;
-}
-
-.github-badge-label,
-.github-badge-value {
-    display: inline-flex;
-    align-items: center;
-    min-height: 20px;
-    padding: 0 var(--space-xs);
-    font-size: var(--font-size-3xs);
-}
-
-.github-badge-label {
-    color: var(--color-muted);
-    border-right: 1px solid var(--color-border);
-}
-
-.github-badge-value {
-    color: var(--color-accent);
-}
-
-.github-badge-stars .github-badge-value {
+/* Room for the hydrated star count and release, so the header keeps its width. */
+.github-badge-stars .badge-value {
     min-width: 3.5ch;
-    justify-content: flex-end;
 }
 
-.github-badge-release .github-badge-value {
+.github-badge-release .badge-value {
     min-width: 5.8ch;
-    justify-content: center;
-}
-
-.github-link:hover .github-badge {
-    border-color: var(--color-accent-dim);
-}
-
-.github-link:hover .github-badge-label {
-    color: var(--color-accent-dim);
-}
-
-.site-theme-switch {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3xs);
-    min-width: 0;
-    margin: 0;
-    padding: var(--space-3xs);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    font: inherit;
-    background: var(--color-surface);
-    font-family: var(--font-mono);
-    user-select: none;
-}
-
-.site-theme-btn {
-    background: transparent;
-    border: 0;
-    min-height: var(--control-height-xs);
-    padding: var(--space-3xs) var(--space-xs);
-    border-radius: 0.25rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--color-muted);
-    cursor: pointer;
-}
-
-.site-theme-btn.text-accent {
-    background: var(--color-surface-interactive);
-}
-
-.site-theme-separator {
-    font-size: var(--font-size-2xs);
-    color: var(--color-dim);
 }
 
 /* Keep page spacing proportional across phone, tablet, and desktop breakpoints. */
@@ -325,27 +232,11 @@ svg {
 }
 
 .hero-description {
-    color: var(--color-muted);
-    font-size: clamp(var(--font-size-body), 2vw, var(--font-size-xl));
-    line-height: var(--line-height-relaxed);
-    max-width: 60ch;
     margin: 0 auto 1.7rem;
 }
 
-.hero-description strong {
-    color: var(--color-text);
-    font-weight: var(--font-weight-semibold);
-}
-
-.hero-eyebrow,
-.section-eyebrow,
-.search-dialog-eyebrow {
+.eyebrow {
     margin: 0 0 0.65rem;
-    color: var(--color-accent);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    letter-spacing: var(--tracking-widest);
-    text-transform: uppercase;
 }
 
 .hero-title {
@@ -999,7 +890,6 @@ svg {
 
 .analytics-notice-actions .button {
     flex: 1 1 10rem;
-    cursor: pointer;
 }
 
 .website-analytics-page {
@@ -1186,23 +1076,6 @@ svg {
     font-size: var(--font-size-sm);
 }
 
-.docs-search__input {
-    width: 100%;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 0.35rem;
-    background: var(--color-surface);
-    color: var(--color-accent);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    padding: var(--space-sm) 0.6rem;
-}
-
-.docs-search__input:focus-visible {
-    border-color: var(--color-accent-dim);
-    outline: 2px solid var(--color-accent-dim);
-    outline-offset: 1px;
-}
-
 .docs-search__status {
     min-height: 1.2rem;
     margin: var(--space-xs) 0 0;
@@ -1324,11 +1197,7 @@ svg {
 }
 
 .docs-page-lead {
-    max-width: 65ch;
     margin: 0.9rem 0 var(--space-2xl);
-    color: var(--color-muted);
-    font-size: 1.05rem;
-    line-height: var(--line-height-relaxed);
 }
 
 .docs-outline-list {
@@ -1395,20 +1264,8 @@ svg {
     text-decoration-color: currentColor;
 }
 
-.docs-content :not(pre) > code:not(.install-cmd-text) {
-    display: inline;
-    border: 1px solid var(--color-border);
-    border-radius: 0.3rem;
-    background: var(--color-surface);
-    color: var(--color-accent);
-    padding: 0 var(--space-xs);
-    line-height: var(--line-height-compact);
-    font-size: 0.92em;
-    overflow-wrap: anywhere;
-    white-space: normal;
-    word-break: normal;
-}
-
+/* A code block's text, which its code element inherits; its lines keep the
+   line height of the prose around it (`1lh` is the parent's line height). */
 .docs-content pre {
     margin: var(--space-lg) 0;
     border: 1px solid var(--color-border);
@@ -1417,21 +1274,11 @@ svg {
     padding: 0.85rem var(--space-lg);
     padding-right: 4.5rem;
     overflow-x: auto;
+    font-size: var(--font-size-lg);
+    line-height: 1lh;
+    overflow-wrap: anywhere;
     white-space: pre-wrap;
     position: relative;
-}
-
-.docs-content pre code {
-    display: inline;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    color: inherit;
-    padding: 0;
-    font-size: var(--font-size-lg);
-    line-height: var(--line-height-body);
-    overflow-wrap: anywhere;
-    word-break: normal;
 }
 
 .docs-copy-btn {
@@ -1593,74 +1440,6 @@ svg {
     margin-top: var(--space-2xs);
 }
 
-/* Docs tables should wrap in place instead of forcing horizontal scrolling. */
-.docs-content table {
-    width: 100%;
-    min-width: 0;
-    margin: 0;
-    border-collapse: separate;
-    border-spacing: 0;
-    border: 0;
-    border-radius: 0;
-    display: table;
-    font-size: var(--font-size-md);
-    line-height: var(--line-height-normal);
-}
-
-.docs-content thead {
-    background: var(--color-surface);
-}
-
-.docs-content thead th {
-    color: var(--color-accent);
-    font-weight: var(--font-weight-semibold);
-    font-size: var(--font-size-sm);
-    letter-spacing: var(--tracking-wider);
-    text-transform: uppercase;
-    text-align: left;
-    padding: 0.65rem 0.9rem;
-    border-bottom: 1px solid var(--color-border);
-    white-space: normal;
-}
-
-.docs-content tbody tr {
-    transition: background var(--transition-fast);
-}
-
-.docs-content tbody tr:hover {
-    background: var(--color-surface);
-}
-
-.docs-content tbody td {
-    padding: var(--space-sm) 0.9rem;
-    border-bottom: 1px solid var(--color-border);
-    color: var(--color-muted);
-    vertical-align: top;
-}
-
-.docs-content thead th,
-.docs-content tbody td {
-    overflow-wrap: break-word;
-    word-break: normal;
-    hyphens: auto;
-}
-
-.docs-content thead th > code,
-.docs-content tbody td > code {
-    overflow-wrap: break-word;
-    word-break: normal;
-    white-space: normal;
-}
-
-.docs-content tbody tr:last-child td {
-    border-bottom: none;
-}
-
-.docs-content tbody td:first-child {
-    color: var(--color-accent-dim);
-    font-weight: var(--font-weight-medium);
-}
-
 .docs-content .zola-anchor {
     font-size: 0.72em;
     margin-left: var(--space-sm);
@@ -1713,7 +1492,7 @@ svg {
     margin-bottom: var(--space-lg);
 }
 
-.search-dialog-eyebrow {
+.search-dialog-header .eyebrow {
     margin-bottom: var(--space-2xs);
 }
 
@@ -1738,41 +1517,6 @@ svg {
 .search-dialog-close:hover {
     border-color: var(--color-border-strong);
     color: var(--color-text);
-}
-
-.search-field {
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    min-height: var(--control-height-xl);
-    padding: 0 0.9rem;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-md);
-    background: var(--color-bg);
-}
-
-.search-field:focus-within {
-    border-color: var(--color-focus);
-    box-shadow: 0 0 0 1px var(--color-focus);
-}
-
-.search-field-prompt {
-    color: var(--color-accent);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xl);
-}
-
-.search-field input {
-    width: 100%;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: var(--color-text);
-    font-size: var(--font-size-body);
-}
-
-.search-field input::placeholder {
-    color: var(--color-dim);
 }
 
 .search-status {
@@ -1854,23 +1598,6 @@ svg {
     }
 }
 
-.theme-btn {
-    background: transparent;
-    border: 0;
-    padding: 0;
-    font-family: var(--font-mono);
-    color: var(--color-muted);
-    cursor: pointer;
-}
-
-.text-accent {
-    color: var(--color-accent);
-}
-
-.text-muted {
-    color: var(--color-muted);
-}
-
 .text-dim {
     color: var(--color-dim);
 }
@@ -1893,19 +1620,6 @@ svg {
 
 .border-b-surface {
     border-bottom-color: var(--color-surface);
-}
-
-.theme-btn.text-accent,
-.theme-btn:hover,
-.site-theme-btn.text-accent,
-.site-theme-btn:hover {
-    color: var(--color-accent);
-}
-
-/* Inactive theme buttons stay muted, including while hovered. */
-.theme-btn.text-muted,
-.site-theme-btn.text-muted {
-    color: var(--color-muted);
 }
 
 @media (max-width: 860px) {
@@ -2114,11 +1828,6 @@ svg {
 }
 
 @media (max-width: 560px) {
-    .site-nav-inner {
-        flex-wrap: wrap;
-        row-gap: 0.6rem;
-    }
-
     .site-nav-left {
         width: 100%;
         flex: 1 1 auto;
@@ -2143,25 +1852,14 @@ svg {
         justify-content: flex-start;
     }
 
-    .site-search-trigger kbd {
-        margin-left: auto;
-    }
-
-    .site-theme-switch {
+    .site-search-trigger .badge,
+    .site-nav-actions .segmented {
         margin-left: auto;
     }
 
     .section-heading-group {
         align-items: flex-start;
         flex-direction: column;
-    }
-
-    .terminal-window-bar {
-        grid-template-columns: 1fr auto;
-    }
-
-    .terminal-window-bar > :nth-child(2) {
-        display: none;
     }
 }
 

@@ -59,6 +59,13 @@ jobs:
           cargo-public-api: "true"
           llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}
 
+      # The `design-gallery` hook compiles the docs site's stylesheet with Zola
+      # and renders it in the runner's Google Chrome, offline.
+      - name: Install Zola
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: zola@0.22.1
+
       # With every file selected, the `clippy` hook lints all workspace targets
       # and features plus Agentty's PTY suites, so it also type-checks them.
       - name: Default validation hooks

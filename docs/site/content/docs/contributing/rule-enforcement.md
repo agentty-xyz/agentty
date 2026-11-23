@@ -89,7 +89,9 @@ four keys:
 - `tokens`: the machine-readable token source, `design/tokens.json`, in the W3C Design
   Tokens format, for consumers that need a value outside CSS.
 - `assets`: other files copied byte for byte, text or binary, such as the brand mark,
-  the favicon, and the monospace font with its licence, which the token source names.
+  the favicon, and the monospace font with its licence, which the token source names,
+  and `design/gallery.html` and `design/gallery-check.mjs`, the component gallery and
+  the script that compares a page's stylesheets with it.
 
 The manifest's `version` is 3 since `tokens` and `assets` were added; a reader of an
 older version rejects it, and every table rejects keys it does not know.

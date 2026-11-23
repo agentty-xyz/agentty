@@ -32,11 +32,12 @@ function capture(source, pattern, label) {
 /**
  * Read the hero eyebrow, title, and font stylesheet from the home page template.
  *
- * Template expressions are rejected because the card shows the text verbatim.
+ * The hero eyebrow is the template's first shared eyebrow. Template
+ * expressions are rejected because the card shows the text verbatim.
  */
 export function readHero(indexHtml) {
   const hero = {
-    eyebrow: capture(indexHtml, /<p class="hero-eyebrow">([^<]*)<\/p>/, 'the hero eyebrow'),
+    eyebrow: capture(indexHtml, /<p class="eyebrow">([^<]*)<\/p>/, 'the hero eyebrow'),
     title: capture(indexHtml, /<h1 class="hero-title"[^>]*>([^<]*)<\/h1>/, 'the hero title'),
     fontHref: capture(indexHtml, /href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/, 'the font stylesheet'),
   };

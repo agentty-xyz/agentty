@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
 import { parsePairingLink } from "../../assets/relay.mjs";
@@ -51,6 +52,27 @@ function mountShell({ isNarrow = true, url = "http://127.0.0.1/" } = {}) {
 
   return { document, elements, routes, shell, window };
 }
+
+test("theme.js applies the dark theme shell.mjs saved, before any module runs", () => {
+  // Arrange: the classic head script runs with only the page's globals.
+  const source = readFileSync(new URL("../../assets/theme.js", import.meta.url), "utf8");
+  const run = (storage) => {
+    const document = createDocument(INDEX_HTML);
+    vm.runInNewContext(source, { document: document, window: { localStorage: storage } });
+
+    return document.documentElement.classList.contains("theme-dark");
+  };
+  const dark = new MemoryStorage();
+  dark.setItem(THEME_KEY, "dark");
+  const green = new MemoryStorage();
+  green.setItem(THEME_KEY, "green");
+
+  // Act and Assert
+  assert.equal(run(dark), true);
+  assert.equal(run(green), false);
+  assert.equal(run(new MemoryStorage()), false);
+  assert.equal(run(new MemoryStorage({ failing: true })), false);
+});
 
 test("loadTheme reads a saved theme and falls back to green", () => {
   // Arrange

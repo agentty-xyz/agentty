@@ -1,9 +1,15 @@
 /* Generated from design/base.css by `cargo run -p ag-xtask -- design-tokens`. Do not edit. */
 /* Foundations and components shared by Agentty's web pages. Load tokens.css
    first and page rules after this file; every value comes from a custom
-   property that tokens.css defines. DESIGN.md explains when to use each part. */
+   property that tokens.css defines. DESIGN.md explains when to use each part,
+   and gallery.html shows every component in each state. */
 
 /* ---- Foundations ---------------------------------------------------- */
+/* Both themes are dark, so form controls and scrollbars are drawn dark. */
+:root {
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -20,15 +26,23 @@ body {
 
 button,
 input,
+select,
 textarea {
   font-family: var(--font-sans);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
 }
 
 a {
   color: var(--color-accent);
 }
 
-:where(a, button, input):focus-visible {
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 3px;
 }
@@ -120,6 +134,7 @@ a {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
   text-decoration: none;
+  cursor: pointer;
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
@@ -185,4 +200,394 @@ a {
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
   background: var(--color-surface-interactive);
+}
+
+/* ---- Eyebrow and lead paragraph: .eyebrow, .lead ---------------------- */
+/* The page places them; neither sets a margin. */
+.eyebrow {
+  margin: 0;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+
+.lead {
+  max-width: 60ch;
+  color: var(--color-muted);
+  font-size: clamp(var(--font-size-body), 2vw, var(--font-size-xl));
+  line-height: var(--line-height-relaxed);
+}
+
+.lead strong {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ---- Fields: input.field, select.field, textarea.field ----------------
+   .field-prompt > .field-prompt-mark + input, for search and code entry */
+.field {
+  width: 100%;
+  min-height: var(--control-height-lg);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  transition: border-color var(--transition-fast);
+}
+
+.field::placeholder,
+.field-prompt input::placeholder {
+  color: var(--color-dim);
+  opacity: 1;
+}
+
+.field:focus {
+  border-color: var(--color-focus);
+}
+
+.field[aria-invalid="true"],
+.field-prompt:has(input[aria-invalid="true"]) {
+  border-color: var(--color-error);
+}
+
+.field:disabled {
+  color: var(--color-dim);
+  cursor: not-allowed;
+}
+
+/* The wrapper draws the field and its focus ring, so the bare input inside
+   draws neither. */
+.field-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: var(--control-height-xl);
+  padding: 0 var(--space-lg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.field-prompt:focus-within {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 1px var(--color-focus);
+}
+
+.field-prompt-mark {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xl);
+}
+
+.field-prompt input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+}
+
+/* A code to type exactly, such as a pairing code. */
+.field-prompt--code input {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xl);
+  letter-spacing: var(--tracking-widest);
+}
+
+/* ---- Badges: .badge, or .badge.badge--pair > .badge-label + .badge-value
+   A keycap is a kbd.badge. Inside a link, a badge follows its hover. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: normal;
+  line-height: var(--line-height-none);
+  text-transform: none;
+  white-space: nowrap;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.badge--pair {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.badge-label,
+.badge-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  padding: 0 var(--space-xs);
+}
+
+.badge-label {
+  border-right: 1px solid var(--color-border);
+  transition: color var(--transition-fast);
+}
+
+.badge-value {
+  color: var(--color-accent);
+}
+
+a:hover .badge {
+  border-color: var(--color-accent-dim);
+}
+
+a:hover .badge-label {
+  color: var(--color-accent-dim);
+}
+
+/* ---- Status: .status.status--<tone> > .status-dot + label --------------
+   The tone classes also set --status-tone for other elements to use. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--status-tone, var(--color-dim));
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--status-tone, var(--color-dim));
+}
+
+/* A status that reads as a line of text and wraps, such as what a session
+   is doing, with its dot centred on the first line. */
+.status--line {
+  display: flex;
+  align-items: flex-start;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-compact);
+  white-space: normal;
+}
+
+.status--line .status-dot {
+  margin-top: calc((var(--line-height-compact) * 1em - 0.45rem) / 2);
+}
+
+.status--working {
+  --status-tone: var(--color-roadmap-future);
+}
+
+.status--asking {
+  --status-tone: var(--color-roadmap-horizon);
+}
+
+.status--ready {
+  --status-tone: var(--color-accent);
+}
+
+.status--queue {
+  --status-tone: var(--color-accent-dim);
+}
+
+.status--idle,
+.status--done {
+  --status-tone: var(--color-dim);
+}
+
+.status--failed {
+  --status-tone: var(--color-error);
+}
+
+/* Live states glow; work in progress also pulses, as does any status
+   marked .status--live. */
+.status--working .status-dot,
+.status--asking .status-dot,
+.status--live .status-dot {
+  box-shadow: 0 0 10px var(--status-tone, var(--color-dim));
+}
+
+.status--working .status-dot,
+.status--live .status-dot {
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
+.status--idle .status-dot {
+  border: 1px solid var(--status-tone);
+  background: transparent;
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---- Inline code and tables: .code and .table, or bare code and table
+   elements inside .prose, which marks rendered Markdown. A classed code
+   element inside .prose is the page's own. ------------------------------ */
+.code,
+.prose :not(pre) > code:not([class]) {
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--color-border);
+  border-radius: 0.3rem;
+  background: var(--color-surface);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  line-height: var(--line-height-compact);
+  overflow-wrap: anywhere;
+}
+
+.table,
+.prose table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+}
+
+.table thead,
+.prose table thead {
+  background: var(--color-surface);
+}
+
+.table th,
+.prose table th,
+.table td,
+.prose table td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+  overflow-wrap: break-word;
+}
+
+.table th,
+.prose table th {
+  color: var(--color-accent);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.table td,
+.prose table td {
+  color: var(--color-muted);
+  vertical-align: top;
+}
+
+.table td:first-child,
+.prose table td:first-child {
+  color: var(--color-accent-dim);
+  font-weight: var(--font-weight-medium);
+}
+
+.table tbody tr,
+.prose table tbody tr {
+  transition: background var(--transition-fast);
+}
+
+.table tbody tr:hover,
+.prose table tbody tr:hover {
+  background: var(--color-surface);
+}
+
+.table tbody tr:last-child td,
+.prose table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ---- Segmented control: .segmented > button[aria-pressed] -------------
+   The theme switch is one, with a data-theme option per theme. */
+.segmented {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.segmented button {
+  min-height: var(--control-height-xs);
+  padding: var(--space-3xs) var(--space-xs);
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented button:hover {
+  color: var(--color-text);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--color-surface-interactive);
+  color: var(--color-accent);
+}
+
+.segmented button:disabled {
+  color: var(--color-dim);
+  cursor: not-allowed;
+}
+
+/* ---- Touch, narrow screens, and reduced motion ---------------------- */
+@media (pointer: coarse) {
+  .segmented button {
+    min-height: var(--control-height-lg);
+  }
+}
+
+/* Header groups wrap onto their own rows, and a window bar drops its
+   title. */
+@media (max-width: 560px) {
+  .site-nav-inner {
+    flex-wrap: wrap;
+    row-gap: var(--space-sm);
+  }
+
+  .terminal-window-bar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .terminal-window-bar > :nth-child(2) {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status--working .status-dot,
+  .status--live .status-dot {
+    animation: none;
+  }
 }

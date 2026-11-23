@@ -41,5 +41,13 @@ files = ["design/tokens.css", "design/fonts.css", "design/base.css"]
 # The machine-readable token source, in the W3C Design Tokens format.
 tokens = "design/tokens.json"
 # Other files copied byte-for-byte, text or binary, each at most 256 KiB. An SVG holds no script and references only itself.
-# The font and its licence are the files the token source's font face names.
-assets = ["design/mark.svg", "design/favicon.ico", "design/fonts/ShareTechMono-Regular.woff2", "design/fonts/OFL.txt"]
+# The font and its licence are the files the token source's font face names. The gallery shows every shared component in
+# each state, and the gallery check compares a page's stylesheets with it.
+assets = [
+    "design/mark.svg",
+    "design/favicon.ico",
+    "design/fonts/ShareTechMono-Regular.woff2",
+    "design/fonts/OFL.txt",
+    "design/gallery.html",
+    "design/gallery-check.mjs",
+]

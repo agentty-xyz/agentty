@@ -20,7 +20,11 @@ Applies to site configuration, templates, content, and static assets.
 - Shared foundations and components live in `design/base.css`, which
   `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens and
   fonts. Change a rule there when the remote-control client or another workspace shares
-  it, and keep site-only rules in `site.scss`.
+  it, and keep site-only rules in `site.scss`. Use the shared components' classes in
+  templates, and mark rendered Markdown containers with `prose`. `site.scss` may place a
+  shared component (margins, position, flex or grid placement, width) but not restyle
+  it; the `design-gallery` hook compares the compiled stylesheet with
+  `design/gallery.html` and names any rule that does.
 - `docs/site/static/mark.svg`, `docs/site/static/favicon.ico`, and the `theme-color`
   value in `docs/site/templates/partials/seo.html` are generated from `design/`; change
   them there. Scripts and templates read colors and fonts from the custom properties at

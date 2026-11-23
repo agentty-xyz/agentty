@@ -4,6 +4,7 @@
 // the Node tests in crates/ag-remote/tests/web/shell.test.mjs pass the fake
 // DOM.
 
+// theme.js reads the same key in the page head, before the first paint.
 export const THEME_KEY = "agentty.remote.theme";
 // The site's two themes, both dark. The first is the default.
 export const THEMES = ["green", "dark"];
