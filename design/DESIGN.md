@@ -25,16 +25,12 @@ decoration to the brand mark and the accent, and let content and status carry th
 ### Brand Mark
 
 The mark is a prompt chevron followed by a cursor line, drawn in the accent color beside
-the name "Agentty" in the monospace stack. Inline this SVG and color it with
-`currentColor`:
-
-```html
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-     stroke-linejoin="round" aria-hidden="true">
-  <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
-</svg>
-```
+the name "Agentty" in the monospace stack. `mark.svg`, exported beside this guide, is
+the one copy: it strokes with `currentColor` and is hidden from assistive technology,
+because the name beside it says the same. Inline its markup in the page, inside an
+element whose `color` is `--color-accent`, so the mark follows the theme; an `img`
+cannot inherit the color. `favicon.ico`, exported beside it too, is the browser tab
+icon. Copy both from the export rather than redrawing them.
 
 ## Colors
 
