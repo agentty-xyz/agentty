@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -40,7 +40,7 @@ use crate::http::{
 use crate::model::{GeneratedResponse, ModelErrorType};
 use crate::provider_spec::{
     CacheBreakpoints, DEFAULT_FALLBACK_MAX_TOKENS, ProviderSpec, ReasoningMapping,
-    StructuredOutputMode,
+    StructuredOutputMode, ThinkingBinding,
 };
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
@@ -73,6 +73,20 @@ const ERROR_STATUSES: [(&str, u16); 10] = [
 const REPLAYED_BLOCK_TYPES: [&str; 4] = ["redacted_thinking", "text", "thinking", "tool_use"];
 /// Signed reasoning block types, replayed verbatim.
 const THINKING_BLOCK_TYPES: [&str; 2] = ["redacted_thinking", "thinking"];
+/// Header listing the beta features a request opts into.
+const BETA_HEADER: &str = "anthropic-beta";
+/// Beta that lets a request set `thinking.block_binding`.
+///
+/// Context fitting edits earlier messages, which invalidates the signed
+/// thinking replayed after them; see [`ThinkingBinding`]. With
+/// `prefix_mismatch_behavior: "drop_block"`, the first mismatched block and
+/// every later one go, for that request only, and the turn proceeds without
+/// their reasoning.
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+/// The phrase of the API's `400` for a replayed thinking block whose
+/// conversation changed, as in "Invalid `signature` in `thinking` block.
+/// The block is bound to a different conversation."
+const BINDING_REJECTION: &str = "bound to a different conversation";
 
 /// Structured-output backend for the Anthropic Messages API, applying the
 /// request policy of one [`ProviderSpec`].
@@ -175,6 +189,8 @@ impl<'spec> AnthropicBackend<'spec> {
         if self.policy.cache_breakpoints == CacheBreakpoints::Marked {
             mark_cache_breakpoints(&mut tools, &mut system, &mut messages);
         }
+        let thinking = self.thinking(effort.is_some(), &messages);
+        let sends_thinking = thinking.is_some();
         let payload = MessagesPayload {
             max_tokens: request
                 .options
@@ -188,28 +204,84 @@ impl<'spec> AnthropicBackend<'spec> {
                 .then_some(OutputConfig { effort, format }),
             stream: true,
             system,
-            thinking: effort.map(|_| Thinking {
-                display: "summarized",
-                kind: "adaptive",
-            }),
+            thinking,
             tool_choice,
             tools,
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
-        let request_body = ProviderRequest::new(
-            self.headers.clone(),
-            self.policy.endpoint(ENDPOINT_PATH),
-            payload,
-        )
-        .with_retry(self.policy.retry, self.observer.clone());
         let response = self
-            .create(&request_body, output_tool.is_some())
+            .send(payload, sends_thinking, output_tool.is_some())
             .await
             .map_err(|error| {
                 error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
             })?;
 
         Ok(self.decode(&response, output_tool.is_some()))
+    }
+
+    /// Sends `payload`, which carries a thinking object when
+    /// `sends_thinking` holds, under the model's [`ThinkingBinding`]: with the
+    /// binding beta when every account checks it, and once more dropping
+    /// the invalidated blocks when an account that checks it rejects a
+    /// replayed block whose conversation changed.
+    async fn send(
+        &self,
+        mut payload: Value,
+        sends_thinking: bool,
+        output_tool: bool,
+    ) -> Result<MessagesResponse, TransportError> {
+        let binding = if sends_thinking {
+            self.policy.thinking_binding
+        } else {
+            ThinkingBinding::Unchecked
+        };
+        let headers = if binding == ThinkingBinding::Always {
+            with_beta(self.headers.clone(), THINKING_BINDING_BETA)
+        } else {
+            self.headers.clone()
+        };
+        let request = ProviderRequest::new(
+            headers,
+            self.policy.endpoint(ENDPOINT_PATH),
+            payload.clone(),
+        )
+        .with_retry(self.policy.retry, self.observer.clone());
+        match self.create(&request, output_tool).await {
+            Err(error)
+                if binding == ThinkingBinding::OnRejection && is_binding_rejection(&error) =>
+            {
+                payload["thinking"]["block_binding"] = json!(BlockBinding::DROP);
+                let dropping = ProviderRequest::new(
+                    with_beta(self.headers.clone(), THINKING_BINDING_BETA),
+                    self.policy.endpoint(ENDPOINT_PATH),
+                    payload,
+                )
+                .with_retry(self.policy.retry, self.observer.clone());
+
+                self.create(&dropping, output_tool).await
+            }
+            sent => sent,
+        }
+    }
+
+    /// Returns the adaptive thinking a request asks for: with an effort, or
+    /// when `messages` replay signed thinking for a model that runs the
+    /// thinking-binding check, since the binding behavior travels in the
+    /// thinking object; a model whose check every account enforces drops
+    /// invalidated blocks up front. See [`ThinkingBinding`].
+    fn thinking(&self, has_effort: bool, messages: &[MessagePayload]) -> Option<Thinking> {
+        let binding = self.policy.thinking_binding;
+        let replays_thinking = binding != ThinkingBinding::Unchecked
+            && messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(is_thinking_block);
+
+        (has_effort || replays_thinking).then_some(Thinking {
+            block_binding: (binding == ThinkingBinding::Always).then_some(BlockBinding::DROP),
+            display: "summarized",
+            kind: "adaptive",
+        })
     }
 
     /// Sends `request` and accumulates its streamed message, reporting
@@ -488,6 +560,33 @@ fn mark_cache_breakpoints(
 /// Returns the `cache_control` of a breakpoint with the default lifetime.
 fn ephemeral_cache_control() -> Value {
     json!({"type": "ephemeral"})
+}
+
+/// Returns whether `error` is the API's `400` for a replayed thinking block
+/// whose conversation changed.
+fn is_binding_rejection(error: &TransportError) -> bool {
+    matches!(
+        error,
+        TransportError::Http { body, status, .. }
+            if *status == StatusCode::BAD_REQUEST && body.contains(BINDING_REJECTION)
+    )
+}
+
+/// Returns `headers` with `beta` added to the `anthropic-beta` list, after
+/// any betas the specification already sends.
+fn with_beta(mut headers: HeaderMap, beta: &str) -> HeaderMap {
+    let joined = match headers.remove(BETA_HEADER) {
+        Some(existing) => [existing.as_bytes(), b",", beta.as_bytes()].concat(),
+        None => beta.as_bytes().to_vec(),
+    };
+    // Both parts are valid header bytes, so the joined list is too.
+    headers.extend(
+        HeaderValue::from_bytes(&joined)
+            .ok()
+            .map(|value| (HeaderName::from_static(BETA_HEADER), value)),
+    );
+
+    headers
 }
 
 /// Returns whether `block` is signed thinking, replayed verbatim.
@@ -1041,7 +1140,21 @@ struct OutputFormat<'a> {
 }
 
 #[derive(Serialize)]
+struct BlockBinding {
+    prefix_mismatch_behavior: &'static str,
+}
+
+impl BlockBinding {
+    /// Drops invalidated thinking blocks instead of rejecting the request.
+    const DROP: Self = Self {
+        prefix_mismatch_behavior: "drop_block",
+    };
+}
+
+#[derive(Serialize)]
 struct Thinking {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_binding: Option<BlockBinding>,
     display: &'static str,
     #[serde(rename = "type")]
     kind: &'static str,

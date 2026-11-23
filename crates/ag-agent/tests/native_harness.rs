@@ -772,7 +772,13 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
     .await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
-    let config = config(data_root.path(), environment(&server));
+    let mut environment = environment(&server);
+    environment.insert("ANTHROPIC_API_KEY".to_string(), "sk-ant-secret".to_string());
+    environment.insert(
+        "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+        "claude-oauth-secret".to_string(),
+    );
+    let config = config(data_root.path(), environment);
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
 
     // Act
@@ -834,6 +840,8 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
     );
     assert!(!bash_result.contains("muse-key"));
     assert!(!bash_result.contains("MODEL_API_KEY"));
+    assert!(!bash_result.contains("sk-ant-secret"));
+    assert!(!bash_result.contains("claude-oauth-secret"));
 }
 
 #[tokio::test]
@@ -1541,7 +1549,15 @@ async fn claude_turn_streams_messages_and_replays_signed_thinking_with_tool_resu
         assert_eq!(body["max_tokens"], 128_000);
         assert_eq!(body["output_config"]["effort"], "low");
         assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+        // Claude Opus 5.5 checks thinking bindings only for newer accounts,
+        // so an unchanged history leaves the binding to the account.
+        assert_eq!(body["thinking"].get("block_binding"), None);
     }
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("anthropic-beta"))
+    );
     let replayed = bodies[1]["messages"].as_array().expect("messages");
     let assistant = replayed
         .iter()

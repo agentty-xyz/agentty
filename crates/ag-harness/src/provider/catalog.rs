@@ -13,11 +13,15 @@ use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
 use super::{anthropic, chatgpt, kimi, muse, openai, openai_compatible, qwen};
-use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing};
+use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
+///
+/// New providers join without a breaking release, so a `match` outside
+/// this crate needs a wildcard arm.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ModelProvider {
     /// Anthropic's Messages API, serving Claude models billed to an API
     /// key.
@@ -272,6 +276,11 @@ impl ModelProvider {
     }
 
     /// Returns the environment variable containing the provider base URL.
+    ///
+    /// Every base URL ends in the provider's version path, such as
+    /// `https://api.anthropic.com/v1`. `ANTHROPIC_BASE_URL` may also name
+    /// the API origin, as Anthropic's SDKs read it, such as
+    /// `https://api.anthropic.com`; configuration then appends `/v1`.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
             Self::Anthropic => anthropic::ANTHROPIC_BASE_URL_ENV,
@@ -282,6 +291,18 @@ impl ModelProvider {
             Self::OpenAiCompatible => openai_compatible::OPENAI_COMPATIBLE_BASE_URL_ENV,
             Self::Qwen => qwen::DASHSCOPE_BASE_URL_ENV,
         }
+    }
+
+    /// Returns `base_url` read from the environment in its versioned form:
+    /// an Anthropic origin without the `/v1` version path gains it, and
+    /// every other value is kept as given.
+    fn versioned(self, base_url: String) -> String {
+        let trimmed = base_url.trim_end_matches('/');
+        if self != Self::Anthropic || trimmed.ends_with("/v1") {
+            return base_url;
+        }
+
+        format!("{trimmed}/v1")
     }
 
     /// Returns the built-in base URL used when the environment has no
@@ -570,7 +591,7 @@ impl ModelConfiguration {
 
     /// Constructs the configured client through an injected environment lookup.
     /// A provider whose key is optional sends no key when its variable is
-    /// unset or blank.
+    /// unset or blank; a blank required key counts as missing.
     ///
     /// # Errors
     ///
@@ -613,10 +634,9 @@ impl ModelConfiguration {
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Credential, ModelConfigurationError> {
         let api_key_environment = self.provider.api_key_environment();
+        // A blank key counts as unset, required or not.
         match environment(api_key_environment) {
-            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
-                Ok(Credential::ApiKey(Some(api_key)))
-            }
+            Ok(api_key) if !api_key.trim().is_empty() => Ok(Credential::ApiKey(Some(api_key))),
             Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
                 Ok(Credential::ApiKey(None))
             }
@@ -638,7 +658,7 @@ impl ModelConfiguration {
         let base_url_environment = self.provider.base_url_environment();
 
         match environment(base_url_environment) {
-            Ok(base_url) if !base_url.trim().is_empty() => Ok(base_url),
+            Ok(base_url) if !base_url.trim().is_empty() => Ok(self.provider.versioned(base_url)),
             // A blank variable counts as unset, so it falls back to the
             // default like a missing one instead of failing validation.
             Ok(_) | Err(env::VarError::NotPresent) => {
@@ -798,10 +818,12 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
 /// `OpenAI`'s API pricing, and on 2026-11-21 by Anthropic's API pricing.
 /// Claude models also carry Anthropic's cache-read and 5-minute cache-write
-/// prices, the breakpoints the Messages requests mark. Cache discounts that
-/// the other providers publish are not modeled yet, so their cached input
-/// falls back to the input price. `ChatGPT` plan models carry no per-token
-/// price.
+/// prices, the breakpoints the Messages requests mark, and Claude Haiku 5.5
+/// its prices for a prompt over 100,000 tokens; other long-prompt tiers,
+/// such as `OpenAI`'s doubled input price above 272,000 tokens, are not
+/// modeled. Cache discounts that the other providers publish are not
+/// modeled yet, so their cached input falls back to the input price.
+/// `ChatGPT` plan models carry no per-token price.
 const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3,
@@ -957,11 +979,18 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
     },
-    // Prompts of at most 100,000 tokens; longer ones bill five times these
-    // prices, which a single price per token cannot express.
+    // A prompt over 100,000 tokens, cache reads and writes included, bills
+    // five times these prices.
     CatalogedModel {
         model: anthropic::CLAUDE_HAIKU_5_5,
-        pricing: Some(Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000)),
+        pricing: Some(
+            Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000)
+                .with_long_context(
+                    100_000,
+                    Pricing::built_in_cached(500_000, 2_500_000, 50_000, 625_000),
+                )
+                .with_source(PricingSource::BuiltIn),
+        ),
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
     },

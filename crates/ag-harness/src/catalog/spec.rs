@@ -8,7 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::model_profile::ModelProfile;
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(
+    feature = "providers-anthropic",
+    feature = "providers-compat",
+    feature = "providers-openai"
+))]
 use crate::provider::ModelProvider;
 
 /// One million micro-USD, one US dollar.
@@ -37,7 +41,11 @@ impl ModelId {
 
     /// Returns the identifier of the built-in entry for `model` served by
     /// `provider`, such as `qwen/qwen3.8-flash`.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub fn cataloged(provider: ModelProvider, model: &str) -> Self {
         Self(format!("{provider}/{model}"))
     }
@@ -184,7 +192,7 @@ impl fmt::Display for Capabilities {
 pub enum PricingSource {
     /// The harness's built-in list prices, as the providers published them
     /// at their lowest input tier: Anthropic on 2026-11-21, the others on
-    /// 2026-10-29.
+    /// 2026-10-29. Claude Haiku 5.5 also carries its long-prompt prices.
     BuiltIn,
     /// Prices the host supplied, such as a negotiated rate.
     Host,
@@ -207,13 +215,19 @@ pub enum PricingSource {
 /// through [`super::CatalogBuilder::pricing`], or
 /// [`ModelSpec::with_pricing`] for a model it catalogs itself.
 ///
-/// Changing a cache price marks the prices [`PricingSource::Host`].
+/// A provider that bills long prompts at higher prices declares them with
+/// [`Self::with_long_context`]; [`Self::for_prompt`] returns the prices one
+/// request pays.
+///
+/// Changing a cache or long-context price marks the prices
+/// [`PricingSource::Host`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct Pricing {
     cache_read: Option<u64>,
     cache_write: Option<u64>,
     input: u64,
+    long_context: Option<LongContextPricing>,
     output: u64,
     source: PricingSource,
 }
@@ -226,9 +240,50 @@ impl Pricing {
             cache_read: None,
             cache_write: None,
             input: input_per_mtok_micro_usd,
+            long_context: None,
             output: output_per_mtok_micro_usd,
             source: PricingSource::Host,
         }
+    }
+
+    /// Bills a request whose prompt exceeds `threshold_tokens` at the input,
+    /// output, and cache prices of `long_prompt` instead, marking the prices
+    /// [`PricingSource::Host`].
+    ///
+    /// A prompt counts every input token of one request, cache reads and
+    /// writes included, as Anthropic prices Claude Haiku 5.5's long prompts.
+    /// `long_prompt`'s own source and long-context tier are ignored, and
+    /// [`Self::cost_tier`] still classifies the base prices.
+    #[must_use]
+    pub const fn with_long_context(mut self, threshold_tokens: u64, long_prompt: Self) -> Self {
+        self.long_context = Some(LongContextPricing {
+            cache_read: long_prompt.cache_read,
+            cache_write: long_prompt.cache_write,
+            input: long_prompt.input,
+            output: long_prompt.output,
+            threshold_tokens,
+        });
+        self.source = PricingSource::Host;
+
+        self
+    }
+
+    /// Returns the prices a request whose prompt holds `input_tokens` pays:
+    /// the long-context prices above their threshold, otherwise these
+    /// prices. The result declares no long-context tier.
+    #[must_use]
+    pub const fn for_prompt(mut self, input_tokens: u64) -> Self {
+        if let Some(long_context) = self.long_context
+            && input_tokens > long_context.threshold_tokens
+        {
+            self.cache_read = long_context.cache_read;
+            self.cache_write = long_context.cache_write;
+            self.input = long_context.input;
+            self.output = long_context.output;
+        }
+        self.long_context = None;
+
+        self
     }
 
     /// Sets the price of cached input tokens, marking the prices
@@ -299,7 +354,12 @@ impl Pricing {
     }
 
     /// Returns built-in list prices in micro-USD per million tokens.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai",
+        test
+    ))]
     pub(crate) const fn built_in(
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
@@ -310,7 +370,12 @@ impl Pricing {
 
     /// Returns built-in list prices in micro-USD per million tokens for a
     /// provider that publishes separate cache prices.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai",
+        test
+    ))]
     pub(crate) const fn built_in_cached(
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
@@ -329,6 +394,17 @@ impl Pricing {
 
         self
     }
+}
+
+/// Prices of a request whose prompt exceeds `threshold_tokens`, in micro-USD
+/// per million tokens.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct LongContextPricing {
+    cache_read: Option<u64>,
+    cache_write: Option<u64>,
+    input: u64,
+    output: u64,
+    threshold_tokens: u64,
 }
 
 /// Declared price class of a cataloged model, from its billing mode or its
@@ -383,7 +459,11 @@ pub struct ModelSpec {
     max_output: Option<u64>,
     pricing: Option<Pricing>,
     profile: Option<ModelProfile>,
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     provider: Option<ModelProvider>,
 }
 
@@ -397,13 +477,21 @@ impl ModelSpec {
             max_output: None,
             pricing: None,
             profile: None,
-            #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+            #[cfg(any(
+                feature = "providers-anthropic",
+                feature = "providers-compat",
+                feature = "providers-openai"
+            ))]
             provider: None,
         }
     }
 
     /// Sets the built-in provider serving the model.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     #[must_use]
     pub fn with_provider(mut self, provider: ModelProvider) -> Self {
         self.provider = Some(provider);
@@ -469,7 +557,11 @@ impl ModelSpec {
 
     /// Returns the built-in provider, or `None` for a host-implemented
     /// model.
-    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+    #[cfg(any(
+        feature = "providers-anthropic",
+        feature = "providers-compat",
+        feature = "providers-openai"
+    ))]
     pub fn provider(&self) -> Option<ModelProvider> {
         self.provider
     }

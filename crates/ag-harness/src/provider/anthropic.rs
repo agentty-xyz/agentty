@@ -5,9 +5,7 @@ use crate::model::{HeuristicContextEstimator, ModelProfile};
 
 /// Base URL of the Anthropic API, ending in its version path.
 pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub(crate) const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
-#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub(crate) const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 
 /// Claude Fable 5.2, Anthropic's most capable generally available model.
