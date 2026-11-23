@@ -6,66 +6,10 @@
 // each other's stored state.
 
 import { forgetDeviceKey, loadDeviceKey } from "../../assets/device_key.mjs";
+import { installFakeIndexedDb } from "./fake_indexed_db.mjs";
 
 // The one object store the client uses, with the faults a browser can show.
-const fake = {
-  failReads: false,
-  failWrites: false,
-  // Safari reads stored X25519 key objects back as null (WebKit bug 312279).
-  losesKeyObjects: false,
-  records: new Map(),
-};
-
-function operation(run) {
-  const request = {};
-  queueMicrotask(() => {
-    try {
-      request.result = run();
-      request.onupgradeneeded?.();
-      request.onsuccess?.();
-    } catch (error) {
-      request.error = error;
-      request.onerror?.();
-    }
-  });
-
-  return request;
-}
-
-const objectStore = {
-  delete: (id) =>
-    operation(() => {
-      if (fake.failWrites) {
-        throw new Error("write failed");
-      }
-      fake.records.delete(id);
-    }),
-  get: (id) =>
-    operation(() => {
-      if (fake.failReads) {
-        throw new Error("read failed");
-      }
-      const value = fake.records.get(id);
-      const isKeyObject = value?.privateKey?.algorithm?.name === "X25519";
-
-      return fake.losesKeyObjects && isKeyObject ? null : value;
-    }),
-  put: (value, id) =>
-    operation(() => {
-      if (fake.failWrites) {
-        throw new Error("write failed");
-      }
-      fake.records.set(id, value);
-    }),
-};
-
-globalThis.indexedDB = {
-  open: () =>
-    operation(() => ({
-      createObjectStore: () => {},
-      transaction: () => ({ objectStore: () => objectStore }),
-    })),
-};
+const fake = installFakeIndexedDb();
 
 async function load() {
   const { keyPair, origin } = await loadDeviceKey();

@@ -19,7 +19,9 @@ import {
   unreadIds,
 } from "./format.mjs";
 
-// Map from session id to the `updated_at` this browser last saw.
+// Map from session key to the `updated_at` this browser last saw. A
+// session of the Agentty with source id `""` is keyed by its id, and one
+// of any other Agentty by that Agentty's id, `:`, and its id.
 export const SEEN_KEY = "agentty.remote.seen";
 // How often relative times refresh, without a request.
 export const TICK_MS = 30000;
@@ -28,18 +30,26 @@ const MAX_CARDS = 6;
 // The group that starts collapsed.
 const COLLAPSED_GROUP = "archive";
 
-// Wires the list. `elements` holds `list` (the groups), `empty` (the line
-// shown when the project has no sessions), `summary` (how many sessions
-// match a filter), `filter` (the text field), `filterKey` (the key hint in
-// it), `chips` (the filter buttons), and `cards` with `waiting`, the home
-// view's cards and their section. `onOpen(sessionId)` runs when a row or a
-// card is chosen. `now()` returns the time in seconds, and
+// Wires the list. `elements` holds `summary` (how many sessions match a
+// filter), `filter` (the text field), `filterKey` (the key hint in it),
+// `chips` (the filter buttons), and `cards` with `waiting`, the home
+// view's cards and their section. `onOpen(sessionId, sourceId)` runs when
+// a row or a card is chosen. `now()` returns the time in seconds, and
 // `isFilterShown()` whether the filter field is on screen for `/`.
 //
-// Returns `update(sessions, openId)` for a new listing while `openId` is
-// open, `setOpen(sessionId)` when another session (or `null`, home) opens,
-// `markSeen()` once the page shows again,
-// and `tick()`, which refreshes relative times.
+// The sessions come from sources, one for each Agentty the page shows,
+// each `{ id, name, sessions, list, empty, isListed }`: its id (`""` for
+// the only one of a page without a relay), the name cards show beside its
+// sessions when there are several sources (`null` otherwise), its listing,
+// the element its groups render into, the line shown when it has no
+// sessions, and whether it has been listed at all. The filter, the chips
+// and the cards span every source; each source keeps its own groups and
+// archive.
+//
+// Returns `setSources(sources)` for new listings, `setOpen(sessionId,
+// sourceId)` when another session (or `null`, home) opens, `markSeen()`
+// once the page shows again, and `tick()`, which refreshes relative
+// times.
 export function createSessionList({
   document,
   window,
@@ -50,13 +60,15 @@ export function createSessionList({
 }) {
   const state = {
     filter: FILTERS[0].id,
-    isArchiveOpen: false,
+    // Sources whose archive is open.
+    openArchives: new Set(),
     // Whether storage failed; then no session shows as unread.
     isStorageBroken: false,
     openId: null,
+    openSource: "",
     query: "",
     seen: null,
-    sessions: [],
+    sources: [],
   };
   state.seen = readStored();
 
@@ -74,13 +86,24 @@ export function createSessionList({
     }
   }
 
+  // The open session's key, or `null` while home shows or the page is
+  // hidden: the open session counts as seen only while it is visible.
+  function visibleOpenKey() {
+    if (document.visibilityState === "hidden" || state.openId === null) {
+      return null;
+    }
+
+    return seenKey(state.openSource, state.openId);
+  }
+
   // Records what this browser has seen. The stored map is read again first,
-  // so two tabs keep each other's later times. The open session counts as
-  // seen only while the page is visible.
+  // so two tabs keep each other's later times. A source the map knows none
+  // of, as after pairing with another Agentty, counts as seen, except for
+  // the times a page that showed one Agentty kept under bare session ids.
   function reconcile() {
-    const visibleOpenId = document.visibilityState === "hidden" ? null : state.openId;
-    const known = mergeSeen(state.seen, readStored());
-    state.seen = reconcileSeen(known, state.sessions, visibleOpenId);
+    const known = adoptNewSources(mergeSeen(state.seen, readStored()));
+    const keyed = state.sources.flatMap((source) => keyedSessions(source));
+    state.seen = reconcileSeen(known, keyed, visibleOpenKey());
     if (state.isStorageBroken) {
       return;
     }
@@ -91,25 +114,61 @@ export function createSessionList({
     }
   }
 
-  // Rebuilds the list, chips and cards. A focused row, card, chip or
+  // Returns `known` with each source it knows none of counted as seen, at
+  // the times a page that showed one Agentty kept under bare session ids
+  // where it has them. Without a map, `reconcileSeen` counts all as seen.
+  function adoptNewSources(known) {
+    if (!known) {
+      return known;
+    }
+    const adopted = { ...known };
+    for (const source of state.sources) {
+      const keys = source.sessions.map((session) => seenKey(source.id, session.id));
+      if (keys.length === 0 || keys.some((key) => Object.hasOwn(known, key))) {
+        continue;
+      }
+      for (const session of source.sessions) {
+        const bare = Object.hasOwn(known, session.id) ? known[session.id] : null;
+        adopted[seenKey(source.id, session.id)] = bare ?? session.updated_at;
+      }
+    }
+
+    return adopted;
+  }
+
+  // The sessions with the unread dot; none while storage fails.
+  function unreadKeys() {
+    if (state.isStorageBroken) {
+      return new Set();
+    }
+    const openKey = state.openId === null ? null : seenKey(state.openSource, state.openId);
+
+    return unreadIds(state.sources.flatMap((source) => keyedSessions(source)), state.seen, openKey);
+  }
+
+  // Rebuilds the lists, chips and cards. A focused row, card, chip or
   // toggle is focused again in its new copy, so keyboard users keep their
   // place when an update arrives.
   function render() {
     const focused = focusedKey();
-    const unread = state.isStorageBroken
-      ? new Set()
-      : unreadIds(state.sessions, state.seen, state.openId);
-    const shown = filterSessions(state.sessions, { filter: state.filter, query: state.query });
+    const unread = unreadKeys();
     const isFiltering = state.query.trim() !== "" || state.filter !== FILTERS[0].id;
     const time = now();
-    elements.list.replaceChildren(
-      ...groupSessions(shown).map((group) => renderGroup(group, unread, time)),
-    );
-    elements.empty.hidden = state.sessions.length > 0;
-    elements.summary.hidden = !isFiltering || state.sessions.length === 0;
+    let total = 0;
+    let matching = 0;
+    for (const source of state.sources) {
+      const shown = filterSessions(source.sessions, { filter: state.filter, query: state.query });
+      total += source.sessions.length;
+      matching += shown.length;
+      source.list.replaceChildren(
+        ...groupSessions(shown).map((group) => renderGroup(source, group, unread, time)),
+      );
+      source.empty.hidden = source.isListed === false || source.sessions.length > 0;
+    }
+    elements.summary.hidden = !isFiltering || total === 0;
     // The summary is a live region: unchanged text is not written again,
     // so an update does not announce it once more.
-    const summary = shown.length + " of " + state.sessions.length + " sessions match.";
+    const summary = matching + " of " + total + " sessions match.";
     if (elements.summary.textContent !== summary) {
       elements.summary.textContent = summary;
     }
@@ -120,7 +179,8 @@ export function createSessionList({
 
   function focusedKey() {
     const active = document.activeElement;
-    for (const container of [elements.list, elements.chips, elements.cards]) {
+    const containers = [...state.sources.map((source) => source.list), elements.chips, elements.cards];
+    for (const container of containers) {
       if (active && container.contains(active)) {
         return { container: container, key: keyOf(active) };
       }
@@ -129,23 +189,28 @@ export function createSessionList({
     return null;
   }
 
-
   // A collapsed group still shows its label and count. A query shows its
-  // matches in every group.
-  function renderGroup(group, unread, time) {
+  // matches in every group. Under an Agentty's own heading, the group
+  // labels are one level lower.
+  function renderGroup(source, group, unread, time) {
     const section = element(document, "section", "session-group");
     section.dataset.group = group.id;
     const count = element(document, "span", "count", String(group.sessions.length));
-    const heading = element(document, "h2", "group-label");
+    const heading = element(document, source.name ? "h3" : "h2", "group-label");
     const rows = element(document, "ul", "rows");
     if (group.id === COLLAPSED_GROUP) {
-      const isOpen = state.isArchiveOpen || state.query.trim() !== "";
+      const isOpen = state.openArchives.has(source.id) || state.query.trim() !== "";
       const toggle = element(document, "button", "group-toggle");
       toggle.type = "button";
+      toggle.dataset.source = source.id;
       toggle.setAttribute("aria-expanded", String(isOpen));
       toggle.append(element(document, "span", "marker", isOpen ? "-" : "+"), group.label, count);
       toggle.addEventListener("click", () => {
-        state.isArchiveOpen = !isOpen;
+        if (isOpen) {
+          state.openArchives.delete(source.id);
+        } else {
+          state.openArchives.add(source.id);
+        }
         render();
       });
       heading.append(toggle);
@@ -155,9 +220,9 @@ export function createSessionList({
     }
     rows.append(
       ...group.sessions.map((session) =>
-        renderRow(session, {
+        renderRow(source, session, {
           isArchived: group.id === COLLAPSED_GROUP,
-          isUnread: unread.has(session.id),
+          isUnread: unread.has(seenKey(source.id, session.id)),
           time: time,
         }),
       ),
@@ -167,14 +232,17 @@ export function createSessionList({
     return section;
   }
 
-  function renderRow(session, { isArchived, isUnread, time }) {
+  function renderRow(source, session, { isArchived, isUnread, time }) {
     const item = element(document, "li");
     const row = element(document, "button", "row");
     row.type = "button";
     row.dataset.sessionId = session.id;
+    if (source.id) {
+      row.dataset.instanceId = source.id;
+    }
     row.classList.toggle("is-unread", isUnread);
     row.classList.toggle("is-archived", isArchived);
-    if (session.id === state.openId) {
+    if (session.id === state.openId && source.id === state.openSource) {
       row.setAttribute("aria-current", "page");
     }
     const figures = sessionFigures(session);
@@ -201,7 +269,7 @@ export function createSessionList({
       dot.append(element(document, "span", "visually-hidden", "Unread"));
       row.append(dot);
     }
-    row.addEventListener("click", () => onOpen(session.id));
+    row.addEventListener("click", () => onOpen(session.id, source.id));
     item.append(row);
 
     return item;
@@ -216,7 +284,10 @@ export function createSessionList({
   }
 
   function renderChips() {
-    const counts = filterCounts(state.sessions, state.query);
+    const counts = filterCounts(
+      state.sources.flatMap((source) => source.sessions),
+      state.query,
+    );
     elements.chips.replaceChildren(
       ...FILTERS.map((filter) => {
         const button = element(document, "button");
@@ -235,15 +306,23 @@ export function createSessionList({
   }
 
   // Up to six sessions that wait for the user, as cards on the home view.
+  // With several Agenttys, each card names the one its session runs on.
   function renderCards(time) {
-    const waiting = filterSessions(state.sessions, { filter: "needs_you" }).slice(0, MAX_CARDS);
+    const waiting = state.sources
+      .flatMap((source) =>
+        filterSessions(source.sessions, { filter: "needs_you" }).map((session) => ({ session, source })),
+      )
+      .slice(0, MAX_CARDS);
     elements.waiting.hidden = waiting.length === 0;
     elements.cards.replaceChildren(
-      ...waiting.map((session) => {
+      ...waiting.map(({ session, source }) => {
         const item = element(document, "li");
         const card = element(document, "button", "card");
         card.type = "button";
         card.dataset.sessionId = session.id;
+        if (source.id) {
+          card.dataset.instanceId = source.id;
+        }
         const figures = sessionFigures(session);
         const line = element(document, "span", "card-meta");
         line.append(
@@ -251,6 +330,11 @@ export function createSessionList({
           ...forgeNodes(document, figures.forge),
           timeNode(session.updated_at, time),
         );
+        if (source.name) {
+          const name = element(document, "span", "card-source", source.name);
+          name.title = source.name;
+          line.append(name);
+        }
         const title = element(document, "strong", "card-title");
         title.append(...sizeBadge(document, figures.size), displayTitle(session));
         card.append(line, title);
@@ -261,7 +345,7 @@ export function createSessionList({
           figuresLine.append(...details.slice(1));
           card.append(figuresLine);
         }
-        card.addEventListener("click", () => onOpen(session.id));
+        card.addEventListener("click", () => onOpen(session.id, source.id));
         item.append(card);
 
         return item;
@@ -312,8 +396,14 @@ export function createSessionList({
       reconcile();
       render();
     },
-    setOpen: (sessionId) => {
+    setOpen: (sessionId, sourceId = "") => {
       state.openId = sessionId;
+      state.openSource = sessionId === null ? "" : sourceId;
+      reconcile();
+      render();
+    },
+    setSources: (sources) => {
+      state.sources = sources;
       reconcile();
       render();
     },
@@ -323,13 +413,20 @@ export function createSessionList({
         node.textContent = relativeTime(Number(node.dataset.updatedAt), time);
       }
     },
-    update: (sessions, openId = null) => {
-      state.sessions = sessions;
-      state.openId = openId;
-      reconcile();
-      render();
-    },
   };
+}
+
+// The key `seen` holds `sessionId` of the source `sourceId` under.
+export function seenKey(sourceId, sessionId) {
+  return sourceId ? sourceId + ":" + sessionId : sessionId;
+}
+
+// A source's sessions as the seen map tracks them.
+function keyedSessions(source) {
+  return source.sessions.map((session) => ({
+    id: seenKey(source.id, session.id),
+    updated_at: session.updated_at,
+  }));
 }
 
 // The title a row shows; the terminal also says `No title` for a session
@@ -439,16 +536,16 @@ function restoreFocus(focused) {
 }
 
 // What identifies a list button across renders: its session, its filter,
-// or the archive toggle.
+// or its source's archive toggle.
 function keyOf(node) {
   if (node.dataset?.sessionId) {
-    return "session:" + node.dataset.sessionId;
+    return "session:" + seenKey(node.dataset.instanceId ?? "", node.dataset.sessionId);
   }
   if (node.dataset?.filter) {
     return "filter:" + node.dataset.filter;
   }
 
-  return node.classList?.contains("group-toggle") ? "toggle" : null;
+  return node.classList?.contains("group-toggle") ? "toggle:" + (node.dataset.source ?? "") : null;
 }
 
 function fullDate(unixSeconds) {

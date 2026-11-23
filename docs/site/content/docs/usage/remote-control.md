@@ -301,6 +301,19 @@ The browser remembers the pairing, so later visits to the relay's address connec
 without a link. Pairing through a relay needs an up-to-date browser, from 2025 or later,
 and a relay served over HTTPS.
 
+One browser can pair with several Agenttys through the same relay: open the pairing link
+of another Agentty, and it joins the ones already paired; `Back to sessions` on the
+pairing page returns to them without pairing. The sidebar then lists each Agentty's
+sessions under its own heading, which names it by the start of its instance identifier
+and shows its connection state, above its project line with `Sync` and `New session`.
+The filter, the `All`, `Needs you`, and `Running` buttons, and the sessions waiting on
+home span them all, and each waiting session names its Agentty. The address names the
+Agentty as well as the session. Each Agentty connects on its own, so one that is offline
+or refuses this device leaves the others working; the banner names the Agentty it is
+about, and the footer counts how many are connected. The footer's `⋯` button offers
+`Forget on` each Agentty. With one Agentty paired, the page looks as it does without the
+others.
+
 Traffic through the relay is encrypted between the device and Agentty. The relay sees
 when devices connect and how much they send, but not what they send. The relay also
 serves the pairing page, so use a relay you trust or run your own.
@@ -408,4 +421,3 @@ control.
   Mermaid and other diagrams show as code, and images show as links. The page's own
   renderer can differ from the terminal at the edges; `View source` under an answer
   shows its text as the agent wrote it. An answer over 256 KB shows as plain text.
-- A browser remembers one relay pairing for each relay address.

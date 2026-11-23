@@ -20,6 +20,8 @@ const WEB_TESTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web");
 const APP_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/app_flow.mjs");
 /// Node script that drives the web client's relay modules.
 const DEVICE_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/relay_device.mjs");
+/// Node script that runs `app.js` over the fake DOM through a relay.
+const RELAY_APP_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web/relay_app_flow.mjs");
 /// Node script that runs the client's key storage over a fake `IndexedDB`.
 const KEY_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -691,6 +693,234 @@ async fn web_client_pairs_exchanges_large_frames_and_reconnects_through_the_rela
     assert_eq!(echoed, json!({"echoed": true}));
     assert_eq!(welcomed["type"], "welcome");
     assert_eq!(welcomed["device_id"], paired["device_id"]);
+    assert!(succeeded);
+    assert_eq!(server.devices.token_hashes().len(), 1);
+
+    Ok(())
+}
+
+/// Approves the first pairing request `server` lists.
+async fn approve_first_request(server: &TestServer) -> TestResult {
+    let request_id = server
+        .handle
+        .status()
+        .wait_for(|status| !status.pairing_requests.is_empty())
+        .await?
+        .pairing_requests[0]
+        .id;
+    assert!(server.handle.approve_pairing(request_id));
+
+    Ok(())
+}
+
+/// Returns the pairing link of `server`, linked to `relay` as `instance`.
+fn link_of(
+    relay: &ag_relay::RelayHandle,
+    instance: &StaticKeypair,
+    server: &TestServer,
+) -> TestResult<String> {
+    let relay_url = format!("ws://{}", relay.local_addr());
+    let code = server.handle.issue_pairing_code()?.code;
+
+    Ok(pairing_link(&relay_url, instance.public(), &code))
+}
+
+#[tokio::test]
+async fn web_client_app_shows_two_agenttys_through_one_relay_and_keeps_them_apart() -> TestResult {
+    // Arrange: both servers list the same session ids.
+    let relay = start_relay().await?;
+    let first_key = StaticKeypair::generate()?;
+    let second_key = StaticKeypair::generate()?;
+    let first = start_linked_server(&relay, &first_key).await?;
+    let second = start_linked_server(&relay, &second_key).await?;
+    let first_link = link_of(&relay, &first_key, &first)?;
+    let second_link = link_of(&relay, &second_key, &second)?;
+
+    // Act
+    let mut app = WebDevice::run(RELAY_APP_SCRIPT, &["multi", &first_link, &second_link])?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&first).await?;
+    let paired = app.next_step().await?;
+    let awaiting_second = app.next_step().await?;
+    approve_first_request(&second).await?;
+    let paired_second = app.next_step().await?;
+    let sent = app.next_step().await?;
+    let returned = app.next_step().await?;
+    let first_calls = first.backend.calls();
+    let second_calls = second.backend.calls();
+    second.handle.shutdown().await;
+    let offline = app.next_step().await?;
+    let forgot = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(awaiting["backHidden"], true);
+    assert_eq!(
+        paired,
+        json!({
+            "step": "paired",
+            "connection": "Connected · relay, encrypted",
+            "hash": "",
+            "project": "agentty",
+            "rows": ["A/session-1", "A/session-2"],
+            "sections": 0,
+            "slotHidden": false,
+            "stored": ["A"],
+        })
+    );
+    // The pairing card offers a way back to the Agentty already paired.
+    assert_eq!(awaiting_second["backHidden"], false);
+    assert_ne!(awaiting_second["code"], awaiting["code"]);
+    assert_eq!(
+        paired_second,
+        json!({
+            "step": "pairedB",
+            "forgetHidden": true,
+            "forgetItems": ["Forget on Agentty A", "Forget on Agentty B"],
+            "heads": [
+                {"name": "Agentty A", "state": "Connected"},
+                {"name": "Agentty B", "state": "Connected"},
+            ],
+            "rows": [
+                ["A/session-1", "A/session-2"],
+                ["B/session-1", "B/session-2"],
+            ],
+            "slotHidden": true,
+            "stored": ["A", "B"],
+            "view": "home-view",
+        })
+    );
+    assert_eq!(
+        sent,
+        json!({
+            "step": "sentB",
+            "current": ["B/session-2"],
+            "error": "",
+            "firstHash": "#i=B&s=session-1",
+            "secondHash": "#i=B&s=session-2",
+        })
+    );
+    assert_eq!(returned["hash"], "#i=B&s=session-1");
+    assert!(
+        second_calls
+            .iter()
+            .any(|call| call == "send:session-2:Sent to B")
+    );
+    assert!(!first_calls.iter().any(|call| call.starts_with("send:")));
+    assert!(first_calls.iter().all(|call| !call.starts_with("get:")));
+    let state = offline["heads"][1]["state"].as_str().unwrap_or_default();
+    assert!(["Reconnecting", "Connecting"].contains(&state), "{offline}");
+    assert_eq!(offline["heads"][0]["state"], "Connected");
+    assert_eq!(offline["connection"], "1 of 2 connected");
+    let banner = offline["banner"].as_str().unwrap_or_default();
+    assert!(banner.starts_with("Agentty B · "), "{banner}");
+    assert_eq!(offline["hash"], "#i=A&s=session-2");
+    assert_eq!(offline["rowsA"], json!(["A/session-1", "A/session-2"]));
+    assert_eq!(
+        forgot,
+        json!({
+            "step": "forgotB",
+            "asked": " to Agentty B",
+            "connection": "Connected · relay, encrypted",
+            "forgetHidden": false,
+            "hash": "#i=A&s=session-2",
+            "rows": ["A/session-1", "A/session-2"],
+            "slotHidden": false,
+            "stored": ["A"],
+            "view": "session-view",
+        })
+    );
+    assert!(succeeded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_keeps_pairing_another_agentty_while_one_revokes_it_through_the_relay()
+-> TestResult {
+    // Arrange
+    let relay = start_relay().await?;
+    let first_key = StaticKeypair::generate()?;
+    let second_key = StaticKeypair::generate()?;
+    let first = start_linked_server(&relay, &first_key).await?;
+    let second = start_linked_server(&relay, &second_key).await?;
+    let first_link = link_of(&relay, &first_key, &first)?;
+    let second_link = link_of(&relay, &second_key, &second)?;
+
+    // Act
+    let mut app = WebDevice::run(RELAY_APP_SCRIPT, &["revoke", &first_link, &second_link])?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&first).await?;
+    let awaiting_second = app.next_step().await?;
+    let device_id = first
+        .devices
+        .device_ids()
+        .pop()
+        .ok_or("A paired no device")?;
+    first.handle.revoke_device(&device_id).await?;
+    let revoked = app.next_step().await?;
+    approve_first_request(&second).await?;
+    let paired_second = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(awaiting["step"], "awaiting");
+    assert_eq!(awaiting_second["step"], "awaitingB");
+    // B's pairing card still waits for approval, with its code and Cancel.
+    assert_eq!(
+        revoked,
+        json!({
+            "step": "revokedA",
+            "cancelHidden": false,
+            "confirmation": true,
+            "error": "",
+            "submitHidden": true,
+            "view": "pair-view",
+        })
+    );
+    assert_eq!(
+        paired_second,
+        json!({
+            "step": "pairedB",
+            "rows": ["B/session-1", "B/session-2"],
+            "sections": 0,
+            "stored": ["B"],
+        })
+    );
+    assert!(succeeded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_keeps_a_pairing_saved_by_an_earlier_version_through_the_relay() -> TestResult
+{
+    // Arrange
+    let relay = start_relay().await?;
+    let instance = StaticKeypair::generate()?;
+    let server = start_linked_server(&relay, &instance).await?;
+    let link = link_of(&relay, &instance, &server)?;
+
+    // Act
+    let mut app = WebDevice::run(RELAY_APP_SCRIPT, &["migrate", &link])?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&server).await?;
+    let migrated = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(awaiting["step"], "keyAwaiting");
+    assert_eq!(
+        migrated,
+        json!({
+            "step": "migrated",
+            "connection": "Connected · relay, encrypted",
+            "legacy": null,
+            "rows": ["A/session-1", "A/session-2"],
+            "sections": 0,
+            "stored": ["A"],
+        })
+    );
     assert!(succeeded);
     assert_eq!(server.devices.token_hashes().len(), 1);
 

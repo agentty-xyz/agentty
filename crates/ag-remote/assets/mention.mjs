@@ -125,7 +125,9 @@ export function mentionText(entry) {
 // suggest.mjs. `context()` returns the open `session`, the host's
 // `capabilities` and `isConnected`, and `fileScope`: `"session"`, the
 // default, for the session's worktree, `"project"` for the project
-// checkout, or `null` for no lookup; `request(body)` sends one request and
+// checkout, or `null` for no lookup; with `"project"`, `projectKey` names
+// the Agentty whose project it is when a page shows several;
+// `request(body)` sends one request and
 // resolves with its result; `setText(text, caret)` replaces the field's
 // text and its saved draft and puts the caret at `caret`;
 // `showError(message)` shows a failure.
@@ -155,12 +157,18 @@ export function createMentions({ input, suggestions, request, context, setText, 
   // request that lists them and the key their entries are kept under;
   // `null` when it may not.
   function mentionSource() {
-    const { capabilities = [], fileScope = "session", isConnected = false, session = null } = context() ?? {};
+    const {
+      capabilities = [],
+      fileScope = "session",
+      isConnected = false,
+      projectKey = "",
+      session = null,
+    } = context() ?? {};
     if (!isConnected || !fileScope || !offersMentions(capabilities, fileScope)) {
       return null;
     }
     if (fileScope === "project") {
-      return { body: { method: "list_project_files" }, key: "project" };
+      return { body: { method: "list_project_files" }, key: "project:" + projectKey };
     }
 
     return session

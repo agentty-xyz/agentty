@@ -609,6 +609,47 @@ test("@ lists the project checkout's files for the session about to start", asyn
   assert.equal(message.value, "Fix @src/lib.rs ");
 });
 
+test("home described for another Agentty drops what it looked up for the first", async () => {
+  // Arrange
+  const page = mountHome({
+    respond: (body) =>
+      body.method === "list_project_files"
+        ? { files: [{ is_dir: false, path: "lib.rs" }], kind: "session_files" }
+        : { kind: "accepted" },
+  });
+  const capabilities = [...CAPABILITIES, "project_files"];
+  await page.home.setCapabilities(capabilities, "first");
+  type(page, "@lib");
+  await settle();
+
+  // Act
+  const reload = page.home.setCapabilities(capabilities, "second");
+  const hostWhileLoading = page.home.host();
+  await reload;
+  type(page, "@li");
+  await settle();
+  type(page, "@lib");
+  await settle();
+
+  // Assert
+  assert.equal(hostWhileLoading, null);
+  assert.equal(page.home.host().scope, "second");
+  assert.equal(newSession(page.home.host(), "regular"), null);
+  assert.equal(page.home.isCreating(), false);
+  // Each Agentty's project files are looked up once.
+  assert.equal(page.requests.filter((body) => body.method === "list_project_files").length, 2);
+});
+
+test("newSession ids name the Agentty a host was described for", () => {
+  const host = parseHost({
+    ...HOST,
+    mode_models: [{ agent: "codex", mode: "regular", model: "gpt-6.1-sol" }],
+  });
+
+  assert.equal(newSession(host, "regular").id, "new:regular");
+  assert.equal(newSession({ ...host, scope: "abc" }, "regular").id, "new:abc:regular");
+});
+
 test("picked settings are applied before the first message is sent", async () => {
   const page = mountHome({ host: PICKING_HOST, respond: createdThen() });
   await page.home.setCapabilities(PICKING_CAPABILITIES);

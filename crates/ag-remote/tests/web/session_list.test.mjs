@@ -26,25 +26,52 @@ function mountList({ storage = new MemoryStorage(), time = () => NOW, isFilterSh
   const document = window.document;
   const byId = (id) => document.getElementById(id);
   const opened = [];
+  // The line the page shows when its one Agentty has no sessions.
+  const empty = document.createElement("p");
+  empty.id = "sessions-empty";
+  empty.hidden = true;
+  byId("sessions").parentNode.append(empty);
   const list = createSessionList({
     document: document,
     elements: {
       cards: byId("home-cards"),
       chips: byId("chips"),
-      empty: byId("sessions-empty"),
       filter: byId("filter"),
       filterKey: byId("filter-key"),
-      list: byId("sessions"),
       summary: byId("filter-summary"),
       waiting: byId("home-waiting"),
     },
     isFilterShown: isFilterShown,
     now: time,
-    onOpen: (sessionId) => opened.push(sessionId),
+    onOpen: (sessionId, sourceId) => opened.push(sourceId ? sourceId + "/" + sessionId : sessionId),
     window: window,
   });
+  // Lists `sessions` of the page's one Agentty, with `openId` open.
+  const update = (sessions, openId = null) => {
+    list.setOpen(openId);
+    list.setSources([
+      { empty: empty, id: "", isListed: true, list: byId("sessions"), name: null, sessions: sessions },
+    ]);
+  };
 
-  return { byId, document, list, opened, window };
+  return { byId, document, list: { ...list, update }, opened, window };
+}
+
+// Two Agenttys' sources, each rendering into its own section of the list.
+function twoSources(page, first, second) {
+  const sources = [
+    { id: "aa", name: "laptop", sessions: first },
+    { id: "bb", name: "server", sessions: second },
+  ];
+
+  return sources.map((source) => {
+    const list = page.document.createElement("div");
+    const empty = page.document.createElement("p");
+    list.dataset.source = source.id;
+    page.byId("sessions").append(list, empty);
+
+    return { ...source, empty: empty, isListed: true, list: list };
+  });
 }
 
 function rowIds(byId) {
@@ -631,4 +658,112 @@ test("slash does nothing while the filter is off screen", () => {
   assert.notEqual(focusedWhileHidden, page.byId("filter"));
   assert.equal(shown.defaultPrevented, true);
   assert.equal(page.document.activeElement, page.byId("filter"));
+});
+
+test("several Agenttys each list their own groups, and the filter, chips and cards span them", () => {
+  // Arrange: both Agenttys have a session with the same id.
+  const page = mountList();
+  const sources = twoSources(page, SESSIONS, [
+    { id: "review", status: "Question", title: "Pick the relay", updated_at: NOW - 60 },
+    { id: "old", status: "Done", title: "Old relay", updated_at: NOW - 86400 },
+  ]);
+  const rowsOf = (source) =>
+    Array.from(source.list.querySelectorAll(".row"), (row) => row.dataset.instanceId + "/" + row.dataset.sessionId);
+  const chips = () => Array.from(page.byId("chips").children, (chip) => chip.textContent);
+
+  // Act
+  page.list.setSources(sources);
+  const listed = sources.map(rowsOf);
+  const labels = Array.from(sources[0].list.querySelectorAll(".group-label"), (label) => label.tagName);
+  const cards = Array.from(page.byId("home-cards").querySelectorAll(".card"), (card) => [
+    card.dataset.instanceId,
+    card.querySelector(".card-source").textContent,
+  ]);
+  const unfiltered = chips();
+  sources[1].list.querySelector(".group-toggle").click();
+  const archives = sources.map((source) => source.list.querySelector(".rows[hidden]") !== null);
+  type(page, "relay");
+  const filtered = sources.map(rowsOf);
+  const summary = page.byId("filter-summary").textContent;
+  type(page, "");
+  sources[1].list.querySelector('[data-session-id="review"]').click();
+
+  // Assert
+  assert.deepEqual(listed, [
+    ["aa/merging", "aa/review", "aa/running", "aa/draft", "aa/done"],
+    ["bb/review", "bb/old"],
+  ]);
+  // Under an Agentty's own heading, the group labels are one level lower.
+  assert.deepEqual(labels, ["H3", "H3", "H3"]);
+  assert.deepEqual(cards, [
+    ["aa", "laptop"],
+    ["bb", "server"],
+  ]);
+  assert.deepEqual(unfiltered, ["All 7", "Needs you 2", "Running 2"]);
+  // Each Agentty keeps its own archive open or closed.
+  assert.deepEqual(archives, [true, false]);
+  assert.deepEqual(filtered, [["aa/done"], ["bb/review", "bb/old"]]);
+  assert.equal(summary, "3 of 7 sessions match.");
+  assert.deepEqual(page.opened, ["bb/review"]);
+});
+
+test("with several Agenttys the open row, unread dots and seen times belong to one of them", () => {
+  // Arrange: the first Agentty was seen before; the second is new.
+  const storage = new MemoryStorage();
+  storage.setItem(SEEN_KEY, JSON.stringify({ "aa:review": NOW - 180 }));
+  const page = mountList({ storage: storage });
+  const later = [{ id: "review", status: "Review", title: "Serve the pairing page", updated_at: NOW }];
+  const sources = twoSources(page, later, later);
+
+  // Act
+  page.list.setSources(sources);
+  const unreadBefore = Array.from(page.byId("sessions").querySelectorAll(".row.is-unread"), (row) => row.dataset.instanceId);
+  page.list.setOpen("review", "aa");
+  const current = Array.from(page.byId("sessions").querySelectorAll('[aria-current="page"]'), (row) => row.dataset.instanceId);
+  const stored = JSON.parse(storage.getItem(SEEN_KEY));
+
+  // Assert
+  // The first Agentty's session changed since it was seen; the second
+  // Agentty's first listing counts as seen.
+  assert.deepEqual(unreadBefore, ["aa"]);
+  assert.deepEqual(current, ["aa"]);
+  assert.deepEqual(stored, { "aa:review": NOW, "bb:review": NOW });
+  assert.equal(page.byId("sessions").querySelectorAll(".row.is-unread").length, 0);
+});
+
+test("seen times a single-Agentty page kept by session id carry over to its Agentty", () => {
+  // Arrange: an earlier page saw `review` before its latest change.
+  const storage = new MemoryStorage();
+  storage.setItem(SEEN_KEY, JSON.stringify({ review: NOW - 180, done: NOW - 2 * 86400 }));
+  const page = mountList({ storage: storage });
+  const later = SESSIONS.map((session) => (session.id === "review" ? { ...session, updated_at: NOW } : session));
+  const [source] = twoSources(page, later, []);
+
+  // Act
+  page.list.setSources([source]);
+  const stored = JSON.parse(storage.getItem(SEEN_KEY));
+
+  // Assert
+  assert.deepEqual(
+    Array.from(source.list.querySelectorAll(".row.is-unread"), (row) => row.dataset.instanceId + "/" + row.dataset.sessionId),
+    ["aa/review"],
+  );
+  assert.equal(stored["aa:review"], NOW - 180);
+  assert.equal(stored["aa:running"], NOW - 5);
+});
+
+test("an Agentty not listed yet shows no empty line", () => {
+  // Arrange
+  const page = mountList();
+  const sources = twoSources(page, [], []);
+  sources[1].isListed = false;
+
+  // Act
+  page.list.setSources(sources);
+
+  // Assert
+  assert.deepEqual(
+    sources.map((source) => source.empty.hidden),
+    [false, true],
+  );
 });

@@ -31,6 +31,8 @@ export function createProject({ elements, request }) {
     capabilities: [],
     // The name `get_host` gives, shown while no listing names the project.
     hostName: null,
+    // Whether the sync dialog is open for this project.
+    isAsking: false,
     isConnected: false,
     // Whether a sync request waits for the host's answer.
     isRequesting: false,
@@ -53,8 +55,15 @@ export function createProject({ elements, request }) {
     elements.sync.disabled = isSyncing || !state.isConnected;
     elements.sync.setAttribute("aria-busy", String(isSyncing));
     elements.syncLabel.textContent = isSyncing ? "Syncing…" : "Sync";
-    elements.dialogTarget.textContent = projectSyncTarget(project) || "the project";
-    elements.dialogBranch.textContent = project?.branch ?? "its branch";
+    if (state.isAsking) {
+      renderDialog();
+    }
+  }
+
+  // The shared dialog names this project while it asks.
+  function renderDialog() {
+    elements.dialogTarget.textContent = projectSyncTarget(state.project) || "the project";
+    elements.dialogBranch.textContent = state.project?.branch ?? "its branch";
   }
 
   // The status is a live region: unchanged text is not written again, so
@@ -82,11 +91,17 @@ export function createProject({ elements, request }) {
   }
 
   elements.sync.addEventListener("click", () => {
+    state.isAsking = true;
+    renderDialog();
     elements.dialog.returnValue = "";
     elements.dialog.showModal();
   });
+  // Several Agenttys' project lines share the dialog; only the one that
+  // asked acts on its answer.
   elements.dialog.addEventListener("close", () => {
-    if (elements.dialog.returnValue === "confirm" && !elements.sync.disabled) {
+    const wasAsking = state.isAsking;
+    state.isAsking = false;
+    if (wasAsking && elements.dialog.returnValue === "confirm" && !elements.sync.disabled) {
       void sync();
     }
   });
