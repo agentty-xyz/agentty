@@ -119,6 +119,11 @@ function storedIds() {
   return Object.keys(JSON.parse(window.localStorage.getItem(PAIRINGS_KEY) ?? "{}")).map(labelled);
 }
 
+// The device menu's items that forget this device on one Agentty each.
+function forgetItems() {
+  return byId("device-menu").querySelectorAll("[data-forget-on]");
+}
+
 function heads() {
   return sections().map((section) => ({
     name: labelled(section.querySelector(".instance-name").textContent),
@@ -181,7 +186,7 @@ async function multiFlow() {
   report({
     step: "pairedB",
     forgetHidden: byId("forget").hidden,
-    forgetItems: Array.from(byId("forget-each").children, (item) => labelled(item.textContent)),
+    forgetItems: Array.from(forgetItems(), (item) => labelled(item.textContent)),
     heads: heads(),
     rows: sections().map((section) => rows(section)),
     slotHidden: byId("instance-slot").hidden,
@@ -235,7 +240,7 @@ async function multiFlow() {
 
   // Forgetting this device on B leaves A alone, in the single layout.
   byId("device-more").click();
-  byId("forget-each").children[1].click();
+  forgetItems()[1].click();
   const asked = labelled(byId("forget-target").textContent);
   byId("forget-dialog").querySelector('button[value="confirm"]').click();
   await waitFor("B to go", () => sections().length === 0);

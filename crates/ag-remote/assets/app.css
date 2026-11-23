@@ -344,10 +344,6 @@ body {
   margin-bottom: var(--space-md);
 }
 
-.menu-group {
-  display: grid;
-}
-
 /* .button.button-secondary, left aligned */
 .new-session {
   display: flex;

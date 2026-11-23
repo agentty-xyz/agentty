@@ -90,7 +90,6 @@ const elements = {
   "device-more": document.getElementById("device-more"),
   "device-menu": document.getElementById("device-menu"),
   forget: document.getElementById("forget"),
-  "forget-each": document.getElementById("forget-each"),
   "forget-dialog": document.getElementById("forget-dialog"),
   "forget-target": document.getElementById("forget-target"),
   scrim: document.getElementById("scrim"),
@@ -504,15 +503,19 @@ function renderFooter() {
   elements.connection.classList.toggle("is-error", kinds.includes("rejected"));
 }
 
-// With several Agenttys, the device menu forgets this device on each.
+// With several Agenttys, the device menu forgets this device on each, in
+// items after the single page's own.
 function renderForgetItems() {
   elements.forget.hidden = isMany();
-  elements["forget-each"].hidden = !isMany();
-  elements["forget-each"].replaceChildren(
+  for (const item of elements["device-menu"].querySelectorAll("[data-forget-on]")) {
+    item.remove();
+  }
+  elements["device-menu"].append(
     ...(isMany() ? state.instances : []).map((instance) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "menu-item is-danger";
+      item.dataset.forgetOn = instance.id;
       item.setAttribute("role", "menuitem");
       item.textContent = "Forget on " + instance.name;
       item.addEventListener("click", () => askToForget(instance));

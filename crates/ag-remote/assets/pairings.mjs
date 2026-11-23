@@ -146,28 +146,32 @@ function read(storage, key) {
 
 // Writes `value` under `key` and reports whether storage took it.
 function write(storage, key, value) {
-  try {
-    storage.setItem(key, value);
-
-    return true;
-  } catch (_error) {
-    // Full or blocked storage: the caller keeps the page's own copy.
-    refusing.add(storage);
-
-    return false;
-  }
+  return change(storage, () => storage.setItem(key, value));
 }
 
 // Removes `key` and reports whether storage took the change.
 function remove(storage, key) {
+  return change(storage, () => storage.removeItem(key));
+}
+
+// Runs `apply` on `storage` and reports whether storage took it. Full or
+// blocked storage refuses, and the caller keeps the page's own copy.
+function change(storage, apply) {
+  const isTaken = attempt(apply);
+  if (!isTaken) {
+    refusing.add(storage);
+  }
+
+  return isTaken;
+}
+
+// Runs `apply` and reports whether it finished without throwing.
+function attempt(apply) {
   try {
-    storage.removeItem(key);
+    apply();
 
     return true;
   } catch (_error) {
-    // Blocked storage: the caller keeps the page's own copy.
-    refusing.add(storage);
-
     return false;
   }
 }
