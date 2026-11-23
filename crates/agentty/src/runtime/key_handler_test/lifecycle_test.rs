@@ -8,15 +8,15 @@ use ratatui::Terminal;
 
 use super::super::{
     current_session_creation_selection, handle_confirmation_decision, handle_key_event,
-    handle_pre_commit_hook_warning_key, handle_session_creation_key, session_creation_mode,
-    session_creation_option_is_enabled, update_session_creation_selection,
+    handle_pre_commit_hook_warning_key, handle_session_creation_key, session_creation_choice,
+    session_creation_mode, update_session_creation_selection,
 };
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, PresentationState};
-use crate::ui::component::session_creation_overlay::HARNESS_OPTION_INDEX;
+use crate::ui::component::session_creation_overlay::LAST_OPTION_INDEX;
 
 #[tokio::test]
 async fn test_session_creation_rejection_stays_in_terminal_ui() {
@@ -57,7 +57,7 @@ async fn test_session_creation_rejection_stays_in_terminal_ui() {
 }
 
 #[tokio::test]
-async fn test_session_creation_navigation_moves_up_and_clamps_disabled_options() {
+async fn test_session_creation_navigation_moves_and_clamps_to_draft() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
     app.mode = AppMode::SessionCreation {
@@ -67,16 +67,22 @@ async fn test_session_creation_navigation_moves_up_and_clamps_disabled_options()
     // Act
     update_session_creation_selection(&mut app, usize::MAX);
     let clamped_selection = current_session_creation_selection(&app);
-    let result =
+    let up_result =
         handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).await;
-    let moved_selection = current_session_creation_selection(&app);
-    let unknown_option_enabled = session_creation_option_is_enabled(&app, usize::MAX);
+    let moved_up_selection = current_session_creation_selection(&app);
+    let down_result =
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await;
+    let moved_down_selection = current_session_creation_selection(&app);
+    let unknown_option = session_creation_choice(&app, usize::MAX);
 
     // Assert
-    assert_eq!(clamped_selection, 1);
-    assert!(matches!(result, Ok(EventResult::Continue)));
-    assert_eq!(moved_selection, 0);
-    assert!(!unknown_option_enabled);
+    assert_eq!(clamped_selection, LAST_OPTION_INDEX);
+    assert!(matches!(up_result, Ok(EventResult::Continue)));
+    assert_eq!(moved_up_selection, 0);
+    assert!(matches!(down_result, Ok(EventResult::Continue)));
+    assert_eq!(moved_down_selection, LAST_OPTION_INDEX);
+    assert_eq!(unknown_option, None);
 }
 
 #[tokio::test]
@@ -363,7 +369,7 @@ async fn confirmed_fork_opens_the_forked_session() {
 }
 
 #[tokio::test]
-async fn test_handle_session_creation_key_creates_harness_session_when_available() {
+async fn test_regular_session_offers_harness_after_agent_clis_in_model_picker() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
     crate::test_support::set_test_harness_models(
@@ -371,10 +377,7 @@ async fn test_handle_session_creation_key_creates_harness_session_when_available
         true,
         Some(AgentModel::QwenPlus),
     );
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 0,
-    };
-    update_session_creation_selection(&mut app, HARNESS_OPTION_INDEX);
+    app.mode = session_creation_mode();
 
     // Act
     let result =
@@ -393,53 +396,47 @@ async fn test_handle_session_creation_key_creates_harness_session_when_available
     assert!(matches!(result, Ok(EventResult::Continue)));
     assert_eq!(app.sessions.sessions().len(), 1);
     let session = &app.sessions.sessions()[0];
-    assert_eq!(session.agent.kind(), AgentKind::Harness);
-    assert_eq!(session.agent.model(), AgentModel::QwenPlus);
+    assert_ne!(session.agent.kind(), AgentKind::Harness);
     assert!(!session.is_draft_session());
     assert!(matches!(
         &app.mode,
         AppMode::Prompt { slash_state, .. }
-            if slash_state.available_agent_kinds == [AgentKind::Harness]
+            if slash_state.available_agent_kinds.last() == Some(&AgentKind::Harness)
+                && slash_state.available_agent_kinds.len() > 1
+                && slash_state.harness_models.len() == 1
     ));
 }
 
 #[tokio::test]
-async fn test_harness_option_is_disabled_without_availability() {
-    // Hidden without the flag, then disabled without a runnable model.
-    for enabled in [false, true] {
-        // Arrange
-        let (mut app, _base_dir) =
-            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-        crate::test_support::set_test_harness_models(&mut app.services, enabled, None);
-        app.mode = AppMode::SessionCreation {
-            selected_option_index: 0,
-        };
+async fn test_session_creation_options_need_a_runnable_agent() {
+    // Arrange
+    let harness_root = tempfile::tempdir().expect("harness data root");
+    let clients =
+        crate::test_support::harness_only_test_app_clients(harness_root.path().to_path_buf())
+            .with_app_server_client_override(crate::test_support::mock_app_server())
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
+    // The harness model stops being runnable after startup.
+    crate::test_support::set_test_harness_models(&mut app.services, true, None);
+    app.mode = session_creation_mode();
 
-        // Act
-        update_session_creation_selection(&mut app, HARNESS_OPTION_INDEX);
-        let clamped_selection = current_session_creation_selection(&app);
-        app.mode = AppMode::SessionCreation {
-            selected_option_index: HARNESS_OPTION_INDEX,
-        };
-        let result = handle_session_creation_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        )
-        .await;
+    // Act
+    let regular_option = session_creation_choice(&app, 0);
+    let draft_option = session_creation_choice(&app, LAST_OPTION_INDEX);
+    let result =
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await;
 
-        // Assert
-        assert_eq!(clamped_selection, 1);
-        assert!(!session_creation_option_is_enabled(
-            &app,
-            HARNESS_OPTION_INDEX
-        ));
-        assert!(matches!(result, Ok(EventResult::Continue)));
-        assert!(app.sessions.sessions().is_empty());
-    }
+    // Assert
+    assert_eq!(regular_option, None);
+    assert_eq!(draft_option, None);
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(app.sessions.sessions().is_empty());
+    assert!(app.pending_session_creations.is_empty());
 }
 
 #[tokio::test]
-async fn test_harness_only_launch_offers_only_harness_session_option() {
+async fn test_harness_only_launch_starts_regular_session_on_harness() {
     // Arrange
     let harness_root = tempfile::tempdir().expect("harness data root");
     let clients =
@@ -450,39 +447,37 @@ async fn test_harness_only_launch_offers_only_harness_session_option() {
     // The CLI refresh lists an `agy` too old for startup to accept.
     app.services
         .replace_available_agent_clis(vec![AgentCliInfo::loading(AgentKind::Antigravity)]);
+    app.mode = session_creation_mode();
 
     // Act
-    let opened_mode = session_creation_mode(&app);
-    let cli_options_enabled = (0..HARNESS_OPTION_INDEX)
-        .any(|option_index| session_creation_option_is_enabled(&app, option_index));
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 0,
-    };
-    let regular_result =
+    let draft_option = session_creation_choice(&app, LAST_OPTION_INDEX);
+    let result =
         handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await;
-    let down_result =
-        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-            .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !app.pending_session_creations.is_empty() {
+            let event = app.next_app_event().await.expect("creation event");
+            app.apply_app_events(event).await;
+        }
+    })
+    .await
+    .expect("creation should finish");
 
     // Assert
-    assert!(matches!(
-        opened_mode,
-        AppMode::SessionCreation {
-            selected_option_index: HARNESS_OPTION_INDEX,
-        }
-    ));
-    assert!(!cli_options_enabled);
+    assert_eq!(draft_option, Some(CreateSessionMode::Draft));
     assert_eq!(
         app.view_snapshot().available_agent_kinds,
         Vec::<AgentKind>::new()
     );
-    assert!(matches!(regular_result, Ok(EventResult::Continue)));
-    assert!(matches!(down_result, Ok(EventResult::Continue)));
-    assert!(app.sessions.sessions().is_empty());
-    assert!(app.pending_session_creations.is_empty());
-    assert_eq!(
-        current_session_creation_selection(&app),
-        HARNESS_OPTION_INDEX
-    );
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert_eq!(app.sessions.sessions().len(), 1);
+    let session = &app.sessions.sessions()[0];
+    assert_eq!(session.agent.kind(), AgentKind::Harness);
+    assert_eq!(session.agent.model(), AgentModel::KimiK3);
+    assert!(!session.is_draft_session());
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { slash_state, .. }
+            if slash_state.available_agent_kinds == [AgentKind::Harness]
+    ));
 }

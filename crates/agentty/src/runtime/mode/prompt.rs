@@ -17,6 +17,7 @@ use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseSt
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{
@@ -118,6 +119,8 @@ enum PromptEffect {
     OpenDiff { restore: Option<DiffRestoreTarget> },
     /// Lists harness models again for the opened `/model` stage.
     RefreshHarnessModels,
+    /// Shows why the selected harness `/model` row cannot run now.
+    ReportUnavailableModel(String),
     /// Saves the captured composer for the next prompt reopen.
     SaveProgress(PromptModeSnapshot),
     /// Starts a background clipboard-image capture.
@@ -403,6 +406,10 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
             app.start_diff_view_load(session_id, restore, DiffSidebarFocus::Files);
         }
         PromptEffect::RefreshHarnessModels => app.refresh_harness_models(),
+        PromptEffect::ReportUnavailableModel(notice) => {
+            app.append_prompt_status_line(session_id, TranscriptNotice::Error, &notice)
+                .await;
+        }
         PromptEffect::SaveProgress(snapshot) => app.save_prompt_progress(snapshot),
         PromptEffect::StartImagePaste { attachment_number } => {
             start_prompt_image_paste(app, session_id, attachment_number);
@@ -1030,11 +1037,7 @@ fn reduce_prompt_slash_submit(
             open_prompt_slash_stage(mode, PromptSlashStage::Style, selected_index);
         }
         Some(PromptSuggestionSelection::Command(_)) => {
-            if let AppMode::Prompt { slash_state, .. } = mode
-                && slash_state.open_model_stage()
-            {
-                effects.push(PromptEffect::RefreshHarnessModels);
-            }
+            update_prompt_slash_state(mode, PromptSlashState::open_model_stage);
         }
         Some(PromptSuggestionSelection::Agent(selected_agent)) => {
             update_prompt_slash_state(mode, |slash_state| {
@@ -1042,10 +1045,17 @@ fn reduce_prompt_slash_submit(
                 slash_state.stage = PromptSlashStage::Model;
                 slash_state.selected_index = 0;
             });
+            if selected_agent == AgentKind::Harness {
+                effects.push(PromptEffect::RefreshHarnessModels);
+            }
         }
         Some(PromptSuggestionSelection::SignIn(selected_agent)) => {
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
             open_chatgpt_sign_in(mode, selected_agent, effects);
+        }
+        Some(PromptSuggestionSelection::Unavailable(notice)) => {
+            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
+            effects.push(PromptEffect::ReportUnavailableModel(notice));
         }
         // Setting selections were applied above.
         Some(
@@ -1073,7 +1083,8 @@ fn prompt_slash_setting_effect(selection: &PromptSuggestionSelection) -> Option<
         }
         PromptSuggestionSelection::Agent(_)
         | PromptSuggestionSelection::Command(_)
-        | PromptSuggestionSelection::SignIn(_) => None,
+        | PromptSuggestionSelection::SignIn(_)
+        | PromptSuggestionSelection::Unavailable(_) => None,
     }
 }
 

@@ -46,7 +46,7 @@ struct RouteSharedContext<'a> {
     available_agent_kinds: &'a [AgentKind],
     current_tab: Tab,
     default_reasoning_level: ReasoningLevel,
-    /// Whether this launch offers Harness sessions.
+    /// Whether this launch offers the in-process harness and can run it.
     harness_availability: HarnessAvailability,
     has_more_archived_sessions: bool,
     is_archive_expanded: bool,
@@ -551,8 +551,7 @@ fn render_mode_overlay(
             selected_option_index,
         } => component::session_creation_overlay::SessionCreationOverlay::new(
             *selected_option_index,
-            shared.harness_availability,
-            !shared.available_agent_kinds.is_empty(),
+            !shared.available_agent_kinds.is_empty() || shared.harness_availability.is_available(),
         )
         .render(frame, area),
         AppMode::PreCommitHookWarning { message } => {

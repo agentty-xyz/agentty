@@ -113,7 +113,7 @@ impl App {
             attachment_state: PromptAttachmentState::default(),
             focus: ChatFocus::Input,
             history_state: PromptHistoryState::new(Vec::new()),
-            slash_state: self.prompt_slash_state(session_id),
+            slash_state: self.prompt_slash_state(),
             session_id: session_id.into(),
             input: InputState::default(),
             scroll_offset: None,

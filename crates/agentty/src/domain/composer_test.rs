@@ -16,8 +16,8 @@ use super::{
     prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
-    ReasoningLevel, ResponseStyle, ServedModel,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, HarnessModelOption,
+    HarnessModelStatus, ModelCost, ReasoningLevel, ResponseStyle, ServedModel,
 };
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
 
@@ -1365,6 +1365,44 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
 }
 
 #[test]
+fn model_agent_stage_lists_harness_as_ag_harness_after_agent_clis() {
+    // Arrange
+    let mut slash_state = PromptSlashState {
+        selected_agent: Some(AgentKind::Harness),
+        selected_index: 3,
+        ..PromptSlashState::with_available_agent_kinds(vec![
+            AgentKind::Antigravity,
+            AgentKind::Claude,
+            AgentKind::Codex,
+            AgentKind::Harness,
+        ])
+    };
+
+    // Act
+    slash_state.open_model_stage();
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("agents should render");
+
+    // Assert
+    assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+    assert_eq!(slash_state.selected_agent, None);
+    assert_eq!(slash_state.selected_index, 0);
+    assert_eq!(
+        suggestion_list
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["antigravity", "claude", "codex", "ag-harness"]
+    );
+}
+
+#[test]
 fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
     // Arrange
     let slash_state = harness_model_stage(labeled_harness_models(), 0);
@@ -1381,7 +1419,7 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
     // Assert
     assert_eq!(
         suggestion_list.title,
-        "/model Harness model (j/k move, Enter select)"
+        "/model Model (j/k move, Enter select)"
     );
     let rows = suggestion_list
         .items
@@ -1390,48 +1428,44 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
             (
                 item.badge.as_deref().unwrap_or_default(),
                 item.label.trim_end(),
-                item.metadata.as_deref().unwrap_or_default(),
+                item.detail.as_deref().unwrap_or_default(),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         rows,
         vec![
-            ("local", "qwen3:latest", "free · Ollama · runs 32k ctx"),
+            ("local", "qwen3:latest", "Ollama · runs 32k ctx"),
+            ("local", "llama3.2:3b", "Ollama · runs 4k ctx, needs 16k"),
+            ("local", "gemma:latest", "Ollama · no tool calls"),
             (
-                "local",
-                "llama3.2:3b",
-                "free · Ollama · runs 4k ctx, needs 16k"
+                "paid",
+                "muse-spark-1.3",
+                AgentModel::MuseSpark13.description()
             ),
-            ("local", "gemma:latest", "free · Ollama · no tool calls"),
-            ("paid", "muse-spark-1.3", "standard · Muse · 256k ctx"),
             (
                 "paid",
                 "muse-spark-1.3-contributor",
-                "cheap · Muse · trains on prompts"
+                AgentModel::MuseSpark13Contributor.description()
             ),
-            ("paid", "kimi-k3", "premium · Kimi · needs KIMI_API_KEY"),
+            ("paid", "kimi-k3", AgentModel::KimiK3.description()),
             (
                 "paid",
                 "chatgpt/gpt-6.1-sol",
-                "plan · ChatGPT plan · needs ag-harness login chatgpt"
+                AgentModel::ChatGptGpt61Sol.description()
             ),
-            (
-                "local",
-                "tiny",
-                "free · OpenAI-compatible server · up to 512 ctx"
-            ),
-            ("local", "plain", "free · OpenAI-compatible server"),
+            ("local", "tiny", "OpenAI-compatible server · up to 512 ctx"),
+            ("local", "plain", "OpenAI-compatible server"),
         ]
     );
-    // Metadata starts in one column after each `[badge] label`.
-    let metadata_columns = suggestion_list
+    // Details start in one column after each `[badge] label`.
+    let detail_columns = suggestion_list
         .items
         .iter()
         .map(|item| item.badge.as_deref().unwrap_or_default().len() + item.label.len())
         .collect::<Vec<_>>();
     assert!(
-        metadata_columns
+        detail_columns
             .iter()
             .all(|column| *column == "paid".len() + "muse-spark-1.3-contributor".len())
     );
@@ -1439,12 +1473,12 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
         suggestion_list
             .items
             .iter()
-            .all(|item| item.detail.is_none())
+            .all(|item| item.metadata.is_none())
     );
 }
 
 #[test]
-fn harness_model_stage_selects_only_models_that_can_run() {
+fn harness_model_stage_reports_what_unavailable_models_need() {
     // Arrange
     let harness_models = vec![
         harness_option(
@@ -1483,7 +1517,12 @@ fn harness_model_stage_selects_only_models_that_can_run() {
             served("qwen3:latest"),
         )))
     );
-    assert_eq!(missing_key, None);
+    assert_eq!(
+        missing_key,
+        Some(PromptSuggestionSelection::Unavailable(
+            "`kimi-k3` needs `KIMI_API_KEY`. Set it before starting Agentty.".to_string()
+        ))
+    );
 }
 
 #[test]
@@ -1532,7 +1571,14 @@ fn harness_model_stage_offers_sign_in_for_models_that_need_it() {
             AgentModel::ChatGptGpt6Sol,
         )))
     );
-    assert_eq!(no_tools, None);
+    assert_eq!(
+        no_tools,
+        Some(PromptSuggestionSelection::Unavailable(
+            "`openai-compatible/embed:latest` does not support tool calls, which Agentty needs. \
+             Choose another model."
+                .to_string()
+        ))
+    );
 }
 
 #[test]
@@ -1566,11 +1612,18 @@ fn harness_model_stage_explains_how_to_add_local_models() {
     // Assert
     assert_eq!(suggestion_list.items[0].label.trim_end(), "no local models");
     assert_eq!(
-        suggestion_list.items[0].metadata.as_deref(),
-        Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL")
+        suggestion_list.items[0].detail.as_deref(),
+        Some("Start Ollama or set OPENAI_COMPATIBLE_BASE_URL.")
     );
     assert_eq!(suggestion_list.items[1].label.trim_end(), "muse-spark-1.3");
-    assert_eq!(hint_selection, None);
+    assert_eq!(
+        hint_selection,
+        Some(PromptSuggestionSelection::Unavailable(
+            "No local models found. Start Ollama or set `OPENAI_COMPATIBLE_BASE_URL` before \
+             starting Agentty."
+                .to_string()
+        ))
+    );
 }
 
 #[test]

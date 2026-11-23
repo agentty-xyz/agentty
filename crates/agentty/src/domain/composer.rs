@@ -47,6 +47,9 @@ pub enum PromptSuggestionSelection {
     /// Harness model selected during `/model` that needs a provider sign-in
     /// before it can run.
     SignIn(AgentSelection),
+    /// Harness `/model` row that cannot run now, with the notice saying what
+    /// it still needs.
+    Unavailable(String),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
     /// Session-scoped response style chosen during `/style`.
@@ -545,22 +548,12 @@ impl PromptSlashState {
         }
     }
 
-    /// Opens `/model` on its agent list, or, in a Harness session, which
-    /// offers only Harness models, straight on the harness model list.
-    ///
-    /// Returns whether the harness model list opened, so the caller can
-    /// refresh it.
-    pub fn open_model_stage(&mut self) -> bool {
-        let is_harness_session = self.available_agent_kinds == [AgentKind::Harness];
-        self.selected_agent = is_harness_session.then_some(AgentKind::Harness);
+    /// Opens `/model` on its agent list, which ends with `ag-harness` when
+    /// the launch offers the in-process harness.
+    pub fn open_model_stage(&mut self) {
+        self.selected_agent = None;
         self.selected_index = 0;
-        self.stage = if is_harness_session {
-            PromptSlashStage::Model
-        } else {
-            PromptSlashStage::Agent
-        };
-
-        is_harness_session
+        self.stage = PromptSlashStage::Agent;
     }
 
     /// Resets slash state back to command selection.
@@ -1138,7 +1131,7 @@ fn build_slash_suggestion_list(
                 .map(|agent_kind| PromptSuggestionItem {
                     badge: None,
                     detail: Some(agent_kind.description().to_string()),
-                    label: agent_kind.name().to_string(),
+                    label: model_agent_label(*agent_kind).to_string(),
                     metadata: None,
                 })
                 .collect(),
@@ -1153,13 +1146,7 @@ fn build_slash_suggestion_list(
                 .into_iter()
                 .map(|(item, _)| item)
                 .collect::<Vec<_>>();
-            let title = if selected_agent_kind == AgentKind::Harness {
-                "/model Harness model (j/k move, Enter select)"
-            } else {
-                "/model Model (j/k move, Enter select)"
-            };
-
-            (title, models)
+            ("/model Model (j/k move, Enter select)", models)
         }
         PromptSlashStage::Reasoning => (
             "/reasoning Level (j/k move, Enter select)",
@@ -1230,7 +1217,9 @@ fn selected_slash_action(
                 ModelRowChoice::SignIn(model) => Some(PromptSuggestionSelection::SignIn(
                     AgentSelection::new(selected_agent_kind, model),
                 )),
-                ModelRowChoice::Unavailable => None,
+                ModelRowChoice::Unavailable(reason) => {
+                    Some(PromptSuggestionSelection::Unavailable(reason.notice()))
+                }
             }
         }
         PromptSlashStage::Reasoning => {
@@ -1260,6 +1249,15 @@ fn clamp_selected_index(selected_index: usize, option_count: usize) -> usize {
     selected_index.min(option_count.saturating_sub(1))
 }
 
+/// Returns the `/model` agent-list label, naming the in-process harness
+/// after its crate, `ag-harness`, and CLI agents by their stored names.
+fn model_agent_label(agent_kind: AgentKind) -> &'static str {
+    match agent_kind {
+        AgentKind::Harness => "ag-harness",
+        AgentKind::Antigravity | AgentKind::Claude | AgentKind::Codex => agent_kind.name(),
+    }
+}
+
 /// Resolves the agent shown for `/model` model selection while preserving the
 /// current session agent when it is still locally runnable.
 ///
@@ -1283,8 +1281,8 @@ enum ModelRowChoice {
     Ready(AgentModel),
     /// Offers the provider sign-in the model still needs.
     SignIn(AgentModel),
-    /// Nothing; the row cannot run a turn now.
-    Unavailable,
+    /// Reports why the row cannot run a turn now.
+    Unavailable(UnavailableModel),
 }
 
 impl ModelRowChoice {
@@ -1293,23 +1291,60 @@ impl ModelRowChoice {
         match option.status {
             HarnessModelStatus::Ready => Self::Ready(option.model),
             HarnessModelStatus::SignInRequired(_) => Self::SignIn(option.model),
-            HarnessModelStatus::MissingConfiguration(_) | HarnessModelStatus::NoToolSupport => {
-                Self::Unavailable
+            HarnessModelStatus::MissingConfiguration(variable) => {
+                Self::Unavailable(UnavailableModel::MissingConfiguration {
+                    model: option.model,
+                    variable,
+                })
+            }
+            HarnessModelStatus::NoToolSupport => {
+                Self::Unavailable(UnavailableModel::NoToolSupport(option.model))
             }
         }
     }
 }
 
+/// Why one harness `/model` row cannot run a turn now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnavailableModel {
+    /// The provider needs `variable` set before Agentty starts.
+    MissingConfiguration {
+        model: AgentModel,
+        variable: &'static str,
+    },
+    /// No local server serves a model.
+    NoLocalModels,
+    /// The served model cannot call tools, which harness turns need.
+    NoToolSupport(AgentModel),
+}
+
+impl UnavailableModel {
+    /// Returns the notice shown when the row is selected.
+    fn notice(self) -> String {
+        match self {
+            Self::MissingConfiguration { model, variable } => format!(
+                "`{}` needs `{variable}`. Set it before starting Agentty.",
+                model.as_str()
+            ),
+            Self::NoLocalModels => "No local models found. Start Ollama or set \
+                                    `OPENAI_COMPATIBLE_BASE_URL` before starting Agentty."
+                .to_string(),
+            Self::NoToolSupport(model) => format!(
+                "`{}` does not support tool calls, which Agentty needs. Choose another model.",
+                model.as_str()
+            ),
+        }
+    }
+}
+
 /// Returns the `/model` rows for `agent_kind`, each with what selecting it
-/// does: switch to a ready model, sign in for one, or nothing.
+/// does: switch to a ready model, sign in for one, or report what it needs.
 ///
 /// Harness rows come from `harness_models`, local models first, badged
-/// `local` or `paid`, with the price class (`free`, `cheap`, `standard`, or
-/// `premium`), the server or provider, whether the provider trains on
-/// prompts, the context window, and what a row still needs. Without local
-/// models a hint row says how to
-/// add them. Other agents, and Harness before its models are listed, show
-/// the fixed catalog.
+/// `local` or `paid`. Paid rows show the model description like every other
+/// agent's rows; local rows show their server and context window. Without
+/// local models a hint row says how to add them. Other agents, and Harness
+/// before its models are listed, show the fixed catalog.
 fn model_rows(
     agent_kind: AgentKind,
     harness_models: &[HarnessModelOption],
@@ -1335,9 +1370,9 @@ fn model_rows(
         .map(|option| {
             let item = PromptSuggestionItem {
                 badge: Some(billing_badge(option.cost).to_string()),
-                detail: None,
+                detail: Some(harness_model_detail(option)),
                 label: option.model.name().to_string(),
-                metadata: Some(harness_model_metadata(option)),
+                metadata: None,
             };
 
             (item, ModelRowChoice::for_option(option))
@@ -1346,20 +1381,26 @@ fn model_rows(
     if harness_models.iter().all(|option| option.cost.is_paid()) {
         let hint = PromptSuggestionItem {
             badge: Some(billing_badge(ModelCost::Local).to_string()),
-            detail: None,
+            detail: Some("Start Ollama or set OPENAI_COMPATIBLE_BASE_URL.".to_string()),
             label: "no local models".to_string(),
-            metadata: Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL".to_string()),
+            metadata: None,
         };
-        rows.insert(0, (hint, ModelRowChoice::Unavailable));
+        rows.insert(
+            0,
+            (
+                hint,
+                ModelRowChoice::Unavailable(UnavailableModel::NoLocalModels),
+            ),
+        );
     }
-    align_row_metadata(&mut rows);
+    align_row_details(&mut rows);
 
     rows
 }
 
-/// Pads labels so every row's metadata starts in one column after its badge
+/// Pads labels so every row's detail starts in one column after its badge
 /// and label.
-fn align_row_metadata(rows: &mut [(PromptSuggestionItem, ModelRowChoice)]) {
+fn align_row_details(rows: &mut [(PromptSuggestionItem, ModelRowChoice)]) {
     let badge_width = |item: &PromptSuggestionItem| item.badge.as_deref().map_or(0, str::len);
     let column = rows
         .iter()
@@ -1377,23 +1418,18 @@ fn billing_badge(cost: ModelCost) -> &'static str {
     if cost.is_paid() { "paid" } else { "local" }
 }
 
-/// Describes one harness model row: its price class, its server or
-/// provider, whether the provider trains on its prompts, its context window,
-/// and what it still needs.
-fn harness_model_metadata(option: &HarnessModelOption) -> String {
-    let mut parts = vec![option.cost.label().to_string(), option.provider.clone()];
-    if option.trains_on_prompts {
-        parts.push("trains on prompts".to_string());
+/// Describes one harness model row: a hosted model's catalog description, or
+/// a local model's server with its context window or missing tool support.
+fn harness_model_detail(option: &HarnessModelOption) -> String {
+    if option.cost.is_paid() {
+        return option.model.description().to_string();
     }
-    match option.status {
-        HarnessModelStatus::MissingConfiguration(remedy)
-        | HarnessModelStatus::SignInRequired(remedy) => {
-            parts.push(format!("needs {remedy}"));
-        }
-        HarnessModelStatus::NoToolSupport => parts.push("no tool calls".to_string()),
-        HarnessModelStatus::Ready => {
-            parts.extend(context_window_label(option));
-        }
+
+    let mut parts = vec![option.provider.clone()];
+    if option.status == HarnessModelStatus::NoToolSupport {
+        parts.push("no tool calls".to_string());
+    } else {
+        parts.extend(context_window_label(option));
     }
 
     parts.join(" · ")
@@ -1415,11 +1451,9 @@ fn context_window_label(option: &HarnessModelOption) -> Option<String> {
         return Some(label);
     }
 
-    let qualifier = if option.cost.is_paid() { "" } else { "up to " };
-
     option
         .context_window
-        .map(|window| format!("{qualifier}{} ctx", token_count_label(window)))
+        .map(|window| format!("up to {} ctx", token_count_label(window)))
 }
 
 /// Formats a token count in binary thousands, as in `32k`.

@@ -358,7 +358,7 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
 }
 
 #[tokio::test]
-async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
+async fn runtime_backend_starts_regular_sessions_on_harness_without_agent_cli() {
     // Arrange
     let harness_root = tempfile::tempdir().expect("harness data root");
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app_with_clients(
@@ -376,9 +376,14 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
     };
 
     // Act
-    let regular_error = request_session_creation(&mut app, request(CreateSessionMode::Regular))
+    let regular_session_id =
+        request_session_creation(&mut app, request(CreateSessionMode::Regular))
+            .await
+            .expect("regular sessions should start on the harness");
+    let regular_session = request_session(&mut app, regular_session_id)
         .await
-        .expect_err("regular sessions need an agent CLI");
+        .expect("the regular session should load")
+        .expect("the regular session should exist");
     let session_id = request_session_creation(&mut app, request(CreateSessionMode::Harness))
         .await
         .expect("harness sessions should be created");
@@ -389,11 +394,20 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
     let host = request_host_context(&mut app)
         .await
         .expect("host context should load");
+    let default_harness_model = app.services.harness_availability().default_model();
+    crate::test_support::set_test_harness_models(&mut app.services, true, None);
+    let unavailable_error = request_session_creation(&mut app, request(CreateSessionMode::Draft))
+        .await
+        .expect_err("sessions need an agent CLI or a runnable harness model");
 
     // Assert
+    assert_eq!(
+        regular_session.settings.agent,
+        AgentSelection::new(AgentKind::Harness, host.default_model)
+    );
     assert!(matches!(
-        regular_error,
-        ApiSessionError::Operation(message) if message.contains("only Harness sessions")
+        unavailable_error,
+        ApiSessionError::Operation(message) if message.contains("No supported backend CLI")
     ));
     assert_eq!(
         host.session_modes,
@@ -405,10 +419,7 @@ async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
             speed_mode: SpeedMode::Normal,
         }]
     );
-    assert_eq!(
-        Some(host.default_model),
-        app.services.harness_availability().default_model()
-    );
+    assert_eq!(Some(host.default_model), default_harness_model);
     assert_ne!(host.default_model, app.sessions.default_session_model());
 }
 

@@ -62,10 +62,10 @@ struct Cli {
 /// Opt-in preview features, disabled unless their launch flags are present.
 #[derive(Debug, Default, clap::Args)]
 struct ExperimentalFeatures {
-    /// Offers preview Harness sessions run by the built-in agent loop on a
-    /// local Ollama or OpenAI-compatible model, or a hosted model when
-    /// `MODEL_API_KEY`, `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` with
-    /// `DASHSCOPE_BASE_URL` is set.
+    /// Offers the preview `ag-harness` agent in `/model`, which runs the
+    /// built-in agent loop on a local Ollama or OpenAI-compatible model, or a
+    /// hosted model when its provider's API key, such as `MODEL_API_KEY`, is
+    /// set.
     #[arg(long = "experimental-harness")]
     harness: bool,
     /// Offers the Remote tab, which lets a paired phone or browser follow

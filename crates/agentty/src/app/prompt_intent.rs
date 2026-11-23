@@ -553,8 +553,8 @@ impl App {
     }
 
     /// Lists the harness models again in the background, so a server started
-    /// or a model pulled after launch appears in the session picker and
-    /// `/model`.
+    /// or a model pulled after launch appears in `/model` and can start new
+    /// sessions in a launch without agent CLIs.
     pub(crate) fn refresh_harness_models(&self) {
         self.services.refresh_harness_models();
     }
