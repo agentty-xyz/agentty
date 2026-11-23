@@ -85,9 +85,10 @@ its box.
 
 The header of the open session shows its size and changed lines, a merge conflict with
 its base branch, the session branch and its base branch, the model and reasoning level,
-a link to its pull request, and the active time while a turn runs. The line under the
-message box shows the model, reasoning level, answer style, and speed. An older Agentty
-sends fewer details, and the page leaves out what it does not know.
+a link to its pull request, and, as in the terminal, `Timer:` with the session's active
+time, counting while a turn runs, and when it started, such as `Started 3h 5m ago`. The
+line under the message box shows the model, reasoning level, answer style, and speed. An
+older Agentty sends fewer details, and the page leaves out what it does not know.
 
 The open session shows its transcript, with each activity summary in a box you can open
 or close. While the session works or waits, the transcript ends with the same status
@@ -95,12 +96,14 @@ line as the terminal, such as `Working...` with the agent's latest step, or
 `Rebasing...`. When you scroll up, new messages leave your place alone and
 `Jump to latest` returns to the end. With a keyboard and mouse, `Enter` sends and
 `Shift+Enter` adds a line; on a touch screen, `Enter` adds a line and the button sends.
-`Ctrl+Enter` or `Cmd+Enter` always sends. While a turn runs, a message waits in the
-queue above the box for the next turn. While the agent asks questions, the box gives way
-to the questions: pick an option or type an answer, then press `Send answers` once each
-has one. A session that is merging or finished shows why you cannot chat. Unsent text
-stays in the box for each session until Agentty accepts it, even after a reload of the
-tab.
+`Ctrl+Enter` or `Cmd+Enter` always sends. As in the terminal, `Up` on the first line
+brings back your earlier messages to the session, newest first, and `Down` on the last
+line goes forward and then back to the text you were typing. While a turn runs, a
+message waits in the queue above the box for the next turn. While the agent asks
+questions, the box gives way to the questions: pick an option or type an answer, then
+press `Send answers` once each has one. A session that is merging or finished shows why
+you cannot chat. Unsent text stays in the box for each session until Agentty accepts it,
+even after a reload of the tab.
 
 The `⋯` button in the session header offers `Cancel session`. When this Agentty lets
 devices stop a turn or merge, the page also shows `Stop` next to the send button while a
@@ -110,26 +113,30 @@ its base branch, and names that branch and the changed lines. `Merge` is off for
 session with a pull request, which merges on the forge.
 
 When this Agentty lets devices publish, `Publish` sits beside `Merge`, or in the `⋯`
-sheet on a phone, while the session is in review. It asks first and names the remote
-branch: the one the session was published to before, or the session branch the first
-time. Publishing pushes the branch and opens its pull request, or refreshes the one it
-has. The button says `Publishing…` until Agentty answers, also when you open another
-session meanwhile, and then the page links the pull request under the header or shows
-why publishing failed. When this Agentty lets devices sync, the `⋯` sheet offers
-`Sync with` the base branch, which asks first and rebases the session branch, after the
-running turn if there is one.
+sheet on a phone, while the session is in review or works. It asks first and names the
+remote branch: the one the session was published to before, or the session branch the
+first time. Publishing pushes the branch and opens its pull request, or refreshes the
+one it has. During a turn, the publish waits and runs after it, as `p` does in the
+terminal, and the button says `Publish queued` until the turn ends, even if the
+connection drops meanwhile. Then it says `Publishing…` until Agentty answers, also when
+you open another session meanwhile, and then the page links the pull request under the
+header or shows why publishing failed. When this Agentty lets devices sync, the `⋯`
+sheet offers `Sync with` the base branch, which asks first and rebases the session
+branch, after the running turn if there is one.
 
 When this Agentty lets devices change settings, the line under the message box is a
 button. It opens a sheet with the models of the session's agent, the reasoning level,
 the answer style, and the speed when the chosen model can run fast. `Apply` sends only
 what you changed; during a running turn, the changes apply from the next turn. Typing
 `/` at the start of the message box also lists `/model`, `/reasoning`, `/style`, and,
-when the model can run fast, `/fast`, as in the terminal: pick one with the arrow keys
-and `Enter`, or tap it, then pick a value; `/fast` toggles the speed at once.
+when the model can run fast, `/fast`, as in the terminal: type any of a command's
+letters in order to narrow the list, pick one with the arrow keys and `Enter`, or tap
+it, then pick a value; `/fast` toggles the speed at once.
 
 When this Agentty lets devices list a session's files, typing `@` at the start of a word
 lists the files and directories in the session's worktree, best match first, as in the
-terminal. Picking one puts `@path` in the message for the agent to read.
+terminal. Picking one puts `@path` in the message, or in a typed answer to a question,
+for the agent to read.
 
 When this Agentty lets devices read diffs, `Diff` in the header, or in the `⋯` sheet on
 a phone, shows the session's changed files in place of the chat, each with its status

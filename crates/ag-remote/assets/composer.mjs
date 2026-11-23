@@ -1,7 +1,8 @@
 // Message composer of the remote control client, shared by the open
 // session and home's first message: the growing text field, the settings
-// line that opens the settings sheet, the key hint, the send button, and
-// the suggestion popup with the slash commands and the `@` file lookup.
+// line that opens the settings sheet, the key hint, the send button, the
+// suggestion popup with the slash commands and the `@` file lookup, and
+// `Up` and `Down` through the session's earlier prompts.
 // Setting names and file paths only ever become text nodes. Functions
 // take `document` and `window` as parameters, so the Node tests in
 // crates/ag-remote/tests/web/ pass the fake DOM.
@@ -32,6 +33,36 @@ export function composerKeyAction(event, { isFinePointer }) {
   }
 
   return isFinePointer && !event.shiftKey && !event.altKey ? "send" : null;
+}
+
+// Which way an arrow key moves through the earlier prompts, as in the
+// terminal: `back` for `ArrowUp` with the caret on the first line of
+// `text`, `forward` for `ArrowDown` with it on the last line, or `null` to
+// let the browser move the caret. Keys with a modifier, and keys while an
+// input method is composing, move nothing.
+export function historyKeyAction(event, text, selectionStart, selectionEnd = selectionStart) {
+  const isPlain =
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+    !event.isComposing && event.keyCode !== 229;
+  if (isPlain && event.key === "ArrowUp" && !text.slice(0, selectionStart).includes("\n")) {
+    return "back";
+  }
+  if (isPlain && event.key === "ArrowDown" && !text.slice(selectionEnd).includes("\n")) {
+    return "forward";
+  }
+
+  return null;
+}
+
+// The prompts sent in `session`, oldest first: the text of its `user`
+// messages, as `session_prompt_history_entries` in
+// crates/agentty/src/runtime/mode/session_view.rs lists them.
+export function promptHistory(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+
+  return messages
+    .filter((message) => message?.kind === "user" && typeof message.content === "string")
+    .map((message) => message.content);
 }
 
 // Rows the composer shows for `text`: one per line, from 1 to
@@ -101,7 +132,8 @@ export function modelNode(document, part) {
 // the default, for the session's worktree, `"project"` for the project
 // checkout of a session yet to start, or `null` for none;
 // `isRunning`, for the settings sheet; and the host's `capabilities` and
-// `isConnected`.
+// `isConnected`. `history()` returns the prompts `Up` and `Down` browse,
+// oldest first, as `promptHistory` lists them; home's composer has none.
 //
 // `request(body)` sends one request and resolves with its result.
 // `applySettings(session, change)` applies a `set_session_settings`
@@ -125,11 +157,18 @@ export function createComposer({
   suggestionsId,
   applySettings = (session, change) =>
     request({ method: "set_session_settings", session_id: session.id, ...change }),
+  history = () => [],
   settings = null,
 }) {
   const drafts = createDrafts(window);
   // Whether a send in flight holds the settings as they are.
   let isLocked = false;
+  // The earlier prompt on screen, by its index in `history`, or `null`;
+  // and the text it replaced, which `Down` past the newest brings back.
+  // A shown prompt is not saved as the draft, so the draft survives
+  // browsing; editing it ends browsing and makes it the draft, as in the
+  // terminal.
+  const browsing = { draft: "", index: null };
   // The suggestion popup, and the slash commands and `@` file lookup it
   // lists. The slash commands take the text first.
   const suggestions = createSuggestions({
@@ -187,9 +226,57 @@ export function createComposer({
     return Boolean(window.matchMedia?.("(pointer: fine)").matches);
   }
 
-  // Opens, filters or closes the suggestions for the text and caret.
+  // Shows `text` in the field, with the caret at its end, without saving
+  // it as the draft.
+  function showText(text) {
+    elements.message.value = text;
+    elements.message.setSelectionRange(text.length, text.length);
+    resize();
+  }
+
+  function stopBrowsing() {
+    browsing.draft = "";
+    browsing.index = null;
+  }
+
+  // Moves `step` (`back` or `forward`) through the earlier prompts, and
+  // says whether it did. `back` starts at the newest and stops at the
+  // oldest; `forward` past the newest brings back the text browsing
+  // replaced.
+  function browseHistory(step) {
+    const prompts = history();
+    if (step === "back") {
+      if (prompts.length === 0) {
+        return false;
+      }
+      if (browsing.index === null) {
+        browsing.draft = elements.message.value;
+      }
+      browsing.index = Math.max(0, Math.min(browsing.index ?? prompts.length, prompts.length) - 1);
+    } else if (browsing.index === null) {
+      return false;
+    } else if (browsing.index + 1 < prompts.length) {
+      browsing.index += 1;
+    } else {
+      const draft = browsing.draft;
+      stopBrowsing();
+      showText(draft);
+
+      return true;
+    }
+    showText(prompts[browsing.index]);
+
+    return true;
+  }
+
+  // Opens, filters or closes the suggestions for the text and caret. An
+  // earlier prompt on screen offers none, so the arrow keys keep
+  // browsing.
   function updateSuggestions() {
-    if (slash.update()) {
+    if (browsing.index !== null) {
+      slash.close();
+      mentions.close();
+    } else if (slash.update()) {
       mentions.close();
     } else {
       mentions.update();
@@ -242,6 +329,7 @@ export function createComposer({
   }
 
   elements.message.addEventListener("input", () => {
+    stopBrowsing();
     const draftId = context().draftId;
     if (draftId) {
       drafts.set(draftId, elements.message.value);
@@ -250,9 +338,17 @@ export function createComposer({
     updateSuggestions();
   });
   // An open suggestion list takes its keys first, so `Enter` picks there
-  // instead of sending.
+  // instead of sending and the arrow keys move through it instead of the
+  // earlier prompts.
   elements.message.addEventListener("keydown", (event) => {
     if (suggestions.handleKey(event)) {
+      return;
+    }
+    const { selectionEnd, selectionStart, value } = elements.message;
+    const step = historyKeyAction(event, value, selectionStart, selectionEnd);
+    if (step && browseHistory(step)) {
+      event.preventDefault();
+
       return;
     }
     if (composerKeyAction(event, { isFinePointer: isFinePointer() }) === "send") {
@@ -283,16 +379,24 @@ export function createComposer({
       }
     },
     // Empties the field when it still holds `text`; text typed since
-    // stays.
+    // stays. A sent earlier prompt gives way to the draft it replaced, and
+    // a draft browsing replaced that went out meanwhile is not brought
+    // back.
     clearText: (text) => {
+      if (browsing.draft === text) {
+        browsing.draft = "";
+      }
       if (elements.message.value === text) {
-        elements.message.value = "";
+        const draft = browsing.draft;
+        stopBrowsing();
+        elements.message.value = draft;
         resize();
       }
     },
     isFinePointer,
     keepDraft: (draftId, text) => drafts.set(draftId, text),
     load: (draftId) => {
+      stopBrowsing();
       elements.message.value = draftId ? drafts.get(draftId) : "";
       resize();
     },
@@ -309,6 +413,7 @@ export function createComposer({
       elements.send.setAttribute("aria-label", sendLabel);
     },
     reset: () => {
+      stopBrowsing();
       isLocked = false;
       elements.hint.textContent = "";
       slash.reset();

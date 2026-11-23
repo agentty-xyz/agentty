@@ -487,6 +487,7 @@ fn assert_message_queued_while_running(running: &Value, queued: &Value, shown: &
                 "wt/session- → main",
                 "codex/gpt-6.1-sol [high]",
             ],
+            "isStartedShown": true,
             "isTimerShown": true,
             "meta": "codex/gpt-6.1-sol [high]·balanced·normal speed",
             "notice": {"isError": true, "label": "Commit Error", "text": "hook failed"},

@@ -2,7 +2,7 @@
 // WebSocket at /ws, or over an encrypted stream through the relay that
 // serves this page; see crates/ag-remote/src/protocol.rs for the frames.
 
-import { createChat, createRefreshGate } from "./chat.mjs";
+import { connectionLostError, createChat, createRefreshGate } from "./chat.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
 import { parseProject } from "./format.mjs";
@@ -129,6 +129,7 @@ const elements = {
   "publish-dialog": document.getElementById("publish-dialog"),
   "publish-branch": document.getElementById("publish-branch"),
   "publish-review": document.getElementById("publish-review"),
+  "publish-wait": document.getElementById("publish-wait"),
   "sync-dialog": document.getElementById("sync-dialog"),
   "sync-target": document.getElementById("sync-target"),
   "settings-dialog": document.getElementById("settings-dialog"),
@@ -474,9 +475,11 @@ function request(body) {
   });
 }
 
+// Ends the requests in flight when the connection drops. Their error says
+// so, as Agentty may still run them.
 function failPending(message) {
   for (const pending of state.pending.values()) {
-    pending.reject(new Error(message));
+    pending.reject(connectionLostError(message));
   }
   state.pending.clear();
 }
@@ -811,6 +814,7 @@ const chat = createChat({
     publishDialog: elements["publish-dialog"],
     publishLabel: elements["publish-label"],
     publishReview: elements["publish-review"],
+    publishWait: elements["publish-wait"],
     questions: elements.questions,
     queued: elements.queued,
     queuedBox: elements["queued-box"],

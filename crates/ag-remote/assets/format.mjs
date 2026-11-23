@@ -158,16 +158,46 @@ export function formatTimer(seconds) {
   return label + (total % 60) + "s";
 }
 
-// Active-work seconds of a listed session at `nowSeconds`, or `null` when
-// it is not running or the host does not say.
+// Active-work seconds of a listed session at `nowSeconds`: the earlier
+// work plus, while a turn runs, its open interval, as the terminal's timer
+// counts. `null` when the session never worked or the host does not say.
 export function activeSeconds(summary, nowSeconds) {
   const startedAt = summary?.in_progress_started_at;
+  const before = Number.isFinite(summary?.in_progress_total_seconds)
+    ? summary.in_progress_total_seconds
+    : 0;
   if (!Number.isFinite(startedAt)) {
+    return before > 0 ? before : null;
+  }
+
+  return before + Math.max(0, nowSeconds - startedAt);
+}
+
+// How long ago a session created at `createdAt` started, as seen at
+// `nowSeconds`, in the terminal's words: `Started just now`, then the two
+// largest units, as `Started 12m ago`, `Started 3h 5m ago` or
+// `Started 2d 4h ago`. `null` when the host does not say.
+// `session_started_label` in crates/agentty/src/ui/session_format.rs owns
+// the same text.
+export function startedLabel(createdAt, nowSeconds) {
+  if (!Number.isFinite(createdAt)) {
     return null;
   }
-  const before = summary.in_progress_total_seconds;
+  const seconds = Math.max(0, Math.floor(nowSeconds - createdAt));
+  if (seconds < 60) {
+    return "Started just now";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const days = Math.floor(seconds / 86400);
+  let age = minutes + "m";
+  if (days > 0) {
+    age = days + "d " + (hours % 24) + "h";
+  } else if (hours > 0) {
+    age = hours + "h " + (minutes % 60) + "m";
+  }
 
-  return (Number.isFinite(before) ? before : 0) + Math.max(0, nowSeconds - startedAt);
+  return "Started " + age + " ago";
 }
 
 // How the list labels a pull request that can merge, as the terminal's

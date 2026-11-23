@@ -8,6 +8,7 @@ import {
   createSlashCommands,
   slashCommands,
   slashQuery,
+  slashScore,
   slashValues,
   toggledSpeed,
 } from "../../assets/slash.mjs";
@@ -92,7 +93,7 @@ test("slashQuery reads a command being typed at the start, with the caret at the
   assert.equal(slashQuery("/mo", 3, 3), "mo");
 });
 
-test("slashCommands filters by prefix in the terminal's order, and lists /fast only when it can run", () => {
+test("slashCommands matches fuzzily as the terminal does, and lists /fast only when it can run", () => {
   const names = (list) => list.map((command) => command.name);
 
   assert.deepEqual(names(slashCommands("")), ["/model", "/reasoning", "/style"]);
@@ -100,10 +101,33 @@ test("slashCommands filters by prefix in the terminal's order, and lists /fast o
   assert.deepEqual(names(slashCommands("re")), ["/reasoning"]);
   assert.deepEqual(names(slashCommands("f", { canFast: true })), ["/fast"]);
   assert.deepEqual(names(slashCommands("f")), []);
+  // A prefix ranks above the same letters inside another name.
+  assert.deepEqual(names(slashCommands("st", { canFast: true })), ["/style", "/fast"]);
+  // Inside a name, an earlier match ranks first; equal scores keep the
+  // terminal's order.
+  assert.deepEqual(names(slashCommands("e", { canFast: true })), ["/reasoning", "/model", "/style"]);
+  // Letters in order, with gaps, still match.
+  assert.deepEqual(names(slashCommands("rsn")), ["/reasoning"]);
+  assert.deepEqual(names(slashCommands("ml")), ["/model"]);
+  assert.deepEqual(names(slashCommands("lm")), []);
   assert.deepEqual(names(slashCommands("apply", { canFast: true })), []);
   assert.deepEqual(names(slashCommands("graph", { canFast: true })), []);
   assert.deepEqual(names(slashCommands("remote", { canFast: true })), []);
   assert.equal(SLASH_COMMANDS[0].description, "Choose an agent and model for this session.");
+});
+
+test("slashScore ranks like the terminal's slash_command_fuzzy_score", () => {
+  assert.equal(slashScore("/model", ""), 0);
+  assert.equal(slashScore("/model", "model"), 0);
+  assert.equal(slashScore("/model", "/model"), 0);
+  assert.equal(slashScore("/model", "mo"), 1);
+  assert.equal(slashScore("/fast", "st"), 102);
+  assert.equal(slashScore("/model", "ml"), 203);
+  assert.equal(slashScore("/reasoning", "rsn"), 203);
+  assert.equal(slashScore("/style", "yl"), 102);
+  assert.equal(slashScore("/style", "se"), 203);
+  assert.equal(slashScore("/style", "x"), null);
+  assert.equal(slashScore("/style", "styles"), null);
 });
 
 test("toggledSpeed switches between normal and fast", () => {
@@ -150,8 +174,10 @@ test("typing / opens the commands, filters them, and closes on other text", asyn
   await settle();
   // The session's model runs fast, so /fast is offered once the host says so.
   assert.deepEqual(shown(), ["/model", "/reasoning", "/style", "/fast"]);
-  type("/st");
+  type("/sty");
   assert.deepEqual(shown(), ["/style"]);
+  type("/st");
+  assert.deepEqual(shown(), ["/style", "/fast"]);
   assert.equal(type("/x"), false);
   assert.equal(suggestions.isOpen(), false);
   type("/s");

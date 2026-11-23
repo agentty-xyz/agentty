@@ -25,6 +25,7 @@ import {
   reviewLabel,
   sessionFigures,
   settingsParts,
+  startedLabel,
   statusInfo,
   statusLine,
   unreadIds,
@@ -476,15 +477,45 @@ test("formatTimer counts like the terminal's timer", () => {
   assert.equal(formatTimer(3723), "1h 2m 3s");
 });
 
-test("activeSeconds adds the open interval to earlier work, only while running", () => {
+test("activeSeconds adds the open interval to earlier work, and keeps the total after", () => {
   const running = { in_progress_started_at: 100, in_progress_total_seconds: 30 };
 
   assert.equal(activeSeconds(running, 160), 90);
   assert.equal(activeSeconds({ in_progress_started_at: 100 }, 160), 60);
+  assert.equal(activeSeconds({ in_progress_started_at: 160, in_progress_total_seconds: 0 }, 160), 0);
   // A clock behind the host's never counts backwards.
   assert.equal(activeSeconds(running, 90), 30);
-  assert.equal(activeSeconds({ in_progress_total_seconds: 30 }, 160), null);
+  // Between turns the total stands still.
+  assert.equal(activeSeconds({ in_progress_total_seconds: 30 }, 160), 30);
+  assert.equal(activeSeconds({ in_progress_total_seconds: 30 }, 999), 30);
+  // A session that never worked, or a host that does not say, shows none.
+  assert.equal(activeSeconds({ in_progress_total_seconds: 0 }, 160), null);
+  assert.equal(activeSeconds({ updated_at: 10 }, 160), null);
   assert.equal(activeSeconds(null, 160), null);
+});
+
+test("startedLabel says how long ago a session started, as the terminal does", () => {
+  const now = 1_000_000;
+  const cases = [
+    [now, "Started just now"],
+    [now - 59, "Started just now"],
+    // A device clock behind the host's never reads a future start.
+    [now + 30, "Started just now"],
+    [now - 60, "Started 1m ago"],
+    [now - 12 * 60 - 59, "Started 12m ago"],
+    [now - 3600, "Started 1h 0m ago"],
+    [now - 3 * 3600 - 5 * 60, "Started 3h 5m ago"],
+    [now - 86400, "Started 1d 0h ago"],
+    [now - 2 * 86400 - 4 * 3600 - 59 * 60, "Started 2d 4h ago"],
+  ];
+
+  assert.deepEqual(
+    cases.map(([createdAt]) => startedLabel(createdAt, now)),
+    cases.map(([, label]) => label),
+  );
+  // An older host omits the creation time.
+  assert.equal(startedLabel(undefined, now), null);
+  assert.equal(startedLabel(null, now), null);
 });
 
 test("sessionFigures reads the listing's figures and hides what an older host omits", () => {

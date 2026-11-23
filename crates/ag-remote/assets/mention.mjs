@@ -1,4 +1,5 @@
-// `@` file lookup of the remote control client's composer. As in the
+// `@` file lookup of the remote control client's composer and of the
+// typed answers to the agent's questions. As in the
 // terminal, typing `@` at the start of a word lists the files and
 // directories of the open session's worktree, or for a session yet to
 // start those of the active project's checkout, ranked by a fuzzy match

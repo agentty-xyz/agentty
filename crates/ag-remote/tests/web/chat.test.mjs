@@ -3,14 +3,22 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { FakeEvent, MemoryStorage, createDocument, createWindow } from "./fake_dom.mjs";
-import { DRAFT_KEY_PREFIX, composerKeyAction, composerRows } from "../../assets/composer.mjs";
+import {
+  DRAFT_KEY_PREFIX,
+  composerKeyAction,
+  composerRows,
+  historyKeyAction,
+  promptHistory,
+} from "../../assets/composer.mjs";
 import {
   clockSkew,
   diffKey,
   collectAnswers,
   composerState,
+  connectionLostError,
   createChat,
   createRefreshGate,
+  isConnectionLost,
   mergeTarget,
   messageKind,
   publishBranch,
@@ -55,6 +63,7 @@ const ELEMENT_IDS = {
   publishDialog: "publish-dialog",
   publishLabel: "publish-label",
   publishReview: "publish-review",
+  publishWait: "publish-wait",
   questions: "questions",
   queued: "queued",
   queuedBox: "queued-box",
@@ -597,6 +606,122 @@ test("the questions panel collects answers, survives refreshes, and sends the se
   assert.equal(byId("answer-error").textContent, "");
 });
 
+const ANSWER_QUESTIONS = [
+  { options: ["CI", "Locally"], text: "Where should it run?" },
+  { options: [], text: "Which file?" },
+];
+
+// Types `text` into answer field `input`, with the caret at its end.
+function typeAnswer(input, text) {
+  input.value = text;
+  input.dispatchEvent(new FakeEvent("input"));
+}
+
+test("@ in a typed answer lists the session's files, and Enter picks one instead of sending", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["files"],
+    respond: (body) =>
+      body.method === "list_session_files"
+        ? {
+            files: [
+              { is_dir: true, path: "src" },
+              { is_dir: false, path: "src/main.rs" },
+            ],
+            kind: "session_files",
+          }
+        : { kind: "accepted" },
+  });
+  chat.render(session({ questions: ANSWER_QUESTIONS, status: "Question" }));
+  const inputs = byId("questions").querySelectorAll("input");
+  const list = byId("answer-suggestions-1");
+  // Each answer field holds its own list, right after it.
+  assert.ok(inputs[1].nextSibling.querySelector("#answer-suggestions-1") === list);
+  assert.ok(byId("answer-suggestions-0") !== null);
+
+  inputs[0].value = "Locally";
+  inputs[0].dispatchEvent(new FakeEvent("input"));
+  typeAnswer(inputs[1], "@mai");
+  await settle();
+  assert.deepEqual(Array.from(list.children, (option) => option.dataset.key), ["src/main.rs"]);
+  assert.equal(inputs[1].getAttribute("aria-expanded"), "true");
+  assert.equal(byId("answer-count").textContent, "2 of 2 answered");
+
+  const enter = new FakeEvent("keydown", { key: "Enter" });
+  inputs[1].dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(inputs[1].value, "@src/main.rs ");
+  assert.equal(inputs[1].selectionStart, inputs[1].value.length);
+  assert.equal(inputs[1].getAttribute("aria-expanded"), "false");
+  // With the list closed, the keys are the field's again.
+  const second = new FakeEvent("keydown", { key: "Enter" });
+  inputs[1].dispatchEvent(second);
+  assert.equal(second.defaultPrevented, false);
+
+  byId("answer-send").click();
+  await settle();
+  assert.deepEqual(requests, [
+    { method: "list_session_files", session_id: "s1" },
+    {
+      answers: [
+        { answer: "Locally", question: "Where should it run?" },
+        { answer: "@src/main.rs", question: "Which file?" },
+      ],
+      method: "answer_questions",
+      session_id: "s1",
+    },
+  ]);
+});
+
+test("the answer file list closes on blur, offline, and with new questions, and needs files", async () => {
+  const plain = mountChat();
+  plain.chat.render(session({ questions: ANSWER_QUESTIONS, status: "Question" }));
+  typeAnswer(plain.byId("questions").querySelectorAll("input")[1], "@src");
+  await settle();
+  assert.equal(plain.byId("answer-suggestions-1").children.length, 0);
+  assert.deepEqual(plain.requests, []);
+
+  let failLoad = false;
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["files"],
+    respond: () => {
+      if (failLoad) {
+        throw new Error("Worktree is gone");
+      }
+
+      return { files: [{ is_dir: false, path: "a.rs" }], kind: "session_files" };
+    },
+  });
+  chat.render(session({ questions: ANSWER_QUESTIONS, status: "Question" }));
+  let input = byId("questions").querySelectorAll("input")[1];
+  const isOpen = () => input.getAttribute("aria-expanded") === "true";
+  typeAnswer(input, "@");
+  await settle();
+  assert.equal(isOpen(), true);
+  input.dispatchEvent(new FakeEvent("blur", { bubbles: false }));
+  assert.equal(isOpen(), false);
+  input.focus();
+  await settle();
+  assert.equal(isOpen(), true);
+
+  chat.setConnected(false);
+  assert.equal(isOpen(), false);
+  chat.setConnected(true);
+  input.dispatchEvent(new FakeEvent("keyup", { key: "@" }));
+  await settle();
+  assert.equal(isOpen(), true);
+
+  // A new set of questions starts with closed lists; a failed load says
+  // why under the answers.
+  chat.render(session({ questions: [{ options: [], text: "Which test?" }], status: "Question" }));
+  input = byId("questions").querySelectorAll("input")[0];
+  failLoad = true;
+  typeAnswer(input, "@");
+  await settle();
+  assert.equal(isOpen(), false);
+  assert.equal(byId("answer-error").textContent, "Could not list the files: Worktree is gone");
+  assert.equal(requests.filter((body) => body.method === "list_session_files").length, 4);
+});
+
 test("a failed send keeps the text and the draft, and a later success clears both", async () => {
   let shouldFail = true;
   const storage = new MemoryStorage();
@@ -752,7 +877,14 @@ test("Diff swaps the transcript and the dock for the session's files and back", 
 });
 
 test("header actions appear only with their capability and status", () => {
-  const none = { diff: false, diffEnabled: false, publish: false, publishEnabled: false, sync: false };
+  const none = {
+    diff: false,
+    diffEnabled: false,
+    publish: false,
+    publishEnabled: false,
+    publishWaits: false,
+    sync: false,
+  };
   assert.deepEqual(sessionActions("Review"), {
     ...none,
     cancel: true,
@@ -770,6 +902,7 @@ test("header actions appear only with their capability and status", () => {
     cancel: true,
     merge: true,
     mergeEnabled: false,
+    publishWaits: true,
   });
   assert.deepEqual(sessionActions("Done", ["merge"]), {
     ...none,
@@ -972,8 +1105,17 @@ const REVIEW_REQUEST = {
 
 test("Publish and Sync appear only with their capability and a status that allows them", () => {
   assert.equal(sessionActions("Review", ["publish"]).publishEnabled, true);
-  assert.equal(sessionActions("InProgress", ["publish"]).publish, true);
-  assert.equal(sessionActions("InProgress", ["publish"]).publishEnabled, false);
+  assert.equal(sessionActions("Review", ["publish"]).publishWaits, false);
+  // As `p` in the terminal, a running turn or sync queues the publish.
+  for (const status of ["InProgress", "Rebasing"]) {
+    assert.equal(sessionActions(status, ["publish"]).publish, true, status);
+    assert.equal(sessionActions(status, ["publish"]).publishEnabled, true, status);
+    assert.equal(sessionActions(status, ["publish"]).publishWaits, true, status);
+    assert.equal(sessionActions(status).publishEnabled, false, status);
+  }
+  for (const status of ["Draft", "Question", "Queued", "Merging", "Merged", "Done", "Canceled"]) {
+    assert.equal(sessionActions(status, ["publish"]).publishEnabled, false, status);
+  }
   assert.equal(sessionActions("Review").publish, false);
   // Sync follows `allows_rebase_action`, and is left out where it does
   // not apply.
@@ -990,10 +1132,12 @@ test("Publish and Sync appear only with their capability and a status that allow
   assert.equal(plain.byId("sheet-sync").hidden, true);
 
   const capable = mountChat({ capabilities: ["publish", "sync"] });
-  capable.chat.render(session({ status: "InProgress" }));
+  capable.chat.render(session({ status: "Question" }));
   assert.equal(capable.byId("publish").hidden, false);
   assert.equal(capable.byId("publish").disabled, true);
   assert.equal(capable.byId("sheet-publish").disabled, true);
+  capable.chat.render(session({ status: "InProgress" }));
+  assert.equal(capable.byId("publish").disabled, false);
   assert.equal(capable.byId("sheet-sync").hidden, false);
   assert.equal(capable.byId("sheet-sync-label").textContent, "Sync with base branch");
   capable.chat.render(session({ base_branch: "main" }));
@@ -1094,6 +1238,135 @@ test("a publish stays pending across session switches and is never sent twice", 
   chat.render(session());
   assert.equal(byId("action-note").textContent, "Published · #7 open");
   assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("publish-label").textContent, "Publish");
+});
+
+test("Publish during a turn says it waits, stays queued until the turn ends, then publishes", async () => {
+  const answer = deferred();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => (body.method === "publish_session" ? answer.promise : { kind: "accepted" }),
+  });
+  chat.render(session());
+  assert.equal(byId("publish-wait").hidden, true);
+  assert.equal(byId("publish").title, "");
+
+  chat.render(session({ status: "InProgress" }));
+  assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(byId("publish").title, "Publishes after the current turn");
+  assert.equal(byId("sheet-publish-note").textContent, "after this turn");
+  assert.equal(byId("publish-wait").hidden, false);
+  assert.equal(
+    byId("publish-wait").textContent,
+    "The session is working, so this waits and publishes after the current turn.",
+  );
+  chat.render(session({ review_request: REVIEW_REQUEST, status: "Rebasing" }));
+  assert.equal(byId("sheet-publish-note").textContent, "after this turn");
+  assert.equal(byId("publish-review").textContent, "refreshes its pull request #7");
+
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.deepEqual(requests, [{ method: "publish_session", session_id: "s1" }]);
+  // The host answers only once the publish ran, so the page says it is
+  // queued while the turn runs, through every refresh.
+  chat.render(session({ status: "InProgress" }));
+  assert.equal(byId("publish").disabled, true);
+  assert.equal(byId("publish").getAttribute("aria-busy"), "true");
+  assert.equal(byId("publish").title, "");
+  assert.equal(byId("publish-label").textContent, "Publish queued");
+  assert.equal(byId("sheet-publish-note").textContent, "queued");
+  // Messages, Stop and the other actions stay free meanwhile.
+  assert.equal(byId("send").disabled, false);
+
+  // The turn ends and the publish runs.
+  chat.render(session());
+  assert.equal(byId("publish-label").textContent, "Publishing…");
+  assert.equal(byId("sheet-publish-note").textContent, "publishing…");
+  assert.equal(byId("publish-wait").hidden, true);
+  answer.resolve({ kind: "review_request", review_request: REVIEW_REQUEST });
+  await settle();
+  assert.equal(byId("action-note").textContent, "Published · #7 open");
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(requests.length, 1);
+});
+
+test("a publish queued behind a turn stays queued when the connection drops", async () => {
+  const answer = deferred();
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => (body.method === "publish_session" ? answer.promise : { kind: "accepted" }),
+  });
+  const confirmPublish = async () => {
+    byId("publish").click();
+    byId("publish-dialog").querySelector('button[value="confirm"]').click();
+    await settle();
+  };
+  chat.render(session({ status: "InProgress" }));
+  await confirmPublish();
+  // The connection drops; Agentty still runs the publish after the turn.
+  answer.reject(connectionLostError("Disconnected"));
+  chat.setConnected(false);
+  await settle();
+  chat.setConnected(true);
+  chat.render(session({ status: "InProgress" }));
+
+  assert.ok(isConnectionLost(connectionLostError("Disconnected")));
+  assert.equal(isConnectionLost(new Error("Disconnected")), false);
+  assert.equal(byId("publish-label").textContent, "Publish queued");
+  assert.equal(byId("sheet-publish-note").textContent, "queued");
+  assert.equal(byId("publish").disabled, true);
+  assert.equal(byId("action-error").textContent, "");
+  // It is not offered again, even through a confirmation left open.
+  byId("publish-dialog").dataset.sessionId = "s1";
+  byId("publish-dialog").showModal();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(requests.length, 1);
+  // Another session meanwhile does not end it.
+  chat.open("s2");
+  chat.render(session({ id: "s2" }));
+  chat.open("s1");
+  chat.render(session({ status: "Rebasing" }));
+  assert.equal(byId("publish-label").textContent, "Publish queued");
+
+  // The turn is over, so the publish ran: Publish is offered again, with
+  // no error.
+  chat.render(session({ review_request: REVIEW_REQUEST }));
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(byId("publish").disabled, false);
+  assert.equal(byId("action-error").textContent, "");
+  assert.equal(byId("action-note").textContent, "");
+});
+
+test("a publish during a turn still shows Agentty's refusal, and one in review a dropped connection", async () => {
+  let failure = new Error("Session is busy");
+  const { byId, chat } = mountChat({
+    capabilities: ["publish"],
+    respond: (body) => {
+      if (body.method === "publish_session") {
+        throw failure;
+      }
+
+      return { kind: "accepted" };
+    },
+  });
+  chat.render(session({ status: "InProgress" }));
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-error").textContent, "Session is busy");
+  assert.equal(byId("publish-label").textContent, "Publish");
+  assert.equal(byId("publish").disabled, false);
+
+  // In review the publish runs at once, so a dropped connection says so.
+  failure = connectionLostError("Disconnected");
+  chat.render(session());
+  byId("publish").click();
+  byId("publish-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+  assert.equal(byId("action-error").textContent, "Disconnected");
   assert.equal(byId("publish-label").textContent, "Publish");
 });
 
@@ -1582,6 +1855,226 @@ test("without the files capability, @ is plain text", async () => {
   assert.deepEqual(requests, []);
 });
 
+test("historyKeyAction browses from the first or last line, without modifiers", () => {
+  const key = (name, init = {}) => ({ key: name, ...init });
+
+  assert.equal(historyKeyAction(key("ArrowUp"), "", 0), "back");
+  assert.equal(historyKeyAction(key("ArrowUp"), "one line", 3), "back");
+  assert.equal(historyKeyAction(key("ArrowUp"), "first\nsecond", 3), "back");
+  assert.equal(historyKeyAction(key("ArrowUp"), "first\nsecond", 8), null);
+  assert.equal(historyKeyAction(key("ArrowDown"), "first\nsecond", 8), "forward");
+  assert.equal(historyKeyAction(key("ArrowDown"), "first\nsecond", 3), null);
+  // A selection counts from its start going up and its end going down.
+  assert.equal(historyKeyAction(key("ArrowUp"), "first\nsecond", 3, 8), "back");
+  assert.equal(historyKeyAction(key("ArrowDown"), "first\nsecond", 3, 8), "forward");
+  for (const modifier of ["altKey", "ctrlKey", "metaKey", "shiftKey", "isComposing"]) {
+    assert.equal(historyKeyAction(key("ArrowUp", { [modifier]: true }), "", 0), null, modifier);
+  }
+  assert.equal(historyKeyAction(key("ArrowUp", { keyCode: 229 }), "", 0), null);
+  assert.equal(historyKeyAction(key("Enter"), "", 0), null);
+});
+
+test("promptHistory lists the session's own prompts, oldest first", () => {
+  assert.deepEqual(
+    promptHistory(
+      session({
+        messages: [
+          { content: "Build it", kind: "user" },
+          { content: "Done.", kind: "assistant" },
+          { content: "Merged", kind: "notice" },
+          { content: "Add tests\nand docs", kind: "user" },
+          { kind: "user" },
+        ],
+      }),
+    ),
+    ["Build it", "Add tests\nand docs"],
+  );
+  assert.deepEqual(promptHistory(session({ messages: [] })), []);
+  assert.deepEqual(promptHistory({ id: "s1" }), []);
+  assert.deepEqual(promptHistory(null), []);
+});
+
+const HISTORY_MESSAGES = [
+  { content: "Build it", kind: "user" },
+  { content: "Done.", kind: "assistant" },
+  { content: "Add tests\nand docs", kind: "user" },
+  { content: "Added.", kind: "assistant" },
+];
+
+function pressArrow(byId, key, init = {}) {
+  const event = new FakeEvent("keydown", { key: key, ...init });
+  byId("message").dispatchEvent(event);
+  byId("message").dispatchEvent(new FakeEvent("keyup", { key: key }));
+
+  return event.defaultPrevented;
+}
+
+test("Up and Down browse the session's prompts and bring the unsent draft back", () => {
+  const storage = new MemoryStorage();
+  const { byId, chat } = mountChat({ sessionStorage: storage });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  const message = byId("message");
+  typeMessage(byId, "half typed");
+
+  // Newest first; the caret ends up at the end of the prompt.
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message.value, "Add tests\nand docs");
+  assert.equal(message.selectionStart, message.value.length);
+  assert.equal(message.rows, 2);
+  // The draft is kept while a prompt shows.
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "half typed");
+  // On a later line of a prompt, Up moves the caret, as the browser does.
+  assert.equal(pressArrow(byId, "ArrowUp"), false);
+  assert.equal(message.value, "Add tests\nand docs");
+  message.setSelectionRange(3);
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message.value, "Build it");
+  // The oldest prompt is as far back as it goes.
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message.value, "Build it");
+  // Shift+Up selects instead.
+  assert.equal(pressArrow(byId, "ArrowUp", { shiftKey: true }), false);
+
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(message.value, "Add tests\nand docs");
+  // On an earlier line, Down moves the caret.
+  message.setSelectionRange(3);
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+  message.setSelectionRange(message.value.length);
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(message.value, "half typed");
+  assert.equal(message.rows, 1);
+  // Back at the draft, Down is the browser's again.
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+  assert.equal(message.value, "half typed");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "half typed");
+});
+
+test("prompt history: none to browse, an edited prompt, and a session switch", () => {
+  const storage = new MemoryStorage();
+  const { byId, chat } = mountChat({ sessionStorage: storage });
+  const message = byId("message");
+  // A session without prompts of its own leaves the keys to the browser.
+  chat.render(session({ messages: [{ content: "Merged", kind: "notice" }] }));
+  assert.equal(pressArrow(byId, "ArrowUp"), false);
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+  assert.equal(message.value, "");
+
+  // Editing a prompt ends browsing and makes it the draft, as in the
+  // terminal.
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  typeMessage(byId, "Add tests\nand docs, please");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "Add tests\nand docs, please");
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+  assert.equal(message.value, "Add tests\nand docs, please");
+
+  // Switching sessions while a prompt shows comes back to the draft.
+  typeMessage(byId, "my draft");
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  chat.open("s2");
+  assert.equal(message.value, "");
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+  chat.open("s1");
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  assert.equal(message.value, "my draft");
+  // Browsing starts afresh there, from the newest prompt.
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message.value, "Add tests\nand docs");
+});
+
+test("a sent earlier prompt gives way to the draft, and the draft stays saved", async () => {
+  const storage = new MemoryStorage();
+  const { byId, chat, requests } = mountChat({ sessionStorage: storage });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  typeMessage(byId, "half typed");
+  pressArrow(byId, "ArrowUp");
+  message(byId).setSelectionRange(0);
+  pressArrow(byId, "ArrowUp");
+  assert.equal(pressKey(byId, "Enter").defaultPrevented, true);
+  await settle();
+
+  assert.deepEqual(requests, [{ method: "send_message", message: "Build it", session_id: "s1" }]);
+  assert.equal(message(byId).value, "half typed");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "half typed");
+  // Browsing ended with the send.
+  assert.equal(pressArrow(byId, "ArrowDown"), false);
+});
+
+test("text sent while browsing starts is not brought back as the draft", async () => {
+  const storage = new MemoryStorage();
+  const reply = deferred();
+  const { byId, chat, requests } = mountChat({
+    respond: (body) => (body.method === "send_message" ? reply.promise : { kind: "accepted" }),
+    sessionStorage: storage,
+  });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  typeMessage(byId, "fresh text");
+  pressKey(byId, "Enter");
+  // Before Agentty answers, Up starts browsing from the text in flight.
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message(byId).value, "Add tests\nand docs");
+  reply.resolve({ kind: "accepted" });
+  await settle();
+
+  assert.deepEqual(requests, [{ method: "send_message", message: "fresh text", session_id: "s1" }]);
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), null);
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(message(byId).value, "");
+});
+
+function message(byId) {
+  return byId("message");
+}
+
+test("open suggestions take the arrow keys, and a shown prompt opens none", async () => {
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["host", "settings", "files"],
+    respond: (body) => {
+      if (body.method === "get_host") {
+        return HOST;
+      }
+
+      return { files: [{ is_dir: false, path: "README.md" }], kind: "session_files" };
+    },
+  });
+  chat.render(
+    session({
+      ...SETTINGS_SESSION,
+      messages: [{ content: "/tmp/notes", kind: "user" }, { content: "Read @REA", kind: "user" }],
+    }),
+  );
+  const isOpen = () => message(byId).getAttribute("aria-expanded") === "true";
+
+  // With the slash menu open, Up moves its highlight.
+  typeMessage(byId, "/");
+  await settle();
+  assert.equal(isOpen(), true);
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message(byId).value, "/");
+  assert.equal(isOpen(), true);
+  // Once the menu closes, Up browses.
+  message(byId).dispatchEvent(new FakeEvent("blur", { bubbles: false }));
+  assert.equal(isOpen(), false);
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message(byId).value, "Read @REA");
+  // The prompt ends in an `@` token, yet no file list opens over it, so
+  // Up keeps browsing.
+  assert.equal(isOpen(), false);
+  assert.deepEqual(
+    requests.map((body) => body.method),
+    ["get_host"],
+  );
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+  assert.equal(message(byId).value, "/tmp/notes");
+  assert.equal(isOpen(), false);
+  // Back at the draft, the suggestions follow the text again.
+  pressArrow(byId, "ArrowDown");
+  pressArrow(byId, "ArrowDown");
+  assert.equal(message(byId).value, "/");
+  assert.equal(isOpen(), true);
+});
+
 test("Cancel session asks first and shows the host's refusal under the header", async () => {
   const { byId, chat, requests } = mountChat({
     respond: () => {
@@ -1934,17 +2427,17 @@ test("the timer allows for a device clock behind the host's", () => {
     detailedSession({ status: "InProgress" }),
     detailedSummary({ in_progress_started_at: 200, in_progress_total_seconds: 10, updated_at: 190 }),
   );
-  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 10s");
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer: 10s");
   time = 105;
   chat.tick();
-  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer 15s");
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer: 15s");
 
   assert.equal(clockSkew({ updated_at: 50 }, 100), 0);
   assert.equal(clockSkew({ updated_at: 150 }, 100), 50);
   assert.equal(clockSkew(null, 100), 0);
 });
 
-test("the header's timer counts while the session runs and goes when it stops", () => {
+test("the header's timer counts while the session runs and stands still between turns", () => {
   let time = 1000;
   const { byId, chat } = mountChat({ now: () => time });
   const running = detailedSummary({
@@ -1954,14 +2447,28 @@ test("the header's timer counts while the session runs and goes when it stops", 
   });
   chat.render(detailedSession({ status: "InProgress" }), running);
   const timer = byId("heading-sub").querySelector(".timer");
-  assert.equal(timer.textContent, "Timer 4m 12s");
+  assert.equal(timer.textContent, "Timer: 4m 12s");
 
   time = 1001;
   chat.tick();
   assert.equal(byId("heading-sub").querySelector(".timer"), timer);
-  assert.equal(timer.textContent, "Timer 4m 13s");
+  assert.equal(timer.textContent, "Timer: 4m 13s");
 
+  // The turn ended: the total the host counted stays, still.
   chat.render(detailedSession(), detailedSummary({ in_progress_total_seconds: 253 }));
+  const stopped = byId("heading-sub").querySelector(".timer");
+  assert.equal(stopped.textContent, "Timer: 4m 13s");
+  time = 1100;
+  chat.tick();
+  assert.equal(stopped.textContent, "Timer: 4m 13s");
+  // So does a finished session's.
+  chat.render(detailedSession({ status: "Done" }), detailedSummary({ in_progress_total_seconds: 253 }));
+  assert.equal(byId("heading-sub").querySelector(".timer").textContent, "Timer: 4m 13s");
+
+  // A session that never worked, or a host that lists no total, shows none.
+  chat.render(detailedSession({ status: "Draft" }), detailedSummary({ in_progress_total_seconds: 0 }));
+  assert.equal(byId("heading-sub").querySelector(".timer"), null);
+  chat.render(detailedSession(), detailedSummary());
   assert.equal(byId("heading-sub").querySelector(".timer"), null);
   chat.tick();
   assert.equal(byId("heading-sub").querySelector(".timer"), null);
@@ -1970,6 +2477,46 @@ test("the header's timer counts while the session runs and goes when it stops", 
   chat.close();
   chat.tick();
   assert.equal(byId("heading-sub").textContent, "");
+});
+
+test("the header says how long ago the session started, after the timer", () => {
+  let time = 20_000;
+  const { byId, chat } = mountChat({ now: () => time });
+  const sub = byId("heading-sub");
+  const tail = () => Array.from(sub.children, (node) => node.className).slice(-2);
+  chat.render(
+    detailedSession({ created_at: 20_000 - 3 * 3600 - 5 * 60 }),
+    detailedSummary({ in_progress_total_seconds: 252 }),
+  );
+  assert.deepEqual(tail(), ["timer", "started"]);
+  const started = sub.querySelector(".started");
+  assert.equal(started.textContent, "Started 3h 5m ago");
+  assert.equal(sub.querySelector(".timer").textContent, "Timer: 4m 12s");
+
+  // The age moves on with the clock, in place.
+  time += 60;
+  chat.tick();
+  assert.equal(sub.querySelector(".started"), started);
+  assert.equal(started.textContent, "Started 3h 6m ago");
+
+  // A refresh keeps both last, and a session that never worked shows the
+  // age alone.
+  chat.render(detailedSession({ created_at: time - 30, status: "Draft" }), detailedSummary());
+  assert.deepEqual(tail().slice(-1), ["started"]);
+  assert.equal(sub.querySelector(".timer"), null);
+  assert.equal(sub.querySelector(".started").textContent, "Started just now");
+  // The timer comes back before the age once the session works.
+  chat.render(
+    detailedSession({ created_at: time - 30, status: "InProgress" }),
+    detailedSummary({ in_progress_started_at: time - 5, status: "InProgress" }),
+  );
+  assert.deepEqual(tail(), ["timer", "started"]);
+  assert.equal(sub.querySelector(".timer").textContent, "Timer: 5s");
+
+  // An older host sends no creation time, and the page leaves the age out.
+  chat.render(detailedSession(), detailedSummary({ in_progress_total_seconds: 252 }));
+  assert.equal(sub.querySelector(".started"), null);
+  assert.deepEqual(tail().slice(-1), ["timer"]);
 });
 
 test("the composer line shows the settings, and the key hint moves below", () => {
