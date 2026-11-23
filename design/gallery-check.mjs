@@ -275,31 +275,41 @@ export function galleryPage(html, css, theme) {
   return theme ? styled.replace(/<html\b/i, '<html class="' + theme + '"') : styled;
 }
 
+// Runs `step` on each item strictly in turn, each once the previous one has
+// settled, and resolves to their results in order. The steps drive one
+// shared page, so they must never overlap.
+export function inSequence(items, step) {
+  return items.reduce(
+    (done, item) => done.then((results) => step(item).then((result) => results.concat([result]))),
+    Promise.resolve([]),
+  );
+}
+
 // Renders the reference and every surface and returns the differences.
 export async function check(browser, input) {
   const page = await browser.newPage();
   const surfaces = input.surfaces.map((surface) => ({ differences: [], findings: [], name: surface.name }));
+  const variants = THEMES.flatMap((theme) => VIEWPORTS.map((viewport) => ({ theme: theme, viewport: viewport })));
   let captures = 0;
   let specimens = 0;
-  for (const theme of THEMES) {
-    for (const viewport of VIEWPORTS) {
-      const variant = theme.name + ", " + viewport.name;
-      const reference = await capture(page, galleryPage(input.gallery, input.reference, theme.className), viewport);
-      if (reference.specimens === 0) {
-        throw new Error("the gallery marks no element with data-specimen");
-      }
-      specimens = reference.specimens;
-      captures += 1;
-      for (const [index, surface] of input.surfaces.entries()) {
-        const rendered = await capture(page, galleryPage(input.gallery, surface.css, theme.className), viewport);
-        captures += 1;
-        surfaces[index].differences.push(...compareStyles(reference.styles, rendered.styles, variant));
-        if (theme === THEMES[0] && viewport === VIEWPORTS[0]) {
-          surfaces[index].findings.push(...auditRules(reference.rules, rendered.rules, surface.markup));
-        }
-      }
+  await inSequence(variants, async ({ theme, viewport }) => {
+    const variant = theme.name + ", " + viewport.name;
+    const reference = await capture(page, galleryPage(input.gallery, input.reference, theme.className), viewport);
+    if (reference.specimens === 0) {
+      throw new Error("the gallery marks no element with data-specimen");
     }
-  }
+    specimens = reference.specimens;
+    captures += 1;
+    const pairs = input.surfaces.map((surface, index) => ({ result: surfaces[index], surface: surface }));
+    await inSequence(pairs, async ({ result, surface }) => {
+      const rendered = await capture(page, galleryPage(input.gallery, surface.css, theme.className), viewport);
+      captures += 1;
+      result.differences.push(...compareStyles(reference.styles, rendered.styles, variant));
+      if (theme === THEMES[0] && viewport === VIEWPORTS[0]) {
+        result.findings.push(...auditRules(reference.rules, rendered.rules, surface.markup));
+      }
+    });
+  });
 
   return {
     captures: captures,
@@ -330,12 +340,13 @@ export async function capture(page, html, viewport) {
   }
   const nodes = await page.nodes(SPECIMENS);
   // One page, so each state is forced, read, and released in turn.
-  for (const state of STATES) {
-    for (const element of elements.filter((candidate) => candidate[state.target])) {
-      const forced = await readForced(page, nodes, element, state, layout);
-      Object.assign(styles, stateChanges(styles, forced, state.name + " " + element.key + " | "));
-    }
-  }
+  const targets = STATES.flatMap((state) =>
+    elements.filter((candidate) => candidate[state.target]).map((element) => ({ element: element, state: state })),
+  );
+  await inSequence(targets, async ({ element, state }) => {
+    const forced = await readForced(page, nodes, element, state, layout);
+    Object.assign(styles, stateChanges(styles, forced, state.name + " " + element.key + " | "));
+  });
 
   return { rules: rules, specimens: elements.filter((element) => element.root).length, styles: styles };
 }
@@ -345,9 +356,7 @@ export async function capture(page, html, viewport) {
 // field that shows its input's focus with :focus-within, and releases it.
 async function readForced(page, nodes, element, state, layout) {
   await page.force(nodes[element.index], state.forced);
-  for (const ancestor of element.ancestors) {
-    await page.force(nodes[ancestor], state.ancestors);
-  }
+  await inSequence(element.ancestors, (ancestor) => page.force(nodes[ancestor], state.ancestors));
   const forced = await page.evaluate(collectPage, {
     layout: layout,
     mode: "styles",
@@ -355,9 +364,7 @@ async function readForced(page, nodes, element, state, layout) {
     root: element.specimen,
     selector: SPECIMENS,
   });
-  for (const node of [element.index, ...element.ancestors]) {
-    await page.force(nodes[node], []);
-  }
+  await inSequence([element.index, ...element.ancestors], (node) => page.force(nodes[node], []));
 
   return forced;
 }
@@ -902,9 +909,7 @@ export class Browser {
     const { targetId } = await this.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await this.send("Target.attachToTarget", { flatten: true, targetId: targetId });
     const page = new Page(this, sessionId);
-    for (const method of ["Page.enable", "DOM.enable", "CSS.enable"]) {
-      await page.send(method);
-    }
+    await inSequence(["Page.enable", "DOM.enable", "CSS.enable"], (method) => page.send(method));
     await page.send("Emulation.setScriptExecutionDisabled", { value: true });
 
     return page;

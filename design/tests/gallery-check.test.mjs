@@ -22,6 +22,7 @@ import {
   formatReport,
   galleryPage,
   galleryStylesheets,
+  inSequence,
   main,
   parseArguments,
   readMarkup,
@@ -168,6 +169,23 @@ test("galleryStylesheets lists the linked stylesheets in order and requires one"
   assert.deepEqual(galleryStylesheets(GALLERY), ["tokens.css", "base.css"]);
   assert.throws(() => galleryStylesheets('<link rel="stylesheet"><link rel="icon" href="x">'), /links no stylesheet/);
   assert.throws(() => galleryStylesheets("<p>No links at all.</p>"), /links no stylesheet/);
+});
+
+test("inSequence runs each step only after the previous one settles, and keeps their results in order", async () => {
+  const events = [];
+  const step = async (item) => {
+    events.push("start " + item);
+    // The first step takes longest, so overlapping steps would interleave.
+    await new Promise((resolve) => setTimeout(resolve, 3 - item));
+    events.push("end " + item);
+
+    return item * 10;
+  };
+
+  assert.deepEqual(await inSequence([1, 2, 3], step), [10, 20, 30]);
+  assert.deepEqual(events, ["start 1", "end 1", "start 2", "end 2", "start 3", "end 3"]);
+  assert.deepEqual(await inSequence([], step), []);
+  await assert.rejects(inSequence([1], () => Promise.reject(new Error("stop"))), /stop/);
 });
 
 test("stateChanges keeps what a state changes, and every style of an element only the state shows", () => {
