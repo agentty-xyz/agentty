@@ -14,6 +14,10 @@
 // `returned`, and the page opens A's session while B is offline and
 // finally forgets this device on B.
 //
+// In `revoke` mode the page pairs A, then opens B's link; after
+// `awaitingB` the Rust test revokes this device on A, then approves B
+// after `revokedA`. B's pairing card stays as it was meanwhile.
+//
 // In `migrate` mode the script pairs a device key with A through the
 // relay modules and saves the pairing as an earlier version of the page
 // did, then loads the page, which moves the pairing over and connects.
@@ -260,8 +264,7 @@ async function revokeFlow() {
   await pairThroughPage();
   report({ step: "awaitingB" });
 
-  await waitFor("A to go", () => storedIds().length === 0 && byId("pair-back").hidden);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await waitFor("A to go", () => storedIds().length === 0);
   report({
     step: "revokedA",
     cancelHidden: byId("pair-cancel").hidden,

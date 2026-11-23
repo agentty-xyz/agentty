@@ -57,28 +57,29 @@ export async function loadPairings(storage) {
 
 // Saves `pairing`, replacing a stored one for the same instance in place,
 // and returns the pairings now stored. The stored pairings are read again
-// first, so another tab's changes stay; `pairings` stands in for them
-// when storage cannot be read.
+// first, so another tab's changes stay. When storage cannot be read or
+// written, `pairings`, the ones this page holds, stand in for them, and
+// the change lasts for this page only.
 export function savePairing(storage, pairings, pairing) {
-  const current = latest(storage, pairings);
-  const index = current.findIndex((known) => known.instanceId === pairing.instanceId);
-  const next = index < 0 ? [...current, pairing] : current.with(index, pairing);
-  write(storage, PAIRINGS_KEY, serialize(next));
+  const add = (list) => {
+    const index = list.findIndex((known) => known.instanceId === pairing.instanceId);
 
-  return next;
+    return index < 0 ? [...list, pairing] : list.with(index, pairing);
+  };
+  const next = add(latest(storage, pairings));
+
+  return write(storage, PAIRINGS_KEY, serialize(next)) ? next : add(pairings);
 }
 
 // Removes the pairing with `instanceId` and returns the pairings left,
 // keeping another tab's changes as `savePairing` does.
 export function forgetPairing(storage, pairings, instanceId) {
-  const next = latest(storage, pairings).filter((pairing) => pairing.instanceId !== instanceId);
-  if (next.length === 0) {
-    remove(storage, PAIRINGS_KEY);
-  } else {
-    write(storage, PAIRINGS_KEY, serialize(next));
-  }
+  const drop = (list) => list.filter((pairing) => pairing.instanceId !== instanceId);
+  const next = drop(latest(storage, pairings));
+  const isSaved =
+    next.length === 0 ? remove(storage, PAIRINGS_KEY) : write(storage, PAIRINGS_KEY, serialize(next));
 
-  return next;
+  return isSaved ? next : drop(pairings);
 }
 
 // The pairings stored now, or `fallback` when storage cannot be read.
@@ -145,10 +146,13 @@ function write(storage, key, value) {
   }
 }
 
+// Removes `key` and reports whether storage took the change.
 function remove(storage, key) {
   try {
     storage.removeItem(key);
+
+    return true;
   } catch (_error) {
-    // Nothing was stored.
+    return false;
   }
 }

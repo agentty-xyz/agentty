@@ -108,11 +108,11 @@ export function createSessionList({
         const entries = keyedSessions(source);
         if (entries.length > 0 && !entries.some((entry) => Object.hasOwn(known, entry.id))) {
           known = { ...known };
-          source.sessions.forEach((session, index) => {
-            known[entries[index].id] = Object.hasOwn(known, session.id)
+          for (const session of source.sessions) {
+            known[seenKey(source.id, session.id)] = Object.hasOwn(known, session.id)
               ? known[session.id]
               : session.updated_at;
-          });
+          }
         }
       }
     }

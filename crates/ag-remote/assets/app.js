@@ -823,7 +823,8 @@ function homeInstance() {
   if (chosen) {
     return chosen;
   }
-  if (state.homeTarget && state.instances.includes(state.homeTarget) && home.host()) {
+  const target = state.homeTarget;
+  if (target && state.instances.includes(target) && !target.rejection && home.host()) {
     return state.homeTarget;
   }
 
@@ -951,6 +952,8 @@ function onRejected(instance, reason, wasPairing) {
   instance.view.error.textContent = isMany() ? reason : "";
   renderSessions();
   renderOffline();
+  // Home moves on from an Agentty that refused this device for good.
+  void describeHome();
 }
 
 // The connection ended before Agentty answered the pairing.

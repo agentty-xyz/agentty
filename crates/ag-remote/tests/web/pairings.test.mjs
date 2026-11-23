@@ -70,6 +70,29 @@ test("two tabs keep each other's pairings when they save or forget one", async (
   assert.deepEqual(await loadPairings(storage), [first]);
 });
 
+test("storage that reads but takes no writes keeps this page's pairings", async () => {
+  // Arrange
+  const storage = new MemoryStorage();
+  storage.setItem = () => {
+    throw new Error("quota");
+  };
+  storage.removeItem = () => {
+    throw new Error("quota");
+  };
+  const first = await pairing(FIRST_KEY);
+  const second = await pairing(SECOND_KEY);
+
+  // Act
+  const saved = savePairing(storage, savePairing(storage, [], first), second);
+  const afterForget = forgetPairing(storage, saved, second.instanceId);
+  const afterLast = forgetPairing(storage, afterForget, first.instanceId);
+
+  // Assert
+  assert.deepEqual(saved, [first, second]);
+  assert.deepEqual(afterForget, [first]);
+  assert.deepEqual(afterLast, []);
+});
+
 test("a pairing of an earlier version moves over once and comes first", async () => {
   // Arrange
   const storage = new MemoryStorage();
