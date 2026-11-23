@@ -56,18 +56,22 @@ export async function loadPairings(storage) {
 }
 
 // Saves `pairing`, replacing a stored one for the same instance in place,
-// and returns the pairings now stored.
+// and returns the pairings now stored. The stored pairings are read again
+// first, so another tab's changes stay; `pairings` stands in for them
+// when storage cannot be read.
 export function savePairing(storage, pairings, pairing) {
-  const index = pairings.findIndex((known) => known.instanceId === pairing.instanceId);
-  const next = index < 0 ? [...pairings, pairing] : pairings.with(index, pairing);
+  const current = latest(storage, pairings);
+  const index = current.findIndex((known) => known.instanceId === pairing.instanceId);
+  const next = index < 0 ? [...current, pairing] : current.with(index, pairing);
   write(storage, PAIRINGS_KEY, serialize(next));
 
   return next;
 }
 
-// Removes the pairing with `instanceId` and returns the pairings left.
+// Removes the pairing with `instanceId` and returns the pairings left,
+// keeping another tab's changes as `savePairing` does.
 export function forgetPairing(storage, pairings, instanceId) {
-  const next = pairings.filter((pairing) => pairing.instanceId !== instanceId);
+  const next = latest(storage, pairings).filter((pairing) => pairing.instanceId !== instanceId);
   if (next.length === 0) {
     remove(storage, PAIRINGS_KEY);
   } else {
@@ -75,6 +79,15 @@ export function forgetPairing(storage, pairings, instanceId) {
   }
 
   return next;
+}
+
+// The pairings stored now, or `fallback` when storage cannot be read.
+function latest(storage, fallback) {
+  try {
+    return parsePairings(storage.getItem(PAIRINGS_KEY));
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 // The stored map, `{ "<instance id>": { key, relay } }`, as a list in

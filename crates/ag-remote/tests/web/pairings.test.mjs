@@ -51,6 +51,25 @@ test("pairings save in the order they were made, replace their own Agentty, and 
   assert.equal(storage.getItem(PAIRINGS_KEY), null);
 });
 
+test("two tabs keep each other's pairings when they save or forget one", async () => {
+  // Arrange: both tabs loaded the same, empty, pairings.
+  const storage = new MemoryStorage();
+  const first = await pairing(FIRST_KEY);
+  const second = await pairing(SECOND_KEY);
+  const firstTab = await loadPairings(storage);
+  const secondTab = await loadPairings(storage);
+
+  // Act
+  savePairing(storage, firstTab, first);
+  const afterSecondSave = savePairing(storage, secondTab, second);
+  const afterForget = forgetPairing(storage, firstTab, second.instanceId);
+
+  // Assert
+  assert.deepEqual(afterSecondSave, [first, second]);
+  assert.deepEqual(afterForget, [first]);
+  assert.deepEqual(await loadPairings(storage), [first]);
+});
+
 test("a pairing of an earlier version moves over once and comes first", async () => {
   // Arrange
   const storage = new MemoryStorage();
